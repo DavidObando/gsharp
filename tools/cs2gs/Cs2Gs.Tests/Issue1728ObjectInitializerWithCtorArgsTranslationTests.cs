@@ -151,7 +151,51 @@ namespace Demo
         Assert.Contains("Bar = 2", printed);
     }
 
+    [Fact]
+    public void CtorArgsPlusNestedObjectInitializerMember_ReportsUnsupported()
+    {
+        // Regression guard (B1, PR #1877 review of issue #1858): a nested
+        // `Sub = { X = 1, Y = 2 }` member is a C# OBJECT initializer, not a
+        // collection initializer — it has no faithful G# form when combined
+        // with constructor arguments. Must still fail loud (ReportUnsupported),
+        // not silently lower each `X = 1` as a bare collection element (which
+        // would emit the semantically wrong `.Add(X = 1)`).
+        (string printed, TranslationContext context) = TranslateUnitWithContext(@"
+namespace Demo
+{
+    public class Sub
+    {
+        public int X { get; set; }
+        public int Y { get; set; }
+    }
+
+    public class Foo
+    {
+        public int X { get; }
+        public Sub Sub { get; } = new Sub();
+        public Foo(int x) { X = x; }
+    }
+
+    public class C
+    {
+        public Foo Make(int x) => new Foo(x) { Sub = { X = 1, Y = 2 } };
+    }
+}");
+
+        Assert.Contains(
+            context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported &&
+                d.Message.Contains("nested collection/object initializer as a member value"));
+        Assert.DoesNotContain(".Add(X = 1)", printed);
+    }
+
     private static string TranslateUnit(string source)
+    {
+        (string printed, _) = TranslateUnitWithContext(source);
+        return printed;
+    }
+
+    private static (string Printed, TranslationContext Context) TranslateUnitWithContext(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
         Assert.True(
@@ -169,6 +213,6 @@ namespace Demo
             result.Success,
             "Translated G# must round-trip. Errors:\n" +
                 string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
-        return printed;
+        return (printed, context);
     }
 }

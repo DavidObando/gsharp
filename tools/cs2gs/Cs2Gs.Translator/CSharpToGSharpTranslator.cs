@@ -9586,11 +9586,14 @@ public sealed class CSharpToGSharpTranslator
         /// <c>Target(args) { Name = value, ... }</c> (gsc issue #522) for a C#
         /// object initializer combined with constructor arguments (issue #1728):
         /// <c>new T(a, b) { Field = value, ... }</c>. A nested
-        /// <c>Prop = { a, b }</c> member lowers to the same target-less member
-        /// collection-initializer form used by <see cref="BuildObjectInitializerLiteral"/>
-        /// (issue #1567) — gsc's suffix parser now carries the same carve-out
-        /// (issue #1858), so a collection member composes with constructor
-        /// arguments in one construct instead of being dropped.
+        /// <c>Prop = { a, b }</c> COLLECTION-initializer member lowers to the
+        /// same target-less member collection-initializer form used by
+        /// <see cref="BuildObjectInitializerLiteral"/> (issue #1567) — gsc's
+        /// suffix parser now carries the same carve-out (issue #1858), so a
+        /// collection member composes with constructor arguments in one
+        /// construct instead of being dropped. A nested <c>Prop = { X = 1 }</c>
+        /// OBJECT-initializer member has no such carve-out and is reported as
+        /// unsupported instead of being silently mistranslated.
         /// </summary>
         private GExpression BuildConstructionWithInitializerSuffix(
             InitializerExpressionSyntax initializer,
@@ -9605,8 +9608,7 @@ public sealed class CSharpToGSharpTranslator
                     assignment.Left is IdentifierNameSyntax name)
                 {
                     if (assignment.Right is InitializerExpressionSyntax nestedInit &&
-                        (nestedInit.IsKind(SyntaxKind.CollectionInitializerExpression) ||
-                         nestedInit.IsKind(SyntaxKind.ObjectInitializerExpression)))
+                        nestedInit.IsKind(SyntaxKind.CollectionInitializerExpression))
                     {
                         List<CollectionInitializerElement> memberElements =
                             this.TranslateCollectionInitializerElements(nestedInit);
@@ -9617,6 +9619,14 @@ public sealed class CSharpToGSharpTranslator
                                 new CollectionInitializerExpression(target: null, memberElements)));
                             continue;
                         }
+                    }
+                    else if (assignment.Right is InitializerExpressionSyntax nestedObjectInit &&
+                        nestedObjectInit.IsKind(SyntaxKind.ObjectInitializerExpression))
+                    {
+                        this.context.ReportUnsupported(
+                            assignment,
+                            "nested collection/object initializer as a member value has no canonical G# form when the outer object creation also has constructor arguments; gsc's construction-with-initializer-suffix form (issue #522) has no target-less collection-initializer carve-out (issue #1728).");
+                        continue;
                     }
 
                     memberInitializers.Add(new FieldInitializer(
