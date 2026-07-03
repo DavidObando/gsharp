@@ -7,7 +7,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Cs2Gs.Pipeline;
@@ -121,27 +120,26 @@ public sealed class GscInvoker
         TargetKind target,
         IReadOnlyList<string> references)
     {
-        var args = new StringBuilder();
-        args.Append('"').Append(this.GscPath).Append('"');
-        args.Append(target == TargetKind.Exe ? " /target:exe" : " /target:library");
-        args.Append(" /out:\"").Append(outputPath).Append('"');
+        var args = new List<string>
+        {
+            this.GscPath,
+            target == TargetKind.Exe ? "/target:exe" : "/target:library",
+            "/out:" + outputPath,
+        };
 
         if (references is not null)
         {
             foreach (string reference in references)
             {
-                args.Append(" /reference:\"").Append(reference).Append('"');
+                args.Add("/reference:" + reference);
             }
         }
 
-        foreach (string gs in gsFiles)
-        {
-            args.Append(" \"").Append(gs).Append('"');
-        }
+        args.AddRange(gsFiles);
 
-        (int exit, string output) = RunDotnet(args.ToString());
-        IReadOnlyList<GscDiagnostic> diagnostics = ParseDiagnostics(output);
-        return new GscResult(exit, output, diagnostics);
+        ProcessRunResult result = ProcessRunner.Run("dotnet", args);
+        IReadOnlyList<GscDiagnostic> diagnostics = ParseDiagnostics(result.Output);
+        return new GscResult(result.ExitCode, result.Output, diagnostics);
     }
 
     /// <summary>
@@ -175,23 +173,6 @@ public sealed class GscInvoker
         }
 
         return diagnostics;
-    }
-
-    private static (int Exit, string Output) RunDotnet(string arguments)
-    {
-        var psi = new ProcessStartInfo("dotnet", arguments)
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-
-        using var process = Process.Start(psi);
-        var output = new StringBuilder();
-        output.Append(process.StandardOutput.ReadToEnd());
-        output.Append(process.StandardError.ReadToEnd());
-        process.WaitForExit();
-        return (process.ExitCode, output.ToString());
     }
 }
 

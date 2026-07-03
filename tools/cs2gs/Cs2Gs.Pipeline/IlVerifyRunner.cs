@@ -4,10 +4,8 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Cs2Gs.Pipeline;
@@ -340,28 +338,10 @@ public sealed class IlVerifyRunner
 
     private (int Exit, string Output) RunDotnet(IReadOnlyList<string> arguments)
     {
-        var psi = new ProcessStartInfo("dotnet")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-
-            // The local tool manifest is discovered relative to the working
-            // directory; anchor at the repo root. All paths are passed absolute.
-            WorkingDirectory = this.RepoRoot,
-        };
-        foreach (string arg in arguments)
-        {
-            psi.ArgumentList.Add(arg);
-        }
-
-        using var process = Process.Start(psi);
-        var output = new StringBuilder();
-        output.Append(process.StandardOutput.ReadToEnd());
-        output.Append(process.StandardError.ReadToEnd());
-        process.WaitForExit();
-        return (process.ExitCode, output.ToString());
+        // The local tool manifest is discovered relative to the working
+        // directory; anchor at the repo root. All paths are passed absolute.
+        ProcessRunResult result = ProcessRunner.Run("dotnet", arguments, this.RepoRoot);
+        return (result.ExitCode, result.Output);
     }
 }
 
