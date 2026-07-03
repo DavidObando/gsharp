@@ -124,6 +124,92 @@ public class Issue1725NullCoalescingNumericWideningEmitTests
         Assert.Equal("11\n3\n", output);
     }
 
+    // N1: reviewer-flagged combos where cs2gs emits `left ?? rightAtResultType`
+    // with NO explicit left coercion, relying entirely on gsc's `??` binder to
+    // widen the left operand's non-null value up to the result type. Each is
+    // an end-to-end lock of that gsc contract for a combo not covered above.
+    [Fact]
+    public void LeftWiderFloatToDouble_WidensNonNullValue()
+    {
+        const string source = """
+            package i1725leftfloatdouble
+            import System
+
+            func N(f float?, d double) double -> f ?? d
+
+            func Main() {
+                System.Console.WriteLine(N(nil, 2.5))
+                System.Console.WriteLine(N(3.0f, 2.5))
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("2.5\n3\n", output);
+    }
+
+    [Fact]
+    public void LeftWiderUintToLong_WidensNonNullValue()
+    {
+        const string source = """
+            package i1725leftuintlong
+            import System
+
+            func N(u uint32?, l int64) int64 -> u ?? l
+
+            func Main() {
+                System.Console.WriteLine(N(nil, 5000000000))
+                System.Console.WriteLine(N(4000000000u, 5000000000))
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("5000000000\n4000000000\n", output);
+    }
+
+    [Fact]
+    public void LeftWiderIntToDecimal_WidensNonNullValue()
+    {
+        const string source = """
+            package i1725leftintdecimal
+            import System
+
+            func N(i int32?, d decimal) decimal -> i ?? d
+
+            func Main() {
+                System.Console.WriteLine(N(nil, 2.5m))
+                System.Console.WriteLine(N(7, 2.5m))
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("2.5\n7\n", output);
+    }
+
+    // N3 / issue #914: a constant signed/unsigned mismatch (`uint? x ?? 0`) —
+    // the literal `0`'s natural type `int32` differs from the `uint32` result
+    // C# computes, so cs2gs coerces the right constant to the result type
+    // (`x ?? uint32(0)`, per Issue1725NullCoalescingResultTypeTranslationTests
+    // .ConstantNarrowerThanUnsignedResult_StillCoerced). Locks the runtime
+    // value of that translated form, not just its text.
+    [Fact]
+    public void ConstantUnsignedMismatch_ProducesCorrectRuntimeValue()
+    {
+        const string source = """
+            package i1725constuintzero
+            import System
+
+            func N(x uint32?) uint32 -> x ?? uint32(0)
+
+            func Main() {
+                System.Console.WriteLine(N(nil))
+                System.Console.WriteLine(N(5u))
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("0\n5\n", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_1725_exe_").FullName;

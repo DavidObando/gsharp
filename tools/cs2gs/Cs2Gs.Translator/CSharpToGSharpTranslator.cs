@@ -3912,9 +3912,12 @@ public sealed class CSharpToGSharpTranslator
         // gsc's own `??` binder (issue #1239) already performs this same
         // C#-faithful best-common-type widening and auto-converts the left
         // operand's non-null value whenever the left is the narrower side —
-        // verified directly against gsc for int32?/int64, int32?/double, and
-        // int64?/int32 (left wider). The one gap gsc does not fill on its own
-        // is a *constant* right operand whose natural numeric kind differs
+        // verified directly against gsc for int32?/int64, int32?/double,
+        // int64?/int32 (left wider), float?/double, uint32?/int64, and
+        // int32?/decimal (see Issue1725NullCoalescingNumericWideningEmitTests
+        // for the runtime locks of each combo). The one gap gsc does not
+        // fill on its own is a *constant* right operand whose natural
+        // numeric kind differs
         // from the result (e.g. `x ?? 0` for `uint32? x`: the literal `0`'s
         // natural type `int32` differs from the `uint32` result C# computed
         // via its constant-literal conversion rule, which gsc's type-only
@@ -3935,8 +3938,16 @@ public sealed class CSharpToGSharpTranslator
                 TryGetNumericKind(rightType, out SpecialType rightUnderlying) &&
                 leftUnderlying != rightUnderlying)
             {
-                TypeInfo binaryInfo = this.context.GetTypeInfo(binary);
-                ITypeSymbol resultType = binaryInfo.Type ?? binaryInfo.ConvertedType;
+                // `.Type` (not `.ConvertedType`) is the `??` expression's own
+                // best-common-type per C# §12.15 — the value we need here.
+                // `.ConvertedType` instead reflects an ENCLOSING conversion
+                // (e.g. an assignment's target type), which would let an
+                // outer context over-coerce this operand to the wrong type
+                // (S1). `.Type` is only null for an unresolved/erroneous
+                // expression; both operands already passed `TryGetNumericKind`
+                // above, meaning the semantic model fully resolved this `??`,
+                // so `.Type` is guaranteed non-null here.
+                ITypeSymbol resultType = this.context.GetTypeInfo(binary).Type;
 
                 if (TryGetNumericKind(resultType, out SpecialType resultUnderlying) &&
                     rightUnderlying != resultUnderlying)
