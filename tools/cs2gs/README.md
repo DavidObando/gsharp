@@ -104,6 +104,56 @@ triage artifact; later stages are reported as `skip`.
    `Gsharp.NET.Sdk`) and compares the passing/failing test set against the C#
    xUnit oracle. Failures → `test-parity-failure`.
 
+## Construct coverage (ADR-0138)
+
+The authoritative statement of C# 14 coverage is
+[`coverage/csharp-construct-inventory.json`](coverage/csharp-construct-inventory.json):
+one row per Roslyn node `SyntaxKind` with a status of `Translated`, `Lowered`,
+`UnsupportedByDesign` (+rationale), `Gap` (+issue), or `Unclassified` (capped
+by a never-raise ratchet). The human-readable rollup is generated into
+[`docs/cs2gs-coverage-matrix.md`](../../docs/cs2gs-coverage-matrix.md).
+
+- `cs2gs coverage` — report drift (exit 1) between the inventory, the
+  Roslyn-surface golden, and the docs matrix.
+- `cs2gs coverage --write` — after a Roslyn bump: append `Unclassified`
+  skeleton rows for new kinds, canonicalize, regenerate golden + docs.
+
+`ConstructInventoryGoldenTests` enforces all of it in CI; the
+`UnsupportedByDesign` registry (consulted by every translator rejection)
+must stay equal to the inventory's unsupported rows
+(`TranslatorExhaustivenessTests`), so an accidental fallthrough is minted
+`CS2GS-GAP` instead of hiding behind `CS2GS-UNSUPPORTED`.
+
+The `corpus/grid/G01…G14` apps are the per-construct differential fixtures:
+one construct per `Constructs/<SyntaxKind>.cs`, executable, stdout
+byte-compared C#-vs-G# in stage 4.
+
+## Triage workflow & CI gate (ADR-0138)
+
+The checked-in gap ledger [`triage/gaps.json`](triage/gaps.json) is both the
+fingerprint↔issue map and the CI baseline:
+
+```sh
+# classify a run against the ledger (read-only)
+cs2gs triage list --run cs2gs-runs/<runId>
+
+# file issues for NEW fingerprints (dry-run by default; --file creates them,
+# clustered by root cause, capped via --limit)
+cs2gs triage file-issues --run cs2gs-runs/<runId> --file
+
+# reconcile ledger statuses with GitHub (closed issue -> resolved; requires an
+# Issue<N>* regression test or --no-test-reason)
+cs2gs triage sync --write
+```
+
+`cs2gs migrate --baseline tools/cs2gs/triage/gaps.json` gates on the ledger:
+**NEW** or **REGRESSED** fingerprints fail; **KNOWN** open gaps are tolerated;
+**STALE** entries warn (fail with `--baseline-strict`, the nightly mode); an
+**unverified** app (skipped stage, no artifact) must be acknowledged in the
+ledger's `unverifiedApps`. The `cs2gs` job in `.github/workflows/build.yml`
+runs this on every PR; `.github/workflows/cs2gs-nightly.yml` runs strict mode
+and auto-files issues for new gaps, opening a ledger-update PR.
+
 ## Triage & fingerprinting (ADR-0115 §D)
 
 Every gap is written as a JSON triage artifact with a stable **fingerprint**:
@@ -146,10 +196,19 @@ details.
 | App | translate | compile | ilverify | test-parity |
 | --- | --- | --- | --- | --- |
 | `corpus/L1-Console` | PASS | PASS | PASS | PASS |
-| `corpus/L2-Library` | PASS | PASS | PASS | PASS |
-| `corpus/L3-Library` | PASS | FAIL (#985) | skip | skip |
+| `corpus/L2-Library` | PASS | PASS | PASS | FAIL ([#1929](https://github.com/DavidObando/gsharp/issues/1929), ledgered) |
+| `corpus/L3-Library` | PASS | PASS | PASS | skip (unverified, ledgered; [#1924](https://github.com/DavidObando/gsharp/issues/1924)/[#1929](https://github.com/DavidObando/gsharp/issues/1929)) |
 | `corpus/L4-Console` | PASS | PASS | PASS | PASS |
 | `corpus/L5-Console` | PASS | PASS | PASS | PASS |
+| `corpus/grid/G01…G14` (14 apps) | PASS | PASS | PASS | PASS |
+| `corpus/CompileGap-Library` | PASS | FAIL (deliberate, ledgered wontfix) | skip | skip |
+
+With `--baseline tools/cs2gs/triage/gaps.json` the run above gates green
+(`2 known, 0 new, 0 regressed, 0 stale`): every residual failure is a
+ledgered, issue-linked gap. The grid build-out filed the coverage backlog as
+issues [#1879–#1934](https://github.com/DavidObando/gsharp/issues?q=label%3A%22gap%3Atranslate%22%2C%22gap%3Acompile%22%2C%22gap%3Ailverify%22%2C%22gap%3Aparity%22)
+(37 translator gaps, 17 gsc gaps, 1 pipeline policy), each with a quarantined
+fixture next to its grid app.
 
 L1, L2, L4, and L5 migrate fully green end-to-end. L2 went green when #973/#974 were
 fixed. L4 emits the **canonical** forms for an interpolated `: base(...)` argument,

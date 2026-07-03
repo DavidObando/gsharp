@@ -728,6 +728,12 @@ Both are written under the run directory alongside the per-failure triage artifa
 
 ### G. Validation outcome (issue #914 capstone)
 
+> **Frozen as a ledger (ADR-0138).** This section remains the historical
+> record of the #914 validation. The *living* gap ledger is
+> `tools/cs2gs/triage/gaps.json` (fingerprint↔issue map + CI baseline), and
+> new gaps are auto-filed via `cs2gs triage file-issues` — do not append new
+> gap rows here.
+
 The tool was validated end-to-end across the full L1–L3 corpus. The deterministic
 report (`report.html` / `summary.json`) is byte-stable and fully self-contained
 (zero external asset/network references), and every discovered gap deduplicates

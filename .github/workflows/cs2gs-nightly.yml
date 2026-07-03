@@ -1,0 +1,116 @@
+name: cs2gs-nightly
+
+# ADR-0138: the deep C#→G# coverage run. Unlike the PR gate (build.yml `cs2gs`
+# job), the nightly runs the ledger in STRICT mode (stale open entries fail so
+# the ledger cannot rot) and then AUTO-FILES GitHub issues for any new gap
+# fingerprints (clustered by root cause, capped per run), pushing the updated
+# ledger back as a pull request for review.
+
+on:
+  schedule:
+    - cron: '17 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK (main)
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore GSharp.sln
+
+      - name: Restore .NET local tools
+        run: dotnet tool restore
+
+      - name: Build
+        run: dotnet build GSharp.sln --configuration Release --no-restore -graph
+
+      - name: Migrate corpus (strict ledger gate)
+        id: migrate
+        run: |
+          set +e
+          dotnet out/bin/Release/Cs2Gs.Cli/cs2gs.dll migrate \
+            --corpus tools/cs2gs/corpus \
+            --baseline tools/cs2gs/triage/gaps.json \
+            --baseline-strict \
+            --out cs2gs-nightly-runs \
+            --config Release | tee cs2gs-migrate.log
+          exit_code=${PIPESTATUS[0]}
+          run_dir=$(ls -d cs2gs-nightly-runs/*/ | head -1)
+          echo "run_dir=${run_dir%/}" >> "$GITHUB_OUTPUT"
+          echo "migrate_exit=$exit_code" >> "$GITHUB_OUTPUT"
+          {
+            echo "### cs2gs nightly migration"
+            echo ''
+            echo '```'
+            cat cs2gs-migrate.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # The gate outcome is reported at the END of the job (after filing),
+          # so a red night still files its issues first.
+          exit 0
+
+      - name: File issues for new gaps (automated, ADR-0138 guardrails)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dotnet out/bin/Release/Cs2Gs.Cli/cs2gs.dll triage file-issues \
+            --run "${{ steps.migrate.outputs.run_dir }}" \
+            --gaps tools/cs2gs/triage/gaps.json \
+            --file --limit 10 | tee cs2gs-triage.log
+          {
+            echo "### cs2gs triage (auto-filed issues)"
+            echo ''
+            echo '```'
+            cat cs2gs-triage.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open ledger update PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if git diff --quiet -- tools/cs2gs/triage/gaps.json; then
+            echo "ledger unchanged; no PR needed."
+            exit 0
+          fi
+          branch="cs2gs/nightly-ledger-$(date -u +%Y%m%d)"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add tools/cs2gs/triage/gaps.json
+          git commit -m "cs2gs: ledger new gap fingerprints from the nightly run
+
+          Auto-filed by cs2gs-nightly (ADR-0138); see the linked issues in the
+          ledger entries."
+          git push origin "$branch"
+          gh pr create --fill --title "cs2gs: nightly gap-ledger update" \
+            --body "Automated ledger update from the cs2gs nightly run. Each new entry links its auto-filed issue. Review the clustering (supersededBy) before merging."
+
+      - name: Upload migration report
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: cs2gs-nightly-report
+          path: |
+            cs2gs-nightly-runs/**/report.html
+            cs2gs-nightly-runs/**/summary.json
+            cs2gs-nightly-runs/**/run.json
+
+      - name: Enforce gate outcome
+        run: |
+          exit "${{ steps.migrate.outputs.migrate_exit }}"

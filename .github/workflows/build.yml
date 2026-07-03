@@ -110,6 +110,63 @@ jobs:
       - name: Run end-to-end tests
         run: ./build/run-e2e-tests.sh
 
+  cs2gs:
+    # ADR-0138: the C#→G# migration quality gate. Runs the full in-repo corpus
+    # (L1–L5 + the conformance grid) through translate → compile → ilverify →
+    # test-parity and gates on the gap ledger: any fingerprint NOT ledgered in
+    # tools/cs2gs/triage/gaps.json (NEW) or ledgered as resolved but
+    # reproducing (REGRESSED) fails the job; known-open gaps do not.
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK (main)
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore GSharp.sln
+
+      - name: Restore .NET local tools
+        # dotnet-ilverify for the pipeline's stage 3.
+        run: dotnet tool restore
+
+      - name: Build
+        run: dotnet build GSharp.sln --configuration Release --no-restore -graph
+
+      - name: Migrate corpus (ledger-gated)
+        run: |
+          set +e
+          dotnet out/bin/Release/Cs2Gs.Cli/cs2gs.dll migrate \
+            --corpus tools/cs2gs/corpus \
+            --baseline tools/cs2gs/triage/gaps.json \
+            --out cs2gs-ci-runs \
+            --config Release | tee cs2gs-migrate.log
+          exit_code=${PIPESTATUS[0]}
+          {
+            echo "### cs2gs corpus migration"
+            echo ''
+            echo '```'
+            cat cs2gs-migrate.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$exit_code"
+
+      - name: Upload migration report
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: cs2gs-report
+          path: |
+            cs2gs-ci-runs/**/report.html
+            cs2gs-ci-runs/**/summary.json
+            cs2gs-ci-runs/**/run.json
+
   vscode-extension:
     name: vscode-extension (${{ matrix.os }})
     strategy:

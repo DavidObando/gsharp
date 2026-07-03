@@ -86,6 +86,19 @@ internal static class Program
             }
         }
 
+        if (verb is "triage")
+        {
+            try
+            {
+                return TriageCommand.Run(args.Skip(1).ToArray());
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("cs2gs: " + ex.Message);
+                return 2;
+            }
+        }
+
         Console.Error.WriteLine($"cs2gs: unknown command '{verb}'.");
         PrintUsage();
         return 1;
@@ -141,13 +154,13 @@ internal static class Program
 
     private static async Task<int> RunMigrateAsync(string[] args)
     {
-        (string Corpus, List<string> AppIds, PipelineOptions Options)? parsed = ParseMigrateArgs(args, out bool helpRequested);
+        (string Corpus, List<string> AppIds, PipelineOptions Options, string BaselinePath, bool BaselineStrict)? parsed = ParseMigrateArgs(args, out bool helpRequested);
         if (parsed is null)
         {
             return helpRequested ? 0 : 1;
         }
 
-        (string corpus, List<string> appIds, PipelineOptions options) = parsed.Value;
+        (string corpus, List<string> appIds, PipelineOptions options, string baselinePath, bool baselineStrict) = parsed.Value;
 
         IReadOnlyList<CorpusApp> apps;
         if (appIds.Count > 0)
@@ -185,7 +198,70 @@ internal static class Program
 
         string runDir = ResolveRunDir(options.OutputRoot, result.RunId);
         bool reportGenerated = GenerateReport(runDir);
+
+        // ADR-0138: with --baseline, the exit gate is the ledger classification
+        // (fail on NEW or REGRESSED fingerprints; known-open gaps are tolerated;
+        // --baseline-strict additionally fails on STALE entries so the nightly
+        // keeps the ledger honest). Without --baseline, today's contract holds.
+        if (!string.IsNullOrEmpty(baselinePath))
+        {
+            GapLedger ledger = GapLedger.Load(baselinePath);
+            IReadOnlyList<TriageArtifact> artifacts = GapLedger.LoadRunArtifacts(runDir);
+            BaselineClassification classification = ledger.Classify(artifacts, fullCorpus: appIds.Count == 0);
+            PrintBaselineClassification(classification, baselineStrict);
+
+            // A skipped/unverified stage produces NO triage artifact, so a
+            // fingerprint-only gate would render such an app green (the issue
+            // #1831 class). Unverified apps must be explicitly acknowledged in
+            // the ledger's unverifiedApps list to pass.
+            List<string> unacknowledged = result.Apps
+                .Where(a => a.Unverified && !ledger.UnverifiedApps.Contains(a.AppId))
+                .Select(a => a.AppId)
+                .ToList();
+            foreach (string appId in unacknowledged)
+            {
+                Console.WriteLine($"  UNVERIFIED {appId} — a stage skipped without a triage artifact and the " +
+                    "app is not acknowledged in the ledger's unverifiedApps list.");
+            }
+
+            bool gatePassed = classification.PassesGate
+                && unacknowledged.Count == 0
+                && (!baselineStrict || classification.Stale.Count == 0);
+            return DetermineMigrateExitCode(gatePassed, reportGenerated);
+        }
+
         return DetermineMigrateExitCode(result.Succeeded, reportGenerated);
+    }
+
+    /// <summary>
+    /// Prints the baseline-gate classification of the run's fingerprints.
+    /// </summary>
+    /// <param name="classification">The ledger classification.</param>
+    /// <param name="strict">Whether stale entries fail the gate (nightly mode).</param>
+    private static void PrintBaselineClassification(BaselineClassification classification, bool strict)
+    {
+        Console.WriteLine();
+        Console.WriteLine(
+            $"baseline: {classification.Known.Count} known, {classification.New.Count} new, " +
+            $"{classification.Regressed.Count} regressed, {classification.Stale.Count} stale.");
+        foreach (TriageArtifact artifact in classification.New)
+        {
+            Console.WriteLine($"  NEW       {artifact.Fingerprint} {artifact.Stage} " +
+                $"{artifact.Diagnostic?.Id} {artifact.OffendingCSharpConstruct?.Kind} ({artifact.CorpusAppId})");
+        }
+
+        foreach (TriageArtifact artifact in classification.Regressed)
+        {
+            Console.WriteLine($"  REGRESSED {artifact.Fingerprint} {artifact.Stage} " +
+                $"{artifact.Diagnostic?.Id} ({artifact.CorpusAppId}) — ledgered as resolved");
+        }
+
+        foreach (GapLedgerEntry entry in classification.Stale)
+        {
+            string verdict = strict ? "FAIL (strict)" : "warn";
+            Console.WriteLine($"  STALE     {entry.Fingerprint} #{entry.Issue} — open in the ledger but " +
+                $"not reproduced ({verdict}); resolve or prune via `cs2gs triage sync`.");
+        }
     }
 
     private static int RunReport(string[] args)
@@ -313,10 +389,12 @@ internal static class Program
         return Path.Combine(root, runId);
     }
 
-    private static (string Corpus, List<string> AppIds, PipelineOptions Options)? ParseMigrateArgs(string[] args, out bool helpRequested)
+    private static (string Corpus, List<string> AppIds, PipelineOptions Options, string BaselinePath, bool BaselineStrict)? ParseMigrateArgs(string[] args, out bool helpRequested)
     {
         helpRequested = false;
         string corpus = null;
+        string baselinePath = null;
+        bool baselineStrict = false;
         var appIds = new List<string>();
         var options = new PipelineOptions();
 
@@ -347,6 +425,12 @@ internal static class Program
                     case "--config":
                         options.Config = NextValue(args, ref i, arg);
                         break;
+                    case "--baseline":
+                        baselinePath = NextValue(args, ref i, arg);
+                        break;
+                    case "--baseline-strict":
+                        baselineStrict = true;
+                        break;
                     default:
                         Console.Error.WriteLine($"cs2gs: unknown option '{arg}'.");
                         PrintUsage();
@@ -371,7 +455,7 @@ internal static class Program
             }
         }
 
-        return (corpus, appIds, options);
+        return (corpus, appIds, options, baselinePath, baselineStrict);
     }
 
     /// <summary>
@@ -485,6 +569,9 @@ internal static class Program
         Console.WriteLine("  cs2gs migrate [options]");
         Console.WriteLine("  cs2gs report --run <runDir> [--out <file-or-dir>]");
         Console.WriteLine("  cs2gs coverage [--write] [--repo-root <dir>]");
+        Console.WriteLine("  cs2gs triage list --run <runDir> [--gaps <file>]");
+        Console.WriteLine("  cs2gs triage file-issues --run <runDir> [--gaps <file>] [--file] [--limit N] [--milestone M]");
+        Console.WriteLine("  cs2gs triage sync [--gaps <file>] [--write] [--no-test-reason <why>]");
         Console.WriteLine();
         Console.WriteLine("migrate options:");
         Console.WriteLine("  --corpus <dir>    Corpus root (default: tools/cs2gs/corpus).");
@@ -492,6 +579,9 @@ internal static class Program
         Console.WriteLine("  --gsc <path>      Override gsc.dll (default: out/bin/<Config>/Compiler/gsc.dll).");
         Console.WriteLine("  --out <dir>       Runs root for artifacts (default: ./cs2gs-runs).");
         Console.WriteLine("  --config <name>   Build config used to find gsc (default: Release).");
+        Console.WriteLine("  --baseline <file> Gate on the gap ledger (tools/cs2gs/triage/gaps.json): fail only on");
+        Console.WriteLine("                    NEW or REGRESSED fingerprints; known-open gaps are tolerated.");
+        Console.WriteLine("  --baseline-strict Also fail on STALE ledger entries (nightly mode).");
         Console.WriteLine();
         Console.WriteLine("report options:");
         Console.WriteLine("  --run <dir>       Existing run directory containing run.json (required).");
