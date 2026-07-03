@@ -5260,23 +5260,55 @@ public sealed class CSharpToGSharpTranslator
                 current = link.Right;
             }
 
-            GExpression rhs = this.TranslateExpression(current);
             var statements = new List<GStatement>();
+
+            // C# evaluates every target's receiver/index sub-expression
+            // left-to-right — outermost first, matching source order — BEFORE
+            // the shared RHS is evaluated (`a[F()] = b[G()] = c` runs F() then
+            // G() then c). Spill each target's side-effecting parts here, in
+            // that order; a target that is already an identifier/`this`/field
+            // with no side-effecting sub-part passes through untouched.
+            var safeTargets = new GExpression[lefts.Count];
+            for (int i = 0; i < lefts.Count; i++)
+            {
+                safeTargets[i] = this.MakeDuplicationSafeTarget(lefts[i].Target, statements);
+            }
+
+            GExpression value = this.TranslateExpression(current);
+
+            // Walk the chain innermost-out, assigning to each target in turn.
+            // C# assigns the SAME rhs VALUE to every target in a run of plain
+            // `=` links — it never re-reads an inner target's getter to obtain
+            // the value carried to the next (outer) link (issue #1845): `a =
+            // obj.P = c` calls `P`'s setter once and never its getter. A
+            // compound link (`+=`, …) genuinely produces a NEW value — the
+            // target's old value combined with the operand — so its result
+            // still has to be read back for the next link; that read is real
+            // C# semantics, unrelated to the #1845 divergence, and is left as
+            // it was under the #1731/#1842 fix (the target was already made
+            // safe to re-embed above).
+            bool valueIsShared = false;
             for (int i = lefts.Count - 1; i >= 0; i--)
             {
-                // A chained link's target is READ AGAIN as the value carried to
-                // the next (outer) link — `a = b = c` lowers to `b = c; a = b`.
-                // When the target is more than a bare identifier (e.g.
-                // `buf[Next()]`), re-embedding the SAME translated target node at
-                // both the write and the read-back would silently re-run any
-                // side-effecting sub-expression (`Next()`) a second time (issue
-                // #1731). The outermost link's target (`i == 0`) is never read
-                // back — the chain ends there — so it is left untouched.
-                GExpression target = i > 0
-                    ? this.MakeDuplicationSafeTarget(lefts[i].Target, statements)
-                    : lefts[i].Target;
-                statements.Add(new AssignmentStatement(target, rhs, lefts[i].Op));
-                rhs = target;
+                bool hasOuterLink = i > 0;
+                GExpression assignedValue = value;
+                if (hasOuterLink && lefts[i].Op == "=" && !valueIsShared)
+                {
+                    // About to be assigned to more than one target — spill once
+                    // so the RHS expression is evaluated exactly one time, then
+                    // every remaining target reuses the same temp/trivial value.
+                    assignedValue = this.SpillOperand(value, statements);
+                    value = assignedValue;
+                    valueIsShared = true;
+                }
+
+                statements.Add(new AssignmentStatement(safeTargets[i], assignedValue, lefts[i].Op));
+
+                if (hasOuterLink && lefts[i].Op != "=")
+                {
+                    value = safeTargets[i];
+                    valueIsShared = true;
+                }
             }
 
             return statements;
@@ -5459,15 +5491,17 @@ public sealed class CSharpToGSharpTranslator
             return new IdentifierExpression(temp);
         }
 
-        // Rebuilds an assignment TARGET (the left-hand side of a chained-
-        // assignment link, `a = TARGET = c`) so it is safe to re-embed as a value
-        // read for the enclosing link (`a = TARGET`) without re-evaluating any
-        // side-effecting sub-expression twice — the receiver of a member access
-        // and the index of an element access are each spilled at most once via
-        // <see cref="SpillOperand(GExpression, List{GStatement})"/>, and the
-        // target is rebuilt from those (now-trivial) pieces (issue #1731). A
-        // target that is already an identifier/`this`/literal, or a member
-        // access whose receiver needs no spilling, passes through untouched.
+        // Rebuilds an assignment TARGET (a link's left-hand side in a chained
+        // assignment `a = TARGET = c`) so its receiver/index sub-expression is
+        // evaluated exactly once even though the target is written to (and, for
+        // a compound-operator link, read back — see
+        // <see cref="FlattenChainedAssignment"/>) — the receiver of a member
+        // access and the index of an element access are each spilled at most
+        // once via <see cref="SpillOperand(GExpression, List{GStatement})"/>,
+        // and the target is rebuilt from those (now-trivial) pieces (issue
+        // #1731). A target that is already an identifier/`this`/literal, or a
+        // member access whose receiver needs no spilling, passes through
+        // untouched.
         private GExpression MakeDuplicationSafeTarget(GExpression target, List<GStatement> prologue)
         {
             switch (target)
