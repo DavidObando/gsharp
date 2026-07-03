@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Cs2Gs.Pipeline;
 using Cs2Gs.Report;
 using Xunit;
@@ -263,6 +264,144 @@ public class ReportTests
         Assert.Equal(0, process.ExitCode);
         Assert.True(File.Exists(Path.Combine(runDir, "report.html")), stdout);
         Assert.True(File.Exists(Path.Combine(runDir, "summary.json")), stdout);
+
+        AssertArtifactLinksResolve(Path.Combine(runDir, "report.html"), runDir);
+    }
+
+    /// <summary>
+    /// <c>report --out</c> to a directory other than the run dir (sibling or
+    /// parent) must still emit triage-artifact links that resolve to the real
+    /// artifact files from the report's actual location (issue #1754, bug 1).
+    /// </summary>
+    [Theory]
+    [InlineData("sibling")]
+    [InlineData("nested/deeper")]
+    [InlineData("..")]
+    public void Cli_ReportVerb_OutToOtherDir_LinksResolveToRealArtifacts(string relativeOut)
+    {
+        string cliDll = FindCliDll();
+        Assert.True(cliDll is not null, "cs2gs.dll not found; build the solution first.");
+
+        string runDir = WriteSyntheticRun();
+        string outDir = Path.GetFullPath(Path.Combine(runDir, relativeOut, "report-out-" + Guid.NewGuid().ToString("N")));
+
+        string stdout = RunCli(cliDll, "report", "--run", runDir, "--out", outDir);
+
+        string htmlPath = Path.Combine(outDir, "report.html");
+        Assert.True(File.Exists(htmlPath), stdout);
+        Assert.True(File.Exists(Path.Combine(outDir, "summary.json")), stdout);
+
+        AssertArtifactLinksResolve(htmlPath, outDir);
+    }
+
+    /// <summary>
+    /// <c>report --out &lt;dir&gt;/&lt;file&gt;.html</c> honors the supplied file
+    /// name for <c>report.html</c> instead of silently discarding it, while
+    /// <c>summary.json</c> keeps its default name alongside it (issue #1754,
+    /// bug 2).
+    /// </summary>
+    [Fact]
+    public void Cli_ReportVerb_OutWithExplicitHtmlFileName_UsesGivenFileName()
+    {
+        string cliDll = FindCliDll();
+        Assert.True(cliDll is not null, "cs2gs.dll not found; build the solution first.");
+
+        string runDir = WriteSyntheticRun();
+        string outDir = Path.Combine(runDir, "custom-" + Guid.NewGuid().ToString("N"));
+        string outFile = Path.Combine(outDir, "mysummary.html");
+
+        string stdout = RunCli(cliDll, "report", "--run", runDir, "--out", outFile);
+
+        Assert.True(File.Exists(outFile), stdout);
+        Assert.False(File.Exists(Path.Combine(outDir, "report.html")), stdout);
+        Assert.True(File.Exists(Path.Combine(outDir, "summary.json")), stdout);
+
+        AssertArtifactLinksResolve(outFile, outDir);
+    }
+
+    /// <summary>
+    /// <c>report --out &lt;dir&gt;/&lt;file&gt;.json</c> honors the supplied file
+    /// name for <c>summary.json</c>, while <c>report.html</c> keeps its default
+    /// name (issue #1754, bug 2).
+    /// </summary>
+    [Fact]
+    public void Cli_ReportVerb_OutWithExplicitJsonFileName_UsesGivenFileName()
+    {
+        string cliDll = FindCliDll();
+        Assert.True(cliDll is not null, "cs2gs.dll not found; build the solution first.");
+
+        string runDir = WriteSyntheticRun();
+        string outDir = Path.Combine(runDir, "custom-" + Guid.NewGuid().ToString("N"));
+        string outFile = Path.Combine(outDir, "run-summary.json");
+
+        string stdout = RunCli(cliDll, "report", "--run", runDir, "--out", outFile);
+
+        Assert.True(File.Exists(outFile), stdout);
+        Assert.False(File.Exists(Path.Combine(outDir, "summary.json")), stdout);
+        Assert.True(File.Exists(Path.Combine(outDir, "report.html")), stdout);
+    }
+
+    /// <summary>
+    /// A <c>--out</c> path with a dotted-but-unrecognized "extension" (e.g. a
+    /// dated directory name) is still treated as a directory, not
+    /// misinterpreted as a file (issue #1754, bug 2 edge case).
+    /// </summary>
+    [Fact]
+    public void Cli_ReportVerb_OutWithDottedDirectoryName_TreatedAsDirectory()
+    {
+        string cliDll = FindCliDll();
+        Assert.True(cliDll is not null, "cs2gs.dll not found; build the solution first.");
+
+        string runDir = WriteSyntheticRun();
+        string outDir = Path.Combine(runDir, "out", "run.2026-07-01");
+
+        string stdout = RunCli(cliDll, "report", "--run", runDir, "--out", outDir);
+
+        Assert.True(File.Exists(Path.Combine(outDir, "report.html")), stdout);
+        Assert.True(File.Exists(Path.Combine(outDir, "summary.json")), stdout);
+    }
+
+    /// <summary>
+    /// Parses every triage-artifact <c>href</c> out of a rendered
+    /// <c>report.html</c> and asserts each one resolves, relative to
+    /// <paramref name="reportDir"/>, to a triage artifact file that actually
+    /// exists.
+    /// </summary>
+    private static void AssertArtifactLinksResolve(string reportHtmlPath, string reportDir)
+    {
+        string html = File.ReadAllText(reportHtmlPath);
+        MatchCollection matches = Regex.Matches(html, "<li><a href=\"([^\"]+)\">");
+        Assert.NotEmpty(matches);
+
+        foreach (Match match in matches)
+        {
+            string href = Uri.UnescapeDataString(match.Groups[1].Value);
+            string resolved = Path.GetFullPath(Path.Combine(reportDir, href.Replace('/', Path.DirectorySeparatorChar)));
+            Assert.True(File.Exists(resolved), $"artifact link '{href}' does not resolve to an existing file at '{resolved}'.");
+        }
+    }
+
+    private static string RunCli(string cliDll, params string[] args)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("dotnet")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        psi.ArgumentList.Add(cliDll);
+        foreach (string arg in args)
+        {
+            psi.ArgumentList.Add(arg);
+        }
+
+        using var process = System.Diagnostics.Process.Start(psi);
+        string stdout = process.StandardOutput.ReadToEnd();
+        string stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        Assert.Equal(0, process.ExitCode);
+        return stdout + stderr;
     }
 
     private static string FindCliDll()

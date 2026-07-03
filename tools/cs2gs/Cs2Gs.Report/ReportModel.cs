@@ -69,6 +69,16 @@ public sealed class ReportModel
     public List<GapReport> Gaps { get; set; } = new List<GapReport>();
 
     /// <summary>
+    /// Gets or sets the absolute run directory the model was built from (i.e.
+    /// the directory <see cref="AppReport.Artifacts"/> paths are relative to).
+    /// Not part of the <c>summary.json</c> schema; used only so
+    /// <see cref="HtmlReportWriter"/> can re-resolve artifact links when
+    /// <c>report.html</c> is written somewhere other than the run dir.
+    /// </summary>
+    [JsonIgnore]
+    public string RunDir { get; set; }
+
+    /// <summary>
     /// Builds a <see cref="ReportModel"/> from a run directory by reading its
     /// <c>run.json</c> and every referenced triage artifact.
     /// </summary>
@@ -150,6 +160,7 @@ public sealed class ReportModel
             StageOrder = stageOrder,
             Apps = apps,
             Gaps = GroupGaps(artifacts),
+            RunDir = Path.GetFullPath(runDir),
         };
     }
 

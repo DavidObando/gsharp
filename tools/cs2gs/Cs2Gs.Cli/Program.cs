@@ -160,26 +160,72 @@ internal static class Program
         }
 
         string targetDir = runDir;
+        string htmlFileName = null;
+        string jsonFileName = null;
         if (!string.IsNullOrEmpty(outPath))
         {
-            targetDir = Directory.Exists(outPath) || HasNoExtension(outPath)
-                ? outPath
-                : Path.GetDirectoryName(Path.GetFullPath(outPath));
+            (targetDir, htmlFileName, jsonFileName) = ResolveOutTarget(outPath);
             Directory.CreateDirectory(targetDir);
         }
 
         ReportModel model = ReportModel.FromRunDirectory(runDir);
-        string htmlPath = HtmlReportWriter.Write(model, targetDir);
-        string jsonPath = JsonSummaryWriter.Write(model, targetDir);
+        string htmlPath = HtmlReportWriter.Write(model, targetDir, htmlFileName);
+        string jsonPath = JsonSummaryWriter.Write(model, targetDir, jsonFileName);
 
         Console.WriteLine($"report:  {htmlPath}");
         Console.WriteLine($"summary: {jsonPath}");
         return 0;
     }
 
-    private static bool HasNoExtension(string path)
+    /// <summary>
+    /// Decides whether a user-supplied <c>--out &lt;file-or-dir&gt;</c> path names
+    /// a directory or a specific output file, and resolves it to a
+    /// (targetDir, htmlFileName, jsonFileName) triple. The rule, in order:
+    /// <list type="number">
+    /// <item>A path ending in a directory separator is always a directory.</item>
+    /// <item>An existing directory is a directory.</item>
+    /// <item>An existing file is that exact file (its parent is the target dir).</item>
+    /// <item>A non-existent path whose extension is a recognized report
+    /// extension (<c>.html</c>, <c>.htm</c>, <c>.json</c>) is a to-be-created
+    /// file with that name.</item>
+    /// <item>Anything else (no extension, or an unrecognized/dotted name such
+    /// as <c>run.2026-07-01</c>) is a to-be-created directory.</item>
+    /// </list>
+    /// When resolved as a file, the file's own extension picks which artifact
+    /// it renames (<c>.json</c> renames <c>summary.json</c>; anything else
+    /// renames <c>report.html</c>); the other artifact keeps its default name
+    /// in the same directory, since one <c>--out</c> file name cannot cover two
+    /// distinct output artifacts.
+    /// </summary>
+    /// <param name="outPath">The raw <c>--out</c> value.</param>
+    /// <returns>The resolved target directory and optional per-writer file names.</returns>
+    private static (string TargetDir, string HtmlFileName, string JsonFileName) ResolveOutTarget(string outPath)
     {
-        return string.IsNullOrEmpty(Path.GetExtension(path));
+        bool trailingSeparator = outPath.EndsWith(Path.DirectorySeparatorChar) ||
+            outPath.EndsWith(Path.AltDirectorySeparatorChar);
+        string fullPath = Path.GetFullPath(outPath);
+
+        bool isDirectory = trailingSeparator
+            || Directory.Exists(fullPath)
+            || (!File.Exists(fullPath) && !IsRecognizedReportExtension(fullPath));
+
+        if (isDirectory)
+        {
+            return (fullPath, null, null);
+        }
+
+        string targetDir = Path.GetDirectoryName(fullPath);
+        string fileName = Path.GetFileName(fullPath);
+        bool isJson = string.Equals(Path.GetExtension(fileName), ".json", StringComparison.OrdinalIgnoreCase);
+        return isJson ? (targetDir, null, fileName) : (targetDir, fileName, null);
+    }
+
+    private static bool IsRecognizedReportExtension(string path)
+    {
+        string extension = Path.GetExtension(path);
+        return string.Equals(extension, ".html", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(extension, ".htm", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(extension, ".json", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string ResolveRunDir(string outputRoot, string runId)
@@ -352,7 +398,12 @@ internal static class Program
         Console.WriteLine();
         Console.WriteLine("report options:");
         Console.WriteLine("  --run <dir>       Existing run directory containing run.json (required).");
-        Console.WriteLine("  --out <dir>       Output directory for report.html + summary.json (default: the run dir).");
+        Console.WriteLine("  --out <file-or-dir>");
+        Console.WriteLine("                    Output location for report.html + summary.json (default: the run dir).");
+        Console.WriteLine("                    A trailing slash or an existing directory is always a directory.");
+        Console.WriteLine("                    A path ending in .html/.htm/.json (or an existing file) names that one");
+        Console.WriteLine("                    output file directly; the other artifact keeps its default name");
+        Console.WriteLine("                    alongside it. Any other path is created as a directory.");
         Console.WriteLine();
         Console.WriteLine("A migrate run also writes report.html + summary.json into the run dir automatically (ADR-0115 §F).");
         Console.WriteLine();

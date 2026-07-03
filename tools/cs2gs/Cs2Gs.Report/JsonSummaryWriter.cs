@@ -39,20 +39,25 @@ public static class JsonSummaryWriter
     }
 
     /// <summary>
-    /// Writes <c>summary.json</c> under the run directory and returns its path.
+    /// Writes the JSON summary into <paramref name="outputDir"/> and returns its path.
     /// </summary>
     /// <param name="model">The aggregated report model.</param>
-    /// <param name="runDir">The run directory to write into.</param>
+    /// <param name="outputDir">The directory to write into.</param>
+    /// <param name="fileName">
+    /// The file name to write, defaulting to <see cref="FileName"/> (<c>summary.json</c>)
+    /// when <see langword="null"/> or empty. Lets <c>--out &lt;file&gt;</c> honor a
+    /// user-supplied summary file name.
+    /// </param>
     /// <returns>The full path of the written file.</returns>
-    public static string Write(ReportModel model, string runDir)
+    public static string Write(ReportModel model, string outputDir, string fileName = null)
     {
-        if (string.IsNullOrEmpty(runDir))
+        if (string.IsNullOrEmpty(outputDir))
         {
-            throw new ArgumentException("Run directory is required.", nameof(runDir));
+            throw new ArgumentException("Output directory is required.", nameof(outputDir));
         }
 
-        Directory.CreateDirectory(runDir);
-        string path = Path.Combine(runDir, FileName);
+        Directory.CreateDirectory(outputDir);
+        string path = Path.Combine(outputDir, string.IsNullOrEmpty(fileName) ? FileName : fileName);
         File.WriteAllText(path, Serialize(model));
         return path;
     }
