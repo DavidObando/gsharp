@@ -20,7 +20,11 @@ namespace Cs2Gs.Tests;
 /// usage (not the internal-error exit 2), <see cref="HtmlReportWriter"/>
 /// slug collisions producing distinct/matching anchors, and the
 /// <see cref="AppReport"/>/<see cref="Cs2Gs.Pipeline.AppResult"/> JSON shape
-/// staying byte-identical after collapsing the duplicated report types.
+/// staying byte-identical after collapsing the duplicated report types. Also
+/// covers #1854, a follow-up that narrows the missing-option-value catch to a
+/// dedicated sentinel exception type (kept in this class/collection so its
+/// <see cref="Console"/>-swapping <c>RunMainAsync</c> helper isn't run
+/// concurrently with another test class's copy of the same pattern).
 /// </summary>
 public class Issue1756Tests
 {
@@ -59,6 +63,54 @@ public class Issue1756Tests
 
         Assert.Equal(1, exitCode);
         Assert.Contains("requires a value", stderr, StringComparison.Ordinal);
+        Assert.Contains("Usage:", stdout, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <c>NextValue</c> must throw a dedicated sentinel type (a private
+    /// nested subclass of <see cref="ArgumentException"/>), not a plain
+    /// <see cref="ArgumentException"/> — see issue #1854. This is what lets
+    /// the verb loops' catch clauses narrow to exactly the missing-value
+    /// case: catching the sentinel type by name, rather than
+    /// <see cref="ArgumentException"/> itself, means any other
+    /// <see cref="ArgumentException"/> a case body might throw (e.g. a future
+    /// validating option setter) is not caught here and falls through to
+    /// exit 2.
+    /// </summary>
+    [Fact]
+    public void NextValue_MissingValue_ThrowsSentinelType_NotBaseArgumentException()
+    {
+        System.Reflection.MethodInfo nextValue = typeof(Cs2Gs.Cli.Program).GetMethod(
+            "NextValue", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(nextValue);
+
+        var args = new[] { "--gsc" };
+        object[] parameters = { args, 0, "--gsc" };
+
+        var wrapper = Assert.Throws<System.Reflection.TargetInvocationException>(
+            () => nextValue.Invoke(null, parameters));
+        Exception thrown = wrapper.InnerException;
+
+        Assert.IsAssignableFrom<ArgumentException>(thrown);
+        Assert.NotEqual(typeof(ArgumentException), thrown.GetType());
+        Assert.Equal("MissingOptionValueException", thrown.GetType().Name);
+    }
+
+    /// <summary>
+    /// An unknown option (e.g. <c>--bogus</c>) must still exit 1 with usage
+    /// for both verbs, unchanged by the #1854 sentinel-narrowing fix —
+    /// unknown options are detected by the <c>default:</c> switch arm, not by
+    /// <c>NextValue</c>, so they never go through the narrowed catch at all.
+    /// </summary>
+    [Theory]
+    [InlineData("migrate", "--bogus")]
+    [InlineData("report", "--bogus")]
+    public async Task UnknownOption_ExitsOne_WithUsage(string verb, string flag)
+    {
+        (int exitCode, string stdout, string stderr) = await RunMainAsync(verb, flag);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("unknown option", stderr, StringComparison.Ordinal);
         Assert.Contains("Usage:", stdout, StringComparison.Ordinal);
     }
 
