@@ -9214,7 +9214,7 @@ public sealed class CSharpToGSharpTranslator
                 return arguments[0];
             }
 
-            return this.BuildObjectCreationCore(typeSymbol, type, arguments, creation.Initializer);
+            return this.BuildObjectCreationCore(creation, typeSymbol, type, arguments, creation.Initializer);
         }
 
         /// <summary>
@@ -9227,6 +9227,7 @@ public sealed class CSharpToGSharpTranslator
         /// one method makes that drift structurally impossible.
         /// </summary>
         private GExpression BuildObjectCreationCore(
+            BaseObjectCreationExpressionSyntax creationNode,
             ITypeSymbol typeSymbol,
             GTypeReference type,
             IReadOnlyList<GExpression> arguments,
@@ -9276,8 +9277,11 @@ public sealed class CSharpToGSharpTranslator
             // callable constructor surface in G#: it is constructed with a struct
             // literal `T{Field: value, ...}` (spec §Struct literals). Map the
             // positional C# `new T(a, b)` to that literal by zipping the arguments
-            // with the type's settable instance members in declaration order
-            // (ADR-0115 §B.4). Imported/BCL structs (e.g. `Guid`, `DateTime`,
+            // with the members the actual invoked constructor assigns them to
+            // (issue #1739 — NOT the type's members in bare declaration order,
+            // which silently swaps/misassigns values whenever a struct's member
+            // declaration order differs from its constructor's parameter order).
+            // Imported/BCL structs (e.g. `Guid`, `DateTime`,
             // `Span<T>` — all `SpecialType.None`) DO expose real constructors that
             // G# can call directly (`Guid(bytes, true)`), so they must fall through
             // to a constructor call rather than be zipped into a bogus literal over
@@ -9300,8 +9304,34 @@ public sealed class CSharpToGSharpTranslator
                     return new CompositeLiteralExpression(type, new List<FieldInitializer>());
                 }
 
-                List<string> targetNames = OrderedValueMemberNames(valueType);
-                if (targetNames.Count == arguments.Count)
+                // Issue #1739: the positional arguments must zip to the members the
+                // ACTUAL invoked constructor assigns them to (in ITS parameter
+                // order), never to `valueType`'s members in bare declaration order —
+                // a hand-written struct is free to declare members in any order
+                // relative to its constructor's parameter list, and a "trivial" ctor
+                // parameter can rename or transform on its way to the member.
+                // `GetSymbolInfo` gives the exact overload Roslyn resolved for this
+                // call site (handling overloads precisely, unlike an arity guess),
+                // and `arguments` is already reordered by `TranslateArguments` into
+                // that constructor's parameter DECLARATION order.
+                var ctorSymbol = this.context.GetSymbolInfo(creationNode).Symbol as IMethodSymbol;
+
+                // A `record struct` / `data struct`'s POSITIONAL primary constructor
+                // is declared as its OWN G# primary constructor (e.g. `data struct
+                // Pos(X int32, Y int32)`) and, unlike a plain struct, IS directly
+                // callable in G# — so `new Pos(1, 2)` maps to the genuine
+                // constructor call `Pos(1, 2)`, not a struct literal; that also
+                // sidesteps the fact that a record's primary ctor has no
+                // `ConstructorDeclarationSyntax` body to walk.
+                if (valueType.IsRecord &&
+                    ctorSymbol != null &&
+                    ctorSymbol.DeclaringSyntaxReferences.Length == 1 &&
+                    ctorSymbol.DeclaringSyntaxReferences[0].GetSyntax() is not ConstructorDeclarationSyntax)
+                {
+                    return BuildConstruction(type, arguments);
+                }
+
+                if (this.TryMapCtorParametersToMembers(ctorSymbol, valueType, out List<string> targetNames, out string unsupportedReason))
                 {
                     var fieldInitializers = new List<FieldInitializer>();
                     for (int i = 0; i < arguments.Count; i++)
@@ -9311,6 +9341,11 @@ public sealed class CSharpToGSharpTranslator
 
                     return new CompositeLiteralExpression(type, fieldInitializers);
                 }
+
+                // The constructor's logic cannot be expressed by a G# struct literal
+                // (it has no callable constructor body to run the logic in) — report
+                // it rather than emit a silently-wrong positional zip (issue #1739).
+                this.context.ReportUnsupported(creationNode, unsupportedReason);
             }
 
             return BuildConstruction(type, arguments);
@@ -9563,27 +9598,122 @@ public sealed class CSharpToGSharpTranslator
             return elements;
         }
 
-        private static List<string> OrderedValueMemberNames(INamedTypeSymbol valueType)
+        /// <summary>
+        /// Resolves a source struct's positional constructor to the members its
+        /// parameters actually initialize, in constructor parameter order (issue
+        /// #1739). Only the trivial "assign-through" ctor shape is resolved — every
+        /// statement a plain <c>Member = param;</c> assignment, one per parameter,
+        /// with no transformation, no chained <c>this(...)</c>/<c>base(...)</c>
+        /// call, and no expression-bodied ctor. A G# struct literal has no callable
+        /// constructor body to run other logic in, so any ctor that does not fit
+        /// this shape cannot be translated correctly — the caller reports it
+        /// unsupported rather than falling back to a guessed member order.
+        /// </summary>
+        /// <param name="ctorSymbol">The constructor symbol resolved for the <c>new</c> call site (via the semantic model), or <see langword="null"/> if unresolved.</param>
+        /// <param name="valueType">The source struct type being constructed.</param>
+        /// <param name="targetNames">On success, the member name each positional argument (in argument order) initializes.</param>
+        /// <param name="unsupportedReason">On failure, a human-readable reason suitable for <see cref="TranslationContext.ReportUnsupported"/>.</param>
+        /// <returns><see langword="true"/> if every constructor parameter was resolved to exactly one member.</returns>
+        private bool TryMapCtorParametersToMembers(
+            IMethodSymbol ctorSymbol,
+            INamedTypeSymbol valueType,
+            out List<string> targetNames,
+            out string unsupportedReason)
         {
-            // Settable instance members in declaration order: positional `data
-            // struct` parameters surface as auto-properties, a hand-written
-            // `struct` exposes auto-properties or fields; either maps to the
-            // struct-literal field list.
-            var props = valueType.GetMembers()
-                .OfType<IPropertySymbol>()
-                .Where(p => !p.IsStatic && !p.IsIndexer && p.GetMethod != null)
-                .Select(p => p.Name)
-                .ToList();
-            if (props.Count > 0)
+            targetNames = null;
+
+            if (ctorSymbol == null || ctorSymbol.MethodKind != MethodKind.Constructor)
             {
-                return props;
+                unsupportedReason = "the invoked struct constructor could not be resolved via the semantic " +
+                    "model; a positional G# struct literal cannot be built without knowing which member each " +
+                    "argument initializes (issue #1739).";
+                return false;
             }
 
-            return valueType.GetMembers()
-                .OfType<IFieldSymbol>()
-                .Where(f => !f.IsStatic && !f.IsImplicitlyDeclared)
-                .Select(f => f.Name)
-                .ToList();
+            // A `record struct` / `data struct`'s POSITIONAL primary constructor
+            // (`data struct Point(int X, int Y)`) never reaches this point — the
+            // caller routes it to a genuine constructor call instead (records have
+            // a real, directly callable primary constructor in G#), since it has
+            // no `ConstructorDeclarationSyntax` body to walk here.
+            if (ctorSymbol.DeclaringSyntaxReferences.Length != 1 ||
+                ctorSymbol.DeclaringSyntaxReferences[0].GetSyntax() is not ConstructorDeclarationSyntax ctorSyntax ||
+                ctorSyntax.Body == null ||
+                ctorSyntax.Initializer != null)
+            {
+                unsupportedReason = "struct constructor is not a simple block-bodied constructor with no " +
+                    "chained this()/base() call; a positional G# struct literal cannot express its logic " +
+                    "(issue #1739).";
+                return false;
+            }
+
+            // The constructor may live in a different file than the one currently
+            // being translated (the active `this.context.SemanticModel` is pinned
+            // to the current tree), so its body must be analyzed via a semantic
+            // model for ITS OWN tree.
+            SemanticModel ctorModel = this.context.Compilation.GetSemanticModel(ctorSyntax.SyntaxTree);
+
+            var paramToMember = new Dictionary<IParameterSymbol, string>(SymbolEqualityComparer.Default);
+            foreach (StatementSyntax statement in ctorSyntax.Body.Statements)
+            {
+                if (statement is not ExpressionStatementSyntax exprStatement ||
+                    exprStatement.Expression is not AssignmentExpressionSyntax assignment ||
+                    !assignment.OperatorToken.IsKind(SyntaxKind.EqualsToken))
+                {
+                    unsupportedReason = "struct constructor has a statement other than a plain member " +
+                        "assignment; a positional G# struct literal cannot express its logic (issue #1739).";
+                    return false;
+                }
+
+                ISymbol leftSymbol = ctorModel.GetSymbolInfo(assignment.Left).Symbol;
+
+                // Any field or property this constructor legally assigns is a
+                // valid struct-literal target — the C# compiler already enforces
+                // that only a setter/init accessor OR (for a get-only auto-
+                // property) the declaring type's OWN constructor may assign it.
+                // Issue #1739's second defect was a stale "settable" filter that
+                // actually tested READABILITY (`GetMethod != null`), which could
+                // admit a get-only COMPUTED property (no backing storage) as a
+                // zip target; that class of member can never appear here because
+                // the ctor could not legally assign it in the first place.
+                string memberName = leftSymbol switch
+                {
+                    IFieldSymbol f when !f.IsStatic && SymbolEqualityComparer.Default.Equals(f.ContainingType, valueType) => f.Name,
+                    IPropertySymbol p when !p.IsStatic && SymbolEqualityComparer.Default.Equals(p.ContainingType, valueType) => p.Name,
+                    _ => null,
+                };
+
+                // The right-hand side must be exactly a reference to one of the
+                // constructor's OWN parameters — anything else (a literal, a
+                // computed expression, a call) is a transformation the struct
+                // literal cannot replay.
+                ISymbol rightSymbol = ctorModel.GetSymbolInfo(assignment.Right).Symbol;
+                bool isPlainParameterAssign = memberName != null &&
+                    rightSymbol is IParameterSymbol rightParameter &&
+                    SymbolEqualityComparer.Default.Equals(rightParameter.ContainingSymbol, ctorSymbol) &&
+                    !paramToMember.ContainsKey(rightParameter);
+
+                if (!isPlainParameterAssign)
+                {
+                    unsupportedReason = "struct constructor assigns a member from something other than a " +
+                        "plain, once-only parameter reference (a transformation, method call, or repeated " +
+                        "parameter use); a positional G# struct literal cannot express its logic (issue #1739).";
+                    return false;
+                }
+
+                paramToMember[(IParameterSymbol)rightSymbol] = memberName;
+            }
+
+            if (paramToMember.Count != ctorSymbol.Parameters.Length)
+            {
+                unsupportedReason = "struct constructor does not assign every parameter directly to a member " +
+                    "(some parameter feeds other logic, e.g. validation); a positional G# struct literal cannot " +
+                    "express its logic (issue #1739).";
+                return false;
+            }
+
+            targetNames = ctorSymbol.Parameters.Select(p => paramToMember[p]).ToList();
+            unsupportedReason = null;
+            return true;
         }
 
         private GExpression TranslateCast(CastExpressionSyntax cast)
@@ -9891,7 +10021,7 @@ public sealed class CSharpToGSharpTranslator
                 ? new List<GExpression>()
                 : this.TranslateArguments(creation.ArgumentList.Arguments);
 
-            return this.BuildObjectCreationCore(typeSymbol, type, arguments, creation.Initializer);
+            return this.BuildObjectCreationCore(creation, typeSymbol, type, arguments, creation.Initializer);
         }
 
         private GExpression TranslateSwitchExpression(SwitchExpressionSyntax node)
