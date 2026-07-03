@@ -477,7 +477,9 @@ internal sealed class OverloadResolver
     /// conversion exists. This keeps overload applicability and final coercion in
     /// agreement with the non-variadic / array-literal element paths.
     /// </summary>
-    private BoundExpression CoerceVariadicElement(
+    internal static BoundExpression CoerceVariadicElement(
+        ConversionClassifier conversions,
+        DiagnosticBag diagnostics,
         BoundExpression argument,
         TypeSymbol elementType,
         TextLocation location,
@@ -515,7 +517,7 @@ internal sealed class OverloadResolver
             return udc;
         }
 
-        Diagnostics.ReportWrongArgumentType(location, parameterName, elementType, argType);
+        diagnostics.ReportWrongArgumentType(location, parameterName, elementType, argType);
         hasErrors = true;
         return argument;
     }
@@ -540,6 +542,8 @@ internal sealed class OverloadResolver
     /// duplicated by hand at each call site, and two copies had drifted to
     /// pack raw, uncoerced elements).
     /// </summary>
+    /// <param name="conversions">The conversion classifier used to bind per-element coercions; issue #1823 promotes this from an instance field to a parameter so <see cref="ExpressionBinder"/> call sites can share this helper.</param>
+    /// <param name="diagnostics">The diagnostic bag that receives GS0154 when an element has no valid conversion; issue #1823 promotes this from an instance property to a parameter for the same reason.</param>
     /// <param name="callSyntax">The syntax node attributed to the packed <see cref="BoundArrayCreationExpression"/> when packing is required.</param>
     /// <param name="boundArguments">The fully-bound, in-order argument list; length must be at least <paramref name="fixedCount"/>.</param>
     /// <param name="fixedCount">The number of leading fixed (non-variadic) parameters.</param>
@@ -548,7 +552,9 @@ internal sealed class OverloadResolver
     /// <param name="locationAt">Maps a trailing argument's index in <paramref name="boundArguments"/> to the source location used for its conversion diagnostics.</param>
     /// <param name="hasErrors">Set to <see langword="true"/> when any trailing element has no valid conversion to the slice's element type.</param>
     /// <returns>An argument list of length <paramref name="fixedCount"/> + 1 whose final element is either the pass-through argument or the packed array.</returns>
-    private ImmutableArray<BoundExpression> PackOrPassThroughVariadicArguments(
+    internal static ImmutableArray<BoundExpression> PackOrPassThroughVariadicArguments(
+        ConversionClassifier conversions,
+        DiagnosticBag diagnostics,
         SyntaxNode callSyntax,
         ImmutableArray<BoundExpression> boundArguments,
         int fixedCount,
@@ -577,6 +583,8 @@ internal sealed class OverloadResolver
         for (var i = fixedCount; i < boundArguments.Length; i++)
         {
             packed.Add(CoerceVariadicElement(
+                conversions,
+                diagnostics,
                 boundArguments[i],
                 elementType,
                 locationAt(i),
@@ -2757,6 +2765,8 @@ internal sealed class OverloadResolver
             // the canonical helper (applies #1493 element coercion when
             // packing).
             var packedArgs = PackOrPassThroughVariadicArguments(
+                conversions,
+                Diagnostics,
                 syntax,
                 boundArguments.ToImmutable(),
                 fixedPrimaryCount,
@@ -3200,6 +3210,8 @@ internal sealed class OverloadResolver
                 // canonical helper (applies #1493 element coercion).
                 var hasVariadicErrors = false;
                 var packedArgs = PackOrPassThroughVariadicArguments(
+                    conversions,
+                    Diagnostics,
                     syntax,
                     boundArguments.ToImmutable(),
                     fixedCtorParamCount,
@@ -4037,6 +4049,8 @@ internal sealed class OverloadResolver
             var sliceType = (SliceTypeSymbol)functionType.ParameterTypes[functionType.Arity - 1];
             var hasElementErrors = false;
             permutedArgs = PackOrPassThroughVariadicArguments(
+                conversions,
+                Diagnostics,
                 syntax,
                 boundArguments,
                 fixedCount,
@@ -4638,6 +4652,8 @@ internal sealed class OverloadResolver
                 var fnSliceType = (SliceTypeSymbol)fnType.ParameterTypes[fnType.Arity - 1];
                 var hasFnElementErrors = false;
                 fnPermutedArgs = PackOrPassThroughVariadicArguments(
+                    conversions,
+                    Diagnostics,
                     syntax,
                     fnPermutedArgs,
                     fnFixedCount,
@@ -4709,6 +4725,8 @@ internal sealed class OverloadResolver
                 var ndSliceType = (SliceTypeSymbol)ndVariadicParam.Type;
                 var hasNdElementErrors = false;
                 ndPermutedArgs = PackOrPassThroughVariadicArguments(
+                    conversions,
+                    Diagnostics,
                     syntax,
                     ndPermutedArgs,
                     ndFixedCount,
@@ -5346,6 +5364,8 @@ internal sealed class OverloadResolver
             // Issue #1630: pack/pass-through through the canonical helper
             // (applies #1493 element coercion when packing).
             var packedArgs = PackOrPassThroughVariadicArguments(
+                conversions,
+                Diagnostics,
                 syntax,
                 boundArguments.ToImmutable(),
                 fixedParamCount,
@@ -5884,6 +5904,8 @@ internal sealed class OverloadResolver
                 // #1493 element coercion).
                 var hasVariadicErrors = false;
                 permutedArguments = PackOrPassThroughVariadicArguments(
+                    conversions,
+                    Diagnostics,
                     ce,
                     permutedArguments,
                     fixedCallableParamCount,
