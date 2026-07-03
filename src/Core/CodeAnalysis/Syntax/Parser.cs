@@ -4850,6 +4850,8 @@ public class Parser
                 return ParseWhileStatement();
             case SyntaxKind.DoKeyword:
                 return ParseDoWhileStatement();
+            case SyntaxKind.LockKeyword:
+                return ParseLockStatement();
             case SyntaxKind.BreakKeyword:
                 return ParseBreakStatement();
             case SyntaxKind.ContinueKeyword:
@@ -5896,6 +5898,17 @@ public class Parser
         var condition = ParseExpressionInBodyHeader();
         var body = ParseStatement();
         return new WhileStatementSyntax(syntaxTree, keyword, condition, body);
+    }
+
+    private StatementSyntax ParseLockStatement()
+    {
+        // Issue #1885: `lock expr { body }` — mutual exclusion around body,
+        // lowered by the binder to the classic Monitor Enter/try/finally/Exit
+        // pattern.
+        var keyword = MatchToken(SyntaxKind.LockKeyword);
+        var expression = ParseExpressionInBodyHeader();
+        var body = ParseStatement();
+        return new LockStatementSyntax(syntaxTree, keyword, expression, body);
     }
 
     private StatementSyntax ParseDoWhileStatement()

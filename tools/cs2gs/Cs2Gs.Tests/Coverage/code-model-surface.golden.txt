@@ -51,6 +51,7 @@ IfStatement
 IncrementDecrementStatement
 LocalDeclarationStatement
 LocalFunctionStatement
+LockStatement
 RawStatement
 ReturnStatement
 SwitchStatement

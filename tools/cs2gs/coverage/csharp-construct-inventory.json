@@ -1321,10 +1321,10 @@
   {
     "kind": "LockStatement",
     "nodeType": "LockStatementSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1885",
-    "notes": "Lowers to Monitor.Enter/Exit but omits import System.Threading."
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/LockStatement.cs"
   },
   {
     "kind": "LogicalAndExpression",

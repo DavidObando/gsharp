@@ -203,7 +203,7 @@
         },
         {
           "name": "keyword.control.flow.gsharp",
-          "match": "\\b(try|catch|finally|throw|defer)\\b"
+          "match": "\\b(try|catch|finally|throw|defer|lock)\\b"
         },
         {
           "name": "keyword.control.async.gsharp",

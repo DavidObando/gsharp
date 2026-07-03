@@ -30,6 +30,10 @@ IfStatement: 12 is even (if without else)
 IfStatement: 12 is between 10 and 20 (nested if)
 LocalFunctionStatement: Add(3, 4) = 7
 LocalFunctionStatement: AddSeed(7) with captured seed = 12
+LockStatement: counter=1
+LockStatement: about to throw
+LockStatement: caught boom
+LockStatement: counter=2
 ReturnStatement: Classify(-4) = negative
 ReturnStatement: Classify(0) = zero
 ReturnStatement: Classify(9) = positive

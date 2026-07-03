@@ -174,6 +174,8 @@ internal sealed class StatementBinder
                 return BindForRangeStatement((ForRangeStatementSyntax)syntax);
             case SyntaxKind.WhileStatement:
                 return BindWhileStatement((WhileStatementSyntax)syntax);
+            case SyntaxKind.LockStatement:
+                return BindLockStatement((LockStatementSyntax)syntax);
             case SyntaxKind.DoWhileStatement:
                 return BindDoWhileStatement((DoWhileStatementSyntax)syntax);
             case SyntaxKind.LabeledStatement:
@@ -3784,6 +3786,92 @@ internal sealed class StatementBinder
     {
         // ADR-0070: `while cond { body }` shares the lowering of `for cond { body }`.
         return BindForConditionStatementCore(syntax, syntax.Condition, syntax.Body, labelName: null);
+    }
+
+    /// <summary>
+    /// Issue #1885: lowers <c>lock expr { body }</c> to the classic
+    /// <c>System.Threading.Monitor.Enter</c> / <c>try</c> / <c>finally</c> /
+    /// <c>Monitor.Exit</c> pattern, evaluating <c>expr</c> exactly once into a
+    /// synthesized readonly local so <c>Enter</c> and <c>Exit</c> always
+    /// agree on the same monitor. Any reference-type target is accepted; a
+    /// value-type target is rejected (matches C# CS0185) because Monitor
+    /// would box a fresh copy on every entry, defeating mutual exclusion.
+    /// </summary>
+    private BoundStatement BindLockStatement(LockStatementSyntax syntax)
+    {
+        var target = bindExpression(syntax.Expression);
+        if (target is BoundErrorExpression)
+        {
+            return BindErrorStatement();
+        }
+
+        if (!IsLockableReferenceType(target.Type))
+        {
+            Diagnostics.ReportLockTargetMustBeReferenceType(syntax.Expression.Location, target.Type ?? TypeSymbol.Error);
+            return BindErrorStatement();
+        }
+
+        var tempVar = new LocalVariableSymbol($"$lock$target${binderCtx.SyntheticLocalCounter++}", isReadOnly: true, target.Type);
+        scope.TryDeclareVariable(tempVar);
+        var tempDecl = new BoundVariableDeclaration(syntax, tempVar, target);
+        BoundExpression TempAsObject()
+        {
+            var read = new BoundVariableExpression(syntax, tempVar);
+            return read.Type == TypeSymbol.Object ? read : new BoundConversionExpression(syntax, TypeSymbol.Object, read);
+        }
+
+        var monitorType = typeof(System.Threading.Monitor);
+        var importedClass = new ImportedClassSymbol(monitorType, declaration: null);
+        var enterMethod = monitorType.GetMethod("Enter", new[] { typeof(object) });
+        var exitMethod = monitorType.GetMethod("Exit", new[] { typeof(object) });
+        var enterFn = new ImportedFunctionSymbol(enterMethod.Name, importedClass, enterMethod, declaration: null);
+        var exitFn = new ImportedFunctionSymbol(exitMethod.Name, importedClass, exitMethod, declaration: null);
+
+        var enterStmt = new BoundExpressionStatement(
+            syntax,
+            new BoundImportedCallExpression(syntax, enterFn, ImmutableArray.Create(TempAsObject())));
+
+        var body = BindStatement(syntax.Body);
+        var exitCall = new BoundImportedCallExpression(syntax, exitFn, ImmutableArray.Create(TempAsObject()));
+        var tryStmt = BuildCleanupTryStatement(ImmutableArray.Create(body), exitCall);
+
+        return new BoundBlockStatement(syntax, ImmutableArray.Create<BoundStatement>(tempDecl, enterStmt, tryStmt));
+    }
+
+    /// <summary>
+    /// Issue #1885: true when <paramref name="type"/> is a reference type and
+    /// therefore a legal <c>lock</c> target. Unwraps a nullable annotation to
+    /// check the underlying type. G# classes (<see cref="StructSymbol"/> with
+    /// <c>IsClass</c>), interfaces, arrays, delegates, and function-value
+    /// types are always reference types; imported CLR types defer to
+    /// <c>ClrType.IsValueType</c>.
+    /// </summary>
+    private static bool IsLockableReferenceType(TypeSymbol type)
+    {
+        if (type == null || type == TypeSymbol.Error)
+        {
+            return true;
+        }
+
+        if (type is NullableTypeSymbol nullable)
+        {
+            type = nullable.UnderlyingType;
+        }
+
+        switch (type)
+        {
+            case StructSymbol structType:
+                return structType.IsClass;
+            case EnumSymbol:
+                return false;
+            case InterfaceSymbol:
+            case ArrayTypeSymbol:
+            case DelegateTypeSymbol:
+            case FunctionTypeSymbol:
+                return true;
+        }
+
+        return type.ClrType == null || !type.ClrType.IsValueType;
     }
 
     private BoundStatement BindDoWhileStatement(DoWhileStatementSyntax syntax)

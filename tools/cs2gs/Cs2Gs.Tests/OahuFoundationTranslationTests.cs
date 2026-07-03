@@ -262,8 +262,10 @@ namespace Demo
     }
 
     /// <summary>
-    /// ADR-0115 §B: `lock (x) { .. }` lowers to a `Monitor.Enter`/`try`/`finally`
-    /// `Monitor.Exit` pair and a local function maps to a `let name = lambda`.
+    /// Issue #1885: `lock (x) { .. }` maps directly to G#'s native `lock x { .. }`
+    /// keyword (no more hand-rolled `Monitor.Enter`/`try`/`finally`/
+    /// `Monitor.Exit`, which used to omit `import System.Threading` and fail
+    /// GS0157). A local function maps to a `let name = lambda`.
     /// </summary>
     [Fact]
     public void LockAndLocalFunction_MapToNativeForms()
@@ -285,8 +287,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Monitor.Enter", printed);
-        Assert.Contains("Monitor.Exit", printed);
+        Assert.Contains("lock this.gate {", printed);
+        Assert.DoesNotContain("Monitor", printed);
         Assert.Contains("Twice = ", printed);
     }
 

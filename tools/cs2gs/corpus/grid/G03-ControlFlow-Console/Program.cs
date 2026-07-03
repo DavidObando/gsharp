@@ -20,6 +20,7 @@ namespace Corpus.Grid03
             ForStatementFixture.Run();
             IfStatementFixture.Run();
             LocalFunctionStatementFixture.Run();
+            LockStatementFixture.Run();
             ReturnStatementFixture.Run();
             SwitchStatementFixture.Run();
             ThrowStatementFixture.Run();

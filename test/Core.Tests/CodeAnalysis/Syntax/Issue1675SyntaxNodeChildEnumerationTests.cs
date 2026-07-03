@@ -75,6 +75,9 @@ public class Issue1675SyntaxNodeChildEnumerationTests
 
         // await using / await for
         "package p\nimport System\nasync func F(stream any) {\n  await using let r = stream\n  await for v in stream {\n  }\n}\n",
+
+        // lock statement (issue #1885)
+        "package p\nclass Gate {}\nfunc F(g Gate) {\n  lock g {\n    var x = 1\n  }\n}\n",
     };
 
     /// <summary>
