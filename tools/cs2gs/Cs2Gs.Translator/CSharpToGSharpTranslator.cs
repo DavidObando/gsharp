@@ -132,6 +132,14 @@ public sealed class CSharpToGSharpTranslator
         return new CompilationUnit(package, imports, members);
     }
 
+    // Forwards to the canonical identifier sanitizer implemented on the nested
+    // declaration visitor, so callers outside the visitor (e.g.
+    // <see cref="CSharpTypeMapper"/>) can route type-name references through the
+    // exact same sanitizer used at every declaration and reference site inside
+    // the visitor, keeping declared and referenced names in agreement (issue
+    // #1734).
+    internal static string SanitizeIdentifier(string name) => DeclarationVisitor.SanitizeIdentifier(name);
+
     private static IEnumerable<MemberDeclarationSyntax> EnumerateTopLevelDeclarations(CompilationUnitSyntax root)
     {
         foreach (MemberDeclarationSyntax member in root.Members)
@@ -578,6 +586,32 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return (funcs, statements);
+        }
+
+        // The set of hard G# keywords (Cs2Gs.Compiler SyntaxFacts.GetKeywordKind).
+        // A C# identifier that collides with one of these cannot be emitted bare; it
+        // is suffixed with `_` consistently at every declaration and reference site.
+        // Internal (not private) so the outer <see cref="CSharpToGSharpTranslator"/>
+        // forwarding method can expose it to <see cref="CSharpTypeMapper"/>, which
+        // routes type-name references through this exact sanitizer too (issue
+        // #1734).
+        internal static string SanitizeIdentifier(string name)
+        {
+            if (string.IsNullOrEmpty(name))
+            {
+                return name;
+            }
+
+            // C# verbatim identifiers (`@default`, `@class`) carry a leading `@`
+            // in their syntax text; G# has no verbatim-identifier escape, so strip
+            // it before the reserved-word check (the bare name is then suffixed if
+            // it still collides with a G# keyword).
+            if (name[0] == '@')
+            {
+                name = name.Substring(1);
+            }
+
+            return GSharpReservedWords.Contains(name) ? name + "_" : name;
         }
 
         /// <summary>
@@ -1078,7 +1112,7 @@ public sealed class CSharpToGSharpTranslator
 
             return new TypeDeclaration(
                 kind.Value,
-                node.Identifier.Text,
+                SanitizeIdentifier(node.Identifier.Text),
                 typeParameters: typeParameters,
                 primaryConstructorParameters: primaryCtor,
                 baseType: baseType,
@@ -1291,7 +1325,7 @@ public sealed class CSharpToGSharpTranslator
                 (string Name, ITypeSymbol Type, bool IsProperty) target = paramToTarget[param];
                 GTypeReference type = this.typeMapper.Map(target.Type, this.context, param.Locations.FirstOrDefault());
                 GExpression liftedDefault = this.BuildOptionalParameterDefault(param, type);
-                primaryParameters.Add(new Parameter(target.Name, type, defaultValue: liftedDefault));
+                primaryParameters.Add(new Parameter(SanitizeIdentifier(target.Name), type, defaultValue: liftedDefault));
                 if (target.IsProperty)
                 {
                     propertiesAsParams.Add(target.Name);
@@ -2542,7 +2576,7 @@ public sealed class CSharpToGSharpTranslator
                 _ => Variance.None,
             };
 
-            return new TypeParameter(tp.Name, legacy, flags, variance);
+            return new TypeParameter(SanitizeIdentifier(tp.Name), legacy, flags, variance);
         }
 
         private IReadOnlyList<Parameter> MapPrimaryConstructor(TypeDeclarationSyntax node)
@@ -4797,7 +4831,7 @@ public sealed class CSharpToGSharpTranslator
                 lambda = new LambdaExpression(parameters, blockBody: new BlockStatement(new List<GStatement>()), isAsync: isAsync, returnType: returnType, isFunctionLiteral: true);
             }
 
-            return new LocalFunctionStatement(localFunction.Identifier.Text, lambda);
+            return new LocalFunctionStatement(SanitizeIdentifier(localFunction.Identifier.Text), lambda);
         }
 
         /// <summary>
@@ -7490,7 +7524,7 @@ public sealed class CSharpToGSharpTranslator
             {
                 target = new MemberAccessExpression(
                     this.TranslateExpression(member.Expression),
-                    memberGeneric.Identifier.Text);
+                    SanitizeIdentifier(memberGeneric.Identifier.Text));
                 typeArguments = this.MapTypeArguments(memberGeneric);
             }
             else if (invocation.Expression is MemberBindingExpressionSyntax memberBinding
@@ -7502,7 +7536,7 @@ public sealed class CSharpToGSharpTranslator
                 // bracket-type-argument form so the chained call keeps `[T...]`.
                 target = new MemberAccessExpression(
                     new ConditionalReceiverExpression(),
-                    memberBindingGeneric.Identifier.Text);
+                    SanitizeIdentifier(memberBindingGeneric.Identifier.Text));
                 typeArguments = this.MapTypeArguments(memberBindingGeneric);
             }
             else if (invocation.Expression is IdentifierNameSyntax bareName &&
@@ -7679,8 +7713,8 @@ public sealed class CSharpToGSharpTranslator
             }
 
             IMethodSymbol original = method.ReducedFrom ?? method;
-            ownerName = original.ContainingType?.Name;
-            methodName = original.Name;
+            ownerName = original.ContainingType?.Name is { } containingName ? SanitizeIdentifier(containingName) : null;
+            methodName = SanitizeIdentifier(original.Name);
             return ownerName != null;
         }
 
@@ -8263,14 +8297,14 @@ public sealed class CSharpToGSharpTranslator
                         if (memberElements != null)
                         {
                             fieldInitializers.Add(new FieldInitializer(
-                                name.Identifier.Text,
+                                SanitizeIdentifier(name.Identifier.Text),
                                 new CollectionInitializerExpression(target: null, memberElements)));
                             continue;
                         }
                     }
 
                     fieldInitializers.Add(new FieldInitializer(
-                        name.Identifier.Text,
+                        SanitizeIdentifier(name.Identifier.Text),
                         this.TranslateExpression(assignment.Right)));
                 }
                 else
@@ -8429,7 +8463,7 @@ public sealed class CSharpToGSharpTranslator
                     assignment.Left is IdentifierNameSyntax name)
                 {
                     updates.Add(new FieldInitializer(
-                        name.Identifier.Text,
+                        SanitizeIdentifier(name.Identifier.Text),
                         this.TranslateExpression(assignment.Right)));
                 }
                 else
@@ -8615,28 +8649,6 @@ public sealed class CSharpToGSharpTranslator
             return symbol != null
                 ? this.typeMapper.Map(symbol, this.context, type.GetLocation())
                 : new NamedTypeReference(type.ToString());
-        }
-
-        // The set of hard G# keywords (Cs2Gs.Compiler SyntaxFacts.GetKeywordKind).
-        // A C# identifier that collides with one of these cannot be emitted bare; it
-        // is suffixed with `_` consistently at every declaration and reference site.
-        private static string SanitizeIdentifier(string name)
-        {
-            if (string.IsNullOrEmpty(name))
-            {
-                return name;
-            }
-
-            // C# verbatim identifiers (`@default`, `@class`) carry a leading `@`
-            // in their syntax text; G# has no verbatim-identifier escape, so strip
-            // it before the reserved-word check (the bare name is then suffixed if
-            // it still collides with a G# keyword).
-            if (name[0] == '@')
-            {
-                name = name.Substring(1);
-            }
-
-            return GSharpReservedWords.Contains(name) ? name + "_" : name;
         }
 
         private GExpression TranslatePredefinedTypeExpression(PredefinedTypeSyntax predefined)
@@ -8951,7 +8963,7 @@ public sealed class CSharpToGSharpTranslator
                 case DeclarationPatternSyntax declaration
                     when declaration.Designation is SingleVariableDesignationSyntax variable:
                     return new TypePattern(
-                        variable.Identifier.Text,
+                        SanitizeIdentifier(variable.Identifier.Text),
                         this.MapTypeSyntax(declaration.Type));
 
                 case RecursivePatternSyntax recursive:
@@ -9004,7 +9016,7 @@ public sealed class CSharpToGSharpTranslator
                         }
 
                         fields.Add(new PropertyPatternField(
-                            sub.NameColon.Name.Identifier.Text,
+                            SanitizeIdentifier(sub.NameColon.Name.Identifier.Text),
                             this.TranslatePattern(sub.Pattern, bindings)));
                     }
                 }
@@ -9014,10 +9026,16 @@ public sealed class CSharpToGSharpTranslator
 
             // Typed recursive pattern: synthesize a designator named after the type
             // (`circle`), and rewrite each `Name: var x` property binding to a
-            // member access on that designator (`circle.Radius`).
+            // member access on that designator (`circle.Radius`). The synthesized
+            // designator is derived from the right-most identifier token of the
+            // type syntax (not `Type.ToString()`, which yields an invalid
+            // identifier for a qualified/generic type such as `Ns.Circle` or
+            // `List<int>`), and sanitized like every other declared/synthesized
+            // name so a keyword-colliding designator agrees with its references
+            // (issue #1734).
             string designator = recursive.Designation is SingleVariableDesignationSyntax named
-                ? named.Identifier.Text
-                : LowerCamel(recursive.Type.ToString());
+                ? SanitizeIdentifier(named.Identifier.Text)
+                : SanitizeIdentifier(LowerCamel(GetRightmostTypeName(recursive.Type)));
 
             if (recursive.PropertyPatternClause != null)
             {
@@ -9031,7 +9049,7 @@ public sealed class CSharpToGSharpTranslator
                             boundSymbol,
                             new MemberAccessExpression(
                                 new IdentifierExpression(designator),
-                                sub.NameColon.Name.Identifier.Text)));
+                                SanitizeIdentifier(sub.NameColon.Name.Identifier.Text))));
                     }
                     else
                     {
@@ -9053,6 +9071,27 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return char.ToLowerInvariant(name[0]) + name.Substring(1);
+        }
+
+        // Extracts the right-most simple-name identifier token from a (possibly
+        // qualified/generic) type syntax, e.g. `Ns.Circle` -> "Circle",
+        // `List<int>` -> "List", `Outer.Inner<T>` -> "Inner". `Type.ToString()`
+        // renders the full qualified/generic text, which is not itself a valid
+        // identifier and must never be used to synthesize a designator name
+        // (issue #1734).
+        private static string GetRightmostTypeName(TypeSyntax type)
+        {
+            switch (type)
+            {
+                case QualifiedNameSyntax qualified:
+                    return GetRightmostTypeName(qualified.Right);
+                case AliasQualifiedNameSyntax aliasQualified:
+                    return GetRightmostTypeName(aliasQualified.Name);
+                case SimpleNameSyntax simple:
+                    return simple.Identifier.Text;
+                default:
+                    return type.ToString();
+            }
         }
 
         private GExpression TranslateQuery(QueryExpressionSyntax query)
@@ -9139,7 +9178,7 @@ public sealed class CSharpToGSharpTranslator
             ExpressionSyntax lambdaBody)
         {
             var lambda = new LambdaExpression(
-                new List<Parameter> { new Parameter(rangeVar, rangeType) },
+                new List<Parameter> { new Parameter(SanitizeIdentifier(rangeVar), rangeType) },
                 expressionBody: this.TranslateExpression(lambdaBody));
             return new InvocationExpression(
                 new MemberAccessExpression(receiver, method),
