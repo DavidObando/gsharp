@@ -287,6 +287,65 @@ namespace Demo
                 d.Message.Contains("try") && d.Message.Contains("finally"));
     }
 
+    /// <summary>
+    /// A <c>continue</c> nested inside a <c>fixed</c> block within a
+    /// while-lowered <c>for</c> (two declarators/incrementors, issue #914).
+    /// Unlike <c>try</c>/<c>finally</c>, a <c>fixed</c> block has no exit-time
+    /// side effect that could be reordered by duplicating the incrementors
+    /// ahead of the <c>continue</c> — it only un-pins a pointer — so this shape
+    /// DOES have a faithful lowering and must NOT be reported as unsupported.
+    /// Pre-fix, <c>RewriteOwnLoopContinue</c> had no <see cref="FixedStatement"/>
+    /// case, fell through to <c>default</c>, and left the <c>continue</c>
+    /// unrewritten: both incrementors were then silently skipped, corrupting
+    /// the iteration count.
+    /// </summary>
+    [Fact]
+    public void ForContinueInsideFixed_StillRunsIncrementorsAndTerminatesWithCorrectCount()
+    {
+        string printed = TranslateAndValidate(@"
+using System;
+
+namespace Demo
+{
+    public sealed class C
+    {
+        public static unsafe void Run()
+        {
+            byte[] data = { 10, 20, 30, 40, 50 };
+            int sum = 0;
+            int i;
+            int n;
+            for (i = 0, n = 0; i < data.Length; i++, n++)
+            {
+                fixed (byte* p = data)
+                {
+                    if (i == 2)
+                    {
+                        continue;
+                    }
+
+                    sum += p[i];
+                }
+            }
+
+            Console.WriteLine(sum + "","" + i + "","" + n);
+        }
+    }
+}");
+
+        // Structural check: the incrementors are duplicated INSIDE the fixed
+        // block, ahead of the continue (mirroring the plain-body case).
+        Assert.Contains("fixed p *uint8 = data {", printed);
+        Assert.True(printed.IndexOf("i++", StringComparison.Ordinal) <
+            printed.IndexOf("continue", StringComparison.Ordinal));
+
+        string stdout = CompileAndRun(printed, "C.Run()");
+
+        // C# baseline: i = 0..4 (5 iterations), sum skips i == 2 ->
+        // 10+20+40+50 = 120; both i and n reach 5 when the loop exits normally.
+        Assert.Equal("120,5,5", stdout.Trim());
+    }
+
     private static string TranslateAndValidate(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });

@@ -6154,7 +6154,7 @@ public sealed class CSharpToGSharpTranslator
                 }
                 else
                 {
-                    translatedBody = DuplicateIncrementorsBeforeOwnLoopContinue(translatedBody, incrementorStatements);
+                    translatedBody = this.DuplicateIncrementorsBeforeOwnLoopContinue(forStatement, translatedBody, incrementorStatements);
                 }
             }
 
@@ -6197,14 +6197,98 @@ public sealed class CSharpToGSharpTranslator
         /// <c>continue</c>.
         /// </para>
         /// </summary>
-        private static BlockStatement DuplicateIncrementorsBeforeOwnLoopContinue(
+        private BlockStatement DuplicateIncrementorsBeforeOwnLoopContinue(
+            ForStatementSyntax forStatement,
             BlockStatement body,
             IReadOnlyList<GStatement> incrementorStatements)
         {
-            return (BlockStatement)RewriteOwnLoopContinue(body, incrementorStatements);
+            return (BlockStatement)this.RewriteOwnLoopContinue(forStatement, body, incrementorStatements);
         }
 
-        private static GStatement RewriteOwnLoopContinue(GStatement statement, IReadOnlyList<GStatement> incrementorStatements)
+        // True when `statement` (a TRANSLATED G# node) transitively holds a
+        // `ContinueStatement` that targets THIS loop, mirroring
+        // <see cref="BodyContainsOwnLoopContinue"/> but walking the G# AST
+        // instead of the C# syntax tree — used by <see
+        // cref="RewriteOwnLoopContinue"/>'s `default` arm so an unhandled
+        // body-carrying G# statement kind is reported (issue #1732) instead of
+        // silently passing an unrewritten own-loop `continue` through (which
+        // would skip the duplicated incrementors, reproducing the original
+        // miscompile). Boundaries match <see cref="RewriteOwnLoopContinue"/>:
+        // a nested loop or local function never contributes its own
+        // `continue`s to this check.
+        private static bool ContainsOwnLoopContinue(GStatement statement)
+        {
+            switch (statement)
+            {
+                case ContinueStatement:
+                    return true;
+
+                case BlockStatement block:
+                    foreach (GStatement inner in block.Statements)
+                    {
+                        if (ContainsOwnLoopContinue(inner))
+                        {
+                            return true;
+                        }
+                    }
+
+                    return false;
+
+                case IfStatement ifStatement:
+                    return ContainsOwnLoopContinue(ifStatement.Then)
+                        || (ifStatement.ElseBranch != null && ContainsOwnLoopContinue(ifStatement.ElseBranch));
+
+                case TryStatement tryStatement:
+                    if (ContainsOwnLoopContinue(tryStatement.TryBlock))
+                    {
+                        return true;
+                    }
+
+                    foreach (CatchClause catchClause in tryStatement.CatchClauses)
+                    {
+                        if (ContainsOwnLoopContinue(catchClause.Body))
+                        {
+                            return true;
+                        }
+                    }
+
+                    // FinallyBlock deliberately excluded: C# forbids a jump
+                    // statement leaving a `finally`, so it can never itself
+                    // hold an own-loop `continue`.
+                    return false;
+
+                case SwitchStatement switchStatement:
+                    foreach (SwitchStatementCase switchCase in switchStatement.Cases)
+                    {
+                        if (ContainsOwnLoopContinue(switchCase.Body))
+                        {
+                            return true;
+                        }
+                    }
+
+                    return false;
+
+                case FixedStatement fixedStatement:
+                    return ContainsOwnLoopContinue(fixedStatement.Body);
+
+                // Boundaries: a nested loop's own continue seam, or a nested
+                // local function (its own statement seam) — never counts.
+                case WhileStatement:
+                case ForStatement:
+                case DoWhileStatement:
+                case ForInStatement:
+                case LocalFunctionStatement:
+                    return false;
+
+                default:
+                    return false;
+            }
+        }
+
+        private GStatement RewriteOwnLoopContinue(
+            ForStatementSyntax forStatement,
+            GStatement statement,
+            IReadOnlyList<GStatement> incrementorStatements)
         {
             switch (statement)
             {
@@ -6219,7 +6303,7 @@ public sealed class CSharpToGSharpTranslator
                     var rewritten = new List<GStatement>(block.Statements.Count);
                     foreach (GStatement inner in block.Statements)
                     {
-                        rewritten.Add(RewriteOwnLoopContinue(inner, incrementorStatements));
+                        rewritten.Add(this.RewriteOwnLoopContinue(forStatement, inner, incrementorStatements));
                     }
 
                     return new BlockStatement(rewritten, block.IsUnsafe);
@@ -6229,10 +6313,10 @@ public sealed class CSharpToGSharpTranslator
                 {
                     GStatement elseBranch = ifStatement.ElseBranch == null
                         ? null
-                        : RewriteOwnLoopContinue(ifStatement.ElseBranch, incrementorStatements);
+                        : this.RewriteOwnLoopContinue(forStatement, ifStatement.ElseBranch, incrementorStatements);
                     return new IfStatement(
                         ifStatement.Condition,
-                        (BlockStatement)RewriteOwnLoopContinue(ifStatement.Then, incrementorStatements),
+                        (BlockStatement)this.RewriteOwnLoopContinue(forStatement, ifStatement.Then, incrementorStatements),
                         elseBranch);
                 }
 
@@ -6244,11 +6328,11 @@ public sealed class CSharpToGSharpTranslator
                         catchClauses.Add(new CatchClause(
                             catchClause.VariableName,
                             catchClause.ExceptionType,
-                            (BlockStatement)RewriteOwnLoopContinue(catchClause.Body, incrementorStatements)));
+                            (BlockStatement)this.RewriteOwnLoopContinue(forStatement, catchClause.Body, incrementorStatements)));
                     }
 
                     return new TryStatement(
-                        (BlockStatement)RewriteOwnLoopContinue(tryStatement.TryBlock, incrementorStatements),
+                        (BlockStatement)this.RewriteOwnLoopContinue(forStatement, tryStatement.TryBlock, incrementorStatements),
                         catchClauses,
                         tryStatement.FinallyBlock);
                 }
@@ -6260,11 +6344,20 @@ public sealed class CSharpToGSharpTranslator
                     {
                         cases.Add(new SwitchStatementCase(
                             switchCase.Pattern,
-                            (BlockStatement)RewriteOwnLoopContinue(switchCase.Body, incrementorStatements),
+                            (BlockStatement)this.RewriteOwnLoopContinue(forStatement, switchCase.Body, incrementorStatements),
                             switchCase.Guard));
                     }
 
                     return new SwitchStatement(switchStatement.Subject, cases);
+                }
+
+                case FixedStatement fixedStatement:
+                {
+                    return new FixedStatement(
+                        fixedStatement.Name,
+                        fixedStatement.PointerType,
+                        fixedStatement.Source,
+                        (BlockStatement)this.RewriteOwnLoopContinue(forStatement, fixedStatement.Body, incrementorStatements));
                 }
 
                 // Boundaries: a nested loop's own continue seam, or a nested
@@ -6277,6 +6370,19 @@ public sealed class CSharpToGSharpTranslator
                     return statement;
 
                 default:
+                    // Any other body-carrying G# statement kind that reaches
+                    // here was missed by the cases above. Silently returning
+                    // it unchanged would let an own-loop `continue` buried
+                    // inside it skip the duplicated incrementors — the same
+                    // silent miscompile this rewrite exists to fix (issue
+                    // #1732). Report it instead of guessing a lowering.
+                    if (ContainsOwnLoopContinue(statement))
+                    {
+                        this.context.ReportUnsupported(
+                            forStatement,
+                            $"a 'continue' inside a '{statement.GetType().Name}' within this 'for' loop has no incrementor-duplication lowering yet (issue #1732).");
+                    }
+
                     return statement;
             }
         }
