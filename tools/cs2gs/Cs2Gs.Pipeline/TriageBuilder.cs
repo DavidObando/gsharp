@@ -3,7 +3,9 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Cs2Gs.Translator;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Text;
@@ -19,6 +21,30 @@ namespace Cs2Gs.Pipeline;
 public sealed class TriageBuilder
 {
     private const int SnippetMaxLength = 160;
+
+    // The leading identifier/keyword token of a (trimmed) line — the position
+    // a G# statement/declaration keyword actually occupies syntactically.
+    // Used by ClassifyGsLine (issue #1750) instead of scanning the whole line,
+    // which can match keyword text that only happens to appear inside a
+    // string literal.
+    private static readonly Regex LeadingTokenPattern = new Regex(
+        @"^[A-Za-z_][A-Za-z0-9_]*",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    // Every modifier keyword the G# printer can emit ahead of a construct
+    // keyword (issue #1750 B1), audited from Cs2Gs.CodeModel.Printing.GSharpPrinter:
+    // RenderVisibility (public/internal/private/protected), the unsafe/open/
+    // sealed/abstract prefixes on RenderTypeDeclaration, the open/override
+    // prefixes on RenderProperty, and the open/override/async prefixes on
+    // RenderMethod. `static`, `virtual`, and `export` are not currently emitted
+    // by the printer but are kept in the set defensively so a future modifier
+    // the printer starts emitting doesn't silently collapse back into the
+    // generic bucket.
+    private static readonly HashSet<string> ModifierTokens = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "public", "private", "internal", "protected", "static", "async", "sealed",
+        "abstract", "virtual", "override", "export", "open", "unsafe",
+    };
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TriageBuilder"/> class.
@@ -91,7 +117,7 @@ public sealed class TriageBuilder
             artifact.Stage,
             artifact.Diagnostic.Id,
             artifact.OffendingCSharpConstruct.Kind,
-            artifact.OffendingCSharpConstruct.Snippet);
+            snippet);
         artifact.SuggestedIssue = this.UnsupportedIssue(artifact);
         return artifact;
     }
@@ -137,7 +163,7 @@ public sealed class TriageBuilder
             artifact.Stage,
             artifact.Diagnostic.Id,
             artifact.OffendingCSharpConstruct.Kind,
-            artifact.OffendingCSharpConstruct.Snippet);
+            parseError);
         artifact.SuggestedIssue = this.UnsupportedIssue(artifact);
         return artifact;
     }
@@ -193,7 +219,7 @@ public sealed class TriageBuilder
             artifact.Stage,
             artifact.Diagnostic.Id,
             artifact.OffendingCSharpConstruct.Kind,
-            artifact.OffendingCSharpConstruct.Snippet);
+            message);
         artifact.SuggestedIssue = this.ProjectLoadIssue(artifact);
         return artifact;
     }
@@ -244,7 +270,7 @@ public sealed class TriageBuilder
             artifact.Stage,
             artifact.Diagnostic.Id,
             artifact.OffendingCSharpConstruct.Kind,
-            artifact.OffendingCSharpConstruct.Snippet);
+            snippet ?? diagnostic.Message);
         artifact.SuggestedIssue = this.CompileIssue(artifact);
         return artifact;
     }
@@ -296,7 +322,7 @@ public sealed class TriageBuilder
             artifact.Stage,
             artifact.Diagnostic.Id,
             artifact.OffendingCSharpConstruct.Kind,
-            artifact.OffendingCSharpConstruct.Snippet);
+            error.Method ?? error.RawLine);
         artifact.SuggestedIssue = this.IlVerifyIssue(artifact);
         return artifact;
     }
@@ -347,7 +373,7 @@ public sealed class TriageBuilder
             artifact.Stage,
             artifact.Diagnostic.Id,
             artifact.OffendingCSharpConstruct.Kind,
-            artifact.OffendingCSharpConstruct.Snippet);
+            diff.ExpectedLine ?? diff.ActualLine ?? diff.Describe());
         artifact.SuggestedIssue = this.TestParityIssue(artifact);
         return artifact;
     }
@@ -398,7 +424,7 @@ public sealed class TriageBuilder
             artifact.Stage,
             artifact.Diagnostic.Id,
             artifact.OffendingCSharpConstruct.Kind,
-            artifact.OffendingCSharpConstruct.Snippet);
+            diff.Describe());
         artifact.SuggestedIssue = this.TestParityIssue(artifact);
         return artifact;
     }
@@ -446,8 +472,75 @@ public sealed class TriageBuilder
             artifact.Stage,
             artifact.Diagnostic.Id,
             artifact.OffendingCSharpConstruct.Kind,
-            artifact.OffendingCSharpConstruct.Snippet);
+            message);
         artifact.SuggestedIssue = this.TestParityIssue(artifact);
+        return artifact;
+    }
+
+    /// <summary>
+    /// Builds a triage artifact for an unhandled exception thrown by a stage
+    /// itself, rather than a diagnostic the stage reported normally (issue
+    /// #1750). The offending construct <c>kind</c> is the exception's runtime
+    /// type name — a structural, deterministic signal — rather than any text
+    /// pulled from <see cref="Exception.Message"/>: crash messages routinely
+    /// embed run-scoped absolute paths (temp/work directories that include the
+    /// run id) that differ machine-to-machine and run-to-run, so fingerprinting
+    /// on the raw message text kept the same recurring crash from ever
+    /// deduping. <see cref="Exception.Message"/> is still recorded in full on
+    /// <see cref="TriageDiagnostic.Message"/> for human triage; it is simply
+    /// not the fingerprint's construct-kind signal (its embedded paths are
+    /// also normalized generically by <see cref="Fingerprint.NormalizeShape"/>
+    /// as a second line of defense).
+    /// </summary>
+    /// <param name="stage">The stage that crashed.</param>
+    /// <param name="category">The triage category to file the crash artifact under.</param>
+    /// <param name="diagnosticId">The diagnostic id to stamp (stage-specific, e.g. <c>GS9999</c>).</param>
+    /// <param name="ex">The exception the stage threw.</param>
+    /// <returns>The populated triage artifact.</returns>
+    public TriageArtifact StageCrash(MigrationStageKind stage, TriageCategory category, string diagnosticId, Exception ex)
+    {
+        if (ex is null)
+        {
+            throw new ArgumentNullException(nameof(ex));
+        }
+
+        string kind = ex.GetType().Name;
+        string message = $"{TriageSerialization.StageName(stage)} stage crashed ({kind}): {ex.Message}";
+
+        var artifact = this.NewArtifact(stage, category);
+        artifact.Diagnostic = new TriageDiagnostic
+        {
+            Id = diagnosticId,
+            Message = message,
+            Severity = "error",
+        };
+        artifact.SourceLocation = new TriageSourceLocation
+        {
+            GsFile = null,
+            GsLine = null,
+            GsColumn = null,
+            CsFile = null,
+            CsLine = null,
+            CsColumn = null,
+        };
+        artifact.OffendingCSharpConstruct = new TriageOffendingConstruct
+        {
+            Kind = kind,
+            Snippet = Truncate(message),
+        };
+        artifact.Fingerprint = Fingerprint.Compute(
+            artifact.Category,
+            artifact.Stage,
+            artifact.Diagnostic.Id,
+            artifact.OffendingCSharpConstruct.Kind,
+            message);
+        artifact.SuggestedIssue = category switch
+        {
+            TriageCategory.CompileError => this.CompileIssue(artifact),
+            TriageCategory.IlVerifyFailure => this.IlVerifyIssue(artifact),
+            TriageCategory.TestParityFailure => this.TestParityIssue(artifact),
+            _ => this.UnsupportedIssue(artifact),
+        };
         return artifact;
     }
 
@@ -490,7 +583,36 @@ public sealed class TriageBuilder
             return "GSharpConstruct";
         }
 
-        string trimmed = line.TrimStart();
+        // Structural signal (issue #1750): classify on the *leading* token of
+        // the statement/declaration only — the syntactic position where a G#
+        // keyword actually appears — never on substring content anywhere in
+        // the line. Scanning the whole line (the prior `Contains(" for ")`
+        // behavior) misclassifies a line like `let msg = "run for cover"` as
+        // a `for` construct because the keyword happens to appear inside a
+        // string literal; the leading token of that line is `let`, which is
+        // unaffected by what the string literal contains.
+        // Skip past any leading modifier run (issue #1750 B1) — G# construct
+        // lines routinely carry modifiers ahead of the actual construct
+        // keyword (`sealed class Shape {`, `async func Bump(...)`,
+        // `private func Helper(...)`, `public static func F()`). Matching only
+        // the very first token misclassifies every modifier-prefixed
+        // construct into the generic bucket, colliding structurally distinct
+        // gaps. Walk forward token-by-token — still by syntactic position,
+        // never by scanning the whole line — until the token isn't a modifier.
+        string remainder = line.TrimStart();
+        Match leadingToken = LeadingTokenPattern.Match(remainder);
+        while (leadingToken.Success && ModifierTokens.Contains(leadingToken.Value))
+        {
+            remainder = remainder.Substring(leadingToken.Index + leadingToken.Length).TrimStart();
+            leadingToken = LeadingTokenPattern.Match(remainder);
+        }
+
+        if (!leadingToken.Success)
+        {
+            return "GSharpConstruct";
+        }
+
+        string token = leadingToken.Value;
         string[] keywords =
         {
             "func", "class", "struct", "data", "interface", "enum", "let", "const",
@@ -499,8 +621,7 @@ public sealed class TriageBuilder
 
         foreach (string keyword in keywords)
         {
-            if (trimmed.StartsWith(keyword + " ", StringComparison.Ordinal) ||
-                trimmed.Contains(" " + keyword + " ", StringComparison.Ordinal))
+            if (string.Equals(token, keyword, StringComparison.Ordinal))
             {
                 return char.ToUpperInvariant(keyword[0]) + keyword.Substring(1) + "Construct";
             }

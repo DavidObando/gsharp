@@ -326,32 +326,20 @@ public sealed class MigrationPipeline
 
     private TriageArtifact StageCrashArtifact(TriageBuilder triage, MigrationStageKind stage, Exception ex)
     {
-        // A stage throwing (e.g. project load failure) is itself a captured gap.
-        if (stage == MigrationStageKind.Compile)
+        // A stage throwing (e.g. project load failure) is itself a captured
+        // gap. Fingerprinted via TriageBuilder.StageCrash (issue #1750) on the
+        // exception's runtime type rather than its raw Message, which
+        // routinely embeds run-scoped absolute paths that would otherwise
+        // fingerprint the same recurring crash differently every run/machine.
+        (TriageCategory category, string diagnosticId) = stage switch
         {
-            return triage.CompileError(
-                new GscDiagnostic("GS9999", "stage crashed: " + ex.Message, "error", null, 1, 1),
-                null);
-        }
+            MigrationStageKind.Compile => (TriageCategory.CompileError, "GS9999"),
+            MigrationStageKind.IlVerify => (TriageCategory.IlVerifyFailure, "IlVerifyError"),
+            MigrationStageKind.TestParity => (TriageCategory.TestParityFailure, "STDOUT-MISMATCH"),
+            _ => (TriageCategory.TranslationUnsupported, "PipelineException"),
+        };
 
-        if (stage == MigrationStageKind.IlVerify)
-        {
-            return triage.IlVerifyFailure(
-                new IlVerifyError("IlVerifyError", null, "ilverify stage crashed: " + ex.Message));
-        }
-
-        if (stage == MigrationStageKind.TestParity)
-        {
-            return triage.TestParityStdoutFailure(
-                StdoutParityResult.Mismatch(0, "<no crash>", "test-parity stage crashed: " + ex.Message));
-        }
-
-        var diagnostic = new Translator.TranslationDiagnostic(
-            "PipelineException",
-            stage + " stage threw: " + ex.Message,
-            null,
-            Translator.TranslationSeverity.Unsupported);
-        return triage.TranslationUnsupported(diagnostic);
+        return triage.StageCrash(stage, category, diagnosticId, ex);
     }
 
     private IReadOnlyList<TriageArtifact> WriteArtifacts(
