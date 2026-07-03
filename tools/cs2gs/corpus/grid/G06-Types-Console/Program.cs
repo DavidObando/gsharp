@@ -1,0 +1,42 @@
+// G06-Types-Console: type-declaration construct grid for cs2gs differential
+// conformance (ADR-0115). One construct per file under Constructs/; each
+// fixture prints deterministic lines prefixed "<Kind>: ". Run order is
+// Constructs/ file-name (ordinal) order.
+using System;
+
+namespace Corpus.Grid06
+{
+    internal static class Program
+    {
+        private static void Main()
+        {
+            BaseListFixture.Run();
+            ClassDeclarationFixture.Run();
+            DestructorDeclarationFixture.Run();
+            EnumDeclarationFixture.Run();
+
+            // QUARANTINED (see Quarantined/): EnumMemberDeclarationFixture — explicit
+            // enum member values are SILENTLY dropped (translate+compile pass; stdout
+            // parity catches 'banana=2' vs 'banana=1'); [Flags] is erased too.
+            // QUARANTINED (see Quarantined/): ExplicitInterfaceSpecifierFixture —
+            // explicit interface impl is lowered to a plain method: with a same-name
+            // public method it fails compile (GS0264 duplicate overload); alone it
+            // compiles but fails ilverify ("Class implements interface but not method").
+            InterfaceDeclarationFixture.Run();
+
+            // QUARANTINED (see Quarantined/): PartialClassFixture — partial class parts
+            // emit two `class Ledger` declarations (GS0102 'Ledger' is already declared);
+            // PrimaryConstructorBaseTypeFixture — primary-constructor parameters are
+            // dropped (GS0125 Variable 'name' doesn't exist; GS0144 arity 0).
+            RecordDeclarationFixture.Run();
+            RecordStructDeclarationFixture.Run();
+
+            // QUARANTINED (see Quarantined/): RequiredMemberFixture — any object
+            // initializer (with or without `required`) emits stray bare assignment
+            // statements before the literal (GS0125 Variable 'Name' doesn't exist).
+            SimpleBaseTypeFixture.Run();
+            StructDeclarationFixture.Run();
+            TypeAliasDeclarationFixture.Run();
+        }
+    }
+}

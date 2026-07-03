@@ -1,0 +1,27 @@
+ArrayCreationExpression: sized=10,20,30
+ArrayCreationExpression: words=alpha,beta
+ArrayCreationExpression: jagged0=1,2 jagged1=3,4,5
+ArrayCreationExpression: withInit=7,8,9
+ArrayInitializerExpression: xs=1,2,3
+ArrayInitializerExpression: names=north,south
+ArrayInitializerExpression: single=42 len=1
+CollectionExpression: array=1,2,3
+CollectionExpression: strings=x,y,z
+CollectionExpression: emptyLen=0
+CollectionInitializerExpression: list=1,2,3
+CollectionInitializerExpression: pairs apple=3;kiwi=1;pear=2
+CollectionInitializerExpression: indexed blue=2;green=4;red=5
+ImplicitArrayCreationExpression: nums=3,1,2 len=3
+ImplicitArrayCreationExpression: strs=pico,nano
+ImplicitArrayCreationExpression: wideSum=6
+IndexExpression: last=5 secondLast=4
+IndexExpression: lastChar=p
+ObjectCreationExpression: byCtor=(3,4)
+ObjectCreationExpression: byProps=(1,2)
+ObjectCreationExpression: implicitNew=(7,7)
+OmittedArraySizeExpression: xs=1,2,3
+OmittedArraySizeExpression: ys=solo len=1
+TupleExpression: items=2,two
+TupleExpression: named=3,three
+TupleExpression: deconstructed=2,two
+TupleExpression: nested=1,2,pair

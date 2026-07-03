@@ -1,0 +1,26 @@
+AwaitExpression: direct=21
+AwaitExpression: sum=42
+AwaitExpression: nested=21
+AwaitExpression: interpolated=16
+AwaitExpression: task-returning helper ran
+AwaitExpression: viaArg=8
+AwaitExpressionConfigureAwait: value=11
+AwaitExpressionConfigureAwait: void-task awaited
+AwaitExpressionConfigureAwait: chained=42
+AwaitExpressionWhenAll: result[0]=1
+AwaitExpressionWhenAll: result[1]=4
+AwaitExpressionWhenAll: result[2]=9
+AwaitExpressionWhenAll: total=14
+AwaitExpressionWhenAll: void WhenAll done
+ForEachStatement: square=1
+ForEachStatement: square=4
+ForEachStatement: square=9
+ForEachStatement: square=16
+ForEachStatement: total=30
+TryStatement: loop step 1 total=10
+TryStatement: loop step 2 total=30
+TryStatement: loop step 3 total=60
+TryStatement: while iterations=2
+TryStatement: try value=5
+TryStatement: catch messageLength=8
+TryStatement: finally value=99

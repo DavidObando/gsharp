@@ -1,0 +1,35 @@
+// inventory: StackAllocArrayCreationExpression — QUARANTINED at ilverify:
+// [IL]: Error [Unverifiable] in StackAllocArrayCreationExpressionFixture::Run()
+// (offset 0x0000000D, localloc). Translate and gsc compile both PASSED for the
+// explicit 'stackalloc int[4]' form, but the emitted IL is unverifiable.
+// The implicit form 'stackalloc[] { 5, 6, 7 }' additionally fails translate:
+// CS2GS-GAP "expression 'ImplicitStackAllocArrayCreationExpression' has no
+// canonical G# form yet".
+using System;
+
+namespace Corpus.Grid05
+{
+    public static class StackAllocArrayCreationExpressionFixture
+    {
+        public static void Run()
+        {
+            Span<int> s = stackalloc int[4];
+            for (int i = 0; i < s.Length; i++)
+            {
+                s[i] = (i + 1) * 10;
+            }
+
+            int sum = 0;
+            for (int i = 0; i < s.Length; i++)
+            {
+                sum += s[i];
+            }
+
+            Console.WriteLine($"StackAllocArrayCreationExpression: sum={sum} len={s.Length}");
+
+            // ImplicitStackAllocArrayCreationExpression.
+            Span<int> t = stackalloc[] { 5, 6, 7 };
+            Console.WriteLine($"StackAllocArrayCreationExpression: implicit={t[0]},{t[1]},{t[2]}");
+        }
+    }
+}

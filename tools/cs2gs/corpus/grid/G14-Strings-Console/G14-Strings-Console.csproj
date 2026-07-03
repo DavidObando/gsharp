@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Corpus.Grid14</RootNamespace>
+    <AssemblyName>G14-Strings-Console</AssemblyName>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,29 @@
+// inventory: DefaultConstraint — where T : default on an override (probe)
+using System;
+
+namespace Corpus.Grid08
+{
+    public abstract class MaybeShower
+    {
+        public abstract string Show<T>(T? value);
+    }
+
+    public sealed class PlainShower : MaybeShower
+    {
+        public override string Show<T>(T? value)
+            where T : default
+        {
+            return value is null ? "null" : "value";
+        }
+    }
+
+    public static class DefaultConstraintFixture
+    {
+        public static void Run()
+        {
+            MaybeShower shower = new PlainShower();
+            Console.WriteLine("DefaultConstraint: string=" + shower.Show("x"));
+            Console.WriteLine("DefaultConstraint: null=" + shower.Show<string>(null));
+        }
+    }
+}

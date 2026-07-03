@@ -63,10 +63,13 @@ public static class UnsupportedByDesign
                 continue;
             }
 
-            // By name: UnionDeclaration is [Experimental] in Roslyn 5.6 (naming
-            // the enum member trips RSEXPERIMENTAL006), and both entries are
-            // unreachable artifacts rather than translatable constructs.
-            if (name is "UnionDeclaration" or "UnknownAccessorDeclaration")
+            // By name: UnionDeclaration and WithElement are [Experimental]/
+            // preview-only in Roslyn 5.6 (naming the enum member trips
+            // RSEXPERIMENTAL006; `with(...)` collection elements are CS8652
+            // under LangVersion latest), and the others are parser
+            // error-recovery artifacts rather than translatable constructs.
+            if (name is "UnionDeclaration" or "UnknownAccessorDeclaration" or "WithElement"
+                or "IncompleteMember")
             {
                 registry[kind] = UnsupportedRationale.NotReachable;
                 continue;
@@ -87,6 +90,10 @@ public static class UnsupportedByDesign
         registry[SyntaxKind.RefTypeExpression] = UnsupportedRationale.NoGsharpConstruct;
         registry[SyntaxKind.RefValueExpression] = UnsupportedRationale.NoGsharpConstruct;
         registry[SyntaxKind.ArgListExpression] = UnsupportedRationale.NoGsharpConstruct;
+
+        // Extern aliases disambiguate identically-named assemblies — a
+        // project-system feature G# does not model and no mapping is planned.
+        registry[SyntaxKind.ExternAliasDirective] = UnsupportedRationale.NoGsharpConstruct;
 
         return registry;
     }

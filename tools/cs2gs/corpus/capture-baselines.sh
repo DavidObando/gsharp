@@ -70,4 +70,10 @@ capture_console "${CORPUS_DIR}/L5-Console" "L5-Console.csproj"
 capture_tests   "${CORPUS_DIR}/L2-Library.Tests" "L2-Library.Tests.csproj"
 capture_tests   "${CORPUS_DIR}/L3-Library.Tests" "L3-Library.Tests.csproj"
 
+# --- Conformance grid (ADR-0138): every grid console app ----------------------
+for grid_app in "${CORPUS_DIR}"/grid/G*-Console; do
+    [ -d "${grid_app}" ] || continue
+    capture_console "${grid_app}" "$(basename "${grid_app}").csproj"
+done
+
 echo "== baseline capture complete =="

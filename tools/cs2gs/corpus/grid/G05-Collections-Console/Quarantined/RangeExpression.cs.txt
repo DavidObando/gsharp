@@ -1,0 +1,31 @@
+// inventory: RangeExpression — QUARANTINED at compile (gsc): GS0159 "Cannot
+// find function Slice." Every range form (a[1..3], a[..2], a[^2..], a[..],
+// "gsharp"[1..4]) is lowered to <receiver>.Slice(...), which resolves for
+// neither arrays nor strings in G#; String.Join/Length then cascade-fail.
+using System;
+
+namespace Corpus.Grid05
+{
+    public static class RangeExpressionFixture
+    {
+        public static void Run()
+        {
+            int[] a = { 1, 2, 3, 4, 5, 6 };
+
+            int[] mid = a[1..3];
+            Console.WriteLine($"RangeExpression: mid={string.Join(",", mid)}");
+
+            int[] head = a[..2];
+            Console.WriteLine($"RangeExpression: head={string.Join(",", head)}");
+
+            int[] tail = a[^2..];
+            Console.WriteLine($"RangeExpression: tail={string.Join(",", tail)}");
+
+            int[] all = a[..];
+            Console.WriteLine($"RangeExpression: allLen={all.Length}");
+
+            string sliced = "gsharp"[1..4];
+            Console.WriteLine($"RangeExpression: sliced={sliced}");
+        }
+    }
+}

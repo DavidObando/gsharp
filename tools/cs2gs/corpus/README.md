@@ -27,6 +27,20 @@ so the simplest possible gap is isolated first.
 Each level builds **and** tests green in C# **first** — that captured C# state
 is the parity oracle.
 
+## The conformance grid (ADR-0138)
+
+`grid/G01…G14` are the per-construct differential fixtures that complement the
+app-level L-corpus: console apps with one C# construct per
+`Constructs/<SyntaxKind>.cs` (header `// inventory: <SyntaxKind>`), a
+deterministic stdout, and a `baseline.stdout.golden` byte-compared against the
+translated G# program in stage 4. Their rows in
+`tools/cs2gs/coverage/csharp-construct-inventory.json` point back at the
+fixture files. Grid apps must stay fully green: a construct that fails any
+pipeline stage is quarantined out of the app and ledgered in
+`../triage/gaps.json`. A PR that adds a gap-surfacing fixture must ledger the
+fingerprint in the same PR — otherwise the CI gate correctly fails on the NEW
+fingerprint (that failure-then-ledger flow is the intended loop).
+
 ## Isolation from the repo build
 
 The corpus is fully isolated from the repository's shared MSBuild props and

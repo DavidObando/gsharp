@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Corpus.Grid06</RootNamespace>
+    <AssemblyName>G06-Types-Console</AssemblyName>
+  </PropertyGroup>
+
+</Project>

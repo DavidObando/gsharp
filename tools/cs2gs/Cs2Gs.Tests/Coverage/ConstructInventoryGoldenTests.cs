@@ -24,13 +24,13 @@ public class ConstructInventoryGoldenTests
     /// Ratchet: the number of inventory rows still Unclassified. Lower it as
     /// classification waves land; never raise it. Target: 0.
     /// </summary>
-    private const int MaxUnclassified = 44;
+    private const int MaxUnclassified = 0;
 
     /// <summary>
     /// Ratchet: translated/lowered rows without a fixture yet. Lower it as the
     /// grid corpus (M4) lands; never raise it. Target: 0.
     /// </summary>
-    private const int MaxTranslatedWithoutFixture = 225;
+    private const int MaxTranslatedWithoutFixture = 58;
 
     [Fact]
     public void RoslynSurface_MatchesGolden()

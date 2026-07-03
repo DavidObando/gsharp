@@ -1,0 +1,61 @@
+AndPattern: -5 is > 0 and < 10 = False
+AndPattern: 0 is > 0 and < 10 = False
+AndPattern: 5 is > 0 and < 10 = True
+AndPattern: 10 is > 0 and < 10 = False
+AndPattern: 15 is > 0 and < 10 = False
+AndPattern: boxed 7 is int and > 3 = True
+AndPattern: 50 is >= 0 and <= 100 and not 13 = True
+CasePatternSwitchLabel: small int 5
+CasePatternSwitchLabel: big int 42
+CasePatternSwitchLabel: string of length 5
+CasePatternSwitchLabel: null input
+CasePatternSwitchLabel: something else
+ConstantPattern: 42 is 42 = True
+ConstantPattern: 42 is 41 = False
+ConstantPattern: null is null = True
+ConstantPattern: flag is true = True
+ConstantPattern: greeting is "hello" = True
+DeclarationPattern: string binder saw length 6
+DeclarationPattern: int binder saw 12 (> 10)
+DeclarationPattern: string payload is not an int
+DiscardPattern: 0 -> zero
+DiscardPattern: 1 -> nonzero
+DiscardPattern: 2 -> nonzero
+DiscardPattern: -5 -> negative
+ExpressionColon: line starts on y-axis = True
+ExpressionColon: line ends above 4 = True
+NotPattern: "abc" is not null = True
+NotPattern: "abc" is not int = True
+NotPattern: null is not null = False
+NotPattern: 7 is not 13 = True
+OrPattern: status 200 is success = True
+OrPattern: status 201 is success = True
+OrPattern: status 204 is success = True
+OrPattern: status 404 is success = False
+OrPattern: status 500 is success = False
+OrPattern: 'a' is vowel = True
+OrPattern: 'b' is vowel = False
+OrPattern: 'e' is vowel = True
+OrPattern: 'z' is vowel = False
+OrPattern: 150 is < 0 or > 100 = True
+ParenthesizedPattern: -3 is (> 0 and < 10) or 42 = False
+ParenthesizedPattern: 5 is (> 0 and < 10) or 42 = True
+ParenthesizedPattern: 42 is (> 0 and < 10) or 42 = True
+ParenthesizedPattern: 77 is (> 0 and < 10) or 42 = False
+ParenthesizedPattern: 9 is not (< 0 or > 10) = True
+RecursivePattern: person is in Lima = True
+RecursivePattern: person has a Lima-range zip
+RecursivePattern: name length 3 = True
+RecursivePattern: routed to bea route
+RelationalPattern: -10 degrees is freezing
+RelationalPattern: 0 degrees is cold
+RelationalPattern: 15 degrees is cold
+RelationalPattern: 22 degrees is mild
+RelationalPattern: 30 degrees is hot
+RelationalPattern: 41 degrees is hot
+RelationalPattern: 8 is > 0 = True, 8 is <= 8 = True
+SwitchExpression: -2 -> negative
+SwitchExpression: 0 -> zero
+SwitchExpression: 2 -> plain positive
+SwitchExpression: 4 -> multiple of four (4)
+SwitchExpression: quarter 3 -> summer
