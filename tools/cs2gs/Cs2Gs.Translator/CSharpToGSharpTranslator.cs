@@ -4031,7 +4031,27 @@ public sealed class CSharpToGSharpTranslator
                 this.currentCatchVariable = variableName;
                 try
                 {
-                    catches.Add(new CatchClause(variableName, exceptionType, this.TranslateBlock(catchClause.Block)));
+                    BlockStatement body = this.TranslateBlock(catchClause.Block);
+                    if (catchClause.Filter != null)
+                    {
+                        // G# has no native `catch ... when (filter)` (no Filter on
+                        // CatchClauseSyntax/TryStatementSyntax; grammar has no `when`
+                        // on catch). Lower it faithfully: evaluate the filter first and
+                        // rethrow the caught exception when it is false, so the
+                        // exception propagates exactly as it would in C# instead of
+                        // being silently swallowed (issue #1724). Note: unlike a real
+                        // CLR exception filter, this runs after the stack has already
+                        // unwound into the handler.
+                        GExpression filter = this.TranslateExpression(catchClause.Filter.FilterExpression);
+                        var rethrowIfFalse = new IfStatement(
+                            new UnaryExpression("!", filter),
+                            new BlockStatement(new List<GStatement> { new ThrowStatement(new IdentifierExpression(variableName)) }));
+                        var statements = new List<GStatement> { rethrowIfFalse };
+                        statements.AddRange(body.Statements);
+                        body = new BlockStatement(statements, body.IsUnsafe);
+                    }
+
+                    catches.Add(new CatchClause(variableName, exceptionType, body));
                 }
                 finally
                 {

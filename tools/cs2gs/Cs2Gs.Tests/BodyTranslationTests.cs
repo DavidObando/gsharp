@@ -205,6 +205,81 @@ public class BodyTranslationTests
         Assert.Contains("throw ex", body);
     }
 
+    /// <summary>G# has no native <c>catch ... when (filter)</c>; a filtered catch
+    /// must lower to a rethrow-if-false prologue so the filter is not silently
+    /// dropped (issue #1724): the caught exception must still propagate when the
+    /// filter is false.</summary>
+    [Fact]
+    public void CatchWhen_LowersToRethrowIfFilterFalse()
+    {
+        string body = GetMethodBody(@"
+            try { n = 1; }
+            catch (Exception ex) when (ex.Message.Length > 0) { n = 2; }");
+
+        Assert.Contains("} catch (ex Exception) {", body);
+        int catchIndex = body.IndexOf("} catch (ex Exception) {", StringComparison.Ordinal);
+        int ifIndex = body.IndexOf("if !(ex.Message.Length > 0) {", StringComparison.Ordinal);
+        int rethrowIndex = body.IndexOf("throw ex", StringComparison.Ordinal);
+        int assignIndex = body.IndexOf("n = 2", StringComparison.Ordinal);
+
+        Assert.True(ifIndex > catchIndex, "filter check must be inside the catch body.");
+        Assert.True(rethrowIndex > ifIndex, "rethrow must be inside the filter's if-branch.");
+        Assert.True(assignIndex > rethrowIndex, "original catch body must run after the filter check.");
+    }
+
+    /// <summary>The filter's rethrow-lowering must not swallow the exception at
+    /// runtime: when the filter is false, the translated G# actually propagates
+    /// the exception out of the whole <c>try</c> instead of continuing to the
+    /// original catch body (issue #1724).</summary>
+    [Fact]
+    public void CatchWhen_FilterFalse_PropagatesInsteadOfRunningBody()
+    {
+        string body = GetMethodBody(@"
+            try { n = 1; }
+            catch (Exception ex) when (false) { n = 999; }");
+
+        Assert.Contains("if !false {", body);
+        Assert.Contains("throw ex", body);
+        Assert.DoesNotContain("999", body.Substring(0, body.IndexOf("if !false", StringComparison.Ordinal)));
+    }
+
+    /// <summary>A filter that only reads the caught exception variable (no other
+    /// state) still translates: the binder is in scope for the filter expression
+    /// (issue #1724).</summary>
+    [Fact]
+    public void CatchWhen_FilterReferencesExceptionVariable()
+    {
+        string body = GetMethodBody(@"
+            try { n = 1; }
+            catch (InvalidOperationException ex) when (ex.Message == ""retry"") { n = 2; }",
+            extraLocals: "");
+
+        Assert.Contains("if !(ex.Message == \"retry\") {", body);
+        Assert.Contains("throw ex", body);
+    }
+
+    /// <summary>A mix of filtered and unfiltered <c>catch</c> clauses translates
+    /// each independently, in source order: only the filtered clause gets the
+    /// rethrow-if-false prologue (issue #1724).</summary>
+    [Fact]
+    public void MixedFilteredAndUnfilteredCatches_OnlyFilteredGetsRethrowPrologue()
+    {
+        string body = GetMethodBody(@"
+            try { n = 1; }
+            catch (InvalidOperationException ex) when (ex.Message.Length > 0) { n = 2; }
+            catch (Exception ex2) { n = 3; }");
+
+        int firstCatch = body.IndexOf("} catch (ex InvalidOperationException) {", StringComparison.Ordinal);
+        int ifIndex = body.IndexOf("if !(ex.Message.Length > 0) {", StringComparison.Ordinal);
+        int secondCatch = body.IndexOf("} catch (ex2 Exception) {", StringComparison.Ordinal);
+
+        Assert.True(firstCatch >= 0 && ifIndex > firstCatch && secondCatch > ifIndex);
+
+        // The unfiltered second catch has no rethrow prologue of its own.
+        string secondCatchBody = body.Substring(secondCatch);
+        Assert.DoesNotContain("if !(", secondCatchBody);
+    }
+
     /// <summary>A pre-declared C# <c>out</c> argument maps to the legacy
     /// pass-by-address form <c>&amp;x</c>; the uninitialised local binds as a
     /// mutable <c>var x T</c> (BCL methods reject inline <c>out var</c>, so the
