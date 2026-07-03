@@ -128,10 +128,10 @@ internal static class Program
 
     private static async Task<int> RunMigrateAsync(string[] args)
     {
-        (string Corpus, List<string> AppIds, PipelineOptions Options)? parsed = ParseMigrateArgs(args);
+        (string Corpus, List<string> AppIds, PipelineOptions Options)? parsed = ParseMigrateArgs(args, out bool helpRequested);
         if (parsed is null)
         {
-            return 1;
+            return helpRequested ? 0 : 1;
         }
 
         (string corpus, List<string> appIds, PipelineOptions options) = parsed.Value;
@@ -180,22 +180,35 @@ internal static class Program
         string runDir = null;
         string outPath = null;
 
-        for (int i = 0; i < args.Length; i++)
+        try
         {
-            string arg = args[i];
-            switch (arg)
+            for (int i = 0; i < args.Length; i++)
             {
-                case "--run":
-                    runDir = NextValue(args, ref i, arg);
-                    break;
-                case "--out":
-                    outPath = NextValue(args, ref i, arg);
-                    break;
-                default:
-                    Console.Error.WriteLine($"cs2gs: unknown option '{arg}'.");
-                    PrintUsage();
-                    return 1;
+                string arg = args[i];
+                switch (arg)
+                {
+                    case "-h":
+                    case "--help":
+                        PrintUsage();
+                        return 0;
+                    case "--run":
+                        runDir = NextValue(args, ref i, arg);
+                        break;
+                    case "--out":
+                        outPath = NextValue(args, ref i, arg);
+                        break;
+                    default:
+                        Console.Error.WriteLine($"cs2gs: unknown option '{arg}'.");
+                        PrintUsage();
+                        return 1;
+                }
             }
+        }
+        catch (ArgumentException ex)
+        {
+            Console.Error.WriteLine("cs2gs: " + ex.Message);
+            PrintUsage();
+            return 1;
         }
 
         if (string.IsNullOrEmpty(runDir))
@@ -287,8 +300,9 @@ internal static class Program
         return Path.Combine(root, runId);
     }
 
-    private static (string Corpus, List<string> AppIds, PipelineOptions Options)? ParseMigrateArgs(string[] args)
+    private static (string Corpus, List<string> AppIds, PipelineOptions Options)? ParseMigrateArgs(string[] args, out bool helpRequested)
     {
+        helpRequested = false;
         string corpus = null;
         var appIds = new List<string>();
         var options = new PipelineOptions();
@@ -296,27 +310,41 @@ internal static class Program
         for (int i = 0; i < args.Length; i++)
         {
             string arg = args[i];
-            switch (arg)
+            try
             {
-                case "--corpus":
-                    corpus = NextValue(args, ref i, arg);
-                    break;
-                case "--app":
-                    appIds.Add(NextValue(args, ref i, arg));
-                    break;
-                case "--gsc":
-                    options.GscPath = NextValue(args, ref i, arg);
-                    break;
-                case "--out":
-                    options.OutputRoot = NextValue(args, ref i, arg);
-                    break;
-                case "--config":
-                    options.Config = NextValue(args, ref i, arg);
-                    break;
-                default:
-                    Console.Error.WriteLine($"cs2gs: unknown option '{arg}'.");
-                    PrintUsage();
-                    return null;
+                switch (arg)
+                {
+                    case "-h":
+                    case "--help":
+                        helpRequested = true;
+                        PrintUsage();
+                        return null;
+                    case "--corpus":
+                        corpus = NextValue(args, ref i, arg);
+                        break;
+                    case "--app":
+                        appIds.Add(NextValue(args, ref i, arg));
+                        break;
+                    case "--gsc":
+                        options.GscPath = NextValue(args, ref i, arg);
+                        break;
+                    case "--out":
+                        options.OutputRoot = NextValue(args, ref i, arg);
+                        break;
+                    case "--config":
+                        options.Config = NextValue(args, ref i, arg);
+                        break;
+                    default:
+                        Console.Error.WriteLine($"cs2gs: unknown option '{arg}'.");
+                        PrintUsage();
+                        return null;
+                }
+            }
+            catch (ArgumentException ex)
+            {
+                Console.Error.WriteLine("cs2gs: " + ex.Message);
+                PrintUsage();
+                return null;
             }
         }
 
@@ -333,6 +361,16 @@ internal static class Program
         return (corpus, appIds, options);
     }
 
+    /// <summary>
+    /// Reads the value following an option flag (e.g. <c>--gsc &lt;path&gt;</c>).
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    /// The flag was the last token with no value following it. Callers catch
+    /// this alongside the unknown-option case and route it through the same
+    /// print-usage/return-1 path — a missing value is a usage error, not an
+    /// internal error, so it must not escape to <see cref="Main"/>'s generic
+    /// catch (which reports exit code 2).
+    /// </exception>
     private static string NextValue(string[] args, ref int index, string flag)
     {
         if (index + 1 >= args.Length)

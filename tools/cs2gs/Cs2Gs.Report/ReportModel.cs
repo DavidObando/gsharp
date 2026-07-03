@@ -214,12 +214,12 @@ public sealed class ReportModel
             .GroupBy(s => s.Stage, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
 
-        var stages = new List<StageReport>();
+        var stages = new List<StageResult>();
         foreach (string stageName in stageOrder)
         {
             if (byName.TryGetValue(stageName, out StageResult stage))
             {
-                stages.Add(new StageReport
+                stages.Add(new StageResult
                 {
                     Stage = stageName,
                     Status = stage.Status ?? "skipped",
@@ -228,7 +228,7 @@ public sealed class ReportModel
             }
             else
             {
-                stages.Add(new StageReport
+                stages.Add(new StageResult
                 {
                     Stage = stageName,
                     Status = "skipped",
@@ -341,7 +341,7 @@ public sealed class AppReport
     /// <summary>Gets or sets the per-stage statuses, in execution order.</summary>
     [JsonPropertyName("stages")]
     [JsonPropertyOrder(3)]
-    public List<StageReport> Stages { get; set; } = new List<StageReport>();
+    public List<StageResult> Stages { get; set; } = new List<StageResult>();
 
     /// <summary>Gets or sets the run-relative triage artifact paths for this app.</summary>
     [JsonPropertyName("artifacts")]
@@ -352,27 +352,6 @@ public sealed class AppReport
     [JsonPropertyName("fingerprints")]
     [JsonPropertyOrder(5)]
     public List<string> Fingerprints { get; set; } = new List<string>();
-}
-
-/// <summary>
-/// The status of one stage within one app's row (ADR-0115 §C).
-/// </summary>
-public sealed class StageReport
-{
-    /// <summary>Gets or sets the stage name.</summary>
-    [JsonPropertyName("stage")]
-    [JsonPropertyOrder(0)]
-    public string Stage { get; set; }
-
-    /// <summary>Gets or sets the stage status (<c>passed</c>/<c>failed</c>/<c>skipped</c>).</summary>
-    [JsonPropertyName("status")]
-    [JsonPropertyOrder(1)]
-    public string Status { get; set; }
-
-    /// <summary>Gets or sets the number of triage artifacts the stage produced.</summary>
-    [JsonPropertyName("artifactCount")]
-    [JsonPropertyOrder(2)]
-    public int ArtifactCount { get; set; }
 }
 
 /// <summary>
