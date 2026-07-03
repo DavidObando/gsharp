@@ -63,6 +63,36 @@ namespace Demo
         Assert.Contains("pair.Item2", printed);
     }
 
+    [Fact]
+    public void AnonymousObjectCreation_NullableEnabledMemberAccess_DoesNotEmitNonNullAssertion()
+    {
+        // Regression test: under `#nullable enable`, an anonymous-typed local
+        // is a flow-proven-non-null C# reference type, which the general
+        // member-access path would wrap in a G# `!!` non-null assertion. The
+        // receiver lowers to a G# tuple literal (a value type that can never
+        // be null), so `!!` on it is both meaningless and hits a gsc
+        // IL-emission gap (StackUnexpected) for value-type receivers.
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public sealed class C
+    {
+        public void M()
+        {
+            var pair = new { A = 1, B = ""two"" };
+            System.Console.WriteLine(pair.A);
+            System.Console.WriteLine(pair.B);
+        }
+    }
+}");
+
+        Assert.Contains("(1, \"two\")", printed);
+        Assert.Contains("pair.Item1", printed);
+        Assert.Contains("pair.Item2", printed);
+        Assert.DoesNotContain("pair!!", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });

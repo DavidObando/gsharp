@@ -1,4 +1,3 @@
-AnonymousObjectCreationExpression: single=1
 AnonymousObjectCreationExpression: pair=2,two
 ArrayCreationExpression: sized=10,20,30
 ArrayCreationExpression: words=alpha,beta

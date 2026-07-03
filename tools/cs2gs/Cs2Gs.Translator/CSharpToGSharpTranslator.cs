@@ -8907,7 +8907,17 @@ public sealed class CSharpToGSharpTranslator
                 }
             }
 
-            GExpression target = this.MemberBindsToNullableThisExtension(member)
+            // Issue #1934 follow-up: an anonymous-typed receiver (`new { ... }`)
+            // is a C# reference type, so the flow-based passes below would wrap
+            // it in a G# `!!` non-null assertion. But the receiver lowers to a
+            // G# tuple literal, which is a non-nullable value type on the G#
+            // side — `!!` on it is both meaningless and hits a gsc IL-emission
+            // gap (StackUnexpected) for value-type receivers. Skip forgiveness
+            // for anonymous-type receivers; the tuple can never be null.
+            bool receiverIsAnonymousType =
+                this.context.GetTypeInfo(member.Expression).Type is { IsAnonymousType: true };
+
+            GExpression target = this.MemberBindsToNullableThisExtension(member) || receiverIsAnonymousType
                 ? this.TranslateExpression(member.Expression)
                 : this.TranslateReceiverWithNullForgiveness(member.Expression);
             string memberName = member.Name.Identifier.Text;
