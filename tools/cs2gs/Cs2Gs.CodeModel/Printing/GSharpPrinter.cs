@@ -23,6 +23,11 @@ public static class GSharpPrinter
 {
     private const string IndentUnit = "    ";
 
+    // Unary operators (`+ - ! ^ * & <-`) bind at precedence 6 in G#'s
+    // grammar — higher than every binary operator — per
+    // SyntaxFacts.GetUnaryOperatorPrecedence.
+    private const int UnaryPrecedence = 6;
+
     /// <summary>
     /// Prints a compilation unit to canonical G# source text.
     /// </summary>
@@ -344,7 +349,65 @@ public static class GSharpPrinter
     private static string RenderCharLiteralBody(string value) =>
         RenderEscapedLiteralBody(value, '\'', escapeDollar: false);
 
-    private static string RenderExpression(GExpression expression, int indent)
+    // Issue #1721: G# uses Go-style operator precedence (mirrored from
+    // SyntaxFacts.GetBinaryOperatorPrecedence in src/Core/CodeAnalysis/Syntax),
+    // which differs from C#'s: `<< >> & &^` are MULTIPLICATIVE (level 5, same
+    // as `* / %`), `| ^` are ADDITIVE (level 4, same as `+ -`), and ALL
+    // comparisons (`== != < <= > >=`) plus `is`/`as` share level 3. C# instead
+    // ranks shifts below additive, bitwise `& ^ |` below equality, and
+    // relational above equality. Because the translator preserves the
+    // original C# expression tree shape (which encodes C# precedence via
+    // nesting, not via G# tokens), printing that tree flat under G#'s table
+    // silently re-associates it. `??` is handled outside this table (parsed
+    // separately, right-associative, binding just below `||`) — see the
+    // level-0 fallback comment on GetBinaryOperatorPrecedence.
+    private static int GetBinaryPrecedence(string op) => op switch
+    {
+        "*" or "/" or "%" or "<<" or ">>" or "&" or "&^" => 5,
+        "+" or "-" or "|" or "^" => 4,
+        "==" or "!=" or "<" or "<=" or ">" or ">=" or "is" or "as" => 3,
+        "&&" => 2,
+        "||" => 1,
+        "??" => 0,
+        _ => throw new ArgumentException($"Unknown binary operator: {op}"),
+    };
+
+    /// <summary>
+    /// Renders an expression, parenthesizing it if its own G# operator
+    /// precedence is lower than <paramref name="minPrecedence"/> (the
+    /// precedence required by the surrounding context to reproduce the
+    /// original tree shape when re-parsed).
+    /// </summary>
+    private static string RenderExpression(GExpression expression, int indent, int minPrecedence)
+    {
+        if (expression is BinaryExpression outerBinary)
+        {
+            var precedence = GetBinaryPrecedence(outerBinary.Operator);
+
+            // `??` is right-associative: its left operand must strictly
+            // out-bind it (else a nested `??` on the left would silently
+            // re-associate), while its right operand may sit at the same
+            // level (a nested `??` on the right reproduces the natural
+            // right-associative chain). Every other G# binary operator is
+            // left-associative: the left operand may sit at the same level,
+            // but the right operand must strictly out-bind it.
+            var isRightAssociative = outerBinary.Operator == "??";
+            var leftMin = isRightAssociative ? precedence + 1 : precedence;
+            var rightMin = isRightAssociative ? precedence : precedence + 1;
+
+            var leftText = RenderExpression(outerBinary.Left, indent, leftMin);
+            var rightText = RenderExpression(outerBinary.Right, indent, rightMin);
+            var rendered = $"{leftText} {outerBinary.Operator} {rightText}";
+            return precedence < minPrecedence ? $"({rendered})" : rendered;
+        }
+
+        return RenderExpressionCore(expression, indent);
+    }
+
+    private static string RenderExpression(GExpression expression, int indent) =>
+        RenderExpression(expression, indent, 0);
+
+    private static string RenderExpressionCore(GExpression expression, int indent)
     {
         switch (expression)
         {
@@ -400,19 +463,35 @@ public static class GSharpPrinter
                 var tupleElements = string.Join(", ", tuple.Elements.Select(e => RenderExpression(e, indent)));
                 return $"({tupleElements})";
 
-            case BinaryExpression binary:
-                return $"{RenderExpression(binary.Left, indent)} {binary.Operator} {RenderExpression(binary.Right, indent)}";
-
             case UnaryExpression unary:
-                return $"{unary.Operator}{RenderExpression(unary.Operand, indent)}";
+                {
+                    // Unary operators bind at precedence 6 — higher than every
+                    // binary operator — so a binary-expression operand (e.g. a
+                    // stray `BinaryExpression` reaching here without an explicit
+                    // `ParenthesizedExpression` wrapper) must be parenthesized.
+                    var operandText = RenderExpression(unary.Operand, indent, UnaryPrecedence);
+
+                    // Issue #1721: nested same-character prefix operators
+                    // silently coalesce into a different token if printed with
+                    // no separating space — `!!flag` (double logical negation)
+                    // lexes as the single BangBangToken (postfix non-null
+                    // assertion), and `- -x` lexes as `--x` (predecrement),
+                    // changing the parsed program. A space between the operator
+                    // and an operand that starts with the same character keeps
+                    // the tokens distinct and is always semantically safe.
+                    var separator = operandText.Length > 0 && operandText[0] == unary.Operator[unary.Operator.Length - 1]
+                        ? " "
+                        : string.Empty;
+                    return $"{unary.Operator}{separator}{operandText}";
+                }
 
             case NonNullAssertionExpression nonNull:
-                return $"{RenderExpression(nonNull.Operand, indent)}!!";
+                return $"{RenderExpression(nonNull.Operand, indent, UnaryPrecedence)}!!";
 
             case IncrementDecrementExpression incDec:
                 return incDec.IsPrefix
-                    ? $"{incDec.Operator}{RenderExpression(incDec.Operand, indent)}"
-                    : $"{RenderExpression(incDec.Operand, indent)}{incDec.Operator}";
+                    ? $"{incDec.Operator}{RenderExpression(incDec.Operand, indent, UnaryPrecedence)}"
+                    : $"{RenderExpression(incDec.Operand, indent, UnaryPrecedence)}{incDec.Operator}";
 
             case StackAllocExpression stackAlloc:
                 {
@@ -434,7 +513,9 @@ public static class GSharpPrinter
                 return RenderLambda(lambda, indent);
 
             case AwaitExpression await:
-                return $"await {RenderExpression(await.Operand, indent)}";
+                // `await` binds at the same precedence slot as unary operators
+                // (Parser.cs: `ParseBinaryExpression(6)` for the await operand).
+                return $"await {RenderExpression(await.Operand, indent, UnaryPrecedence)}";
 
             case SwitchExpression switchExpression:
                 return RenderSwitchExpression(switchExpression, indent);
