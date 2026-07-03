@@ -35,15 +35,20 @@ public sealed class TriageBuilder
     // keyword (issue #1750 B1), audited from Cs2Gs.CodeModel.Printing.GSharpPrinter:
     // RenderVisibility (public/internal/private/protected), the unsafe/open/
     // sealed/abstract prefixes on RenderTypeDeclaration, the open/override
-    // prefixes on RenderProperty, and the open/override/async prefixes on
-    // RenderMethod. `static`, `virtual`, and `export` are not currently emitted
-    // by the printer but are kept in the set defensively so a future modifier
-    // the printer starts emitting doesn't silently collapse back into the
-    // generic bucket.
+    // prefixes on RenderProperty, the open/override/async prefixes on
+    // RenderMethod, and the `inline` prefix RenderKindKeyword emits ahead of
+    // `struct` for TypeDeclarationKind.InlineStruct (issue #1851). `static`,
+    // `virtual`, and `export` are not currently emitted by the printer but are
+    // kept in the set defensively so a future modifier the printer starts
+    // emitting doesn't silently collapse back into the generic bucket.
+    // `data` (DataClass/DataStruct's `data class`/`data struct`) is
+    // deliberately NOT added here: it is already its own entry in the
+    // construct-keyword list below, so those lines classify as
+    // DataConstruct rather than falling through to the generic bucket.
     private static readonly HashSet<string> ModifierTokens = new HashSet<string>(StringComparer.Ordinal)
     {
         "public", "private", "internal", "protected", "static", "async", "sealed",
-        "abstract", "virtual", "override", "export", "open", "unsafe",
+        "abstract", "virtual", "override", "export", "open", "unsafe", "inline",
     };
 
     /// <summary>

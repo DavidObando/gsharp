@@ -193,11 +193,22 @@ public class Issue1750TriageFingerprintStabilityTests
     /// gap and an `async func` gap both fingerprinting as the same
     /// unclassified kind).
     /// </summary>
+    /// <summary>
+    /// (#1851, residual of B1) <c>GSharpPrinter.RenderKindKeyword</c> emits
+    /// the compound keyword <c>inline struct</c> for
+    /// <c>TypeDeclarationKind.InlineStruct</c>. Its leading token, <c>inline</c>,
+    /// is neither a construct keyword nor (pre-fix) a recognized modifier, so
+    /// a modifier-free `inline struct Foo {` line fell through to the generic
+    /// bucket instead of classifying as <c>StructConstruct</c> alongside plain
+    /// `struct` and modifier-prefixed `inline struct` declarations.
+    /// </summary>
     [Theory]
     [InlineData("sealed class Shape {", "ClassConstruct")]
     [InlineData("async func Bump(n int32) int32 {", "FuncConstruct")]
     [InlineData("private func Helper(x int32) int32 {", "FuncConstruct")]
     [InlineData("public static async func F() {", "FuncConstruct")]
+    [InlineData("inline struct Foo {", "StructConstruct")]
+    [InlineData("public inline struct Bar {", "StructConstruct")]
     public void CompileError_ModifierPrefixedConstruct_ClassifiesOnConstructKeyword(string gsLine, string expectedKind)
     {
         var builder = new TriageBuilder("run_1", "2026-06-21T20:00:00Z", "0.2.0+abc", "corpus/Sample");
@@ -258,6 +269,36 @@ public class Issue1750TriageFingerprintStabilityTests
 
         Assert.Equal(a.OffendingCSharpConstruct.Kind, b.OffendingCSharpConstruct.Kind);
         Assert.NotEqual(a.Fingerprint, b.Fingerprint);
+    }
+
+    /// <summary>
+    /// (#1851) `inline struct` fingerprints identically to plain `struct` on
+    /// construct kind (both <c>StructConstruct</c>) since both are the same
+    /// underlying declaration shape, but stays distinct from an unrelated
+    /// `func` construct — proving the `inline` fix lands on the correct
+    /// following keyword rather than merging distinct construct kinds.
+    /// </summary>
+    [Fact]
+    public void CompileError_InlineStruct_MatchesPlainStructButNotFunc()
+    {
+        var builder = new TriageBuilder("run_1", "2026-06-21T20:00:00Z", "0.2.0+abc", "corpus/Sample");
+        var diagnostic = new GscDiagnostic("GS0313", "unexpected token", "error", "Sample.gs", 1, 5);
+
+        var emittedInlineStruct = new EmittedGsFile(
+            "/abs/Sample.gs", "corpus_Sample/Sample.gs", "/abs/Sample.cs", "inline struct Foo {\n}\n");
+        var emittedPlainStruct = new EmittedGsFile(
+            "/abs/Sample.gs", "corpus_Sample/Sample.gs", "/abs/Sample.cs", "struct Foo {\n}\n");
+        var emittedFunc = new EmittedGsFile(
+            "/abs/Sample.gs", "corpus_Sample/Sample.gs", "/abs/Sample.cs", "func Foo() {\n}\n");
+
+        TriageArtifact a = builder.CompileError(diagnostic, emittedInlineStruct);
+        TriageArtifact b = builder.CompileError(diagnostic, emittedPlainStruct);
+        TriageArtifact c = builder.CompileError(diagnostic, emittedFunc);
+
+        Assert.Equal("StructConstruct", a.OffendingCSharpConstruct.Kind);
+        Assert.Equal(a.OffendingCSharpConstruct.Kind, b.OffendingCSharpConstruct.Kind);
+        Assert.NotEqual(a.OffendingCSharpConstruct.Kind, c.OffendingCSharpConstruct.Kind);
+        Assert.NotEqual(a.Fingerprint, c.Fingerprint);
     }
 
     /// <summary>
