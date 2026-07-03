@@ -281,6 +281,42 @@ namespace Demo
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
     }
 
+    /// <summary>
+    /// Reviewer follow-up: a null-seam operand that is ITSELF nested inside
+    /// another null-seam operand — here, the is-pattern scrutinee
+    /// <c>Y[Z()..a]</c> is a range-slice whose start <c>Z()</c> is also
+    /// non-trivial and gets spilled first. Naively lowering both to captures
+    /// of the SAME helper would pass the inner spill's synthesized parameter
+    /// name (<c>__p0</c>) as part of the outer capture's call-site argument
+    /// (<c>__init0(Z(), Y[__p0..a])</c>) — but <c>__p0</c> only exists as a
+    /// parameter INSIDE the helper body, so it is a dangling identifier at
+    /// the field-initializer call site. This must bail to the loud
+    /// <c>Unsupported</c> diagnostic (the pre-#1849 behavior) instead of
+    /// emitting a broken helper call.
+    /// </summary>
+    [Fact]
+    public void FieldInitializer_NestedNullSeamOperand_ReportsUnsupportedInsteadOfDanglingHelperCall()
+    {
+        (string printed, TranslationContext context) = TranslateUnitWithContext(@"
+namespace Demo
+{
+    public sealed class C
+    {
+        private static int[] Y = new int[] { 1, 2, 3, 4, 5 };
+
+        private static int Z() => 1;
+
+        private const int a = 3;
+
+        private bool flag = Y[Z()..a] is [1, 2];
+    }
+}");
+
+        Assert.Contains(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.DoesNotContain("__init0", printed);
+        Assert.DoesNotContain("__p0", printed);
+    }
+
     private static int CountOccurrences(string haystack, string needle)
     {
         int count = 0;

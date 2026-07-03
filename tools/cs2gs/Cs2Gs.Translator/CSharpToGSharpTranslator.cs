@@ -5603,6 +5603,19 @@ public sealed class CSharpToGSharpTranslator
         // as translation encounters them).
         private GExpression TranslateNullSeamArgument(ArgumentSyntax argument, IMethodSymbol ctorSymbol)
         {
+            // Issue #1849 review: a `ref`/`out` argument's value IS the
+            // caller's own variable — a helper cannot `return` it back into
+            // that slot, so a non-trivial nested null-seam operand inside one
+            // (exotic: `ref`/`out` in a base/this ctor-init argument) is never
+            // routed through the helper lowering. `TranslateArgument` still
+            // reports the ordinary loud `Unsupported` diagnostic via
+            // `SpillOperand` if such an operand is actually encountered, since
+            // no capture session is opened here.
+            if (argument.RefKindKeyword.Kind() is SyntaxKind.RefKeyword or SyntaxKind.OutKeyword)
+            {
+                return this.TranslateArgument(argument);
+            }
+
             INamedTypeSymbol containingType = ctorSymbol?.ContainingType;
             GTypeReference returnType = containingType != null
                 ? this.ResolveExpressionType(argument.Expression)
@@ -5693,6 +5706,38 @@ public sealed class CSharpToGSharpTranslator
                 return body;
             }
 
+            // Issue #1849 review: a capture's own call-site OPERAND (the
+            // argument expression this helper will be invoked with) can itself
+            // reference a sibling capture's synthesized parameter name — this
+            // happens when a null-seam operand is ITSELF nested inside another
+            // null-seam operand (e.g. a range-slice start spilled inside an
+            // is-pattern scrutinee that is also spilled: `Y[Z()..a] is [1,2]`).
+            // The inner spill's `__pN` placeholder only exists as a PARAMETER
+            // inside this helper's own body — it is not in scope at the call
+            // site, so passing it as a sibling argument would emit a dangling
+            // identifier. Detect any such cross-reference and bail to the loud
+            // `Unsupported` diagnostic (re-translating with no capture session
+            // active, so `SpillOperand` reports it) instead of emitting a
+            // broken call.
+            // Pre-seeded ctor-parameter passthroughs (see `TranslateNullSeamArgument`)
+            // are real, in-scope-at-the-call-site names — only a capture
+            // introduced by `SpillOperand` itself (a synthesized `__pN`) is
+            // unsafe to reference from a sibling capture's operand.
+            var paramNames = new HashSet<string>(
+                captures.Skip(preSeedCount).Select(c => c.Name), StringComparer.Ordinal);
+            if (captures.Any(c => ContainsIdentifierReference(c.Operand, paramNames)))
+            {
+                this.pendingHelperCaptures = null;
+                try
+                {
+                    return translate();
+                }
+                finally
+                {
+                    this.pendingHelperCaptures = outerCaptures;
+                }
+            }
+
             string helperName = this.NextSynthHelperName(containingType);
             List<Parameter> parameters = captures
                 .Select(c => new Parameter(c.Name, c.Type))
@@ -5707,6 +5752,50 @@ public sealed class CSharpToGSharpTranslator
             return new InvocationExpression(
                 new IdentifierExpression(helperName),
                 captures.Select(c => c.Operand).ToList());
+        }
+
+        // Issue #1849 review: true if `node` (a capture's call-site operand, or
+        // any sub-tree of one) reads an identifier whose name is in `names` —
+        // used by <see cref="WrapInNullSeamHelperIfCaptured"/> to detect a
+        // sibling capture's synthesized `__pN` parameter name leaking into
+        // another capture's own call-site argument. Walks every public
+        // property of the AST node reflectively (rather than hand-listing each
+        // of the ~30 <see cref="GExpression"/> subtypes) so it stays correct
+        // for arbitrarily nested/mixed shapes without needing a matching case
+        // added here every time a new expression node is introduced.
+        private static bool ContainsIdentifierReference(GNode node, ISet<string> names)
+        {
+            if (node == null)
+            {
+                return false;
+            }
+
+            if (node is IdentifierExpression identifier)
+            {
+                return names.Contains(identifier.Name);
+            }
+
+            foreach (System.Reflection.PropertyInfo property in node.GetType().GetProperties())
+            {
+                object value = property.GetValue(node);
+                if (value is GNode child && ContainsIdentifierReference(child, names))
+                {
+                    return true;
+                }
+
+                if (value is System.Collections.IEnumerable items and not string)
+                {
+                    foreach (object item in items)
+                    {
+                        if (item is GNode itemNode && ContainsIdentifierReference(itemNode, names))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            return false;
         }
 
         // Issue #1849: picks a synthetic null-seam helper method name
