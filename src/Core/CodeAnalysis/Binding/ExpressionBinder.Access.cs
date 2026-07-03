@@ -2980,28 +2980,28 @@ internal sealed partial class ExpressionBinder
                 var substitutedSlice = substitution != null
                     ? (SliceTypeSymbol)Binder.SubstituteType(sliceType, substitution)
                     : sliceType;
-                var trailingCount = arguments.Length - fixedParamCount;
-                var passThrough = trailingCount == 1 && arguments[fixedParamCount].Type == substitutedSlice;
-                if (passThrough)
-                {
-                    permutedArgs = arguments;
-                }
-                else
-                {
-                    var packedTrailing = ImmutableArray.CreateBuilder<BoundExpression>(trailingCount);
-                    for (var i = fixedParamCount; i < arguments.Length; i++)
-                    {
-                        packedTrailing.Add(arguments[i]);
-                    }
+                var hasVariadicErrors = false;
 
-                    var newArgs = ImmutableArray.CreateBuilder<BoundExpression>(fixedParamCount + 1);
-                    for (var i = 0; i < fixedParamCount; i++)
-                    {
-                        newArgs.Add(arguments[i]);
-                    }
+                // Issue #1823: route through the #1630 canonical helper so
+                // trailing elements get the same per-element coercion applied
+                // at every other variadic pack site (previously packed raw,
+                // uncoerced elements here). Coerce against the SUBSTITUTED
+                // slice's element type since generic type arguments may have
+                // been inferred/substituted above.
+                permutedArgs = OverloadResolver.PackOrPassThroughVariadicArguments(
+                    conversions,
+                    Diagnostics,
+                    ce,
+                    arguments,
+                    fixedParamCount,
+                    substitutedSlice,
+                    variadicParam.Name,
+                    i => i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Identifier.Location,
+                    ref hasVariadicErrors);
 
-                    newArgs.Add(new BoundArrayCreationExpression(ce, substitutedSlice, packedTrailing.MoveToImmutable()));
-                    permutedArgs = newArgs.ToImmutable();
+                if (hasVariadicErrors)
+                {
+                    return new BoundErrorExpression(null);
                 }
             }
             else

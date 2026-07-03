@@ -3843,24 +3843,27 @@ internal sealed partial class ExpressionBinder
         if (fldIsVariadic)
         {
             var sliceType = (SliceTypeSymbol)functionType.ParameterTypes[functionType.ParameterTypes.Length - 1];
-            var trailing = arguments.Length - fldFixedCount;
-            var passThrough = trailing == 1 && arguments[fldFixedCount].Type == sliceType;
-            if (!passThrough)
+            var hasVariadicErrors = false;
+
+            // Issue #1823: route through the #1630 canonical helper so
+            // trailing elements get the same per-element coercion applied
+            // at every other variadic pack site (previously packed raw,
+            // uncoerced elements here).
+            permutedArgs = OverloadResolver.PackOrPassThroughVariadicArguments(
+                conversions,
+                Diagnostics,
+                ce,
+                arguments,
+                fldFixedCount,
+                sliceType,
+                methodName,
+                i => i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Location,
+                ref hasVariadicErrors);
+
+            if (hasVariadicErrors)
             {
-                var packed = ImmutableArray.CreateBuilder<BoundExpression>(trailing);
-                for (var i = fldFixedCount; i < arguments.Length; i++)
-                {
-                    packed.Add(arguments[i]);
-                }
-
-                var rebuilt = ImmutableArray.CreateBuilder<BoundExpression>(fldFixedCount + 1);
-                for (var i = 0; i < fldFixedCount; i++)
-                {
-                    rebuilt.Add(arguments[i]);
-                }
-
-                rebuilt.Add(new BoundArrayCreationExpression(ce, sliceType, packed.MoveToImmutable()));
-                permutedArgs = rebuilt.ToImmutable();
+                result = new BoundErrorExpression(null);
+                return true;
             }
         }
 
@@ -4271,24 +4274,26 @@ internal sealed partial class ExpressionBinder
         {
             var variadicParam = delegateSym.Parameters[delegateSym.Parameters.Length - 1];
             var sliceType = (SliceTypeSymbol)variadicParam.Type;
-            var trailingCount = arguments.Length - fixedParamCount;
-            var passThrough = trailingCount == 1 && arguments[fixedParamCount].Type == sliceType;
-            if (!passThrough)
+            var hasVariadicErrors = false;
+
+            // Issue #1823: route through the #1630 canonical helper so
+            // trailing elements get the same per-element coercion applied
+            // at every other variadic pack site (previously packed raw,
+            // uncoerced elements here).
+            permutedArgs = OverloadResolver.PackOrPassThroughVariadicArguments(
+                conversions,
+                Diagnostics,
+                ce,
+                arguments,
+                fixedParamCount,
+                sliceType,
+                variadicParam.Name,
+                i => i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Location,
+                ref hasVariadicErrors);
+
+            if (hasVariadicErrors)
             {
-                var packed = ImmutableArray.CreateBuilder<BoundExpression>(trailingCount);
-                for (var i = fixedParamCount; i < arguments.Length; i++)
-                {
-                    packed.Add(arguments[i]);
-                }
-
-                var rebuilt = ImmutableArray.CreateBuilder<BoundExpression>(fixedParamCount + 1);
-                for (var i = 0; i < fixedParamCount; i++)
-                {
-                    rebuilt.Add(arguments[i]);
-                }
-
-                rebuilt.Add(new BoundArrayCreationExpression(ce, sliceType, packed.MoveToImmutable()));
-                permutedArgs = rebuilt.ToImmutable();
+                return new BoundErrorExpression(null);
             }
         }
 
