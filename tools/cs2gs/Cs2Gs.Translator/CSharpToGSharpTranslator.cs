@@ -453,6 +453,24 @@ public sealed class CSharpToGSharpTranslator
         // carries a binder-less side-effecting `is`-pattern clause (issue #914).
         private int loopHoistCounter;
 
+        // The active statement-seam prologue (issue #1731): several lowerings
+        // (lock targets, chained-assignment link targets, non-trivial pattern
+        // scrutinees, range-slice start operands) must embed the SAME translated
+        // operand at more than one output position; naively reusing the operand's
+        // node would print — and so re-evaluate — it once per embed. `SpillOperand`
+        // hoists such an operand into a fresh `let` appended here, evaluated
+        // exactly once immediately before the statement currently being
+        // translated (see <see cref="WithSpillSeam"/>). Null outside any
+        // statement seam and across a lambda/local-function boundary (its body is
+        // a distinct evaluation scope; see <see cref="TranslateLambda"/> and
+        // <see cref="TranslateLocalFunction"/>) so a hoist can never leak into an
+        // unrelated enclosing scope — in that case `SpillOperand` conservatively
+        // leaves the operand embedded as-is.
+        private List<GStatement> pendingSpillPrologue;
+
+        // Monotonic counter for synthesizing spill temporaries (issue #1731).
+        private int spillCounter;
+
         // When translating the body of a lifted owned-value-aggregate receiver
         // method (issue #938), the implicit `this.` of a bare instance-member
         // reference must be made explicit through the receiver name (`self.`),
@@ -3049,13 +3067,17 @@ public sealed class CSharpToGSharpTranslator
             {
                 // A void expression body is an executed statement (often an
                 // assignment, which is statement-only in G#), so route it through
-                // the statement seam rather than wrapping the value.
-                return new BlockStatement(this.TranslateExpressionStatements(expression).ToList());
+                // the statement seam rather than wrapping the value. It behaves
+                // like `TranslateStatement` for spill-hoisting purposes (issue
+                // #1731): it has no OUTER statement of its own, so it opens its
+                // own seam via <see cref="WithSpillSeam"/>.
+                return new BlockStatement(this.WithSpillSeam(
+                    () => this.TranslateExpressionStatements(expression).ToList()).ToList());
             }
 
-            return new BlockStatement(this.WithHoistedPostfix(
+            return new BlockStatement(this.WithSpillSeam(() => this.WithHoistedPostfix(
                 expression,
-                () => new GStatement[] { new ReturnStatement(this.TranslateExpression(expression)) }).ToList());
+                () => new GStatement[] { new ReturnStatement(this.TranslateExpression(expression)) }).ToList()).ToList());
         }
 
         private BlockStatement TranslateBlock(BlockSyntax block)
@@ -3212,7 +3234,36 @@ public sealed class CSharpToGSharpTranslator
             return new BlockStatement(this.TranslateStatement(statement).ToList());
         }
 
+        // Establishes a fresh statement seam (issue #1731) around each statement's
+        // translation: any spill hoisted while translating `statement` (see
+        // <see cref="SpillOperand"/>) is collected into its own prologue and
+        // emitted immediately ahead of `statement`'s own output, then the ambient
+        // seam is restored — so a nested statement (e.g. a block's own children)
+        // always gets its own independent seam rather than sharing this one.
         private IEnumerable<GStatement> TranslateStatement(StatementSyntax statement)
+        {
+            List<GStatement> outerSpillPrologue = this.pendingSpillPrologue;
+            var spillPrologue = new List<GStatement>();
+            this.pendingSpillPrologue = spillPrologue;
+            try
+            {
+                List<GStatement> core = this.TranslateStatementCore(statement).ToList();
+                if (spillPrologue.Count == 0)
+                {
+                    return core;
+                }
+
+                var combined = new List<GStatement>(spillPrologue);
+                combined.AddRange(core);
+                return combined;
+            }
+            finally
+            {
+                this.pendingSpillPrologue = outerSpillPrologue;
+            }
+        }
+
+        private IEnumerable<GStatement> TranslateStatementCore(StatementSyntax statement)
         {
             switch (statement)
             {
@@ -4535,6 +4586,25 @@ public sealed class CSharpToGSharpTranslator
         /// </summary>
         private GExpression TranslateConditionWithHoist(ExpressionSyntax expression, List<GStatement> prologue)
         {
+            // Any spill hoisted while translating `expression` (issue #1731) is
+            // redirected into `prologue` — the SAME preceding-statement list an
+            // embedded assignment hoists into below — rather than the enclosing
+            // statement's own ambient prologue, so both kinds of hoist land in
+            // the same list in evaluation order.
+            List<GStatement> outerSpillPrologue = this.pendingSpillPrologue;
+            this.pendingSpillPrologue = prologue;
+            try
+            {
+                return this.TranslateConditionWithHoistCore(expression, prologue);
+            }
+            finally
+            {
+                this.pendingSpillPrologue = outerSpillPrologue;
+            }
+        }
+
+        private GExpression TranslateConditionWithHoistCore(ExpressionSyntax expression, List<GStatement> prologue)
+        {
             List<AssignmentExpressionSyntax> embedded = this.CollectEmbeddedAssignments(expression, includeSelf: true);
             if (embedded.Count == 0)
             {
@@ -4682,8 +4752,19 @@ public sealed class CSharpToGSharpTranslator
             var statements = new List<GStatement>();
             for (int i = lefts.Count - 1; i >= 0; i--)
             {
-                statements.Add(new AssignmentStatement(lefts[i].Target, rhs, lefts[i].Op));
-                rhs = lefts[i].Target;
+                // A chained link's target is READ AGAIN as the value carried to
+                // the next (outer) link — `a = b = c` lowers to `b = c; a = b`.
+                // When the target is more than a bare identifier (e.g.
+                // `buf[Next()]`), re-embedding the SAME translated target node at
+                // both the write and the read-back would silently re-run any
+                // side-effecting sub-expression (`Next()`) a second time (issue
+                // #1731). The outermost link's target (`i == 0`) is never read
+                // back — the chain ends there — so it is left untouched.
+                GExpression target = i > 0
+                    ? this.MakeDuplicationSafeTarget(lefts[i].Target, statements)
+                    : lefts[i].Target;
+                statements.Add(new AssignmentStatement(target, rhs, lefts[i].Op));
+                rhs = target;
             }
 
             return statements;
@@ -4769,8 +4850,13 @@ public sealed class CSharpToGSharpTranslator
         {
             // G# has no `lock` keyword; the canonical lowering is the BCL
             // monitor pattern `Monitor.Enter(x)` followed by
-            // `try { body } finally { Monitor.Exit(x) }` (ADR-0115 §B).
-            GExpression target = this.TranslateExpression(lockStatement.Expression);
+            // `try { body } finally { Monitor.Exit(x) }` (ADR-0115 §B). The
+            // translated target is embedded at BOTH the `Enter` and `Exit` call
+            // sites; C# evaluates a `lock` operand exactly once, so a non-trivial
+            // target (e.g. `GetSyncRoot()`) is spilled into a preceding local and
+            // both calls reference that local instead (issue #1731) — `Enter` and
+            // `Exit` then always agree on the same monitor.
+            GExpression target = this.SpillOperand(this.TranslateExpression(lockStatement.Expression));
 
             GStatement enter = new ExpressionStatement(new InvocationExpression(
                 new MemberAccessExpression(new IdentifierExpression("Monitor"), "Enter"),
@@ -4788,6 +4874,100 @@ public sealed class CSharpToGSharpTranslator
             var tryStatement = new TryStatement(body, new List<CatchClause>(), finallyBlock);
 
             return new BlockStatement(new List<GStatement> { enter, tryStatement });
+        }
+
+        // True when duplicating `expression` in the output has no observable
+        // effect — a bare identifier, `this`, or a literal never has a side
+        // effect and always reads the same value, so it is safe to embed at more
+        // than one output position without spilling it to a temp first (issue
+        // #1731). Anything else (a method/property/indexer read, an arithmetic
+        // expression, …) may run a side effect or re-read a mutable value and
+        // must be evaluated exactly once if it needs to appear more than once.
+        private static bool IsTrivialOperand(GExpression expression) =>
+            expression is IdentifierExpression or ThisExpression or LiteralExpression;
+
+        // Spills `operand` into a fresh `let` in the active statement seam's
+        // prologue (see <see cref="pendingSpillPrologue"/>/<see
+        // cref="WithSpillSeam"/>) and returns a reference to that local, UNLESS
+        // `operand` is already trivial (see <see cref="IsTrivialOperand"/>) — a
+        // bare local/`this`/literal is safe to duplicate as-is, so spilling it
+        // would only add clutter. When no statement seam is active (translating
+        // outside any statement, or across a lambda/local-function boundary —
+        // see <see cref="TranslateLambda"/>/<see cref="TranslateLocalFunction"/>)
+        // the operand is conservatively left embedded as-is rather than spilled
+        // into an unrelated scope.
+        private GExpression SpillOperand(GExpression operand) => this.SpillOperand(operand, this.pendingSpillPrologue);
+
+        // As above, but appends the spill declaration directly to an explicit
+        // `prologue` list rather than the ambient one — used by callers (e.g.
+        // <see cref="FlattenChainedAssignment"/>) that already build their own
+        // ordered statement list and know exactly where the spill must land,
+        // independent of whatever statement seam happens to be active.
+        private GExpression SpillOperand(GExpression operand, List<GStatement> prologue)
+        {
+            if (IsTrivialOperand(operand) || prologue == null)
+            {
+                return operand;
+            }
+
+            string temp = $"__spill{this.spillCounter++}";
+            prologue.Add(new LocalDeclarationStatement(BindingKind.Let, temp, type: null, initializer: operand));
+            return new IdentifierExpression(temp);
+        }
+
+        // Rebuilds an assignment TARGET (the left-hand side of a chained-
+        // assignment link, `a = TARGET = c`) so it is safe to re-embed as a value
+        // read for the enclosing link (`a = TARGET`) without re-evaluating any
+        // side-effecting sub-expression twice — the receiver of a member access
+        // and the index of an element access are each spilled at most once via
+        // <see cref="SpillOperand(GExpression, List{GStatement})"/>, and the
+        // target is rebuilt from those (now-trivial) pieces (issue #1731). A
+        // target that is already an identifier/`this`/literal, or a member
+        // access whose receiver needs no spilling, passes through untouched.
+        private GExpression MakeDuplicationSafeTarget(GExpression target, List<GStatement> prologue)
+        {
+            switch (target)
+            {
+                case MemberAccessExpression member:
+                    return new MemberAccessExpression(this.MakeDuplicationSafeTarget(member.Target, prologue), member.MemberName);
+
+                case IndexExpression index:
+                    return new IndexExpression(
+                        this.MakeDuplicationSafeTarget(index.Target, prologue),
+                        this.SpillOperand(index.Index, prologue));
+
+                default:
+                    return this.SpillOperand(target, prologue);
+            }
+        }
+
+        // Establishes a fresh statement seam (issue #1731) around a single
+        // value-producing translation that has no `TranslateStatement` seam of
+        // its own — a member/lambda/local-function arrow body, which behaves
+        // like an implicit `return expr;` statement. Any spill collected while
+        // running `translate` is emitted immediately ahead of its result, then
+        // the ambient seam is restored (mirrors <see cref="TranslateStatement"/>).
+        private IReadOnlyList<GStatement> WithSpillSeam(Func<IReadOnlyList<GStatement>> translate)
+        {
+            List<GStatement> outerSpillPrologue = this.pendingSpillPrologue;
+            var spillPrologue = new List<GStatement>();
+            this.pendingSpillPrologue = spillPrologue;
+            try
+            {
+                IReadOnlyList<GStatement> core = translate();
+                if (spillPrologue.Count == 0)
+                {
+                    return core;
+                }
+
+                var combined = new List<GStatement>(spillPrologue);
+                combined.AddRange(core);
+                return combined;
+            }
+            finally
+            {
+                this.pendingSpillPrologue = outerSpillPrologue;
+            }
         }
 
         private GStatement TranslateLocalFunction(LocalFunctionStatementSyntax localFunction)
@@ -4812,23 +4992,46 @@ public sealed class CSharpToGSharpTranslator
                 ? this.MapDelegateLikeReturnType(localSymbol, isAsync, localFunction.ReturnType.GetLocation())
                 : null;
 
+            // A local function's body is its own evaluation scope: a spill hoisted
+            // while translating it (issue #1731) must never leak into the
+            // ENCLOSING statement's prologue (that would evaluate the operand once,
+            // eagerly, at the local-function declaration instead of per call). The
+            // ambient seam is suspended for the body's translation; each statement
+            // inside a block body still opens its own fresh seam via
+            // <see cref="TranslateStatement"/>.
+            List<GStatement> outerSpillPrologue = this.pendingSpillPrologue;
+            this.pendingSpillPrologue = null;
             LambdaExpression lambda;
-            if (localFunction.Body != null)
+            try
             {
-                lambda = new LambdaExpression(parameters, blockBody: this.WithParameterShadows(localFunction, this.TranslateBlock(localFunction.Body)), isAsync: isAsync, returnType: returnType, isFunctionLiteral: true);
+                if (localFunction.Body != null)
+                {
+                    lambda = new LambdaExpression(parameters, blockBody: this.WithParameterShadows(localFunction, this.TranslateBlock(localFunction.Body)), isAsync: isAsync, returnType: returnType, isFunctionLiteral: true);
+                }
+                else if (localFunction.ExpressionBody != null)
+                {
+                    // The expression body has no per-statement seam of its own
+                    // (unlike a block body — see below), so a nested spill (issue
+                    // #1731) must open a fresh seam here via
+                    // <see cref="WithSpillSeam"/> — evaluated per call, inside this
+                    // very body, rather than being silently dropped by the
+                    // enclosing null seam above.
+                    lambda = new LambdaExpression(
+                        parameters,
+                        blockBody: new BlockStatement(this.WithSpillSeam(
+                            () => this.TranslateExpressionStatements(localFunction.ExpressionBody.Expression).ToList()).ToList()),
+                        isAsync: isAsync,
+                        returnType: returnType,
+                        isFunctionLiteral: true);
+                }
+                else
+                {
+                    lambda = new LambdaExpression(parameters, blockBody: new BlockStatement(new List<GStatement>()), isAsync: isAsync, returnType: returnType, isFunctionLiteral: true);
+                }
             }
-            else if (localFunction.ExpressionBody != null)
+            finally
             {
-                lambda = new LambdaExpression(
-                    parameters,
-                    blockBody: new BlockStatement(this.TranslateExpressionStatements(localFunction.ExpressionBody.Expression).ToList()),
-                    isAsync: isAsync,
-                    returnType: returnType,
-                    isFunctionLiteral: true);
-            }
-            else
-            {
-                lambda = new LambdaExpression(parameters, blockBody: new BlockStatement(new List<GStatement>()), isAsync: isAsync, returnType: returnType, isFunctionLiteral: true);
+                this.pendingSpillPrologue = outerSpillPrologue;
             }
 
             return new LocalFunctionStatement(SanitizeIdentifier(localFunction.Identifier.Text), lambda);
@@ -5104,6 +5307,26 @@ public sealed class CSharpToGSharpTranslator
         // its scrutinee once into a local and turns the pattern's must-hold tests
         // into `break` guards (issue #914).
         private void HoistLoopConditionClause(ExpressionSyntax clause, List<GStatement> into)
+        {
+            // Any spill hoisted while translating `clause` (issue #1731 — e.g. a
+            // non-trivial pattern scrutinee or range-slice start nested inside the
+            // condition) must land in `into`, which runs at the START of each loop
+            // iteration — NOT in the enclosing loop STATEMENT's own prologue (that
+            // would evaluate the operand once, before the loop, instead of once
+            // per iteration as C# does).
+            List<GStatement> outerSpillPrologue = this.pendingSpillPrologue;
+            this.pendingSpillPrologue = into;
+            try
+            {
+                this.HoistLoopConditionClauseCore(clause, into);
+            }
+            finally
+            {
+                this.pendingSpillPrologue = outerSpillPrologue;
+            }
+        }
+
+        private void HoistLoopConditionClauseCore(ExpressionSyntax clause, List<GStatement> into)
         {
             if (clause is not IsPatternExpressionSyntax isPattern)
             {
@@ -6410,8 +6633,70 @@ public sealed class CSharpToGSharpTranslator
         {
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
             ITypeSymbol receiverType = this.context.GetTypeInfo(isPattern.Expression).Type;
+
+            // A pattern that binds a designation, or tests more than one
+            // sub-pattern, reads the translated scrutinee more than once:
+            // `BuildPatternNarrowingReplacement` substitutes it at every binder
+            // reference, a recursive/property pattern re-embeds it per member
+            // test, and `and`/`or`/parenthesized combinators re-embed it per
+            // branch. A non-trivial scrutinee (anything beyond a bare
+            // identifier/`this`/literal — e.g. a method call or a property read
+            // with a side effect) must then be evaluated exactly once into a
+            // local and reused, matching C# semantics (issue #1731). A pattern
+            // that reads the scrutinee at most once (a bare type test, a
+            // constant/relational pattern) is left untouched, avoiding an
+            // unnecessary temp. Some shapes (a single escaping/non-smart-
+            // castable declaration pattern over a reference type) are already
+            // hoisted more precisely by <see cref="TryBuildPositiveGuardHoist"/>/
+            // <see cref="TryBuildNegatedGuardHoist"/> before reaching here — for
+            // those, `receiver` is already a bare local and this is a no-op.
+            if (!PatternReadsScrutineeAtMostOnce(isPattern.Pattern))
+            {
+                receiver = this.SpillOperand(receiver);
+            }
+
             return this.TranslatePatternTest(receiver, isPattern.Pattern, receiverType, isPattern.Expression);
         }
+
+        // See <see cref="TranslateIsPattern"/>: true when translating `pattern`
+        // against its scrutinee embeds the scrutinee at MOST one time, so no
+        // spill is needed regardless of whether the scrutinee is trivial.
+        private static bool PatternReadsScrutineeAtMostOnce(PatternSyntax pattern) =>
+            pattern switch
+            {
+                // `x is null` / `x is 0` / `x is > 0`: a single equality/relational
+                // test against the receiver, no designation possible.
+                ConstantPatternSyntax => true,
+                RelationalPatternSyntax => true,
+
+                // `x is not P` / `(P)`: reads the receiver exactly as many times as
+                // the inner pattern does.
+                UnaryPatternSyntax unary => PatternReadsScrutineeAtMostOnce(unary.Pattern),
+                ParenthesizedPatternSyntax parenthesized => PatternReadsScrutineeAtMostOnce(parenthesized.Pattern),
+
+                // `x is T t`: always binds a designation, narrowing-replacing the
+                // receiver at every later reference to `t` — more than one read
+                // whenever `t` is actually used.
+                DeclarationPatternSyntax => false,
+
+                // `x is Circle` (no designation/subpatterns) reads the receiver
+                // once; `x is Circle c`, `x is { X: 1 }`, or `x is Circle(1, 2)`
+                // each read it more than once (a designation narrowing-replaces
+                // it, and each property/positional subpattern re-embeds it).
+                RecursivePatternSyntax recursive =>
+                    recursive.Designation == null
+                    && recursive.PropertyPatternClause == null
+                    && recursive.PositionalPatternClause == null,
+
+                // `x is var v`: always binds a designation.
+                VarPatternSyntax => false,
+
+                // `x is A or B` / `x is A and B`: the receiver is re-embedded once
+                // per branch.
+                BinaryPatternSyntax => false,
+
+                _ => false,
+            };
 
         private GExpression TranslatePatternTest(
             GExpression receiver, PatternSyntax pattern, ITypeSymbol receiverType = null, ExpressionSyntax receiverSyntax = null)
@@ -6982,6 +7267,15 @@ public sealed class CSharpToGSharpTranslator
             if (range.RightOperand == null)
             {
                 return new InvocationExpression(slice, new List<GExpression> { start });
+            }
+
+            // `start` is embedded both as the `Slice` start argument and inside
+            // the `end - start` length below; a non-trivial left operand (e.g. a
+            // side-effecting `Next()`) would otherwise be re-evaluated a second
+            // time here — C# evaluates the range's start once (issue #1731).
+            if (range.LeftOperand != null)
+            {
+                start = this.SpillOperand(start);
             }
 
             GExpression end = this.TranslateExpression(range.RightOperand);
@@ -8539,33 +8833,76 @@ public sealed class CSharpToGSharpTranslator
 
             bool isAsync = lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword);
 
-            if (lambda.Body is BlockSyntax block)
+            // A block-bodied lambda's body is its own evaluation scope: a spill
+            // hoisted while translating it (issue #1731) must never leak into the
+            // ENCLOSING statement's prologue (that would evaluate the operand
+            // once, eagerly, at the lambda's definition instead of per
+            // invocation). The ambient seam is suspended around the block body;
+            // each statement inside it still opens its own fresh seam via
+            // <see cref="TranslateStatement"/>. The assignment-/expression-bodied
+            // branches below instead open their OWN fresh seam via
+            // <see cref="WithSpillSeam"/> (rather than being suspended outright),
+            // since they have no per-statement seam of their own to fall back on.
+            List<GStatement> outerSpillPrologue = this.pendingSpillPrologue;
+            this.pendingSpillPrologue = null;
+            try
             {
-                // ADR-0128 / issue #1172: a block-bodied C# lambda renders as the
-                // idiomatic G# arrow form `(params) -> { … }`. The arrow lambda's
-                // statement-block body now reaches parity with func literals and
-                // infers its return type, so no explicit return type is emitted.
-                return new LambdaExpression(
-                    parameters,
-                    blockBody: this.TranslateBlock(block),
-                    isAsync: isAsync);
-            }
+                if (lambda.Body is BlockSyntax block)
+                {
+                    // ADR-0128 / issue #1172: a block-bodied C# lambda renders as the
+                    // idiomatic G# arrow form `(params) -> { … }`. The arrow lambda's
+                    // statement-block body now reaches parity with func literals and
+                    // infers its return type, so no explicit return type is emitted.
+                    return new LambdaExpression(
+                        parameters,
+                        blockBody: this.TranslateBlock(block),
+                        isAsync: isAsync);
+                }
 
-            if (lambda.Body is AssignmentExpressionSyntax)
+                if (lambda.Body is AssignmentExpressionSyntax)
+                {
+                    // An assignment is statement-only in G#; an assignment-bodied lambda
+                    // (`o => x = f()`) becomes a block-bodied arrow lambda. An assignment
+                    // has no value, so the resulting arrow lambda is void (ADR-0128).
+                    return new LambdaExpression(
+                        parameters,
+                        blockBody: new BlockStatement(this.WithSpillSeam(
+                            () => this.TranslateExpressionStatements((ExpressionSyntax)lambda.Body).ToList()).ToList()),
+                        isAsync: isAsync);
+                }
+
+                // A value-returning expression-bodied lambda (`x => x.Get() is {…}`)
+                // has no statement seam of its own; open one via
+                // <see cref="WithSpillSeam"/> so a nested spill (issue #1731) lands
+                // here rather than being dropped. If nothing spilled, keep the
+                // idiomatic arrow-expression form; otherwise the lambda must
+                // become block-bodied to host the spill's `let`, ending in an
+                // explicit `return`.
+                var spillPrologue = new List<GStatement>();
+                List<GStatement> savedSeam = this.pendingSpillPrologue;
+                this.pendingSpillPrologue = spillPrologue;
+                GExpression expressionBody;
+                try
+                {
+                    expressionBody = this.TranslateExpression((ExpressionSyntax)lambda.Body);
+                }
+                finally
+                {
+                    this.pendingSpillPrologue = savedSeam;
+                }
+
+                if (spillPrologue.Count == 0)
+                {
+                    return new LambdaExpression(parameters, expressionBody: expressionBody, isAsync: isAsync);
+                }
+
+                var bodyStatements = new List<GStatement>(spillPrologue) { new ReturnStatement(expressionBody) };
+                return new LambdaExpression(parameters, blockBody: new BlockStatement(bodyStatements), isAsync: isAsync);
+            }
+            finally
             {
-                // An assignment is statement-only in G#; an assignment-bodied lambda
-                // (`o => x = f()`) becomes a block-bodied arrow lambda. An assignment
-                // has no value, so the resulting arrow lambda is void (ADR-0128).
-                return new LambdaExpression(
-                    parameters,
-                    blockBody: new BlockStatement(this.TranslateExpressionStatements((ExpressionSyntax)lambda.Body).ToList()),
-                    isAsync: isAsync);
+                this.pendingSpillPrologue = outerSpillPrologue;
             }
-
-            return new LambdaExpression(
-                parameters,
-                expressionBody: this.TranslateExpression((ExpressionSyntax)lambda.Body),
-                isAsync: isAsync);
         }
 
         // Shared mapping of a method/lambda result type into a G# func return type,
