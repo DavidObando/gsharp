@@ -803,6 +803,13 @@ internal sealed class OverloadResolver
         ambiguous = false;
         nullSafetyFailure = null;
 
+        // Issue #1632: the #1124 applicability filter and the Phase-2 scoring
+        // below both infer a generic candidate's method-type-parameter
+        // substitution from the SAME (candidate, boundArguments, argumentCount)
+        // inputs. Memoize per candidate for this call so unification runs once
+        // instead of twice per generic candidate.
+        var substitutionCache = new Dictionary<FunctionSymbol, (bool Ok, Dictionary<TypeParameterSymbol, TypeSymbol> Substitution)>();
+
         // Phase 1: applicability.
         var applicable = new List<FunctionSymbol>();
         foreach (var cand in candidates)
@@ -836,7 +843,7 @@ internal sealed class OverloadResolver
                 }
                 else if (cand.IsGeneric)
                 {
-                    if (AllMethodTypeParametersInferable(cand, boundArguments, argumentCount))
+                    if (GetCachedCandidateSubstitution(cand, boundArguments, argumentCount, substitutionCache, out _))
                     {
                         filtered.Add(cand);
                     }
@@ -946,7 +953,7 @@ internal sealed class OverloadResolver
             Dictionary<TypeParameterSymbol, TypeSymbol> candSubstitution = null;
             if (cand.IsGeneric)
             {
-                TryInferCandidateSubstitution(cand, boundArguments, argumentCount, out candSubstitution);
+                GetCachedCandidateSubstitution(cand, boundArguments, argumentCount, substitutionCache, out candSubstitution);
             }
 
             // Classify each supplied argument's conversion to its ACTUAL
@@ -1691,27 +1698,36 @@ internal sealed class OverloadResolver
     }
 
     /// <summary>
-    /// Issue #1124: returns <see langword="true"/> when every method type
-    /// parameter of a generic candidate can be inferred from the supplied
-    /// argument types, mirroring the inference the binder performs once a
-    /// candidate is selected (see <c>BindUserTypeStaticCall</c> /
-    /// <c>InferTypeArguments</c>). Used to drop generic candidates whose type
-    /// arguments cannot be inferred so they do not participate in (and tie within)
-    /// overload ranking. Non-generic candidates trivially qualify.
+    /// Issue #1632: memoizing wrapper over <see cref="TryInferCandidateSubstitution"/>,
+    /// keyed by candidate. Within a single <see cref="SelectBestUserOverloadCore"/>
+    /// call the #1124 applicability filter and the Phase-2 scoring pass both
+    /// infer the same generic candidate's substitution from the identical
+    /// <paramref name="boundArguments"/>/<paramref name="argumentCount"/> inputs;
+    /// caching here runs unification once per candidate instead of twice.
     /// </summary>
-    private bool AllMethodTypeParametersInferable(
+    private bool GetCachedCandidateSubstitution(
         FunctionSymbol candidate,
         ImmutableArray<BoundExpression>.Builder boundArguments,
-        int argumentCount)
+        int argumentCount,
+        Dictionary<FunctionSymbol, (bool Ok, Dictionary<TypeParameterSymbol, TypeSymbol> Substitution)> cache,
+        out Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
     {
-        return TryInferCandidateSubstitution(candidate, boundArguments, argumentCount, out _);
+        if (cache.TryGetValue(candidate, out var cached))
+        {
+            substitution = cached.Substitution;
+            return cached.Ok;
+        }
+
+        var ok = TryInferCandidateSubstitution(candidate, boundArguments, argumentCount, out substitution);
+        cache[candidate] = (ok, substitution);
+        return ok;
     }
 
     /// <summary>
     /// Computes the method-type-parameter substitution inferred from the
     /// supplied argument types for a generic <paramref name="candidate"/>, and
     /// reports whether every type parameter received a binding. Shared by the
-    /// #1124 applicability filter (<see cref="AllMethodTypeParametersInferable"/>)
+    /// #1124 applicability filter (<see cref="GetCachedCandidateSubstitution"/>)
     /// and the Phase-2 exact-match scoring, which substitutes the inferred
     /// bindings into each open delegate parameter type so a value-returning
     /// delegate/method-group argument prefers the `(...)->TResult` overload over
