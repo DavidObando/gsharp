@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 
 namespace Cs2Gs.Pipeline;
 
@@ -202,6 +203,16 @@ public class GsharpTestProjectRunner
             args.Add($"-p:RestoreConfigFile={repoNugetConfig}");
         }
 
+        // Bug #1752 (part 1): NuGet's shared global-packages folder keys its
+        // extracted package cache on id+version alone, so a same-version
+        // rebuilt SDK nupkg copied into `.nugs` (see EnsureInLocalFeed) would
+        // still resolve to the stale extraction left behind by an earlier run.
+        // Point restore at a packages folder scoped to this work dir so every
+        // run extracts the current `.nugs` nupkg contents fresh, regardless of
+        // what is already sitting in the shared global cache.
+        string isolatedPackagesPath = Path.Combine(workDir, ".nuget-packages");
+        args.Add($"-p:RestorePackagesPath={isolatedPackagesPath}");
+
         (int exit, string output) = this.RunDotnet(args, workDir);
 
         if (!File.Exists(trxPath))
@@ -213,23 +224,21 @@ public class GsharpTestProjectRunner
         return GsharpTestRunResult.Ran(exit, output, trxPath, results);
     }
 
-    private static string ParseVersion(string fileName)
+    /// <summary>
+    /// Compares two dotted-numeric SDK versions (with an optional prerelease
+    /// suffix) per SemVer 2.0.0 §11 precedence: numeric release components
+    /// compare numerically (so <c>1.10.0</c> outranks <c>1.9.0</c>), a version
+    /// WITHOUT a prerelease tag outranks the same release WITH one (a
+    /// prerelease precedes its release), and when both carry a prerelease tag
+    /// its dot-separated identifiers are compared per §11.4 (numeric
+    /// identifiers compare numerically and are lower than alphanumeric ones,
+    /// which compare ordinally).
+    /// </summary>
+    /// <param name="left">The left-hand version.</param>
+    /// <param name="right">The right-hand version.</param>
+    /// <returns>A negative, zero, or positive value as <paramref name="left"/> is lower than, equal to, or higher than <paramref name="right"/>.</returns>
+    internal static int CompareVersions(string left, string right)
     {
-        if (!fileName.StartsWith(SdkPackagePrefix, StringComparison.Ordinal) ||
-            !fileName.EndsWith(".nupkg", StringComparison.Ordinal))
-        {
-            return null;
-        }
-
-        return fileName.Substring(
-            SdkPackagePrefix.Length,
-            fileName.Length - SdkPackagePrefix.Length - ".nupkg".Length);
-    }
-
-    private static int CompareVersions(string left, string right)
-    {
-        // Compare the dotted numeric release components (e.g. 0.2.107) numerically
-        // so 0.2.107 outranks 0.2.99, falling back to ordinal on the build suffix.
         (int[] LeftNumbers, string LeftSuffix) a = SplitVersion(left);
         (int[] RightNumbers, string RightSuffix) b = SplitVersion(right);
 
@@ -244,7 +253,61 @@ public class GsharpTestProjectRunner
             }
         }
 
-        return string.CompareOrdinal(a.LeftSuffix, b.RightSuffix);
+        bool leftHasSuffix = a.LeftSuffix.Length > 0;
+        bool rightHasSuffix = b.RightSuffix.Length > 0;
+        if (leftHasSuffix != rightHasSuffix)
+        {
+            // Absent prerelease tag (release) outranks a present one.
+            return leftHasSuffix ? -1 : 1;
+        }
+
+        if (!leftHasSuffix)
+        {
+            return 0;
+        }
+
+        return ComparePrereleaseIdentifiers(a.LeftSuffix, b.RightSuffix);
+    }
+
+    /// <summary>
+    /// Copies <paramref name="nupkgPath"/> into the repo's local <c>.nugs</c>
+    /// feed, refreshing it when the destination already exists but its content
+    /// differs from the source (a same-version rebuild), while leaving an
+    /// unchanged nupkg untouched.
+    /// </summary>
+    /// <param name="repoRoot">The repository root containing the <c>.nugs</c> feed.</param>
+    /// <param name="nupkgPath">The source nupkg to stage.</param>
+    internal static void EnsureInLocalFeed(string repoRoot, string nupkgPath)
+    {
+        string feed = Path.Combine(repoRoot, ".nugs");
+        Directory.CreateDirectory(feed);
+        string target = Path.Combine(feed, Path.GetFileName(nupkgPath));
+
+        // Bug #1752 (part 1): a rebuilt SDK nupkg with an unchanged version
+        // string used to be silently skipped here (`if (!File.Exists(target))`),
+        // pinning stale bits in the `.nugs` feed forever. Refresh whenever the
+        // source nupkg's content actually differs from what is already staged,
+        // so a same-version rebuild is picked up while an unchanged nupkg is
+        // not needlessly re-copied.
+        if (File.Exists(target) && FilesAreIdentical(nupkgPath, target))
+        {
+            return;
+        }
+
+        File.Copy(nupkgPath, target, overwrite: true);
+    }
+
+    private static string ParseVersion(string fileName)
+    {
+        if (!fileName.StartsWith(SdkPackagePrefix, StringComparison.Ordinal) ||
+            !fileName.EndsWith(".nupkg", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return fileName.Substring(
+            SdkPackagePrefix.Length,
+            fileName.Length - SdkPackagePrefix.Length - ".nupkg".Length);
     }
 
     private static (int[] Numbers, string Suffix) SplitVersion(string version)
@@ -268,6 +331,49 @@ public class GsharpTestProjectRunner
         return (numbers, suffix);
     }
 
+    private static int ComparePrereleaseIdentifiers(string left, string right)
+    {
+        string[] leftIds = left.Split('.');
+        string[] rightIds = right.Split('.');
+
+        int count = Math.Min(leftIds.Length, rightIds.Length);
+        for (int i = 0; i < count; i++)
+        {
+            int cmp = ComparePrereleaseIdentifier(leftIds[i], rightIds[i]);
+            if (cmp != 0)
+            {
+                return cmp;
+            }
+        }
+
+        // A larger set of identifiers outranks a smaller one when the shared
+        // prefix is otherwise equal (SemVer §11.4.4).
+        return leftIds.Length.CompareTo(rightIds.Length);
+    }
+
+    private static int ComparePrereleaseIdentifier(string left, string right)
+    {
+        bool leftNumeric = IsNumericIdentifier(left, out int leftNum);
+        bool rightNumeric = IsNumericIdentifier(right, out int rightNum);
+
+        if (leftNumeric && rightNumeric)
+        {
+            return leftNum.CompareTo(rightNum);
+        }
+
+        if (leftNumeric != rightNumeric)
+        {
+            // Numeric identifiers always have lower precedence than
+            // alphanumeric identifiers (SemVer §11.4.3).
+            return leftNumeric ? -1 : 1;
+        }
+
+        return string.CompareOrdinal(left, right);
+    }
+
+    private static bool IsNumericIdentifier(string value, out int number) =>
+        int.TryParse(value, out number) && value.Length > 0;
+
     private string FindNupkgForVersion(string version)
     {
         (string NupkgPath, string Version)? resolved = ResolveLocalSdkPackage(this.RepoRoot);
@@ -290,15 +396,23 @@ public class GsharpTestProjectRunner
         return null;
     }
 
-    private static void EnsureInLocalFeed(string repoRoot, string nupkgPath)
+    private static bool FilesAreIdentical(string left, string right)
     {
-        string feed = Path.Combine(repoRoot, ".nugs");
-        Directory.CreateDirectory(feed);
-        string target = Path.Combine(feed, Path.GetFileName(nupkgPath));
-        if (!File.Exists(target))
+        var leftInfo = new FileInfo(left);
+        var rightInfo = new FileInfo(right);
+        if (leftInfo.Length != rightInfo.Length)
         {
-            File.Copy(nupkgPath, target);
+            return false;
         }
+
+        return ComputeHash(left).SequenceEqual(ComputeHash(right));
+    }
+
+    private static byte[] ComputeHash(string path)
+    {
+        using FileStream stream = File.OpenRead(path);
+        using SHA256 sha256 = SHA256.Create();
+        return sha256.ComputeHash(stream);
     }
 
     private static void WriteIsolationBoundary(string workDir)
