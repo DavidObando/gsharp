@@ -18,10 +18,11 @@ namespace Cs2Gs.Tests;
 /// escape chars so a future edit can't silently diverge the two call sites
 /// again), <see cref="ForInStatement.IsAwait"/> is now constructor-only, and
 /// re-printing the same AST node is byte-identical (the "same AST → same
-/// text" guarantee the mutable setter used to put at risk). The indent-cache
-/// and <c>isOpen</c>-extraction cleanups are pure perf/dedup with no
-/// observable-output change, so they're covered implicitly by every other
-/// printer test in this suite continuing to pass unchanged.
+/// text" guarantee the mutable setter used to put at risk), and
+/// <see cref="GSharpPrinter.Print"/> is safe to call concurrently (it has no
+/// shared mutable state). The <c>isOpen</c>-extraction cleanup is pure
+/// perf/dedup with no observable-output change, so it's covered implicitly
+/// by every other printer test in this suite continuing to pass unchanged.
 /// </summary>
 public class Issue1745PrinterCodeModelCleanupTests
 {
@@ -82,6 +83,31 @@ namespace Demo
 
         Assert.Equal(first, second);
         Assert.Contains("await for x in src", first, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <see cref="GSharpPrinter.Print"/> is a public static API and xunit
+    /// runs test classes in parallel by default, so it must not rely on any
+    /// unsynchronized shared mutable state (a prior indent-string cache did,
+    /// and could race). Printing many nested, varying-depth ASTs from
+    /// multiple threads at once must not throw and must produce correctly
+    /// nested output every time.
+    /// </summary>
+    [Fact]
+    public void Print_FromMultipleThreadsConcurrently_DoesNotThrow()
+    {
+        System.Threading.Tasks.Parallel.For(0, 64, i =>
+        {
+            GStatement body = new BlockStatement(Array.Empty<GStatement>());
+            for (int depth = 0; depth < (i % 20) + 1; depth++)
+            {
+                body = new BlockStatement(new[] { body });
+            }
+
+            var unit = new CompilationUnit(members: new GNode[] { body });
+            string printed = GSharpPrinter.Print(unit);
+            Assert.Contains("{", printed, StringComparison.Ordinal);
+        });
     }
 
     private static string TranslateUnit(string source)

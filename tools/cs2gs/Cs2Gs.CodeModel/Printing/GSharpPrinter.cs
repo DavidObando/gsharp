@@ -28,13 +28,6 @@ public static class GSharpPrinter
     // SyntaxFacts.GetUnaryOperatorPrecedence.
     private const int UnaryPrecedence = 6;
 
-    // Issue #1745: indent strings are re-derived from the same small set of
-    // nesting levels on every render call. Cache them instead of allocating
-    // (via Enumerable.Repeat + string.Concat) each time; the cache grows
-    // lazily and is unbounded only in the sense that G# source nests a few
-    // dozen levels deep at most in practice.
-    private static readonly List<string> IndentCache = new List<string> { string.Empty };
-
     /// <summary>
     /// Prints a compilation unit to canonical G# source text.
     /// </summary>
@@ -62,12 +55,11 @@ public static class GSharpPrinter
 
     private static string Indent(int level)
     {
-        for (var i = IndentCache.Count; i <= level; i++)
-        {
-            IndentCache.Add(IndentCache[i - 1] + IndentUnit);
-        }
-
-        return IndentCache[level];
+        // ponytail: no shared cache — Print is a public static API and xunit
+        // runs test classes in parallel, so a shared List<string> grown
+        // on-demand here would race. Indent strings are tiny; allocate
+        // per-call instead of guarding shared state.
+        return string.Concat(Enumerable.Repeat(IndentUnit, level));
     }
 
     private static string RenderVisibility(Visibility visibility)
