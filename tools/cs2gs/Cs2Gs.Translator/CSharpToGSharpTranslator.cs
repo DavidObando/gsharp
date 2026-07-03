@@ -8477,8 +8477,6 @@ public sealed class CSharpToGSharpTranslator
                 ? this.typeMapper.Map(typeSymbol, this.context, creation.GetLocation())
                 : new NamedTypeReference(creation.Type.ToString());
 
-            bool hasCtorArgs = creation.ArgumentList != null && creation.ArgumentList.Arguments.Count > 0;
-
             var arguments = creation.ArgumentList == null
                 ? new List<GExpression>()
                 : this.TranslateArguments(creation.ArgumentList.Arguments);
@@ -8497,6 +8495,26 @@ public sealed class CSharpToGSharpTranslator
                 return arguments[0];
             }
 
+            return this.BuildObjectCreationCore(typeSymbol, type, arguments, creation.Initializer);
+        }
+
+        /// <summary>
+        /// Shared core for <see cref="TranslateObjectCreation"/> and
+        /// <see cref="TranslateImplicitObjectCreation"/> (issue #1728): both entry
+        /// points map the same C# constructor-call-plus-initializer shapes to the
+        /// same G# forms, and had already drifted apart before this method
+        /// existed (a struct-zip guard present on only one path; a verbatim
+        /// re-inline of <see cref="BuildConstruction"/>). Routing both through
+        /// one method makes that drift structurally impossible.
+        /// </summary>
+        private GExpression BuildObjectCreationCore(
+            ITypeSymbol typeSymbol,
+            GTypeReference type,
+            IReadOnlyList<GExpression> arguments,
+            InitializerExpressionSyntax initializer)
+        {
+            bool hasCtorArgs = arguments.Count > 0;
+
             // A C# collection initializer maps to the canonical G# collection
             // initializer `Target{ ... }` (ADR-0117, issue #479). This covers
             // `new List<int>{1, 2, 3}` (bare elements), `new Dictionary<K,V>{ {k, v} }`
@@ -8504,20 +8522,35 @@ public sealed class CSharpToGSharpTranslator
             // `new Dictionary<K,V>{ ["k"] = v }` (indexer entries). The construction
             // target carries any constructor arguments, matching
             // `new(StringComparer.OrdinalIgnoreCase){ ... }`.
-            if (creation.Initializer != null &&
-                this.TryTranslateCollectionInitializer(creation.Initializer, type, arguments, out GExpression collectionInitializer))
+            if (initializer != null &&
+                this.TryTranslateCollectionInitializer(initializer, type, arguments, out GExpression collectionInitializer))
             {
                 return collectionInitializer;
             }
 
-            // An object initializer `new T { Field = value, ... }` (no/empty
-            // constructor argument list) maps to the canonical G# struct literal
-            // `T{Field: value, ...}` (spec §Struct literals; ADR-0115 §B.11).
-            if (creation.Initializer != null &&
-                creation.Initializer.IsKind(SyntaxKind.ObjectInitializerExpression) &&
-                !hasCtorArgs)
+            if (initializer != null && initializer.IsKind(SyntaxKind.ObjectInitializerExpression))
             {
-                return this.BuildObjectInitializerLiteral(creation.Initializer, type);
+                // An object initializer `new T { Field = value, ... }` with NO
+                // constructor argument list maps to the canonical G# struct
+                // literal `T{Field: value, ...}` (spec §Struct literals; ADR-0115
+                // §B.11).
+                if (!hasCtorArgs)
+                {
+                    return this.BuildObjectInitializerLiteral(initializer, type);
+                }
+
+                // Issue #1728: `new T(a, b) { Field = value, ... }` combines
+                // constructor arguments WITH an object initializer. Neither the
+                // colon struct literal above nor a bare construction call has a
+                // slot for both a positional constructor call and member
+                // assignments — falling through to a bare `BuildConstruction`
+                // here (the original bug) silently drops every assignment. gsc's
+                // construction-with-initializer-suffix form (issue #522,
+                // `Target(args) { Field = value, ... }`) is built for exactly
+                // this: it lowers to a synthetic local, the assignments, then a
+                // trailing value, so it composes at any expression position —
+                // no hoisted-temp workaround is needed.
+                return this.BuildConstructionWithInitializerSuffix(initializer, type, arguments);
             }
 
             // A source-defined value aggregate (`struct` / `data struct`) has no
@@ -8529,8 +8562,13 @@ public sealed class CSharpToGSharpTranslator
             // `Span<T>` — all `SpecialType.None`) DO expose real constructors that
             // G# can call directly (`Guid(bytes, true)`), so they must fall through
             // to a constructor call rather than be zipped into a bogus literal over
-            // the type's *properties*.
-            if (typeSymbol is INamedTypeSymbol { TypeKind: TypeKind.Struct, SpecialType: SpecialType.None } valueType &&
+            // the type's *properties*. An initializer here (reachable only when it
+            // wasn't a plain object initializer, e.g. an unsupported collection
+            // initializer shape) has no field to zip into either, so it must NOT
+            // be silently absorbed into a bogus zip — skip straight to
+            // `BuildConstruction` and let the initializer's own diagnostic stand.
+            if (initializer == null &&
+                typeSymbol is INamedTypeSymbol { TypeKind: TypeKind.Struct, SpecialType: SpecialType.None } valueType &&
                 !valueType.IsTupleType &&
                 !valueType.DeclaringSyntaxReferences.IsEmpty)
             {
@@ -8661,6 +8699,55 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return new CompositeLiteralExpression(type, fieldInitializers);
+        }
+
+        /// <summary>
+        /// Builds the canonical G# construction-with-initializer-suffix
+        /// <c>Target(args) { Name = value, ... }</c> (gsc issue #522) for a C#
+        /// object initializer combined with constructor arguments (issue #1728):
+        /// <c>new T(a, b) { Field = value, ... }</c>. Unlike
+        /// <see cref="BuildObjectInitializerLiteral"/> (the colon struct-literal
+        /// form, no ctor args), this suffix parses each member value as a plain
+        /// expression (gsc's <c>ParseObjectInitializerList</c> → <c>ParseExpression</c>)
+        /// — it has no target-less collection-initializer carve-out (issue #1567),
+        /// so a nested <c>Prop = { a, b }</c> member has no canonical form here yet
+        /// and is reported as unsupported instead of silently dropped.
+        /// </summary>
+        private GExpression BuildConstructionWithInitializerSuffix(
+            InitializerExpressionSyntax initializer,
+            GTypeReference type,
+            IReadOnlyList<GExpression> arguments)
+        {
+            GExpression construction = BuildConstruction(type, arguments);
+            var memberInitializers = new List<FieldInitializer>();
+            foreach (ExpressionSyntax element in initializer.Expressions)
+            {
+                if (element is AssignmentExpressionSyntax assignment &&
+                    assignment.Left is IdentifierNameSyntax name)
+                {
+                    if (assignment.Right is InitializerExpressionSyntax nestedInit &&
+                        (nestedInit.IsKind(SyntaxKind.CollectionInitializerExpression) ||
+                         nestedInit.IsKind(SyntaxKind.ObjectInitializerExpression)))
+                    {
+                        this.context.ReportUnsupported(
+                            assignment,
+                            "nested collection/object initializer as a member value has no canonical G# form when the outer object creation also has constructor arguments; gsc's construction-with-initializer-suffix form (issue #522) has no target-less collection-initializer carve-out (issue #1728).");
+                        continue;
+                    }
+
+                    memberInitializers.Add(new FieldInitializer(
+                        SanitizeIdentifier(name.Identifier.Text),
+                        this.TranslateExpression(assignment.Right)));
+                }
+                else
+                {
+                    this.context.ReportUnsupported(
+                        element,
+                        "object-initializer element is not a simple `Field = value` assignment; no canonical G# construction-with-initializer-suffix form yet (issue #1728).");
+                }
+            }
+
+            return new ObjectCreationInitializerExpression(construction, memberInitializers);
         }
 
         /// <summary>
@@ -9064,65 +9151,7 @@ public sealed class CSharpToGSharpTranslator
                 ? new List<GExpression>()
                 : this.TranslateArguments(creation.ArgumentList.Arguments);
 
-            bool hasCtorArgs = arguments.Count > 0;
-
-            // A target-typed `new() { ... }` carries the same initializer forms as
-            // an explicit `new T() { ... }`; without this the initializer was
-            // silently dropped, emitting a bare `T()` call (GS0130 for value
-            // structs, lost members otherwise).
-            if (creation.Initializer != null &&
-                this.TryTranslateCollectionInitializer(creation.Initializer, type, arguments, out GExpression collectionInitializer))
-            {
-                return collectionInitializer;
-            }
-
-            if (creation.Initializer != null &&
-                creation.Initializer.IsKind(SyntaxKind.ObjectInitializerExpression) &&
-                !hasCtorArgs)
-            {
-                return this.BuildObjectInitializerLiteral(creation.Initializer, type);
-            }
-
-            // A source-defined value aggregate is constructed with a composite
-            // literal; a reference type — or an imported/BCL struct with a real
-            // constructor — with a call on the (bracketed-generic) type name.
-            if (typeSymbol is INamedTypeSymbol { TypeKind: TypeKind.Struct, SpecialType: SpecialType.None } valueType &&
-                !valueType.IsTupleType &&
-                !valueType.DeclaringSyntaxReferences.IsEmpty &&
-                creation.Initializer == null)
-            {
-                // Parameterless target-typed `new()` on a source value struct → empty
-                // struct literal `T{}` (no callable constructor surface in G#).
-                if (arguments.Count == 0)
-                {
-                    return new CompositeLiteralExpression(type, new List<FieldInitializer>());
-                }
-
-                List<string> targetNames = OrderedValueMemberNames(valueType);
-                if (targetNames.Count == arguments.Count)
-                {
-                    var fieldInitializers = new List<FieldInitializer>();
-                    for (int i = 0; i < arguments.Count; i++)
-                    {
-                        fieldInitializers.Add(new FieldInitializer(targetNames[i], arguments[i]));
-                    }
-
-                    return new CompositeLiteralExpression(type, fieldInitializers);
-                }
-            }
-
-            if (type is NamedTypeReference named)
-            {
-                IReadOnlyList<GTypeReference> typeArguments = named.TypeArguments.Count > 0
-                    ? named.TypeArguments
-                    : null;
-                return new InvocationExpression(
-                    new IdentifierExpression(ConstructionCalleeName(named.Name)),
-                    arguments,
-                    typeArguments);
-            }
-
-            return new InvocationExpression(new IdentifierExpression(type.ToString()), arguments);
+            return this.BuildObjectCreationCore(typeSymbol, type, arguments, creation.Initializer);
         }
 
         private GExpression TranslateSwitchExpression(SwitchExpressionSyntax node)

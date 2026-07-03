@@ -211,6 +211,37 @@ public sealed class CompositeLiteralExpression : GExpression
 }
 
 /// <summary>
+/// A constructor call followed by a property-initializer suffix
+/// <c>Target(args) { Name = value, ... }</c> (gsc issue #522). Used for a C#
+/// object creation that combines constructor ARGUMENTS with an object
+/// initializer (<c>new Foo(x) { Bar = 2 }</c>, issue #1728) — neither the
+/// colon struct literal <c>T{Bar: 2}</c> nor a plain construction call has a
+/// slot for both a positional constructor call and named member
+/// assignments. gsc lowers this suffix form to a synthetic local, the
+/// assignments, then a trailing value, so it is legal at any expression
+/// position.
+/// </summary>
+public sealed class ObjectCreationInitializerExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ObjectCreationInitializerExpression"/> class.
+    /// </summary>
+    /// <param name="construction">The constructor call expression.</param>
+    /// <param name="memberInitializers">The member (property/field) initializers applied after construction.</param>
+    public ObjectCreationInitializerExpression(GExpression construction, IReadOnlyList<FieldInitializer> memberInitializers = null)
+    {
+        Construction = construction;
+        MemberInitializers = memberInitializers ?? new List<FieldInitializer>();
+    }
+
+    /// <summary>Gets the constructor call expression.</summary>
+    public GExpression Construction { get; }
+
+    /// <summary>Gets the member initializers applied after construction.</summary>
+    public IReadOnlyList<FieldInitializer> MemberInitializers { get; }
+}
+
+/// <summary>
 /// A single element of a <see cref="CollectionInitializerExpression"/>:
 /// a bare element, a <c>key: value</c> pair, or an <c>[key] = value</c>
 /// indexer entry (ADR-0117).
