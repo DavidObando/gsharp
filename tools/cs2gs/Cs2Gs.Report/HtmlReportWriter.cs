@@ -87,16 +87,26 @@ public static class HtmlReportWriter
         "})();") + Newline;
 
     /// <summary>
-    /// Renders the model to a self-contained HTML document.
+    /// Renders the model to a self-contained HTML document. Triage-artifact
+    /// links are resolved relative to <paramref name="outputDir"/> (defaulting
+    /// to <see cref="ReportModel.RunDir"/>, i.e. as if the document were
+    /// written into the run dir) so the same model renders correct, clickable
+    /// links no matter where <c>report.html</c> ultimately lives.
     /// </summary>
     /// <param name="model">The aggregated report model.</param>
+    /// <param name="outputDir">
+    /// The directory the rendered document will be written into. Defaults to
+    /// <see cref="ReportModel.RunDir"/> when <see langword="null"/>.
+    /// </param>
     /// <returns>The deterministic HTML text.</returns>
-    public static string Render(ReportModel model)
+    public static string Render(ReportModel model, string outputDir = null)
     {
         if (model is null)
         {
             throw new ArgumentNullException(nameof(model));
         }
+
+        outputDir = Path.GetFullPath(outputDir ?? model.RunDir);
 
         var sb = new StringBuilder();
         sb.Append("<!DOCTYPE html>").Append(Newline);
@@ -106,7 +116,7 @@ public static class HtmlReportWriter
         AppendHeader(sb, model);
         AppendMatrix(sb, model);
         AppendGaps(sb, model);
-        AppendAppDetails(sb, model);
+        AppendAppDetails(sb, model, outputDir);
         AppendScript(sb);
         sb.Append("</body>").Append(Newline);
         sb.Append("</html>").Append(Newline);
@@ -114,21 +124,29 @@ public static class HtmlReportWriter
     }
 
     /// <summary>
-    /// Writes <c>report.html</c> under the run directory and returns its path.
+    /// Writes <c>report.html</c> into <paramref name="outputDir"/> (which may
+    /// differ from the run dir the model was built from) and returns its path.
+    /// Triage-artifact links are rewritten relative to <paramref name="outputDir"/>
+    /// so they resolve from wherever the document is written.
     /// </summary>
     /// <param name="model">The aggregated report model.</param>
-    /// <param name="runDir">The run directory to write into.</param>
+    /// <param name="outputDir">The directory to write <c>report.html</c> into.</param>
+    /// <param name="fileName">
+    /// The file name to write, defaulting to <see cref="FileName"/> (<c>report.html</c>)
+    /// when <see langword="null"/> or empty. Lets <c>--out &lt;file&gt;</c> honor a
+    /// user-supplied report file name.
+    /// </param>
     /// <returns>The full path of the written file.</returns>
-    public static string Write(ReportModel model, string runDir)
+    public static string Write(ReportModel model, string outputDir, string fileName = null)
     {
-        if (string.IsNullOrEmpty(runDir))
+        if (string.IsNullOrEmpty(outputDir))
         {
-            throw new ArgumentException("Run directory is required.", nameof(runDir));
+            throw new ArgumentException("Output directory is required.", nameof(outputDir));
         }
 
-        Directory.CreateDirectory(runDir);
-        string path = Path.Combine(runDir, FileName);
-        File.WriteAllText(path, Render(model));
+        Directory.CreateDirectory(outputDir);
+        string path = Path.Combine(outputDir, string.IsNullOrEmpty(fileName) ? FileName : fileName);
+        File.WriteAllText(path, Render(model, outputDir));
         return path;
     }
 
@@ -393,7 +411,7 @@ public static class HtmlReportWriter
         sb.Append("</details>").Append(Newline);
     }
 
-    private static void AppendAppDetails(StringBuilder sb, ReportModel model)
+    private static void AppendAppDetails(StringBuilder sb, ReportModel model, string outputDir)
     {
         sb.Append("<section aria-labelledby=\"apps-h\">").Append(Newline);
         sb.Append("<h2 id=\"apps-h\">App details</h2>").Append(Newline);
@@ -430,7 +448,8 @@ public static class HtmlReportWriter
                 sb.Append("<ul class=\"artifacts\">").Append(Newline);
                 foreach (string artifact in app.Artifacts)
                 {
-                    sb.Append("<li><a href=\"").Append(Encode(EncodeUriPath(artifact))).Append("\">")
+                    string href = ResolveArtifactHref(model.RunDir, outputDir, artifact);
+                    sb.Append("<li><a href=\"").Append(Encode(EncodeUriPath(href))).Append("\">")
                         .Append(Encode(artifact)).Append("</a></li>").Append(Newline);
                 }
 
@@ -510,6 +529,27 @@ public static class HtmlReportWriter
         }
 
         return string.Join("/", relative.Split('/').Select(Uri.EscapeDataString));
+    }
+
+    /// <summary>
+    /// Resolves a triage-artifact path (stored relative to <paramref name="runDir"/>
+    /// in <c>run.json</c>) to a link that is valid relative to
+    /// <paramref name="outputDir"/>, the directory <c>report.html</c> is actually
+    /// written into. Uses <see cref="Path.GetRelativePath(string, string)"/> so it
+    /// works for any relationship between the two directories (parent, sibling,
+    /// nested, or the same directory) and normalizes the result to forward
+    /// slashes for use as a URI path.
+    /// </summary>
+    /// <param name="runDir">The absolute run directory the artifact path is relative to.</param>
+    /// <param name="outputDir">The absolute directory the document is written into.</param>
+    /// <param name="artifactRelative">The run-relative artifact path from <c>run.json</c>.</param>
+    /// <returns>The href, relative to <paramref name="outputDir"/>, with forward-slash separators.</returns>
+    private static string ResolveArtifactHref(string runDir, string outputDir, string artifactRelative)
+    {
+        string absoluteArtifact = Path.GetFullPath(
+            Path.Combine(runDir, artifactRelative.Replace('/', Path.DirectorySeparatorChar)));
+        string relativeToOutput = Path.GetRelativePath(outputDir, absoluteArtifact);
+        return relativeToOutput.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
     }
 
     private static string Slug(string value)
