@@ -57,6 +57,20 @@ internal sealed class DeclarationBinder
     /// <returns>The bound type or <c>null</c>.</returns>
     internal delegate TypeSymbol BindReturnTypeClauseDelegate(TypeClauseSyntax syntax, bool isAsync);
 
+    /// <summary>
+    /// Issue #1812: signature for the
+    /// <c>BindInterpolatedStringAsFormattable(syntax, targetType)</c> entry
+    /// point, letting <see cref="ResolveClrBaseConstructor"/> re-lower a
+    /// <c>: base($"...")</c> argument to <c>FormattableStringFactory.Create(...)</c>
+    /// once overload resolution has selected an IFormattable/FormattableString
+    /// parameter — mirroring what <c>RebindFormattableInterpolationArguments</c>
+    /// does for every other CLR-call path in <c>ExpressionBinder</c>.
+    /// </summary>
+    /// <param name="syntax">The interpolated-string syntax.</param>
+    /// <param name="targetType">The target type, or <see langword="null"/> for the FormattableString-factory form.</param>
+    /// <returns>The bound (re-lowered) expression.</returns>
+    internal delegate BoundExpression BindInterpolatedStringAsFormattableDelegate(InterpolatedStringExpressionSyntax syntax, TypeSymbol targetType);
+
     private readonly BinderContext binderCtx;
     private readonly ConversionClassifier conversions;
     private readonly BindExpressionDelegate bindExpression;
@@ -64,6 +78,7 @@ internal sealed class DeclarationBinder
     private readonly BindReturnTypeClauseDelegate bindReturnTypeClause;
     private readonly BindTypeOfExpressionDelegate bindTypeOfExpression;
     private readonly BindArrayCreationExpressionDelegate bindArrayCreationExpression;
+    private readonly BindInterpolatedStringAsFormattableDelegate bindInterpolatedStringAsFormattable;
     private readonly Func<SyntaxToken, Accessibility> resolveAccessibility;
     private readonly Func<string, TypeSymbol> lookupType;
     private readonly Func<TypeSymbol, Type> getEffectiveArgumentClrType;
@@ -129,7 +144,8 @@ internal sealed class DeclarationBinder
         Func<TypeSymbol, bool> isAsyncSequenceReturnType,
         Func<string, bool> isPrimitiveTypeName,
         Func<RefKind, string> refKindToString,
-        Func<FunctionSymbol> getCurrentFunction)
+        Func<FunctionSymbol> getCurrentFunction,
+        BindInterpolatedStringAsFormattableDelegate bindInterpolatedStringAsFormattable = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
         this.conversions = conversions ?? throw new ArgumentNullException(nameof(conversions));
@@ -138,6 +154,7 @@ internal sealed class DeclarationBinder
         this.bindReturnTypeClause = bindReturnTypeClause ?? throw new ArgumentNullException(nameof(bindReturnTypeClause));
         this.bindTypeOfExpression = bindTypeOfExpression ?? throw new ArgumentNullException(nameof(bindTypeOfExpression));
         this.bindArrayCreationExpression = bindArrayCreationExpression ?? throw new ArgumentNullException(nameof(bindArrayCreationExpression));
+        this.bindInterpolatedStringAsFormattable = bindInterpolatedStringAsFormattable;
         this.resolveAccessibility = resolveAccessibility ?? throw new ArgumentNullException(nameof(resolveAccessibility));
         this.lookupType = lookupType ?? throw new ArgumentNullException(nameof(lookupType));
         this.getEffectiveArgumentClrType = getEffectiveArgumentClrType ?? throw new ArgumentNullException(nameof(getEffectiveArgumentClrType));
@@ -6858,6 +6875,8 @@ internal sealed class DeclarationBinder
         }
 
         ImmutableArray<BoundExpression>.Builder boundArguments;
+        BaseConstructorInitializer clrInit = null;
+        BaseConstructorInitializer gsharpInit = null;
         using (PushStaticMemberScope(structSymbol))
         {
             var staticScope = scope;
@@ -6876,28 +6895,36 @@ internal sealed class DeclarationBinder
                 boundArguments.Add(bindExpression(syntax.BaseConstructorArguments[i]));
             }
 
+            // Issue #1812: resolve (and, when needed, interpolation-rebind)
+            // while the primary-ctor-parameter scope set up above is still
+            // active — this must happen before the `using` block below tears
+            // the parameter scope back down (`PushStaticMemberScope`'s
+            // `Dispose` hard-resets `binderCtx.RootScope`, discarding the
+            // child scope created above regardless of any assignment here).
+            // See the matching comment in BindConstructorBaseInitializerCore.
+            if (importedBaseType?.ClrType is System.Type clrBase)
+            {
+                clrInit = ResolveClrBaseConstructor(i => syntax.BaseConstructorArguments[i].Location, clrBase, boundArguments, location, i => syntax.BaseConstructorArguments[i]);
+            }
+            else
+            {
+                gsharpInit = ResolveGSharpBaseConstructor(i => syntax.BaseConstructorArguments[i].Location, structSymbol.Name, baseClassSymbol, boundArguments, location);
+            }
+
             scope = staticScope;
+        }
+
+        if (clrInit != null)
+        {
+            structSymbol.SetBaseConstructorInitializer(clrInit);
+        }
+        else if (gsharpInit != null)
+        {
+            structSymbol.SetBaseConstructorInitializer(gsharpInit);
         }
 
         scope = savedScope;
         binderCtx.CurrentTypeParameters = savedTypeParameters;
-
-        if (importedBaseType?.ClrType is System.Type clrBase)
-        {
-            var clrInit = ResolveClrBaseConstructor(i => syntax.BaseConstructorArguments[i].Location, clrBase, boundArguments, location);
-            if (clrInit != null)
-            {
-                structSymbol.SetBaseConstructorInitializer(clrInit);
-            }
-
-            return;
-        }
-
-        var gsharpInit = ResolveGSharpBaseConstructor(i => syntax.BaseConstructorArguments[i].Location, structSymbol.Name, baseClassSymbol, boundArguments, location);
-        if (gsharpInit != null)
-        {
-            structSymbol.SetBaseConstructorInitializer(gsharpInit);
-        }
     }
 
     /// <summary>Resolves a base-constructor initializer against an imported CLR base type's constructors (issue #306). Returns <c>null</c> (after reporting a diagnostic) when no accessible constructor matches.</summary>
@@ -6905,7 +6932,8 @@ internal sealed class DeclarationBinder
         System.Func<int, TextLocation> argLocation,
         System.Type clrBase,
         ImmutableArray<BoundExpression>.Builder boundArguments,
-        TextLocation location)
+        TextLocation location,
+        System.Func<int, ExpressionSyntax> argSyntax = null)
     {
         var ctors = ClrTypeUtilities.SafeGetConstructors(clrBase, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
             .Where(c => c.IsPublic || c.IsFamily || c.IsFamilyOrAssembly)
@@ -6931,7 +6959,14 @@ internal sealed class DeclarationBinder
         var isExpanded = false;
         if (argsAllTyped)
         {
-            var resolution = OverloadResolution.Resolve(ctors, argTypes);
+            // Issue #1812: a `: base($"...")` argument to an imported CLR base
+            // constructor is convertible to an IFormattable/FormattableString
+            // (or interpolated-string-handler) parameter just like any other
+            // CLR call site, so mark which positional arguments are
+            // interpolated-string literals (base-ctor arguments are always
+            // positional, never named).
+            var interpolatedStringArgs = ComputeInterpolatedStringArgFlags(argSyntax, boundArguments.Count);
+            var resolution = OverloadResolution.Resolve(ctors, argTypes, interpolatedStringArgs: interpolatedStringArgs);
             switch (resolution.Outcome)
             {
                 case OverloadResolution.ResolutionOutcome.Resolved:
@@ -6950,6 +6985,30 @@ internal sealed class DeclarationBinder
         {
             Diagnostics.ReportNoMatchingBaseConstructor(location, clrBase.Name, boundArguments.Count);
             return null;
+        }
+
+        // Issue #1812: mirror RebindFormattableInterpolationArguments (the
+        // step every ExpressionBinder CLR-call path runs) — now that overload
+        // resolution has selected `bestCtor`, re-lower each interpolated-string
+        // `: base(...)` argument whose chosen parameter is
+        // IFormattable/FormattableString-shaped to
+        // FormattableStringFactory.Create(...). Base-ctor arguments are always
+        // positional (no named-argument mapping), so parameter index == argument
+        // index. A no-op (and safe) when the caller has no
+        // bindInterpolatedStringAsFormattable delegate wired or no argSyntax was
+        // supplied.
+        if (argSyntax != null && bindInterpolatedStringAsFormattable != null)
+        {
+            var bestCtorParams = bestCtor.GetParameters();
+            var limit = Math.Min(boundArguments.Count, bestCtorParams.Length);
+            for (var i = 0; i < limit; i++)
+            {
+                if (argSyntax(i) is InterpolatedStringExpressionSyntax interpolated
+                    && OverloadResolution.IsFormattableStringTarget(bestCtorParams[i].ParameterType))
+                {
+                    boundArguments[i] = bindInterpolatedStringAsFormattable(interpolated, targetType: null);
+                }
+            }
         }
 
         // Issue #306 (item 2): honor `ref`/`out`/`in` base-constructor parameters.
@@ -7051,6 +7110,38 @@ internal sealed class DeclarationBinder
         }
 
         return new BaseConstructorInitializer(convertedArgs.ToImmutable(), bestCtor, refKindsBuilder.ToImmutable());
+    }
+
+    /// <summary>
+    /// Issue #1812 (ADR-0055 Tier 4 / #369 companion): produces the per-argument
+    /// flags marking which positional `: base(...)` arguments are
+    /// interpolated-string literals, so overload resolution can treat them as
+    /// convertible to IFormattable/FormattableString/handler parameters — the
+    /// same treatment every other CLR-call Resolve site gives interpolated
+    /// string arguments. Base-constructor arguments are always positional
+    /// (there is no named-argument base-ctor syntax), so no unwrap step is
+    /// needed here (contrast with the named-argument-aware helpers used for
+    /// ordinary calls). Returns <see langword="null"/> when no argument
+    /// qualifies or <paramref name="argSyntax"/> is unavailable.
+    /// </summary>
+    private static System.Collections.Generic.IReadOnlyList<bool> ComputeInterpolatedStringArgFlags(System.Func<int, ExpressionSyntax> argSyntax, int count)
+    {
+        if (argSyntax == null)
+        {
+            return null;
+        }
+
+        bool[] flags = null;
+        for (var i = 0; i < count; i++)
+        {
+            if (argSyntax(i) is InterpolatedStringExpressionSyntax)
+            {
+                flags ??= new bool[count];
+                flags[i] = true;
+            }
+        }
+
+        return flags;
     }
 
     /// <summary>Resolves a base-constructor initializer against a GSharp base class's constructors (issue #306). Returns <c>null</c> (after reporting a diagnostic) when no match.</summary>
@@ -7543,6 +7634,7 @@ internal sealed class DeclarationBinder
         }
 
         ImmutableArray<BoundExpression>.Builder boundArguments;
+        BaseConstructorInitializer init = null;
         using (PushStaticMemberScope(structSymbol))
         {
             var staticScope = scope;
@@ -7558,32 +7650,42 @@ internal sealed class DeclarationBinder
                 boundArguments.Add(bindExpression(ctorSyntax.BaseArguments[i]));
             }
 
+            // Issue #1812: resolve (and, when needed, interpolation-rebind)
+            // while the ctor-parameter scope set up above is still active, so
+            // a `: base($"...{n}...")` argument referencing an explicit ctor
+            // parameter (`n`) can be re-bound against the chosen
+            // FormattableString parameter — this must happen before the
+            // `using` block below tears the parameter scope back down
+            // (`PushStaticMemberScope`'s `Dispose` hard-resets
+            // `binderCtx.RootScope`, discarding the child scope created above
+            // regardless of any assignment here), otherwise the rebind would
+            // fail to resolve `n` (issue #377/#1638's
+            // RebindFormattableInterpolationArguments does not have this
+            // problem because ExpressionBinder never tears its scope down
+            // mid-call the way this deferred base-initializer pass does).
+            if (baseClassSymbol == null && importedBaseType == null)
+            {
+                Diagnostics.ReportBaseConstructorArgumentsWithoutBase(location);
+            }
+            else if (importedBaseType?.ClrType is System.Type clrBase)
+            {
+                init = ResolveClrBaseConstructor(i => ctorSyntax.BaseArguments[i].Location, clrBase, boundArguments, location, i => ctorSyntax.BaseArguments[i]);
+            }
+            else
+            {
+                init = ResolveGSharpBaseConstructor(i => ctorSyntax.BaseArguments[i].Location, structSymbol.Name, baseClassSymbol, boundArguments, location);
+            }
+
             scope = staticScope;
+        }
+
+        if (init != null)
+        {
+            constructorSymbol.SetBaseInitializer(init);
         }
 
         scope = savedScope;
         binderCtx.CurrentTypeParameters = savedTypeParameters;
-
-        if (baseClassSymbol == null && importedBaseType == null)
-        {
-            Diagnostics.ReportBaseConstructorArgumentsWithoutBase(location);
-        }
-        else if (importedBaseType?.ClrType is System.Type clrBase)
-        {
-            var init = ResolveClrBaseConstructor(i => ctorSyntax.BaseArguments[i].Location, clrBase, boundArguments, location);
-            if (init != null)
-            {
-                constructorSymbol.SetBaseInitializer(init);
-            }
-        }
-        else
-        {
-            var init = ResolveGSharpBaseConstructor(i => ctorSyntax.BaseArguments[i].Location, structSymbol.Name, baseClassSymbol, boundArguments, location);
-            if (init != null)
-            {
-                constructorSymbol.SetBaseInitializer(init);
-            }
-        }
     }
 
     /// <summary>

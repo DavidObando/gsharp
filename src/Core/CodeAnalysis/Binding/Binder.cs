@@ -280,7 +280,8 @@ public sealed class Binder
             isAsyncSequenceReturnType: IsAsyncSequenceReturnType,
             isPrimitiveTypeName: IsPrimitiveTypeName,
             refKindToString: RefKindToString,
-            getCurrentFunction: () => this.function);
+            getCurrentFunction: () => this.function,
+            bindInterpolatedStringAsFormattable: (syntax, targetType) => expressions.BindInterpolatedStringAsFormattable(syntax, targetType));
         expressions = new ExpressionBinder(
             binderCtx,
             memberLookup,

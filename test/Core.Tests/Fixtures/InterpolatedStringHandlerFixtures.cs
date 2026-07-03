@@ -270,3 +270,45 @@ public class Issue1638FormattableBaseFixture
 {
     public string Render(System.FormattableString fs) => fs.ToString(System.Globalization.CultureInfo.InvariantCulture);
 }
+
+/// <summary>
+/// Issue #1812 fixture: a static method whose sole parameter is
+/// <see cref="System.FormattableString"/>. Exercises the STATIC CLR-call
+/// dispatch path (<c>ImportedClassSymbol.TryLookupFunction</c> /
+/// <c>BindAccessorCall</c>'s <c>classSymbol != null</c> branch in
+/// <c>ExpressionBinder.Calls.cs</c>) with an interpolated-string argument,
+/// mirroring <see cref="Issue1638FormattableBaseFixture"/>'s
+/// inherited-instance coverage but for a static call.
+/// </summary>
+public static class Issue1812StaticFormattableFixture
+{
+    public static string Render(System.FormattableString fs) => fs.ToString(System.Globalization.CultureInfo.InvariantCulture);
+}
+
+/// <summary>
+/// Issue #1812 fixture: an <c>[Extension]</c> method whose sole non-receiver
+/// parameter is <see cref="System.FormattableString"/>. Exercises the
+/// EXTENSION-method CLR-call dispatch path
+/// (<c>ExpressionBinder.TryBindImportedExtensionCall</c>) with an
+/// interpolated-string argument.
+/// </summary>
+public static class Issue1812ExtensionFormattableFixture
+{
+    public static string Render(this string receiver, System.FormattableString fs) => receiver + fs.ToString(System.Globalization.CultureInfo.InvariantCulture);
+}
+
+/// <summary>
+/// Issue #1812 fixture: a CLR base class whose sole constructor parameter is
+/// <see cref="System.FormattableString"/>. Exercises the
+/// <c>: base(...)</c> BASE-CONSTRUCTOR CLR-call dispatch path
+/// (<c>DeclarationBinder.ResolveClrBaseConstructor</c>) with an
+/// interpolated-string argument — a companion gap found while auditing every
+/// CLR-call <c>Resolve</c> site, not one of the five call shapes #1638
+/// originally named.
+/// </summary>
+public class Issue1812BaseCtorFormattableFixture
+{
+    public string Rendered { get; }
+
+    public Issue1812BaseCtorFormattableFixture(System.FormattableString fs) => this.Rendered = fs.ToString(System.Globalization.CultureInfo.InvariantCulture);
+}

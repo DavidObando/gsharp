@@ -1090,6 +1090,13 @@ internal sealed class ConversionClassifier
 
         if (applicable.Count > 0)
         {
+            // Issue #1812: no interpolatedStringArgs flag applies here — this
+            // resolves a method-GROUP-to-delegate conversion (e.g. `var x
+            // Action = SomeClass.SomeMethod;`), matching candidate overloads
+            // against the target delegate's Invoke parameter shape. There is
+            // no user-supplied call-argument syntax at all (argTypes are the
+            // delegate's own parameter types), so no argument could ever be an
+            // interpolated-string literal in the first place.
             var resolution = OverloadResolution.Resolve(applicable, argTypes);
             if (resolution.Outcome == OverloadResolution.ResolutionOutcome.Resolved)
             {

@@ -104,6 +104,13 @@ internal static class ClrOperatorResolution
             return false;
         }
 
+        // Issue #1812: no interpolatedStringArgs flag is passed (or possible)
+        // here — this overload resolves purely from the operands' GSharp
+        // TypeSymbols (leftType/rightType), never from the originating
+        // expression's syntax tree, so there is no ExpressionSyntax available
+        // to test for InterpolatedStringExpressionSyntax in the first place.
+        // An interpolated-string operand already collapses to its natural
+        // `string` type before reaching this operator lookup.
         var argTypes = new[] { leftType?.ClrType, rightType?.ClrType };
         var outcome = OverloadResolution.Resolve(candidates, argTypes);
         if (outcome.Outcome == OverloadResolution.ResolutionOutcome.Resolved)
@@ -143,6 +150,9 @@ internal static class ClrOperatorResolution
             return false;
         }
 
+        // Issue #1812: same rationale as TryResolveBinary above — resolved
+        // purely from the operand's TypeSymbol, no ExpressionSyntax available
+        // to classify as an interpolated string.
         var argTypes = new[] { operandType.ClrType };
         var outcome = OverloadResolution.Resolve(candidates, argTypes);
         if (outcome.Outcome == OverloadResolution.ResolutionOutcome.Resolved)
