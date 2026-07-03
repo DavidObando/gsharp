@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -7033,7 +7034,7 @@ public sealed class CSharpToGSharpTranslator
                     // type (ADR-0115 §B.12).
                     if (this.IsConvertedToFloatingPoint(literal))
                     {
-                        return LiteralExpression.Float(this.ToFloatLiteralText(literal.Token.Text));
+                        return LiteralExpression.Float(this.ToFloatLiteralText(literal.Token.Value));
                     }
 
                     return LiteralExpression.Int(this.NormalizeIntegerLiteralText(literal));
@@ -7133,10 +7134,18 @@ public sealed class CSharpToGSharpTranslator
             return originalIsIntegral && convertedIsFloat;
         }
 
-        private string ToFloatLiteralText(string text)
+        private string ToFloatLiteralText(object value)
         {
-            // A plain integer spelling (`30`) needs a fractional part so the G#
-            // lexer classifies it as float64; an already-float spelling is kept.
+            // The token's *spelling* can be hex (`0xFF`), binary (`0b1010`),
+            // digit-separated (`1_000`), or suffixed (`30L`); appending ".0" to
+            // that raw text either produces an invalid G# float (`0xFF.0`,
+            // `30L.0`) or silently misses cases that already contain a stray
+            // 'e'/'E' hex digit (`0xAE`). Deriving the text from the token's
+            // already-parsed *value* instead sidesteps spelling entirely: format
+            // the numeric value as decimal and ensure it carries a fractional
+            // part so the G# lexer classifies it as float64.
+            double number = Convert.ToDouble(value, CultureInfo.InvariantCulture);
+            string text = number.ToString("R", CultureInfo.InvariantCulture);
             return text.IndexOfAny(new[] { '.', 'e', 'E' }) >= 0 ? text : text + ".0";
         }
 
