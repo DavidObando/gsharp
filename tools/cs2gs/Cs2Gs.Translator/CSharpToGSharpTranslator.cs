@@ -1835,7 +1835,9 @@ public sealed class CSharpToGSharpTranslator
                     // A C# finalizer `~T()` maps to the G# `deinit { ... }` block
                     // (ADR-0068, reference types only).
                     yield return (
-                        new DestructorDeclaration(this.TranslateBody(destructor, $"finalizer on '{destructor.Identifier.Text}'")),
+                        new DestructorDeclaration(
+                            this.TranslateBody(destructor, $"finalizer on '{destructor.Identifier.Text}'"),
+                            this.MapAttributes(destructor.AttributeLists)),
                         false);
                     break;
 
@@ -1887,7 +1889,8 @@ public sealed class CSharpToGSharpTranslator
                 var declaration = new EventDeclaration(
                     SanitizeIdentifier(declarator.Identifier.Text),
                     type,
-                    MapVisibility(symbol, this.context, node));
+                    MapVisibility(symbol, this.context, node),
+                    this.MapAttributes(node.AttributeLists));
 
                 yield return (declaration, symbol != null && symbol.IsStatic);
             }
@@ -2542,6 +2545,30 @@ public sealed class CSharpToGSharpTranslator
             }
 
             IReadOnlyList<AccessorDeclarationSyntax> declared = node.AccessorList.Accessors;
+
+            // Issue #1741: an accessor-level accessibility modifier (`{ get; private
+            // set; }`) narrows just that accessor; G# has no per-accessor
+            // accessibility, so it would silently widen back to the property's own
+            // accessibility. Diagnose the loss instead of translating it silently.
+            foreach (AccessorDeclarationSyntax accessor in declared)
+            {
+                SyntaxToken accessibilityModifier = accessor.Modifiers.FirstOrDefault(m =>
+                    m.IsKind(SyntaxKind.PrivateKeyword) ||
+                    m.IsKind(SyntaxKind.ProtectedKeyword) ||
+                    m.IsKind(SyntaxKind.InternalKeyword));
+                if (accessibilityModifier.IsKind(SyntaxKind.None))
+                {
+                    continue;
+                }
+
+                string accessorMods = string.Join(" ", accessor.Modifiers.Select(m => m.ValueText));
+                this.context.Report(new TranslationDiagnostic(
+                    accessor.Kind().ToString(),
+                    $"{displayName} accessor '{accessorMods} {accessor.Keyword.ValueText}' has narrower accessibility than the property; G# has no per-accessor accessibility, so it is widened to the property's own accessibility (ADR-0115 §B.11).",
+                    accessor.GetLocation(),
+                    TranslationSeverity.Warning));
+            }
+
             bool anyBodied = declared.Any(a => a.Body != null || a.ExpressionBody != null);
             bool hasSet = declared.Any(a => a.IsKind(SyntaxKind.SetAccessorDeclaration));
             bool hasGet = declared.Any(a => a.IsKind(SyntaxKind.GetAccessorDeclaration));
@@ -2787,7 +2814,7 @@ public sealed class CSharpToGSharpTranslator
                 csBase.SpecialType != SpecialType.System_Object &&
                 csBase.SpecialType != SpecialType.System_ValueType &&
                 csBase.TypeKind == TypeKind.Class &&
-                csBase.Name != "Enum")
+                csBase.SpecialType != SpecialType.System_Enum)
             {
                 baseType = this.typeMapper.Map(csBase, this.context, location);
             }
@@ -4848,6 +4875,23 @@ public sealed class CSharpToGSharpTranslator
         }
 
         /// <summary>
+        /// Issue #1741: whether an identifier named <c>_</c> is a true C# discard
+        /// (<see cref="IDiscardSymbol"/>) rather than a real variable/field named
+        /// <c>_</c> that happens to be in scope. A real <c>_</c> binding is a normal
+        /// assignment target, not a discard, and must not be dropped.
+        /// </summary>
+        /// <param name="identifier">The <c>_</c> identifier on the assignment's left side.</param>
+        /// <returns><c>true</c> when <paramref name="identifier"/> is a genuine discard.</returns>
+        private bool IsTrueDiscard(IdentifierNameSyntax identifier)
+        {
+            ISymbol symbol = this.context.GetSymbolInfo(identifier).Symbol;
+
+            // No symbol at all means there is no real `_` binding in scope, so this
+            // is a genuine discard; fall back to the name-based check.
+            return symbol is IDiscardSymbol or null;
+        }
+
+        /// <summary>
         /// Translates an expression-statement that may expand into several G#
         /// statements: a tuple deconstruction (<c>var (a, b) = e</c>) or a chained
         /// assignment (<c>a = b = c</c>), neither of which has a single-statement G#
@@ -4858,7 +4902,8 @@ public sealed class CSharpToGSharpTranslator
             if (expression is AssignmentExpressionSyntax assignment &&
                 assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
             {
-                if (assignment.Left is IdentifierNameSyntax { Identifier.ValueText: "_" })
+                if (assignment.Left is IdentifierNameSyntax { Identifier.ValueText: "_" } discardCandidate &&
+                    this.IsTrueDiscard(discardCandidate))
                 {
                     // C# statement-level discard `_ = e` (Roslyn parses the `_`
                     // target as an IdentifierNameSyntax). G# has no discard target

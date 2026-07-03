@@ -355,13 +355,18 @@ public sealed class DestructorDeclaration : GMember
     /// Initializes a new instance of the <see cref="DestructorDeclaration"/> class.
     /// </summary>
     /// <param name="body">The finalizer body.</param>
-    public DestructorDeclaration(BlockStatement body)
+    /// <param name="attributes">The finalizer attributes.</param>
+    public DestructorDeclaration(BlockStatement body, IReadOnlyList<AttributeUse> attributes = null)
     {
         Body = body;
+        Attributes = attributes ?? new List<AttributeUse>();
     }
 
     /// <summary>Gets the finalizer body.</summary>
     public BlockStatement Body { get; }
+
+    /// <summary>Gets the finalizer attributes.</summary>
+    public IReadOnlyList<AttributeUse> Attributes { get; }
 }
 
 /// <summary>
@@ -379,11 +384,17 @@ public sealed class EventDeclaration : GMember
     /// <param name="name">The event name.</param>
     /// <param name="type">The handler/delegate type.</param>
     /// <param name="visibility">The accessibility.</param>
-    public EventDeclaration(string name, GTypeReference type, Visibility visibility = Visibility.Default)
+    /// <param name="attributes">The event attributes.</param>
+    public EventDeclaration(
+        string name,
+        GTypeReference type,
+        Visibility visibility = Visibility.Default,
+        IReadOnlyList<AttributeUse> attributes = null)
     {
         Name = name;
         Type = type;
         Visibility = visibility;
+        Attributes = attributes ?? new List<AttributeUse>();
     }
 
     /// <summary>Gets the event name.</summary>
@@ -394,4 +405,7 @@ public sealed class EventDeclaration : GMember
 
     /// <summary>Gets the accessibility.</summary>
     public Visibility Visibility { get; }
+
+    /// <summary>Gets the event attributes.</summary>
+    public IReadOnlyList<AttributeUse> Attributes { get; }
 }
