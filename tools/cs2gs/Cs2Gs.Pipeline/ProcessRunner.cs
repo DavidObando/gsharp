@@ -107,36 +107,70 @@ public static class ProcessRunner
         {
             await process.WaitForExitAsync(linkedCts.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
-            timedOut = true;
+            // Either token can fire here (timeout or an external caller
+            // cancellation); either way the child must be killed before we
+            // leave, or it leaks as an orphaned process (#1817 N1).
+            KillTree(process);
+            await DrainOrObserve(stdoutTask, stderrTask).ConfigureAwait(false);
+
+            if (timeoutCts.IsCancellationRequested)
+            {
+                timedOut = true;
+            }
+            else
+            {
+                throw;
+            }
         }
 
         if (timedOut)
         {
-            KillTree(process);
-
-            // The kill closes the child's ends of the pipes, which lets the
-            // pending reads drain and complete; bound the wait so a
-            // stuck grandchild can't re-introduce a hang.
-            await Task.WhenAny(Task.WhenAll(stdoutTask, stderrTask), Task.Delay(TimeSpan.FromSeconds(10)))
-                .ConfigureAwait(false);
-
+            // The kill (above) closes the child's ends of the pipes, which
+            // lets the pending reads drain and complete; DrainOrObserve
+            // already bounded that wait so a stuck grandchild can't
+            // re-introduce a hang.
             string timedOutStderr = SafeResult(stderrTask) +
                 $"{Environment.NewLine}[ProcessRunner] '{fileName}' timed out after {effectiveTimeout} and was killed.";
             return new ProcessRunResult(-1, SafeResult(stdoutTask), timedOutStderr, timedOut: true);
-        }
-
-        if (cancellationToken.IsCancellationRequested)
-        {
-            KillTree(process);
-            cancellationToken.ThrowIfCancellationRequested();
         }
 
         // The process has already exited, so these reads are bounded by the
         // pipes actually closing — this await cannot hang.
         string[] outputs = await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
         return new ProcessRunResult(process.ExitCode, outputs[0], outputs[1], timedOut: false);
+    }
+
+    /// <summary>
+    /// Bounds the wait for the stdout/stderr drain tasks to complete after a
+    /// kill, and observes their result/fault either way so that a stuck
+    /// grandchild's pipes (or the eventual <c>using var process</c> disposal
+    /// racing a still-pending read) never produce an unobserved task
+    /// exception once we walk away from the tasks (#1817 N2).
+    /// </summary>
+    private static async Task DrainOrObserve(Task<string> stdoutTask, Task<string> stderrTask)
+    {
+        await Task.WhenAny(Task.WhenAll(stdoutTask, stderrTask), Task.Delay(TimeSpan.FromSeconds(10)))
+            .ConfigureAwait(false);
+
+        // Attach a continuation to any still-pending task so its eventual
+        // fault (e.g. ObjectDisposedException once `process` is disposed) is
+        // observed instead of becoming an unhandled/unobserved task
+        // exception on the finalizer thread.
+        ObserveWhenDone(stdoutTask);
+        ObserveWhenDone(stderrTask);
+    }
+
+    private static void ObserveWhenDone(Task<string> task)
+    {
+        if (task.IsCompleted)
+        {
+            _ = task.Exception;
+            return;
+        }
+
+        _ = task.ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
     }
 
     private static void KillTree(Process process)
