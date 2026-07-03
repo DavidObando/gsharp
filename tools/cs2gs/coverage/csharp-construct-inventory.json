@@ -83,6 +83,7 @@
     "nodeType": "LiteralExpressionSyntax",
     "status": "UnsupportedByDesign",
     "rationale": "NoGsharpConstruct",
+    "fixture": "tools/cs2gs/Cs2Gs.Tests/Fixtures/Grid/Unsupported/ArgListExpression.cs",
     "notes": "Legacy TypedReference/varargs machinery (__makeref/__reftype/__refvalue/__arglist); no G# analog planned."
   },
   {
@@ -1203,6 +1204,7 @@
     "nodeType": "MakeRefExpressionSyntax",
     "status": "UnsupportedByDesign",
     "rationale": "NoGsharpConstruct",
+    "fixture": "tools/cs2gs/Cs2Gs.Tests/Fixtures/Grid/Unsupported/MakeRefExpression.cs",
     "notes": "Legacy TypedReference/varargs machinery (__makeref/__reftype/__refvalue/__arglist); no G# analog planned."
   },
   {
@@ -1617,6 +1619,7 @@
     "nodeType": "RefTypeExpressionSyntax",
     "status": "UnsupportedByDesign",
     "rationale": "NoGsharpConstruct",
+    "fixture": "tools/cs2gs/Cs2Gs.Tests/Fixtures/Grid/Unsupported/RefTypeExpression.cs",
     "notes": "Legacy TypedReference/varargs machinery (__makeref/__reftype/__refvalue/__arglist); no G# analog planned."
   },
   {
@@ -1624,6 +1627,7 @@
     "nodeType": "RefValueExpressionSyntax",
     "status": "UnsupportedByDesign",
     "rationale": "NoGsharpConstruct",
+    "fixture": "tools/cs2gs/Cs2Gs.Tests/Fixtures/Grid/Unsupported/RefValueExpression.cs",
     "notes": "Legacy TypedReference/varargs machinery (__makeref/__reftype/__refvalue/__arglist); no G# analog planned."
   },
   {

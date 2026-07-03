@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using Cs2Gs.Translator.Coverage;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
@@ -96,10 +97,22 @@ public sealed class TranslationContext
             throw new ArgumentNullException(nameof(node));
         }
 
-        this.diagnostics.Add(new TranslationDiagnostic(
+        // The exhaustiveness choke point (ADR-0138): a kind registered in
+        // UnsupportedByDesign is a recorded design decision; anything else is
+        // an accidental fallthrough classified as a gap, which the coverage
+        // tests and the triage pipeline surface loudly until it is either
+        // translated or registered with a rationale.
+        var diagnostic = new TranslationDiagnostic(
             node.Kind().ToString(),
             message,
             node.GetLocation(),
-            TranslationSeverity.Unsupported));
+            TranslationSeverity.Unsupported);
+        if (UnsupportedByDesign.TryGetRationale(node.Kind(), out UnsupportedRationale rationale))
+        {
+            diagnostic.Classification = UnsupportedClassification.ByDesign;
+            diagnostic.Rationale = rationale;
+        }
+
+        this.diagnostics.Add(diagnostic);
     }
 }

@@ -97,9 +97,18 @@ public sealed class TriageBuilder
         snippet ??= diagnostic.Message;
 
         var artifact = this.NewArtifact(MigrationStageKind.Translate, TriageCategory.TranslationUnsupported);
+
+        // ADR-0138: a construct registered as deliberately rejected keeps the
+        // long-standing CS2GS-UNSUPPORTED id; an accidental fallthrough (a
+        // construct neither translated nor registered with a rationale) is a
+        // coverage hole and gets its own id so ledger/CI can treat it as a
+        // distinct, always-actionable class.
+        string diagnosticId = diagnostic.Classification == UnsupportedClassification.ByDesign
+            ? "CS2GS-UNSUPPORTED"
+            : "CS2GS-GAP";
         artifact.Diagnostic = new TriageDiagnostic
         {
-            Id = "CS2GS-UNSUPPORTED",
+            Id = diagnosticId,
             Message = diagnostic.Message,
             Severity = "error",
         };

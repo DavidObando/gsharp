@@ -298,7 +298,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| ArgListExpression | LiteralExpressionSyntax |  | NoGsharpConstruct |  |  | Legacy TypedReference/varargs machinery (__makeref/__reftype/__refvalue/__arglist); no G# analog planned. |
+| ArgListExpression | LiteralExpressionSyntax |  | NoGsharpConstruct | tools/cs2gs/Cs2Gs.Tests/Fixtures/Grid/Unsupported/ArgListExpression.cs |  | Legacy TypedReference/varargs machinery (__makeref/__reftype/__refvalue/__arglist); no G# analog planned. |
 | BadDirectiveTrivia | BadDirectiveTriviaSyntax |  | Preprocessor |  |  | Resolved by Roslyn parse options before translation; inactive code is deliberately dropped. |
 | ConversionOperatorMemberCref | ConversionOperatorMemberCrefSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | CrefBracketedParameterList | CrefBracketedParameterListSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
@@ -318,7 +318,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | LineDirectiveTrivia | LineDirectiveTriviaSyntax |  | Preprocessor |  |  | Resolved by Roslyn parse options before translation; inactive code is deliberately dropped. |
 | LineSpanDirectiveTrivia | LineSpanDirectiveTriviaSyntax |  | Preprocessor |  |  | Resolved by Roslyn parse options before translation; inactive code is deliberately dropped. |
 | LoadDirectiveTrivia | LoadDirectiveTriviaSyntax |  | Preprocessor |  |  | Resolved by Roslyn parse options before translation; inactive code is deliberately dropped. |
-| MakeRefExpression | MakeRefExpressionSyntax |  | NoGsharpConstruct |  |  | Legacy TypedReference/varargs machinery (__makeref/__reftype/__refvalue/__arglist); no G# analog planned. |
+| MakeRefExpression | MakeRefExpressionSyntax |  | NoGsharpConstruct | tools/cs2gs/Cs2Gs.Tests/Fixtures/Grid/Unsupported/MakeRefExpression.cs |  | Legacy TypedReference/varargs machinery (__makeref/__reftype/__refvalue/__arglist); no G# analog planned. |
 | MultiLineDocumentationCommentTrivia | DocumentationCommentTriviaSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | NameMemberCref | NameMemberCrefSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | NullableDirectiveTrivia | NullableDirectiveTriviaSyntax |  | Preprocessor |  |  | Resolved by Roslyn parse options before translation; inactive code is deliberately dropped. |
@@ -326,8 +326,8 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | PragmaChecksumDirectiveTrivia | PragmaChecksumDirectiveTriviaSyntax |  | Preprocessor |  |  | Resolved by Roslyn parse options before translation; inactive code is deliberately dropped. |
 | PragmaWarningDirectiveTrivia | PragmaWarningDirectiveTriviaSyntax |  | Preprocessor |  |  | Resolved by Roslyn parse options before translation; inactive code is deliberately dropped. |
 | QualifiedCref | QualifiedCrefSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
-| RefTypeExpression | RefTypeExpressionSyntax |  | NoGsharpConstruct |  |  | Legacy TypedReference/varargs machinery (__makeref/__reftype/__refvalue/__arglist); no G# analog planned. |
-| RefValueExpression | RefValueExpressionSyntax |  | NoGsharpConstruct |  |  | Legacy TypedReference/varargs machinery (__makeref/__reftype/__refvalue/__arglist); no G# analog planned. |
+| RefTypeExpression | RefTypeExpressionSyntax |  | NoGsharpConstruct | tools/cs2gs/Cs2Gs.Tests/Fixtures/Grid/Unsupported/RefTypeExpression.cs |  | Legacy TypedReference/varargs machinery (__makeref/__reftype/__refvalue/__arglist); no G# analog planned. |
+| RefValueExpression | RefValueExpressionSyntax |  | NoGsharpConstruct | tools/cs2gs/Cs2Gs.Tests/Fixtures/Grid/Unsupported/RefValueExpression.cs |  | Legacy TypedReference/varargs machinery (__makeref/__reftype/__refvalue/__arglist); no G# analog planned. |
 | ReferenceDirectiveTrivia | ReferenceDirectiveTriviaSyntax |  | Preprocessor |  |  | Resolved by Roslyn parse options before translation; inactive code is deliberately dropped. |
 | RegionDirectiveTrivia | RegionDirectiveTriviaSyntax |  | Preprocessor |  |  | Resolved by Roslyn parse options before translation; inactive code is deliberately dropped. |
 | ShebangDirectiveTrivia | ShebangDirectiveTriviaSyntax |  | Preprocessor |  |  | Resolved by Roslyn parse options before translation; inactive code is deliberately dropped. |
