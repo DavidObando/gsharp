@@ -3931,6 +3931,18 @@ public sealed class CSharpToGSharpTranslator
                         {
                             emitType = true;
                         }
+                        else if (this.context.GetDeclaredSymbol(declarator) is ILocalSymbol equalTypeLocal
+                            && this.IsPromotedToNullableReference(equalTypeLocal))
+                        {
+                            // Issue #1737: the explicit-type-equals-initializer-type
+                            // shape above bypasses the type clause entirely (relying
+                            // on inference), which would also silently drop the
+                            // #1072 nullable promotion below. Route it through the
+                            // same emitType=true path as every other explicit-typed
+                            // shape so `var x = e;` and `T x = e;` (declared type ==
+                            // natural type) promote identically.
+                            emitType = true;
+                        }
                     }
 
                     if (emitType)
