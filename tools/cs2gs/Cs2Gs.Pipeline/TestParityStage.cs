@@ -4,10 +4,8 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Ast;
@@ -105,15 +103,27 @@ public sealed class TestParityStage : IMigrationStage
 
     private StageOutcome RunStdoutParity(StageExecutionContext context)
     {
-        (int exit, string stdout, string stderr) = RunProgram(context.EmittedAssemblyPath, context.AppRunDir);
+        (int exit, string stdout, string stderr, bool timedOut) =
+            RunProgram(context.EmittedAssemblyPath, context.AppRunDir);
 
         string golden = File.ReadAllText(context.App.StdoutGolden);
         StdoutParityResult parity = StdoutParity.Compare(golden, stdout);
 
-        string note = $"stdout parity: exit={exit}; match={parity.IsMatch}." +
+        string note = $"stdout parity: exit={exit}; match={parity.IsMatch}; timedOut={timedOut}." +
             (parity.IsMatch ? string.Empty : " " + parity.Describe()) +
             (string.IsNullOrWhiteSpace(stderr) ? string.Empty : "\nstderr:\n" + stderr);
         this.Note(context, note);
+
+        if (timedOut)
+        {
+            // A codegen bug producing an infinite loop must surface as a named
+            // parity failure, not an unattended-CI hang (#1748).
+            StdoutParityResult timeoutDiff = StdoutParityResult.Mismatch(
+                0, "process to complete", "process timed out");
+            TriageArtifact timeoutArtifact = context.Triage.TestParityStdoutFailure(
+                timeoutDiff, EmittedGsRelative(context));
+            return StageOutcome.Failed(new[] { timeoutArtifact });
+        }
 
         if (parity.IsMatch && exit == 0)
         {
@@ -249,23 +259,15 @@ public sealed class TestParityStage : IMigrationStage
         return TranslatedProject.Ready(files);
     }
 
-    private static (int Exit, string Stdout, string Stderr) RunProgram(string assemblyPath, string workingDirectory)
+    private static (int Exit, string Stdout, string Stderr, bool TimedOut) RunProgram(string assemblyPath, string workingDirectory)
     {
-        var psi = new ProcessStartInfo("dotnet")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectory,
-        };
-        psi.ArgumentList.Add(assemblyPath);
-
-        using var process = Process.Start(psi);
-        string stdout = process.StandardOutput.ReadToEnd();
-        string stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        return (process.ExitCode, stdout, stderr);
+        // The migrated program under test is exactly the code stage 4 exists to
+        // scrutinize: a codegen bug can produce an infinite loop, and a
+        // translated Console.ReadLine() would otherwise block on inherited
+        // stdin. ProcessRunner bounds the run and never inherits stdin (#1748).
+        ProcessRunResult result = ProcessRunner.Run(
+            "dotnet", new[] { assemblyPath }, workingDirectory, TimeSpan.FromSeconds(30));
+        return (result.ExitCode, result.Stdout, result.Stderr, result.TimedOut);
     }
 
     private static string EmittedGsRelative(StageExecutionContext context) =>

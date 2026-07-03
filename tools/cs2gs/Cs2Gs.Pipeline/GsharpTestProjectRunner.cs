@@ -4,10 +4,8 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Text;
 
 namespace Cs2Gs.Pipeline;
 
@@ -348,25 +346,12 @@ public sealed class GsharpTestProjectRunner
 
     private (int Exit, string Output) RunDotnet(IReadOnlyList<string> arguments, string workingDirectory)
     {
-        var psi = new ProcessStartInfo("dotnet")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectory,
-        };
-        foreach (string arg in arguments)
-        {
-            psi.ArgumentList.Add(arg);
-        }
-
-        using var process = Process.Start(psi);
-        var output = new StringBuilder();
-        output.Append(process.StandardOutput.ReadToEnd());
-        output.Append(process.StandardError.ReadToEnd());
-        process.WaitForExit();
-        return (process.ExitCode, output.ToString());
+        // `dotnet test` builds a project before running it, so allow more
+        // headroom than the default; still bounded so a wedged run fails the
+        // batch instead of hanging it (#1748).
+        ProcessRunResult result = ProcessRunner.Run(
+            "dotnet", arguments, workingDirectory, TimeSpan.FromMinutes(10));
+        return (result.ExitCode, result.Output);
     }
 }
 
