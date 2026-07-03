@@ -34,6 +34,22 @@ namespace Cs2Gs.Translator;
 /// </summary>
 public sealed class CSharpToGSharpTranslator
 {
+    // A subclass can only ever be declared in source, never synthesized from a
+    // referenced assembly's metadata, so the set of "is this base type ever
+    // subclassed" facts is a pure function of the *source* assembly's symbol
+    // tree and is invariant across every document translated from the same
+    // `Compilation`. `Compilation.GlobalNamespace` is the merged namespace
+    // across every metadata reference too, so scanning it (as the previous
+    // implementation did) forces materialization of the entire BCL symbol
+    // tree — tens of thousands of `INamedTypeSymbol`s — on every single
+    // document. Caching per `Compilation` (keyed by reference identity via
+    // `ConditionalWeakTable`, so a new/edited `Compilation` naturally gets a
+    // fresh entry and stale ones are collectible) plus restricting the walk to
+    // `compilation.Assembly.GlobalNamespace` (the source assembly only) turns
+    // an O(assemblies × types × documents) cost into a single O(source types)
+    // pass per compilation.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, HashSet<INamedTypeSymbol>> SubclassedBaseTypesCache = new();
+
     /// <summary>
     /// Translates a loaded C# document into a G# <see cref="CompilationUnit"/>,
     /// recording any unsupported constructs on a fresh context. Use
@@ -65,17 +81,21 @@ public sealed class CSharpToGSharpTranslator
         string package = this.ResolvePackage(root, context);
         IReadOnlyList<ImportDirective> imports = this.TranslateImports(root, context);
 
-        HashSet<INamedTypeSymbol> openBases = CollectSubclassedBaseTypes(context.Compilation);
+        HashSet<INamedTypeSymbol> openBases = GetOrCollectSubclassedBaseTypes(context.Compilation);
         HashSet<INamedTypeSymbol> staticUsingTargets = CollectStaticUsingTargets(root, context);
-        var visitor = new DeclarationVisitor(context, new CSharpTypeMapper(), openBases, staticUsingTargets);
 
         // T3 (ADR-0115 §B.1/§B.11): the C# program entry point and its enclosing
         // static class become top-level G#. The entry `Main` body translates to
         // top-level statements (the program entry in G# is top-level statements,
         // not a `Main` method) and the sibling static methods become top-level
         // `func`s — never a `shared { }` block.
+        //
+        // Computed once here and threaded through so the visitor does not
+        // recompute it (`Compilation.GetEntryPoint` re-walks the compilation).
         IMethodSymbol entryPoint = context.Compilation.GetEntryPoint(default);
         INamedTypeSymbol entryType = entryPoint?.ContainingType;
+
+        var visitor = new DeclarationVisitor(context, new CSharpTypeMapper(), openBases, staticUsingTargets, entryPoint);
 
         var members = new List<GNode>();
         var trailingStatements = new List<GNode>();
@@ -143,10 +163,15 @@ public sealed class CSharpToGSharpTranslator
         }
     }
 
+    private static HashSet<INamedTypeSymbol> GetOrCollectSubclassedBaseTypes(Compilation compilation)
+    {
+        return SubclassedBaseTypesCache.GetValue(compilation, CollectSubclassedBaseTypes);
+    }
+
     private static HashSet<INamedTypeSymbol> CollectSubclassedBaseTypes(Compilation compilation)
     {
         var bases = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
-        foreach (INamedTypeSymbol type in EnumerateNamedTypes(compilation.GlobalNamespace))
+        foreach (INamedTypeSymbol type in EnumerateNamedTypes(compilation.Assembly.GlobalNamespace))
         {
             INamedTypeSymbol baseType = type.BaseType;
             if (baseType != null &&
@@ -434,13 +459,19 @@ public sealed class CSharpToGSharpTranslator
             TranslationContext context,
             CSharpTypeMapper typeMapper,
             HashSet<INamedTypeSymbol> subclassedBases,
-            HashSet<INamedTypeSymbol> staticUsingTargets)
+            HashSet<INamedTypeSymbol> staticUsingTargets,
+            IMethodSymbol entryPoint)
         {
             this.context = context;
             this.typeMapper = typeMapper;
             this.subclassedBases = subclassedBases;
             this.staticUsingTargets = staticUsingTargets ?? new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
-            this.entryType = context.Compilation.GetEntryPoint(default)?.ContainingType;
+
+            // `entryPoint` is threaded in by the caller (`TranslateDocument`)
+            // instead of being recomputed here: `Compilation.GetEntryPoint`
+            // re-walks the compilation and was otherwise called twice per
+            // document (once by the caller, once here).
+            this.entryType = entryPoint?.ContainingType;
         }
 
         public override GMember VisitClassDeclaration(ClassDeclarationSyntax node) => this.VisitAggregate(node);
