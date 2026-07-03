@@ -309,16 +309,22 @@ internal sealed partial class ExpressionBinder
     /// <c>FormattableStringFactory.Create(...)</c>. Arguments bound against any
     /// other parameter (including <c>string</c>) are left untouched. Returns the
     /// original array unchanged when nothing needs re-lowering.
+    /// Issue #1638: <c>receiverArgCount</c> is the number of leading argument
+    /// slots reserved for a synthesised receiver (0 for plain calls, 1 for
+    /// imported extension calls, which prepend the receiver to both
+    /// <c>arguments</c> and <c>parameters</c> but not to <c>argumentSyntax</c>).
+    /// Receiver slots are skipped since they have no source syntax to re-lower.
     /// </summary>
     private ImmutableArray<BoundExpression> RebindFormattableInterpolationArguments(
         ImmutableArray<BoundExpression> arguments,
         SeparatedSyntaxList<ExpressionSyntax> argumentSyntax,
         System.Reflection.ParameterInfo[] parameters,
-        ImmutableArray<int> parameterMapping = default)
+        ImmutableArray<int> parameterMapping = default,
+        int receiverArgCount = 0)
     {
         ImmutableArray<BoundExpression>.Builder builder = null;
-        var limit = Math.Min(arguments.Length, argumentSyntax.Count);
-        for (var i = 0; i < limit; i++)
+        var limit = Math.Min(arguments.Length, argumentSyntax.Count + receiverArgCount);
+        for (var i = receiverArgCount; i < limit; i++)
         {
             var paramIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
             if (paramIndex >= parameters.Length)
@@ -326,7 +332,7 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            var argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argumentSyntax[i]);
+            var argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argumentSyntax[i - receiverArgCount]);
             if (argSyntax is InterpolatedStringExpressionSyntax interpolated
                 && OverloadResolution.IsFormattableStringTarget(parameters[paramIndex].ParameterType))
             {

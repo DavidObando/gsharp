@@ -937,14 +937,23 @@ internal sealed partial class ExpressionBinder
         // parameter order with optional slots filled — downstream reorderers
         // therefore consume an identity mapping.
         var ctorDownstreamMapping = ctorIsExpanded ? default : ctorMapping;
-        var ctorRebound = RebindFormattableInterpolationArguments(ctorExpandedArgs, syntax.Arguments, ctorParameters, ctorDownstreamMapping);
-        var ctorHandlerArgs = ApplyInterpolatedStringHandlers(ctorParameters, ctorRebound, receiver: null, syntax.Location, ctorDownstreamMapping, out var ctorHandlerPrelude, out _);
 
-        // Issue #506 follow-up: fixed-arity CLR ctor overloads expecting an
-        // `object` parameter from a value-type argument require a boxing
-        // conversion in IL; route through BindClrParameterConversions so the
-        // emitter sees a BoundConversionExpression and emits `box <T>`.
-        var ctorConvertedArgs = conversions.BindClrParameterConversions(ctorHandlerArgs, ctorParameters, syntax, ctorDownstreamMapping);
+        // Issue #1638: route through the shared CLR call-argument-construction
+        // pipeline (interpolation rebind → handler args → delegate rebind →
+        // parameter conversions) so a Func/Action-literal argument to a CLR
+        // ctor is void-ized/adapted the same way an instance/static call's
+        // argument is, instead of skipping straight to boxing conversions.
+        var ctorConvertedArgs = BuildResolvedClrCallArguments(
+            ctorExpandedArgs,
+            syntax.Arguments,
+            ctorParameters,
+            ctorDownstreamMapping,
+            receiver: null,
+            syntax.Location,
+            syntax,
+            ClrCallDelegateRebindMode.Full,
+            out var ctorHandlerPrelude,
+            out _);
         var ctorArgs = OverloadResolver.BuildOrderedCallArguments(ctorConvertedArgs, ctorDownstreamMapping, ctorParameters);
         if (!ctorRefKinds.IsDefault)
         {
@@ -3026,8 +3035,6 @@ internal sealed partial class ExpressionBinder
                     ? overloads.ExpandParamsArguments(arguments, staticParameters, ce, parameterMapping: staticMapping)
                     : arguments;
                 var staticDownstreamMapping = staticIsExpanded ? default : staticMapping;
-                var staticRebound = RebindFormattableInterpolationArguments(staticExpandedArgs, ce.Arguments, staticParameters, staticDownstreamMapping);
-                var staticHandlerArgs = ApplyInterpolatedStringHandlers(staticParameters, staticRebound, receiver: null, ce.Location, staticDownstreamMapping, out var staticHandlerPrelude, out _);
 
                 // Issue #1325 / #1471: recover the symbolic method type-argument
                 // vector before parameter conversion so a bare `default`
@@ -3043,15 +3050,28 @@ internal sealed partial class ExpressionBinder
                 var staticSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(staticFn.Method, typeArgSymbols, staticSymbolicArgs);
                 var staticTypeArgSymbolsForCall = !staticSymbolicTypeArgs.IsDefault ? staticSymbolicTypeArgs : typeArgSymbols;
 
-                // Issue #889: void-ize value-returning func/arrow literals passed
-                // to void-returning delegate parameters (System.Action / Action<...>)
-                // before CLR parameter conversion, mirroring the instance path.
-                var staticDelegateArgs = RebindFunctionLiteralDelegateArguments(staticHandlerArgs, staticParameters, staticDownstreamMapping, staticFn.Method, staticTypeArgSymbolsForCall);
-
-                // Issue #506 follow-up: ensure value-type → object boxing fires
-                // for fixed-arity CLR static calls (e.g. `String.Format("{0}", 42)`
-                // selecting the fixed `(string, object)` overload).
-                var staticConvertedArgs = conversions.BindClrParameterConversions(staticDelegateArgs, staticParameters, ce, staticDownstreamMapping, method: staticFn.Method, symbolicMethodTypeArgs: staticTypeArgSymbolsForCall);
+                // Issue #1638: shared CLR call-argument-construction pipeline
+                // (interpolation rebind → handler args → delegate rebind →
+                // parameter conversions). Issue #889: void-izes value-returning
+                // func/arrow literals passed to void-returning delegate
+                // parameters (System.Action / Action<...>), mirroring the
+                // instance path. Issue #506 follow-up: ensures value-type →
+                // object boxing fires for fixed-arity CLR static calls (e.g.
+                // `String.Format("{0}", 42)` selecting the fixed `(string,
+                // object)` overload).
+                var staticConvertedArgs = BuildResolvedClrCallArguments(
+                    staticExpandedArgs,
+                    ce.Arguments,
+                    staticParameters,
+                    staticDownstreamMapping,
+                    receiver: null,
+                    ce.Location,
+                    ce,
+                    ClrCallDelegateRebindMode.Full,
+                    out var staticHandlerPrelude,
+                    out _,
+                    method: staticFn.Method,
+                    symbolicMethodTypeArgs: staticTypeArgSymbolsForCall);
                 var staticArguments = OverloadResolver.BuildOrderedCallArguments(staticConvertedArgs, staticDownstreamMapping, staticParameters);
                 var refKinds = ComputeArgumentRefKinds(staticParameters);
                 overloads.ValidateRefArguments(staticArguments, refKinds, methodName, ce.Location);
@@ -3495,10 +3515,26 @@ internal sealed partial class ExpressionBinder
                             ? overloads.ExpandParamsArguments(arguments, instParameters, ce, parameterMapping: instMapping)
                             : arguments;
                         var instDownstreamMapping = resolution.IsExpanded ? default : instMapping;
-                        var instRebound = RebindFormattableInterpolationArguments(instExpandedArgs, ce.Arguments, instParameters, instDownstreamMapping);
-                        var instHandlerArgs = ApplyInterpolatedStringHandlers(instParameters, instRebound, receiver, ce.Location, instDownstreamMapping, out var instHandlerPrelude, out var instUpdatedReceiver);
-                        var instDelegateArgs = RebindFunctionLiteralDelegateArguments(instHandlerArgs, instParameters, instDownstreamMapping, resolution.Best, instTypeArgSymbolsForCall, effectiveReceiverType);
-                        var instConvertedArgs = conversions.BindClrParameterConversions(instDelegateArgs, instParameters, ce, instDownstreamMapping, method: resolution.Best, receiverType: receiver?.Type, symbolicMethodTypeArgs: instTypeArgSymbolsForCall);
+
+                        // Issue #1638: shared CLR call-argument-construction
+                        // pipeline (interpolation rebind → handler args →
+                        // delegate rebind → parameter conversions).
+                        var instConvertedArgs = BuildResolvedClrCallArguments(
+                            instExpandedArgs,
+                            ce.Arguments,
+                            instParameters,
+                            instDownstreamMapping,
+                            receiver,
+                            ce.Location,
+                            ce,
+                            ClrCallDelegateRebindMode.Full,
+                            out var instHandlerPrelude,
+                            out var instUpdatedReceiver,
+                            method: resolution.Best,
+                            symbolicMethodTypeArgs: instTypeArgSymbolsForCall,
+                            receiverType: effectiveReceiverType,
+                            hasConversionReceiverTypeOverride: true,
+                            conversionReceiverType: receiver?.Type);
                         var instArguments = OverloadResolver.BuildOrderedCallArguments(instConvertedArgs, instDownstreamMapping, instParameters);
                         var instRefKinds = ComputeArgumentRefKinds(instParameters);
                         overloads.ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
@@ -4116,6 +4152,7 @@ internal sealed partial class ExpressionBinder
             argTypes,
             explicitTypeArgs,
             scope.References.MapClrTypeToReferences,
+            ComputeInterpolatedStringArgFlags(ce.Arguments, arguments.Length),
             argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments));
@@ -4151,9 +4188,28 @@ internal sealed partial class ExpressionBinder
                     ? overloads.ExpandParamsArguments(arguments, inheritedParameters, ce, parameterMapping: inheritedMapping)
                     : arguments;
                 var inheritedDownstreamMapping = resolution.IsExpanded ? default : inheritedMapping;
-                var inheritedHandlerArgs = ApplyInterpolatedStringHandlers(inheritedParameters, inheritedExpandedArgs, receiver, ce.Location, inheritedDownstreamMapping, out var inheritedHandlerPrelude, out var inheritedUpdatedReceiver);
-                var inheritedDelegateArgs = RebindFunctionLiteralDelegateArguments(inheritedHandlerArgs, inheritedParameters, inheritedDownstreamMapping, resolution.Best, inheritedTypeArgSymbolsForCall, receiver?.Type);
-                var inheritedConvertedArgs = conversions.BindClrParameterConversions(inheritedDelegateArgs, inheritedParameters, ce, inheritedDownstreamMapping, method: resolution.Best, receiverType: receiver?.Type, symbolicMethodTypeArgs: inheritedTypeArgSymbolsForCall);
+
+                // Issue #1638: shared CLR call-argument-construction pipeline
+                // (interpolation rebind → handler args → delegate rebind →
+                // parameter conversions). Previously this inherited-instance
+                // path skipped straight to handler args, so an interpolated
+                // string argument targeting an IFormattable/FormattableString
+                // parameter of an inherited (base-class) member was never
+                // re-lowered to FormattableStringFactory.Create(...).
+                var inheritedConvertedArgs = BuildResolvedClrCallArguments(
+                    inheritedExpandedArgs,
+                    ce.Arguments,
+                    inheritedParameters,
+                    inheritedDownstreamMapping,
+                    receiver,
+                    ce.Location,
+                    ce,
+                    ClrCallDelegateRebindMode.Full,
+                    out var inheritedHandlerPrelude,
+                    out var inheritedUpdatedReceiver,
+                    method: resolution.Best,
+                    symbolicMethodTypeArgs: inheritedTypeArgSymbolsForCall,
+                    receiverType: receiver?.Type);
                 var inheritedArguments = OverloadResolver.BuildOrderedCallArguments(inheritedConvertedArgs, inheritedDownstreamMapping, inheritedParameters);
                 var refKinds = ComputeArgumentRefKinds(inheritedParameters);
                 overloads.ValidateRefArguments(inheritedArguments, refKinds, methodName, ce.Location);
@@ -4444,24 +4500,43 @@ internal sealed partial class ExpressionBinder
 
         var downstreamMapping = resolution.IsExpanded ? default : resolution.ParameterMapping;
 
-        // Issue #1150: reshape a func/arrow literal argument whose natural
-        // numeric return type implicitly, losslessly widens to the resolved
-        // parameter's delegate return type (e.g. a `uint32`-returning selector
-        // flowing into `Sum`'s `Func<T,long>` overload) so the produced delegate
-        // is created over a method whose return type already matches the target
-        // — inserting the numeric return-widening conversion in the body. Only
-        // the return is widened; the literal's concrete parameter types are
-        // preserved (so non-widening selectors such as `Where`/`Single`/`Select`
-        // are left untouched and value-type selectors are not erased to object).
-        // The bound vector is [receiver, args…] aligned with the method's
-        // parameter list (receiver at slot 0), matching the mapping used below.
-        bound = RebindNumericReturnWideningDelegateArguments(bound, parameters, downstreamMapping);
-
-        // Issue #506 follow-up: route through BindClrParameterConversions so
-        // value-type → object boxing fires for fixed-arity imported extension
-        // calls too. The receiver occupies arg slot 0 (and is already typed
-        // correctly via the extension dispatch).
-        bound = conversions.BindClrParameterConversions(bound, parameters, ce, downstreamMapping, receiverArgCount: 1);
+        // Issue #1638: shared CLR call-argument-construction pipeline
+        // (interpolation rebind → handler args → delegate rebind →
+        // parameter conversions). The receiver occupies bound[0] /
+        // parameters[0] (receiverArgCount: 1), so both the interpolation
+        // rebind and handler-args steps must skip that synthesised slot
+        // (it has no source syntax and, per the extension-call ADR, no
+        // separate BoundExpression that needs updating outside `bound`).
+        //
+        // Issue #1150: the delegate-rebind step deliberately narrows to
+        // ONLY numeric-return-widening (rather than the full erasing
+        // rebind used by ctor/static/instance/inherited dispatch): a full
+        // erasing rebind of a non-numeric-widening func/arrow literal
+        // would erase the produced delegate to the generic LINQ method's
+        // type-erased shape (e.g. `Func<object,object>`) while the call
+        // site re-closes the generic method over the real (symbolic) type
+        // argument — see Issue #1334 for the ilverify StackUnexpected
+        // mismatch this narrowing avoids.
+        //
+        // Issue #506 follow-up: still routes through BindClrParameterConversions
+        // so value-type → object boxing fires for fixed-arity imported
+        // extension calls too.
+        bound = BuildResolvedClrCallArguments(
+            bound,
+            ce.Arguments,
+            parameters,
+            downstreamMapping,
+            receiver,
+            ce.Location,
+            ce,
+            ClrCallDelegateRebindMode.NumericWideningOnly,
+            out var extensionHandlerPrelude,
+            out var extensionUpdatedReceiver,
+            receiverArgCount: 1);
+        if (extensionUpdatedReceiver != null && extensionUpdatedReceiver != receiver)
+        {
+            bound = bound.SetItem(0, extensionUpdatedReceiver);
+        }
 
         // Issue #327 / #343: re-order arguments into parameter positions when
         // named arguments were used; otherwise fall through to the existing
@@ -4470,7 +4545,7 @@ internal sealed partial class ExpressionBinder
 
         var refKinds = ComputeArgumentRefKinds(parameters);
         overloads.ValidateRefArguments(bound, refKinds, methodName, ce.Location);
-        result = new BoundImportedCallExpression(null, function, bound, refKinds, extensionTypeArgSymbolsForCall);
+        result = WrapWithHandlerPrelude(new BoundImportedCallExpression(null, function, bound, refKinds, extensionTypeArgSymbolsForCall), extensionHandlerPrelude, ce);
         return true;
     }
 
@@ -4560,6 +4635,84 @@ internal sealed partial class ExpressionBinder
         {
             return 0;
         }
+    }
+
+    /// <summary>
+    /// Issue #1638: selects which delegate-argument rebind step
+    /// <see cref="BuildResolvedClrCallArguments"/> runs between the
+    /// interpolated-string-handler pass and the CLR parameter-conversion
+    /// pass.
+    /// </summary>
+    private enum ClrCallDelegateRebindMode
+    {
+        /// <summary>Full erasing rebind (<see cref="RebindFunctionLiteralDelegateArguments"/>): used by ctor/static/instance/inherited dispatch.</summary>
+        Full,
+
+        /// <summary>
+        /// Issue #1150 / #1334: numeric-return-widening-only rebind
+        /// (<see cref="RebindNumericReturnWideningDelegateArguments"/>).
+        /// Imported EXTENSION dispatch deliberately narrows to this subset:
+        /// a full erasing rebind of a non-numeric-widening literal would
+        /// erase the delegate to the generic LINQ method's type-erased
+        /// shape (e.g. <c>Func&lt;object,object&gt;</c>) while the call site
+        /// re-closes the generic method over the real (symbolic) type
+        /// argument, producing an ilverify StackUnexpected mismatch.
+        /// </summary>
+        NumericWideningOnly,
+    }
+
+    /// <summary>
+    /// Issue #1638: the shared post-overload-resolution CLR call-argument
+    /// construction pipeline — <c>RebindFormattableInterpolationArguments →
+    /// ApplyInterpolatedStringHandlers → (delegate rebind) →
+    /// BindClrParameterConversions</c> — used by every resolved CLR call
+    /// dispatch (ctor, static, instance, inherited-instance, extension).
+    /// Centralising the sequence keeps a fix applied once (e.g. a step
+    /// re-ordering or a missing step) from drifting out of sync across the
+    /// five call sites.
+    ///
+    /// <c>argumentSyntax</c> is the call's source argument syntax list, used
+    /// to detect interpolated-string arguments; it does NOT include a slot
+    /// for a synthesised receiver. <c>delegateRebindMode</c> selects which
+    /// delegate-argument rebind step runs; see
+    /// <see cref="ClrCallDelegateRebindMode"/>. <c>receiverType</c> is passed
+    /// to the delegate-rebind step's symbolic-target lookup. Issue
+    /// #1512/#1320: <c>conversionReceiverType</c> is the receiver type passed
+    /// to <see cref="ConversionClassifier.BindClrParameterConversions"/>
+    /// instead — the instance-call path deliberately feeds the delegate
+    /// rebind the enumerable-normalized receiver type while feeding the
+    /// parameter-conversion pass the raw (un-normalized) receiver type, so
+    /// this can differ from <c>receiverType</c>; defaults to it via
+    /// <c>hasConversionReceiverTypeOverride</c> when not overridden.
+    /// <c>receiverArgCount</c> is the number of leading argument/parameter
+    /// slots reserved for a synthesised receiver (0 for plain calls, 1 for
+    /// imported extension calls).
+    /// </summary>
+    private ImmutableArray<BoundExpression> BuildResolvedClrCallArguments(
+        ImmutableArray<BoundExpression> arguments,
+        SeparatedSyntaxList<ExpressionSyntax> argumentSyntax,
+        ParameterInfo[] parameters,
+        ImmutableArray<int> parameterMapping,
+        BoundExpression receiver,
+        TextLocation location,
+        CallExpressionSyntax call,
+        ClrCallDelegateRebindMode delegateRebindMode,
+        out ImmutableArray<BoundStatement> preludeStatements,
+        out BoundExpression updatedReceiver,
+        MethodInfo method = null,
+        ImmutableArray<TypeSymbol> symbolicMethodTypeArgs = default,
+        TypeSymbol receiverType = null,
+        bool hasConversionReceiverTypeOverride = false,
+        TypeSymbol conversionReceiverType = null,
+        int receiverArgCount = 0)
+    {
+        var rebound = RebindFormattableInterpolationArguments(arguments, argumentSyntax, parameters, parameterMapping, receiverArgCount);
+        var handlerArgs = ApplyInterpolatedStringHandlers(parameters, rebound, receiver, location, parameterMapping, out preludeStatements, out updatedReceiver);
+        var delegateArgs = delegateRebindMode == ClrCallDelegateRebindMode.Full
+            ? RebindFunctionLiteralDelegateArguments(handlerArgs, parameters, parameterMapping, method, symbolicMethodTypeArgs, receiverType)
+            : RebindNumericReturnWideningDelegateArguments(handlerArgs, parameters, parameterMapping);
+        var effectiveConversionReceiverType = hasConversionReceiverTypeOverride ? conversionReceiverType : receiverType;
+        return conversions.BindClrParameterConversions(delegateArgs, parameters, call, parameterMapping, receiverArgCount, method, effectiveConversionReceiverType, symbolicMethodTypeArgs);
     }
 
     private ImmutableArray<BoundExpression> RebindFunctionLiteralDelegateArguments(

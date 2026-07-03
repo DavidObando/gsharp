@@ -237,3 +237,36 @@ public struct TypedAppendInterpolatedStringHandler
 
     public override string ToString() => this.builder.ToString();
 }
+
+/// <summary>
+/// Issue #1638 fixture: a CLR constructor whose sole parameter is
+/// <see cref="System.Action"/>. Exercises the ctor call-construction pipeline's
+/// delegate-argument rebind step (previously skipped only on the ctor path),
+/// which must void-ize a value-returning arrow-lambda literal argument the
+/// same way the instance/static/inherited call paths already do (issue #889).
+/// </summary>
+public class Issue1638ActionCtorFixture
+{
+    public bool Invoked;
+
+    public Issue1638ActionCtorFixture(System.Action callback)
+    {
+        callback();
+        this.Invoked = true;
+    }
+}
+
+/// <summary>
+/// Issue #1638 fixture: a CLR base class exposing an instance method whose
+/// parameter is <see cref="System.FormattableString"/>. A G# subclass that
+/// does not override the method dispatches through the INHERITED CLR
+/// instance-call path, which (before the fix) skipped
+/// <c>RebindFormattableInterpolationArguments</c> entirely, so an
+/// interpolated-string argument was never re-lowered to
+/// <c>FormattableStringFactory.Create(...)</c> and could not bind against
+/// this parameter.
+/// </summary>
+public class Issue1638FormattableBaseFixture
+{
+    public string Render(System.FormattableString fs) => fs.ToString(System.Globalization.CultureInfo.InvariantCulture);
+}
