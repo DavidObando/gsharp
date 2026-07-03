@@ -168,8 +168,20 @@ public sealed class ReportModel
                     continue;
                 }
 
-                TriageArtifact artifact = JsonSerializer.Deserialize<TriageArtifact>(
-                    File.ReadAllText(artifactPath), TriageSerialization.Options);
+                TriageArtifact artifact;
+                try
+                {
+                    artifact = JsonSerializer.Deserialize<TriageArtifact>(
+                        File.ReadAllText(artifactPath), TriageSerialization.Options);
+                }
+                catch (JsonException)
+                {
+                    missingArtifactCount++;
+                    Console.Error.WriteLine(
+                        $"cs2gs: warning: triage artifact '{relative}' referenced by app '{app.AppId}' is malformed; gap data is incomplete.");
+                    continue;
+                }
+
                 if (artifact is null)
                 {
                     missingArtifactCount++;

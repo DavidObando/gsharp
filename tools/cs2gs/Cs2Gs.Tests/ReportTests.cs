@@ -292,6 +292,84 @@ public class ReportTests
     }
 
     /// <summary>
+    /// A malformed (invalid-JSON) triage artifact must be counted exactly
+    /// like a missing or null-deserialize artifact — increment
+    /// <see cref="ReportModel.MissingArtifactCount"/> and continue — instead
+    /// of letting the <see cref="System.Text.Json.JsonException"/> escape and
+    /// abort the whole report. One bad artifact must not nuke the rest of the
+    /// run's report (issue #1846).
+    /// </summary>
+    [Fact]
+    public void ReportModel_MalformedTriageArtifact_IsCountedAndReportStillRenders()
+    {
+        string runDir = NewRunDir("malformed-artifact");
+
+        var run = new RunResult
+        {
+            RunId = "2026-03-01T00-00-03Z_malformed",
+            Timestamp = "2026-03-01T00:00:03Z",
+            GscVersion = "0.2.0+test",
+            GscPath = "/path/to/gsc.dll",
+            Succeeded = false,
+            Apps = new List<AppResult>
+            {
+                new AppResult
+                {
+                    AppId = "corpus/L1-Console",
+                    Succeeded = false,
+                    FailureCategory = "translation-unsupported",
+                    Stages = new List<StageResult>
+                    {
+                        new StageResult { Stage = "translate", Status = "failed", ArtifactCount = 1 },
+                        new StageResult { Stage = "compile", Status = "skipped" },
+                        new StageResult { Stage = "ilverify", Status = "skipped" },
+                        new StageResult { Stage = "test-parity", Status = "skipped" },
+                    },
+                    Artifacts = new List<string> { "corpus_L1-Console/translate-malformed.json" },
+                },
+                new AppResult
+                {
+                    AppId = "corpus/L2-Library",
+                    Succeeded = true,
+                    Stages = AllStages("passed"),
+                },
+            },
+        };
+        WriteRunJson(runDir, run);
+
+        // Write invalid JSON to the referenced artifact path: not missing,
+        // not null-deserializing to a valid object — a genuine parse failure.
+        string artifactPath = Path.Combine(runDir, "corpus_L1-Console", "translate-malformed.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(artifactPath));
+        File.WriteAllText(artifactPath, "{ this is not valid json ");
+
+        ReportModel model = ReportModel.FromRunDirectory(runDir);
+
+        Assert.False(model.Succeeded);
+        Assert.Empty(model.Gaps);
+        Assert.Equal(1, model.MissingArtifactCount);
+        Assert.False(model.IsGreen);
+
+        // Both apps still rendered: the malformed artifact did not abort the
+        // rest of the report.
+        Assert.Equal(2, model.Apps.Count);
+        Assert.Contains(model.Apps, a => a.AppId == "corpus/L1-Console");
+        Assert.Contains(model.Apps, a => a.AppId == "corpus/L2-Library");
+
+        string html = HtmlReportWriter.Render(model);
+        Assert.Contains("NOT a green run", html, StringComparison.Ordinal);
+        Assert.Contains("Gap data unavailable", html, StringComparison.Ordinal);
+
+        string json = JsonSummaryWriter.Serialize(model);
+        Assert.Contains("\"missingArtifactCount\": 1", json, StringComparison.Ordinal);
+        Assert.Contains("\"isGreen\": false", json, StringComparison.Ordinal);
+
+        // Report was generated (no abort): exit code is the non-green 1, not
+        // the internal-error 2 reserved for genuinely unexpected failures.
+        Assert.Equal(1, Cs2Gs.Cli.Program.DetermineMigrateExitCode(model.Succeeded, reportGenerated: true));
+    }
+
+    /// <summary>
     /// A FAILED run with no triage artifacts referenced at all (e.g. every
     /// stage errored before it could emit one) must also not be rendered as
     /// green — the empty-gaps message must reflect the failed run, not claim
