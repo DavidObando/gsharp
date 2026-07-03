@@ -194,6 +194,65 @@ namespace Demo
     }
 
     /// <summary>
+    /// The int-to-float promotion in <see cref="TranslateLiteral"/> must derive
+    /// the emitted float text from the literal's bound *value*, not its raw
+    /// token spelling — appending ".0" to the spelling mangles hex (`0xFF` →
+    /// `0xFF.0`, a parse error), silently misses hex spellings that already
+    /// contain an 'E' digit (`0xAE`), and leaves integer suffixes in place
+    /// (`30L` → `30L.0`, a parse error). Binary literals and digit separators
+    /// must promote correctly too, and an already-float argument must never be
+    /// promoted twice (Issue #1740).
+    /// </summary>
+    [Theory]
+    [InlineData("0xFF", "255.0")]
+    [InlineData("0xAE", "174.0")]
+    [InlineData("30L", "30.0")]
+    [InlineData("0b1010", "10.0")]
+    [InlineData("1_000", "1000.0")]
+    [InlineData("30", "30.0")]
+    public void IntegerLiteralSpellings_PromotedToDouble_EmitAsValidFloatLiteral(
+        string literalSpelling, string expectedFloatText)
+    {
+        string printed = TranslateUnit($@"
+namespace Demo
+{{
+    public static class Calc
+    {{
+        public static double Scale(double factor) => factor * 2.0;
+
+        public static double Run() => Scale({literalSpelling});
+    }}
+}}");
+
+        Assert.Contains($"Scale({expectedFloatText})", printed);
+    }
+
+    /// <summary>
+    /// A C# literal that is already floating-point (e.g. <c>2.0</c>) must be
+    /// passed through unchanged when its target parameter is also
+    /// floating-point — the promotion path only applies to integral literals,
+    /// so it must never double-promote or otherwise rewrite an already-float
+    /// spelling (Issue #1740).
+    /// </summary>
+    [Fact]
+    public void FloatLiteral_PassedToDoubleParameter_IsNotDoublePromoted()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public static class Calc
+    {
+        public static double Scale(double factor) => factor * 2.0;
+
+        public static double Run() => Scale(2.0);
+    }
+}");
+
+        Assert.Contains("Scale(2.0)", printed);
+        Assert.DoesNotContain("Scale(2.0.0)", printed);
+    }
+
+    /// <summary>
     /// A parameterless constructor that assigns a constant to a property keeps
     /// its explicit <c>init()</c> body — G# accepts a field member initializer
     /// (<c>var Name T = expr</c>) but rejects a property member initializer
