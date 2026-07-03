@@ -394,6 +394,53 @@ namespace Demo
     }
 
     /// <summary>
+    /// A <c>continue</c> inside a <c>switch</c> STATEMENT case still targets
+    /// the enclosing <c>do</c>/<c>while</c> loop — unlike <c>break</c>, C#'s
+    /// <c>switch</c> does not re-target <c>continue</c>. So this must be
+    /// flagged Unsupported the same as an un-nested continue (issue #1723).
+    /// </summary>
+    [Fact]
+    public void DoWhileConditionAssignmentWithContinueInsideSwitch_ReportsUnsupportedInsteadOfSilentlyDroppingHoist()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("Snippet.cs", @"
+namespace Demo
+{
+    public sealed class C
+    {
+        public void M()
+        {
+            int i = 0;
+            int x = 0;
+            do
+            {
+                switch (i % 2)
+                {
+                    case 0:
+                        i = i + 1;
+                        continue;
+                    default:
+                        x = x + i;
+                        break;
+                }
+            } while ((i = i + 1) < 10);
+        }
+    }
+}"),
+        });
+        Assert.True(project.BoundWithoutErrors);
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        _ = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+
+        Assert.Contains(
+            context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("short-circuited"));
+    }
+
+    /// <summary>
     /// Regression guard: a <c>continue</c> inside a NESTED inner loop targets
     /// the inner loop, not the outer <c>do</c>/<c>while</c> — it never reaches
     /// this do-while's ADR-0070 continueLabel, so the outer tail-hoist is safe

@@ -4766,7 +4766,7 @@ public sealed class CSharpToGSharpTranslator
         {
             bool DescendGuard(SyntaxNode node) =>
                 node is not (ForStatementSyntax or ForEachStatementSyntax or ForEachVariableStatementSyntax or
-                    WhileStatementSyntax or DoStatementSyntax or SwitchStatementSyntax or
+                    WhileStatementSyntax or DoStatementSyntax or
                     AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax);
 
             return body.DescendantNodesAndSelf(descendIntoChildren: DescendGuard).OfType<ContinueStatementSyntax>().Any();
