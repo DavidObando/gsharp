@@ -2257,9 +2257,7 @@ public sealed class CSharpToGSharpTranslator
                     // form `init(params) : base(args) { ... }` (sample
                     // ExplicitConstructor.gs; ADR-0115 §B.13). This is how a custom
                     // exception forwards its message to System.Exception's ctor.
-                    baseArguments = node.Initializer.ArgumentList.Arguments
-                        .Select(a => this.TranslateArgument(a))
-                        .ToList();
+                    baseArguments = this.TranslateArguments(node.Initializer.ArgumentList.Arguments);
                 }
                 else
                 {
@@ -2276,7 +2274,7 @@ public sealed class CSharpToGSharpTranslator
             {
                 var delegated = new ExpressionStatement(new InvocationExpression(
                     new IdentifierExpression("init"),
-                    node.Initializer.ArgumentList.Arguments.Select(a => this.TranslateArgument(a)).ToList()));
+                    this.TranslateArguments(node.Initializer.ArgumentList.Arguments)));
                 var statements = new List<GStatement> { delegated };
                 statements.AddRange(body.Statements);
                 body = new BlockStatement(statements);
@@ -7414,9 +7412,7 @@ public sealed class CSharpToGSharpTranslator
                     { MethodKind: MethodKind.DelegateInvoke }
                 && TryGetDelegateInvokeReceiver(invocation.Expression, out GExpression invokeTarget))
             {
-                var invokeArguments = invocation.ArgumentList.Arguments
-                    .Select(a => this.TranslateArgument(a))
-                    .ToList();
+                var invokeArguments = this.TranslateArguments(invocation.ArgumentList.Arguments);
                 return new InvocationExpression(invokeTarget, invokeArguments, null);
             }
 
@@ -7432,7 +7428,7 @@ public sealed class CSharpToGSharpTranslator
                 {
                     this.TranslateExpression(extMember.Expression),
                 };
-                extArgs.AddRange(invocation.ArgumentList.Arguments.Select(a => this.TranslateArgument(a)));
+                extArgs.AddRange(this.TranslateArguments(invocation.ArgumentList.Arguments));
                 IReadOnlyList<GTypeReference> extTypeArgs = extMember.Name is GenericNameSyntax extGeneric
                     ? this.MapTypeArguments(extGeneric)
                     : null;
@@ -7492,9 +7488,7 @@ public sealed class CSharpToGSharpTranslator
                 target = this.TranslateExpression(invocation.Expression);
             }
 
-            var arguments = invocation.ArgumentList.Arguments
-                .Select(a => this.TranslateArgument(a))
-                .ToList();
+            var arguments = this.TranslateArguments(invocation.ArgumentList.Arguments);
 
             // Directly invoking a nullable-reference delegate field/property
             // (`handler(args)` where `handler` is `((T) -> R)?`) needs a `!!`
@@ -7597,7 +7591,7 @@ public sealed class CSharpToGSharpTranslator
             {
                 new NonNullAssertionExpression(receiver),
             };
-            callArgs.AddRange(invocation.ArgumentList.Arguments.Select(a => this.TranslateArgument(a)));
+            callArgs.AddRange(this.TranslateArguments(invocation.ArgumentList.Arguments));
             IReadOnlyList<GTypeReference> callTypeArgs = binding.Name is GenericNameSyntax generic
                 ? this.MapTypeArguments(generic)
                 : null;
@@ -7657,6 +7651,175 @@ public sealed class CSharpToGSharpTranslator
         /// the address-of form <c>&amp;x</c>, an inline <c>out var x</c> maps to
         /// <c>out var x</c>, and an <c>out _</c> discard maps to <c>out _</c>.
         /// </summary>
+        // Issue #1727: G# has no named-argument call syntax, so a C# argument list
+        // that uses `name:` must be translated into pure declaration-order
+        // positional form. `Foo(b: 2, a: 1)` was previously emitted in SYNTAX order
+        // (`Foo(2, 1)`) — silently swapping the arguments — and a skipped optional
+        // parameter (`Foo(c: 5)` skipping `a`/`b`) bound the value to the FIRST
+        // parameter instead of `c`. The fast path (no named arguments) is
+        // untouched: it is the overwhelming majority of call sites and must not
+        // change behavior or cost.
+        private List<GExpression> TranslateArguments(SeparatedSyntaxList<ArgumentSyntax> arguments)
+        {
+            if (!arguments.Any(a => a.NameColon != null))
+            {
+                return arguments.Select(a => this.TranslateArgument(a)).ToList();
+            }
+
+            return this.TranslateNamedArguments(arguments);
+        }
+
+        // Reorders a named/mixed argument list into parameter DECLARATION order
+        // (the only order a positional G# call can express), filling any optional
+        // parameter skipped by the named arguments with its default value.
+        //
+        // C# evaluates call-site arguments in LEXICAL (source) order and binds by
+        // name only afterward. Reordering into declaration order therefore changes
+        // observable evaluation order when a moved argument may have a side effect
+        // (a method call, object creation, assignment, increment, or await) — so
+        // that case is reported unsupported instead of silently reordering side
+        // effects (a source-order fallback is emitted so translation still
+        // produces compiling, if diagnostically-flagged, output).
+        private List<GExpression> TranslateNamedArguments(SeparatedSyntaxList<ArgumentSyntax> arguments)
+        {
+            var resolved = new List<(ArgumentSyntax Syntax, IParameterSymbol Parameter)>();
+            foreach (ArgumentSyntax argument in arguments)
+            {
+                if (this.context.SemanticModel.GetOperation(argument) is not IArgumentOperation operation ||
+                    operation.Parameter == null)
+                {
+                    string message = "a named argument could not be resolved to a parameter via the semantic " +
+                        "model; emitted in source order, which may mis-bind (issue #1727).";
+                    this.context.ReportUnsupported(argument, message);
+                    return arguments.Select(a => this.TranslateArgument(a)).ToList();
+                }
+
+                resolved.Add((argument, operation.Parameter));
+            }
+
+            for (int i = 0; i < resolved.Count; i++)
+            {
+                for (int j = i + 1; j < resolved.Count; j++)
+                {
+                    // resolved is in lexical (source) order by construction, so i < j
+                    // is "before" lexically; declaration order disagrees whenever the
+                    // ordinals are not increasing in the same direction.
+                    bool declarationOrderAgrees = resolved[i].Parameter.Ordinal < resolved[j].Parameter.Ordinal;
+                    if (!declarationOrderAgrees &&
+                        (IsPotentiallySideEffecting(resolved[i].Syntax.Expression) ||
+                            IsPotentiallySideEffecting(resolved[j].Syntax.Expression)))
+                    {
+                        string message = "named arguments reorder potentially side-effecting expressions " +
+                            "relative to C#'s lexical evaluation order; no side-effect-preserving G# lowering " +
+                            "yet (issue #1727).";
+                        this.context.ReportUnsupported(resolved[i].Syntax, message);
+                        return arguments.Select(a => this.TranslateArgument(a)).ToList();
+                    }
+                }
+            }
+
+            Dictionary<int, ArgumentSyntax> byOrdinal = resolved.ToDictionary(r => r.Parameter.Ordinal, r => r.Syntax);
+            int maxOrdinal = resolved.Max(r => r.Parameter.Ordinal);
+            IMethodSymbol invokedMethod = resolved[0].Parameter.ContainingSymbol as IMethodSymbol;
+
+            var result = new List<GExpression>();
+            for (int ordinal = 0; ordinal <= maxOrdinal; ordinal++)
+            {
+                if (byOrdinal.TryGetValue(ordinal, out ArgumentSyntax explicitArgument))
+                {
+                    result.Add(this.TranslateArgument(explicitArgument));
+                    continue;
+                }
+
+                IParameterSymbol skippedParameter = invokedMethod != null && ordinal < invokedMethod.Parameters.Length
+                    ? invokedMethod.Parameters[ordinal]
+                    : null;
+                GExpression fillerDefault = this.BuildSkippedNamedArgumentDefault(skippedParameter, arguments);
+                if (fillerDefault == null)
+                {
+                    return arguments.Select(a => this.TranslateArgument(a)).ToList();
+                }
+
+                result.Add(fillerDefault);
+            }
+
+            return result;
+        }
+
+        // Computes the positional filler for an optional parameter that a named
+        // argument list skipped, or `null` (after reporting Unsupported) when no
+        // faithful G# value can be emitted: a caller-info parameter
+        // ([CallerMemberName]/[CallerLineNumber]/[CallerFilePath]/
+        // [CallerArgumentExpression]) needs the value the C# compiler substitutes
+        // at THIS call site, which the parameter's own default does not carry, and
+        // a non-literal default (a `const` field, an enum member, etc.) has no
+        // simple literal form (mirrors the declaration-side limitation already
+        // accepted in BuildOptionalParameterDefault).
+        private GExpression BuildSkippedNamedArgumentDefault(IParameterSymbol skippedParameter, SeparatedSyntaxList<ArgumentSyntax> arguments)
+        {
+            if (skippedParameter == null)
+            {
+                string message = "a named argument list skips a parameter that could not be resolved via the " +
+                    "semantic model (issue #1727).";
+                this.context.ReportUnsupported(arguments.First(), message);
+                return null;
+            }
+
+            bool hasCallerInfo = skippedParameter.GetAttributes().Any(a => a.AttributeClass?.Name is
+                "CallerMemberNameAttribute" or "CallerLineNumberAttribute" or
+                "CallerFilePathAttribute" or "CallerArgumentExpressionAttribute");
+            if (hasCallerInfo)
+            {
+                string message = $"named argument list skips caller-info parameter '{skippedParameter.Name}'; " +
+                    "its call-site-substituted value has no faithful G# positional form yet (issue #1727).";
+                this.context.ReportUnsupported(arguments.First(), message);
+                return null;
+            }
+
+            GTypeReference parameterType = this.typeMapper.Map(
+                skippedParameter.Type,
+                this.context,
+                skippedParameter.Locations.FirstOrDefault());
+            GExpression fillerDefault = this.BuildOptionalParameterDefault(skippedParameter, parameterType);
+            if (fillerDefault == null)
+            {
+                string message = $"named argument list skips parameter '{skippedParameter.Name}' whose default " +
+                    "value is not a simple literal; no faithful G# positional form yet (issue #1727).";
+                this.context.ReportUnsupported(arguments.First(), message);
+            }
+
+            return fillerDefault;
+        }
+
+        // Conservative "no observable side effect" check used only to decide
+        // whether reordering a named argument into declaration position is safe
+        // (issue #1727). A bare literal or a plain identifier/member-access chain
+        // that never invokes anything reads state without changing it; everything
+        // else (calls, object creation, assignment, increment/decrement, await,
+        // and — conservatively — any operator, since it may be an overloaded
+        // operator with side effects) is treated as potentially side-effecting.
+        private static bool IsPotentiallySideEffecting(ExpressionSyntax expression)
+        {
+            switch (expression)
+            {
+                case null:
+                case LiteralExpressionSyntax:
+                case IdentifierNameSyntax:
+                case ThisExpressionSyntax:
+                case PredefinedTypeSyntax:
+                    return false;
+                case ParenthesizedExpressionSyntax parenthesized:
+                    return IsPotentiallySideEffecting(parenthesized.Expression);
+                case MemberAccessExpressionSyntax memberAccess:
+                    return IsPotentiallySideEffecting(memberAccess.Expression);
+                case PrefixUnaryExpressionSyntax prefixUnary
+                    when prefixUnary.IsKind(SyntaxKind.UnaryMinusExpression) || prefixUnary.IsKind(SyntaxKind.UnaryPlusExpression):
+                    return IsPotentiallySideEffecting(prefixUnary.Operand);
+                default:
+                    return true;
+            }
+        }
+
         private GExpression TranslateArgument(ArgumentSyntax argument)
         {
             SyntaxKind refKind = argument.RefKindKeyword.Kind();
@@ -7865,9 +8028,7 @@ public sealed class CSharpToGSharpTranslator
 
             var arguments = creation.ArgumentList == null
                 ? new List<GExpression>()
-                : creation.ArgumentList.Arguments
-                    .Select(a => this.TranslateArgument(a))
-                    .ToList();
+                : this.TranslateArguments(creation.ArgumentList.Arguments);
 
             // A C# delegate creation `new SomeDelegate(target)` wraps a method
             // group, lambda, or another delegate in a named delegate type. G# has
@@ -8427,9 +8588,7 @@ public sealed class CSharpToGSharpTranslator
 
             var arguments = creation.ArgumentList == null
                 ? new List<GExpression>()
-                : creation.ArgumentList.Arguments
-                    .Select(a => this.TranslateArgument(a))
-                    .ToList();
+                : this.TranslateArguments(creation.ArgumentList.Arguments);
 
             bool hasCtorArgs = arguments.Count > 0;
 
