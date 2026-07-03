@@ -119,6 +119,65 @@ var ok = Enum.TryParse[Color](""Red"", out var result)
         Assert.Empty(diagnostics);
     }
 
+    [Fact]
+    public void GenericForward_NonEnumStructConstrained_MemoryMarshalCast_Resolves()
+    {
+        // Generalization: a DIFFERENT struct-constrained BCL generic method
+        // (MemoryMarshal.Cast<TFrom, TTo>, where TFrom : struct, TTo : struct)
+        // must also close over a forwarded constrained type parameter — proving
+        // the fix is not Enum.TryParse-specific.
+        const string source = @"
+package p
+import System.Runtime.InteropServices
+
+func Cast[TEnum Enum struct](s Span[TEnum]) Span[uint8] {
+    return MemoryMarshal.Cast[TEnum, uint8](s)
+}
+";
+        var diagnostics = Bind(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0159");
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void UnconstrainedTypeParameter_EnumTryParse_StillErrors()
+    {
+        // Negative control: an UNCONSTRAINED `[T]` must NOT satisfy
+        // Enum.TryParse<TEnum>'s `where TEnum : struct, Enum` constraint. The
+        // fix must not over-loosen constraint checking to admit any type
+        // parameter, only ones that themselves carry a value-type constraint.
+        const string source = @"
+package p
+import System
+
+func Parse[T](arg string) T? {
+    if !Enum.TryParse[T](arg, out var result) {
+        return nil
+    }
+    return result
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0159");
+    }
+
+    [Fact]
+    public void UnconstrainedTypeParameter_MemoryMarshalCast_StillErrors()
+    {
+        // Negative control for the non-Enum generalization: an unconstrained
+        // `[T]` must not satisfy MemoryMarshal.Cast's `where T : struct`.
+        const string source = @"
+package p
+import System.Runtime.InteropServices
+
+func Cast[T](s Span[T]) Span[uint8] {
+    return MemoryMarshal.Cast[T, uint8](s)
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0159");
+    }
+
     private static IReadOnlyList<Diagnostic> Bind(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
