@@ -4575,14 +4575,24 @@ public sealed class CSharpToGSharpTranslator
         //     property/field of the enclosing type. gsc resolves a bare-identifier
         //     assignment receiver as a variable/parameter; an implicit-this property
         //     receiver has no local slot, so the member write fails (GS0158 /
-        //     GS9998). Qualifying it as `this.Prop.Member = v` routes the write
-        //     through the expression-receiver path, which binds correctly.
+        //     GS9998). Qualifying it as `this.Prop.Member = v` (or `self.Prop.Member
+        //     = v` inside a lifted receiver-clause func, issue #938 — see
+        //     <paramref name="left"/>'s <see cref="currentReceiverName"/>) routes the
+        //     write through the expression-receiver path, which binds correctly.
+        //     When `Prop` is itself declared-nullable (or promoted, issue #1072),
+        //     the same `!!` the read path applies is inserted on the qualified
+        //     receiver (`this.Prop!!.Member = v`) — the qualification and the
+        //     null-forgiveness are independent fixes and compose.
         //
         //   • `recv.Member = v` where `recv` is a declared-nullable receiver that
-        //     Roslyn flow-proved non-null. gsc does not flow-narrow an *assignment*
-        //     receiver (only reads), so the bare nullable receiver fails to bind the
-        //     setter (GS0158). A `recv!!.Member = v` re-establishes the non-null fact
-        //     (mirrors the read-side <see cref="TranslateReceiverWithNullForgiveness"/>).
+        //     Roslyn flow-proved non-null (or was promoted to nullable, #1072).
+        //     gsc does not flow-narrow an *assignment* receiver (only reads), so the
+        //     bare nullable receiver fails to bind the setter (GS0158). A
+        //     `recv!!.Member = v` re-establishes the non-null fact (mirrors the
+        //     read-side <see cref="TranslateReceiverWithNullForgiveness"/> and its
+        //     flow-independent <see cref="ReceiverIsNullableReferenceFieldOrProperty"/>
+        //     companion, so nullable-oblivious corpora get the same assertion the
+        //     read path does).
         private GExpression TranslateAssignmentTarget(ExpressionSyntax left)
         {
             if (left is MemberAccessExpressionSyntax member)
@@ -4591,13 +4601,24 @@ public sealed class CSharpToGSharpTranslator
                     this.context.GetSymbolInfo(receiverId).Symbol is { IsStatic: false } receiverSymbol &&
                     receiverSymbol.Kind is SymbolKind.Property or SymbolKind.Field)
                 {
-                    GExpression thisQualified = new MemberAccessExpression(
-                        new ThisExpression(), SanitizeIdentifier(receiverId.Identifier.Text));
+                    GExpression qualifier = this.currentReceiverName != null
+                        ? new IdentifierExpression(this.currentReceiverName)
+                        : new ThisExpression();
+                    GExpression qualifiedReceiver = new MemberAccessExpression(
+                        qualifier, SanitizeIdentifier(receiverId.Identifier.Text));
+
+                    if (this.ReceiverNeedsNullForgiveness(receiverId) ||
+                        this.ReceiverIsNullableReferenceFieldOrProperty(receiverId))
+                    {
+                        qualifiedReceiver = new NonNullAssertionExpression(qualifiedReceiver);
+                    }
+
                     return new MemberAccessExpression(
-                        thisQualified, SanitizeIdentifier(member.Name.Identifier.Text));
+                        qualifiedReceiver, SanitizeIdentifier(member.Name.Identifier.Text));
                 }
 
                 if (this.ReceiverNeedsNullForgiveness(member.Expression) ||
+                    this.ReceiverIsNullableReferenceFieldOrProperty(member.Expression) ||
                     (member.Expression is IdentifierNameSyntax hoistedId &&
                      this.context.GetSymbolInfo(hoistedId).Symbol is { } hoistedSymbol &&
                      this.hoistedNullableGuardLocals.Contains(hoistedSymbol)))
@@ -8419,7 +8440,13 @@ public sealed class CSharpToGSharpTranslator
             {
                 case MemberAccessExpressionSyntax member
                     when member.Name.Identifier.Text == "Invoke":
-                    receiver = this.TranslateExpression(member.Expression);
+                    // A nullable delegate/event receiver spelled `field.Invoke(...)`
+                    // needs the same `!!` the direct-call spelling `field(...)` gets
+                    // below (#1598): route through the shared receiver-forgiveness
+                    // helper rather than a bare translate, or the `.Invoke` spelling
+                    // bypasses the assertion and emits an unforgiven `field(...)`
+                    // (GS0131).
+                    receiver = this.TranslateReceiverWithNullForgiveness(member.Expression);
                     return true;
 
                 case MemberBindingExpressionSyntax binding
