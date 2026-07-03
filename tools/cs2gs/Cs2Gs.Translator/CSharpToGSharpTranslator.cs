@@ -7718,6 +7718,40 @@ public sealed class CSharpToGSharpTranslator
                 }
             }
 
+            // A `params` parameter used in EXPANDED form (e.g. `Foo(x: 0, 1, 2, 3)`
+            // for `Foo(int x, params int[] rest)`) makes several arguments share
+            // the SAME `Parameter.Ordinal` (the params parameter's), which a plain
+            // `ToDictionary` throws on. Source order already agrees with
+            // declaration order whenever ordinals are non-decreasing in source
+            // order (the common/legal case, since C# forbids a positional
+            // argument from following a named one that skipped ahead) — that
+            // needs no reordering at all, so just pass it through. Anything else
+            // sharing an ordinal cannot be faithfully expressed as a dense
+            // ordinal->argument map; report unsupported instead of crashing.
+            bool ordinalsNonDecreasing = true;
+            for (int i = 1; i < resolved.Count; i++)
+            {
+                if (resolved[i].Parameter.Ordinal < resolved[i - 1].Parameter.Ordinal)
+                {
+                    ordinalsNonDecreasing = false;
+                    break;
+                }
+            }
+
+            bool hasDuplicateOrdinal = resolved.Select(r => r.Parameter.Ordinal).Distinct().Count() != resolved.Count;
+            if (hasDuplicateOrdinal)
+            {
+                if (ordinalsNonDecreasing)
+                {
+                    return arguments.Select(a => this.TranslateArgument(a)).ToList();
+                }
+
+                string message = "named arguments combined with a params argument in expanded form cannot be " +
+                    "faithfully reordered (issue #1727).";
+                this.context.ReportUnsupported(resolved[0].Syntax, message);
+                return arguments.Select(a => this.TranslateArgument(a)).ToList();
+            }
+
             Dictionary<int, ArgumentSyntax> byOrdinal = resolved.ToDictionary(r => r.Parameter.Ordinal, r => r.Syntax);
             int maxOrdinal = resolved.Max(r => r.Parameter.Ordinal);
             IMethodSymbol invokedMethod = resolved[0].Parameter.ContainingSymbol as IMethodSymbol;

@@ -135,6 +135,81 @@ namespace Demo
         Assert.NotNull(unit);
     }
 
+    /// <summary>
+    /// A named argument at a leading parameter's own position combined with a
+    /// <c>params</c> parameter used in EXPANDED form (C# 7.2+) makes several
+    /// arguments share the SAME <c>Parameter.Ordinal</c> (the params
+    /// parameter's). This must not crash the translator (previously an
+    /// unguarded <c>ToDictionary</c> threw on the duplicate key); since source
+    /// order already agrees with declaration order here, it is emitted
+    /// unchanged.
+    /// </summary>
+    [Fact]
+    public void NamedArgument_WithExpandedParams_DoesNotCrash_EmitsSourceOrder()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        public void Foo(int x, params int[] rest) { }
+
+        public void Caller()
+        {
+            Foo(x: 0, 1, 2, 3);
+        }
+    }
+}");
+        Assert.Contains("Foo(0, 1, 2, 3)", printed, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Skipping a MIDDLE optional parameter (not just a leading one) must
+    /// still dense-fill the gap from the parameter's own default.
+    /// </summary>
+    [Fact]
+    public void NamedArgument_SkipsMiddleOptionalParameter_FillsDefault()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        public void Foo(int a = 1, int b = 2, int c = 3) { }
+
+        public void Caller()
+        {
+            Foo(a: 1, c: 5);
+        }
+    }
+}");
+        Assert.Contains("Foo(1, 2, 5)", printed, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Sanity baseline: an all-positional call into a <c>params</c> parameter
+    /// (no named arguments at all) is untouched by the named-argument reorder
+    /// path and keeps its correct, unchanged output.
+    /// </summary>
+    [Fact]
+    public void AllPositionalArguments_WithParams_TranslateUnchanged()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        public void Foo(int x, params int[] rest) { }
+
+        public void Caller()
+        {
+            Foo(1, 2, 3);
+        }
+    }
+}");
+        Assert.Contains("Foo(1, 2, 3)", printed, StringComparison.Ordinal);
+    }
+
     private static string TranslateUnit(string source)
     {
         (CompilationUnit unit, _) = Translate(source);
