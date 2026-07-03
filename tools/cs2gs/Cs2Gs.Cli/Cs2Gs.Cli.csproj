@@ -5,9 +5,6 @@
     <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
     <RootNamespace>Cs2Gs.Cli</RootNamespace>
     <AssemblyName>cs2gs</AssemblyName>
-    <!-- The cs2gs Directory.Build.props marks the whole tree IsTestProject=true
-         (skips docs/StyleCop), which also defaults IsPackable=false. Re-enable
-         packing below without re-enabling StyleCop. -->
   </PropertyGroup>
 
   <!-- Ship the C#->G# translator as a .NET tool: `dotnet tool install Gsharp.Cs2Gs`

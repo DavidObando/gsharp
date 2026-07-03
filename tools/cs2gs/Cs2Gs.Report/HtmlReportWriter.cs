@@ -108,15 +108,17 @@ public static class HtmlReportWriter
 
         outputDir = Path.GetFullPath(outputDir ?? model.RunDir);
 
+        Dictionary<string, string> slugs = BuildSlugMap(model);
+
         var sb = new StringBuilder();
         sb.Append("<!DOCTYPE html>").Append(Newline);
         sb.Append("<html lang=\"en\">").Append(Newline);
         AppendHead(sb, model);
         sb.Append("<body>").Append(Newline);
         AppendHeader(sb, model);
-        AppendMatrix(sb, model);
+        AppendMatrix(sb, model, slugs);
         AppendGaps(sb, model);
-        AppendAppDetails(sb, model, outputDir);
+        AppendAppDetails(sb, model, outputDir, slugs);
         AppendScript(sb);
         sb.Append("</body>").Append(Newline);
         sb.Append("</html>").Append(Newline);
@@ -202,7 +204,7 @@ public static class HtmlReportWriter
             .Append("<dd>").Append(Encode(value)).Append("</dd>").Append(Newline);
     }
 
-    private static void AppendMatrix(StringBuilder sb, ReportModel model)
+    private static void AppendMatrix(StringBuilder sb, ReportModel model, Dictionary<string, string> slugs)
     {
         sb.Append("<section aria-labelledby=\"matrix-h\">").Append(Newline);
         sb.Append("<h2 id=\"matrix-h\">Status matrix</h2>").Append(Newline);
@@ -219,11 +221,11 @@ public static class HtmlReportWriter
         foreach (AppReport app in model.Apps)
         {
             sb.Append("<tr>");
-            sb.Append("<th scope=\"row\"><a href=\"#app-").Append(Slug(app.AppId)).Append("\">")
+            sb.Append("<th scope=\"row\"><a href=\"#app-").Append(slugs[app.AppId]).Append("\">")
                 .Append(Encode(app.AppId)).Append("</a></th>");
             foreach (string stageName in model.StageOrder)
             {
-                StageReport stage = app.Stages.FirstOrDefault(s =>
+                StageResult stage = app.Stages.FirstOrDefault(s =>
                     string.Equals(s.Stage, stageName, StringComparison.Ordinal));
                 AppendMatrixCell(sb, stage);
             }
@@ -236,7 +238,7 @@ public static class HtmlReportWriter
         sb.Append("</section>").Append(Newline);
     }
 
-    private static void AppendMatrixCell(StringBuilder sb, StageReport stage)
+    private static void AppendMatrixCell(StringBuilder sb, StageResult stage)
     {
         string status = stage?.Status ?? "skipped";
         (string Label, string Css, string Word) info = status switch
@@ -429,7 +431,7 @@ public static class HtmlReportWriter
         sb.Append("</details>").Append(Newline);
     }
 
-    private static void AppendAppDetails(StringBuilder sb, ReportModel model, string outputDir)
+    private static void AppendAppDetails(StringBuilder sb, ReportModel model, string outputDir, Dictionary<string, string> slugs)
     {
         sb.Append("<section aria-labelledby=\"apps-h\">").Append(Newline);
         sb.Append("<h2 id=\"apps-h\">App details</h2>").Append(Newline);
@@ -437,7 +439,7 @@ public static class HtmlReportWriter
         foreach (AppReport app in model.Apps)
         {
             string stateClass = app.Succeeded ? "ok" : "bad";
-            sb.Append("<article id=\"app-").Append(Slug(app.AppId)).Append("\" class=\"app-detail\">").Append(Newline);
+            sb.Append("<article id=\"app-").Append(slugs[app.AppId]).Append("\" class=\"app-detail\">").Append(Newline);
             sb.Append("<h3>").Append(Encode(app.AppId))
                 .Append(" <span class=\"state ").Append(stateClass).Append("\">")
                 .Append(app.Succeeded ? "green" : "failing").Append("</span></h3>").Append(Newline);
@@ -450,7 +452,7 @@ public static class HtmlReportWriter
             sb.Append("<table class=\"stage-list\"><thead><tr>")
                 .Append("<th scope=\"col\">stage</th><th scope=\"col\">status</th><th scope=\"col\">artifacts</th>")
                 .Append("</tr></thead><tbody>").Append(Newline);
-            foreach (StageReport stage in app.Stages)
+            foreach (StageResult stage in app.Stages)
             {
                 sb.Append("<tr><td>").Append(Encode(stage.Stage)).Append("</td>")
                     .Append("<td>").Append(Encode(stage.Status)).Append("</td>")
@@ -568,6 +570,39 @@ public static class HtmlReportWriter
             Path.Combine(runDir, artifactRelative.Replace('/', Path.DirectorySeparatorChar)));
         string relativeToOutput = Path.GetRelativePath(outputDir, absoluteArtifact);
         return relativeToOutput.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
+    }
+
+    /// <summary>
+    /// Assigns each app a unique HTML id fragment (used for both the matrix's
+    /// <c>href="#app-…"</c> and the detail <c>id="app-…"</c>) so the anchors
+    /// always resolve. <see cref="Slug"/> folds case and collapses every
+    /// non-alphanumeric run to a single '-', so distinct app ids (e.g.
+    /// <c>corpus/L1-Console</c> and <c>corpus/l1.console</c>) can collide;
+    /// on collision this appends the app's ordinal index in
+    /// <see cref="ReportModel.Apps"/> (already ordinal-sorted, so stable
+    /// across runs) and keeps incrementing until the id is free, which also
+    /// covers 3-way-plus collisions.
+    /// </summary>
+    private static Dictionary<string, string> BuildSlugMap(ReportModel model)
+    {
+        var slugs = new Dictionary<string, string>(StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (int i = 0; i < model.Apps.Count; i++)
+        {
+            string appId = model.Apps[i].AppId;
+            string baseSlug = Slug(appId);
+            string candidate = baseSlug;
+            int suffix = i;
+            while (!seen.Add(candidate))
+            {
+                candidate = baseSlug + "-" + suffix.ToString(CultureInfo.InvariantCulture);
+                suffix++;
+            }
+
+            slugs[appId] = candidate;
+        }
+
+        return slugs;
     }
 
     private static string Slug(string value)
