@@ -389,6 +389,16 @@ public sealed class CSharpToGSharpTranslator
         private readonly HashSet<SyntaxNode> suppressedPostfix =
             new HashSet<SyntaxNode>();
 
+        // C# assignment-expressions used in VALUE position (`while ((line =
+        // r.ReadLine()) != null)`, `M(x = 5)`, `if ((x = f()) > 0)`) that the
+        // surrounding statement/condition seam has hoisted into a preceding
+        // assignment statement (G# assignment is a statement, not a
+        // value-yielding expression; spec §Statements). While a node is in this
+        // set, `TranslateExpression` renders it as a bare read of its already-
+        // written target rather than dropping the write (issue #1723).
+        private readonly HashSet<SyntaxNode> suppressedAssignments =
+            new HashSet<SyntaxNode>();
+
         // Static-field initializers lifted out of a `static` constructor body
         // (`static T() { Field = value; }`). G# has no static constructor, so a
         // simple static ctor is folded into the corresponding `shared { }` field
@@ -3202,13 +3212,45 @@ public sealed class CSharpToGSharpTranslator
                     return this.TranslateFixedStatement(fixedStatement);
 
                 case ReturnStatementSyntax ret:
-                    return new[]
+                {
+                    if (ret.Expression == null)
                     {
-                        (GStatement)new ReturnStatement(
-                            ret.Expression == null
-                                ? null
-                                : this.TranslateValueWithNullForgiveness(ret.Expression)),
-                    };
+                        return new[] { (GStatement)new ReturnStatement(null) };
+                    }
+
+                    // `return (x = M());` — a value-position assignment in the
+                    // return expression is hoisted into a preceding assignment
+                    // statement; it runs once, exactly where C# would evaluate it
+                    // (issue #1723).
+                    var returnPrologue = new List<GStatement>();
+                    List<AssignmentExpressionSyntax> returnEmbedded =
+                        this.CollectEmbeddedAssignments(ret.Expression, includeSelf: true);
+                    foreach (AssignmentExpressionSyntax node in returnEmbedded)
+                    {
+                        returnPrologue.AddRange(this.FlattenChainedAssignment(node));
+                    }
+
+                    foreach (AssignmentExpressionSyntax node in returnEmbedded)
+                    {
+                        this.suppressedAssignments.Add(node);
+                    }
+
+                    GExpression returnValue;
+                    try
+                    {
+                        returnValue = this.TranslateValueWithNullForgiveness(ret.Expression);
+                    }
+                    finally
+                    {
+                        foreach (AssignmentExpressionSyntax node in returnEmbedded)
+                        {
+                            this.suppressedAssignments.Remove(node);
+                        }
+                    }
+
+                    returnPrologue.Add(new ReturnStatement(returnValue));
+                    return returnPrologue;
+                }
 
                 case IfStatementSyntax ifStatement:
                     return this.TranslateIfStatements(ifStatement).ToArray();
@@ -3296,11 +3338,43 @@ public sealed class CSharpToGSharpTranslator
 
             foreach (VariableDeclaratorSyntax declarator in declaration.Variables)
             {
-                GExpression initializer = declarator.Initializer == null
-                    ? null
-                    : this.CoerceConstantToUnsigned(
-                        declarator.Initializer.Value,
-                        this.TranslateExpression(declarator.Initializer.Value));
+                GExpression initializer;
+                if (declarator.Initializer == null)
+                {
+                    initializer = null;
+                }
+                else
+                {
+                    // `int y = (x = 5) + 1;` — a value-position assignment nested in
+                    // the initializer is hoisted into a preceding assignment
+                    // statement; it runs once, exactly where C# would evaluate it
+                    // (issue #1723).
+                    List<AssignmentExpressionSyntax> initializerEmbedded =
+                        this.CollectEmbeddedAssignments(declarator.Initializer.Value, includeSelf: true);
+                    foreach (AssignmentExpressionSyntax node in initializerEmbedded)
+                    {
+                        results.AddRange(this.FlattenChainedAssignment(node));
+                    }
+
+                    foreach (AssignmentExpressionSyntax node in initializerEmbedded)
+                    {
+                        this.suppressedAssignments.Add(node);
+                    }
+
+                    try
+                    {
+                        initializer = this.CoerceConstantToUnsigned(
+                            declarator.Initializer.Value,
+                            this.TranslateExpression(declarator.Initializer.Value));
+                    }
+                    finally
+                    {
+                        foreach (AssignmentExpressionSyntax node in initializerEmbedded)
+                        {
+                            this.suppressedAssignments.Remove(node);
+                        }
+                    }
+                }
 
                 BindingKind binding;
                 if (isConst)
@@ -4126,18 +4200,35 @@ public sealed class CSharpToGSharpTranslator
                 {
                     return this.LowerTupleAssignment(leftTuple, rightTuple);
                 }
-
-                if (assignment.Right is AssignmentExpressionSyntax)
-                {
-                    // `a = b = c` → `b = c` then `a = b`. G# assignment is a
-                    // statement, so the chain is flattened innermost-first.
-                    return this.FlattenChainedAssignment(assignment);
-                }
             }
 
-            return this.WithHoistedPostfix(
+            // `a = b = c`, `a = b += c`, `a += b = c`, … — any assignment whose
+            // RHS is itself an assignment (any operator, optionally parenthesized)
+            // has no single-statement G# form; flatten innermost-first so every
+            // link's write is preserved (issue #1723).
+            if (expression is AssignmentExpressionSyntax outerAssignment &&
+                Unwrap(outerAssignment.Right) is AssignmentExpressionSyntax)
+            {
+                return this.FlattenChainedAssignment(outerAssignment);
+            }
+
+            return this.WithHoistedAssignments(
                 expression,
-                () => new[] { this.TranslateExpressionStatement(expression) });
+                includeSelf: false,
+                () => this.WithHoistedPostfix(
+                    expression,
+                    () => new[] { this.TranslateExpressionStatement(expression) }).ToList());
+        }
+
+        // Strips parentheses so chain/assignment detection is parenthesis-transparent.
+        private static ExpressionSyntax Unwrap(ExpressionSyntax expression)
+        {
+            while (expression is ParenthesizedExpressionSyntax paren)
+            {
+                expression = paren.Expression;
+            }
+
+            return expression;
         }
 
         /// <summary>
@@ -4185,6 +4276,175 @@ public sealed class CSharpToGSharpTranslator
             return statements;
         }
 
+        /// <summary>
+        /// Translates an expression that may embed VALUE-POSITION assignments
+        /// (`M(x = 5)`, `while ((line = r.ReadLine()) != null)`, `if ((x = f()) >
+        /// 0)`), hoisting each into a preceding assignment statement. G# models
+        /// assignment as a statement, not a value-yielding expression, so a
+        /// naive translation drops the write and keeps only the read (issue
+        /// #1723). <paramref name="includeSelf"/> controls whether
+        /// <paramref name="expression"/> ITSELF counts as a hoist candidate when
+        /// it is an assignment: statement-position callers (where the whole
+        /// expression already IS the statement, e.g. `a += 5;`) pass <c>false</c>
+        /// so only assignments NESTED inside it (e.g. `a += (b = c);`) are
+        /// hoisted; condition callers (`if`/`while`/`for`, where the whole
+        /// condition can itself be a bare assignment, e.g. `if (x = f())`) pass
+        /// <c>true</c>.
+        /// </summary>
+        private IEnumerable<GStatement> WithHoistedAssignments(
+            ExpressionSyntax expression,
+            bool includeSelf,
+            Func<List<GStatement>> buildMain)
+        {
+            List<AssignmentExpressionSyntax> embedded = this.CollectEmbeddedAssignments(expression, includeSelf);
+            if (embedded.Count == 0)
+            {
+                return buildMain();
+            }
+
+            var hoisted = new List<GStatement>();
+            foreach (AssignmentExpressionSyntax node in embedded)
+            {
+                hoisted.AddRange(this.FlattenChainedAssignment(node));
+            }
+
+            foreach (AssignmentExpressionSyntax node in embedded)
+            {
+                this.suppressedAssignments.Add(node);
+            }
+
+            List<GStatement> main;
+            try
+            {
+                main = buildMain();
+            }
+            finally
+            {
+                foreach (AssignmentExpressionSyntax node in embedded)
+                {
+                    this.suppressedAssignments.Remove(node);
+                }
+            }
+
+            hoisted.AddRange(main);
+            return hoisted;
+        }
+
+        /// <summary>
+        /// Translates <paramref name="expression"/> (typically a condition:
+        /// `if`/`while`/`for`), hoisting any embedded value-position assignment
+        /// into <paramref name="prologue"/> as a preceding assignment statement
+        /// and returning the condition with each hoisted assignment read as its
+        /// already-written target (issue #1723). The whole expression counts as
+        /// a hoist candidate (a bare `if (x = f())` condition IS the assignment).
+        /// </summary>
+        private GExpression TranslateConditionWithHoist(ExpressionSyntax expression, List<GStatement> prologue)
+        {
+            List<AssignmentExpressionSyntax> embedded = this.CollectEmbeddedAssignments(expression, includeSelf: true);
+            if (embedded.Count == 0)
+            {
+                return this.TranslateExpression(expression);
+            }
+
+            foreach (AssignmentExpressionSyntax node in embedded)
+            {
+                prologue.AddRange(this.FlattenChainedAssignment(node));
+            }
+
+            foreach (AssignmentExpressionSyntax node in embedded)
+            {
+                this.suppressedAssignments.Add(node);
+            }
+
+            try
+            {
+                return this.TranslateExpression(expression);
+            }
+            finally
+            {
+                foreach (AssignmentExpressionSyntax node in embedded)
+                {
+                    this.suppressedAssignments.Remove(node);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Finds the outermost value-position assignment nodes in
+        /// <paramref name="expression"/> (in evaluation/document order),
+        /// excluding ones inside a nested lambda/local function (their own
+        /// statement seam) and — for chained links (`a = b = c`) — excluding the
+        /// inner links of a chain already captured by the outer node (see
+        /// <see cref="FlattenChainedAssignment"/>). An assignment hidden inside the
+        /// short-circuited operand of `&amp;&amp;`/`||` or a `?:` branch would change
+        /// evaluation COUNT/order if hoisted, so it is flagged unsupported instead
+        /// (issue #1723).
+        /// </summary>
+        private List<AssignmentExpressionSyntax> CollectEmbeddedAssignments(ExpressionSyntax expression, bool includeSelf)
+        {
+            bool DescendGuard(SyntaxNode node) =>
+                node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax or AssignmentExpressionSyntax);
+
+            IEnumerable<AssignmentExpressionSyntax> Scan(ExpressionSyntax root) =>
+                root.DescendantNodesAndSelf(descendIntoChildren: DescendGuard).OfType<AssignmentExpressionSyntax>();
+
+            IEnumerable<AssignmentExpressionSyntax> candidates = includeSelf || expression is not AssignmentExpressionSyntax rootAssignment
+                ? Scan(expression)
+                : Scan(rootAssignment.Left).Concat(Scan(rootAssignment.Right));
+
+            var safe = new List<AssignmentExpressionSyntax>();
+            foreach (AssignmentExpressionSyntax candidate in candidates)
+            {
+                if (IsInShortCircuitOrConditionalBranch(candidate, expression))
+                {
+                    this.context.ReportUnsupported(
+                        candidate,
+                        "assignment inside a short-circuited '&&'/'||' operand or a conditional ('?:') branch has no side-effect-preserving G# lowering yet (issue #1723).");
+                    continue;
+                }
+
+                safe.Add(candidate);
+            }
+
+            return safe;
+        }
+
+        // True when `node` is reached only through a not-always-evaluated operand
+        // inside `root`: the right operand of a `&&`/`||`, either branch of a
+        // `?:`, the right operand of `??`, or the "when not null" side of a
+        // `?.`/`?[...]` conditional-access chain (including any member/element
+        // access further chained off it). Hoisting such an assignment out in
+        // front of `root` would evaluate/mutate it unconditionally, changing C#
+        // semantics.
+        private static bool IsInShortCircuitOrConditionalBranch(SyntaxNode node, ExpressionSyntax root)
+        {
+            for (SyntaxNode current = node; current != null && current != root; current = current.Parent)
+            {
+                SyntaxNode parent = current.Parent;
+                if (parent is BinaryExpressionSyntax binary &&
+                    (binary.IsKind(SyntaxKind.LogicalAndExpression) || binary.IsKind(SyntaxKind.LogicalOrExpression) ||
+                     binary.IsKind(SyntaxKind.CoalesceExpression)) &&
+                    current == binary.Right)
+                {
+                    return true;
+                }
+
+                if (parent is ConditionalExpressionSyntax conditional &&
+                    (current == conditional.WhenTrue || current == conditional.WhenFalse))
+                {
+                    return true;
+                }
+
+                if (parent is ConditionalAccessExpressionSyntax conditionalAccess &&
+                    current == conditionalAccess.WhenNotNull)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private static List<PostfixUnaryExpressionSyntax> CollectEmbeddedPostfix(ExpressionSyntax expression)
         {
             // Collect `i++` / `i--` nodes nested inside `expression` (in document
@@ -4199,11 +4459,26 @@ public sealed class CSharpToGSharpTranslator
 
         private IEnumerable<GStatement> FlattenChainedAssignment(AssignmentExpressionSyntax assignment)
         {
+            // Follows the chain through ANY assignment operator (`=`, `+=`, …), not
+            // just `=`: `a = b += c` is `a = (b += c)`, so the `+=` link must also be
+            // captured or its mutation of `b` is silently dropped (issue #1723). The
+            // walk is parenthesis-transparent (`a = (b = c)`) since a link's RHS may
+            // be a parenthesized nested assignment.
             var lefts = new List<(GExpression Target, string Op)>();
             ExpressionSyntax current = assignment;
-            while (current is AssignmentExpressionSyntax link &&
-                link.IsKind(SyntaxKind.SimpleAssignmentExpression))
+            while (true)
             {
+                ExpressionSyntax unwrapped = current;
+                while (unwrapped is ParenthesizedExpressionSyntax paren)
+                {
+                    unwrapped = paren.Expression;
+                }
+
+                if (unwrapped is not AssignmentExpressionSyntax link)
+                {
+                    break;
+                }
+
                 lefts.Add((this.TranslateExpression(link.Left), link.OperatorToken.Text));
                 current = link.Right;
             }
@@ -4435,6 +4710,88 @@ public sealed class CSharpToGSharpTranslator
         {
             result = null;
 
+            if (!this.TryBuildHoistedLoopCondition(condition, out GExpression loopCondition, out List<GStatement> hoisted, out bool hoistsAssignment))
+            {
+                return false;
+            }
+
+            if (isDoWhile && hoistsAssignment && BodyContainsOwnLoopContinue(bodyStatement))
+            {
+                // The tail-appended hoist runs where C# evaluates `cond` — AFTER the
+                // body. But G# `do`/`while` lowers `continue` to a goto that lands
+                // right after the whole body (ADR-0070's continueLabel), which is
+                // now past the hoisted tail too. A `continue` targeting this loop
+                // would therefore skip the hoisted assignment/break-guard, silently
+                // re-using a stale value instead of re-evaluating it (issue #1723).
+                // Plain `while` is unaffected: its hoist leads the body, so
+                // `continue` re-enters it on the next iteration.
+                this.context.ReportUnsupported(
+                    condition,
+                    "assignment inside a short-circuited '&&'/'||' operand or a conditional ('?:') branch has no side-effect-preserving G# lowering yet (issue #1723).");
+                return false;
+            }
+
+            BlockStatement originalBody = this.TranslateStatementAsBlock(bodyStatement);
+            var bodyStatements = new List<GStatement>();
+            if (isDoWhile)
+            {
+                // C# `do { body } while (cond)` evaluates `cond` AFTER the body runs,
+                // so the hoisted assignment/break-guard must trail the body (not lead
+                // it), or the first body iteration would observe a write that hasn't
+                // happened yet (issue #1723).
+                bodyStatements.AddRange(originalBody.Statements);
+                bodyStatements.AddRange(hoisted);
+            }
+            else
+            {
+                bodyStatements.AddRange(hoisted);
+                bodyStatements.AddRange(originalBody.Statements);
+            }
+
+            var body = new BlockStatement(bodyStatements);
+
+            result = isDoWhile
+                ? new GStatement[] { new DoWhileStatement(body, GuardBlockCondition(loopCondition)) }
+                : new GStatement[] { new WhileStatement(GuardBlockCondition(loopCondition), body) };
+            return true;
+        }
+
+        // True when `body` has a `continue` that targets THIS loop. Descent stops
+        // at any nested loop/switch (its own `continue`/`break` seam) and at
+        // nested lambdas/local functions (their own statement seam), so a
+        // `continue` inside an inner `for`/`foreach`/`while`/`do`/`switch` does
+        // NOT count — it never reaches this loop's do-while tail hoist (issue
+        // #1723).
+        private static bool BodyContainsOwnLoopContinue(StatementSyntax body)
+        {
+            bool DescendGuard(SyntaxNode node) =>
+                node is not (ForStatementSyntax or ForEachStatementSyntax or ForEachVariableStatementSyntax or
+                    WhileStatementSyntax or DoStatementSyntax or
+                    AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax);
+
+            return body.DescendantNodesAndSelf(descendIntoChildren: DescendGuard).OfType<ContinueStatementSyntax>().Any();
+        }
+
+        /// <summary>
+        /// Splits <paramref name="condition"/> into its top-level `&amp;&amp;` clauses and,
+        /// if any clause needs hoisting (an `is`-pattern requiring a scrutinee
+        /// local, or a value-position assignment), returns the leading
+        /// side-effect-free clauses as <paramref name="loopCondition"/> and the
+        /// rest as body-prologue <paramref name="hoisted"/> statements (a scrutinee
+        /// local / hoisted assignment plus `if !test { break }` guards) — shared by
+        /// `while`, `do`/`while`, and `for` loop translation (issue #914, #1723).
+        /// Returns <c>false</c> (no hoisting needed) when every clause is plain.
+        /// </summary>
+        private bool TryBuildHoistedLoopCondition(
+            ExpressionSyntax condition,
+            out GExpression loopCondition,
+            out List<GStatement> hoisted,
+            out bool hoistsAssignment)
+        {
+            loopCondition = null;
+            hoisted = null;
+            hoistsAssignment = false;
+
             var clauses = new List<ExpressionSyntax>();
             FlattenAndClauses(condition, clauses);
 
@@ -4453,34 +4810,37 @@ public sealed class CSharpToGSharpTranslator
                 return false;
             }
 
+            for (int i = firstHoist; i < clauses.Count; i++)
+            {
+                if (ClauseContainsAssignment(clauses[i]))
+                {
+                    hoistsAssignment = true;
+                    break;
+                }
+            }
+
             // The leading side-effect-free clauses remain the real loop condition.
-            GExpression loopCondition = null;
+            GExpression combined = null;
             for (int i = 0; i < firstHoist; i++)
             {
                 GExpression clause = this.TranslateExpression(clauses[i]);
-                loopCondition = loopCondition == null
+                combined = combined == null
                     ? clause
-                    : new BinaryExpression(loopCondition, "&&", clause);
+                    : new BinaryExpression(combined, "&&", clause);
             }
 
-            loopCondition ??= LiteralExpression.Bool(true);
+            combined ??= LiteralExpression.Bool(true);
 
             // The remaining clauses hoist to the top of the loop body as a single
-            // scrutinee evaluation plus `if !test { break }` guards.
-            var hoisted = new List<GStatement>();
+            // scrutinee evaluation / assignment plus `if !test { break }` guards.
+            var prologue = new List<GStatement>();
             for (int i = firstHoist; i < clauses.Count; i++)
             {
-                this.HoistLoopConditionClause(clauses[i], hoisted);
+                this.HoistLoopConditionClause(clauses[i], prologue);
             }
 
-            BlockStatement originalBody = this.TranslateStatementAsBlock(bodyStatement);
-            var bodyStatements = new List<GStatement>(hoisted);
-            bodyStatements.AddRange(originalBody.Statements);
-            var body = new BlockStatement(bodyStatements);
-
-            result = isDoWhile
-                ? new GStatement[] { new DoWhileStatement(body, GuardBlockCondition(loopCondition)) }
-                : new GStatement[] { new WhileStatement(GuardBlockCondition(loopCondition), body) };
+            loopCondition = combined;
+            hoisted = prologue;
             return true;
         }
 
@@ -4508,14 +4868,28 @@ public sealed class CSharpToGSharpTranslator
         // A loop-condition clause needs hoisting when it is an `is`-pattern whose
         // lowering would duplicate a side-effecting scrutinee (an `and`/`or`
         // combinator re-emits the receiver), declare an `out var` more than once
-        // (GS0102), or bind a pattern variable the G# loop body cannot see (GS0125).
+        // (GS0102), or bind a pattern variable the G# loop body cannot see
+        // (GS0125); or when it contains a value-position assignment (`(line =
+        // r.ReadLine()) != null`) — G# assignment is a statement, so the write
+        // must be hoisted into the loop body, run once per iteration (issue
+        // #1723).
         private bool ClauseRequiresConditionHoist(ExpressionSyntax clause)
         {
-            return clause is IsPatternExpressionSyntax isPattern &&
+            return (clause is IsPatternExpressionSyntax isPattern &&
                 (PatternIntroducesBinding(isPattern.Pattern) ||
                  PatternDuplicatesScrutinee(isPattern.Pattern) ||
-                 ExpressionDeclaresOutVar(isPattern.Expression));
+                 ExpressionDeclaresOutVar(isPattern.Expression))) ||
+                ClauseContainsAssignment(clause);
         }
+
+        // Cheap presence check used only to decide whether a clause needs the
+        // hoist path at all; the short-circuit/`?:` safety analysis and the
+        // actual hoisting happen once, in HoistLoopConditionClause.
+        private static bool ClauseContainsAssignment(ExpressionSyntax clause) =>
+            clause.DescendantNodesAndSelf(descendIntoChildren: node =>
+                    node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax))
+                .OfType<AssignmentExpressionSyntax>()
+                .Any();
 
         private static bool PatternIntroducesBinding(PatternSyntax pattern) =>
             pattern.DescendantNodesAndSelf().OfType<SingleVariableDesignationSyntax>().Any();
@@ -4527,14 +4901,46 @@ public sealed class CSharpToGSharpTranslator
             expression.DescendantNodesAndSelf().OfType<DeclarationExpressionSyntax>().Any();
 
         // Emits the hoisted statements for a single loop-condition clause: a pure
-        // clause becomes a negated `break` guard; an `is`-pattern clause evaluates
+        // clause becomes a negated `break` guard; a clause carrying a
+        // value-position assignment (`(line = r.ReadLine()) != null`) hoists the
+        // assignment(s) as preceding statement(s) — re-run every iteration, exactly
+        // where C# would re-evaluate them — then becomes a negated `break` guard
+        // over the now-hoisted read (issue #1723); an `is`-pattern clause evaluates
         // its scrutinee once into a local and turns the pattern's must-hold tests
         // into `break` guards (issue #914).
         private void HoistLoopConditionClause(ExpressionSyntax clause, List<GStatement> into)
         {
             if (clause is not IsPatternExpressionSyntax isPattern)
             {
-                into.Add(BreakIf(Negate(this.TranslateExpression(clause))));
+                List<AssignmentExpressionSyntax> embedded = this.CollectEmbeddedAssignments(clause, includeSelf: true);
+                if (embedded.Count == 0)
+                {
+                    into.Add(BreakIf(Negate(this.TranslateExpression(clause))));
+                    return;
+                }
+
+                foreach (AssignmentExpressionSyntax node in embedded)
+                {
+                    into.AddRange(this.FlattenChainedAssignment(node));
+                }
+
+                foreach (AssignmentExpressionSyntax node in embedded)
+                {
+                    this.suppressedAssignments.Add(node);
+                }
+
+                try
+                {
+                    into.Add(BreakIf(Negate(this.TranslateExpression(clause))));
+                }
+                finally
+                {
+                    foreach (AssignmentExpressionSyntax node in embedded)
+                    {
+                        this.suppressedAssignments.Remove(node);
+                    }
+                }
+
                 return;
             }
 
@@ -5017,8 +5423,13 @@ public sealed class CSharpToGSharpTranslator
             // Translate the condition first so any `x is T t` declaration pattern
             // registers its Kotlin-style smart-cast binding before the guarded
             // block is translated; the binding is scoped to the then-block only.
+            // A value-position assignment in the condition (`if ((x = f()) > 0)`,
+            // `if (x = f())`) is hoisted into a preceding assignment statement — it
+            // runs once, exactly where C# would evaluate it (issue #1723).
             var bindingsBefore = new HashSet<ISymbol>(this.patternBindings.Keys, SymbolEqualityComparer.Default);
-            GExpression condition = GuardBlockCondition(this.TranslateExpression(ifStatement.Condition));
+            var conditionPrologue = new List<GStatement>();
+            GExpression condition = GuardBlockCondition(
+                this.TranslateConditionWithHoist(ifStatement.Condition, conditionPrologue));
 
             BlockStatement then = this.TranslateStatementAsBlock(ifStatement.Statement);
 
@@ -5043,7 +5454,14 @@ public sealed class CSharpToGSharpTranslator
                 }
             }
 
-            return new IfStatement(condition, then, elseBranch);
+            GStatement result = new IfStatement(condition, then, elseBranch);
+            if (conditionPrologue.Count > 0)
+            {
+                conditionPrologue.Add(result);
+                result = new BlockStatement(conditionPrologue);
+            }
+
+            return result;
         }
 
         private GStatement TranslateForStatement(ForStatementSyntax forStatement)
@@ -5054,10 +5472,15 @@ public sealed class CSharpToGSharpTranslator
             // a C-style `for` with multiple declarators/initializers or multiple
             // incrementors cannot be represented directly. Lower those to a block
             // + `while` so every init runs once up front and every incrementor runs
-            // at the end of each iteration (issue #914).
+            // at the end of each iteration (issue #914). A condition needing clause
+            // hoisting (a value-position assignment, e.g. `for (…; (c = Next()) !=
+            // -1; …)`, or an is-pattern requiring a scrutinee local) has the same
+            // problem — G#'s single-expression `for` condition has nowhere to place
+            // the hoisted statement — so it takes the same lowering (issue #1723).
             if (declaratorCount > 1 ||
                 forStatement.Initializers.Count > 1 ||
-                forStatement.Incrementors.Count > 1)
+                forStatement.Incrementors.Count > 1 ||
+                this.ForConditionRequiresHoist(forStatement.Condition))
             {
                 return this.LowerForToWhile(forStatement);
             }
@@ -5088,12 +5511,28 @@ public sealed class CSharpToGSharpTranslator
                 this.TranslateStatementAsBlock(forStatement.Statement));
         }
 
+        private bool ForConditionRequiresHoist(ExpressionSyntax condition)
+        {
+            if (condition == null)
+            {
+                return false;
+            }
+
+            var clauses = new List<ExpressionSyntax>();
+            FlattenAndClauses(condition, clauses);
+            return clauses.Any(this.ClauseRequiresConditionHoist);
+        }
+
         /// <summary>
         /// Lowers a C-style <c>for</c> that has more than one initializer/declarator
         /// or more than one incrementor — neither of which fits G#'s single-init,
         /// single-incrementor <c>for</c> — into an equivalent block + <c>while</c>:
         /// all inits run once before the loop, the body runs each iteration, then
-        /// every incrementor runs at the end of the body (issue #914).
+        /// every incrementor runs at the end of the body (issue #914). A condition
+        /// needing clause hoisting places its prologue (hoisted assignment /
+        /// scrutinee local plus `if !test { break }` guards) at the TOP of the body,
+        /// re-run every iteration exactly where C# would re-test the condition
+        /// (issue #1723).
         /// </summary>
         /// <remarks>
         /// Fidelity caveat: in C# the incrementors also run when the body executes a
@@ -5116,19 +5555,33 @@ public sealed class CSharpToGSharpTranslator
                 outer.AddRange(this.TranslateExpressionStatements(init));
             }
 
-            GExpression condition = forStatement.Condition == null
-                ? LiteralExpression.Bool(true)
-                : GuardBlockCondition(this.TranslateExpression(forStatement.Condition));
+            GExpression condition;
+            List<GStatement> conditionPrologue;
+            if (forStatement.Condition == null)
+            {
+                condition = LiteralExpression.Bool(true);
+                conditionPrologue = new List<GStatement>();
+            }
+            else if (this.TryBuildHoistedLoopCondition(forStatement.Condition, out GExpression hoistedCondition, out List<GStatement> hoisted, out _))
+            {
+                condition = hoistedCondition;
+                conditionPrologue = hoisted;
+            }
+            else
+            {
+                condition = this.TranslateExpression(forStatement.Condition);
+                conditionPrologue = new List<GStatement>();
+            }
 
-            var bodyStatements = new List<GStatement>(
-                this.TranslateStatementAsBlock(forStatement.Statement).Statements);
+            var bodyStatements = new List<GStatement>(conditionPrologue);
+            bodyStatements.AddRange(this.TranslateStatementAsBlock(forStatement.Statement).Statements);
 
             foreach (ExpressionSyntax inc in forStatement.Incrementors)
             {
                 bodyStatements.AddRange(this.TranslateExpressionStatements(inc));
             }
 
-            outer.Add(new WhileStatement(condition, new BlockStatement(bodyStatements)));
+            outer.Add(new WhileStatement(GuardBlockCondition(condition), new BlockStatement(bodyStatements)));
 
             return new BlockStatement(outer);
         }
@@ -5662,11 +6115,24 @@ public sealed class CSharpToGSharpTranslator
                     return new IdentifierExpression(aliasQualified.Name.Identifier.Text);
 
                 case AssignmentExpressionSyntax nestedAssignment:
-                    // An assignment used in value position (`a = b = c`, or an
-                    // assignment lambda body that reached here). G# models
-                    // assignment as a statement; the in-expression form has no
-                    // canonical value, so emit the assigned value and let the
-                    // enclosing statement seam re-materialise the write.
+                    // An assignment used in value position (`a = b = c`, `M(x =
+                    // 5)`, `while ((line = r.ReadLine()) != null)`). G# models
+                    // assignment as a statement, not a value-yielding expression.
+                    // The enclosing statement/condition seam (WithHoistedAssignments
+                    // / TranslateConditionWithHoist / HoistLoopConditionClause)
+                    // hoists the write into a preceding assignment statement and
+                    // marks this node suppressed; reading it here means the write
+                    // already happened, so the expression's value is just the
+                    // (now up-to-date) target (issue #1723).
+                    if (this.suppressedAssignments.Contains(nestedAssignment))
+                    {
+                        return this.TranslateExpression(nestedAssignment.Left);
+                    }
+
+                    // No enclosing seam claimed this node (e.g. it lives inside a
+                    // short-circuited `&&`/`||` operand or a `?:` branch, already
+                    // flagged unsupported at the point of detection): fall back to
+                    // the RHS value so translation still completes.
                     return this.TranslateExpression(nestedAssignment.Right);
 
                 case ThrowExpressionSyntax throwExpression:
