@@ -204,6 +204,32 @@ public sealed class WhileStatement : GStatement
 }
 
 /// <summary>
+/// A <c>lock target { body }</c> statement (issue #1885). G# has a first-class
+/// <c>lock</c> keyword mirroring C#'s mutual-exclusion statement, so the
+/// translator emits it directly rather than lowering to the
+/// <c>Monitor.Enter</c>/try-finally/<c>Monitor.Exit</c> pattern by hand.
+/// </summary>
+public sealed class LockStatement : GStatement
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="LockStatement"/> class.
+    /// </summary>
+    /// <param name="target">The lock-target expression.</param>
+    /// <param name="body">The protected body.</param>
+    public LockStatement(GExpression target, BlockStatement body)
+    {
+        Target = target;
+        Body = body;
+    }
+
+    /// <summary>Gets the lock-target expression.</summary>
+    public GExpression Target { get; }
+
+    /// <summary>Gets the protected body.</summary>
+    public BlockStatement Body { get; }
+}
+
+/// <summary>
 /// A C-style three-clause <c>for init; cond; incr { }</c> loop. Each clause is
 /// optional. The init/incr clauses are "simple" statements (local declaration,
 /// assignment, increment/decrement, or expression statement) per the G# grammar

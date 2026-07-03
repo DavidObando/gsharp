@@ -15,70 +15,25 @@ namespace Cs2Gs.Tests;
 /// <summary>
 /// Regression tests for issue #1731: several lowerings re-embedded the SAME
 /// translated operand at two output positions instead of translating it once
-/// — a <c>lock (target)</c>'s target (once for <c>Monitor.Enter</c>, once for
-/// <c>Monitor.Exit</c>), a chained assignment's inner target (once as the
-/// write, once as the next link's read), an <c>is</c>-pattern's scrutinee
-/// (once per sub-pattern/binder reference), and a range-slice's start operand
-/// (once as the <c>Slice</c> argument, once inside the length computation).
-/// When the operand has a side effect (a method call, an increment) or reads
-/// a mutable value, duplicating it silently changes C# semantics by running
-/// it twice. The fix spills any non-trivial operand into a single <c>let</c>
-/// via a shared helper and references the local at both positions, while a
-/// bare local/<c>this</c>/literal operand is left untouched (no spurious
-/// temp). Every snippet must round-trip through the real G# parser.
+/// — a chained assignment's inner target (once as the write, once as the next
+/// link's read), an <c>is</c>-pattern's scrutinee (once per sub-pattern/binder
+/// reference), and a range-slice's start operand (once as the <c>Slice</c>
+/// argument, once inside the length computation). When the operand has a side
+/// effect (a method call, an increment) or reads a mutable value, duplicating
+/// it silently changes C# semantics by running it twice. The fix spills any
+/// non-trivial operand into a single <c>let</c> via a shared helper and
+/// references the local at both positions, while a bare local/<c>this</c>/
+/// literal operand is left untouched (no spurious temp). Every snippet must
+/// round-trip through the real G# parser.
+///
+/// The original <c>lock</c> double-evaluation cases (target embedded once for
+/// <c>Monitor.Enter</c>, once for <c>Monitor.Exit</c>) are now moot: G# has a
+/// first-class <c>lock</c> keyword (issue #1885), so the translator emits the
+/// target expression exactly once and single-evaluation is gsc's job, not the
+/// translator's — see <see cref="Issue1885LockStatementTranslationTests"/>.
 /// </summary>
 public class Issue1731DoubleEvaluationTranslationTests
 {
-    [Fact]
-    public void Lock_MethodCallTarget_EvaluatesTargetOnce()
-    {
-        string printed = TranslateUnit(@"
-namespace Demo
-{
-    public sealed class C
-    {
-        private static object GetSyncRoot() => new object();
-
-        public void M()
-        {
-            lock (GetSyncRoot())
-            {
-                System.Console.WriteLine(1);
-            }
-        }
-    }
-}");
-
-        Assert.Equal(2, CountOccurrences(printed, "GetSyncRoot()")); // 1 declaration + 1 call (was 1 declaration + 2 calls before the fix)
-        Assert.Contains("Monitor.Enter(", printed);
-        Assert.Contains("Monitor.Exit(", printed);
-    }
-
-    [Fact]
-    public void Lock_SimpleFieldTarget_NoUnnecessaryTemp()
-    {
-        string printed = TranslateUnit(@"
-namespace Demo
-{
-    public sealed class C
-    {
-        private readonly object gate = new object();
-
-        public void M()
-        {
-            lock (gate)
-            {
-                System.Console.WriteLine(1);
-            }
-        }
-    }
-}");
-
-        Assert.DoesNotContain("__spill", printed);
-        Assert.Contains("Monitor.Enter(gate)", printed);
-        Assert.Contains("Monitor.Exit(gate)", printed);
-    }
-
     [Fact]
     public void ChainedAssignment_SideEffectingIndexTarget_EvaluatesIndexOnce()
     {

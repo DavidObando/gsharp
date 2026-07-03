@@ -145,6 +145,7 @@ public enum SyntaxKind
     UsingKeyword,
     VarKeyword,
     WhileKeyword,
+    LockKeyword,
 
     // compilation
     CompilationUnit,
@@ -225,6 +226,7 @@ public enum SyntaxKind
     ThrowExpression,
     UsingStatement,
     DeferStatement,
+    LockStatement,
     CatchKeyword,
     FinallyKeyword,
     StructDeclaration,

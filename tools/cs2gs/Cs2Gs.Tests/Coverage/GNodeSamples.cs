@@ -125,6 +125,7 @@ public static class GNodeSamples
                 body: Block(new ReturnStatement(Int("1"))))),
             [typeof(IfStatement)] = () => Stmts(new IfStatement(Id("c"), Block(), Block())),
             [typeof(WhileStatement)] = () => Stmts(new WhileStatement(Id("c"), Block())),
+            [typeof(LockStatement)] = () => Stmts(new LockStatement(Id("gate"), Block())),
             [typeof(ForStatement)] = () => Stmts(new ForStatement(
                 new LocalDeclarationStatement(BindingKind.Var, "i", initializer: Int("0")),
                 new BinaryExpression(Id("i"), "<", Int("3")),

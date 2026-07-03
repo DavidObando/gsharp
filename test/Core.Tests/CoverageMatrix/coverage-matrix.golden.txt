@@ -142,6 +142,8 @@ LessToken
 LetKeyword
 ListPattern
 LiteralExpression
+LockKeyword
+LockStatement
 MakeChannelExpression
 MapCreationExpression
 MapEntry

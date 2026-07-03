@@ -232,6 +232,8 @@ public static class SyntaxFacts
                 return SyntaxKind.VarKeyword;
             case "while":
                 return SyntaxKind.WhileKeyword;
+            case "lock":
+                return SyntaxKind.LockKeyword;
             default:
                 return SyntaxKind.IdentifierToken;
         }
@@ -498,6 +500,8 @@ public static class SyntaxFacts
                 return "var";
             case SyntaxKind.WhileKeyword:
                 return "while";
+            case SyntaxKind.LockKeyword:
+                return "lock";
             default:
                 return null;
         }

@@ -6,12 +6,12 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | Status | Count |
 | --- | --- |
 | Unclassified | 0 |
-| Translated | 208 |
+| Translated | 209 |
 | Lowered | 10 |
 | UnsupportedByDesign | 56 |
-| Gap | 47 |
+| Gap | 46 |
 
-## Translated (208)
+## Translated (209)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -128,6 +128,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | LessThanOrEqualExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LessThanOrEqualExpression.cs |  |  |
 | LocalDeclarationStatement | LocalDeclarationStatementSyntax | ADR-0115 §B.3 |  |  |  |  |
 | LocalFunctionStatement | LocalFunctionStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/LocalFunctionStatement.cs | https://github.com/DavidObando/gsharp/issues/1886 | static local functions mislower at call sites; generic local functions unrepresentable (issue #1886). |
+| LockStatement | LockStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/LockStatement.cs |  |  |
 | LogicalAndExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LogicalAndExpression.cs |  |  |
 | LogicalNotExpression | PrefixUnaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LogicalNotExpression.cs |  |  |
 | LogicalOrExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LogicalOrExpression.cs |  |  |
@@ -300,7 +301,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | XmlText | XmlTextSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | XmlTextAttribute | XmlTextAttributeSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 
-## Gap (47)
+## Gap (46)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -333,7 +334,6 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | LabeledStatement | LabeledStatementSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1884 |  |
 | LetClause | LetClauseSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1902 | Query syntax lowered to the method-call chain, mirroring Roslyn. |
 | ListPattern | ListPatternSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1889 |  |
-| LockStatement | LockStatementSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1885 | Lowers to Monitor.Enter/Exit but omits import System.Threading. |
 | ObjectInitializerExpression | InitializerExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1892 | Initializer assignments emitted as stray statements. |
 | PointerMemberAccessExpression | MemberAccessExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1905 | p->X lowered to p.X; (*p).X compiles. |
 | PositionalPatternClause | PositionalPatternClauseSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1887 | SILENT MISTRANSLATION: sub-patterns dropped to match-anything case { }. |
