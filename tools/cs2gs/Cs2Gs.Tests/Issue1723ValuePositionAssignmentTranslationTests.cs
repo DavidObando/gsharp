@@ -345,6 +345,97 @@ namespace Demo
     }
 
     /// <summary>
+    /// A <c>do</c>/<c>while</c> whose condition carries a value-position
+    /// assignment AND whose body has a <c>continue</c> targeting this loop: the
+    /// tail-hoisted assignment/break-guard sits AFTER the `continue`'s jump
+    /// target (ADR-0070's continueLabel is placed right after the whole bound
+    /// body), so `continue` would skip it — re-using a stale condition value
+    /// instead of re-evaluating it. This has no side-effect-preserving G#
+    /// lowering yet, so it must be flagged Unsupported instead of silently
+    /// mistranslated (issue #1723, do-while + continue regression).
+    /// </summary>
+    [Fact]
+    public void DoWhileConditionAssignmentWithOwnContinue_ReportsUnsupportedInsteadOfSilentlyDroppingHoist()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("Snippet.cs", @"
+namespace Demo
+{
+    public sealed class C
+    {
+        public void M()
+        {
+            int i = 0;
+            int x = 0;
+            do
+            {
+                if (i % 2 == 0)
+                {
+                    i = i + 1;
+                    continue;
+                }
+
+                x = x + i;
+            } while ((i = i + 1) < 10);
+        }
+    }
+}"),
+        });
+        Assert.True(project.BoundWithoutErrors);
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        _ = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+
+        Assert.Contains(
+            context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("short-circuited"));
+    }
+
+    /// <summary>
+    /// Regression guard: a <c>continue</c> inside a NESTED inner loop targets
+    /// the inner loop, not the outer <c>do</c>/<c>while</c> — it never reaches
+    /// this do-while's ADR-0070 continueLabel, so the outer tail-hoist is safe
+    /// and must still lower normally (no diagnostic), instead of being
+    /// over-flagged as unsupported (issue #1723).
+    /// </summary>
+    [Fact]
+    public void DoWhileConditionAssignmentWithNestedLoopContinue_StillLowersNormally()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public sealed class C
+    {
+        public void M()
+        {
+            int i = 0;
+            do
+            {
+                for (int j = 0; j < 3; j++)
+                {
+                    if (j == 1)
+                    {
+                        continue;
+                    }
+
+                    System.Console.WriteLine(j);
+                }
+            } while ((i = i + 1) < 3);
+        }
+    }
+}");
+
+        Assert.Contains("i = i + 1", printed);
+        Assert.Contains("continue", printed);
+
+        int writeLine = printed.IndexOf("Console.WriteLine(j)", StringComparison.Ordinal);
+        int assign = printed.IndexOf("i = i + 1", StringComparison.Ordinal);
+        Assert.True(writeLine >= 0 && assign >= 0 && writeLine < assign, printed);
+    }
+
+    /// <summary>
     /// A <c>while</c> loop whose hoisted condition-assignment body contains a
     /// <c>continue</c>: the hoisted assignment lives at the TOP of the body (as
     /// the loop's real condition check), so <c>continue</c> jumps back to it and

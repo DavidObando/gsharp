@@ -4710,8 +4710,24 @@ public sealed class CSharpToGSharpTranslator
         {
             result = null;
 
-            if (!this.TryBuildHoistedLoopCondition(condition, out GExpression loopCondition, out List<GStatement> hoisted))
+            if (!this.TryBuildHoistedLoopCondition(condition, out GExpression loopCondition, out List<GStatement> hoisted, out bool hoistsAssignment))
             {
+                return false;
+            }
+
+            if (isDoWhile && hoistsAssignment && BodyContainsOwnLoopContinue(bodyStatement))
+            {
+                // The tail-appended hoist runs where C# evaluates `cond` — AFTER the
+                // body. But G# `do`/`while` lowers `continue` to a goto that lands
+                // right after the whole body (ADR-0070's continueLabel), which is
+                // now past the hoisted tail too. A `continue` targeting this loop
+                // would therefore skip the hoisted assignment/break-guard, silently
+                // re-using a stale value instead of re-evaluating it (issue #1723).
+                // Plain `while` is unaffected: its hoist leads the body, so
+                // `continue` re-enters it on the next iteration.
+                this.context.ReportUnsupported(
+                    condition,
+                    "assignment inside a short-circuited '&&'/'||' operand or a conditional ('?:') branch has no side-effect-preserving G# lowering yet (issue #1723).");
                 return false;
             }
 
@@ -4722,9 +4738,7 @@ public sealed class CSharpToGSharpTranslator
                 // C# `do { body } while (cond)` evaluates `cond` AFTER the body runs,
                 // so the hoisted assignment/break-guard must trail the body (not lead
                 // it), or the first body iteration would observe a write that hasn't
-                // happened yet (issue #1723). `continue` naturally still re-runs the
-                // hoist since it sits at the tail, mirroring where the real condition
-                // check happens.
+                // happened yet (issue #1723).
                 bodyStatements.AddRange(originalBody.Statements);
                 bodyStatements.AddRange(hoisted);
             }
@@ -4742,6 +4756,22 @@ public sealed class CSharpToGSharpTranslator
             return true;
         }
 
+        // True when `body` has a `continue` that targets THIS loop. Descent stops
+        // at any nested loop/switch (its own `continue`/`break` seam) and at
+        // nested lambdas/local functions (their own statement seam), so a
+        // `continue` inside an inner `for`/`foreach`/`while`/`do`/`switch` does
+        // NOT count — it never reaches this loop's do-while tail hoist (issue
+        // #1723).
+        private static bool BodyContainsOwnLoopContinue(StatementSyntax body)
+        {
+            bool DescendGuard(SyntaxNode node) =>
+                node is not (ForStatementSyntax or ForEachStatementSyntax or ForEachVariableStatementSyntax or
+                    WhileStatementSyntax or DoStatementSyntax or SwitchStatementSyntax or
+                    AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax);
+
+            return body.DescendantNodesAndSelf(descendIntoChildren: DescendGuard).OfType<ContinueStatementSyntax>().Any();
+        }
+
         /// <summary>
         /// Splits <paramref name="condition"/> into its top-level `&amp;&amp;` clauses and,
         /// if any clause needs hoisting (an `is`-pattern requiring a scrutinee
@@ -4755,10 +4785,12 @@ public sealed class CSharpToGSharpTranslator
         private bool TryBuildHoistedLoopCondition(
             ExpressionSyntax condition,
             out GExpression loopCondition,
-            out List<GStatement> hoisted)
+            out List<GStatement> hoisted,
+            out bool hoistsAssignment)
         {
             loopCondition = null;
             hoisted = null;
+            hoistsAssignment = false;
 
             var clauses = new List<ExpressionSyntax>();
             FlattenAndClauses(condition, clauses);
@@ -4776,6 +4808,15 @@ public sealed class CSharpToGSharpTranslator
             if (firstHoist < 0)
             {
                 return false;
+            }
+
+            for (int i = firstHoist; i < clauses.Count; i++)
+            {
+                if (ClauseContainsAssignment(clauses[i]))
+                {
+                    hoistsAssignment = true;
+                    break;
+                }
             }
 
             // The leading side-effect-free clauses remain the real loop condition.
@@ -5521,7 +5562,7 @@ public sealed class CSharpToGSharpTranslator
                 condition = LiteralExpression.Bool(true);
                 conditionPrologue = new List<GStatement>();
             }
-            else if (this.TryBuildHoistedLoopCondition(forStatement.Condition, out GExpression hoistedCondition, out List<GStatement> hoisted))
+            else if (this.TryBuildHoistedLoopCondition(forStatement.Condition, out GExpression hoistedCondition, out List<GStatement> hoisted, out _))
             {
                 condition = hoistedCondition;
                 conditionPrologue = hoisted;
