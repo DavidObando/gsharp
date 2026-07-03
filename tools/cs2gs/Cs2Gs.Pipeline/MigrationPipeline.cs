@@ -166,33 +166,44 @@ public sealed class MigrationPipeline
             .Where(d => !string.Equals(new DirectoryInfo(d).Name, currentRunId, StringComparison.Ordinal))
             .OrderBy(d => new DirectoryInfo(d).Name, StringComparer.Ordinal))
         {
-            foreach (string file in Directory.EnumerateFiles(priorRunDir, "*.json", SearchOption.AllDirectories))
+            // Retry-entry artifacts are written by WriteArtifacts() (below) at
+            // exactly one location: <runDir>/<sanitizedAppId>/<stage>-<hash>.json
+            // (top-level files directly under each app's run directory; see
+            // WriteArtifacts). A recursive "*.json" scan of priorRunDir also
+            // walks into stage-4 (test-parity) scaffolds such as
+            // <appDir>/test-parity/<Lib>/obj/, whose NuGet-restore JSON
+            // (project.assets.json, *.nuget.*.json, MSBuild caches) can be
+            // several MB each and grows with every prior run — making this
+            // loop cost quadratic over the lifetime of an output root
+            // (issue #1751). Enumerate only the app directories directly
+            // under priorRunDir, and only the top-level files in each,
+            // matching the writer's layout exactly instead of descending into
+            // build artifacts.
+            foreach (string appDir in Directory.EnumerateDirectories(priorRunDir))
             {
-                if (string.Equals(Path.GetFileName(file), "run.json", StringComparison.Ordinal))
+                foreach (string file in Directory.EnumerateFiles(appDir, "*.json", SearchOption.TopDirectoryOnly))
                 {
-                    continue;
-                }
-
-                TriageArtifact prior = TryReadArtifact(file);
-                if (prior?.Fingerprint is null)
-                {
-                    continue;
-                }
-
-                if (!map.TryGetValue(prior.Fingerprint, out List<TriageRetryEntry> entries))
-                {
-                    entries = new List<TriageRetryEntry>();
-                    map[prior.Fingerprint] = entries;
-                }
-
-                if (entries.All(e => !string.Equals(e.RunId, prior.RunId, StringComparison.Ordinal)))
-                {
-                    entries.Add(new TriageRetryEntry
+                    TriageArtifact prior = TryReadArtifact(file);
+                    if (prior?.Fingerprint is null)
                     {
-                        RunId = prior.RunId,
-                        GscVersion = prior.GscVersion,
-                        Result = "fail",
-                    });
+                        continue;
+                    }
+
+                    if (!map.TryGetValue(prior.Fingerprint, out List<TriageRetryEntry> entries))
+                    {
+                        entries = new List<TriageRetryEntry>();
+                        map[prior.Fingerprint] = entries;
+                    }
+
+                    if (entries.All(e => !string.Equals(e.RunId, prior.RunId, StringComparison.Ordinal)))
+                    {
+                        entries.Add(new TriageRetryEntry
+                        {
+                            RunId = prior.RunId,
+                            GscVersion = prior.GscVersion,
+                            Result = "fail",
+                        });
+                    }
                 }
             }
         }
