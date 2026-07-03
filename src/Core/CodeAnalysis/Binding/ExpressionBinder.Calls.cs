@@ -4747,6 +4747,23 @@ internal sealed partial class ExpressionBinder
                 {
                     targetFunctionType = symbolicTarget;
                 }
+                else if (TypeSymbol.ContainsTypeParameter(literal.FunctionType) || TypeSymbol.ContainsSameCompilationUserType(literal.FunctionType))
+                {
+                    // Issue #1502 (ctor path): no method-generic recovery applies
+                    // (this is a constructor call, or a non-generic/erasure-free
+                    // method), yet the literal's bound function type already
+                    // carries a type parameter or same-compilation user type —
+                    // e.g. a `Lazy[T](() -> v)` ctor argument pre-bound against
+                    // the OPEN ctor's symbolic delegate shape by
+                    // TryResolveSymbolicDelegateTargetForCtor. The CLR parameter
+                    // type here is only the erased placeholder shape (type
+                    // parameters closed with `object`); re-erasing the
+                    // already-correct symbolic literal below would downgrade
+                    // `Func<T>` back to `Func<object>` and produce an
+                    // unverifiable delegate. Keep the literal's existing
+                    // (already symbolic) function type instead of erasing it.
+                    targetFunctionType = literal.FunctionType;
+                }
 
                 if (literal.FunctionType != targetFunctionType)
                 {
