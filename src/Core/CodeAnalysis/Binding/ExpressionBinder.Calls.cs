@@ -1316,6 +1316,60 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Issue #1833: scans every public static/instance generic method named
+    /// <paramref name="methodName"/> on <paramref name="classType"/> whose
+    /// arity matches the explicit type-argument list, looking for one whose
+    /// only structural mismatch is a value-type-erased type argument (a
+    /// concrete non-enum struct, or a bare <c>[T struct]</c> type parameter)
+    /// failing an explicit base-class constraint — e.g. <c>Enum.TryParse</c>'s
+    /// <c>where TEnum : Enum</c> bound. Reports the constraint-violation
+    /// diagnostic (<c>GS0152</c>, the same one user-declared generic
+    /// functions/types already use) and returns <see langword="true"/> on the
+    /// first hit; other reasons a candidate is inapplicable (arity, argument
+    /// types, an unconstrained type parameter, ...) are left to the caller's
+    /// existing "cannot find function" fallback.
+    /// </summary>
+    /// <param name="classType">The imported class's CLR <see cref="Type"/>.</param>
+    /// <param name="methodName">The called method's name.</param>
+    /// <param name="explicitTypeArgs">The resolved explicit CLR type arguments.</param>
+    /// <param name="typeArgSymbols">The resolved symbolic type-argument vector.</param>
+    /// <param name="location">The text location to attach the diagnostic to.</param>
+    /// <returns><see langword="true"/> when a violation was found and reported.</returns>
+    private bool TryReportGenericValueTypeBaseConstraintViolation(Type classType, string methodName, System.Type[] explicitTypeArgs, ImmutableArray<TypeSymbol> typeArgSymbols, TextLocation location)
+    {
+        if (classType is null || explicitTypeArgs is null || explicitTypeArgs.Length == 0 || typeArgSymbols.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        MethodInfo[] candidates;
+        try
+        {
+            candidates = classType
+                .GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance)
+                .Where(m => m.Name == methodName
+                    && m.IsGenericMethodDefinition
+                    && m.GetGenericArguments().Length == explicitTypeArgs.Length)
+                .ToArray();
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        foreach (var candidate in candidates)
+        {
+            if (OverloadResolution.TryDescribeValueTypeBaseConstraintViolation(candidate, explicitTypeArgs, typeArgSymbols, out var typeParameterName, out var typeArgument, out var constraintDescription))
+            {
+                Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(location, typeParameterName, typeArgument, constraintDescription);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Issue #320: computes a return-type override for an imported generic method
     /// closed over explicit type arguments. When the method's open return type is
     /// exactly one of its method type parameters, the real return type is the
@@ -3104,6 +3158,22 @@ internal sealed partial class ExpressionBinder
             if (TryBindNestedTypeConstructorCall(classSymbol.ClassType, ce, out var nestedCtorResult))
             {
                 return nestedCtorResult;
+            }
+
+            // Issue #1833: a value-type-erased type argument (a concrete
+            // non-enum struct, or a bare `[T struct]` type parameter) explicitly
+            // supplied to a generic BCL method whose type parameter carries an
+            // `Enum` (or any other concrete) base-class constraint is now
+            // rejected by `SatisfiesGenericConstraints`, so the candidate above
+            // was silently dropped exactly like any other inapplicable overload.
+            // Report the specific constraint violation here — before falling
+            // back to the generic "cannot find function" diagnostic — so the
+            // caller gets a clear bind-time error instead of only discovering
+            // the problem at CLR verification.
+            if (explicitTypeArgs != null
+                && TryReportGenericValueTypeBaseConstraintViolation(classSymbol.ClassType, methodName, explicitTypeArgs, typeArgSymbols, ce.Location))
+            {
+                return new BoundErrorExpression(null);
             }
 
             Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);

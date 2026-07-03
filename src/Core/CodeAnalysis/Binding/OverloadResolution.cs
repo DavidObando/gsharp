@@ -1148,6 +1148,100 @@ internal static class OverloadResolution
     }
 
     /// <summary>
+    /// Issue #1833: identifies a generic candidate whose only structural
+    /// mismatch is a value-type-erased type argument (a same-compilation user
+    /// struct/enum, or a struct-constrained type parameter) that fails to
+    /// satisfy an explicit CLR base-class constraint — e.g. a concrete
+    /// non-enum struct, or a plain <c>[T struct]</c> type parameter, forwarded
+    /// to <c>Enum.TryParse[TEnum]</c>'s <c>where TEnum : Enum</c> bound. This
+    /// distinguishes that specific "binds through overload resolution but only
+    /// fails CLR verification" hole from every other reason a candidate can be
+    /// inapplicable (arity mismatch, wrong argument types, an unconstrained type
+    /// parameter, ...), which must keep surfacing the generic "cannot find
+    /// function" diagnostic exactly as it did before <c>#1833</c>.
+    /// </summary>
+    /// <param name="openMethod">The open generic method definition considered as a candidate.</param>
+    /// <param name="typeArgs">The CLR type arguments (with user value types erased).</param>
+    /// <param name="typeArgSymbols">The recovered symbolic type-argument vector.</param>
+    /// <param name="typeParameterName">On success, the violated type parameter's name.</param>
+    /// <param name="typeArgument">On success, the offending type-argument symbol.</param>
+    /// <param name="constraintDescription">On success, a human-readable description of the violated constraint.</param>
+    /// <returns><see langword="true"/> when a base-constraint violation of this specific shape was found.</returns>
+    internal static bool TryDescribeValueTypeBaseConstraintViolation(
+        MethodInfo openMethod,
+        Type[] typeArgs,
+        ImmutableArray<TypeSymbol> typeArgSymbols,
+        out string typeParameterName,
+        out TypeSymbol typeArgument,
+        out string constraintDescription)
+    {
+        typeParameterName = null;
+        typeArgument = null;
+        constraintDescription = null;
+
+        if (openMethod is null || typeArgs is null || typeArgSymbols.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        Type[] typeParams;
+        try
+        {
+            typeParams = openMethod.GetGenericArguments();
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return false;
+        }
+
+        if (typeParams.Length != typeArgs.Length || typeParams.Length != typeArgSymbols.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < typeParams.Length; i++)
+        {
+            var arg = typeArgs[i];
+            if (arg is null || arg.IsGenericParameter || !IsValueTypeErasedSymbol(typeArgSymbols[i]))
+            {
+                continue;
+            }
+
+            var param = typeParams[i];
+            Type[] typeConstraints;
+            try
+            {
+                typeConstraints = param.GetGenericParameterConstraints();
+            }
+            catch (Exception ex) when (IsMetadataLoadFailure(ex))
+            {
+                continue;
+            }
+
+            foreach (var constraint in typeConstraints)
+            {
+                if (constraint is null
+                    || constraint.IsInterface
+                    || constraint.IsGenericParameter
+                    || constraint.ContainsGenericParameters)
+                {
+                    continue;
+                }
+
+                if (!ValueTypeErasedSymbolSatisfiesBaseConstraint(typeArgSymbols[i], constraint))
+                {
+                    typeParameterName = param.Name;
+                    typeArgument = typeArgSymbols[i];
+                    constraintDescription = constraint.FullName ?? constraint.Name;
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Substitutes inferred method-type-parameter <paramref name="bounds"/> into
     /// <paramref name="type"/>, succeeding only when the result is fully closed
     /// (contains no remaining generic parameters). Used by
@@ -3013,13 +3107,29 @@ internal static class OverloadResolution
                 // `System.ValueType` base constraint in metadata (and an enum a
                 // `System.Enum` one). A same-compilation user value type is erased
                 // to a `System.Object` placeholder, which is not name-assignable
-                // to `ValueType`/`Enum`, so without this guard the candidate is
-                // wrongly rejected here even though the struct check above passed.
-                if (argIsUserValueType
-                    && (string.Equals(constraint.FullName, "System.ValueType", StringComparison.Ordinal)
-                        || string.Equals(constraint.FullName, "System.Enum", StringComparison.Ordinal)))
+                // to `ValueType`/`Enum` by the plain `IsAssignableByName` check
+                // below, so a base-type (class, non-interface) constraint needs
+                // the symbolic derivation check instead.
+                // Issue #1833: the former version of this guard unconditionally
+                // treated *every* `ValueType`/`Enum`-named constraint as satisfied
+                // once `argIsUserValueType` was true — so a plain (non-enum)
+                // struct, or a bare `[T struct]` type parameter with no `Enum`
+                // bound, silently bound through `Enum.TryParse[T]`'s `where T :
+                // Enum` constraint and only failed later at CLR verification.
+                // `ValueTypeErasedSymbolSatisfiesBaseConstraint` walks the
+                // recovered symbol's real derivation/constraint chain so
+                // `ValueType`/`Object` are still trivially satisfied by any
+                // struct/enum, but `Enum` (or any other concrete base) is only
+                // satisfied by an actual enum or a type parameter that itself
+                // carries that same base bound.
+                if (argIsUserValueType && !constraint.IsInterface)
                 {
-                    continue;
+                    if (ValueTypeErasedSymbolSatisfiesBaseConstraint(typeArgSymbols[i], constraint))
+                    {
+                        continue;
+                    }
+
+                    return false;
                 }
 
                 try
@@ -3072,6 +3182,78 @@ internal static class OverloadResolution
     private static bool IsValueTypeErasedSymbol(TypeSymbol symbol)
         => IsUserValueTypeSymbol(symbol)
             || symbol is TypeParameterSymbol { HasValueTypeConstraint: true };
+
+    /// <summary>
+    /// Issue #1833: determines whether a value-type-erased type-argument symbol
+    /// (see <see cref="IsValueTypeErasedSymbol"/>) satisfies an explicit CLR
+    /// base-class (non-interface) constraint <paramref name="constraint"/>,
+    /// generalizing the former hardcoded `System.ValueType`/`System.Enum` name
+    /// check into a walk of the symbol's own derivation/constraint chain.
+    /// <list type="bullet">
+    /// <item><description><c>System.ValueType</c> and <c>System.Object</c> are
+    /// trivially satisfied by every struct/enum — every value type derives from
+    /// them.</description></item>
+    /// <item><description>A concrete enum (<see cref="EnumSymbol"/>) satisfies
+    /// exactly <c>System.Enum</c> — no other base class is possible for an
+    /// enum.</description></item>
+    /// <item><description>A plain struct (<see cref="StructSymbol"/>) satisfies
+    /// neither — a value type has no symbolic base beyond
+    /// <c>ValueType</c>/<c>Object</c> under the CLR, so any other base-class
+    /// constraint (most notably <c>Enum</c>) is unsatisfiable.</description></item>
+    /// <item><description>An in-scope generic type parameter
+    /// (<see cref="TypeParameterSymbol"/>, e.g. the forwarded <c>TEnum</c> of
+    /// <c>[TEnum Enum struct]</c>) satisfies <paramref name="constraint"/> only
+    /// when its own <see cref="TypeParameterSymbol.ClassConstraint"/> resolves to
+    /// the same CLR type (transitively, through a chain of forwarded
+    /// constraints) — a bare <c>struct</c> constraint with no class bound does
+    /// not prove anything about <c>Enum</c> or any other base.</description></item>
+    /// </list>
+    /// </summary>
+    /// <param name="symbol">The recovered value-type-erased type-argument symbol.</param>
+    /// <param name="constraint">The CLR base-class constraint to check against.</param>
+    /// <returns><see langword="true"/> when the symbol provably satisfies the constraint.</returns>
+    private static bool ValueTypeErasedSymbolSatisfiesBaseConstraint(TypeSymbol symbol, Type constraint)
+    {
+        if (constraint is null)
+        {
+            return true;
+        }
+
+        if (constraint.IsSameAs(typeof(object))
+            || string.Equals(constraint.FullName, "System.ValueType", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var current = symbol;
+        while (current != null)
+        {
+            switch (current)
+            {
+                case EnumSymbol:
+                    return string.Equals(constraint.FullName, "System.Enum", StringComparison.Ordinal);
+
+                case StructSymbol:
+                    return false;
+
+                case TypeParameterSymbol typeParam:
+                    var classConstraint = typeParam.ClassConstraint;
+                    if (classConstraint?.ClrType != null
+                        && string.Equals(classConstraint.ClrType.FullName, constraint.FullName, StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+
+                    current = classConstraint;
+                    continue;
+
+                default:
+                    return false;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Issue #1325: attempts to close <paramref name="openDef"/> over a value-type
