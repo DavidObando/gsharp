@@ -226,8 +226,13 @@ public sealed class ImportedClassSymbol : Symbol
             // so the value-type-constrained generic overload stays applicable;
             // the recovered explicit type-argument symbols drive the constraint
             // check and emit. Without this the call collapses to GS0159.
+            // Issue #1601: the same holds when the pointee is a value-type
+            // (`struct`) constrained generic type parameter (e.g. a `TEnum`
+            // forwarded from an enclosing `[TEnum Enum struct]`), which is also
+            // erased to the placeholder and has no reference-context CLR type.
             if (arguments[i] is BoundAddressOfExpression { Operand.Type: var byRefPointee }
-                && byRefPointee is EnumSymbol or StructSymbol { IsClass: false }
+                && (byRefPointee is EnumSymbol or StructSymbol { IsClass: false }
+                    || byRefPointee is TypeParameterSymbol { HasValueTypeConstraint: true })
                 && byRefPointee.ClrType == null)
             {
                 argTypes[i] = OverloadResolution.InlineOutVarArgumentType;
