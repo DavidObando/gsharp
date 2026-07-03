@@ -3898,9 +3898,32 @@ public sealed class CSharpToGSharpTranslator
             }
         }
 
-        // C# `a ?? b` where `a` is a nullable numeric: G# requires `b` to match
-        // the underlying numeric type of `a`, otherwise GS0129. Coerce the right
-        // operand to the left's underlying (non-nullable) type when they differ.
+        // C# `a ?? b` where `a` is a nullable numeric and the operands' numeric
+        // kinds differ: the coercion target is the *result* type of the whole
+        // `??` expression — C#'s best-common-type computation (§12.15), exactly
+        // as `GetTypeInfo(binary).Type` already reports it — not unconditionally
+        // the left operand's type (issue #1725). When the right operand is
+        // *wider* than the left (e.g. `long r = nullableInt ?? longDefault;`),
+        // C# types the whole expression as the right operand's (wider) type and
+        // converts the LEFT's non-null value instead; the old code coerced the
+        // right operand DOWN to the left's narrower type, silently truncating
+        // it (or truncating a `double` fallback to the left's integral type).
+        //
+        // gsc's own `??` binder (issue #1239) already performs this same
+        // C#-faithful best-common-type widening and auto-converts the left
+        // operand's non-null value whenever the left is the narrower side —
+        // verified directly against gsc for int32?/int64, int32?/double, and
+        // int64?/int32 (left wider). The one gap gsc does not fill on its own
+        // is a *constant* right operand whose natural numeric kind differs
+        // from the result (e.g. `x ?? 0` for `uint32? x`: the literal `0`'s
+        // natural type `int32` differs from the `uint32` result C# computed
+        // via its constant-literal conversion rule, which gsc's type-only
+        // conversion lattice does not special-case) — only in that direction
+        // is an explicit coercion required, and it always targets the
+        // *result* type, never the left type. Coercing the right operand when
+        // it already matches the result type is a no-op (skipped below), so
+        // this also covers left-wider-than-right (right coerced up, as
+        // before) and equal-kind operands (no coercion, unchanged).
         // Non-numeric coalescing (reference types, tasks) is left untouched.
         private GExpression TranslateNullCoalescing(
             BinaryExpressionSyntax binary, GExpression left, GExpression right)
@@ -3912,8 +3935,14 @@ public sealed class CSharpToGSharpTranslator
                 TryGetNumericKind(rightType, out SpecialType rightUnderlying) &&
                 leftUnderlying != rightUnderlying)
             {
-                ITypeSymbol leftUnderlyingType = UnwrapNullable(leftType);
-                right = this.CoerceOperandTo(right, leftUnderlyingType);
+                TypeInfo binaryInfo = this.context.GetTypeInfo(binary);
+                ITypeSymbol resultType = binaryInfo.Type ?? binaryInfo.ConvertedType;
+
+                if (TryGetNumericKind(resultType, out SpecialType resultUnderlying) &&
+                    rightUnderlying != resultUnderlying)
+                {
+                    right = this.CoerceOperandTo(right, UnwrapNullable(resultType));
+                }
             }
 
             return new BinaryExpression(left, "??", right);
