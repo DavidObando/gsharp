@@ -13,6 +13,7 @@ using Microsoft.Build.Locator;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.MSBuild;
+using Microsoft.CodeAnalysis.Text;
 
 namespace Cs2Gs.Translator.Loading;
 
@@ -38,6 +39,38 @@ namespace Cs2Gs.Translator.Loading;
 public static class CSharpProjectLoader
 {
     private static readonly object MSBuildRegistrationLock = new object();
+
+    /// <summary>
+    /// Diagnostic id for an MSBuild workspace load failure (a project that
+    /// soft-failed to load: missing SDK/targets, skipped project reference,
+    /// wrong TFM, etc.). Surfaced as an <see cref="DiagnosticSeverity.Error"/> so
+    /// <see cref="LoadedCSharpProject.BoundWithoutErrors"/> reflects the real
+    /// state of the load instead of silently proceeding on a degraded project.
+    /// </summary>
+#pragma warning disable RS2008 // no analyzer release-tracking file for this non-analyzer diagnostic id
+    private static readonly DiagnosticDescriptor MSBuildWorkspaceLoadFailureDescriptor = new DiagnosticDescriptor(
+        id: "CS2GS0001",
+        title: "MSBuild workspace load failure",
+        messageFormat: "MSBuild workspace failed to load the project: {0}",
+        category: "Cs2Gs.Loading",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    /// <summary>
+    /// Diagnostic id emitted (informationally) for each source file excluded from
+    /// translation because it is genuinely build-generated (recognized by an
+    /// <c>&lt;auto-generated&gt;</c> header or by living under the project's own
+    /// <c>obj/</c>/<c>bin/</c> output directories) — never by file name alone.
+    /// </summary>
+    private static readonly DiagnosticDescriptor GeneratedSourceSkippedDescriptor = new DiagnosticDescriptor(
+        id: "CS2GS0002",
+        title: "Generated source file excluded from translation",
+        messageFormat: "Skipped '{0}' because it is recognized as generated code",
+        category: "Cs2Gs.Loading",
+        defaultSeverity: DiagnosticSeverity.Info,
+        isEnabledByDefault: true);
+#pragma warning restore RS2008
+
     private static bool msbuildRegistered;
 
     /// <summary>
@@ -75,6 +108,17 @@ public static class CSharpProjectLoader
         Project project = await workspace.OpenProjectAsync(fullPath, cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
+        // OD-T? (issue #1742): MSBuildWorkspace can soft-fail a project load (missing
+        // SDK/targets, a project reference it had to skip, an unrecognized TFM, ...)
+        // without throwing. Those failures land in workspace.Diagnostics and were
+        // previously never inspected, so the translator proceeded on a degraded
+        // compilation and the user only saw confusing downstream binding errors.
+        // Surface them as load errors so BoundWithoutErrors reflects reality.
+        loadDiagnostics.AddRange(
+            workspace.Diagnostics
+                .Where(d => d.Kind == WorkspaceDiagnosticKind.Failure)
+                .Select(d => Diagnostic.Create(MSBuildWorkspaceLoadFailureDescriptor, Location.None, d.Message)));
+
         Compilation compilation = await project.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
         if (compilation is not CSharpCompilation csharpCompilation)
         {
@@ -82,7 +126,8 @@ public static class CSharpProjectLoader
                 $"Project '{fullPath}' did not produce a C# compilation (language: {project.Language}).");
         }
 
-        IReadOnlyList<LoadedDocument> documents = BuildDocuments(csharpCompilation);
+        string projectDirectory = Path.GetDirectoryName(fullPath);
+        IReadOnlyList<LoadedDocument> documents = BuildDocuments(csharpCompilation, projectDirectory, loadDiagnostics);
         loadDiagnostics.AddRange(SignificantDiagnostics(csharpCompilation));
 
         return new LoadedCSharpProject(csharpCompilation, documents, loadDiagnostics);
@@ -122,8 +167,9 @@ public static class CSharpProjectLoader
             resolvedReferences,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithAllowUnsafe(true));
 
-        IReadOnlyList<LoadedDocument> documents = BuildDocuments(compilation);
-        IReadOnlyList<Diagnostic> loadDiagnostics = SignificantDiagnostics(compilation);
+        var loadDiagnostics = new List<Diagnostic>();
+        IReadOnlyList<LoadedDocument> documents = BuildDocuments(compilation, projectDirectory: null, loadDiagnostics);
+        loadDiagnostics.AddRange(SignificantDiagnostics(compilation));
 
         return new LoadedCSharpProject(compilation, documents, loadDiagnostics);
     }
@@ -149,18 +195,23 @@ public static class CSharpProjectLoader
             .ToImmutableArray();
     }
 
-    private static IReadOnlyList<LoadedDocument> BuildDocuments(CSharpCompilation compilation)
+    private static IReadOnlyList<LoadedDocument> BuildDocuments(
+        CSharpCompilation compilation,
+        string projectDirectory,
+        ICollection<Diagnostic> diagnosticSink)
     {
         var documents = new List<LoadedDocument>();
         foreach (SyntaxTree tree in compilation.SyntaxTrees)
         {
-            // OD-T4: build-generated sources (Nerdbank.GitVersioning `ThisAssembly`,
-            // `*.AssemblyInfo.cs`, global usings, etc.) reference attributes the G#
-            // compiler cannot resolve (GS0198) and are not part of the app's hand-
-            // written source. Skip them for translation/emit; they stay in the C#
-            // compilation so semantic binding of the real sources is unaffected.
-            if (IsGeneratedSource(tree.FilePath))
+            // OD-T4 (issue #1742): only skip a file when it is genuinely
+            // build-generated — under the project's own obj/bin output, or
+            // carrying the standard `<auto-generated>` header (Nerdbank.GitVersioning
+            // `ThisAssembly`, SDK AssemblyInfo, resx Designer files, source-generator
+            // output, ...). A hand-written file that merely happens to match a
+            // generated-looking name (e.g. a hand-written `Api.Version.cs`) is kept.
+            if (IsGeneratedSource(tree, projectDirectory))
             {
+                diagnosticSink.Add(Diagnostic.Create(GeneratedSourceSkippedDescriptor, Location.None, tree.FilePath));
                 continue;
             }
 
@@ -172,32 +223,64 @@ public static class CSharpProjectLoader
     }
 
     /// <summary>
-    /// Determines whether a C# file is a build-generated artifact that should not
-    /// be translated: anything under an <c>obj/</c> or <c>bin/</c> directory, or a
-    /// recognized generated file name (assembly-info, global usings, version, or
-    /// any <c>*.g.cs</c> / <c>*.g.i.cs</c> source generator output).
+    /// Determines whether a C# source is a build-generated artifact that should
+    /// not be translated. A file is only considered generated when it lives under
+    /// the project's own <c>obj/</c> or <c>bin/</c> output directories, or its text
+    /// carries the standard <c>&lt;auto-generated&gt;</c> header — never by file
+    /// name alone.
     /// </summary>
-    private static bool IsGeneratedSource(string filePath)
+    private static bool IsGeneratedSource(SyntaxTree tree, string projectDirectory)
     {
+        string filePath = tree.FilePath;
         if (string.IsNullOrEmpty(filePath))
         {
             return false;
         }
 
-        string normalized = filePath.Replace('\\', '/');
-        if (normalized.Contains("/obj/", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrEmpty(projectDirectory))
         {
-            return true;
+            string normalized = filePath.Replace('\\', '/');
+            string objPrefix = Path.Combine(projectDirectory, "obj").Replace('\\', '/').TrimEnd('/') + "/";
+            string binPrefix = Path.Combine(projectDirectory, "bin").Replace('\\', '/').TrimEnd('/') + "/";
+            if (normalized.StartsWith(objPrefix, StringComparison.OrdinalIgnoreCase) ||
+                normalized.StartsWith(binPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
         }
 
-        string name = Path.GetFileName(normalized);
-        return name.EndsWith(".AssemblyInfo.cs", StringComparison.OrdinalIgnoreCase) ||
-            name.EndsWith(".AssemblyAttributes.cs", StringComparison.OrdinalIgnoreCase) ||
-            name.EndsWith(".GlobalUsings.g.cs", StringComparison.OrdinalIgnoreCase) ||
-            name.EndsWith(".Version.cs", StringComparison.OrdinalIgnoreCase) ||
-            name.EndsWith(".g.i.cs", StringComparison.OrdinalIgnoreCase) ||
-            name.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase);
+        return HasAutoGeneratedHeader(tree);
+    }
+
+    /// <summary>
+    /// Sniffs the leading comment lines of a source file for the standard
+    /// <c>// &lt;auto-generated&gt;</c> marker (the convention emitted by T4,
+    /// resx code-gen, source generators, and the SDK's own generated files).
+    /// </summary>
+    private static bool HasAutoGeneratedHeader(SyntaxTree tree)
+    {
+        SourceText text = tree.GetText();
+        int linesToCheck = Math.Min(text.Lines.Count, 5);
+        for (int i = 0; i < linesToCheck; i++)
+        {
+            string line = text.Lines[i].ToString().Trim();
+            if (line.Length == 0)
+            {
+                continue;
+            }
+
+            if (!line.StartsWith("//", StringComparison.Ordinal))
+            {
+                break;
+            }
+
+            if (line.Contains("<auto-generated", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static IReadOnlyList<Diagnostic> SignificantDiagnostics(CSharpCompilation compilation) =>
