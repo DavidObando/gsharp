@@ -726,6 +726,23 @@ public sealed class CSharpToGSharpTranslator
             return !type.IsSealed && this.subclassedBases.Contains(type.OriginalDefinition);
         }
 
+        /// <summary>
+        /// Issue #1745: whether a method/property/indexer <paramref name="symbol"/>
+        /// is emitted with the G# <c>open</c> modifier. Extracted from three
+        /// byte-identical copies (method, property, and indexer translation) so a
+        /// change to the openness rule only needs to be made once.
+        /// </summary>
+        /// <param name="symbol">The member symbol, or <see langword="null"/> when translating without semantic info.</param>
+        /// <param name="isOverride">Whether the member is emitted with the G# <c>override</c> modifier.</param>
+        /// <returns><c>true</c> when the member should carry <c>open</c>.</returns>
+        private bool IsMemberEmittedOpen(ISymbol symbol, bool isOverride)
+        {
+            bool inInterface = symbol?.ContainingType?.TypeKind == TypeKind.Interface;
+            return symbol != null && !inInterface && !symbol.IsSealed &&
+                (symbol.IsVirtual || symbol.IsAbstract || isOverride) &&
+                this.IsTypeEmittedOpen(symbol.ContainingType);
+        }
+
         private static TypeDeclarationKind? MapAggregateKind(BaseTypeDeclarationSyntax node)
         {
             switch (node)
@@ -1848,10 +1865,7 @@ public sealed class CSharpToGSharpTranslator
             // members of an `interface` carry no modifier (the `open` keyword is for
             // virtual/abstract members of a class). Suppress `open` for them so the
             // emitted G# round-trips (ADR-0115 §B.6).
-            bool inInterface = symbol?.ContainingType?.TypeKind == TypeKind.Interface;
-            bool isOpen = symbol != null && !inInterface && !symbol.IsSealed &&
-                (symbol.IsVirtual || symbol.IsAbstract || isOverride) &&
-                this.IsTypeEmittedOpen(symbol.ContainingType);
+            bool isOpen = this.IsMemberEmittedOpen(symbol, isOverride);
 
             // A method lifted to the top-level receiver-clause form (an owned-value
             // aggregate method or an extension method) has no `open`/`override`:
@@ -2114,10 +2128,7 @@ public sealed class CSharpToGSharpTranslator
 
             // Interface members are implicitly abstract; canonical G# interface
             // members carry no `open` modifier (ADR-0115 §B.6).
-            bool inInterface = symbol?.ContainingType?.TypeKind == TypeKind.Interface;
-            bool isOpen = symbol != null && !inInterface && !symbol.IsSealed &&
-                (symbol.IsVirtual || symbol.IsAbstract || isOverride) &&
-                this.IsTypeEmittedOpen(symbol.ContainingType);
+            bool isOpen = this.IsMemberEmittedOpen(symbol, isOverride);
 
             var property = new PropertyDeclaration(
                 SanitizeIdentifier(node.Identifier.Text),
@@ -2184,10 +2195,7 @@ public sealed class CSharpToGSharpTranslator
             }
 
             bool isOverride = symbol != null && symbol.IsOverride && !OverridesExternalBaseProperty(symbol);
-            bool inInterface = symbol?.ContainingType?.TypeKind == TypeKind.Interface;
-            bool isOpen = symbol != null && !inInterface && !symbol.IsSealed &&
-                (symbol.IsVirtual || symbol.IsAbstract || isOverride) &&
-                this.IsTypeEmittedOpen(symbol.ContainingType);
+            bool isOpen = this.IsMemberEmittedOpen(symbol, isOverride);
 
             var property = new PropertyDeclaration(
                 "this",
@@ -3427,10 +3435,8 @@ public sealed class CSharpToGSharpTranslator
                         (GStatement)new ForInStatement(
                             SanitizeIdentifier(forEach.Identifier.Text),
                             this.TranslateReceiverWithNullForgiveness(forEach.Expression),
-                            this.TranslateStatementAsBlock(forEach.Statement))
-                        {
-                            IsAwait = !forEach.AwaitKeyword.IsKind(SyntaxKind.None),
-                        },
+                            this.TranslateStatementAsBlock(forEach.Statement),
+                            isAwait: !forEach.AwaitKeyword.IsKind(SyntaxKind.None)),
                     };
 
                 case ForEachVariableStatementSyntax forEachVariable:
@@ -9274,10 +9280,8 @@ public sealed class CSharpToGSharpTranslator
                 return new ForInStatement(
                     pair,
                     this.TranslateReceiverWithNullForgiveness(node.Expression),
-                    new BlockStatement(statements))
-                {
-                    IsAwait = !node.AwaitKeyword.IsKind(SyntaxKind.None),
-                };
+                    new BlockStatement(statements),
+                    isAwait: !node.AwaitKeyword.IsKind(SyntaxKind.None));
             }
 
             this.context.ReportUnsupported(

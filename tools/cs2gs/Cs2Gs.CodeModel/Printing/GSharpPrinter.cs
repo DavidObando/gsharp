@@ -55,6 +55,10 @@ public static class GSharpPrinter
 
     private static string Indent(int level)
     {
+        // ponytail: no shared cache — Print is a public static API and xunit
+        // runs test classes in parallel, so a shared List<string> grown
+        // on-demand here would race. Indent strings are tiny; allocate
+        // per-call instead of guarding shared state.
         return string.Concat(Enumerable.Repeat(IndentUnit, level));
     }
 
@@ -120,8 +124,13 @@ public static class GSharpPrinter
             return $"[]{arrayMarker}{RenderType(array.ElementType)}";
         }
 
+        // Issue #1745: `type` can't be null here — RenderTypeCore already
+        // dereferenced it above (via the `type is ArrayTypeReference` check)
+        // and, for any other unsupported/null input, throws inside its
+        // switch's default case before returning. The `type == null` guard
+        // that used to sit here was dead code.
         var rendered = RenderTypeCore(type);
-        if (type == null || !type.IsNullable)
+        if (!type.IsNullable)
         {
             return rendered;
         }
