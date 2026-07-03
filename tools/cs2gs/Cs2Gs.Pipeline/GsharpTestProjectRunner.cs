@@ -37,7 +37,7 @@ public enum GsharpTestRunStatus
 /// root so the repo-shared build (Nerdbank.GitVersioning, StyleCop) does not
 /// apply to the generated G# project.
 /// </summary>
-public sealed class GsharpTestProjectRunner
+public class GsharpTestProjectRunner
 {
     private const string SdkPackageId = "Gsharp.NET.Sdk";
     private const string SdkPackagePrefix = SdkPackageId + ".";
@@ -115,7 +115,7 @@ public sealed class GsharpTestProjectRunner
     /// <param name="project">The translated G# test project to build and run.</param>
     /// <param name="workDir">The directory to scaffold the project under.</param>
     /// <returns>The run result (build status, output, TRX path, parsed outcomes).</returns>
-    public GsharpTestRunResult Run(GsharpTestProject project, string workDir)
+    public virtual GsharpTestRunResult Run(GsharpTestProject project, string workDir)
     {
         if (project is null)
         {
@@ -172,7 +172,7 @@ public sealed class GsharpTestProjectRunner
             File.Delete(trxPath);
         }
 
-        var args = new[]
+        var args = new List<string>
         {
             "test",
             testsProjectPath,
@@ -183,6 +183,24 @@ public sealed class GsharpTestProjectRunner
             "--results-directory",
             trxDir,
         };
+
+        // Issue #1749 mode 1: the generated project is scaffolded under
+        // `workDir`, which NuGet restore reaches by walking *up* from looking
+        // for `nuget.config`. When `--output` places `workDir` outside the repo
+        // (a non-default `OutputRoot`), that walk never finds the repo
+        // `nuget.config` that points restore at the local `.nugs` feed, so
+        // restore always fails and library parity is silently disabled. Pass
+        // the repo `nuget.config` explicitly so restore finds the feed
+        // regardless of where the scaffold lives.
+        // `dotnet test` forwards unrecognized args to MSBuild's VSTest target,
+        // and MSBuild has no `--configfile` switch (that's a `dotnet restore`/
+        // `dotnet nuget` only switch) - it fails hard with MSB1001. The
+        // MSBuild-property form works for build/restore/test alike.
+        string repoNugetConfig = Path.Combine(this.RepoRoot, "nuget.config");
+        if (File.Exists(repoNugetConfig))
+        {
+            args.Add($"-p:RestoreConfigFile={repoNugetConfig}");
+        }
 
         (int exit, string output) = this.RunDotnet(args, workDir);
 

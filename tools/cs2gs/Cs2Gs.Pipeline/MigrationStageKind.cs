@@ -48,7 +48,13 @@ public enum TriageCategory
 /// </summary>
 public enum StageStatus
 {
-    /// <summary>The stage did not run (a prior stage failed and short-circuited it).</summary>
+    /// <summary>
+    /// The stage was not verified: either it did not run (a prior stage failed
+    /// and short-circuited it), or it ran but a dependency it needs to verify
+    /// (e.g. a locally-built SDK, or a not-yet-implemented translation step) is
+    /// genuinely unavailable. Distinct from <see cref="Passed"/> — "not
+    /// verified" must never render as "verified green" (issue #1749).
+    /// </summary>
     Skipped,
 
     /// <summary>The stage ran and its pass gate held.</summary>

@@ -403,6 +403,54 @@ public sealed class TriageBuilder
         return artifact;
     }
 
+    /// <summary>
+    /// Builds a stage-4 <c>test-parity-failure</c> artifact for a library app
+    /// whose translated G# test project failed to build against the
+    /// locally-built <c>Gsharp.NET.Sdk</c> (issue #1749 mode 1). A library that
+    /// green-built standalone with <c>gsc</c> in stage 2 but fails to build here
+    /// is a real regression — the SDK/build surface broke, not "not verified
+    /// yet" — so this is reported as a failure, never a skip. The diagnostic id
+    /// is <c>LIBRARY-BUILD-FAILED</c>; the message is the tail of the captured
+    /// <c>dotnet test</c> output.
+    /// </summary>
+    /// <param name="output">The captured <c>dotnet test</c> output (already truncated by the caller).</param>
+    /// <param name="gsFile">The emitted G# library file (relative path), or null.</param>
+    /// <returns>The populated triage artifact.</returns>
+    public TriageArtifact TestParityLibraryBuildFailure(string output, string gsFile = null)
+    {
+        string message = string.IsNullOrWhiteSpace(output) ? "(no build output captured)" : output.Trim();
+
+        var artifact = this.NewArtifact(MigrationStageKind.TestParity, TriageCategory.TestParityFailure);
+        artifact.Diagnostic = new TriageDiagnostic
+        {
+            Id = "LIBRARY-BUILD-FAILED",
+            Message = message,
+            Severity = "error",
+        };
+        artifact.SourceLocation = new TriageSourceLocation
+        {
+            GsFile = gsFile,
+            GsLine = null,
+            GsColumn = null,
+            CsFile = null,
+            CsLine = null,
+            CsColumn = null,
+        };
+        artifact.OffendingCSharpConstruct = new TriageOffendingConstruct
+        {
+            Kind = "LibraryBuild",
+            Snippet = Truncate(message),
+        };
+        artifact.Fingerprint = Fingerprint.Compute(
+            artifact.Category,
+            artifact.Stage,
+            artifact.Diagnostic.Id,
+            artifact.OffendingCSharpConstruct.Kind,
+            artifact.OffendingCSharpConstruct.Snippet);
+        artifact.SuggestedIssue = this.TestParityIssue(artifact);
+        return artifact;
+    }
+
     private static (string File, int? Line, int? Column, string Snippet) ResolveCSharpLocation(Location location)
     {
         if (location is null || !location.IsInSource)
@@ -608,6 +656,7 @@ public sealed class TriageBuilder
         string title = $"[cs2gs] test-parity {artifact.Diagnostic.Id} in migrated {this.CorpusAppId} " +
             $"({artifact.OffendingCSharpConstruct.Kind})";
         bool isStdout = string.Equals(artifact.Diagnostic.Id, "STDOUT-MISMATCH", StringComparison.Ordinal);
+        bool isBuildFailure = string.Equals(artifact.Diagnostic.Id, "LIBRARY-BUILD-FAILED", StringComparison.Ordinal);
         string repro = isStdout
             ? "**Reproduction:** `cs2gs migrate` translates the corpus app, compiles it with `gsc`, runs the " +
                 "produced program, and compares its stdout to `baseline.stdout.golden`."
@@ -620,6 +669,8 @@ public sealed class TriageBuilder
             $"- Failure: `{artifact.Diagnostic.Id}`",
             $"- Detail: {artifact.Diagnostic.Message}",
             isStdout ? "- This is a behavioral divergence: the program compiled but produced different output." :
+                isBuildFailure ? "- This is a build regression: the app compiled with `gsc` in stage 2 but the " +
+                    "translated G# test project failed to build against the locally-built SDK here." :
                 $"- Failing test: `{artifact.OffendingCSharpConstruct.Kind}`",
             string.Empty,
             repro,

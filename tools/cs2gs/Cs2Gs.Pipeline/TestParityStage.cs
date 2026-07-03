@@ -170,8 +170,10 @@ public sealed class TestParityStage : IMigrationStage
 
         if (tests.PendingReason is not null)
         {
+            // Gated intentionally (ADR-0115 §E) until test-translation lands —
+            // "not verified yet", never a fabricated pass (issue #1749).
             this.Note(context, "library xUnit parity SKIPPED: " + tests.PendingReason);
-            return StageOutcome.Passed();
+            return StageOutcome.Skipped();
         }
 
         BaselineTestsOracle oracle = BaselineTestsOracle.Load(context.App.TestsBaselinePath);
@@ -194,16 +196,25 @@ public sealed class TestParityStage : IMigrationStage
 
         if (run.Status == GsharpTestRunStatus.Unavailable)
         {
+            // The SDK/tooling this verification needs is genuinely absent (no
+            // locally-built Gsharp.NET.Sdk nupkg) — "not verified", not a pass
+            // (issue #1749 mode 1).
             this.Note(context, "library xUnit parity SKIPPED: " + run.UnavailableReason);
-            return StageOutcome.Passed();
+            return StageOutcome.Skipped();
         }
 
         if (run.Status == GsharpTestRunStatus.BuildFailed)
         {
-            string buildNote = "library xUnit parity SKIPPED: the translated G# test project did not build " +
-                "(test-translation pending map-advanced).\n" + Truncate(run.Output);
+            // A library that green-built standalone `gsc` in stage 2 but fails
+            // to build its translated G# test project here is a real
+            // regression, not "translation pending" — report it as a failure
+            // (issue #1749 mode 1), never a fabricated pass.
+            string buildNote = "library xUnit parity FAILED: the translated G# test project did not build.\n" +
+                Truncate(run.Output);
             this.Note(context, buildNote);
-            return StageOutcome.Passed();
+            TriageArtifact buildArtifact = context.Triage.TestParityLibraryBuildFailure(
+                run.Output, EmittedGsRelative(context));
+            return StageOutcome.Failed(new[] { buildArtifact });
         }
 
         TestParityResult parity = TestParityComparison.Compare(oracle.Tests, run.Results);

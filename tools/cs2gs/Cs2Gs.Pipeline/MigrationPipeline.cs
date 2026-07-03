@@ -274,6 +274,23 @@ public sealed class MigrationPipeline
                 continue;
             }
 
+            if (outcome.Status == StageStatus.Skipped)
+            {
+                // "Not verified" (issue #1749): a genuinely-unavailable
+                // dependency (no locally-built SDK, a translation step not
+                // implemented yet) is neither a pass nor a failure. It must not
+                // render as green, so it gets its own status rather than
+                // StageStatus.Passed, but it also does not fail the app or
+                // short-circuit later stages.
+                appResult.Stages.Add(new StageResult
+                {
+                    Stage = stageName,
+                    Status = "skipped",
+                    ArtifactCount = 0,
+                });
+                continue;
+            }
+
             IReadOnlyList<TriageArtifact> written = this.WriteArtifacts(
                 outcome.Artifacts, appRunDir, runDir, priorHistory, appResult);
 

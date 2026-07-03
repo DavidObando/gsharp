@@ -172,9 +172,23 @@ public sealed class StageOutcome
     /// <summary>Gets the triage artifacts the stage produced (empty on success).</summary>
     public IReadOnlyList<TriageArtifact> Artifacts { get; }
 
-    /// <summary>Creates a passing outcome with no artifacts.</summary>
+    /// <summary>
+    /// Creates a passing outcome with no artifacts.
+    /// </summary>
     /// <returns>A passing <see cref="StageOutcome"/>.</returns>
     public static StageOutcome Passed() => new StageOutcome(StageStatus.Passed, Array.Empty<TriageArtifact>());
+
+    /// <summary>
+    /// Creates a skipped outcome (issue #1749 mode 1): the stage ran but a
+    /// verification it depends on is genuinely unavailable (e.g. no
+    /// locally-built SDK, or a downstream translation step that has not landed
+    /// yet) — "not verified", distinct from both <see cref="Passed"/> ("verified
+    /// green") and <see cref="Failed"/> ("verified and broke"). Never use this
+    /// for a build/test that ran and broke; that is a real regression and must
+    /// be reported <see cref="Failed"/>.
+    /// </summary>
+    /// <returns>A skipped <see cref="StageOutcome"/>.</returns>
+    public static StageOutcome Skipped() => new StageOutcome(StageStatus.Skipped, Array.Empty<TriageArtifact>());
 
     /// <summary>Creates a failing outcome carrying the supplied artifacts.</summary>
     /// <param name="artifacts">The triage artifacts that describe the failure.</param>
