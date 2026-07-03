@@ -335,6 +335,163 @@ namespace Demo
         Assert.DoesNotContain("__spill", printed);
     }
 
+    // --- N1: null-seam expression contexts (field/property initializers and
+    // base(...)/this(...) constructor-call arguments have no ambient
+    // statement seam of their own, AND — unlike a lambda/local-function body
+    // — G# has no expression-only way to host a spill `let` there at all: a
+    // bare block-with-trailing-expression is only legal directly inside a
+    // lambda arrow body or an if/else branch, and G# has no "invoke an
+    // arbitrary parenthesized expression" postfix form to smuggle one in as
+    // an immediately-invoked lambda either. So these two sites cannot be
+    // upgraded to single-evaluation without a G# grammar change; instead the
+    // translator now REPORTS the gap (TranslationSeverity.Unsupported)
+    // instead of silently double-evaluating.) -------------------------------
+
+    [Fact]
+    public void FieldInitializer_PatternScrutineeSideEffectingReceiver_ReportsUnsupported()
+    {
+        (string printed, TranslationContext context) = TranslateUnitWithContext(@"
+namespace Demo
+{
+    public sealed class A
+    {
+        public int X;
+        public int Y;
+    }
+
+    public sealed class C
+    {
+        private static A GetA() => new A();
+
+        private bool flag = GetA() is { X: 1, Y: 2 };
+    }
+}");
+
+        // No G# lowering exists to spill a field initializer's operand (issue
+        // #1731 N1): the shape still triple-embeds `GetA()` (once per
+        // sub-pattern test plus the null-guard), but the gap is now surfaced
+        // as a diagnostic rather than silently wrong.
+        Assert.Equal(4, CountOccurrences(printed, "GetA()")); // 1 declaration + 3 uses (was silently the same before N1)
+        Assert.Contains(
+            context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("1731 N1"));
+    }
+
+    [Fact]
+    public void FieldInitializer_RangeSliceSideEffectingOperand_ReportsUnsupported()
+    {
+        (string printed, TranslationContext context) = TranslateUnitWithContext(@"
+namespace Demo
+{
+    public sealed class C
+    {
+        private static int counter;
+
+        private static int Next() => counter++;
+
+        private static int[] Data = new int[] { 1, 2, 3, 4 };
+
+        private int[] r = Data[Next()..2];
+    }
+}");
+
+        Assert.Equal(3, CountOccurrences(printed, "Next()")); // 1 declaration + 2 uses (Slice start + length calc)
+        Assert.Contains(".Slice(", printed);
+        Assert.Contains(
+            context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("1731 N1"));
+    }
+
+    [Fact]
+    public void BaseConstructorArgument_PatternScrutineeSideEffectingReceiver_ReportsUnsupported()
+    {
+        (string printed, TranslationContext context) = TranslateUnitWithContext(@"
+namespace Demo
+{
+    public sealed class A
+    {
+        public int X;
+        public int Y;
+    }
+
+    public class Base
+    {
+        public Base(bool flag) { }
+    }
+
+    public sealed class Derived : Base
+    {
+        private static A GetA() => new A();
+
+        public Derived() : base(GetA() is { X: 1, Y: 2 }) { }
+    }
+}");
+
+        Assert.Equal(4, CountOccurrences(printed, "GetA()")); // 1 declaration + 3 uses
+        Assert.Contains(": base(", printed);
+        Assert.Contains(
+            context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("1731 N1"));
+    }
+
+    [Fact]
+    public void ThisConstructorArgument_RangeSliceSideEffectingOperand_ReportsUnsupported()
+    {
+        (string printed, TranslationContext context) = TranslateUnitWithContext(@"
+namespace Demo
+{
+    public sealed class C
+    {
+        private static int counter;
+
+        private static int Next() => counter++;
+
+        public C(int[] r) { }
+
+        public C(int[] s, int j) : this(s[Next()..j]) { }
+    }
+}");
+
+        Assert.Equal(3, CountOccurrences(printed, "Next()")); // 1 declaration + 2 uses (Slice start + length calc)
+        Assert.Contains(".Slice(", printed);
+        Assert.Contains(
+            context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("1731 N1"));
+    }
+
+    /// <summary>
+    /// Documents the N1 safety argument for attribute arguments and default
+    /// parameter values (see <c>MapAttributeArgumentValue</c> and
+    /// <c>BuildOptionalParameterDefault</c> doc comments): C# requires both to
+    /// be compile-time constants, and neither an <c>is</c>-pattern nor a
+    /// range-slice is ever a constant expression — so those two "null-seam"
+    /// sites can never actually reach <c>SpillOperand</c>'s no-seam fallback,
+    /// and no diagnostic is expected for this ordinary constant case.
+    /// </summary>
+    [Fact]
+    public void AttributeArgumentAndDefaultParameter_ConstantOperand_TranslatesUnaffected()
+    {
+        (string printed, TranslationContext context) = TranslateUnitWithContext(@"
+namespace Demo
+{
+    public sealed class MyAttribute : System.Attribute
+    {
+        public MyAttribute(int value) { }
+    }
+
+    [My(42)]
+    public sealed class C
+    {
+        public void M(int x = 7) { }
+    }
+}");
+
+        Assert.Contains("42", printed);
+        Assert.Contains("7", printed);
+        Assert.DoesNotContain("__spill", printed);
+        Assert.DoesNotContain(context.Diagnostics, d => d.Message.Contains("1731 N1"));
+    }
+
     private static int CountOccurrences(string haystack, string needle)
     {
         int count = 0;
@@ -348,7 +505,9 @@ namespace Demo
         return count;
     }
 
-    private static string TranslateUnit(string source)
+    private static string TranslateUnit(string source) => TranslateUnitWithContext(source).Printed;
+
+    private static (string Printed, TranslationContext Context) TranslateUnitWithContext(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
         Assert.True(
@@ -366,6 +525,6 @@ namespace Demo
             result.Success,
             "Translated G# must round-trip. Errors:\n" +
                 string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
-        return printed;
+        return (printed, context);
     }
 }

@@ -2680,6 +2680,18 @@ public sealed class CSharpToGSharpTranslator
         /// (gsc rejects a bare <c>default</c> with GS0265); a reference or nullable
         /// value type emits <c>nil</c>.
         /// </summary>
+        /// <remarks>
+        /// Issue #1731 N1: a C# optional-parameter default must itself be a
+        /// compile-time constant, so this method (and <see cref="MapConstantDefault"/>)
+        /// only ever reads <c>symbol.ExplicitDefaultValue</c> — it never calls
+        /// <c>TranslateExpression</c>/<c>TranslatePatternTest</c>/
+        /// <c>TranslateRangeSlice</c> on the source syntax at all. A non-constant
+        /// default (which could theoretically embed an `is`-pattern or a
+        /// range-slice, except neither of those is itself a constant expression
+        /// either) falls through to the "not a simple literal" diagnostic below
+        /// and is omitted, never translated. So `SpillOperand`'s no-seam
+        /// fallback can never be reached from here.
+        /// </remarks>
         private GExpression BuildOptionalParameterDefault(IParameterSymbol symbol, GTypeReference type)
         {
             if (!symbol.HasExplicitDefaultValue)
@@ -2821,6 +2833,13 @@ public sealed class CSharpToGSharpTranslator
             return attributes;
         }
 
+        // Issue #1731 N1: attribute-argument expressions here can never be an
+        // `is`-pattern or a range-slice (i.e. can never reach `SpillOperand`'s
+        // no-seam fallback) — C# requires every attribute argument to be a
+        // compile-time constant (or a `typeof`/array of constants), and
+        // neither an `is` pattern-match nor a `x[a..b]` range-slice is ever a
+        // constant expression. So the double-evaluation gap this file
+        // otherwise guards against has no way to reach this call site.
         private GExpression MapAttributeArgumentValue(AttributeArgumentSyntax argument)
         {
             Optional<object> constant = this.context.SemanticModel.GetConstantValue(argument.Expression);
@@ -4898,6 +4917,38 @@ public sealed class CSharpToGSharpTranslator
         // into an unrelated scope.
         private GExpression SpillOperand(GExpression operand) => this.SpillOperand(operand, this.pendingSpillPrologue);
 
+        // As above, but for a call site that CAN be reached from a "null-seam"
+        // expression context — a field/property initializer or a
+        // base(...)/this(...) constructor-initializer argument (issue #1731
+        // N1) — where `this.pendingSpillPrologue` is null and G#'s grammar has
+        // no expression-only way to host a spill `let`: a bare block-with-
+        // trailing-expression is only legal directly inside a lambda arrow
+        // body or an if/else branch (not a field initializer or a `base`/
+        // `this` argument list), and G# has no "call an arbitrary parenthesized
+        // expression" postfix form to smuggle one in as an immediately-invoked
+        // lambda either (ParsePostfixChainCore has no open-paren/invocation
+        // case for a non-name target). So when no seam is active AND `operand`
+        // is non-trivial, silently embedding it (the old, wrong, behavior)
+        // would double-evaluate it — instead this reports the shape as
+        // unsupported so the gap is visible rather than silently wrong, and
+        // still falls back to embedding the untouched operand so translation
+        // keeps producing (compiling, if diagnostically-flagged) output.
+        private GExpression SpillOperand(GExpression operand, SyntaxNode operandSyntaxForDiagnostic)
+        {
+            if (this.pendingSpillPrologue != null || IsTrivialOperand(operand))
+            {
+                return this.SpillOperand(operand);
+            }
+
+            string message =
+                "a non-trivial pattern-scrutinee/range-slice operand here has no enclosing statement to host a " +
+                "single-evaluation spill (a field/property initializer or a base(...)/this(...) constructor " +
+                "argument has no G# lowering for this yet); it is embedded as-is, which re-evaluates it if it " +
+                "is read more than once (issue #1731 N1).";
+            this.context.ReportUnsupported(operandSyntaxForDiagnostic, message);
+            return operand;
+        }
+
         // As above, but appends the spill declaration directly to an explicit
         // `prologue` list rather than the ambient one — used by callers (e.g.
         // <see cref="FlattenChainedAssignment"/>) that already build their own
@@ -6652,7 +6703,7 @@ public sealed class CSharpToGSharpTranslator
             // those, `receiver` is already a bare local and this is a no-op.
             if (!PatternReadsScrutineeAtMostOnce(isPattern.Pattern))
             {
-                receiver = this.SpillOperand(receiver);
+                receiver = this.SpillOperand(receiver, isPattern.Expression);
             }
 
             return this.TranslatePatternTest(receiver, isPattern.Pattern, receiverType, isPattern.Expression);
@@ -7275,7 +7326,7 @@ public sealed class CSharpToGSharpTranslator
             // time here — C# evaluates the range's start once (issue #1731).
             if (range.LeftOperand != null)
             {
-                start = this.SpillOperand(start);
+                start = this.SpillOperand(start, range.LeftOperand);
             }
 
             GExpression end = this.TranslateExpression(range.RightOperand);
