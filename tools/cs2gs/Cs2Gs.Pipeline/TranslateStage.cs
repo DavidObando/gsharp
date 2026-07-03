@@ -45,6 +45,22 @@ public sealed class TranslateStage : IMigrationStage
         var artifacts = new List<TriageArtifact>();
         Directory.CreateDirectory(context.AppRunDir);
 
+        // Issue #1742: a project that does not even bind in C# (missing SDK/
+        // targets, an unresolved project reference, an unsupported TFM, ...)
+        // must stop here — proceeding to translate produces only confusing
+        // downstream binding errors instead of the real load failure. This is
+        // scoped to the MSBuild workspace load failure signal specifically
+        // (not every C# semantic error), since some corpus fixtures carry a
+        // deliberate C# error to exercise a later stage (e.g. CompileGap-Library).
+        if (project.WorkspaceLoadFailed)
+        {
+            artifacts.Add(context.Triage.ProjectLoadFailure(
+                MigrationStageKind.Translate,
+                TriageCategory.TranslationUnsupported,
+                project.WorkspaceLoadErrors));
+            return StageOutcome.Failed(artifacts);
+        }
+
         var usedGsFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (LoadedDocument document in project.Documents)

@@ -143,6 +143,62 @@ public sealed class TriageBuilder
     }
 
     /// <summary>
+    /// Builds an artifact for a project that failed to bind in C# — MSBuild
+    /// workspace load errors captured in
+    /// <see cref="Cs2Gs.Translator.Loading.LoadedCSharpProject.ErrorDiagnostics"/>
+    /// (ADR-0115 §C, issue #1742). Callers must check
+    /// <see cref="Cs2Gs.Translator.Loading.LoadedCSharpProject.BoundWithoutErrors"/>
+    /// and stop before translating any document: a project that does not even
+    /// bind produces only confusing downstream binding noise otherwise.
+    /// </summary>
+    /// <param name="stage">The stage the load happened in (its own project for stage 1, the <c>.Tests</c> project for stage 4).</param>
+    /// <param name="category">The triage category to file the artifact under.</param>
+    /// <param name="errors">The load-error diagnostics (<see cref="Cs2Gs.Translator.Loading.LoadedCSharpProject.ErrorDiagnostics"/>).</param>
+    /// <returns>The populated triage artifact.</returns>
+    public TriageArtifact ProjectLoadFailure(
+        MigrationStageKind stage,
+        TriageCategory category,
+        IReadOnlyList<Diagnostic> errors)
+    {
+        if (errors is null || errors.Count == 0)
+        {
+            throw new ArgumentException("errors must be a non-empty list.", nameof(errors));
+        }
+
+        string message = string.Join(" | ", errors.Select(d => d.GetMessage()));
+
+        var artifact = this.NewArtifact(stage, category);
+        artifact.Diagnostic = new TriageDiagnostic
+        {
+            Id = errors[0].Id,
+            Message = message,
+            Severity = "error",
+        };
+        artifact.SourceLocation = new TriageSourceLocation
+        {
+            GsFile = null,
+            GsLine = null,
+            GsColumn = null,
+            CsFile = null,
+            CsLine = null,
+            CsColumn = null,
+        };
+        artifact.OffendingCSharpConstruct = new TriageOffendingConstruct
+        {
+            Kind = "ProjectLoad",
+            Snippet = Truncate(message),
+        };
+        artifact.Fingerprint = Fingerprint.Compute(
+            artifact.Category,
+            artifact.Stage,
+            artifact.Diagnostic.Id,
+            artifact.OffendingCSharpConstruct.Kind,
+            artifact.OffendingCSharpConstruct.Snippet);
+        artifact.SuggestedIssue = this.ProjectLoadIssue(artifact);
+        return artifact;
+    }
+
+    /// <summary>
     /// Builds a stage-2 <c>compile-error</c> artifact from a single <c>gsc</c>
     /// diagnostic. The G# location is precise (from <c>gsc</c>); the C# side is
     /// <see langword="null"/> because the translator keeps no per-line C#↔G#
@@ -449,6 +505,31 @@ public sealed class TriageBuilder
             $"- Snippet: `{artifact.OffendingCSharpConstruct.Snippet}`",
             string.Empty,
             "**Reproduction:** run `cs2gs migrate` over the corpus; stage 1 (translate) gates on this construct.",
+            $"**Fingerprint:** `{artifact.Fingerprint}`",
+        };
+
+        var issue = new TriageSuggestedIssue
+        {
+            Title = title,
+            Body = string.Join("\n", lines),
+        };
+        issue.Labels.Add("Oats");
+        return issue;
+    }
+
+    private TriageSuggestedIssue ProjectLoadIssue(TriageArtifact artifact)
+    {
+        string title = $"[cs2gs] project failed to load ({this.CorpusAppId})";
+        string[] lines =
+        {
+            $"MSBuild could not bind the C# project for **{this.CorpusAppId}** " +
+                $"(gsc {this.GscVersion}) — missing SDK/targets, an unresolved project reference, " +
+                "or an unsupported TFM.",
+            string.Empty,
+            $"- Diagnostic: `{artifact.Diagnostic.Id}` — {artifact.Diagnostic.Message}",
+            string.Empty,
+            "**Reproduction:** run `cs2gs migrate` over the corpus; the project load gate fails before " +
+                "any document is translated.",
             $"**Fingerprint:** `{artifact.Fingerprint}`",
         };
 

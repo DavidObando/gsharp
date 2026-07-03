@@ -54,4 +54,28 @@ public sealed class LoadedCSharpProject
 
     /// <summary>Gets a value indicating whether the project bound with no C# errors.</summary>
     public bool BoundWithoutErrors => this.ErrorDiagnostics.Count == 0;
+
+    /// <summary>
+    /// Gets a value indicating whether MSBuild itself failed to open the
+    /// project (missing SDK/targets, an unresolvable project reference, an
+    /// unsupported TFM, ...) — see
+    /// <see cref="CSharpProjectLoader.WorkspaceLoadFailureDiagnosticId"/>
+    /// (ADR-0115 §C, issue #1742). Unlike <see cref="BoundWithoutErrors"/>, this
+    /// ignores ordinary C# semantic errors from documents that did load (some
+    /// corpus fixtures carry those deliberately to exercise a later stage), so
+    /// pipeline stages should gate on THIS to stop before translating a project
+    /// that never even bound, without misfiring on those fixtures.
+    /// </summary>
+    public bool WorkspaceLoadFailed =>
+        this.ErrorDiagnostics.Any(d => d.Id == CSharpProjectLoader.WorkspaceLoadFailureDiagnosticId);
+
+    /// <summary>
+    /// Gets the subset of <see cref="ErrorDiagnostics"/> that are MSBuild
+    /// workspace load failures — the diagnostics a stage should surface when
+    /// <see cref="WorkspaceLoadFailed"/> is <see langword="true"/>.
+    /// </summary>
+    public IReadOnlyList<Diagnostic> WorkspaceLoadErrors =>
+        this.ErrorDiagnostics
+            .Where(d => d.Id == CSharpProjectLoader.WorkspaceLoadFailureDiagnosticId)
+            .ToImmutableArray();
 }

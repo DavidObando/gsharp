@@ -13,6 +13,7 @@ using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using Microsoft.CodeAnalysis;
 
 namespace Cs2Gs.Pipeline;
 
@@ -157,6 +158,16 @@ public sealed class TestParityStage : IMigrationStage
         TranslatedProject tests = await TranslateProjectAsync(
             context.App.TestsProjectPath, cancellationToken).ConfigureAwait(false);
 
+        if (tests.LoadErrors is not null)
+        {
+            this.Note(context, "library xUnit parity FAILED: .Tests project did not load.");
+            TriageArtifact loadArtifact = context.Triage.ProjectLoadFailure(
+                MigrationStageKind.TestParity,
+                TriageCategory.TestParityFailure,
+                tests.LoadErrors);
+            return StageOutcome.Failed(new[] { loadArtifact });
+        }
+
         if (tests.PendingReason is not null)
         {
             this.Note(context, "library xUnit parity SKIPPED: " + tests.PendingReason);
@@ -219,6 +230,17 @@ public sealed class TestParityStage : IMigrationStage
         LoadedCSharpProject project = await CSharpProjectLoader
             .LoadProjectAsync(projectPath, cancellationToken)
             .ConfigureAwait(false);
+
+        // Issue #1742: same load-failure gate as TranslateStage, scoped to the
+        // MSBuild workspace load failure signal (not every C# semantic error —
+        // some corpus fixtures deliberately carry those to exercise a later
+        // stage). A `.Tests` project that does not bind in C# must fail the
+        // stage, not be silently skipped as "translation pending" nor proceed
+        // to translate.
+        if (project.WorkspaceLoadFailed)
+        {
+            return TranslatedProject.LoadFailed(project.WorkspaceLoadErrors);
+        }
 
         var files = new List<GsharpSourceFile>();
         var usedGsFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -300,20 +322,30 @@ public sealed class TestParityStage : IMigrationStage
 
     private sealed class TranslatedProject
     {
-        private TranslatedProject(IReadOnlyList<GsharpSourceFile> files, string pendingReason)
+        private TranslatedProject(
+            IReadOnlyList<GsharpSourceFile> files,
+            string pendingReason,
+            IReadOnlyList<Diagnostic> loadErrors)
         {
             this.Files = files ?? Array.Empty<GsharpSourceFile>();
             this.PendingReason = pendingReason;
+            this.LoadErrors = loadErrors;
         }
 
         public IReadOnlyList<GsharpSourceFile> Files { get; }
 
         public string PendingReason { get; }
 
+        /// <summary>Gets the load-error diagnostics, or <see langword="null"/> if the project bound.</summary>
+        public IReadOnlyList<Diagnostic> LoadErrors { get; }
+
         public static TranslatedProject Ready(IReadOnlyList<GsharpSourceFile> files) =>
-            new TranslatedProject(files, null);
+            new TranslatedProject(files, null, null);
 
         public static TranslatedProject Pending(string reason) =>
-            new TranslatedProject(Array.Empty<GsharpSourceFile>(), reason);
+            new TranslatedProject(Array.Empty<GsharpSourceFile>(), reason, null);
+
+        public static TranslatedProject LoadFailed(IReadOnlyList<Diagnostic> loadErrors) =>
+            new TranslatedProject(Array.Empty<GsharpSourceFile>(), null, loadErrors);
     }
 }
