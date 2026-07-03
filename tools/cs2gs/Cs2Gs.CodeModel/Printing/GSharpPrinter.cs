@@ -446,6 +446,10 @@ public static class GSharpPrinter
                 var inits = string.Join(", ", composite.FieldInitializers.Select(f => $"{f.Name}: {RenderExpression(f.Value, indent)}"));
                 return $"{RenderType(composite.Type)}{{{inits}}}";
 
+            case ObjectCreationInitializerExpression objectCreation:
+                var memberInits = string.Join(", ", objectCreation.MemberInitializers.Select(f => $"{f.Name} = {RenderExpression(f.Value, indent)}"));
+                return $"{RenderExpression(objectCreation.Construction, indent)}{{{memberInits}}}";
+
             case CollectionInitializerExpression collection:
                 return RenderCollectionInitializer(collection, indent);
 
