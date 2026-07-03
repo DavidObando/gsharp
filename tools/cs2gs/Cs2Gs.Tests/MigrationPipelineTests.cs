@@ -5,6 +5,8 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Cs2Gs.Pipeline;
@@ -277,6 +279,92 @@ public class MigrationPipelineTests
         Assert.NotEmpty(artifact.RetryHistory);
         Assert.Contains(artifact.RetryHistory, e => e.RunId == first.RunId);
         Assert.All(artifact.RetryHistory, e => Assert.Equal("fail", e.Result));
+    }
+
+    /// <summary>
+    /// Issue #1751 regression guard: a prior run directory that also contains a
+    /// stage-4 (test-parity) NuGet-restore scaffold under
+    /// <c>&lt;appDir&gt;/test-parity/&lt;Lib&gt;/obj/</c> (e.g.
+    /// <c>project.assets.json</c>, <c>*.nuget.dgspec.json</c>) must not have
+    /// those decoy JSON files opened at all — <see cref="LoadPriorRetryEntries"/>
+    /// (reached via reflection since it is a pipeline-internal helper) is
+    /// scoped to exactly the writer's layout, <c>&lt;runDir&gt;/&lt;appDir&gt;/*.json</c>
+    /// (top-level only), so it never descends into <c>obj/</c>. The decoy
+    /// files are chmod'd unreadable as a canary: were they opened, the
+    /// unhandled <see cref="UnauthorizedAccessException"/> would fail this
+    /// test loudly (only <see cref="JsonException"/>/<see cref="IOException"/>
+    /// are swallowed by <c>TryReadArtifact</c>). Skipped on Windows, which has
+    /// no POSIX permission bits to enforce the canary.
+    /// </summary>
+    [Fact]
+    public void LoadPriorRetryEntries_IgnoresObjArtifacts_AndDoesNotDescendIntoThem()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return;
+        }
+
+        string outputRoot = NewOutputRoot("retry-scan-scope");
+        string priorRunDir = Path.Combine(outputRoot, "2026-01-01T00-00-00Z_aaaaaa");
+        string appDir = Path.Combine(priorRunDir, "corpus_Sample");
+        Directory.CreateDirectory(appDir);
+
+        // The real retry-entry artifact: written by WriteArtifacts() directly
+        // under the app's run directory as "<stage>-<12hex fingerprint>.json".
+        var builder = new TriageBuilder(
+            "2026-01-01T00-00-00Z_aaaaaa", "2026-01-01T00:00:00Z", "0.2.0+abc", "corpus/Sample");
+        var diagnostic = new GscDiagnostic("GS0100", "no overload for 'g'", "error", "Sample.gs", 2, 13);
+        TriageArtifact real = builder.CompileError(diagnostic, null);
+        string realFile = Path.Combine(appDir, "compile-" + FingerprintShort(real.Fingerprint) + ".json");
+        File.WriteAllText(realFile, JsonSerializer.Serialize(real, TriageSerialization.Options));
+
+        // Decoy stage-4 NuGet/MSBuild artifacts nested under obj/, exactly the
+        // layout GsharpTestProjectRunner.Run() scaffolds
+        // (<appDir>/test-parity/<Lib>/obj/*.json). Made unreadable so any
+        // attempt to open them throws instead of silently succeeding.
+        string objDir = Path.Combine(appDir, "test-parity", "Sample", "obj");
+        Directory.CreateDirectory(objDir);
+        string[] decoys =
+        {
+            Path.Combine(objDir, "project.assets.json"),
+            Path.Combine(objDir, "Sample.csproj.nuget.dgspec.json"),
+            Path.Combine(objDir, "Sample.csproj.nuget.g.props.json"),
+        };
+        foreach (string decoy in decoys)
+        {
+            File.WriteAllText(decoy, new string('x', 1024)); // not even valid JSON
+            File.SetUnixFileMode(decoy, UnixFileMode.None); // canary: reading this throws
+        }
+
+        try
+        {
+            MethodInfo method = typeof(MigrationPipeline).GetMethod(
+                "LoadPriorRetryEntries", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+
+            var result = (System.Collections.Generic.IReadOnlyDictionary<string, System.Collections.Generic.List<TriageRetryEntry>>)
+                method.Invoke(null, new object[] { outputRoot, "2026-01-02T00-00-00Z_bbbbbb" });
+
+            TriageRetryEntry entry = Assert.Single(Assert.Single(result).Value);
+            Assert.Equal("2026-01-01T00-00-00Z_aaaaaa", entry.RunId);
+            Assert.Single(result); // exactly the one real fingerprint, nothing from the decoys
+        }
+        finally
+        {
+            // Restore permissions so test cleanup (temp-dir deletion) can proceed.
+            foreach (string decoy in decoys)
+            {
+                File.SetUnixFileMode(decoy, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+        }
+    }
+
+    private static string FingerprintShort(string fingerprint)
+    {
+        string hex = fingerprint.StartsWith("sha256:", StringComparison.Ordinal)
+            ? fingerprint.Substring("sha256:".Length)
+            : fingerprint;
+        return hex.Length <= 12 ? hex : hex.Substring(0, 12);
     }
 
     private static string NewOutputRoot(string label)
