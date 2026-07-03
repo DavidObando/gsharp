@@ -904,9 +904,20 @@ public sealed class CSharpToGSharpTranslator
                     (c.Initializer == null || c.Initializer.ThisOrBaseKeyword.IsKind(SyntaxKind.BaseKeyword)));
         }
 
-        private static GExpression MapConstantDefault(IParameterSymbol symbol)
+        private GExpression MapConstantDefault(IParameterSymbol symbol)
         {
             object value = symbol.ExplicitDefaultValue;
+
+            // Issue #1733: an enum-typed default (`Color c = Color.Blue`) must
+            // resolve to the member reference, not `symbol.ExplicitDefaultValue`'s
+            // boxed underlying integer — see the remarks on
+            // <see cref="MapEnumConstant"/>.
+            if (value != null && symbol.Type?.TypeKind == TypeKind.Enum && IsIntegral(value))
+            {
+                SyntaxNode node = symbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+                return this.MapEnumConstant(symbol.Type, value, node, $"parameter '{symbol.Name}''s default value");
+            }
+
             switch (value)
             {
                 case null:
@@ -918,14 +929,136 @@ public sealed class CSharpToGSharpTranslator
                 case char c:
                     return LiteralExpression.Char(c.ToString());
                 case double d:
-                    return LiteralExpression.Float(d.ToString(CultureInfo.InvariantCulture));
+                    return MapSpecialFloatConstant(d, isDouble: true) ??
+                        LiteralExpression.Float(d.ToString(CultureInfo.InvariantCulture));
                 case float f:
-                    return LiteralExpression.Float(f.ToString(CultureInfo.InvariantCulture));
+                    return MapSpecialFloatConstant(f, isDouble: false) ??
+                        LiteralExpression.Float(f.ToString(CultureInfo.InvariantCulture));
                 default:
                     return IsIntegral(value)
                         ? LiteralExpression.Int(System.Convert.ToString(value, CultureInfo.InvariantCulture))
                         : null;
             }
+        }
+
+        /// <summary>
+        /// Issue #1733: <c>double</c>/<c>float</c>'s special non-finite values
+        /// (<c>NaN</c>, <c>PositiveInfinity</c>, <c>NegativeInfinity</c>) have no
+        /// numeric-literal spelling — <c>d.ToString(CultureInfo.InvariantCulture)</c>
+        /// renders them as the bare words <c>"NaN"</c>/<c>"Infinity"</c>/
+        /// <c>"-Infinity"</c>, which G# reads as unresolved identifiers. G# exposes
+        /// the BCL fields directly (`System.Double.NaN`, `System.Single.NaN`, …;
+        /// see <c>Issue1616FloatNaNOperatorEmitTests</c>/<c>Issue1617…</c>), so those
+        /// are emitted as a fully-qualified member reference instead — qualified so
+        /// the reference resolves even when the C# source has no <c>using
+        /// System;</c> (a bare <c>double</c>/<c>float</c> default never requires
+        /// one).
+        /// </summary>
+        /// <param name="value">The floating-point value.</param>
+        /// <param name="isDouble">Whether <paramref name="value"/> is a <c>double</c> (vs. <c>float</c>).</param>
+        /// <returns>The qualified BCL member reference, or <see langword="null"/> when <paramref name="value"/> is an ordinary finite value.</returns>
+        private static GExpression MapSpecialFloatConstant(double value, bool isDouble)
+        {
+            string owner = isDouble ? "System.Double" : "System.Single";
+            if (double.IsNaN(value))
+            {
+                return new MemberAccessExpression(new IdentifierExpression(owner), "NaN");
+            }
+
+            if (double.IsPositiveInfinity(value))
+            {
+                return new MemberAccessExpression(new IdentifierExpression(owner), "PositiveInfinity");
+            }
+
+            if (double.IsNegativeInfinity(value))
+            {
+                return new MemberAccessExpression(new IdentifierExpression(owner), "NegativeInfinity");
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Issue #1733: resolves an enum-typed constant's boxed underlying integral
+        /// value to the qualified enum-member reference(s) it represents
+        /// (<c>EnumType.Member</c>), rather than the raw integer. <see
+        /// cref="VisitEnumDeclaration"/> drops the C# explicit case values, so
+        /// translated enums are renumbered by declaration order; emitting the bare
+        /// underlying int (as <c>IParameterSymbol.ExplicitDefaultValue</c> /
+        /// <c>SemanticModel.GetConstantValue</c> box it) would silently bind to
+        /// whichever member happens to hold that ordinal under the NEW numbering —
+        /// wrong, and worse than a compile error because it is silent. Resolving to
+        /// the member NAME instead lets it track the renumbering correctly.
+        /// A <c>[Flags]</c> combination (`A | B`) with no single matching member is
+        /// decomposed into the OR of the matching member names; a value that
+        /// matches no member (and no flag combination) has no safe G# spelling and
+        /// is reported as unsupported rather than emitting a raw int that
+        /// renumbering would silently corrupt.
+        /// </summary>
+        /// <param name="enumType">The parameter/attribute-argument's enum type.</param>
+        /// <param name="rawValue">The boxed underlying integral constant value.</param>
+        /// <param name="node">The C# node to anchor an unsupported diagnostic to, or <see langword="null"/> to suppress the diagnostic.</param>
+        /// <param name="constructDescription">A human-readable description of the constant's origin, for the diagnostic message.</param>
+        /// <returns>The member reference (or OR'd flag combination) expression, or <see langword="null"/> when no member/combination matches.</returns>
+        private GExpression MapEnumConstant(ITypeSymbol enumType, object rawValue, SyntaxNode node, string constructDescription)
+        {
+            if (enumType is not INamedTypeSymbol { TypeKind: TypeKind.Enum } namedEnum)
+            {
+                return null;
+            }
+
+            string enumTypeName = this.typeMapper.Map(namedEnum, this.context, node?.GetLocation()) is NamedTypeReference typeRef
+                ? typeRef.Name
+                : SanitizeIdentifier(namedEnum.Name);
+            long target = System.Convert.ToInt64(rawValue, CultureInfo.InvariantCulture);
+
+            List<IFieldSymbol> members = namedEnum.GetMembers()
+                .OfType<IFieldSymbol>()
+                .Where(m => m.HasConstantValue)
+                .ToList();
+
+            foreach (IFieldSymbol member in members)
+            {
+                if (System.Convert.ToInt64(member.ConstantValue, CultureInfo.InvariantCulture) == target)
+                {
+                    return new MemberAccessExpression(new IdentifierExpression(enumTypeName), SanitizeIdentifier(member.Name));
+                }
+            }
+
+            bool isFlags = namedEnum.GetAttributes()
+                .Any(a => a.AttributeClass?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) == "global::System.FlagsAttribute");
+            if (isFlags && target != 0)
+            {
+                long remaining = target;
+                GExpression combined = null;
+                foreach (IFieldSymbol member in members.OrderByDescending(
+                    m => System.Convert.ToInt64(m.ConstantValue, CultureInfo.InvariantCulture)))
+                {
+                    long memberValue = System.Convert.ToInt64(member.ConstantValue, CultureInfo.InvariantCulture);
+                    if (memberValue == 0 || (remaining & memberValue) != memberValue)
+                    {
+                        continue;
+                    }
+
+                    GExpression memberExpr = new MemberAccessExpression(new IdentifierExpression(enumTypeName), SanitizeIdentifier(member.Name));
+                    combined = combined == null ? memberExpr : new BinaryExpression(combined, "|", memberExpr);
+                    remaining &= ~memberValue;
+                }
+
+                if (remaining == 0 && combined != null)
+                {
+                    return combined;
+                }
+            }
+
+            if (node != null)
+            {
+                this.context.ReportUnsupported(
+                    node,
+                    $"{constructDescription} is the enum value '{target}' of '{namedEnum.Name}', which matches no member or [Flags] combination; G# renumbers enum members by declaration order so the raw underlying integer cannot be emitted safely.");
+            }
+
+            return null;
         }
 
         private GMember VisitAggregate(TypeDeclarationSyntax node)
@@ -2852,7 +2985,7 @@ public sealed class CSharpToGSharpTranslator
                 return null;
             }
 
-            GExpression defaultValue = MapConstantDefault(symbol);
+            GExpression defaultValue = this.MapConstantDefault(symbol);
             if (defaultValue != null)
             {
                 return defaultValue;
@@ -2998,6 +3131,23 @@ public sealed class CSharpToGSharpTranslator
             Optional<object> constant = this.context.SemanticModel.GetConstantValue(argument.Expression);
             if (constant.HasValue)
             {
+                // Issue #1733: an enum-typed attribute argument (e.g.
+                // `[Kind(Color.Blue)]`) constant-folds to its boxed underlying
+                // integer just like an enum-typed parameter default; resolve it to
+                // the member reference via the same helper used for
+                // <see cref="MapConstantDefault"/> rather than emit the raw int
+                // (see <see cref="MapEnumConstant"/> remarks on renumbering).
+                ITypeSymbol argumentType = this.context.GetTypeInfo(argument.Expression).ConvertedType;
+                if (constant.Value != null && argumentType?.TypeKind == TypeKind.Enum && IsIntegral(constant.Value))
+                {
+                    GExpression enumValue = this.MapEnumConstant(
+                        argumentType, constant.Value, argument, "attribute argument");
+                    if (enumValue != null)
+                    {
+                        return enumValue;
+                    }
+                }
+
                 switch (constant.Value)
                 {
                     case null:
@@ -3008,6 +3158,10 @@ public sealed class CSharpToGSharpTranslator
                         return new IdentifierExpression(b ? "true" : "false");
                     case char c:
                         return LiteralExpression.Char(c.ToString());
+                    case double d when MapSpecialFloatConstant(d, isDouble: true) is { } specialD:
+                        return specialD;
+                    case float f when MapSpecialFloatConstant(f, isDouble: false) is { } specialF:
+                        return specialF;
                     default:
                         if (IsIntegral(constant.Value))
                         {
