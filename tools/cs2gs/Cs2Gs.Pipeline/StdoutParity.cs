@@ -51,13 +51,27 @@ public static class StdoutParity
     }
 
     /// <summary>
-    /// Normalizes captured text the same way as the L1 end-to-end test: CRLF→LF
-    /// and exactly one trailing newline.
+    /// Normalizes captured text the same way as the L1 end-to-end test: CRLF→LF,
+    /// then tolerate exactly one unavoidable terminal newline. Issue #1749 mode
+    /// 2: <c>TrimEnd('\n')</c> strips *every* trailing newline, so
+    /// <c>"a\n\n\n"</c> and <c>"a\n"</c> normalized equal — a migrated program
+    /// that gains/loses trailing blank lines would falsely byte-parity-match.
+    /// Stripping at most one trailing newline before re-appending one keeps
+    /// that single terminal newline tolerated while any extra trailing blank
+    /// line still registers as a real difference.
     /// </summary>
     /// <param name="text">The text to normalize (null treated as empty).</param>
     /// <returns>The normalized text.</returns>
-    public static string Normalize(string text) =>
-        (text ?? string.Empty).Replace("\r\n", "\n").TrimEnd('\n') + "\n";
+    public static string Normalize(string text)
+    {
+        string normalized = (text ?? string.Empty).Replace("\r\n", "\n");
+        if (normalized.EndsWith("\n", StringComparison.Ordinal))
+        {
+            normalized = normalized.Substring(0, normalized.Length - 1);
+        }
+
+        return normalized + "\n";
+    }
 }
 
 /// <summary>

@@ -248,17 +248,21 @@ public class TestParityEngineTests
     }
 
     /// <summary>
-    /// Stdout parity normalizes CRLF→LF and a single trailing newline (the L1
-    /// recipe), so a golden and an actual that differ only in line endings and
-    /// trailing whitespace still match.
+    /// Stdout parity normalizes CRLF→LF and tolerates exactly one unavoidable
+    /// terminal newline (the L1 recipe), so a golden and an actual that differ
+    /// only in line endings and that single trailing newline still match.
+    /// Issue #1749 mode 2: this must NOT extend to collapsing *every* trailing
+    /// newline — see <see cref="StdoutParityNormalizeTests"/> for the case this
+    /// regressed (extra trailing blank lines must still be detected).
     /// </summary>
     [Fact]
-    public void StdoutParity_Normalizes_LineEndingsAndTrailingNewline()
+    public void StdoutParity_Normalizes_LineEndingsAndSingleTrailingNewline()
     {
-        StdoutParityResult result = StdoutParity.Compare("line1\nline2\n", "line1\r\nline2\r\n\n\n");
+        StdoutParityResult result = StdoutParity.Compare("line1\nline2\n", "line1\r\nline2\r\n");
 
         Assert.True(result.IsMatch);
     }
+
 
     /// <summary>
     /// A stdout mismatch isolates the first differing line (1-based) and both
