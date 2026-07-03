@@ -60,6 +60,7 @@ public class BoundNodeKindExhaustivenessTests
         // Statement kinds — dispatched via EmitStatement, not EmitExpression.
         "BlockStatement",
         "VariableDeclaration",
+        "LocalFunctionDeclaration",
         "IfStatement",
         "ForInfiniteStatement",
         "ForEllipsisStatement",
@@ -206,6 +207,7 @@ public class BoundNodeKindExhaustivenessTests
         // Statement kinds — not expressions.
         "BlockStatement",
         "VariableDeclaration",
+        "LocalFunctionDeclaration",
         "IfStatement",
         "ForInfiniteStatement",
         "ForEllipsisStatement",

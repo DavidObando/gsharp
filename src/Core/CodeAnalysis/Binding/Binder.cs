@@ -246,7 +246,8 @@ public sealed class Binder
             resolveClrTypeForGenericArg: ResolveClrTypeForGenericArg,
             getCurrentFunction: () => this.function,
             setCurrentFunction: fn => this.function = fn,
-            bindLambdaBodyExpression: syntax => expressions.BindLambdaBodyExpression(syntax));
+            bindLambdaBodyExpression: syntax => expressions.BindLambdaBodyExpression(syntax),
+            bindTypeParameterList: syntax => declarations.BindTypeParameterList(syntax));
         statements = new StatementBinder(
             binderCtx,
             conversions,
@@ -264,7 +265,8 @@ public sealed class Binder
             resolveAccessibility: ResolveAccessibility,
             bindVariableDeclarationAttributes: (annotations, positionDescription) => declarations.BindAttributes(annotations, AttributeTargetKind.Field, VariableDeclarationAllowedTargets, positionDescription, System.AttributeTargets.Field),
             getCurrentFunction: () => this.function,
-            bindLambdaWithTargetType: (syntax, targetType) => lambdas.BindLambdaExpression(syntax, targetType));
+            bindLambdaWithTargetType: (syntax, targetType) => lambdas.BindLambdaExpression(syntax, targetType),
+            bindGenericLocalFunctionDeclaration: syntax => lambdas.BindGenericLocalFunctionDeclaration(syntax));
         declarations = new DeclarationBinder(
             binderCtx,
             conversions,

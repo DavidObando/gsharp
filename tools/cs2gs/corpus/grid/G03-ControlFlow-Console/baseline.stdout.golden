@@ -30,6 +30,9 @@ IfStatement: 12 is even (if without else)
 IfStatement: 12 is between 10 and 20 (nested if)
 LocalFunctionStatement: Add(3, 4) = 7
 LocalFunctionStatement: AddSeed(7) with captured seed = 12
+LocalFunctionStatement: Square(6) = 36
+LocalFunctionStatement: First(1, 2) = 1
+LocalFunctionStatement: First("x", "y") = x
 LockStatement: counter=1
 LockStatement: about to throw
 LockStatement: caught boom

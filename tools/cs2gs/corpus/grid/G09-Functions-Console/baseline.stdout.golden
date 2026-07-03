@@ -7,6 +7,8 @@ DeclarationExpression: outTyped=7 ok=True
 DeclarationExpression: discardParse=False
 DeclarationExpression: tryGet=36
 DeclarationExpression: missing=0 found=False
+LocalFunctionStatementGeneric: Echo(7)=7
+LocalFunctionStatementGeneric: Echo("hi")=hi
 LocalFunctionStatementGeneric: asFunc=36
 LocalFunctionStatementGeneric: shift=101
 MethodGroupConversion: func=42

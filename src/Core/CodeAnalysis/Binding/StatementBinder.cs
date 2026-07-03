@@ -87,6 +87,7 @@ internal sealed class StatementBinder
     private readonly BindVariableDeclarationAttributesDelegate bindVariableDeclarationAttributes;
     private readonly Func<FunctionSymbol> getCurrentFunction;
     private readonly Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression> bindLambdaWithTargetType;
+    private readonly Func<VariableDeclarationSyntax, BoundStatement> bindGenericLocalFunctionDeclaration;
 
     public StatementBinder(
         BinderContext binderCtx,
@@ -105,7 +106,8 @@ internal sealed class StatementBinder
         Func<SyntaxToken, Accessibility> resolveAccessibility,
         BindVariableDeclarationAttributesDelegate bindVariableDeclarationAttributes,
         Func<FunctionSymbol> getCurrentFunction,
-        Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression> bindLambdaWithTargetType = null)
+        Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression> bindLambdaWithTargetType = null,
+        Func<VariableDeclarationSyntax, BoundStatement> bindGenericLocalFunctionDeclaration = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
         this.conversions = conversions ?? throw new ArgumentNullException(nameof(conversions));
@@ -124,6 +126,7 @@ internal sealed class StatementBinder
         this.bindVariableDeclarationAttributes = bindVariableDeclarationAttributes ?? throw new ArgumentNullException(nameof(bindVariableDeclarationAttributes));
         this.getCurrentFunction = getCurrentFunction ?? throw new ArgumentNullException(nameof(getCurrentFunction));
         this.bindLambdaWithTargetType = bindLambdaWithTargetType;
+        this.bindGenericLocalFunctionDeclaration = bindGenericLocalFunctionDeclaration;
     }
 
     private DiagnosticBag Diagnostics => binderCtx.Diagnostics;
@@ -858,6 +861,17 @@ internal sealed class StatementBinder
         if (syntax.HasRefKindModifier)
         {
             return BindRefAliasLocalDeclaration(syntax);
+        }
+
+        // Issue #1886: `let Name[T, ...] = func (...) ... { ... }` declares a generic local
+        // function. Route to the dedicated LambdaBinder path instead of the ordinary
+        // variable-declaration binder — a generic function value cannot be represented as a
+        // delegate stored in a variable.
+        if (syntax.TypeParameterList != null)
+        {
+            return bindGenericLocalFunctionDeclaration != null
+                ? bindGenericLocalFunctionDeclaration(syntax)
+                : throw new InvalidOperationException("Generic local-function declarations require bindGenericLocalFunctionDeclaration to be wired.");
         }
 
         var isReadOnly = syntax.Keyword?.Kind == SyntaxKind.ConstKeyword

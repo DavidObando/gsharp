@@ -16,6 +16,7 @@ public enum BoundNodeKind
     // Statements
     BlockStatement,
     VariableDeclaration,
+    LocalFunctionDeclaration,
     IfStatement,
     ForInfiniteStatement,
     ForEllipsisStatement,

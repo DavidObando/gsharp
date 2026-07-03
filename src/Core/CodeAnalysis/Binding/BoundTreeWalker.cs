@@ -72,6 +72,9 @@ public abstract class BoundTreeWalker
             case BoundNodeKind.VariableDeclaration:
                 VisitVariableDeclaration((BoundVariableDeclaration)node);
                 break;
+            case BoundNodeKind.LocalFunctionDeclaration:
+                VisitLocalFunctionDeclaration((BoundLocalFunctionDeclaration)node);
+                break;
             case BoundNodeKind.IfStatement:
                 VisitIfStatement((BoundIfStatement)node);
                 break;
@@ -406,6 +409,13 @@ public abstract class BoundTreeWalker
     protected virtual void VisitVariableDeclaration(BoundVariableDeclaration node)
     {
         VisitExpression(node.Initializer);
+    }
+
+    /// <summary>Visits a generic local-function declaration (issue #1886) by descending into its function literal, mirroring <see cref="VisitVariableDeclaration"/>.</summary>
+    /// <param name="node">The node to visit.</param>
+    protected virtual void VisitLocalFunctionDeclaration(BoundLocalFunctionDeclaration node)
+    {
+        VisitExpression(node.Literal);
     }
 
     protected virtual void VisitIfStatement(BoundIfStatement node)

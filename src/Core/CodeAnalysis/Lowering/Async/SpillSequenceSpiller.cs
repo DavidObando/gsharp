@@ -180,6 +180,11 @@ public static class SpillSequenceSpiller
                 case BoundPatternSwitchStatement:
                 case BoundAwaitSequencePoint:
                 case BoundYieldStatement:
+                case BoundLocalFunctionDeclaration:
+                    // Issue #1886: a generic local function's literal body is a
+                    // separate lexical scope (mirrors BoundTreeRewriter's
+                    // RewriteFunctionLiteralExpression) lowered independently
+                    // when hosted for emission — nothing here to spill.
                     builder.Add(statement);
                     return false;
 

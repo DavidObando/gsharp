@@ -275,6 +275,11 @@ internal sealed partial class MethodBodyEmitter
                 this.EmitExpression(decl.Initializer);
                 this.EmitStoreVariable(decl.Variable);
                 break;
+            case BoundLocalFunctionDeclaration:
+                // Issue #1886: a generic local function is not a runtime value — no slot, no
+                // codegen here. Its underlying method is discovered and emitted independently
+                // via the non-capturing-lambda hosting pipeline (see SlotPlanner.CollectFunctionLiterals).
+                break;
             case BoundLabelStatement lbl:
                 this.il.MarkLabel(this.labels[lbl.Label]);
                 break;
