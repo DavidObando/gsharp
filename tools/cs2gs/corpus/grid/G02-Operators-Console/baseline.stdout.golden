@@ -1,0 +1,53 @@
+AddAssignmentExpression: int=15 double=3.75 string=abcd
+AddExpression: int=10 double=3.5
+AddExpression: string=cat-dog mixed=n=7
+AndAssignmentExpression: bits=10 flag=False
+AsExpression: text=hello missing=null
+BitwiseAndExpression: int=8 bool=False
+BitwiseNotExpression: notFive=-6 notZero=-1
+BitwiseOrExpression: int=14 bool=True
+CastExpression: truncated=3 half=3.5 letter=B narrowed=44
+CoalesceAssignmentExpression: name=fallback keep=kept
+CoalesceExpression: first=value picked=21
+ConditionalAccessExpression: len=5 nullLen=-1
+ConditionalExpression: max=9 label=even clamped=5
+DefaultExpression: int=0 bool=False double=0 stringIsNull=True
+DivideAssignmentExpression: int=7 double=2.25
+DivideExpression: int=3 negInt=-3 double=3.5
+ElementBindingExpression: first=10 missing=-1
+EqualsExpression: ints=True strings=True nullCheck=True
+ExclusiveOrAssignmentExpression: bits=6 flag=False
+ExclusiveOrExpression: int=6 bool=True
+GreaterThanExpression: gt=True notGt=False
+GreaterThanOrEqualExpression: ge=True notGe=False
+IsExpression: isString=True isInt=True wrong=False
+LeftShiftAssignmentExpression: v=48
+LeftShiftExpression: a=32 b=12
+LessThanExpression: lt=True notLt=False
+LessThanOrEqualExpression: le=True notLe=False
+LogicalAndExpression: guarded=False both=True
+LogicalNotExpression: off=False doubled=True
+LogicalOrExpression: safe=True either=True
+MemberBindingExpression: upper=WORLD absent=null
+ModuloAssignmentExpression: int=1 double=1.5
+ModuloExpression: int=1 negInt=-1 double=1.5
+MultiplyAssignmentExpression: int=42 double=6
+MultiplyExpression: int=42 double=6 negative=-12
+NameOfExpression: local=counter type=Console method=Run value=3
+NotEqualsExpression: ints=True strings=False notNull=False
+OrAssignmentExpression: bits=7 flag=True
+PostDecrementExpression: observed=5 after=4
+PostIncrementExpression: observed=5 after=6
+PreDecrementExpression: observed=4 after=4
+PreIncrementExpression: observed=6 after=6
+RightShiftAssignmentExpression: v=6 w=-8
+RightShiftExpression: a=8 arithmetic=-4
+SimpleAssignmentExpression: a=2 b=7 c=7
+SizeOfExpression: int=4 byte=1 char=2
+SizeOfExpression: long=8 bool=1 double=8
+SubtractAssignmentExpression: int=6 double=4.25
+SubtractExpression: int=6 negative=-7 double=2.25
+SuppressNullableWarningExpression: value=present len=7
+TypeOfExpression: int=Int32 string=String double=System.Double
+UnaryMinusExpression: negated=-5 double=-2.5 expr=-7
+UnaryPlusExpression: plus=5 double=2.5

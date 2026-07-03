@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using Cs2Gs.Translator.Coverage;
 using Microsoft.CodeAnalysis;
 
 namespace Cs2Gs.Translator;
@@ -23,6 +24,21 @@ public enum TranslationSeverity
     /// (ADR-0115 §B/§C — category <c>translation-unsupported</c>).
     /// </summary>
     Unsupported,
+}
+
+/// <summary>
+/// Whether an <see cref="TranslationSeverity.Unsupported"/> diagnostic is a
+/// recorded design decision or an accidental fallthrough (ADR-0138). The
+/// choke point in <see cref="TranslationContext.ReportUnsupported"/> assigns
+/// it from the <see cref="UnsupportedByDesign"/> registry.
+/// </summary>
+public enum UnsupportedClassification
+{
+    /// <summary>An accidental hole: the construct is not registered as deliberately rejected (triage id <c>CS2GS-GAP</c>).</summary>
+    Gap,
+
+    /// <summary>A recorded design decision with a rationale (triage id <c>CS2GS-UNSUPPORTED</c>).</summary>
+    ByDesign,
 }
 
 /// <summary>
@@ -63,6 +79,21 @@ public sealed class TranslationDiagnostic
 
     /// <summary>Gets the severity.</summary>
     public TranslationSeverity Severity { get; }
+
+    /// <summary>
+    /// Gets or sets the gap-vs-by-design classification of an
+    /// <see cref="TranslationSeverity.Unsupported"/> record. Defaults to
+    /// <see cref="UnsupportedClassification.Gap"/>; the
+    /// <see cref="TranslationContext.ReportUnsupported"/> choke point upgrades
+    /// it when the construct is in the <see cref="UnsupportedByDesign"/> registry.
+    /// </summary>
+    public UnsupportedClassification Classification { get; set; }
+
+    /// <summary>
+    /// Gets or sets the rationale when <see cref="Classification"/> is
+    /// <see cref="UnsupportedClassification.ByDesign"/>.
+    /// </summary>
+    public UnsupportedRationale Rationale { get; set; }
 
     /// <summary>Gets a value indicating whether this is an unsupported-construct record.</summary>
     public bool IsUnsupported => this.Severity == TranslationSeverity.Unsupported;

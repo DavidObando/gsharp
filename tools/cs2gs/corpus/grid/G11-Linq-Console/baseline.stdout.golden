@@ -1,0 +1,16 @@
+MethodChainParity: query=25,16,9,4
+MethodChainParity: chain=25,16,9,4
+MethodChainParity: queryUpper=BB,CCC,DD
+MethodChainParity: chainUpper=BB,CCC,DD
+OrderByClause: asc=1,2,3,4,5
+OrderByClause: desc=5,4,3,2,1
+OrderByClause: ranked=ada41,dee41,bea30,cid30
+QueryContinuation: scaledUp=31,41,51,61
+QueryExpression: doubled=2,4,6,8
+QueryExpression: shouted=ADA,BEA,CID
+QueryExpressionNested: 2<=[1|2]
+QueryExpressionNested: 3<=[1|2|3]
+QueryExpressionNested: 4<=[1|2|3|4]
+WhereClause: evens=2,4,6,8
+WhereClause: band=3,4,5,6
+WhereClause: picky=2,6,8

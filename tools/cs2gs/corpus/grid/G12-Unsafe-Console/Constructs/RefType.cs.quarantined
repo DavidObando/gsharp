@@ -1,0 +1,27 @@
+// inventory: RefType — ref locals and a ref-returning method (probe)
+// `ref int` locals aliasing array elements and a `ref` return that the caller
+// binds and mutates through.
+using System;
+
+namespace Corpus.Grid12.Constructs
+{
+    public static class RefTypeFixture
+    {
+        public static void Run()
+        {
+            int[] data = new int[] { 1, 2, 3 };
+            ref int first = ref data[0];
+            first = 10;
+
+            ref int middle = ref Middle(data);
+            middle += 5;
+
+            Console.WriteLine($"RefType: data={data[0]},{data[1]},{data[2]}");
+        }
+
+        private static ref int Middle(int[] values)
+        {
+            return ref values[1];
+        }
+    }
+}

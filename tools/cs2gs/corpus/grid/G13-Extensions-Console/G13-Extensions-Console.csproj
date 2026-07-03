@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Corpus.Grid13</RootNamespace>
+    <AssemblyName>G13-Extensions-Console</AssemblyName>
+  </PropertyGroup>
+
+</Project>

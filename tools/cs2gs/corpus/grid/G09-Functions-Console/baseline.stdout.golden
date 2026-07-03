@@ -1,0 +1,35 @@
+ConditionalAccessExpression: nullHandler=null
+ConditionalAccessExpression: got ping
+ConditionalAccessExpression: missed=none
+ConditionalAccessExpression: hit=9
+DeclarationExpression: outVar=42
+DeclarationExpression: outTyped=7 ok=True
+DeclarationExpression: discardParse=False
+DeclarationExpression: tryGet=36
+DeclarationExpression: missing=0 found=False
+LocalFunctionStatementGeneric: asFunc=36
+LocalFunctionStatementGeneric: shift=101
+MethodGroupConversion: func=42
+MethodGroupConversion: emit action
+MethodGroupConversion: linq=2,4,6
+MethodGroupConversion: instance=5,10
+NameColon: inOrder=2xcat
+NameColon: outOfOrder=1XDOG
+NameColon: mixed=3xfox
+OptionalAndParamsArray: defaults=Hello Ada x1
+OptionalAndParamsArray: oneOverride=Yo Bea x1
+OptionalAndParamsArray: namedSkip=Hello Cid x2
+OptionalAndParamsArray: sumNone=0
+OptionalAndParamsArray: sumThree=6
+OptionalAndParamsArray: sumArray=9
+ParenthesizedLambdaExpression: add=5
+ParenthesizedLambdaExpression: mul=20
+ParenthesizedLambdaExpression: hello=hello
+ParenthesizedLambdaExpression: stmt=16
+ParenthesizedLambdaExpression: report=6/7
+ParenthesizedLambdaExpressionAsync: result=42
+ParenthesizedLambdaExpressionAttributed: result=42
+SimpleLambdaExpression: twice=16
+SimpleLambdaExpression: scale=40
+SimpleLambdaExpression: bang=go!
+SimpleLambdaExpression: bumped=2,3,4

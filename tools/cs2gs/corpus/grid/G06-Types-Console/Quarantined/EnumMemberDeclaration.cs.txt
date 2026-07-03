@@ -1,0 +1,26 @@
+// inventory: EnumMemberDeclaration — explicit values, negative value, member referencing member
+using System;
+
+namespace Corpus.Grid06
+{
+    public enum StatusCode
+    {
+        Unknown = -1,
+        Ok = 200,
+        NotFound = 404,
+        ServerError = 500,
+        DefaultError = ServerError,
+    }
+
+    public static class EnumMemberDeclarationFixture
+    {
+        public static void Run()
+        {
+            Console.WriteLine("EnumMemberDeclaration: unknown=" + ((int)StatusCode.Unknown).ToString());
+            Console.WriteLine("EnumMemberDeclaration: ok=" + ((int)StatusCode.Ok).ToString());
+            Console.WriteLine("EnumMemberDeclaration: notfound=" + ((int)StatusCode.NotFound).ToString());
+            Console.WriteLine("EnumMemberDeclaration: default-error=" + ((int)StatusCode.DefaultError).ToString());
+            Console.WriteLine("EnumMemberDeclaration: alias-equals=" + (StatusCode.DefaultError == StatusCode.ServerError ? "true" : "false"));
+        }
+    }
+}

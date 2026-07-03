@@ -1,0 +1,11 @@
+ScopedType: data=1,7,3
+ScopedType: bumped=6
+SizeOfExpression: sizeof(byte)=1
+SizeOfExpression: sizeof(short)=2
+SizeOfExpression: sizeof(int)=4
+SizeOfExpression: sizeof(long)=8
+SizeOfExpression: sizeof(char)=2
+SizeOfExpression: sizeof(double)=8
+SizeOfExpression: sizeof(SizePair)=8 sum=7
+UnsafeStatement: block markerSize=16 tag=42
+UnsafeStatement: method result=42

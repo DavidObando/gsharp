@@ -1,0 +1,21 @@
+// inventory: ParenthesizedLambdaExpression — QUARANTINED at compile (gsc):
+// C#12 lambda default parameters are dropped in the emitted G# lambda, so the
+// zero-argument call fails: GS0144 "Function 'f' requires 1 arguments but was
+// given 0."
+using System;
+
+namespace Corpus.Grid09
+{
+    public static class ParenthesizedLambdaExpressionDefaultsFixture
+    {
+        public static void Run()
+        {
+            // C#12 lambda default parameters probe.
+            var f = (int x = 10) => x * 2;
+            Console.WriteLine($"ParenthesizedLambdaExpressionDefaults: fDefault={f()} fGiven={f(3)}");
+
+            var g = (int a, int b = 5) => a + b;
+            Console.WriteLine($"ParenthesizedLambdaExpressionDefaults: gDefault={g(1)} gGiven={g(1, 2)}");
+        }
+    }
+}

@@ -1,0 +1,31 @@
+// inventory: ExplicitInterfaceSpecifier — explicit interface member implementation (probe)
+// QUARANTINED sub-probe: an explicit impl ALONGSIDE a same-name public method fails
+// compile with GS0264 (the explicit impl is lowered to a plain `func Greet()` that
+// collides with the public overload). Only the lone explicit impl is exercised here.
+using System;
+
+namespace Corpus.Grid06
+{
+    public interface IGreeter
+    {
+        string Greet();
+    }
+
+    public class QuietHost : IGreeter
+    {
+        string IGreeter.Greet()
+        {
+            return "hello-explicit";
+        }
+    }
+
+    public static class ExplicitInterfaceSpecifierFixture
+    {
+        public static void Run()
+        {
+            QuietHost host = new QuietHost();
+            IGreeter viaInterface = host;
+            Console.WriteLine("ExplicitInterfaceSpecifier: interface=" + viaInterface.Greet());
+        }
+    }
+}

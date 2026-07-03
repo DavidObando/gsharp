@@ -1,0 +1,2523 @@
+[
+  {
+    "kind": "AccessorList",
+    "nodeType": "AccessorListSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None"
+  },
+  {
+    "kind": "AddAccessorDeclaration",
+    "nodeType": "AccessorDeclarationSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1899"
+  },
+  {
+    "kind": "AddAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/AddAssignmentExpression.cs"
+  },
+  {
+    "kind": "AddExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/AddExpression.cs"
+  },
+  {
+    "kind": "AddressOfExpression",
+    "nodeType": "PrefixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.30",
+    "rationale": "None"
+  },
+  {
+    "kind": "AliasQualifiedName",
+    "nodeType": "AliasQualifiedNameSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.12",
+    "rationale": "None"
+  },
+  {
+    "kind": "AllowsConstraintClause",
+    "nodeType": "AllowsConstraintClauseSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.7",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/AllowsConstraintClause.cs",
+    "notes": "C#13 allows ref struct passes E2E (grid G08)."
+  },
+  {
+    "kind": "AndAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/AndAssignmentExpression.cs"
+  },
+  {
+    "kind": "AndPattern",
+    "nodeType": "BinaryPatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/AndPattern.cs"
+  },
+  {
+    "kind": "AnonymousMethodExpression",
+    "nodeType": "AnonymousMethodExpressionSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1898"
+  },
+  {
+    "kind": "AnonymousObjectCreationExpression",
+    "nodeType": "AnonymousObjectCreationExpressionSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1934"
+  },
+  {
+    "kind": "AnonymousObjectMemberDeclarator",
+    "nodeType": "AnonymousObjectMemberDeclaratorSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1934"
+  },
+  {
+    "kind": "ArgListExpression",
+    "nodeType": "LiteralExpressionSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "NoGsharpConstruct",
+    "fixture": "tools/cs2gs/Cs2Gs.Tests/Fixtures/Grid/Unsupported/ArgListExpression.cs",
+    "notes": "Legacy TypedReference/varargs machinery (__makeref/__reftype/__refvalue/__arglist); no G# analog planned."
+  },
+  {
+    "kind": "Argument",
+    "nodeType": "ArgumentSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "ArgumentList",
+    "nodeType": "ArgumentListSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "ArrayCreationExpression",
+    "nodeType": "ArrayCreationExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.16",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/ArrayCreationExpression.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1893",
+    "notes": "Multi-dim arrays silently lowered to 1-D (issue #1893, parity-verified); 1-D/jagged green."
+  },
+  {
+    "kind": "ArrayInitializerExpression",
+    "nodeType": "InitializerExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.16",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/ArrayInitializerExpression.cs"
+  },
+  {
+    "kind": "ArrayRankSpecifier",
+    "nodeType": "ArrayRankSpecifierSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.16",
+    "rationale": "None"
+  },
+  {
+    "kind": "ArrayType",
+    "nodeType": "ArrayTypeSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.16",
+    "rationale": "None"
+  },
+  {
+    "kind": "ArrowExpressionClause",
+    "nodeType": "ArrowExpressionClauseSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.5",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/ArrowExpressionClause.cs",
+    "notes": "Expression-bodied members (ADR-0131)."
+  },
+  {
+    "kind": "AsExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/AsExpression.cs"
+  },
+  {
+    "kind": "AscendingOrdering",
+    "nodeType": "OrderingSyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/OrderByClause.cs",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "Attribute",
+    "nodeType": "AttributeSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/AttributeList.cs",
+    "notes": "User-defined attribute classes blocked by gsc GS0200 (issue #1921)."
+  },
+  {
+    "kind": "AttributeArgument",
+    "nodeType": "AttributeArgumentSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None"
+  },
+  {
+    "kind": "AttributeArgumentList",
+    "nodeType": "AttributeArgumentListSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None"
+  },
+  {
+    "kind": "AttributeList",
+    "nodeType": "AttributeListSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/AttributeList.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1913",
+    "notes": "BCL attributes green; parameter attributes silently dropped and generic attributes emit non-parsing G# (issue #1913)."
+  },
+  {
+    "kind": "AttributeTargetSpecifier",
+    "nodeType": "AttributeTargetSpecifierSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None"
+  },
+  {
+    "kind": "AwaitExpression",
+    "nodeType": "AwaitExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.23",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G10-Async-Console/Constructs/AwaitExpression.cs",
+    "notes": "Task/Task\u003CT\u003E green incl. ConfigureAwait and await foreach; ValueTask blocked by gsc (issue #1918); async Main mislowers (issue #1904)."
+  },
+  {
+    "kind": "BadDirectiveTrivia",
+    "nodeType": "BadDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "BaseConstructorInitializer",
+    "nodeType": "ConstructorInitializerSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.28",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/BaseConstructorInitializer.cs"
+  },
+  {
+    "kind": "BaseExpression",
+    "nodeType": "BaseExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "notes": "base.M() virtual calls (issue #986, resolved)."
+  },
+  {
+    "kind": "BaseList",
+    "nodeType": "BaseListSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.6",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/BaseList.cs"
+  },
+  {
+    "kind": "BitwiseAndExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/BitwiseAndExpression.cs"
+  },
+  {
+    "kind": "BitwiseNotExpression",
+    "nodeType": "PrefixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/BitwiseNotExpression.cs"
+  },
+  {
+    "kind": "BitwiseOrExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/BitwiseOrExpression.cs"
+  },
+  {
+    "kind": "Block",
+    "nodeType": "BlockSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.2",
+    "rationale": "None"
+  },
+  {
+    "kind": "BracketedArgumentList",
+    "nodeType": "BracketedArgumentListSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "notes": "Issue #942 (resolved)."
+  },
+  {
+    "kind": "BracketedParameterList",
+    "nodeType": "BracketedParameterListSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None",
+    "notes": "User indexers (issue #944)."
+  },
+  {
+    "kind": "BreakStatement",
+    "nodeType": "BreakStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/BreakStatement.cs"
+  },
+  {
+    "kind": "CasePatternSwitchLabel",
+    "nodeType": "CasePatternSwitchLabelSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.33",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/CasePatternSwitchLabel.cs"
+  },
+  {
+    "kind": "CaseSwitchLabel",
+    "nodeType": "CaseSwitchLabelSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.33",
+    "rationale": "None"
+  },
+  {
+    "kind": "CastExpression",
+    "nodeType": "CastExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.17",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/CastExpression.cs"
+  },
+  {
+    "kind": "CatchClause",
+    "nodeType": "CatchClauseSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.27",
+    "rationale": "None"
+  },
+  {
+    "kind": "CatchDeclaration",
+    "nodeType": "CatchDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.27",
+    "rationale": "None"
+  },
+  {
+    "kind": "CatchFilterClause",
+    "nodeType": "CatchFilterClauseSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.27",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/CatchFilterClause.cs",
+    "notes": "A when-filter with an overlapping later sibling catch has no faithful lowering (issue #1724 area)."
+  },
+  {
+    "kind": "CharacterLiteralExpression",
+    "nodeType": "LiteralExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/CharacterLiteralExpression.cs"
+  },
+  {
+    "kind": "CheckedExpression",
+    "nodeType": "CheckedExpressionSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1881"
+  },
+  {
+    "kind": "CheckedStatement",
+    "nodeType": "CheckedStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/CheckedStatement.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1881",
+    "notes": "Overflow semantics silently erased \u2014 emitted as a plain block (issue #1881, parity-verified divergence); non-overflow subset green."
+  },
+  {
+    "kind": "ClassConstraint",
+    "nodeType": "ClassOrStructConstraintSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.7",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/ClassConstraint.cs"
+  },
+  {
+    "kind": "ClassDeclaration",
+    "nodeType": "ClassDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.4",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/ClassDeclaration.cs",
+    "notes": "C#12 primary ctors dropped (issue #1909); partial parts not merged (issue #1910)."
+  },
+  {
+    "kind": "CoalesceAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/CoalesceAssignmentExpression.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1916",
+    "notes": "On nullable value types the emitted G# fails ilverify (gsc issue #1916); string form is green."
+  },
+  {
+    "kind": "CoalesceExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/CoalesceExpression.cs",
+    "notes": "Binary ?? (issue #941, resolved)."
+  },
+  {
+    "kind": "CollectionExpression",
+    "nodeType": "CollectionExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.36",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/CollectionExpression.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1897",
+    "notes": "Array targets green; List\u003CT\u003E targets fail conversion; spread unsupported (issues #1897)."
+  },
+  {
+    "kind": "CollectionInitializerExpression",
+    "nodeType": "InitializerExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.16",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/CollectionInitializerExpression.cs"
+  },
+  {
+    "kind": "CompilationUnit",
+    "nodeType": "CompilationUnitSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.1",
+    "rationale": "None"
+  },
+  {
+    "kind": "ComplexElementInitializerExpression",
+    "nodeType": "InitializerExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.16",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/CollectionInitializerExpression.cs"
+  },
+  {
+    "kind": "ConditionalAccessExpression",
+    "nodeType": "ConditionalAccessExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/ConditionalAccessExpression.cs",
+    "notes": "Null-conditional ?. / ?[."
+  },
+  {
+    "kind": "ConditionalExpression",
+    "nodeType": "ConditionalExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.26",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/ConditionalExpression.cs"
+  },
+  {
+    "kind": "ConstantPattern",
+    "nodeType": "ConstantPatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/ConstantPattern.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1923",
+    "notes": "Boxed-object subjects fail in gsc (issue #1923); typed subjects green."
+  },
+  {
+    "kind": "ConstructorConstraint",
+    "nodeType": "ConstructorConstraintSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.7",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/ConstructorConstraint.cs",
+    "notes": "new T() under new() works (past gap #988 resolved)."
+  },
+  {
+    "kind": "ConstructorDeclaration",
+    "nodeType": "ConstructorDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.28",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/ConstructorDeclaration.cs"
+  },
+  {
+    "kind": "ContinueStatement",
+    "nodeType": "ContinueStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/ContinueStatement.cs"
+  },
+  {
+    "kind": "ConversionOperatorDeclaration",
+    "nodeType": "ConversionOperatorDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.31",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/ConversionOperatorDeclaration.cs"
+  },
+  {
+    "kind": "ConversionOperatorMemberCref",
+    "nodeType": "ConversionOperatorMemberCrefSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "CrefBracketedParameterList",
+    "nodeType": "CrefBracketedParameterListSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "CrefParameter",
+    "nodeType": "CrefParameterSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "CrefParameterList",
+    "nodeType": "CrefParameterListSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "DeclarationExpression",
+    "nodeType": "DeclarationExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.30",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G09-Functions-Console/Constructs/DeclarationExpression.cs"
+  },
+  {
+    "kind": "DeclarationPattern",
+    "nodeType": "DeclarationPatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/DeclarationPattern.cs",
+    "notes": "x is T t binder (issue #993, resolved)."
+  },
+  {
+    "kind": "DefaultConstraint",
+    "nodeType": "DefaultConstraintSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.7",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1931",
+    "notes": "Translates; gsc rejects default-constrained overrides (issue #1931)."
+  },
+  {
+    "kind": "DefaultExpression",
+    "nodeType": "DefaultExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/DefaultExpression.cs"
+  },
+  {
+    "kind": "DefaultLiteralExpression",
+    "nodeType": "LiteralExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/DefaultLiteralExpression.cs"
+  },
+  {
+    "kind": "DefaultSwitchLabel",
+    "nodeType": "DefaultSwitchLabelSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.33",
+    "rationale": "None"
+  },
+  {
+    "kind": "DefineDirectiveTrivia",
+    "nodeType": "DefineDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "DelegateDeclaration",
+    "nodeType": "DelegateDeclarationSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1899"
+  },
+  {
+    "kind": "DescendingOrdering",
+    "nodeType": "OrderingSyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/OrderByClause.cs",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "DestructorDeclaration",
+    "nodeType": "DestructorDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/DestructorDeclaration.cs"
+  },
+  {
+    "kind": "DiscardDesignation",
+    "nodeType": "DiscardDesignationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.30",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G09-Functions-Console/Constructs/DeclarationExpression.cs"
+  },
+  {
+    "kind": "DiscardPattern",
+    "nodeType": "DiscardPatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/DiscardPattern.cs"
+  },
+  {
+    "kind": "DivideAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/DivideAssignmentExpression.cs"
+  },
+  {
+    "kind": "DivideExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/DivideExpression.cs"
+  },
+  {
+    "kind": "DoStatement",
+    "nodeType": "DoStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/DoStatement.cs"
+  },
+  {
+    "kind": "ElementAccessExpression",
+    "nodeType": "ElementAccessExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "notes": "Issue #942 (resolved)."
+  },
+  {
+    "kind": "ElementBindingExpression",
+    "nodeType": "ElementBindingExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/ElementBindingExpression.cs",
+    "notes": "Null-conditional ?. / ?[."
+  },
+  {
+    "kind": "ElifDirectiveTrivia",
+    "nodeType": "ElifDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "ElseClause",
+    "nodeType": "ElseClauseSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "ElseDirectiveTrivia",
+    "nodeType": "ElseDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "EmptyStatement",
+    "nodeType": "EmptyStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/EmptyStatement.cs"
+  },
+  {
+    "kind": "EndIfDirectiveTrivia",
+    "nodeType": "EndIfDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "EndRegionDirectiveTrivia",
+    "nodeType": "EndRegionDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "EnumDeclaration",
+    "nodeType": "EnumDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/EnumDeclaration.cs",
+    "notes": "Implicit member values only; explicit values/[Flags] silently erased (issue #1912)."
+  },
+  {
+    "kind": "EnumMemberDeclaration",
+    "nodeType": "EnumMemberDeclarationSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1912",
+    "notes": "Explicit values, [Flags], negative and alias members erased to sequential ordinals \u2014 parity-verified divergence."
+  },
+  {
+    "kind": "EqualsExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/EqualsExpression.cs"
+  },
+  {
+    "kind": "EqualsValueClause",
+    "nodeType": "EqualsValueClauseSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.3",
+    "rationale": "None"
+  },
+  {
+    "kind": "ErrorDirectiveTrivia",
+    "nodeType": "ErrorDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "EventDeclaration",
+    "nodeType": "EventDeclarationSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1899"
+  },
+  {
+    "kind": "EventFieldDeclaration",
+    "nodeType": "EventFieldDeclarationSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1899"
+  },
+  {
+    "kind": "ExclusiveOrAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/ExclusiveOrAssignmentExpression.cs"
+  },
+  {
+    "kind": "ExclusiveOrExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/ExclusiveOrExpression.cs"
+  },
+  {
+    "kind": "ExplicitInterfaceSpecifier",
+    "nodeType": "ExplicitInterfaceSpecifierSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1911"
+  },
+  {
+    "kind": "ExpressionColon",
+    "nodeType": "ExpressionColonSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/ExpressionColon.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1891",
+    "notes": "is-form green; switch-expression arm form unsupported (issue #1891)."
+  },
+  {
+    "kind": "ExpressionElement",
+    "nodeType": "ExpressionElementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.36",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/CollectionExpression.cs"
+  },
+  {
+    "kind": "ExpressionStatement",
+    "nodeType": "ExpressionStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "ExtensionBlockDeclaration",
+    "nodeType": "ExtensionBlockDeclarationSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1879",
+    "notes": "C# 14 headline; classic this-param extensions map to receiver funcs and are green (grid G13)."
+  },
+  {
+    "kind": "ExtensionMemberCref",
+    "nodeType": "ExtensionMemberCrefSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "ExternAliasDirective",
+    "nodeType": "ExternAliasDirectiveSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "NoGsharpConstruct",
+    "notes": "Extern aliases disambiguate identically-named assemblies \u2014 a project-system feature G# does not model."
+  },
+  {
+    "kind": "FalseLiteralExpression",
+    "nodeType": "LiteralExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/FalseLiteralExpression.cs"
+  },
+  {
+    "kind": "FieldDeclaration",
+    "nodeType": "FieldDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.3",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/FieldDeclaration.cs"
+  },
+  {
+    "kind": "FieldExpression",
+    "nodeType": "FieldExpressionSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1907",
+    "notes": "C# 14 field keyword."
+  },
+  {
+    "kind": "FileScopedNamespaceDeclaration",
+    "nodeType": "FileScopedNamespaceDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.1",
+    "rationale": "None"
+  },
+  {
+    "kind": "FinallyClause",
+    "nodeType": "FinallyClauseSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.27",
+    "rationale": "None"
+  },
+  {
+    "kind": "FixedStatement",
+    "nodeType": "FixedStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1933",
+    "notes": "Compiles; ilverify-by-design (issue #1933)."
+  },
+  {
+    "kind": "ForEachStatement",
+    "nodeType": "ForEachStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/ForEachStatement.cs"
+  },
+  {
+    "kind": "ForEachVariableStatement",
+    "nodeType": "ForEachVariableStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1922",
+    "notes": "Translates; blocked by gsc ValueTuple deconstruction (issue #1922)."
+  },
+  {
+    "kind": "ForStatement",
+    "nodeType": "ForStatementSyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/ForStatement.cs",
+    "notes": "Lowered to a while loop when clauses demand it (issue #1732 incrementor-on-continue fix)."
+  },
+  {
+    "kind": "FromClause",
+    "nodeType": "FromClauseSyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/QueryExpression.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1902",
+    "notes": "First from lowers; a second from (SelectMany) has no lowering (issue #1902)."
+  },
+  {
+    "kind": "FunctionPointerCallingConvention",
+    "nodeType": "FunctionPointerCallingConventionSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1906"
+  },
+  {
+    "kind": "FunctionPointerParameter",
+    "nodeType": "FunctionPointerParameterSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1906"
+  },
+  {
+    "kind": "FunctionPointerParameterList",
+    "nodeType": "FunctionPointerParameterListSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1906"
+  },
+  {
+    "kind": "FunctionPointerType",
+    "nodeType": "FunctionPointerTypeSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1906"
+  },
+  {
+    "kind": "FunctionPointerUnmanagedCallingConvention",
+    "nodeType": "FunctionPointerUnmanagedCallingConventionSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1906"
+  },
+  {
+    "kind": "FunctionPointerUnmanagedCallingConventionList",
+    "nodeType": "FunctionPointerUnmanagedCallingConventionListSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1906"
+  },
+  {
+    "kind": "GenericName",
+    "nodeType": "GenericNameSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.7",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/GenericName.cs"
+  },
+  {
+    "kind": "GetAccessorDeclaration",
+    "nodeType": "AccessorDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None"
+  },
+  {
+    "kind": "GlobalStatement",
+    "nodeType": "GlobalStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None",
+    "notes": "Entry-class hoisting (T3): top-level statements."
+  },
+  {
+    "kind": "GotoCaseStatement",
+    "nodeType": "GotoStatementSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1884"
+  },
+  {
+    "kind": "GotoDefaultStatement",
+    "nodeType": "GotoStatementSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1884"
+  },
+  {
+    "kind": "GotoStatement",
+    "nodeType": "GotoStatementSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1884"
+  },
+  {
+    "kind": "GreaterThanExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/GreaterThanExpression.cs"
+  },
+  {
+    "kind": "GreaterThanOrEqualExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/GreaterThanOrEqualExpression.cs"
+  },
+  {
+    "kind": "GroupClause",
+    "nodeType": "GroupClauseSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1902",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "IdentifierName",
+    "nodeType": "IdentifierNameSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.12",
+    "rationale": "None"
+  },
+  {
+    "kind": "IfDirectiveTrivia",
+    "nodeType": "IfDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "IfStatement",
+    "nodeType": "IfStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/IfStatement.cs"
+  },
+  {
+    "kind": "IgnoredDirectiveTrivia",
+    "nodeType": "IgnoredDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "ImplicitArrayCreationExpression",
+    "nodeType": "ImplicitArrayCreationExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.16",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/ImplicitArrayCreationExpression.cs"
+  },
+  {
+    "kind": "ImplicitElementAccess",
+    "nodeType": "ImplicitElementAccessSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1897"
+  },
+  {
+    "kind": "ImplicitObjectCreationExpression",
+    "nodeType": "ImplicitObjectCreationExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.25",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/ObjectCreationExpression.cs"
+  },
+  {
+    "kind": "ImplicitStackAllocArrayCreationExpression",
+    "nodeType": "ImplicitStackAllocArrayCreationExpressionSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1897",
+    "notes": "ADR-0124 stackalloc surface."
+  },
+  {
+    "kind": "IncompleteMember",
+    "nodeType": "IncompleteMemberSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "NotReachable",
+    "notes": "Parser error-recovery artifact; never appears in well-formed C#."
+  },
+  {
+    "kind": "IndexExpression",
+    "nodeType": "PrefixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.36",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/IndexExpression.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1894",
+    "notes": "Inline ^i green; Index-typed locals mis-lower (issue #1894, runtime crash)."
+  },
+  {
+    "kind": "IndexerDeclaration",
+    "nodeType": "IndexerDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/IndexerDeclaration.cs",
+    "notes": "User indexers (issue #944)."
+  },
+  {
+    "kind": "IndexerMemberCref",
+    "nodeType": "IndexerMemberCrefSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "InitAccessorDeclaration",
+    "nodeType": "AccessorDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/PropertyDeclaration.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1892",
+    "notes": "Blocked when targeted by object initializers (issue #1892)."
+  },
+  {
+    "kind": "InterfaceDeclaration",
+    "nodeType": "InterfaceDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.4",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/InterfaceDeclaration.cs"
+  },
+  {
+    "kind": "InterpolatedStringExpression",
+    "nodeType": "InterpolatedStringExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.9",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G14-Strings-Console/Constructs/InterpolatedStringExpression.cs"
+  },
+  {
+    "kind": "InterpolatedStringText",
+    "nodeType": "InterpolatedStringTextSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.9",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G14-Strings-Console/Constructs/InterpolatedStringText.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1882",
+    "notes": "Brace escapes {{ }} copied verbatim \u2014 parity-verified divergence (issue #1882)."
+  },
+  {
+    "kind": "Interpolation",
+    "nodeType": "InterpolationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.9",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G14-Strings-Console/Constructs/Interpolation.cs"
+  },
+  {
+    "kind": "InterpolationAlignmentClause",
+    "nodeType": "InterpolationAlignmentClauseSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.9",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G14-Strings-Console/Constructs/InterpolationAlignmentClause.cs"
+  },
+  {
+    "kind": "InterpolationFormatClause",
+    "nodeType": "InterpolationFormatClauseSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.9",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G14-Strings-Console/Constructs/InterpolationFormatClause.cs"
+  },
+  {
+    "kind": "InvocationExpression",
+    "nodeType": "InvocationExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "IsExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/IsExpression.cs"
+  },
+  {
+    "kind": "IsPatternExpression",
+    "nodeType": "IsPatternExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.36",
+    "rationale": "None"
+  },
+  {
+    "kind": "JoinClause",
+    "nodeType": "JoinClauseSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1902",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "JoinIntoClause",
+    "nodeType": "JoinIntoClauseSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1902",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "LabeledStatement",
+    "nodeType": "LabeledStatementSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1884"
+  },
+  {
+    "kind": "LeftShiftAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LeftShiftAssignmentExpression.cs"
+  },
+  {
+    "kind": "LeftShiftExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LeftShiftExpression.cs"
+  },
+  {
+    "kind": "LessThanExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LessThanExpression.cs"
+  },
+  {
+    "kind": "LessThanOrEqualExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LessThanOrEqualExpression.cs"
+  },
+  {
+    "kind": "LetClause",
+    "nodeType": "LetClauseSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1902",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "LineDirectivePosition",
+    "nodeType": "LineDirectivePositionSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "LineDirectiveTrivia",
+    "nodeType": "LineDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "LineSpanDirectiveTrivia",
+    "nodeType": "LineSpanDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "ListPattern",
+    "nodeType": "ListPatternSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1889"
+  },
+  {
+    "kind": "LoadDirectiveTrivia",
+    "nodeType": "LoadDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "LocalDeclarationStatement",
+    "nodeType": "LocalDeclarationStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.3",
+    "rationale": "None"
+  },
+  {
+    "kind": "LocalFunctionStatement",
+    "nodeType": "LocalFunctionStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/LocalFunctionStatement.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1886",
+    "notes": "static local functions mislower at call sites; generic local functions unrepresentable (issue #1886)."
+  },
+  {
+    "kind": "LockStatement",
+    "nodeType": "LockStatementSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1885",
+    "notes": "Lowers to Monitor.Enter/Exit but omits import System.Threading."
+  },
+  {
+    "kind": "LogicalAndExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LogicalAndExpression.cs"
+  },
+  {
+    "kind": "LogicalNotExpression",
+    "nodeType": "PrefixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LogicalNotExpression.cs"
+  },
+  {
+    "kind": "LogicalOrExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LogicalOrExpression.cs"
+  },
+  {
+    "kind": "MakeRefExpression",
+    "nodeType": "MakeRefExpressionSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "NoGsharpConstruct",
+    "fixture": "tools/cs2gs/Cs2Gs.Tests/Fixtures/Grid/Unsupported/MakeRefExpression.cs",
+    "notes": "Legacy TypedReference/varargs machinery (__makeref/__reftype/__refvalue/__arglist); no G# analog planned."
+  },
+  {
+    "kind": "MemberBindingExpression",
+    "nodeType": "MemberBindingExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/MemberBindingExpression.cs",
+    "notes": "Null-conditional ?. / ?[."
+  },
+  {
+    "kind": "MethodDeclaration",
+    "nodeType": "MethodDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.5",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/MethodDeclaration.cs"
+  },
+  {
+    "kind": "ModuloAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/ModuloAssignmentExpression.cs"
+  },
+  {
+    "kind": "ModuloExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/ModuloExpression.cs"
+  },
+  {
+    "kind": "MultiLineDocumentationCommentTrivia",
+    "nodeType": "DocumentationCommentTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "MultiplyAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/MultiplyAssignmentExpression.cs"
+  },
+  {
+    "kind": "MultiplyExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/MultiplyExpression.cs"
+  },
+  {
+    "kind": "NameColon",
+    "nodeType": "NameColonSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G09-Functions-Console/Constructs/NameColon.cs",
+    "notes": "Named arguments use the G# name: value form (ADR-0080)."
+  },
+  {
+    "kind": "NameEquals",
+    "nodeType": "NameEqualsSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.16",
+    "rationale": "None"
+  },
+  {
+    "kind": "NameMemberCref",
+    "nodeType": "NameMemberCrefSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "NamespaceDeclaration",
+    "nodeType": "NamespaceDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.1",
+    "rationale": "None"
+  },
+  {
+    "kind": "NotEqualsExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/NotEqualsExpression.cs"
+  },
+  {
+    "kind": "NotPattern",
+    "nodeType": "UnaryPatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/NotPattern.cs"
+  },
+  {
+    "kind": "NullLiteralExpression",
+    "nodeType": "LiteralExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/NullLiteralExpression.cs"
+  },
+  {
+    "kind": "NullableDirectiveTrivia",
+    "nodeType": "NullableDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "NullableType",
+    "nodeType": "NullableTypeSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.12",
+    "rationale": "None",
+    "notes": "T? maps to G# nullable spelling."
+  },
+  {
+    "kind": "NumericLiteralExpression",
+    "nodeType": "LiteralExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/NumericLiteralExpression.cs"
+  },
+  {
+    "kind": "ObjectCreationExpression",
+    "nodeType": "ObjectCreationExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.16",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/ObjectCreationExpression.cs"
+  },
+  {
+    "kind": "ObjectInitializerExpression",
+    "nodeType": "InitializerExpressionSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1892",
+    "notes": "Initializer assignments emitted as stray statements."
+  },
+  {
+    "kind": "OmittedArraySizeExpression",
+    "nodeType": "OmittedArraySizeExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/OmittedArraySizeExpression.cs"
+  },
+  {
+    "kind": "OmittedTypeArgument",
+    "nodeType": "OmittedTypeArgumentSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.7",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/OmittedTypeArgument.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1915",
+    "notes": "nameof(List\u003C\u003E) forms green (C#14); typeof(List\u003C\u003E) emits typeof(List) (issue #1915)."
+  },
+  {
+    "kind": "OperatorDeclaration",
+    "nodeType": "OperatorDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.31",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/OperatorDeclaration.cs",
+    "notes": "C#14 instance compound-assignment operators fail round-trip (issue #1908); Equals(object) is-pattern override fails ilverify (issue #1917)."
+  },
+  {
+    "kind": "OperatorMemberCref",
+    "nodeType": "OperatorMemberCrefSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "OrAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/OrAssignmentExpression.cs"
+  },
+  {
+    "kind": "OrPattern",
+    "nodeType": "BinaryPatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/OrPattern.cs"
+  },
+  {
+    "kind": "OrderByClause",
+    "nodeType": "OrderByClauseSyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/OrderByClause.cs",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "Parameter",
+    "nodeType": "ParameterSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.5",
+    "rationale": "None"
+  },
+  {
+    "kind": "ParameterList",
+    "nodeType": "ParameterListSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.5",
+    "rationale": "None"
+  },
+  {
+    "kind": "ParenthesizedExpression",
+    "nodeType": "ParenthesizedExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "ParenthesizedLambdaExpression",
+    "nodeType": "ParenthesizedLambdaExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.20",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G09-Functions-Console/Constructs/ParenthesizedLambdaExpression.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1901",
+    "notes": "Lambda default parameters dropped (issue #1901); async lambdas blocked by gsc ICE (issue #1919)."
+  },
+  {
+    "kind": "ParenthesizedPattern",
+    "nodeType": "ParenthesizedPatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/ParenthesizedPattern.cs"
+  },
+  {
+    "kind": "ParenthesizedVariableDesignation",
+    "nodeType": "ParenthesizedVariableDesignationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.30",
+    "rationale": "None"
+  },
+  {
+    "kind": "PointerIndirectionExpression",
+    "nodeType": "PrefixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1925",
+    "notes": "Compiles; ilverify-by-design (issue #1933). *(p \u002B i) misbinds in gsc (issue #1925)."
+  },
+  {
+    "kind": "PointerMemberAccessExpression",
+    "nodeType": "MemberAccessExpressionSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1905",
+    "notes": "p-\u003EX lowered to p.X; (*p).X compiles."
+  },
+  {
+    "kind": "PointerType",
+    "nodeType": "PointerTypeSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1933",
+    "notes": "Pointer IL is unverifiable by design \u2014 pipeline policy issue #1933; compile-level green."
+  },
+  {
+    "kind": "PositionalPatternClause",
+    "nodeType": "PositionalPatternClauseSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1887",
+    "notes": "SILENT MISTRANSLATION: sub-patterns dropped to match-anything case { }."
+  },
+  {
+    "kind": "PostDecrementExpression",
+    "nodeType": "PostfixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/PostDecrementExpression.cs"
+  },
+  {
+    "kind": "PostIncrementExpression",
+    "nodeType": "PostfixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/PostIncrementExpression.cs"
+  },
+  {
+    "kind": "PragmaChecksumDirectiveTrivia",
+    "nodeType": "PragmaChecksumDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "PragmaWarningDirectiveTrivia",
+    "nodeType": "PragmaWarningDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "PreDecrementExpression",
+    "nodeType": "PrefixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/PreDecrementExpression.cs"
+  },
+  {
+    "kind": "PreIncrementExpression",
+    "nodeType": "PrefixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/PreIncrementExpression.cs"
+  },
+  {
+    "kind": "PredefinedType",
+    "nodeType": "PredefinedTypeSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.12",
+    "rationale": "None"
+  },
+  {
+    "kind": "PrimaryConstructorBaseType",
+    "nodeType": "PrimaryConstructorBaseTypeSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1909"
+  },
+  {
+    "kind": "PropertyDeclaration",
+    "nodeType": "PropertyDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/PropertyDeclaration.cs"
+  },
+  {
+    "kind": "PropertyPatternClause",
+    "nodeType": "PropertyPatternClauseSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/RecursivePattern.cs",
+    "notes": "Property sub-patterns; designator collisions fixed in issue #1839."
+  },
+  {
+    "kind": "QualifiedCref",
+    "nodeType": "QualifiedCrefSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "QualifiedName",
+    "nodeType": "QualifiedNameSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.12",
+    "rationale": "None"
+  },
+  {
+    "kind": "QueryBody",
+    "nodeType": "QueryBodySyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/QueryExpression.cs",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "QueryContinuation",
+    "nodeType": "QueryContinuationSyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/QueryContinuation.cs",
+    "notes": "Non-group into green; group-based continuation blocked by GroupClause (issue #1902)."
+  },
+  {
+    "kind": "QueryExpression",
+    "nodeType": "QueryExpressionSyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/QueryExpression.cs",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "RangeExpression",
+    "nodeType": "RangeExpressionSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1896",
+    "notes": "Lowers to .Slice(...) which gsc cannot resolve on arrays/strings."
+  },
+  {
+    "kind": "RecordDeclaration",
+    "nodeType": "RecordDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.4",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/RecordDeclaration.cs",
+    "notes": "with-expressions blocked by initializer bug (issue #1892)."
+  },
+  {
+    "kind": "RecordStructDeclaration",
+    "nodeType": "RecordDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.4",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/RecordStructDeclaration.cs"
+  },
+  {
+    "kind": "RecursivePattern",
+    "nodeType": "RecursivePatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/RecursivePattern.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1923",
+    "notes": "Shallow property patterns green; nested reference-member and boxed/nullable subjects blocked by gsc (issue #1923)."
+  },
+  {
+    "kind": "RefExpression",
+    "nodeType": "RefExpressionSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1900",
+    "notes": "ref argument/return seam (\u0026x pass-by-address)."
+  },
+  {
+    "kind": "RefStructConstraint",
+    "nodeType": "RefStructConstraintSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.7",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/AllowsConstraintClause.cs"
+  },
+  {
+    "kind": "RefType",
+    "nodeType": "RefTypeSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1900"
+  },
+  {
+    "kind": "RefTypeExpression",
+    "nodeType": "RefTypeExpressionSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "NoGsharpConstruct",
+    "fixture": "tools/cs2gs/Cs2Gs.Tests/Fixtures/Grid/Unsupported/RefTypeExpression.cs",
+    "notes": "Legacy TypedReference/varargs machinery (__makeref/__reftype/__refvalue/__arglist); no G# analog planned."
+  },
+  {
+    "kind": "RefValueExpression",
+    "nodeType": "RefValueExpressionSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "NoGsharpConstruct",
+    "fixture": "tools/cs2gs/Cs2Gs.Tests/Fixtures/Grid/Unsupported/RefValueExpression.cs",
+    "notes": "Legacy TypedReference/varargs machinery (__makeref/__reftype/__refvalue/__arglist); no G# analog planned."
+  },
+  {
+    "kind": "ReferenceDirectiveTrivia",
+    "nodeType": "ReferenceDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "RegionDirectiveTrivia",
+    "nodeType": "RegionDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "RelationalPattern",
+    "nodeType": "RelationalPatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/RelationalPattern.cs"
+  },
+  {
+    "kind": "RemoveAccessorDeclaration",
+    "nodeType": "AccessorDeclarationSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1899"
+  },
+  {
+    "kind": "ReturnStatement",
+    "nodeType": "ReturnStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/ReturnStatement.cs"
+  },
+  {
+    "kind": "RightShiftAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/RightShiftAssignmentExpression.cs"
+  },
+  {
+    "kind": "RightShiftExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/RightShiftExpression.cs"
+  },
+  {
+    "kind": "ScopedType",
+    "nodeType": "ScopedTypeSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/ScopedType.cs",
+    "notes": "scoped Span/scoped ref parameters translate and verify (grid G12)."
+  },
+  {
+    "kind": "SelectClause",
+    "nodeType": "SelectClauseSyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/QueryExpression.cs",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "SetAccessorDeclaration",
+    "nodeType": "AccessorDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None"
+  },
+  {
+    "kind": "ShebangDirectiveTrivia",
+    "nodeType": "ShebangDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "SimpleAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/SimpleAssignmentExpression.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1895",
+    "notes": "Deconstruction-assignment into existing locals emits let bindings (issue #1895)."
+  },
+  {
+    "kind": "SimpleBaseType",
+    "nodeType": "SimpleBaseTypeSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.6",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/SimpleBaseType.cs"
+  },
+  {
+    "kind": "SimpleLambdaExpression",
+    "nodeType": "SimpleLambdaExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.20",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G09-Functions-Console/Constructs/SimpleLambdaExpression.cs"
+  },
+  {
+    "kind": "SimpleMemberAccessExpression",
+    "nodeType": "MemberAccessExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "SingleLineDocumentationCommentTrivia",
+    "nodeType": "DocumentationCommentTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "SingleVariableDesignation",
+    "nodeType": "SingleVariableDesignationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.30",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G09-Functions-Console/Constructs/DeclarationExpression.cs"
+  },
+  {
+    "kind": "SizeOfExpression",
+    "nodeType": "SizeOfExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/SizeOfExpression.cs"
+  },
+  {
+    "kind": "SkippedTokensTrivia",
+    "nodeType": "SkippedTokensTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "SlicePattern",
+    "nodeType": "SlicePatternSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1889"
+  },
+  {
+    "kind": "SpreadElement",
+    "nodeType": "SpreadElementSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1897"
+  },
+  {
+    "kind": "StackAllocArrayCreationExpression",
+    "nodeType": "StackAllocArrayCreationExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1933",
+    "notes": "Translates and compiles; IL is unverifiable by design \u2014 pipeline policy issue #1933."
+  },
+  {
+    "kind": "StringLiteralExpression",
+    "nodeType": "LiteralExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/StringLiteralExpression.cs"
+  },
+  {
+    "kind": "StructConstraint",
+    "nodeType": "ClassOrStructConstraintSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.7",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/StructConstraint.cs"
+  },
+  {
+    "kind": "StructDeclaration",
+    "nodeType": "StructDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.4",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/StructDeclaration.cs",
+    "notes": "Generic-struct ctor zip declined (issue #1915)."
+  },
+  {
+    "kind": "Subpattern",
+    "nodeType": "SubpatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/RecursivePattern.cs",
+    "notes": "Property sub-patterns; designator collisions fixed in issue #1839."
+  },
+  {
+    "kind": "SubtractAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/SubtractAssignmentExpression.cs"
+  },
+  {
+    "kind": "SubtractExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/SubtractExpression.cs"
+  },
+  {
+    "kind": "SuppressNullableWarningExpression",
+    "nodeType": "PostfixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/SuppressNullableWarningExpression.cs",
+    "notes": "x! maps to the G# !! assertion."
+  },
+  {
+    "kind": "SwitchExpression",
+    "nodeType": "SwitchExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/SwitchExpression.cs"
+  },
+  {
+    "kind": "SwitchExpressionArm",
+    "nodeType": "SwitchExpressionArmSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None"
+  },
+  {
+    "kind": "SwitchSection",
+    "nodeType": "SwitchSectionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.33",
+    "rationale": "None"
+  },
+  {
+    "kind": "SwitchStatement",
+    "nodeType": "SwitchStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.33",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/SwitchStatement.cs"
+  },
+  {
+    "kind": "ThisConstructorInitializer",
+    "nodeType": "ConstructorInitializerSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.28",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/ThisConstructorInitializer.cs"
+  },
+  {
+    "kind": "ThisExpression",
+    "nodeType": "ThisExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "ThrowExpression",
+    "nodeType": "ThrowExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.27",
+    "rationale": "None"
+  },
+  {
+    "kind": "ThrowStatement",
+    "nodeType": "ThrowStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.27",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/ThrowStatement.cs"
+  },
+  {
+    "kind": "TrueLiteralExpression",
+    "nodeType": "LiteralExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/TrueLiteralExpression.cs"
+  },
+  {
+    "kind": "TryStatement",
+    "nodeType": "TryStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.27",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/TryStatement.cs"
+  },
+  {
+    "kind": "TupleElement",
+    "nodeType": "TupleElementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.12",
+    "rationale": "None",
+    "notes": "G# tuple types (T1, T2)."
+  },
+  {
+    "kind": "TupleExpression",
+    "nodeType": "TupleExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/TupleExpression.cs"
+  },
+  {
+    "kind": "TupleType",
+    "nodeType": "TupleTypeSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.12",
+    "rationale": "None",
+    "notes": "G# tuple types (T1, T2)."
+  },
+  {
+    "kind": "TypeArgumentList",
+    "nodeType": "TypeArgumentListSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.7",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/TypeArgumentList.cs"
+  },
+  {
+    "kind": "TypeConstraint",
+    "nodeType": "TypeConstraintSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.7",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/TypeConstraint.cs"
+  },
+  {
+    "kind": "TypeCref",
+    "nodeType": "TypeCrefSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "TypeOfExpression",
+    "nodeType": "TypeOfExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/TypeOfExpression.cs"
+  },
+  {
+    "kind": "TypeParameter",
+    "nodeType": "TypeParameterSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.7",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/TypeParameterList.cs"
+  },
+  {
+    "kind": "TypeParameterConstraintClause",
+    "nodeType": "TypeParameterConstraintClauseSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.7",
+    "rationale": "None"
+  },
+  {
+    "kind": "TypeParameterList",
+    "nodeType": "TypeParameterListSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.7",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/TypeParameterList.cs",
+    "notes": "Generic class \u002B primary ctor ICEs gsc (issue #1920); declaration-site variance missing in gsc (issue #1927)."
+  },
+  {
+    "kind": "TypePattern",
+    "nodeType": "TypePatternSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1890",
+    "notes": "Bare-type switch-expression arms; is/case binder forms work (DeclarationPattern)."
+  },
+  {
+    "kind": "UnaryMinusExpression",
+    "nodeType": "PrefixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/UnaryMinusExpression.cs"
+  },
+  {
+    "kind": "UnaryPlusExpression",
+    "nodeType": "PrefixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/UnaryPlusExpression.cs"
+  },
+  {
+    "kind": "UncheckedExpression",
+    "nodeType": "CheckedExpressionSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1881"
+  },
+  {
+    "kind": "UncheckedStatement",
+    "nodeType": "CheckedStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/UncheckedStatement.cs",
+    "notes": "Wrap-around parity verified (grid G03)."
+  },
+  {
+    "kind": "UndefDirectiveTrivia",
+    "nodeType": "UndefDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "UnionDeclaration",
+    "nodeType": "(not exported by Roslyn 5.6)",
+    "status": "UnsupportedByDesign",
+    "rationale": "NotReachable",
+    "notes": "Post-C#14 preview syntax in Roslyn 5.6; not reachable at LangVersion latest."
+  },
+  {
+    "kind": "UnknownAccessorDeclaration",
+    "nodeType": "AccessorDeclarationSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "NotReachable",
+    "notes": "Parser error-recovery artifact; never appears in well-formed C#."
+  },
+  {
+    "kind": "UnsafeStatement",
+    "nodeType": "UnsafeStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/UnsafeStatement.cs"
+  },
+  {
+    "kind": "UnsignedRightShiftAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1880",
+    "notes": "Emits \u003E\u003E\u003E= verbatim; never parses."
+  },
+  {
+    "kind": "UnsignedRightShiftExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1880",
+    "notes": "Translator crash: Unknown binary operator \u003E\u003E\u003E."
+  },
+  {
+    "kind": "UsingDirective",
+    "nodeType": "UsingDirectiveSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.1",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/TypeAliasDeclaration.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1914",
+    "notes": "Plain \u002B simple-alias green; alias-any-type (C#12) unsupported (issue #1914)."
+  },
+  {
+    "kind": "UsingStatement",
+    "nodeType": "UsingStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.29",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/UsingStatement.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1903",
+    "notes": "await using drops async-dispose semantics (issue #1903)."
+  },
+  {
+    "kind": "Utf8StringLiteralExpression",
+    "nodeType": "LiteralExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/Utf8StringLiteralExpression.cs",
+    "notes": "C# 11 u8 literals translate and reach parity (grid G01)."
+  },
+  {
+    "kind": "VarPattern",
+    "nodeType": "VarPatternSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1888"
+  },
+  {
+    "kind": "VariableDeclaration",
+    "nodeType": "VariableDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.3",
+    "rationale": "None"
+  },
+  {
+    "kind": "VariableDeclarator",
+    "nodeType": "VariableDeclaratorSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.3",
+    "rationale": "None"
+  },
+  {
+    "kind": "WarningDirectiveTrivia",
+    "nodeType": "WarningDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "WhenClause",
+    "nodeType": "WhenClauseSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None",
+    "notes": "Pattern guards (issue #991, resolved)."
+  },
+  {
+    "kind": "WhereClause",
+    "nodeType": "WhereClauseSyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/WhereClause.cs",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "WhileStatement",
+    "nodeType": "WhileStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/WhileStatement.cs"
+  },
+  {
+    "kind": "WithElement",
+    "nodeType": "WithElementSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "NotReachable",
+    "notes": "Collection-expression with-element is preview-only (CS8652) under LangVersion latest (C# 14)."
+  },
+  {
+    "kind": "WithExpression",
+    "nodeType": "WithExpressionSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1892",
+    "notes": "Stray bare assignment emitted before the with-expression."
+  },
+  {
+    "kind": "WithInitializerExpression",
+    "nodeType": "InitializerExpressionSyntax",
+    "status": "Gap",
+    "rationale": "None",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1892"
+  },
+  {
+    "kind": "XmlCDataSection",
+    "nodeType": "XmlCDataSectionSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlComment",
+    "nodeType": "XmlCommentSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlCrefAttribute",
+    "nodeType": "XmlCrefAttributeSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlElement",
+    "nodeType": "XmlElementSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlElementEndTag",
+    "nodeType": "XmlElementEndTagSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlElementStartTag",
+    "nodeType": "XmlElementStartTagSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlEmptyElement",
+    "nodeType": "XmlEmptyElementSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlName",
+    "nodeType": "XmlNameSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlNameAttribute",
+    "nodeType": "XmlNameAttributeSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlPrefix",
+    "nodeType": "XmlPrefixSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlProcessingInstruction",
+    "nodeType": "XmlProcessingInstructionSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlText",
+    "nodeType": "XmlTextSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlTextAttribute",
+    "nodeType": "XmlTextAttributeSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "YieldBreakStatement",
+    "nodeType": "YieldStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.34",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/YieldBreakStatement.cs",
+    "notes": "Issue #994 (resolved)."
+  },
+  {
+    "kind": "YieldReturnStatement",
+    "nodeType": "YieldStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.34",
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/YieldReturnStatement.cs"
+  }
+]

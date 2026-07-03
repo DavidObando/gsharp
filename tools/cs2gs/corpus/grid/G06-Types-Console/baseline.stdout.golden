@@ -1,0 +1,30 @@
+BaseList: plain=generic
+BaseList: dog=woof (was generic)
+BaseList: intro=animal says woof (was generic)
+ClassDeclaration: plain count=2
+ClassDeclaration: sealed label=gold
+ClassDeclaration: abstract area=16 doubled=32
+ClassDeclaration: static triple=30
+ClassDeclaration: nested=6
+DestructorDeclaration: declared, id=7
+EnumDeclaration: banana=1
+EnumDeclaration: cherry=2
+EnumDeclaration: west=3
+EnumDeclaration: picked-is-banana=true
+EnumDeclaration: banana-not-cherry=true
+InterfaceDeclaration: length=12
+InterfaceDeclaration: describe=rope of 12
+InterfaceDeclaration: default-method=42
+RecordDeclaration: x=3 y=4
+RecordDeclaration: other-y=9
+RecordDeclaration: not-equal=true
+RecordStructDeclaration: w=2 h=3
+RecordStructDeclaration: wide-w=8
+RecordStructDeclaration: equal=true
+RecordStructDeclaration: not-equal=true
+SimpleBaseType: kind=sprocket
+SimpleBaseType: tag=tag-sprocket
+StructDeclaration: sum=12
+StructDeclaration: product=42
+StructDeclaration: area=25
+TypeAliasDeclaration: count=42

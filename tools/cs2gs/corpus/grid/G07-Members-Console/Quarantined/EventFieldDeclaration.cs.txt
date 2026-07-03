@@ -1,0 +1,38 @@
+// inventory: EventFieldDeclaration — field-like event, += subscribe, -= unsubscribe, raise (probe)
+using System;
+
+namespace Corpus.Grid07
+{
+    public delegate void TickHandler(int count);
+
+    public class TickSource
+    {
+        public event TickHandler? Ticked;
+
+        public void Tick(int count)
+        {
+            TickHandler? snapshot = Ticked;
+            if (snapshot != null)
+            {
+                snapshot(count);
+            }
+        }
+    }
+
+    public static class EventFieldDeclarationFixture
+    {
+        public static void Run()
+        {
+            TickSource source = new TickSource();
+            TickHandler listener = delegate(int count)
+            {
+                Console.WriteLine("EventFieldDeclaration: tick=" + count.ToString());
+            };
+            source.Ticked += listener;
+            source.Tick(3);
+            source.Ticked -= listener;
+            source.Tick(9);
+            Console.WriteLine("EventFieldDeclaration: done");
+        }
+    }
+}

@@ -1,0 +1,7 @@
+ExtensionMethodsClassic: bracketed=[hi]
+ExtensionMethodsClassic: squared=49
+ExtensionMethodsClassic: userType=42
+ExtensionMethodsClassic: chained=[[x]]
+ExtensionMethodsGeneric: middleInt=4
+ExtensionMethodsGeneric: middleWord=beta
+ExtensionMethodsGeneric: chained=40,120

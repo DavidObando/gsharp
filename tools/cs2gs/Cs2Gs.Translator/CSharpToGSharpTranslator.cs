@@ -3333,14 +3333,19 @@ public sealed class CSharpToGSharpTranslator
                 }
             }
 
-            // Fall back to the verbatim C# text for non-constant attribute
-            // arguments; these are rare and re-reviewed in triage.
+            // A non-constant attribute argument (an array of constants like
+            // `[InlineData(new[] { 3, 1 })]`, a `typeof(X)`, ...) goes through the
+            // ordinary expression translator: emitting the verbatim C# text here
+            // (the old fallback) produced non-parsing G# — `new[] { … }` can never
+            // round-trip — which violates the §B contract that every emitted form
+            // is parseable. Constructs the expression translator cannot map still
+            // surface loudly through its own diagnostics.
             this.context.Report(new TranslationDiagnostic(
                 nameof(SyntaxKind.AttributeArgument),
-                "attribute argument is not a simple constant; emitted its verbatim text (ADR-0115 §B.11).",
+                "attribute argument is not a simple constant; translated as an expression (ADR-0115 §B.11).",
                 argument.GetLocation(),
                 TranslationSeverity.Info));
-            return new IdentifierExpression(argument.Expression.ToString());
+            return this.TranslateExpression(argument.Expression);
         }
 
         /// <summary>
@@ -10226,8 +10231,36 @@ public sealed class CSharpToGSharpTranslator
             // The constructor may live in a different file than the one currently
             // being translated (the active `this.context.SemanticModel` is pinned
             // to the current tree), so its body must be analyzed via a semantic
-            // model for ITS OWN tree.
-            SemanticModel ctorModel = this.context.Compilation.GetSemanticModel(ctorSyntax.SyntaxTree);
+            // model for ITS OWN tree. When the project is loaded through
+            // MSBuildWorkspace, a struct declared in a REFERENCED project surfaces
+            // as a source symbol whose tree belongs to that project's compilation
+            // (a `CompilationReference`) — asking the CURRENT compilation for a
+            // model over that foreign tree throws, so resolve the model from the
+            // compilation that owns the tree. The zip must still happen for such
+            // types: in a co-translated bundle (e.g. the library + its .Tests
+            // project in test-parity) the struct is emitted as G# source with no
+            // callable constructor, so `new T(a, b)` has to become a composite
+            // literal exactly as it does for a same-project struct.
+            SemanticModel ctorModel;
+            if (this.context.Compilation.ContainsSyntaxTree(ctorSyntax.SyntaxTree))
+            {
+                ctorModel = this.context.Compilation.GetSemanticModel(ctorSyntax.SyntaxTree);
+            }
+            else
+            {
+                Compilation owningCompilation = this.context.Compilation.References
+                    .OfType<CompilationReference>()
+                    .Select(reference => (Compilation)reference.Compilation)
+                    .FirstOrDefault(candidate => candidate.ContainsSyntaxTree(ctorSyntax.SyntaxTree));
+                if (owningCompilation is null)
+                {
+                    unsupportedReason = "struct constructor syntax belongs to no reachable compilation; " +
+                        "its body cannot be analyzed for a positional G# struct literal (issue #1739).";
+                    return false;
+                }
+
+                ctorModel = owningCompilation.GetSemanticModel(ctorSyntax.SyntaxTree);
+            }
 
             var paramToMember = new Dictionary<IParameterSymbol, string>(SymbolEqualityComparer.Default);
             foreach (StatementSyntax statement in ctorSyntax.Body.Statements)

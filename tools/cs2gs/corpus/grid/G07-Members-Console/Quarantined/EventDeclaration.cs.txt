@@ -1,0 +1,44 @@
+// inventory: EventDeclaration — explicit add/remove accessors on a custom event (probe)
+using System;
+
+namespace Corpus.Grid07
+{
+    public delegate void MessageHandler(string message);
+
+    public class Broadcaster
+    {
+        private MessageHandler? _handlers;
+
+        public event MessageHandler Message
+        {
+            add { _handlers = _handlers + value; }
+            remove { _handlers = _handlers - value; }
+        }
+
+        public void Send(string text)
+        {
+            MessageHandler? snapshot = _handlers;
+            if (snapshot != null)
+            {
+                snapshot(text);
+            }
+        }
+    }
+
+    public static class EventDeclarationFixture
+    {
+        public static void Run()
+        {
+            Broadcaster broadcaster = new Broadcaster();
+            MessageHandler printer = delegate(string message)
+            {
+                Console.WriteLine("EventDeclaration: got=" + message);
+            };
+            broadcaster.Message += printer;
+            broadcaster.Send("first");
+            broadcaster.Message -= printer;
+            broadcaster.Send("silent");
+            Console.WriteLine("EventDeclaration: done");
+        }
+    }
+}

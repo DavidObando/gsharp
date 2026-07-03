@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Corpus.Grid04</RootNamespace>
+    <AssemblyName>G04-Patterns-Console</AssemblyName>
+  </PropertyGroup>
+
+</Project>

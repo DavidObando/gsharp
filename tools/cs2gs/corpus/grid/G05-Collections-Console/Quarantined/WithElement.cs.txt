@@ -1,0 +1,19 @@
+// inventory: WithElement — QUARANTINED at baseline C# build: CS8652 "The
+// feature 'collection expression arguments' is currently in Preview and
+// *unsupported*" under the corpus LangVersion (latest). Cannot be baselined,
+// so it never reaches the translator.
+using System;
+using System.Collections.Generic;
+
+namespace Corpus.Grid05
+{
+    public static class WithElementFixture
+    {
+        public static void Run()
+        {
+            // C#14 collection-expression arguments probe: with(...) element.
+            List<int> xs = [with(capacity: 8), 1, 2, 3];
+            Console.WriteLine($"WithElement: items={string.Join(",", xs)} count={xs.Count}");
+        }
+    }
+}

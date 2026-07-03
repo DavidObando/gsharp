@@ -1,0 +1,25 @@
+CharacterLiteralExpression: letter=A unicode=B hexEscape=C
+CharacterLiteralExpression: newlineCode=10 tabCode=9
+CharacterLiteralExpression: backslash=\ quote='
+DefaultLiteralExpression: int=0 bool=False double=0
+DefaultLiteralExpression: charCode=0 stringIsNull=True
+FalseLiteralExpression: branch taken
+FalseLiteralExpression: value=False local=False
+NullLiteralExpression: isNull=True shown=null
+NullLiteralExpression: objectIsNull=True
+NullLiteralExpression: afterAssign=assigned
+NumericLiteralExpression: int=42 long=9000000000 sep=1000000
+NumericLiteralExpression: ulong=18446744073709551615 uint=4000000000
+NumericLiteralExpression: hex=255 binary=170
+NumericLiteralExpression: double=3.14159 float=2.5 sci=1500
+NumericLiteralExpression: decimal=19.99
+StringLiteralExpression: plain=hello world
+StringLiteralExpression: escaped=line1	column2
+StringLiteralExpression: verbatim=C:\temp\logs
+StringLiteralExpression: verbatimQuotes=say "hi" twice
+StringLiteralExpression: raw=He said "raw" strings work.
+StringLiteralExpression: emptyLength=0
+TrueLiteralExpression: branch taken
+TrueLiteralExpression: value=True local=True
+Utf8StringLiteralExpression: length=3
+Utf8StringLiteralExpression: first=97

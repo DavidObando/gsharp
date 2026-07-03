@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "1.0",
+  "unverifiedApps": [
+    "corpus/L3-Library"
+  ],
+  "gaps": [
+    {
+      "fingerprint": "sha256:7cec0cb40be8ae4fa272f36c7c8140e272ed9c99f0be5503b8179f3c14648b2e",
+      "status": "wontfix",
+      "title": "[cs2gs] GS0130 compiling translated corpus/CompileGap-Library (ReturnConstruct)",
+      "stage": "compile",
+      "diagnosticId": "GS0130",
+      "constructKind": "ReturnConstruct",
+      "firstSeenRun": "2026-07-03T18-07-29Z_a6aacb",
+      "apps": [
+        "corpus/CompileGap-Library"
+      ],
+      "notes": "CompileGap-Library deliberately fails compile to exercise the later stages; never to be fixed."
+    },
+    {
+      "fingerprint": "sha256:9fb51a6cca02a85de69c74f6526cf2baf302376475da72f340e9038fd64710b9",
+      "issue": 1929,
+      "status": "open",
+      "title": "[cs2gs] test-parity LIBRARY-BUILD-FAILED in migrated corpus/L2-Library (LibraryBuild)",
+      "stage": "test-parity",
+      "diagnosticId": "LIBRARY-BUILD-FAILED",
+      "constructKind": "LibraryBuild",
+      "firstSeenRun": "2026-07-03T18-07-29Z_a6aacb",
+      "apps": [
+        "corpus/L2-Library"
+      ],
+      "notes": "G#-level semantics lost across assembly references blocks library test-parity (issue #1929); L3 parity is gated on the same family plus parser issue #1924."
+    }
+  ]
+}

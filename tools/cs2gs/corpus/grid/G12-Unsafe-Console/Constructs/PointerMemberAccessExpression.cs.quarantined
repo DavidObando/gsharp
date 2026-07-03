@@ -1,0 +1,29 @@
+// inventory: PointerMemberAccessExpression — p->Field on a struct pointer (probe)
+// Writes and reads struct fields through a pointer with `->`.
+using System;
+
+namespace Corpus.Grid12.Constructs
+{
+    internal struct PmaPoint
+    {
+        public int X;
+        public int Y;
+    }
+
+    public static class PointerMemberAccessExpressionFixture
+    {
+        public static void Run()
+        {
+            unsafe
+            {
+                PmaPoint pt;
+                pt.X = 1;
+                pt.Y = 2;
+                PmaPoint* p = &pt;
+                p->X = 10;
+                int y = p->Y;
+                Console.WriteLine($"PointerMemberAccessExpression: X={p->X} Y={y}");
+            }
+        }
+    }
+}

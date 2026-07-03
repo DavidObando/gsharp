@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Corpus.Grid03</RootNamespace>
+    <AssemblyName>G03-ControlFlow-Console</AssemblyName>
+  </PropertyGroup>
+
+</Project>

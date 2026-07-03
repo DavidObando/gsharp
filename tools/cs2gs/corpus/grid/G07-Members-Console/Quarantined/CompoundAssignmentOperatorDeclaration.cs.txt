@@ -1,0 +1,36 @@
+// inventory: OperatorDeclaration — C#14 user-defined instance compound assignment operator += (probe)
+using System;
+
+namespace Corpus.Grid07
+{
+    public class TallyBag
+    {
+        private int _total;
+
+        public TallyBag(int start)
+        {
+            _total = start;
+        }
+
+        public void operator +=(int amount)
+        {
+            _total = _total + amount;
+        }
+
+        public int Total()
+        {
+            return _total;
+        }
+    }
+
+    public static class CompoundAssignmentOperatorDeclarationFixture
+    {
+        public static void Run()
+        {
+            TallyBag bag = new TallyBag(10);
+            bag += 5;
+            bag += 7;
+            Console.WriteLine("CompoundAssignmentOperatorDeclaration: total=" + bag.Total().ToString());
+        }
+    }
+}

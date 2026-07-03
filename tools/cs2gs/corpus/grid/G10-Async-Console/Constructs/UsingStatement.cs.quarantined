@@ -1,0 +1,40 @@
+// inventory: UsingStatement — await using over an IAsyncDisposable (probe)
+// Both `await using` forms: the block statement and the local-declaration
+// form. DisposeAsync returns an already-completed ValueTask and prints, so the
+// open/inside/dispose ordering is the deterministic oracle.
+using System;
+using System.Threading.Tasks;
+
+namespace Corpus.Grid10.Constructs
+{
+    public sealed class AsyncResource : IAsyncDisposable
+    {
+        private readonly string _name;
+
+        public AsyncResource(string name)
+        {
+            _name = name;
+            Console.WriteLine($"UsingStatement: opened {_name}");
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            Console.WriteLine($"UsingStatement: disposed {_name}");
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    public static class UsingStatementFixture
+    {
+        public static async Task RunAsync()
+        {
+            await using (AsyncResource outer = new AsyncResource("outer"))
+            {
+                Console.WriteLine("UsingStatement: inside block form");
+            }
+
+            await using AsyncResource declared = new AsyncResource("declared");
+            Console.WriteLine("UsingStatement: after declaration form");
+        }
+    }
+}

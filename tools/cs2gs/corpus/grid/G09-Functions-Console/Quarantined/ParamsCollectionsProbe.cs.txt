@@ -1,0 +1,39 @@
+// inventory: Parameter — QUARANTINED at compile (gsc): C#13 params
+// collections translate but the expanded-form call sites do not bind:
+//   GS0154 "Parameter 'values' requires a value of type List`1[Int32]"
+//     for Total(1, 2, 3),
+//   GS0129 "Binary operator '+=' is not defined for types 'int32' and
+//     List`1[Int32]" inside the foreach lowering,
+//   GS0154 for JoinParts("a", "b", "c") against IEnumerable<string>.
+using System;
+using System.Collections.Generic;
+
+namespace Corpus.Grid09
+{
+    public static class ParamsCollectionsProbeFixture
+    {
+        public static void Run()
+        {
+            // C#13 params collections probe: params List<int> / IEnumerable<string>.
+            Console.WriteLine($"ParamsCollectionsProbe: totalNone={Total()}");
+            Console.WriteLine($"ParamsCollectionsProbe: totalThree={Total(1, 2, 3)}");
+            Console.WriteLine($"ParamsCollectionsProbe: joined={JoinParts("a", "b", "c")}");
+        }
+
+        private static int Total(params List<int> values)
+        {
+            int total = 0;
+            foreach (int v in values)
+            {
+                total += v;
+            }
+
+            return total;
+        }
+
+        private static string JoinParts(params IEnumerable<string> parts)
+        {
+            return string.Join("+", parts);
+        }
+    }
+}

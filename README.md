@@ -249,6 +249,14 @@ dotnet tool install --global Gsharp.Repl    # `gsi` — interactive REPL / file 
 dotnet tool install --global Gsharp.Cs2Gs   # `cs2gs` — C# to G# migration tool
 ```
 
+`cs2gs` doubles as the compiler's quality gate: every C# syntax construct is
+classified in a machine-checked coverage inventory
+([`docs/cs2gs-coverage-matrix.md`](docs/cs2gs-coverage-matrix.md)), a
+per-construct conformance corpus is translated, compiled, IL-verified, and
+byte-compared against its C# baseline on every PR, and newly discovered
+compiler gaps are automatically filed as issues from a fingerprinted gap
+ledger (see [`tools/cs2gs/README.md`](tools/cs2gs/README.md) and ADR-0138).
+
 ## Repository layout
 
 ```
