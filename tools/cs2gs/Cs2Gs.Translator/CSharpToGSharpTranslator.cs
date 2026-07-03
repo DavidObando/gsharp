@@ -5251,6 +5251,18 @@ public sealed class CSharpToGSharpTranslator
             return true;
         }
 
+        // True for a node that starts a NEW `continue` seam: a nested loop (its
+        // own `continue` target) or a lambda/local function (C# forbids a jump
+        // statement crossing that boundary at all). Shared by the do-while tail
+        // hoist scan (issue #1723) and the for→while incrementor-on-continue fix
+        // (issue #1732) so both agree on what "targets THIS loop" means. Note a
+        // `switch` is NOT a boundary: `continue` (unlike `break`) passes through a
+        // `switch` straight to the enclosing loop.
+        private static bool IsOwnLoopContinueBoundary(SyntaxNode node) =>
+            node is ForStatementSyntax or ForEachStatementSyntax or ForEachVariableStatementSyntax or
+                WhileStatementSyntax or DoStatementSyntax or
+                AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax;
+
         // True when `body` has a `continue` that targets THIS loop. Descent stops
         // at any nested loop/switch (its own `continue`/`break` seam) and at
         // nested lambdas/local functions (their own statement seam), so a
@@ -5259,12 +5271,42 @@ public sealed class CSharpToGSharpTranslator
         // #1723).
         private static bool BodyContainsOwnLoopContinue(StatementSyntax body)
         {
-            bool DescendGuard(SyntaxNode node) =>
-                node is not (ForStatementSyntax or ForEachStatementSyntax or ForEachVariableStatementSyntax or
-                    WhileStatementSyntax or DoStatementSyntax or
-                    AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax);
+            bool DescendGuard(SyntaxNode node) => !IsOwnLoopContinueBoundary(node);
 
             return body.DescendantNodesAndSelf(descendIntoChildren: DescendGuard).OfType<ContinueStatementSyntax>().Any();
+        }
+
+        // True when an own-loop `continue` inside `body` sits under a `try` that
+        // has a `finally` clause (reachable without crossing this loop's own
+        // boundary). C# runs that `finally` on the way out of the `continue`
+        // BEFORE the for-loop's incrementors re-run; duplicating the incrementors
+        // right before the `continue` (see
+        // <see cref="DuplicateIncrementorsBeforeOwnLoopContinue"/>) would instead
+        // run them BEFORE the `finally`, reordering an observable side effect.
+        // This shape has no faithful lowering here, so the caller reports it
+        // instead of silently reordering (issue #1732).
+        private static bool OwnLoopContinueCrossesFinally(StatementSyntax body)
+        {
+            bool DescendGuard(SyntaxNode node) => !IsOwnLoopContinueBoundary(node);
+
+            foreach (ContinueStatementSyntax continueStatement in
+                body.DescendantNodesAndSelf(descendIntoChildren: DescendGuard).OfType<ContinueStatementSyntax>())
+            {
+                for (SyntaxNode ancestor = continueStatement.Parent; ancestor != null; ancestor = ancestor.Parent)
+                {
+                    if (ancestor is TryStatementSyntax tryStatement && tryStatement.Finally != null)
+                    {
+                        return true;
+                    }
+
+                    if (ancestor == body)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -6048,14 +6090,20 @@ public sealed class CSharpToGSharpTranslator
         /// scrutinee local plus `if !test { break }` guards) at the TOP of the body,
         /// re-run every iteration exactly where C# would re-test the condition
         /// (issue #1723).
+        /// <para>
+        /// In C# the incrementors also run when the body executes a loop-targeting
+        /// <c>continue</c>, but a G# <c>continue</c> is a goto straight past the
+        /// WHOLE lowered <c>while</c> body — so the trailing incrementors below
+        /// would be silently skipped. When the body has such a <c>continue</c>, it
+        /// is rewritten (<see cref="DuplicateIncrementorsBeforeOwnLoopContinue"/>) to duplicate the
+        /// incrementors immediately ahead of every own-loop <c>continue</c>, so they
+        /// still run before the condition re-test either way (issue #1732). The one
+        /// shape that rewrite cannot do faithfully — the <c>continue</c> sits inside
+        /// a <c>try</c>/<c>finally</c>, where C# runs <c>finally</c> before the
+        /// incrementors — is reported via <c>ReportUnsupported</c> instead of
+        /// silently reordering that side effect.
+        /// </para>
         /// </summary>
-        /// <remarks>
-        /// Fidelity caveat: in C# the incrementors also run when the body executes a
-        /// loop-targeting <c>continue</c>; in this while-lowering the trailing
-        /// incrementors are SKIPPED on <c>continue</c>. The decoder loops this fix
-        /// targets do not use a loop-level <c>continue</c>, so the lowering is
-        /// faithful for them; a warning would be required to generalise this.
-        /// </remarks>
         private GStatement LowerForToWhile(ForStatementSyntax forStatement)
         {
             var outer = new List<GStatement>();
@@ -6088,17 +6136,149 @@ public sealed class CSharpToGSharpTranslator
                 conditionPrologue = new List<GStatement>();
             }
 
-            var bodyStatements = new List<GStatement>(conditionPrologue);
-            bodyStatements.AddRange(this.TranslateStatementAsBlock(forStatement.Statement).Statements);
-
-            foreach (ExpressionSyntax inc in forStatement.Incrementors)
+            List<ExpressionSyntax> incrementorExpressions = forStatement.Incrementors.ToList();
+            var incrementorStatements = new List<GStatement>();
+            foreach (ExpressionSyntax inc in incrementorExpressions)
             {
-                bodyStatements.AddRange(this.TranslateExpressionStatements(inc));
+                incrementorStatements.AddRange(this.TranslateExpressionStatements(inc));
             }
+
+            BlockStatement translatedBody = this.TranslateStatementAsBlock(forStatement.Statement);
+            if (incrementorStatements.Count > 0 && BodyContainsOwnLoopContinue(forStatement.Statement))
+            {
+                if (OwnLoopContinueCrossesFinally(forStatement.Statement))
+                {
+                    this.context.ReportUnsupported(
+                        forStatement,
+                        "a 'continue' inside a 'try'/'finally' within this 'for' loop has no side-effect-preserving G# lowering yet (issue #1732).");
+                }
+                else
+                {
+                    translatedBody = DuplicateIncrementorsBeforeOwnLoopContinue(translatedBody, incrementorStatements);
+                }
+            }
+
+            var bodyStatements = new List<GStatement>(conditionPrologue);
+            bodyStatements.AddRange(translatedBody.Statements);
+            bodyStatements.AddRange(incrementorStatements);
 
             outer.Add(new WhileStatement(GuardBlockCondition(condition), new BlockStatement(bodyStatements)));
 
             return new BlockStatement(outer);
+        }
+
+        /// <summary>
+        /// Duplicates a <c>for</c> loop's already-translated incrementor
+        /// statements immediately ahead of every <c>continue</c> that targets
+        /// THIS loop. G#'s while-lowering (<see cref="LowerForToWhile"/>) appends
+        /// the incrementors as trailing statements in the lowered <c>while</c>
+        /// body, but a G# <c>continue</c> is a goto straight past the WHOLE body
+        /// (ADR-0070's continueLabel) — so without this rewrite the trailing
+        /// incrementors are silently skipped on <c>continue</c>, unlike C#'s
+        /// <c>for</c>, which always runs them before re-testing the condition
+        /// (issue #1732).
+        /// <para>
+        /// Operates on the TRANSLATED G# statement tree, not the C# syntax tree:
+        /// rebuilding a Roslyn syntax subtree to splice in the incrementors would
+        /// re-parent untouched sibling nodes onto a detached tree, breaking any
+        /// later <c>SemanticModel.GetSymbolInfo</c> call on them
+        /// (<see cref="ArgumentException"/> "Syntax node is not within syntax
+        /// tree"). The G# AST has no such constraint, so the rewrite happens
+        /// here, after translation.
+        /// </para>
+        /// <para>
+        /// Descent stops at a nested loop (<see cref="WhileStatement"/>,
+        /// <see cref="ForStatement"/>, <see cref="DoWhileStatement"/>,
+        /// <see cref="ForInStatement"/>) or a nested
+        /// <see cref="LocalFunctionStatement"/> — each is its own
+        /// <c>continue</c> seam, mirroring <see cref="BodyContainsOwnLoopContinue"/>.
+        /// A <c>finally</c> block is left untouched: C# forbids a jump statement
+        /// leaving a <c>finally</c>, so it can never itself contain an own-loop
+        /// <c>continue</c>.
+        /// </para>
+        /// </summary>
+        private static BlockStatement DuplicateIncrementorsBeforeOwnLoopContinue(
+            BlockStatement body,
+            IReadOnlyList<GStatement> incrementorStatements)
+        {
+            return (BlockStatement)RewriteOwnLoopContinue(body, incrementorStatements);
+        }
+
+        private static GStatement RewriteOwnLoopContinue(GStatement statement, IReadOnlyList<GStatement> incrementorStatements)
+        {
+            switch (statement)
+            {
+                case ContinueStatement:
+                {
+                    var replaced = new List<GStatement>(incrementorStatements) { statement };
+                    return new BlockStatement(replaced);
+                }
+
+                case BlockStatement block:
+                {
+                    var rewritten = new List<GStatement>(block.Statements.Count);
+                    foreach (GStatement inner in block.Statements)
+                    {
+                        rewritten.Add(RewriteOwnLoopContinue(inner, incrementorStatements));
+                    }
+
+                    return new BlockStatement(rewritten, block.IsUnsafe);
+                }
+
+                case IfStatement ifStatement:
+                {
+                    GStatement elseBranch = ifStatement.ElseBranch == null
+                        ? null
+                        : RewriteOwnLoopContinue(ifStatement.ElseBranch, incrementorStatements);
+                    return new IfStatement(
+                        ifStatement.Condition,
+                        (BlockStatement)RewriteOwnLoopContinue(ifStatement.Then, incrementorStatements),
+                        elseBranch);
+                }
+
+                case TryStatement tryStatement:
+                {
+                    var catchClauses = new List<CatchClause>(tryStatement.CatchClauses.Count);
+                    foreach (CatchClause catchClause in tryStatement.CatchClauses)
+                    {
+                        catchClauses.Add(new CatchClause(
+                            catchClause.VariableName,
+                            catchClause.ExceptionType,
+                            (BlockStatement)RewriteOwnLoopContinue(catchClause.Body, incrementorStatements)));
+                    }
+
+                    return new TryStatement(
+                        (BlockStatement)RewriteOwnLoopContinue(tryStatement.TryBlock, incrementorStatements),
+                        catchClauses,
+                        tryStatement.FinallyBlock);
+                }
+
+                case SwitchStatement switchStatement:
+                {
+                    var cases = new List<SwitchStatementCase>(switchStatement.Cases.Count);
+                    foreach (SwitchStatementCase switchCase in switchStatement.Cases)
+                    {
+                        cases.Add(new SwitchStatementCase(
+                            switchCase.Pattern,
+                            (BlockStatement)RewriteOwnLoopContinue(switchCase.Body, incrementorStatements),
+                            switchCase.Guard));
+                    }
+
+                    return new SwitchStatement(switchStatement.Subject, cases);
+                }
+
+                // Boundaries: a nested loop's own continue seam, or a nested
+                // local function (its own statement seam) — never descend.
+                case WhileStatement:
+                case ForStatement:
+                case DoWhileStatement:
+                case ForInStatement:
+                case LocalFunctionStatement:
+                    return statement;
+
+                default:
+                    return statement;
+            }
         }
 
         private bool IsLocalReassigned(ILocalSymbol local)
