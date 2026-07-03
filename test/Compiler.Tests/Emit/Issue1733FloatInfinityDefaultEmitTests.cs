@@ -41,7 +41,8 @@ public class Issue1733FloatInfinityDefaultEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("\u221e\n-\u221e\nTrue\nTrue\n", output);
+        var expected = $"{double.PositiveInfinity}\n{double.NegativeInfinity}\nTrue\nTrue\n";
+        Assert.Equal(expected, output);
     }
 
     [Fact]
@@ -62,7 +63,8 @@ public class Issue1733FloatInfinityDefaultEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("\u221e\n-\u221e\nTrue\nTrue\n", output);
+        var expected = $"{float.PositiveInfinity}\n{float.NegativeInfinity}\nTrue\nTrue\n";
+        Assert.Equal(expected, output);
     }
 
     private static string CompileAndRun(string source)
