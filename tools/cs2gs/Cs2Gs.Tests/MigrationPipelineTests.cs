@@ -359,6 +359,109 @@ public class MigrationPipelineTests
         }
     }
 
+    /// <summary>
+    /// A stage-2 skip (e.g. a genuinely-unavailable dependency) with no
+    /// failing stage rolls up to an app that is <see cref="AppResult.Unverified"/>
+    /// but still <see cref="AppResult.Succeeded"/>, and a run that is
+    /// <see cref="RunResult.Unverified"/> but still <see cref="RunResult.Succeeded"/>
+    /// — never "green" but also never exiting non-zero (issue #1831).
+    /// </summary>
+    [Fact]
+    public async Task SkippedStage_NoFailure_RollsUpToUnverified_NotGreen_AppAndRun()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            return;
+        }
+
+        string corpus = ResolveCorpusDir();
+        string outRoot = NewOutputRoot("skip-rollup");
+        var options = new PipelineOptions { GscPath = compiler, OutputRoot = outRoot };
+        var pipeline = new MigrationPipeline(
+            options,
+            new IMigrationStage[] { new PassStage(MigrationStageKind.Translate), new SkipStage(MigrationStageKind.Compile) });
+
+        CorpusApp l1 = CorpusDiscovery.FindById(corpus, "corpus/L1-Console");
+        Assert.NotNull(l1);
+
+        RunResult result = await pipeline.RunAsync(new[] { l1 });
+        AppResult app = Assert.Single(result.Apps);
+
+        Assert.True(app.Succeeded);
+        Assert.True(app.Unverified);
+        Assert.True(result.Succeeded);
+        Assert.True(result.Unverified);
+    }
+
+    /// <summary>
+    /// A failed stage takes precedence over a later skip in the same app: the
+    /// app and run are "Failed" (<see cref="AppResult.Succeeded"/> /
+    /// <see cref="RunResult.Succeeded"/> both <see langword="false"/>), never
+    /// "Unverified" — the general rollup precedence is Failed &gt; Skipped &gt;
+    /// Green (issue #1831).
+    /// </summary>
+    [Fact]
+    public async Task FailedStage_TakesPrecedenceOverSkip_AppAndRunAreFailed_NotUnverified()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            return;
+        }
+
+        string corpus = ResolveCorpusDir();
+        string outRoot = NewOutputRoot("fail-precedence");
+        var options = new PipelineOptions { GscPath = compiler, OutputRoot = outRoot };
+        var pipeline = new MigrationPipeline(
+            options,
+            new IMigrationStage[] { new FailStage(MigrationStageKind.Translate) });
+
+        CorpusApp l1 = CorpusDiscovery.FindById(corpus, "corpus/L1-Console");
+        Assert.NotNull(l1);
+
+        RunResult result = await pipeline.RunAsync(new[] { l1 });
+        AppResult app = Assert.Single(result.Apps);
+
+        Assert.False(app.Succeeded);
+        Assert.False(app.Unverified);
+        Assert.False(result.Succeeded);
+        Assert.False(result.Unverified);
+    }
+
+    /// <summary>A fixed-outcome stage double, used to drive pipeline rollup tests deterministically.</summary>
+    private sealed class PassStage : IMigrationStage
+    {
+        public PassStage(MigrationStageKind kind) => this.Kind = kind;
+
+        public MigrationStageKind Kind { get; }
+
+        public Task<StageOutcome> ExecuteAsync(StageExecutionContext context, CancellationToken cancellationToken = default) =>
+            Task.FromResult(StageOutcome.Passed());
+    }
+
+    /// <summary>A fixed-outcome stage double that reports <see cref="StageStatus.Skipped"/>.</summary>
+    private sealed class SkipStage : IMigrationStage
+    {
+        public SkipStage(MigrationStageKind kind) => this.Kind = kind;
+
+        public MigrationStageKind Kind { get; }
+
+        public Task<StageOutcome> ExecuteAsync(StageExecutionContext context, CancellationToken cancellationToken = default) =>
+            Task.FromResult(StageOutcome.Skipped());
+    }
+
+    /// <summary>A fixed-outcome stage double that reports <see cref="StageStatus.Failed"/>.</summary>
+    private sealed class FailStage : IMigrationStage
+    {
+        public FailStage(MigrationStageKind kind) => this.Kind = kind;
+
+        public MigrationStageKind Kind { get; }
+
+        public Task<StageOutcome> ExecuteAsync(StageExecutionContext context, CancellationToken cancellationToken = default) =>
+            Task.FromResult(StageOutcome.Failed(Array.Empty<TriageArtifact>()));
+    }
+
     private static string FingerprintShort(string fingerprint)
     {
         string hex = fingerprint.StartsWith("sha256:", StringComparison.Ordinal)

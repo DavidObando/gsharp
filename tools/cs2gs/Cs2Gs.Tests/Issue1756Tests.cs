@@ -243,9 +243,10 @@ public class Issue1756Tests
         using var doc = JsonDocument.Parse(json);
         JsonElement app = doc.RootElement.GetProperty("apps")[0];
 
-        // Exact property set + order for the app row.
+        // Exact property set + order for the app row (extended for issue
+        // #1831 with "unverified", inserted right after "succeeded").
         Assert.Equal(
-            new[] { "appId", "succeeded", "failureCategory", "stages", "artifacts", "fingerprints" },
+            new[] { "appId", "succeeded", "unverified", "failureCategory", "stages", "artifacts", "fingerprints" },
             app.EnumerateObject().Select(p => p.Name).ToArray());
 
         JsonElement stage = app.GetProperty("stages")[0];

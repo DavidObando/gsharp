@@ -131,6 +131,11 @@ public sealed class MigrationPipeline
             }
         }
 
+        if (runResult.Succeeded && runResult.Apps.Any(a => a.Unverified))
+        {
+            runResult.Unverified = true;
+        }
+
         string runJsonPath = Path.Combine(runDir, "run.json");
         File.WriteAllText(runJsonPath, JsonSerializer.Serialize(runResult, TriageSerialization.Options));
 
@@ -319,6 +324,13 @@ public sealed class MigrationPipeline
             }
 
             shortCircuited = true;
+        }
+
+        if (appResult.Succeeded && appResult.Stages.Any(s => s.Status == "skipped"))
+        {
+            // No stage failed, but at least one was genuinely unverified
+            // (issue #1831): don't let that roll up as green.
+            appResult.Unverified = true;
         }
 
         return appResult;
