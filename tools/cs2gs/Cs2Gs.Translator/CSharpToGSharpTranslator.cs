@@ -440,6 +440,27 @@ public sealed class CSharpToGSharpTranslator
         private readonly Dictionary<ISymbol, GExpression> staticFieldInitializers =
             new Dictionary<ISymbol, GExpression>(SymbolEqualityComparer.Default);
 
+        // Issue #1743: both <see cref="IsSymbolReassigned"/> and
+        // <see cref="IsUsedAsNullable"/> answer a question that depends only on
+        // (symbol, scope) — never on WHEN it's asked — yet each call re-walks
+        // every descendant node of the scope (a whole method/type/body) looking
+        // for it. A file with hundreds of field/property receiver checks was
+        // rescanning its whole containing type hundreds of times
+        // (O(accesses × type size)). Keyed on the (symbol, scope) pair rather
+        // than the symbol alone: nothing here actually requires the extra scope
+        // key today (see the two methods' own comments), but it costs nothing
+        // and removes any doubt if a future caller ever passes a different scope
+        // for the same symbol. Scoped to this translator instance: symbols/
+        // scopes come from a specific `SemanticModel`/syntax tree, so even a
+        // translator instance reused across documents/compilations (as some
+        // tests do) never gets a stale cross-document hit — different
+        // compilations produce different (non-equal) symbol/node instances.
+        private readonly Dictionary<(ISymbol Symbol, SyntaxNode Scope), bool> symbolReassignedCache =
+            new Dictionary<(ISymbol, SyntaxNode), bool>(SymbolScopeKeyComparer.Instance);
+
+        private readonly Dictionary<(ISymbol Symbol, SyntaxNode Scope), bool> usedAsNullableCache =
+            new Dictionary<(ISymbol, SyntaxNode), bool>(SymbolScopeKeyComparer.Instance);
+
         // The syntax node whose body is currently being translated. It bounds the
         // data-flow scan that decides whether a local is mutable (var) or
         // immutable (let) per ADR-0115 §B.3.
@@ -6841,6 +6862,19 @@ public sealed class CSharpToGSharpTranslator
                 return false;
             }
 
+            var key = (symbol, scope);
+            if (this.symbolReassignedCache.TryGetValue(key, out bool cached))
+            {
+                return cached;
+            }
+
+            bool result = this.ComputeIsSymbolReassigned(symbol, scope);
+            this.symbolReassignedCache[key] = result;
+            return result;
+        }
+
+        private bool ComputeIsSymbolReassigned(ISymbol symbol, SyntaxNode scope)
+        {
             foreach (SyntaxNode node in scope.DescendantNodes())
             {
                 switch (node)
@@ -6891,6 +6925,19 @@ public sealed class CSharpToGSharpTranslator
                 return false;
             }
 
+            var key = (symbol, scope);
+            if (this.usedAsNullableCache.TryGetValue(key, out bool cached))
+            {
+                return cached;
+            }
+
+            bool result = this.ComputeIsUsedAsNullable(symbol, scope);
+            this.usedAsNullableCache[key] = result;
+            return result;
+        }
+
+        private bool ComputeIsUsedAsNullable(ISymbol symbol, SyntaxNode scope)
+        {
             // The scope is scanned with the current document's semantic model, so a
             // node from another syntax tree (e.g. an inherited field declared in a
             // different file) cannot be queried here — `GetSymbolInfo` would throw
@@ -10625,6 +10672,26 @@ public sealed class CSharpToGSharpTranslator
             /// </summary>
             public IReadOnlyList<GStatement> ResidualInitStatements { get; init; } =
                 new List<GStatement>();
+        }
+
+        // Issue #1743: equality for the (symbol, scope) cache key used by
+        // <see cref="IsSymbolReassigned"/>/<see cref="IsUsedAsNullable"/>'s
+        // memoization. Symbols compare via the Roslyn-recommended
+        // <see cref="SymbolEqualityComparer.Default"/>; scope nodes compare by
+        // reference (the same `SyntaxNode` instance is what every call site
+        // passes for a given symbol).
+        private sealed class SymbolScopeKeyComparer : IEqualityComparer<(ISymbol Symbol, SyntaxNode Scope)>
+        {
+            public static readonly SymbolScopeKeyComparer Instance = new SymbolScopeKeyComparer();
+
+            public bool Equals((ISymbol Symbol, SyntaxNode Scope) x, (ISymbol Symbol, SyntaxNode Scope) y) =>
+                SymbolEqualityComparer.Default.Equals(x.Symbol, y.Symbol) &&
+                ReferenceEquals(x.Scope, y.Scope);
+
+            public int GetHashCode((ISymbol Symbol, SyntaxNode Scope) obj) =>
+                HashCode.Combine(
+                    SymbolEqualityComparer.Default.GetHashCode(obj.Symbol),
+                    System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj.Scope));
         }
     }
 }
