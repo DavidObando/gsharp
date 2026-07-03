@@ -310,6 +310,219 @@ namespace Demo
             d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("short-circuited"));
     }
 
+    /// <summary>
+    /// A <c>do</c>/<c>while</c> loop whose condition carries a value-position
+    /// assignment must hoist the assignment + break-guard to the TAIL of the
+    /// body, not the top: C# evaluates the body BEFORE the condition on every
+    /// iteration (including the first), so hoisting at the top would apply the
+    /// assignment's write before the first body run, silently reordering an
+    /// observable side effect (issue #1723, do-while regression).
+    /// </summary>
+    [Fact]
+    public void DoWhileConditionAssignment_HoistsToBodyTailNotTop()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public sealed class C
+    {
+        public void M()
+        {
+            int i = 0;
+            do
+            {
+                System.Console.WriteLine(i);
+            } while ((i = i + 1) < 3);
+        }
+    }
+}");
+
+        int writeLine = printed.IndexOf("Console.WriteLine(i)", StringComparison.Ordinal);
+        int assign = printed.IndexOf("i = i + 1", StringComparison.Ordinal);
+        Assert.True(writeLine >= 0, "Expected `Console.WriteLine(i)` in:\n" + printed);
+        Assert.True(assign >= 0, "Expected hoisted `i = i + 1` in:\n" + printed);
+        Assert.True(writeLine < assign, "Body must run before the hoisted condition assignment:\n" + printed);
+    }
+
+    /// <summary>
+    /// A <c>while</c> loop whose hoisted condition-assignment body contains a
+    /// <c>continue</c>: the hoisted assignment lives at the TOP of the body (as
+    /// the loop's real condition check), so <c>continue</c> jumps back to it and
+    /// it re-runs every iteration — it must never go stale.
+    /// </summary>
+    [Fact]
+    public void WhileConditionAssignmentWithContinue_ReevaluatesHoistedAssignmentEachIteration()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public sealed class Source
+    {
+        private int calls;
+
+        public int Next()
+        {
+            this.calls++;
+            return this.calls > 5 ? -1 : this.calls;
+        }
+    }
+
+    public sealed class C
+    {
+        public void M(Source s)
+        {
+            int c;
+            while ((c = s.Next()) != -1)
+            {
+                if (c % 2 == 0)
+                {
+                    continue;
+                }
+
+                System.Console.WriteLine(c);
+            }
+        }
+    }
+}");
+
+        Assert.Contains("while true {", printed);
+        Assert.Contains("c = s.Next()", printed);
+        Assert.Contains("continue", printed);
+
+        // The hoisted assignment must be the first statement in the loop body
+        // (before the `continue`'s enclosing `if`), so `continue` re-triggers it.
+        int hoist = printed.IndexOf("c = s.Next()", StringComparison.Ordinal);
+        int continueIdx = printed.IndexOf("continue", StringComparison.Ordinal);
+        Assert.True(hoist >= 0 && continueIdx >= 0 && hoist < continueIdx, printed);
+    }
+
+    /// <summary>
+    /// An assignment hidden in the RHS of <c>??</c> (<c>a ?? (x = f())</c>): the
+    /// RHS only runs when <c>a</c> is null, so hoisting the assignment
+    /// unconditionally would run it even when <c>a</c> is non-null, changing C#'s
+    /// evaluation count. Must be surfaced as <see cref="TranslationSeverity.Unsupported"/>,
+    /// not silently hoisted (issue #1723 follow-up).
+    /// </summary>
+    [Fact]
+    public void AssignmentInsideCoalesceRight_ReportsUnsupportedInsteadOfSilentlyDropping()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("Snippet.cs", @"
+namespace Demo
+{
+    public sealed class C
+    {
+        public void M(string s)
+        {
+            int x = 0;
+            int y = s?.Length ?? (x = 42);
+            System.Console.WriteLine(y);
+        }
+    }
+}"),
+        });
+        Assert.True(project.BoundWithoutErrors);
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        _ = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+
+        Assert.Contains(
+            context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported);
+    }
+
+    /// <summary>
+    /// An assignment inside the "when not null" side of a <c>?.</c> chain
+    /// (<c>obj?.M(x = 5)</c>): the call/argument only evaluates when <c>obj</c>
+    /// is non-null, so hoisting unconditionally would run it even when <c>obj</c>
+    /// is null. Must be surfaced as <see cref="TranslationSeverity.Unsupported"/>.
+    /// </summary>
+    [Fact]
+    public void AssignmentInsideConditionalAccessWhenNotNull_ReportsUnsupportedInsteadOfSilentlyDropping()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("Snippet.cs", @"
+namespace Demo
+{
+    public sealed class Obj
+    {
+        public int M(int value) => value;
+    }
+
+    public sealed class C
+    {
+        public void M(Obj obj)
+        {
+            int x = 0;
+            int? y = obj?.M(x = 5);
+            System.Console.WriteLine(y);
+        }
+    }
+}"),
+        });
+        Assert.True(project.BoundWithoutErrors);
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        _ = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+
+        Assert.Contains(
+            context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported);
+    }
+
+    /// <summary>
+    /// Multiple independent embedded assignments in one expression must hoist
+    /// (and thus evaluate) in left-to-right source order: <c>if ((a=f())&gt;(b=g()))</c>
+    /// and <c>M(x=1, y=2)</c>.
+    /// </summary>
+    [Fact]
+    public void MultipleEmbeddedAssignments_PreserveLeftToRightOrder()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public sealed class C
+    {
+        public static int F() => 1;
+
+        public static int G() => 2;
+
+        public static void Consume(int x, int y)
+        {
+        }
+
+        public void M()
+        {
+            int a = 0;
+            int b = 0;
+            if ((a = F()) > (b = G()))
+            {
+                System.Console.WriteLine(a);
+            }
+
+            int p = 0;
+            int q = 0;
+            Consume(p = 1, q = 2);
+            System.Console.WriteLine(p);
+            System.Console.WriteLine(q);
+        }
+    }
+}");
+
+        int aAssign = printed.IndexOf("a = C.F()", StringComparison.Ordinal);
+        int bAssign = printed.IndexOf("b = C.G()", StringComparison.Ordinal);
+        Assert.True(aAssign >= 0 && bAssign >= 0 && aAssign < bAssign, printed);
+
+        int pAssign = printed.IndexOf("p = 1", StringComparison.Ordinal);
+        int qAssign = printed.IndexOf("q = 2", StringComparison.Ordinal);
+        Assert.True(pAssign >= 0 && qAssign >= 0 && pAssign < qAssign, printed);
+        Assert.Contains("Consume(p, q)", printed);
+    }
+
     private static int CountOccurrences(string haystack, string needle)
     {
         int count = 0;

@@ -4409,17 +4409,21 @@ public sealed class CSharpToGSharpTranslator
             return safe;
         }
 
-        // True when `node` is reached only through the (not-always-evaluated)
-        // right operand of a `&&`/`||` inside `root`, or through either branch of
-        // a `?:` inside `root`. Hoisting such an assignment out in front of `root`
-        // would evaluate/mutate it unconditionally, changing C# semantics.
+        // True when `node` is reached only through a not-always-evaluated operand
+        // inside `root`: the right operand of a `&&`/`||`, either branch of a
+        // `?:`, the right operand of `??`, or the "when not null" side of a
+        // `?.`/`?[...]` conditional-access chain (including any member/element
+        // access further chained off it). Hoisting such an assignment out in
+        // front of `root` would evaluate/mutate it unconditionally, changing C#
+        // semantics.
         private static bool IsInShortCircuitOrConditionalBranch(SyntaxNode node, ExpressionSyntax root)
         {
             for (SyntaxNode current = node; current != null && current != root; current = current.Parent)
             {
                 SyntaxNode parent = current.Parent;
                 if (parent is BinaryExpressionSyntax binary &&
-                    (binary.IsKind(SyntaxKind.LogicalAndExpression) || binary.IsKind(SyntaxKind.LogicalOrExpression)) &&
+                    (binary.IsKind(SyntaxKind.LogicalAndExpression) || binary.IsKind(SyntaxKind.LogicalOrExpression) ||
+                     binary.IsKind(SyntaxKind.CoalesceExpression)) &&
                     current == binary.Right)
                 {
                     return true;
@@ -4427,6 +4431,12 @@ public sealed class CSharpToGSharpTranslator
 
                 if (parent is ConditionalExpressionSyntax conditional &&
                     (current == conditional.WhenTrue || current == conditional.WhenFalse))
+                {
+                    return true;
+                }
+
+                if (parent is ConditionalAccessExpressionSyntax conditionalAccess &&
+                    current == conditionalAccess.WhenNotNull)
                 {
                     return true;
                 }
@@ -4706,8 +4716,24 @@ public sealed class CSharpToGSharpTranslator
             }
 
             BlockStatement originalBody = this.TranslateStatementAsBlock(bodyStatement);
-            var bodyStatements = new List<GStatement>(hoisted);
-            bodyStatements.AddRange(originalBody.Statements);
+            var bodyStatements = new List<GStatement>();
+            if (isDoWhile)
+            {
+                // C# `do { body } while (cond)` evaluates `cond` AFTER the body runs,
+                // so the hoisted assignment/break-guard must trail the body (not lead
+                // it), or the first body iteration would observe a write that hasn't
+                // happened yet (issue #1723). `continue` naturally still re-runs the
+                // hoist since it sits at the tail, mirroring where the real condition
+                // check happens.
+                bodyStatements.AddRange(originalBody.Statements);
+                bodyStatements.AddRange(hoisted);
+            }
+            else
+            {
+                bodyStatements.AddRange(hoisted);
+                bodyStatements.AddRange(originalBody.Statements);
+            }
+
             var body = new BlockStatement(bodyStatements);
 
             result = isDoWhile
