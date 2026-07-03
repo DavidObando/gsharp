@@ -1845,6 +1845,24 @@ public sealed class CSharpToGSharpTranslator
                     // inline initializer in C#, so its assigned value — not the
                     // inline initializer — is the field's true final value. Prefer
                     // it over `declarator.Initializer` even when both are present.
+                    //
+                    // Issue #1729 (N1): dropping `declarator.Initializer` this way is
+                    // only safe when its RHS is side-effect-free (a constant/literal/
+                    // `new T()` shape). If it can run observable side effects (e.g.
+                    // `static int X = Log(1);`), C# still runs them before the cctor
+                    // overwrites the field, and silently folding to just the cctor
+                    // value would drop that side effect. Report instead of folding.
+                    if (declarator.Initializer != null &&
+                        this.ContainsPotentialSideEffect(declarator.Initializer.Value))
+                    {
+                        string message =
+                            $"field '{declarator.Identifier.Text}' has a side-effecting inline " +
+                            "initializer that a static constructor overwrites; folding would " +
+                            "silently drop the initializer's side effect (ADR-0115 §B.11).";
+                        this.context.ReportUnsupported(declarator, message);
+                        continue;
+                    }
+
                     initializer = staticLifted;
                 }
                 else if (declarator.Initializer != null)

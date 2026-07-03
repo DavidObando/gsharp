@@ -73,6 +73,57 @@ namespace Demo
     }
 
     /// <summary>
+    /// N1: an inline field initializer whose RHS is SIDE-EFFECTING (a call) and a
+    /// static-ctor assignment to the same field must NOT silently fold. C# runs
+    /// the side-effecting inline initializer, THEN the static constructor
+    /// overwrites the field — folding to just the ctor's value would silently
+    /// drop the initializer's observable side effect. This must surface an
+    /// Unsupported diagnostic instead.
+    /// </summary>
+    [Fact]
+    public void InlineInitializerSideEffecting_AndStaticCtorAssignment_ReportsUnsupported_DoesNotFold()
+    {
+        (string printed, TranslationContext context) = Translate(@"
+namespace Demo
+{
+    public class C
+    {
+        public static int Log(int n) => n;
+        public static int X = Log(1);
+        static C() { X = 2; }
+    }
+}");
+
+        Assert.Contains(context.Diagnostics, d => d.IsUnsupported);
+        Assert.DoesNotContain("var X int32 = 2", printed);
+    }
+
+    /// <summary>
+    /// N1 (pure path): an inline field initializer whose RHS is a pure
+    /// constant/literal is safe to drop when a static-ctor assignment overwrites
+    /// it — dropping it does not lose any observable behavior. This still folds
+    /// to the ctor's final value with no diagnostic (locks the good path
+    /// alongside the side-effecting case above).
+    /// </summary>
+    [Fact]
+    public void InlineInitializerPure_AndStaticCtorAssignment_StillFoldsNoDiagnostic()
+    {
+        (string printed, TranslationContext context) = Translate(@"
+namespace Demo
+{
+    public class C
+    {
+        public static int X = 1;
+        static C() { X = 2; }
+    }
+}");
+
+        Assert.Contains("var X int32 = 2", printed);
+        Assert.DoesNotContain("var X int32 = 1", printed);
+        Assert.DoesNotContain(context.Diagnostics, d => d.IsUnsupported);
+    }
+
+    /// <summary>
     /// Mode 2: a static constructor that assigns another TYPE's static field is
     /// not foldable (the entry would be keyed by the other type's field symbol
     /// and never consumed by this type's fields, silently vanishing). It must
