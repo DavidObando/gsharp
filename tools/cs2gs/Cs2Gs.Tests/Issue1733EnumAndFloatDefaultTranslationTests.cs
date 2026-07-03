@@ -3,11 +3,15 @@
 // </copyright>
 
 using System;
+using System.Collections.Immutable;
+using System.IO;
 using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -39,6 +43,17 @@ namespace Corpus.Issue1733
     [Flags]
     public enum Toppings { None = 0, Cheese = 1, Olives = 2, Pepperoni = 4 }
 
+    // N2: a ulong-backed [Flags] enum with a high-bit member above
+    // long.MaxValue. Convert.ToInt64 throws OverflowException on such a value;
+    // MapEnumConstant must resolve/decompose it without crashing.
+    [Flags]
+    public enum BigFlags : ulong
+    {
+        None = 0,
+        Small = 1UL,
+        Big = 0x8000_0000_0000_0000UL,
+    }
+
     public class KindAttribute : Attribute
     {
         public KindAttribute(Color color) { }
@@ -49,6 +64,8 @@ namespace Corpus.Issue1733
         public void Paint(Color c = Color.Blue) { }
 
         public void Sprinkle(Toppings t = Toppings.Cheese | Toppings.Olives) { }
+
+        public void BigFlagCombo(BigFlags b = BigFlags.Big | BigFlags.Small) { }
 
         public void Undefined(Color c = (Color)99) { }
 
@@ -86,6 +103,16 @@ namespace Corpus.Issue1733
 
         // Decomposed in descending-value order (Olives=2 before Cheese=1).
         Assert.Contains("t Toppings = Toppings.Olives | Toppings.Cheese", rendered, StringComparison.Ordinal);
+    }
+
+    // N2: a ulong [Flags] enum member above long.MaxValue must not crash
+    // Convert.ToInt64 (OverflowException) and must resolve/decompose correctly.
+    [Fact]
+    public void UInt64FlagsEnumWithHighBitMember_DoesNotCrash_AndRendersAsOrOfMembers()
+    {
+        string rendered = Render();
+
+        Assert.Contains("b BigFlags = BigFlags.Big | BigFlags.Small", rendered, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -134,6 +161,81 @@ namespace Corpus.Issue1733
         Assert.Contains("nan float32 = System.Single.NaN", rendered, StringComparison.Ordinal);
         Assert.Contains("posInf float32 = System.Single.PositiveInfinity", rendered, StringComparison.Ordinal);
         Assert.Contains("negInf float32 = System.Single.NegativeInfinity", rendered, StringComparison.Ordinal);
+    }
+
+    // N3: a parameter symbol declared in a REFERENCED (metadata) assembly has no
+    // `DeclaringSyntaxReferences`, so the old code (using that alone as the
+    // diagnostic anchor) silently dropped the default with NO diagnostic. Here,
+    // `ExternalLib.Service.Configure`'s `level` parameter is compiled into a
+    // separate metadata assembly with a default that matches no `Level` member;
+    // a named-argument call that skips it must still resolve `MapConstantDefault`
+    // to a non-null fallback node (the call-site argument list) so the
+    // Unsupported diagnostic fires instead of being swallowed.
+    [Fact]
+    public void MetadataEnumParameterDefault_WithNoMatchingMember_StillReportsUnsupported()
+    {
+        MetadataReference libraryReference = CompileExternalLibraryReference();
+
+        const string CallerSource = @"
+namespace Corpus.Issue1733.Caller
+{
+    public class Caller
+    {
+        public void Invoke()
+        {
+            ExternalLib.Service.Configure(extra: 5);
+        }
+    }
+}
+";
+
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Caller.cs", CallerSource) },
+            CSharpProjectLoader.RuntimeReferences().Append(libraryReference).ToImmutableArray());
+
+        Assert.True(
+            project.BoundWithoutErrors,
+            "inline source should bind with no C# errors: " +
+                string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        new CSharpToGSharpTranslator().TranslateDocument(document, context);
+
+        Assert.Contains(
+            context.Diagnostics,
+            d => d.IsUnsupported && d.Message.Contains("'99'", StringComparison.Ordinal));
+    }
+
+    private static MetadataReference CompileExternalLibraryReference()
+    {
+        const string LibrarySource = @"
+namespace ExternalLib
+{
+    public enum Level { Low = 1, High = 2 }
+
+    public static class Service
+    {
+        public static void Configure(string name = ""a"", Level level = (Level)99, int extra = 0) { }
+    }
+}
+";
+        var tree = CSharpSyntaxTree.ParseText(LibrarySource, new CSharpParseOptions(LanguageVersion.Latest));
+        CSharpCompilation compilation = CSharpCompilation.Create(
+            "Cs2Gs.Issue1733.ExternalLib",
+            new[] { tree },
+            CSharpProjectLoader.RuntimeReferences(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        using var stream = new MemoryStream();
+        Microsoft.CodeAnalysis.Emit.EmitResult emitResult = compilation.Emit(stream);
+        Assert.True(
+            emitResult.Success,
+            "external library fixture should compile: " +
+                string.Join(Environment.NewLine, emitResult.Diagnostics));
+
+        stream.Position = 0;
+        return MetadataReference.CreateFromStream(stream);
     }
 
     private static string Render()
