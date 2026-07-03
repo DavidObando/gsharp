@@ -281,10 +281,21 @@ internal sealed partial class ExpressionBinder
     /// their natural <c>string</c> type. Returns <see langword="null"/> when no
     /// argument qualifies so callers pay nothing on the common path.
     /// </summary>
-    private static IReadOnlyList<bool> ComputeInterpolatedStringArgFlags(SeparatedSyntaxList<ExpressionSyntax> argumentSyntax, int count)
+    /// <param name="argumentSyntax">The call's source-order argument syntax.</param>
+    /// <param name="count">The total argTypes/parameter-slot count that the
+    /// returned flags array is indexed against (see <paramref name="receiverArgCount"/>).</param>
+    /// <param name="receiverArgCount">
+    /// Issue #1812: the number of leading argTypes/parameter slots that precede
+    /// the user-supplied arguments — e.g. 1 for an extension-method call, which
+    /// dispatches as <c>Class.Method(receiver, userArgs…)</c> so slot 0 is the
+    /// receiver and <paramref name="argumentSyntax"/>[i] lands at flags[i +
+    /// receiverArgCount]. Mirrors the offset already threaded through
+    /// <see cref="RebindFormattableInterpolationArguments"/> for the same shape.
+    /// </param>
+    private static IReadOnlyList<bool> ComputeInterpolatedStringArgFlags(SeparatedSyntaxList<ExpressionSyntax> argumentSyntax, int count, int receiverArgCount = 0)
     {
         bool[] flags = null;
-        var limit = Math.Min(count, argumentSyntax.Count);
+        var limit = Math.Min(count - receiverArgCount, argumentSyntax.Count);
         for (var i = 0; i < limit; i++)
         {
             // Issue #377 sub-item 5: an interpolated string passed as a named
@@ -295,7 +306,7 @@ internal sealed partial class ExpressionBinder
             if (argSyntax is InterpolatedStringExpressionSyntax)
             {
                 flags ??= new bool[count];
-                flags[i] = true;
+                flags[i + receiverArgCount] = true;
             }
         }
 

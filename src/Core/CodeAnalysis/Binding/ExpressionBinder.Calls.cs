@@ -2258,6 +2258,17 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
+            // Issue #1812: `interpolatedStringArgs` is intentionally omitted
+            // here. This Resolve call is a best-effort probe purely to
+            // discover a deferred (untyped) arrow-lambda argument's delegate
+            // parameter type by narrowing candidates on the other,
+            // already-bound arguments; it is never the final overload
+            // decision. The call is re-resolved for real via the ordinary
+            // static/instance/extension Resolve call sites once every
+            // argument (including the now-typed lambda) is bound — those
+            // sites already pass the flag, so an interpolated-string argument
+            // sharing a call with a deferred lambda still resolves/rebinds
+            // correctly overall.
             var resolution = OverloadResolution.Resolve(methods, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences);
             if (resolution.Outcome != OverloadResolution.ResolutionOutcome.Resolved)
             {
@@ -4498,11 +4509,18 @@ internal sealed partial class ExpressionBinder
         // Issue #1311: imported extension calls dispatch as
         // `Class.Method(this receiver, args…)`, so argTypes slot 0 is the
         // receiver and user argument `i` lives at slot `i + 1`.
+        // Issue #1812: mirror the flag every other CLR-call path already passes
+        // — an interpolated-string argument to an extension method's
+        // IFormattable/FormattableString (or handler) parameter must resolve
+        // consistently with the instance/inherited/static/ctor paths. Offset by
+        // 1 (receiverArgCount) since slot 0 here is the receiver, not a
+        // user-supplied argument.
         var resolution = OverloadResolution.Resolve(
             candidates,
             argTypes,
             explicitTypeArgs,
             scope.References.MapClrTypeToReferences,
+            ComputeInterpolatedStringArgFlags(ce.Arguments, argTypes.Length, receiverArgCount: 1),
             argumentNames: extensionArgumentNames,
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments, argumentOffset: 1));
@@ -5962,6 +5980,19 @@ internal sealed partial class ExpressionBinder
             argTypes[i] = t;
         }
 
+        // Issue #1812: `interpolatedStringArgs` is deliberately left null here
+        // (unlike every other CLR-call Resolve site). This path skips the
+        // entire CLR parameter-conversion pass below (see the "deliberately
+        // skip" comment on orderedArgs) because the emitted MemberRef parameter
+        // is the interface type-variable `!0`, passed unconverted. If the flag
+        // let overload resolution pick a FormattableString/handler overload
+        // here, the interpolated-string argument would still flow through as a
+        // plain `string`-typed BoundExpression with no rebind step to convert
+        // it — a worse bug (wrong overload chosen, argument never actually
+        // converted) than the status quo. Wiring this up would require adding
+        // the BuildResolvedClrCallArguments pipeline to a path that exists
+        // specifically to avoid it; left as a documented gap rather than risking
+        // an ilverify mismatch.
         var resolution = OverloadResolution.Resolve(
             candidates,
             argTypes,
@@ -6058,6 +6089,15 @@ internal sealed partial class ExpressionBinder
             argTypes[i] = t;
         }
 
+        // Issue #1812: `interpolatedStringArgs` is deliberately left null here.
+        // Candidates are drawn only from `typeof(object)`'s public instance
+        // methods (ToString, Equals(object), GetHashCode, GetType) — none
+        // declares an IFormattable/FormattableString/handler parameter, so an
+        // interpolated-string argument could never take the Tier-4
+        // (ADR-0055) conversion path against any candidate here regardless of
+        // the flag. Unlike TryBindConstrainedClrInterfaceCall above, this path
+        // does run the full CLR parameter-conversion pass afterward, but that
+        // fact is irrelevant given no candidate parameter shape could match.
         var resolution = OverloadResolution.Resolve(
             candidates,
             argTypes,
