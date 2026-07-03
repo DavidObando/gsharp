@@ -20,7 +20,7 @@ namespace Cs2Gs.Pipeline;
 /// verifier's reference set. All process I/O is local — it only shells out to
 /// <c>dotnet</c>; there is no network egress and no keys.
 /// </summary>
-public sealed class IlVerifyRunner
+public class IlVerifyRunner
 {
     /// <summary>
     /// The environment variable that, when set to <c>1</c>, bypasses IL
@@ -141,7 +141,7 @@ public sealed class IlVerifyRunner
     /// <param name="assemblyPath">The absolute path of the .dll to verify.</param>
     /// <param name="additionalReferences">The app's extra references, or null.</param>
     /// <returns>The verification result (skipped/passed/failed + parsed errors).</returns>
-    public IlVerifyResult Verify(string assemblyPath, IReadOnlyList<string> additionalReferences = null)
+    public virtual IlVerifyResult Verify(string assemblyPath, IReadOnlyList<string> additionalReferences = null)
     {
         if (!IsEnabled)
         {
@@ -175,12 +175,7 @@ public sealed class IlVerifyRunner
 
         IReadOnlyList<IlVerifyError> errors = FilterIgnored(ParseErrors(output));
 
-        if (exit == 0 || errors.Count == 0)
-        {
-            return IlVerifyResult.Passed(output, errors);
-        }
-
-        return IlVerifyResult.Failed(exit, output, errors);
+        return IlVerifyResult.FromRun(exit, output, errors);
     }
 
     /// <summary>
@@ -425,4 +420,21 @@ public sealed class IlVerifyResult
     /// <returns>A failing <see cref="IlVerifyResult"/>.</returns>
     public static IlVerifyResult Failed(int exitCode, string output, IReadOnlyList<IlVerifyError> errors) =>
         new IlVerifyResult(IlVerifyStatus.Failed, exitCode, output, errors);
+
+    /// <summary>
+    /// Decides pass/fail from a completed ilverify run (#1747): exit 0 is the
+    /// only signal ilverify gives for "verified clean" — the <c>-g</c> ignore
+    /// flags plus <see cref="IlVerifyRunner.FilterIgnored"/> already strip known
+    /// false positives before this runs, so a zero exit is trusted as-is. Any
+    /// non-zero exit is a failure, whether or not error lines parsed: a
+    /// tool crash / offline restore / a future ilverify output-format change
+    /// must never be silently swallowed as a pass just because
+    /// <see cref="IlVerifyRunner.ParseErrors"/> found nothing to report.
+    /// </summary>
+    /// <param name="exitCode">The ilverify process exit code.</param>
+    /// <param name="output">The tool's combined stdout+stderr.</param>
+    /// <param name="errors">The parsed, false-positive-filtered errors.</param>
+    /// <returns>A passing or failing <see cref="IlVerifyResult"/>.</returns>
+    public static IlVerifyResult FromRun(int exitCode, string output, IReadOnlyList<IlVerifyError> errors) =>
+        exitCode == 0 ? Passed(output, errors) : Failed(exitCode, output, errors);
 }

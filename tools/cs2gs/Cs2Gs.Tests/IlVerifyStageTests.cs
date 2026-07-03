@@ -134,6 +134,92 @@ public class IlVerifyStageTests
     }
 
     /// <summary>
+    /// #1747 regression: exit 0 is always Passed, regardless of stray parsed
+    /// error lines (the <c>-g</c> ignore flags + <see cref="IlVerifyRunner.FilterIgnored"/>
+    /// already handle known false positives upstream of this decision).
+    /// </summary>
+    [Fact]
+    public void FromRun_ExitZero_IsPassed()
+    {
+        IlVerifyResult result = IlVerifyResult.FromRun(0, "All Classes and Methods Verified.", Array.Empty<IlVerifyError>());
+        Assert.Equal(IlVerifyStatus.Passed, result.Status);
+        Assert.True(result.Succeeded);
+    }
+
+    /// <summary>
+    /// #1747 regression: exit non-zero with real parsed error lines is Failed
+    /// (unchanged behavior).
+    /// </summary>
+    [Fact]
+    public void FromRun_NonZeroExitWithErrors_IsFailed()
+    {
+        var errors = new[] { new IlVerifyError("StackUnexpected", "P::Main(string[])", SampleErrorLine) };
+        IlVerifyResult result = IlVerifyResult.FromRun(1, SampleErrorLine, errors);
+        Assert.Equal(IlVerifyStatus.Failed, result.Status);
+        Assert.False(result.Succeeded);
+    }
+
+    /// <summary>
+    /// #1747: this is the bug's core case — ilverify crashes (or its output
+    /// format no longer matches <see cref="IlVerifyRunner.ParseErrors"/>) and
+    /// exits non-zero with zero parseable error lines. Before the fix this
+    /// silently returned Passed, permanently defeating the gate; it must now
+    /// return Failed so <see cref="IlVerifyStage"/>'s synthetic-artifact
+    /// fallback is reachable.
+    /// </summary>
+    [Fact]
+    public void FromRun_NonZeroExitWithNoParseableErrors_IsFailed_NotSilentlyPassed()
+    {
+        IlVerifyResult result = IlVerifyResult.FromRun(134, "Segmentation fault (core dumped)", Array.Empty<IlVerifyError>());
+        Assert.Equal(IlVerifyStatus.Failed, result.Status);
+        Assert.False(result.Succeeded);
+        Assert.Equal(134, result.ExitCode);
+    }
+
+    /// <summary>
+    /// #1747: when <see cref="IlVerifyRunner.Verify"/> reports a tool-crash
+    /// Failed result (non-zero exit, no parseable errors), the stage must not
+    /// pass silently — it hits the synthetic-artifact fallback in
+    /// <c>IlVerifyStage</c> (ExecuteAsync's <c>artifacts.Count == 0</c> branch)
+    /// and reports <see cref="StageOutcome"/> failed with one synthetic
+    /// <c>ilverify-failure</c> artifact.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_ToolCrash_FailsStage_WithSyntheticArtifact()
+    {
+        string outRoot = NewOutputRoot("ilverify-tool-crash");
+        var runner = new CrashingIlVerifyRunner();
+        var stage = new IlVerifyStage(runner);
+
+        string fakeAssembly = Path.Combine(outRoot, "App.dll");
+        File.WriteAllBytes(fakeAssembly, Array.Empty<byte>());
+
+        var app = new CorpusApp("corpus/Fake", "/fake/Fake.csproj", TargetKind.Exe);
+        var options = new PipelineOptions { GscPath = "/fake/gsc.dll", OutputRoot = outRoot };
+        var context = new StageExecutionContext(
+            app,
+            options,
+            new GscInvoker(options.GscPath),
+            outRoot,
+            new TriageBuilder("run_1", "2026-06-21T20:00:00Z", "0.2.0+abc", "corpus/Fake"))
+        {
+            EmittedAssemblyPath = fakeAssembly,
+        };
+
+        StageOutcome outcome = await stage.ExecuteAsync(context);
+
+        Assert.Equal(StageStatus.Failed, outcome.Status);
+        TriageArtifact artifact = Assert.Single(outcome.Artifacts);
+        Assert.Equal("ilverify-failure", artifact.Category);
+    }
+
+    private sealed class CrashingIlVerifyRunner : IlVerifyRunner
+    {
+        public override IlVerifyResult Verify(string assemblyPath, IReadOnlyList<string> additionalReferences = null) =>
+            IlVerifyResult.FromRun(134, "Segmentation fault (core dumped)", Array.Empty<IlVerifyError>());
+    }
+
+    /// <summary>
     /// Running the pipeline over <c>corpus/L1-Console</c> passes stage 3
     /// (<c>ilverify</c>) cleanly with zero artifacts: all three stages green and
     /// the stage list now has three entries. Gated on the compiler artifact and
