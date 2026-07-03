@@ -73,6 +73,19 @@ internal static class Program
             }
         }
 
+        if (verb is "coverage")
+        {
+            try
+            {
+                return CoverageCommand.Run(args.Skip(1).ToArray());
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("cs2gs: " + ex.Message);
+                return 2;
+            }
+        }
+
         Console.Error.WriteLine($"cs2gs: unknown command '{verb}'.");
         PrintUsage();
         return 1;
@@ -471,6 +484,7 @@ internal static class Program
         Console.WriteLine("Usage:");
         Console.WriteLine("  cs2gs migrate [options]");
         Console.WriteLine("  cs2gs report --run <runDir> [--out <file-or-dir>]");
+        Console.WriteLine("  cs2gs coverage [--write] [--repo-root <dir>]");
         Console.WriteLine();
         Console.WriteLine("migrate options:");
         Console.WriteLine("  --corpus <dir>    Corpus root (default: tools/cs2gs/corpus).");
@@ -487,6 +501,11 @@ internal static class Program
         Console.WriteLine("                    A path ending in .html/.htm/.json (or an existing file) names that one");
         Console.WriteLine("                    output file directly; the other artifact keeps its default name");
         Console.WriteLine("                    alongside it. Any other path is created as a directory.");
+        Console.WriteLine();
+        Console.WriteLine("coverage options:");
+        Console.WriteLine("  --write           Append skeleton rows for new Roslyn node kinds, canonicalize the");
+        Console.WriteLine("                    construct inventory, and regenerate the docs matrix + surface golden.");
+        Console.WriteLine("  --repo-root <dir> Repository root (default: walk up from the current directory).");
         Console.WriteLine();
         Console.WriteLine("A migrate run also writes report.html + summary.json into the run dir automatically (ADR-0115 §F).");
         Console.WriteLine();

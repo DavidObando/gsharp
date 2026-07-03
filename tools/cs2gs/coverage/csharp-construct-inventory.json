@@ -1,0 +1,2248 @@
+[
+  {
+    "kind": "AccessorList",
+    "nodeType": "AccessorListSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None"
+  },
+  {
+    "kind": "AddAccessorDeclaration",
+    "nodeType": "AccessorDeclarationSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "AddAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "AddExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "AddressOfExpression",
+    "nodeType": "PrefixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.30",
+    "rationale": "None"
+  },
+  {
+    "kind": "AliasQualifiedName",
+    "nodeType": "AliasQualifiedNameSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.12",
+    "rationale": "None"
+  },
+  {
+    "kind": "AllowsConstraintClause",
+    "nodeType": "AllowsConstraintClauseSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "AndAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "AndPattern",
+    "nodeType": "BinaryPatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None"
+  },
+  {
+    "kind": "AnonymousMethodExpression",
+    "nodeType": "AnonymousMethodExpressionSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "AnonymousObjectCreationExpression",
+    "nodeType": "AnonymousObjectCreationExpressionSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "AnonymousObjectMemberDeclarator",
+    "nodeType": "AnonymousObjectMemberDeclaratorSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "ArgListExpression",
+    "nodeType": "LiteralExpressionSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "NoGsharpConstruct",
+    "notes": "Legacy TypedReference/varargs machinery (__makeref/__reftype/__refvalue/__arglist); no G# analog planned."
+  },
+  {
+    "kind": "Argument",
+    "nodeType": "ArgumentSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "ArgumentList",
+    "nodeType": "ArgumentListSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "ArrayCreationExpression",
+    "nodeType": "ArrayCreationExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.16",
+    "rationale": "None"
+  },
+  {
+    "kind": "ArrayInitializerExpression",
+    "nodeType": "InitializerExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.16",
+    "rationale": "None"
+  },
+  {
+    "kind": "ArrayRankSpecifier",
+    "nodeType": "ArrayRankSpecifierSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.16",
+    "rationale": "None"
+  },
+  {
+    "kind": "ArrayType",
+    "nodeType": "ArrayTypeSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.16",
+    "rationale": "None"
+  },
+  {
+    "kind": "ArrowExpressionClause",
+    "nodeType": "ArrowExpressionClauseSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.5",
+    "rationale": "None",
+    "notes": "Expression-bodied members (ADR-0131)."
+  },
+  {
+    "kind": "AsExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "AscendingOrdering",
+    "nodeType": "OrderingSyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
+    "rationale": "None",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "Attribute",
+    "nodeType": "AttributeSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None"
+  },
+  {
+    "kind": "AttributeArgument",
+    "nodeType": "AttributeArgumentSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None"
+  },
+  {
+    "kind": "AttributeArgumentList",
+    "nodeType": "AttributeArgumentListSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None"
+  },
+  {
+    "kind": "AttributeList",
+    "nodeType": "AttributeListSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None"
+  },
+  {
+    "kind": "AttributeTargetSpecifier",
+    "nodeType": "AttributeTargetSpecifierSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None"
+  },
+  {
+    "kind": "AwaitExpression",
+    "nodeType": "AwaitExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.23",
+    "rationale": "None"
+  },
+  {
+    "kind": "BadDirectiveTrivia",
+    "nodeType": "BadDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "BaseConstructorInitializer",
+    "nodeType": "ConstructorInitializerSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.28",
+    "rationale": "None"
+  },
+  {
+    "kind": "BaseExpression",
+    "nodeType": "BaseExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "notes": "base.M() virtual calls (issue #986, resolved)."
+  },
+  {
+    "kind": "BaseList",
+    "nodeType": "BaseListSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.6",
+    "rationale": "None"
+  },
+  {
+    "kind": "BitwiseAndExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "BitwiseNotExpression",
+    "nodeType": "PrefixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "BitwiseOrExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "Block",
+    "nodeType": "BlockSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.2",
+    "rationale": "None"
+  },
+  {
+    "kind": "BracketedArgumentList",
+    "nodeType": "BracketedArgumentListSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "notes": "Issue #942 (resolved)."
+  },
+  {
+    "kind": "BracketedParameterList",
+    "nodeType": "BracketedParameterListSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None",
+    "notes": "User indexers (issue #944)."
+  },
+  {
+    "kind": "BreakStatement",
+    "nodeType": "BreakStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "CasePatternSwitchLabel",
+    "nodeType": "CasePatternSwitchLabelSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.33",
+    "rationale": "None"
+  },
+  {
+    "kind": "CaseSwitchLabel",
+    "nodeType": "CaseSwitchLabelSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.33",
+    "rationale": "None"
+  },
+  {
+    "kind": "CastExpression",
+    "nodeType": "CastExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.17",
+    "rationale": "None"
+  },
+  {
+    "kind": "CatchClause",
+    "nodeType": "CatchClauseSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.27",
+    "rationale": "None"
+  },
+  {
+    "kind": "CatchDeclaration",
+    "nodeType": "CatchDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.27",
+    "rationale": "None"
+  },
+  {
+    "kind": "CatchFilterClause",
+    "nodeType": "CatchFilterClauseSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "CharacterLiteralExpression",
+    "nodeType": "LiteralExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "CheckedExpression",
+    "nodeType": "CheckedExpressionSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "CheckedStatement",
+    "nodeType": "CheckedStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "notes": "Emitted as a plain inner block; overflow-checking semantics are NOT preserved \u2014 candidate for reclassification."
+  },
+  {
+    "kind": "ClassConstraint",
+    "nodeType": "ClassOrStructConstraintSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.7",
+    "rationale": "None"
+  },
+  {
+    "kind": "ClassDeclaration",
+    "nodeType": "ClassDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.4",
+    "rationale": "None"
+  },
+  {
+    "kind": "CoalesceAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "CoalesceExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "notes": "Binary ?? (issue #941, resolved)."
+  },
+  {
+    "kind": "CollectionExpression",
+    "nodeType": "CollectionExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.36",
+    "rationale": "None"
+  },
+  {
+    "kind": "CollectionInitializerExpression",
+    "nodeType": "InitializerExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.16",
+    "rationale": "None"
+  },
+  {
+    "kind": "CompilationUnit",
+    "nodeType": "CompilationUnitSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.1",
+    "rationale": "None"
+  },
+  {
+    "kind": "ComplexElementInitializerExpression",
+    "nodeType": "InitializerExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.16",
+    "rationale": "None"
+  },
+  {
+    "kind": "ConditionalAccessExpression",
+    "nodeType": "ConditionalAccessExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "notes": "Null-conditional ?. / ?[."
+  },
+  {
+    "kind": "ConditionalExpression",
+    "nodeType": "ConditionalExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.26",
+    "rationale": "None"
+  },
+  {
+    "kind": "ConstantPattern",
+    "nodeType": "ConstantPatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None"
+  },
+  {
+    "kind": "ConstructorConstraint",
+    "nodeType": "ConstructorConstraintSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.7",
+    "rationale": "None"
+  },
+  {
+    "kind": "ConstructorDeclaration",
+    "nodeType": "ConstructorDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.28",
+    "rationale": "None"
+  },
+  {
+    "kind": "ContinueStatement",
+    "nodeType": "ContinueStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "ConversionOperatorDeclaration",
+    "nodeType": "ConversionOperatorDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.31",
+    "rationale": "None"
+  },
+  {
+    "kind": "ConversionOperatorMemberCref",
+    "nodeType": "ConversionOperatorMemberCrefSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "CrefBracketedParameterList",
+    "nodeType": "CrefBracketedParameterListSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "CrefParameter",
+    "nodeType": "CrefParameterSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "CrefParameterList",
+    "nodeType": "CrefParameterListSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "DeclarationExpression",
+    "nodeType": "DeclarationExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.30",
+    "rationale": "None"
+  },
+  {
+    "kind": "DeclarationPattern",
+    "nodeType": "DeclarationPatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None",
+    "notes": "x is T t binder (issue #993, resolved)."
+  },
+  {
+    "kind": "DefaultConstraint",
+    "nodeType": "DefaultConstraintSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "DefaultExpression",
+    "nodeType": "DefaultExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "DefaultLiteralExpression",
+    "nodeType": "LiteralExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "DefaultSwitchLabel",
+    "nodeType": "DefaultSwitchLabelSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.33",
+    "rationale": "None"
+  },
+  {
+    "kind": "DefineDirectiveTrivia",
+    "nodeType": "DefineDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "DelegateDeclaration",
+    "nodeType": "DelegateDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.8",
+    "rationale": "None"
+  },
+  {
+    "kind": "DescendingOrdering",
+    "nodeType": "OrderingSyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
+    "rationale": "None",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "DestructorDeclaration",
+    "nodeType": "DestructorDeclarationSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "DiscardDesignation",
+    "nodeType": "DiscardDesignationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.30",
+    "rationale": "None"
+  },
+  {
+    "kind": "DiscardPattern",
+    "nodeType": "DiscardPatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None"
+  },
+  {
+    "kind": "DivideAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "DivideExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "DoStatement",
+    "nodeType": "DoStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "ElementAccessExpression",
+    "nodeType": "ElementAccessExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "notes": "Issue #942 (resolved)."
+  },
+  {
+    "kind": "ElementBindingExpression",
+    "nodeType": "ElementBindingExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "notes": "Null-conditional ?. / ?[."
+  },
+  {
+    "kind": "ElifDirectiveTrivia",
+    "nodeType": "ElifDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "ElseClause",
+    "nodeType": "ElseClauseSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "ElseDirectiveTrivia",
+    "nodeType": "ElseDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "EmptyStatement",
+    "nodeType": "EmptyStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "EndIfDirectiveTrivia",
+    "nodeType": "EndIfDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "EndRegionDirectiveTrivia",
+    "nodeType": "EndRegionDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "EnumDeclaration",
+    "nodeType": "EnumDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None"
+  },
+  {
+    "kind": "EnumMemberDeclaration",
+    "nodeType": "EnumMemberDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None"
+  },
+  {
+    "kind": "EqualsExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "EqualsValueClause",
+    "nodeType": "EqualsValueClauseSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.3",
+    "rationale": "None"
+  },
+  {
+    "kind": "ErrorDirectiveTrivia",
+    "nodeType": "ErrorDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "EventDeclaration",
+    "nodeType": "EventDeclarationSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "EventFieldDeclaration",
+    "nodeType": "EventFieldDeclarationSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "ExclusiveOrAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "ExclusiveOrExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "ExplicitInterfaceSpecifier",
+    "nodeType": "ExplicitInterfaceSpecifierSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "ExpressionColon",
+    "nodeType": "ExpressionColonSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "ExpressionElement",
+    "nodeType": "ExpressionElementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.36",
+    "rationale": "None"
+  },
+  {
+    "kind": "ExpressionStatement",
+    "nodeType": "ExpressionStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "ExtensionBlockDeclaration",
+    "nodeType": "ExtensionBlockDeclarationSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "ExtensionMemberCref",
+    "nodeType": "ExtensionMemberCrefSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "ExternAliasDirective",
+    "nodeType": "ExternAliasDirectiveSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "FalseLiteralExpression",
+    "nodeType": "LiteralExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "FieldDeclaration",
+    "nodeType": "FieldDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.3",
+    "rationale": "None"
+  },
+  {
+    "kind": "FieldExpression",
+    "nodeType": "FieldExpressionSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "FileScopedNamespaceDeclaration",
+    "nodeType": "FileScopedNamespaceDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.1",
+    "rationale": "None"
+  },
+  {
+    "kind": "FinallyClause",
+    "nodeType": "FinallyClauseSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.27",
+    "rationale": "None"
+  },
+  {
+    "kind": "FixedStatement",
+    "nodeType": "FixedStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "ForEachStatement",
+    "nodeType": "ForEachStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "ForEachVariableStatement",
+    "nodeType": "ForEachVariableStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "ForStatement",
+    "nodeType": "ForStatementSyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "notes": "Lowered to a while loop when clauses demand it (issue #1732 incrementor-on-continue fix)."
+  },
+  {
+    "kind": "FromClause",
+    "nodeType": "FromClauseSyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
+    "rationale": "None",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "FunctionPointerCallingConvention",
+    "nodeType": "FunctionPointerCallingConventionSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "FunctionPointerParameter",
+    "nodeType": "FunctionPointerParameterSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "FunctionPointerParameterList",
+    "nodeType": "FunctionPointerParameterListSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "FunctionPointerType",
+    "nodeType": "FunctionPointerTypeSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "FunctionPointerUnmanagedCallingConvention",
+    "nodeType": "FunctionPointerUnmanagedCallingConventionSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "FunctionPointerUnmanagedCallingConventionList",
+    "nodeType": "FunctionPointerUnmanagedCallingConventionListSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "GenericName",
+    "nodeType": "GenericNameSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.7",
+    "rationale": "None"
+  },
+  {
+    "kind": "GetAccessorDeclaration",
+    "nodeType": "AccessorDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None"
+  },
+  {
+    "kind": "GlobalStatement",
+    "nodeType": "GlobalStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None",
+    "notes": "Entry-class hoisting (T3): top-level statements."
+  },
+  {
+    "kind": "GotoCaseStatement",
+    "nodeType": "GotoStatementSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "GotoDefaultStatement",
+    "nodeType": "GotoStatementSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "GotoStatement",
+    "nodeType": "GotoStatementSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "GreaterThanExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "GreaterThanOrEqualExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "GroupClause",
+    "nodeType": "GroupClauseSyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
+    "rationale": "None",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "IdentifierName",
+    "nodeType": "IdentifierNameSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.12",
+    "rationale": "None"
+  },
+  {
+    "kind": "IfDirectiveTrivia",
+    "nodeType": "IfDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "IfStatement",
+    "nodeType": "IfStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "IgnoredDirectiveTrivia",
+    "nodeType": "IgnoredDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "ImplicitArrayCreationExpression",
+    "nodeType": "ImplicitArrayCreationExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.16",
+    "rationale": "None"
+  },
+  {
+    "kind": "ImplicitElementAccess",
+    "nodeType": "ImplicitElementAccessSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.16",
+    "rationale": "None"
+  },
+  {
+    "kind": "ImplicitObjectCreationExpression",
+    "nodeType": "ImplicitObjectCreationExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.25",
+    "rationale": "None"
+  },
+  {
+    "kind": "ImplicitStackAllocArrayCreationExpression",
+    "nodeType": "ImplicitStackAllocArrayCreationExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "notes": "ADR-0124 stackalloc surface."
+  },
+  {
+    "kind": "IncompleteMember",
+    "nodeType": "IncompleteMemberSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "IndexExpression",
+    "nodeType": "PrefixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.36",
+    "rationale": "None",
+    "notes": "^i from-end index."
+  },
+  {
+    "kind": "IndexerDeclaration",
+    "nodeType": "IndexerDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None",
+    "notes": "User indexers (issue #944)."
+  },
+  {
+    "kind": "IndexerMemberCref",
+    "nodeType": "IndexerMemberCrefSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "InitAccessorDeclaration",
+    "nodeType": "AccessorDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None"
+  },
+  {
+    "kind": "InterfaceDeclaration",
+    "nodeType": "InterfaceDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.4",
+    "rationale": "None"
+  },
+  {
+    "kind": "InterpolatedStringExpression",
+    "nodeType": "InterpolatedStringExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.9",
+    "rationale": "None"
+  },
+  {
+    "kind": "InterpolatedStringText",
+    "nodeType": "InterpolatedStringTextSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.9",
+    "rationale": "None"
+  },
+  {
+    "kind": "Interpolation",
+    "nodeType": "InterpolationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.9",
+    "rationale": "None"
+  },
+  {
+    "kind": "InterpolationAlignmentClause",
+    "nodeType": "InterpolationAlignmentClauseSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.9",
+    "rationale": "None"
+  },
+  {
+    "kind": "InterpolationFormatClause",
+    "nodeType": "InterpolationFormatClauseSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.9",
+    "rationale": "None"
+  },
+  {
+    "kind": "InvocationExpression",
+    "nodeType": "InvocationExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "IsExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "IsPatternExpression",
+    "nodeType": "IsPatternExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.36",
+    "rationale": "None"
+  },
+  {
+    "kind": "JoinClause",
+    "nodeType": "JoinClauseSyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
+    "rationale": "None",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "JoinIntoClause",
+    "nodeType": "JoinIntoClauseSyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
+    "rationale": "None",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "LabeledStatement",
+    "nodeType": "LabeledStatementSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "LeftShiftAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "LeftShiftExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "LessThanExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "LessThanOrEqualExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "LetClause",
+    "nodeType": "LetClauseSyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
+    "rationale": "None",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "LineDirectivePosition",
+    "nodeType": "LineDirectivePositionSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "LineDirectiveTrivia",
+    "nodeType": "LineDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "LineSpanDirectiveTrivia",
+    "nodeType": "LineSpanDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "ListPattern",
+    "nodeType": "ListPatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None"
+  },
+  {
+    "kind": "LoadDirectiveTrivia",
+    "nodeType": "LoadDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "LocalDeclarationStatement",
+    "nodeType": "LocalDeclarationStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.3",
+    "rationale": "None"
+  },
+  {
+    "kind": "LocalFunctionStatement",
+    "nodeType": "LocalFunctionStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "LockStatement",
+    "nodeType": "LockStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "LogicalAndExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "LogicalNotExpression",
+    "nodeType": "PrefixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "LogicalOrExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "MakeRefExpression",
+    "nodeType": "MakeRefExpressionSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "NoGsharpConstruct",
+    "notes": "Legacy TypedReference/varargs machinery (__makeref/__reftype/__refvalue/__arglist); no G# analog planned."
+  },
+  {
+    "kind": "MemberBindingExpression",
+    "nodeType": "MemberBindingExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "notes": "Null-conditional ?. / ?[."
+  },
+  {
+    "kind": "MethodDeclaration",
+    "nodeType": "MethodDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.5",
+    "rationale": "None"
+  },
+  {
+    "kind": "ModuloAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "ModuloExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "MultiLineDocumentationCommentTrivia",
+    "nodeType": "DocumentationCommentTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "MultiplyAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "MultiplyExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "NameColon",
+    "nodeType": "NameColonSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "notes": "Named arguments use the G# name: value form (ADR-0080)."
+  },
+  {
+    "kind": "NameEquals",
+    "nodeType": "NameEqualsSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.16",
+    "rationale": "None"
+  },
+  {
+    "kind": "NameMemberCref",
+    "nodeType": "NameMemberCrefSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "NamespaceDeclaration",
+    "nodeType": "NamespaceDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.1",
+    "rationale": "None"
+  },
+  {
+    "kind": "NotEqualsExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "NotPattern",
+    "nodeType": "UnaryPatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None"
+  },
+  {
+    "kind": "NullLiteralExpression",
+    "nodeType": "LiteralExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "NullableDirectiveTrivia",
+    "nodeType": "NullableDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "NullableType",
+    "nodeType": "NullableTypeSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.12",
+    "rationale": "None",
+    "notes": "T? maps to G# nullable spelling."
+  },
+  {
+    "kind": "NumericLiteralExpression",
+    "nodeType": "LiteralExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "ObjectCreationExpression",
+    "nodeType": "ObjectCreationExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.16",
+    "rationale": "None"
+  },
+  {
+    "kind": "ObjectInitializerExpression",
+    "nodeType": "InitializerExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.16",
+    "rationale": "None"
+  },
+  {
+    "kind": "OmittedArraySizeExpression",
+    "nodeType": "OmittedArraySizeExpressionSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "OmittedTypeArgument",
+    "nodeType": "OmittedTypeArgumentSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "OperatorDeclaration",
+    "nodeType": "OperatorDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.31",
+    "rationale": "None"
+  },
+  {
+    "kind": "OperatorMemberCref",
+    "nodeType": "OperatorMemberCrefSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "OrAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "OrPattern",
+    "nodeType": "BinaryPatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None"
+  },
+  {
+    "kind": "OrderByClause",
+    "nodeType": "OrderByClauseSyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
+    "rationale": "None",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "Parameter",
+    "nodeType": "ParameterSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.5",
+    "rationale": "None"
+  },
+  {
+    "kind": "ParameterList",
+    "nodeType": "ParameterListSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.5",
+    "rationale": "None"
+  },
+  {
+    "kind": "ParenthesizedExpression",
+    "nodeType": "ParenthesizedExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "ParenthesizedLambdaExpression",
+    "nodeType": "ParenthesizedLambdaExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.20",
+    "rationale": "None"
+  },
+  {
+    "kind": "ParenthesizedPattern",
+    "nodeType": "ParenthesizedPatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None"
+  },
+  {
+    "kind": "ParenthesizedVariableDesignation",
+    "nodeType": "ParenthesizedVariableDesignationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.30",
+    "rationale": "None"
+  },
+  {
+    "kind": "PointerIndirectionExpression",
+    "nodeType": "PrefixUnaryExpressionSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "PointerMemberAccessExpression",
+    "nodeType": "MemberAccessExpressionSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "PointerType",
+    "nodeType": "PointerTypeSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "PositionalPatternClause",
+    "nodeType": "PositionalPatternClauseSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "PostDecrementExpression",
+    "nodeType": "PostfixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "PostIncrementExpression",
+    "nodeType": "PostfixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "PragmaChecksumDirectiveTrivia",
+    "nodeType": "PragmaChecksumDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "PragmaWarningDirectiveTrivia",
+    "nodeType": "PragmaWarningDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "PreDecrementExpression",
+    "nodeType": "PrefixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "PreIncrementExpression",
+    "nodeType": "PrefixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "PredefinedType",
+    "nodeType": "PredefinedTypeSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.12",
+    "rationale": "None"
+  },
+  {
+    "kind": "PrimaryConstructorBaseType",
+    "nodeType": "PrimaryConstructorBaseTypeSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "PropertyDeclaration",
+    "nodeType": "PropertyDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None"
+  },
+  {
+    "kind": "PropertyPatternClause",
+    "nodeType": "PropertyPatternClauseSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None",
+    "notes": "Property sub-patterns; designator collisions fixed in issue #1839."
+  },
+  {
+    "kind": "QualifiedCref",
+    "nodeType": "QualifiedCrefSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "QualifiedName",
+    "nodeType": "QualifiedNameSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.12",
+    "rationale": "None"
+  },
+  {
+    "kind": "QueryBody",
+    "nodeType": "QueryBodySyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
+    "rationale": "None",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "QueryContinuation",
+    "nodeType": "QueryContinuationSyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
+    "rationale": "None",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "QueryExpression",
+    "nodeType": "QueryExpressionSyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
+    "rationale": "None",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "RangeExpression",
+    "nodeType": "RangeExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.36",
+    "rationale": "None"
+  },
+  {
+    "kind": "RecordDeclaration",
+    "nodeType": "RecordDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.4",
+    "rationale": "None"
+  },
+  {
+    "kind": "RecordStructDeclaration",
+    "nodeType": "RecordDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.4",
+    "rationale": "None"
+  },
+  {
+    "kind": "RecursivePattern",
+    "nodeType": "RecursivePatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None",
+    "notes": "Property sub-patterns; designator collisions fixed in issue #1839."
+  },
+  {
+    "kind": "RefExpression",
+    "nodeType": "RefExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.30",
+    "rationale": "None",
+    "notes": "ref argument/return seam (\u0026x pass-by-address)."
+  },
+  {
+    "kind": "RefStructConstraint",
+    "nodeType": "RefStructConstraintSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "RefType",
+    "nodeType": "RefTypeSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "RefTypeExpression",
+    "nodeType": "RefTypeExpressionSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "NoGsharpConstruct",
+    "notes": "Legacy TypedReference/varargs machinery (__makeref/__reftype/__refvalue/__arglist); no G# analog planned."
+  },
+  {
+    "kind": "RefValueExpression",
+    "nodeType": "RefValueExpressionSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "NoGsharpConstruct",
+    "notes": "Legacy TypedReference/varargs machinery (__makeref/__reftype/__refvalue/__arglist); no G# analog planned."
+  },
+  {
+    "kind": "ReferenceDirectiveTrivia",
+    "nodeType": "ReferenceDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "RegionDirectiveTrivia",
+    "nodeType": "RegionDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "RelationalPattern",
+    "nodeType": "RelationalPatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None"
+  },
+  {
+    "kind": "RemoveAccessorDeclaration",
+    "nodeType": "AccessorDeclarationSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "ReturnStatement",
+    "nodeType": "ReturnStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "RightShiftAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "RightShiftExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "ScopedType",
+    "nodeType": "ScopedTypeSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "SelectClause",
+    "nodeType": "SelectClauseSyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
+    "rationale": "None",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "SetAccessorDeclaration",
+    "nodeType": "AccessorDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
+    "rationale": "None"
+  },
+  {
+    "kind": "ShebangDirectiveTrivia",
+    "nodeType": "ShebangDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "SimpleAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "SimpleBaseType",
+    "nodeType": "SimpleBaseTypeSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.6",
+    "rationale": "None"
+  },
+  {
+    "kind": "SimpleLambdaExpression",
+    "nodeType": "SimpleLambdaExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.20",
+    "rationale": "None"
+  },
+  {
+    "kind": "SimpleMemberAccessExpression",
+    "nodeType": "MemberAccessExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "SingleLineDocumentationCommentTrivia",
+    "nodeType": "DocumentationCommentTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "SingleVariableDesignation",
+    "nodeType": "SingleVariableDesignationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.30",
+    "rationale": "None"
+  },
+  {
+    "kind": "SizeOfExpression",
+    "nodeType": "SizeOfExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "SkippedTokensTrivia",
+    "nodeType": "SkippedTokensTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "SlicePattern",
+    "nodeType": "SlicePatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None"
+  },
+  {
+    "kind": "SpreadElement",
+    "nodeType": "SpreadElementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.36",
+    "rationale": "None"
+  },
+  {
+    "kind": "StackAllocArrayCreationExpression",
+    "nodeType": "StackAllocArrayCreationExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "notes": "ADR-0124 stackalloc surface."
+  },
+  {
+    "kind": "StringLiteralExpression",
+    "nodeType": "LiteralExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "StructConstraint",
+    "nodeType": "ClassOrStructConstraintSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.7",
+    "rationale": "None"
+  },
+  {
+    "kind": "StructDeclaration",
+    "nodeType": "StructDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.4",
+    "rationale": "None"
+  },
+  {
+    "kind": "Subpattern",
+    "nodeType": "SubpatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None",
+    "notes": "Property sub-patterns; designator collisions fixed in issue #1839."
+  },
+  {
+    "kind": "SubtractAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "SubtractExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "SuppressNullableWarningExpression",
+    "nodeType": "PostfixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "notes": "x! maps to the G# !! assertion."
+  },
+  {
+    "kind": "SwitchExpression",
+    "nodeType": "SwitchExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None"
+  },
+  {
+    "kind": "SwitchExpressionArm",
+    "nodeType": "SwitchExpressionArmSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None"
+  },
+  {
+    "kind": "SwitchSection",
+    "nodeType": "SwitchSectionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.33",
+    "rationale": "None"
+  },
+  {
+    "kind": "SwitchStatement",
+    "nodeType": "SwitchStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.33",
+    "rationale": "None"
+  },
+  {
+    "kind": "ThisConstructorInitializer",
+    "nodeType": "ConstructorInitializerSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.28",
+    "rationale": "None"
+  },
+  {
+    "kind": "ThisExpression",
+    "nodeType": "ThisExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "ThrowExpression",
+    "nodeType": "ThrowExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.27",
+    "rationale": "None"
+  },
+  {
+    "kind": "ThrowStatement",
+    "nodeType": "ThrowStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.27",
+    "rationale": "None"
+  },
+  {
+    "kind": "TrueLiteralExpression",
+    "nodeType": "LiteralExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "TryStatement",
+    "nodeType": "TryStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.27",
+    "rationale": "None"
+  },
+  {
+    "kind": "TupleElement",
+    "nodeType": "TupleElementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.12",
+    "rationale": "None",
+    "notes": "G# tuple types (T1, T2)."
+  },
+  {
+    "kind": "TupleExpression",
+    "nodeType": "TupleExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "TupleType",
+    "nodeType": "TupleTypeSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.12",
+    "rationale": "None",
+    "notes": "G# tuple types (T1, T2)."
+  },
+  {
+    "kind": "TypeArgumentList",
+    "nodeType": "TypeArgumentListSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.7",
+    "rationale": "None"
+  },
+  {
+    "kind": "TypeConstraint",
+    "nodeType": "TypeConstraintSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.7",
+    "rationale": "None"
+  },
+  {
+    "kind": "TypeCref",
+    "nodeType": "TypeCrefSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "TypeOfExpression",
+    "nodeType": "TypeOfExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "TypeParameter",
+    "nodeType": "TypeParameterSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.7",
+    "rationale": "None"
+  },
+  {
+    "kind": "TypeParameterConstraintClause",
+    "nodeType": "TypeParameterConstraintClauseSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.7",
+    "rationale": "None"
+  },
+  {
+    "kind": "TypeParameterList",
+    "nodeType": "TypeParameterListSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.7",
+    "rationale": "None"
+  },
+  {
+    "kind": "TypePattern",
+    "nodeType": "TypePatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None"
+  },
+  {
+    "kind": "UnaryMinusExpression",
+    "nodeType": "PrefixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "UnaryPlusExpression",
+    "nodeType": "PrefixUnaryExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "UncheckedExpression",
+    "nodeType": "CheckedExpressionSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "UncheckedStatement",
+    "nodeType": "CheckedStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None",
+    "notes": "Emitted as a plain inner block; overflow-checking semantics are NOT preserved \u2014 candidate for reclassification."
+  },
+  {
+    "kind": "UndefDirectiveTrivia",
+    "nodeType": "UndefDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "UnionDeclaration",
+    "nodeType": "(not exported by Roslyn 5.6)",
+    "status": "UnsupportedByDesign",
+    "rationale": "NotReachable",
+    "notes": "Post-C#14 preview syntax in Roslyn 5.6; not reachable at LangVersion latest."
+  },
+  {
+    "kind": "UnknownAccessorDeclaration",
+    "nodeType": "AccessorDeclarationSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "NotReachable",
+    "notes": "Parser error-recovery artifact; never appears in well-formed C#."
+  },
+  {
+    "kind": "UnsafeStatement",
+    "nodeType": "UnsafeStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "UnsignedRightShiftAssignmentExpression",
+    "nodeType": "AssignmentExpressionSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "UnsignedRightShiftExpression",
+    "nodeType": "BinaryExpressionSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "UsingDirective",
+    "nodeType": "UsingDirectiveSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.1",
+    "rationale": "None"
+  },
+  {
+    "kind": "UsingStatement",
+    "nodeType": "UsingStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.29",
+    "rationale": "None"
+  },
+  {
+    "kind": "Utf8StringLiteralExpression",
+    "nodeType": "LiteralExpressionSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "VarPattern",
+    "nodeType": "VarPatternSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None"
+  },
+  {
+    "kind": "VariableDeclaration",
+    "nodeType": "VariableDeclarationSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.3",
+    "rationale": "None"
+  },
+  {
+    "kind": "VariableDeclarator",
+    "nodeType": "VariableDeclaratorSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.3",
+    "rationale": "None"
+  },
+  {
+    "kind": "WarningDirectiveTrivia",
+    "nodeType": "WarningDirectiveTriviaSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "Preprocessor",
+    "notes": "Resolved by Roslyn parse options before translation; inactive code is deliberately dropped."
+  },
+  {
+    "kind": "WhenClause",
+    "nodeType": "WhenClauseSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
+    "rationale": "None",
+    "notes": "Pattern guards (issue #991, resolved)."
+  },
+  {
+    "kind": "WhereClause",
+    "nodeType": "WhereClauseSyntax",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
+    "rationale": "None",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+  },
+  {
+    "kind": "WhileStatement",
+    "nodeType": "WhileStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
+    "rationale": "None"
+  },
+  {
+    "kind": "WithElement",
+    "nodeType": "WithElementSyntax",
+    "status": "Unclassified",
+    "rationale": "None"
+  },
+  {
+    "kind": "WithExpression",
+    "nodeType": "WithExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.15",
+    "rationale": "None"
+  },
+  {
+    "kind": "WithInitializerExpression",
+    "nodeType": "InitializerExpressionSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.15",
+    "rationale": "None"
+  },
+  {
+    "kind": "XmlCDataSection",
+    "nodeType": "XmlCDataSectionSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlComment",
+    "nodeType": "XmlCommentSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlCrefAttribute",
+    "nodeType": "XmlCrefAttributeSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlElement",
+    "nodeType": "XmlElementSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlElementEndTag",
+    "nodeType": "XmlElementEndTagSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlElementStartTag",
+    "nodeType": "XmlElementStartTagSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlEmptyElement",
+    "nodeType": "XmlEmptyElementSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlName",
+    "nodeType": "XmlNameSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlNameAttribute",
+    "nodeType": "XmlNameAttributeSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlPrefix",
+    "nodeType": "XmlPrefixSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlProcessingInstruction",
+    "nodeType": "XmlProcessingInstructionSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlText",
+    "nodeType": "XmlTextSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "XmlTextAttribute",
+    "nodeType": "XmlTextAttributeSyntax",
+    "status": "UnsupportedByDesign",
+    "rationale": "ToolingScope",
+    "notes": "Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope."
+  },
+  {
+    "kind": "YieldBreakStatement",
+    "nodeType": "YieldStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.34",
+    "rationale": "None",
+    "notes": "Issue #994 (resolved)."
+  },
+  {
+    "kind": "YieldReturnStatement",
+    "nodeType": "YieldStatementSyntax",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.34",
+    "rationale": "None"
+  }
+]
