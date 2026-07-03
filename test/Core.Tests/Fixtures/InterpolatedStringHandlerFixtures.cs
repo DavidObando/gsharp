@@ -312,3 +312,31 @@ public class Issue1812BaseCtorFormattableFixture
 
     public Issue1812BaseCtorFormattableFixture(System.FormattableString fs) => this.Rendered = fs.ToString(System.Globalization.CultureInfo.InvariantCulture);
 }
+
+/// <summary>
+/// Issue #1852 fixture: a CLR interface whose sole method takes a
+/// <see cref="System.FormattableString"/> parameter, used as a generic
+/// type-parameter constraint (<c>T IIssue1852Renderer</c>) so a call on the
+/// constrained receiver dispatches through
+/// <c>ExpressionBinder.TryBindConstrainedClrInterfaceCall</c> — the sixth
+/// CLR-call construction shape (found during the #1812 follow-up audit,
+/// tracked as #1852) that must re-lower an interpolated-string argument to
+/// the handler-shaped parameter just like the other five.
+/// </summary>
+public interface IIssue1852Renderer
+{
+    string Render(System.FormattableString fs);
+
+    string RenderTwo(string tag, System.FormattableString fs);
+}
+
+/// <summary>
+/// Issue #1852 fixture: a CLR struct implementing <see cref="IIssue1852Renderer"/>,
+/// used as the type argument satisfying <c>T IIssue1852Renderer</c>.
+/// </summary>
+public struct Issue1852RendererFixture : IIssue1852Renderer
+{
+    public string Render(System.FormattableString fs) => fs.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    public string RenderTwo(string tag, System.FormattableString fs) => tag + ":" + fs.ToString(System.Globalization.CultureInfo.InvariantCulture);
+}
