@@ -38,6 +38,16 @@ namespace Cs2Gs.Translator.Loading;
 /// </summary>
 public static class CSharpProjectLoader
 {
+    /// <summary>
+    /// Diagnostic id for an MSBuild workspace load failure — the exact signal
+    /// pipeline stages must gate on (issue #1742): a project that soft-failed
+    /// to open (missing SDK/targets, an unresolvable project reference, an
+    /// unsupported TFM, ...), as opposed to an ordinary C# semantic error in a
+    /// document that did load (some corpus fixtures carry those deliberately,
+    /// e.g. to exercise the later <c>gsc</c> compile-gap stage).
+    /// </summary>
+    public const string WorkspaceLoadFailureDiagnosticId = "CS2GS0001";
+
     private static readonly object MSBuildRegistrationLock = new object();
 
     /// <summary>
@@ -49,7 +59,7 @@ public static class CSharpProjectLoader
     /// </summary>
 #pragma warning disable RS2008 // no analyzer release-tracking file for this non-analyzer diagnostic id
     private static readonly DiagnosticDescriptor MSBuildWorkspaceLoadFailureDescriptor = new DiagnosticDescriptor(
-        id: "CS2GS0001",
+        id: WorkspaceLoadFailureDiagnosticId,
         title: "MSBuild workspace load failure",
         messageFormat: "MSBuild workspace failed to load the project: {0}",
         category: "Cs2Gs.Loading",

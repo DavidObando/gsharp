@@ -112,6 +112,52 @@ namespace Sample
             d => d.Descriptor.Id == "CS2GS0002" && d.Severity == DiagnosticSeverity.Info);
     }
 
+    /// <summary>
+    /// N1/S2 (issue #1742 review follow-up): the project-directory-relative
+    /// obj/bin exclusion in <c>IsGeneratedSource</c> is a path-boundary check —
+    /// a file physically under <c>&lt;projDir&gt;/obj/</c> is excluded, but a
+    /// hand-written file merely living in a folder whose name happens to START
+    /// WITH <c>obj</c> (e.g. <c>src/obji/Foo.cs</c>, NOT the <c>obj</c> output
+    /// dir) is not. The explicit <c>&lt;Compile Include&gt;</c> items below
+    /// force both files into the compilation, bypassing the SDK's own default
+    /// glob exclude for <c>obj/</c>/<c>bin/</c> so the loader's own boundary
+    /// check is what is actually exercised.
+    /// </summary>
+    [Fact]
+    public async Task LoadProjectAsync_ObjBinExclusion_IsPathBoundaryNotPrefixMatch()
+    {
+        string projectDir = NewScratchDir("obj-boundary");
+        File.WriteAllText(Path.Combine(projectDir, "Directory.Build.props"), "<Project></Project>");
+
+        Directory.CreateDirectory(Path.Combine(projectDir, "obj"));
+        File.WriteAllText(
+            Path.Combine(projectDir, "obj", "Manual.cs"),
+            "public class ManualUnderObj { public int Bar() => 1; }");
+
+        Directory.CreateDirectory(Path.Combine(projectDir, "src", "obji"));
+        File.WriteAllText(
+            Path.Combine(projectDir, "src", "obji", "Foo.cs"),
+            "public class HandWrittenInObjiFolder { public int Bar() => 2; }");
+
+        string projectPath = Path.Combine(projectDir, "ObjBoundary.csproj");
+        File.WriteAllText(projectPath, @"<Project Sdk=""Microsoft.NET.Sdk"">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove=""obj/**/*.cs"" />
+    <Compile Include=""obj/Manual.cs"" />
+    <Compile Include=""src/obji/Foo.cs"" />
+  </ItemGroup>
+</Project>
+");
+
+        LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(projectPath);
+
+        Assert.DoesNotContain(project.Documents, d => d.FilePath.Replace('\\', '/').EndsWith("obj/Manual.cs", StringComparison.Ordinal));
+        Assert.Contains(project.Documents, d => d.FilePath.Replace('\\', '/').EndsWith("src/obji/Foo.cs", StringComparison.Ordinal));
+    }
+
     private static string NewScratchDir(string label)
     {
         string root = Path.Combine(AppContext.BaseDirectory, "loader-tests", label, Guid.NewGuid().ToString("N"));
