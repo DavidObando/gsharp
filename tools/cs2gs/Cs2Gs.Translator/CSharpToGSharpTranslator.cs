@@ -9207,11 +9207,11 @@ public sealed class CSharpToGSharpTranslator
 
             foreach (SwitchExpressionArmSyntax arm in node.Arms)
             {
-                // Issue #991: C# `when` guards now have a canonical G# form.
-                GExpression guard = arm.WhenClause != null
-                    ? this.TranslateExpression(arm.WhenClause.Condition)
-                    : null;
-
+                // Issue #1730: the pattern's bindings must be installed BEFORE the
+                // `when` guard is translated, since the guard can reference them
+                // (`Circle { Radius: var r } when r > 0 => ...`). Translating the
+                // guard first (the prior order) resolved `r` while it was still
+                // out of scope.
                 var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
                 GPattern pattern = this.TranslatePattern(arm.Pattern, bindings);
 
@@ -9220,9 +9220,14 @@ public sealed class CSharpToGSharpTranslator
                     this.patternBindings[symbol] = replacement;
                 }
 
+                GExpression guard;
                 GExpression body;
                 try
                 {
+                    // Issue #991: C# `when` guards now have a canonical G# form.
+                    guard = arm.WhenClause != null
+                        ? this.TranslateExpression(arm.WhenClause.Condition)
+                        : null;
                     body = this.TranslateExpression(arm.Expression);
                 }
                 finally
@@ -9248,9 +9253,11 @@ public sealed class CSharpToGSharpTranslator
             {
                 // A G# switch-statement arm carries a single pattern; a C# section
                 // that stacks multiple `case` labels (fall-through) has no canonical
-                // G# form, so each label is emitted as its own arm sharing the body.
+                // G# form, so each label is emitted as its own arm. The body is
+                // translated per-label (not once per section) because a pattern
+                // label's bindings (issue #1730) must be installed before the body
+                // is translated, and bindings can differ across stacked labels.
                 var labels = section.Labels.ToList();
-                BlockStatement body = this.TranslateSwitchSectionBody(section);
 
                 foreach (SwitchLabelSyntax label in labels)
                 {
@@ -9260,21 +9267,45 @@ public sealed class CSharpToGSharpTranslator
                             var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
                             GPattern pattern = this.TranslatePattern(patternLabel.Pattern, bindings);
 
-                            // Issue #991: C# `when` guards now have a canonical G# form.
-                            GExpression guard = patternLabel.WhenClause != null
-                                ? this.TranslateExpression(patternLabel.WhenClause.Condition)
-                                : null;
-                            cases.Add(new SwitchStatementCase(pattern, body, guard));
+                            // Issue #1730: install the pattern's bindings before
+                            // translating the `when` guard and the case body, so
+                            // both see the bound variable (`case Circle { Radius:
+                            // var r } when r > 0: return r;`). The bindings are
+                            // scoped to this label only.
+                            foreach ((ISymbol symbol, GExpression replacement) in bindings)
+                            {
+                                this.patternBindings[symbol] = replacement;
+                            }
+
+                            GExpression guard;
+                            BlockStatement patternBody;
+                            try
+                            {
+                                // Issue #991: C# `when` guards now have a canonical G# form.
+                                guard = patternLabel.WhenClause != null
+                                    ? this.TranslateExpression(patternLabel.WhenClause.Condition)
+                                    : null;
+                                patternBody = this.TranslateSwitchSectionBody(section);
+                            }
+                            finally
+                            {
+                                foreach ((ISymbol symbol, _) in bindings)
+                                {
+                                    this.patternBindings.Remove(symbol);
+                                }
+                            }
+
+                            cases.Add(new SwitchStatementCase(pattern, patternBody, guard));
                             break;
 
                         case CaseSwitchLabelSyntax valueLabel:
                             cases.Add(new SwitchStatementCase(
                                 new ConstantPattern(this.TranslateExpression(valueLabel.Value)),
-                                body));
+                                this.TranslateSwitchSectionBody(section)));
                             break;
 
                         case DefaultSwitchLabelSyntax:
-                            cases.Add(new SwitchStatementCase(null, body));
+                            cases.Add(new SwitchStatementCase(null, this.TranslateSwitchSectionBody(section)));
                             break;
 
                         default:
