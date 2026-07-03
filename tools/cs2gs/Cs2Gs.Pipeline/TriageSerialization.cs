@@ -18,12 +18,16 @@ public static class TriageSerialization
     /// <summary>
     /// Gets the shared serializer options: indented, camelCase via explicit
     /// <c>[JsonPropertyName]</c>, relaxed escaping so snippets stay readable, and
-    /// nulls preserved (the schema's source-map sub-fields are nullable).
+    /// nulls preserved (the schema's source-map sub-fields are nullable). <c>NewLine</c>
+    /// is pinned to <c>"\n"</c> so <c>summary.json</c>/<c>run.json</c>/triage artifacts are
+    /// byte-identical across platforms (ADR-0115 §F) — without this, .NET defaults
+    /// <c>NewLine</c> to <see cref="Environment.NewLine"/>, which is <c>\r\n</c> on Windows.
     /// </summary>
     public static JsonSerializerOptions Options { get; } = new JsonSerializerOptions
     {
         WriteIndented = true,
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        NewLine = "\n",
     };
 
     /// <summary>
