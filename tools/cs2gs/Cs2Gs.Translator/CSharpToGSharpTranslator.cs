@@ -10129,7 +10129,8 @@ public sealed class CSharpToGSharpTranslator
                 // guard first (the prior order) resolved `r` while it was still
                 // out of scope.
                 var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
-                GPattern pattern = this.TranslatePattern(arm.Pattern, bindings);
+                var usedDesignators = new HashSet<string>(StringComparer.Ordinal);
+                GPattern pattern = this.TranslatePattern(arm.Pattern, bindings, usedDesignators);
 
                 foreach ((ISymbol symbol, GExpression replacement) in bindings)
                 {
@@ -10181,7 +10182,8 @@ public sealed class CSharpToGSharpTranslator
                     {
                         case CasePatternSwitchLabelSyntax patternLabel:
                             var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
-                            GPattern pattern = this.TranslatePattern(patternLabel.Pattern, bindings);
+                            var usedDesignators = new HashSet<string>(StringComparer.Ordinal);
+                            GPattern pattern = this.TranslatePattern(patternLabel.Pattern, bindings, usedDesignators);
 
                             // Issue #1730: install the pattern's bindings before
                             // translating the `when` guard and the case body, so
@@ -10352,7 +10354,8 @@ public sealed class CSharpToGSharpTranslator
 
         private GPattern TranslatePattern(
             PatternSyntax pattern,
-            List<(ISymbol Symbol, GExpression Replacement)> bindings)
+            List<(ISymbol Symbol, GExpression Replacement)> bindings,
+            HashSet<string> usedDesignators)
         {
             switch (pattern)
             {
@@ -10375,7 +10378,7 @@ public sealed class CSharpToGSharpTranslator
                         this.MapTypeSyntax(declaration.Type));
 
                 case RecursivePatternSyntax recursive:
-                    return this.TranslateRecursivePattern(recursive, bindings);
+                    return this.TranslateRecursivePattern(recursive, bindings, usedDesignators);
 
                 // Issue #992: C# `and` / `or` pattern combinators map to G#
                 // `and` / `or`. C# `BinaryPatternSyntax` carries an `and`/`or`
@@ -10384,16 +10387,16 @@ public sealed class CSharpToGSharpTranslator
                     when binary.OperatorToken.IsKind(SyntaxKind.AndKeyword) || binary.OperatorToken.IsKind(SyntaxKind.OrKeyword):
                     return new BinaryPattern(
                         binary.OperatorToken.IsKind(SyntaxKind.AndKeyword),
-                        this.TranslatePattern(binary.Left, bindings),
-                        this.TranslatePattern(binary.Right, bindings));
+                        this.TranslatePattern(binary.Left, bindings, usedDesignators),
+                        this.TranslatePattern(binary.Right, bindings, usedDesignators));
 
                 // Issue #992: C# `not <pattern>` maps to G# `not <pattern>`.
                 case UnaryPatternSyntax unary
                     when unary.OperatorToken.IsKind(SyntaxKind.NotKeyword):
-                    return new NotPattern(this.TranslatePattern(unary.Pattern, bindings));
+                    return new NotPattern(this.TranslatePattern(unary.Pattern, bindings, usedDesignators));
 
                 case ParenthesizedPatternSyntax parenthesized:
-                    return new ParenthesizedPattern(this.TranslatePattern(parenthesized.Pattern, bindings));
+                    return new ParenthesizedPattern(this.TranslatePattern(parenthesized.Pattern, bindings, usedDesignators));
 
                 default:
                     this.context.ReportUnsupported(
@@ -10405,7 +10408,8 @@ public sealed class CSharpToGSharpTranslator
 
         private GPattern TranslateRecursivePattern(
             RecursivePatternSyntax recursive,
-            List<(ISymbol Symbol, GExpression Replacement)> bindings)
+            List<(ISymbol Symbol, GExpression Replacement)> bindings,
+            HashSet<string> usedDesignators)
         {
             // A pure property pattern (`{ A: 0, B: 0 }`) with no type maps to the
             // G# property pattern; a typed recursive pattern (`Circle { Radius: var r }`)
@@ -10425,7 +10429,7 @@ public sealed class CSharpToGSharpTranslator
 
                         fields.Add(new PropertyPatternField(
                             SanitizeIdentifier(sub.NameColon.Name.Identifier.Text),
-                            this.TranslatePattern(sub.Pattern, bindings)));
+                            this.TranslatePattern(sub.Pattern, bindings, usedDesignators)));
                     }
                 }
 
@@ -10444,6 +10448,15 @@ public sealed class CSharpToGSharpTranslator
             string designator = recursive.Designation is SingleVariableDesignationSyntax named
                 ? SanitizeIdentifier(named.Identifier.Text)
                 : SanitizeIdentifier(LowerCamel(GetRightmostTypeName(recursive.Type)));
+
+            // Issue #1839 (N3): two typed recursive subpatterns within the SAME
+            // arm/scope (e.g. `Ns.Circle or Other.Circle`) can synthesize the
+            // identical designator from their distinct rightmost simple names,
+            // which would silently shadow one another as two `circle` locals.
+            // Uniquify on collision within this arm's shared `usedDesignators`
+            // scope (threaded alongside `bindings`) rather than emitting a
+            // colliding declaration.
+            designator = Uniquify(designator, usedDesignators);
 
             if (recursive.PropertyPatternClause != null)
             {
@@ -10481,13 +10494,43 @@ public sealed class CSharpToGSharpTranslator
             return char.ToLowerInvariant(name[0]) + name.Substring(1);
         }
 
+        // Issue #1839 (N3): appends a numeric suffix (`circle_2`, `circle_3`, …)
+        // when `name` was already used earlier in the same arm/scope, so two
+        // typed recursive subpatterns that happen to collapse to the same
+        // designator (distinct types sharing a rightmost simple name, or an
+        // explicit designation colliding with a synthesized one) get distinct,
+        // compilable locals instead of silently shadowing one another.
+        private static string Uniquify(string name, HashSet<string> usedDesignators)
+        {
+            string candidate = name;
+            int suffix = 2;
+            while (!usedDesignators.Add(candidate))
+            {
+                candidate = $"{name}_{suffix}";
+                suffix++;
+            }
+
+            return candidate;
+        }
+
         // Extracts the right-most simple-name identifier token from a (possibly
         // qualified/generic) type syntax, e.g. `Ns.Circle` -> "Circle",
         // `List<int>` -> "List", `Outer.Inner<T>` -> "Inner". `Type.ToString()`
         // renders the full qualified/generic text, which is not itself a valid
         // identifier and must never be used to synthesize a designator name
         // (issue #1734).
-        private static string GetRightmostTypeName(TypeSyntax type)
+        //
+        // Issue #1839 (N2): a predefined type (`int`) resolves to its BCL name
+        // via the semantic model — the same resolution `TranslatePredefinedTypeExpression`
+        // uses for a predefined-type expression receiver — rather than the
+        // lowercase keyword text (`int`), which is itself a G# keyword and not a
+        // valid designator once sanitized. Nullable/array types recurse into
+        // their element type, since `int?`/`int[]` designate the same underlying
+        // simple type as `int`. A tuple, pointer, or function-pointer type has no
+        // single simple name to derive a faithful designator from, so a
+        // diagnostic is reported instead of emitting the unsanitized, invalid
+        // `Type.ToString()` text (`(int, int)`, `int*`, `delegate*<int, int>`).
+        private string GetRightmostTypeName(TypeSyntax type)
         {
             switch (type)
             {
@@ -10497,6 +10540,20 @@ public sealed class CSharpToGSharpTranslator
                     return GetRightmostTypeName(aliasQualified.Name);
                 case SimpleNameSyntax simple:
                     return simple.Identifier.Text;
+                case PredefinedTypeSyntax predefined:
+                    ITypeSymbol predefinedSymbol = this.context.GetTypeInfo(predefined).Type;
+                    return predefinedSymbol?.Name ?? predefined.Keyword.Text;
+                case NullableTypeSyntax nullable:
+                    return GetRightmostTypeName(nullable.ElementType);
+                case ArrayTypeSyntax array:
+                    return GetRightmostTypeName(array.ElementType);
+                case TupleTypeSyntax:
+                case PointerTypeSyntax:
+                case FunctionPointerTypeSyntax:
+                    this.context.ReportUnsupported(
+                        type,
+                        $"recursive pattern designator cannot be synthesized from type '{type.Kind()}'; give the pattern an explicit designation (ADR-0115 §B).");
+                    return "value";
                 default:
                     return type.ToString();
             }
