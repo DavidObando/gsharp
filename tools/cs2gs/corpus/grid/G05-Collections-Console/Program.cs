@@ -9,6 +9,7 @@ namespace Corpus.Grid05
     {
         private static void Main()
         {
+            AnonymousObjectCreationExpressionFixture.Run();
             ArrayCreationExpressionFixture.Run();
             ArrayInitializerExpressionFixture.Run();
             CollectionExpressionFixture.Run();

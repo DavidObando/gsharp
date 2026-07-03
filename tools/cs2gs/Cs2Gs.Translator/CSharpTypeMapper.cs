@@ -221,6 +221,24 @@ public sealed class CSharpTypeMapper
                 return new TupleTypeReference(elementTypes);
             }
 
+            // Issue #1934: an anonymous type (`new { A = 1, B = 2 }`) has no G#
+            // equivalent, but its shape — an ordered list of property types — is
+            // exactly a tuple's shape, so it maps to the same positional tuple
+            // type as a named C# tuple, above.
+            if (named.IsAnonymousType)
+            {
+                List<GTypeReference> anonymousElementTypes = named.GetMembers()
+                    .OfType<IPropertySymbol>()
+                    .Select(p => this.Map(p.Type, context, location))
+                    .ToList();
+                context.Report(new TranslationDiagnostic(
+                    named.ToDisplayString(),
+                    "C# anonymous type mapped to the canonical G# positional tuple type; member names are dropped and named access lowers to '.ItemN' (ADR-0115 §B.4).",
+                    location,
+                    TranslationSeverity.Info));
+                return new TupleTypeReference(anonymousElementTypes);
+            }
+
             // Delegate types (Func/Action/named delegates) render in arrow form
             // (ADR-0115 §B.8).
             if (named.TypeKind == TypeKind.Delegate && named.DelegateInvokeMethod != null)

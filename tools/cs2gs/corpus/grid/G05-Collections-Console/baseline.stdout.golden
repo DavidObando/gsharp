@@ -1,3 +1,5 @@
+AnonymousObjectCreationExpression: single=1
+AnonymousObjectCreationExpression: pair=2,two
 ArrayCreationExpression: sized=10,20,30
 ArrayCreationExpression: words=alpha,beta
 ArrayCreationExpression: jagged0=1,2 jagged1=3,4,5

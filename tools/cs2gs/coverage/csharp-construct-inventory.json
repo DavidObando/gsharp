@@ -78,16 +78,20 @@
   {
     "kind": "AnonymousObjectCreationExpression",
     "nodeType": "AnonymousObjectCreationExpressionSyntax",
-    "status": "Gap",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.4",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1934"
+    "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/AnonymousObjectCreationExpression.cs",
+    "notes": "G# has no anonymous types; lowers to the same positional tuple literal used for C# named tuples, member names dropped (issue #1934)."
   },
   {
     "kind": "AnonymousObjectMemberDeclarator",
     "nodeType": "AnonymousObjectMemberDeclaratorSyntax",
-    "status": "Gap",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.4",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1934"
+    "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/AnonymousObjectCreationExpression.cs",
+    "notes": "Each declarator becomes one positional tuple-literal element (issue #1934); exercised by the AnonymousObjectCreationExpression fixture."
   },
   {
     "kind": "ArgListExpression",

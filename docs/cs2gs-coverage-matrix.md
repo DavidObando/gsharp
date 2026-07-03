@@ -7,9 +7,9 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | --- | --- |
 | Unclassified | 0 |
 | Translated | 208 |
-| Lowered | 10 |
+| Lowered | 12 |
 | UnsupportedByDesign | 56 |
-| Gap | 47 |
+| Gap | 45 |
 
 ## Translated (208)
 
@@ -224,10 +224,12 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | YieldBreakStatement | YieldStatementSyntax | ADR-0115 §B.34 |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/YieldBreakStatement.cs |  | Issue #994 (resolved). |
 | YieldReturnStatement | YieldStatementSyntax | ADR-0115 §B.34 |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/YieldReturnStatement.cs |  |  |
 
-## Lowered (10)
+## Lowered (12)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
+| AnonymousObjectCreationExpression | AnonymousObjectCreationExpressionSyntax | ADR-0115 §B.4 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/AnonymousObjectCreationExpression.cs |  | G# has no anonymous types; lowers to the same positional tuple literal used for C# named tuples, member names dropped (issue #1934). |
+| AnonymousObjectMemberDeclarator | AnonymousObjectMemberDeclaratorSyntax | ADR-0115 §B.4 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/AnonymousObjectCreationExpression.cs |  | Each declarator becomes one positional tuple-literal element (issue #1934); exercised by the AnonymousObjectCreationExpression fixture. |
 | AscendingOrdering | OrderingSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/OrderByClause.cs |  | Query syntax lowered to the method-call chain, mirroring Roslyn. |
 | DescendingOrdering | OrderingSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/OrderByClause.cs |  | Query syntax lowered to the method-call chain, mirroring Roslyn. |
 | ForStatement | ForStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/ForStatement.cs |  | Lowered to a while loop when clauses demand it (issue #1732 incrementor-on-continue fix). |
@@ -300,14 +302,12 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | XmlText | XmlTextSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | XmlTextAttribute | XmlTextAttributeSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 
-## Gap (47)
+## Gap (45)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | AddAccessorDeclaration | AccessorDeclarationSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1899 |  |
 | AnonymousMethodExpression | AnonymousMethodExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1898 |  |
-| AnonymousObjectCreationExpression | AnonymousObjectCreationExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1934 |  |
-| AnonymousObjectMemberDeclarator | AnonymousObjectMemberDeclaratorSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1934 |  |
 | CheckedExpression | CheckedExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1881 |  |
 | DelegateDeclaration | DelegateDeclarationSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1899 |  |
 | EnumMemberDeclaration | EnumMemberDeclarationSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1912 | Explicit values, [Flags], negative and alias members erased to sequential ordinals — parity-verified divergence. |

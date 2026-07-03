@@ -7766,6 +7766,9 @@ public sealed class CSharpToGSharpTranslator
                     return new TupleLiteralExpression(
                         tuple.Arguments.Select(a => this.TranslateValueWithNullForgiveness(a.Expression)).ToList());
 
+                case AnonymousObjectCreationExpressionSyntax anonymous:
+                    return this.TranslateAnonymousObjectCreation(anonymous);
+
                 case ElementAccessExpressionSyntax elementAccess:
                     if (elementAccess.ArgumentList.Arguments.Count == 1 &&
                         elementAccess.ArgumentList.Arguments[0].Expression is RangeExpressionSyntax sliceRange)
@@ -8838,6 +8841,28 @@ public sealed class CSharpToGSharpTranslator
             return text.IndexOfAny(new[] { '.', 'e', 'E' }) >= 0 ? text : text + ".0";
         }
 
+        /// <summary>
+        /// Translates a C# anonymous object creation (<c>new { A = 1, B = 2 }</c>,
+        /// issue #1934). G# has no anonymous types, but an anonymous object's
+        /// shape is exactly its ordered list of member declarators — the same
+        /// shape a G# tuple literal has (ADR-0115 §B.4's positional
+        /// <c>(a, b, c)</c>, already used for C# named tuples). Member names are
+        /// dropped at construction; a later <c>x.A</c> access is rewritten to the
+        /// positional <c>x.Item1</c> in <see cref="TranslateMemberAccess"/> using
+        /// the anonymous type's property declaration order.
+        /// </summary>
+        private GExpression TranslateAnonymousObjectCreation(AnonymousObjectCreationExpressionSyntax anonymous)
+        {
+            this.context.Report(new TranslationDiagnostic(
+                nameof(SyntaxKind.AnonymousObjectCreationExpression),
+                "anonymous object creation 'new { ... }' maps to a G# positional tuple literal; member names are dropped (ADR-0115 §B.4).",
+                anonymous.GetLocation(),
+                TranslationSeverity.Info));
+
+            return new TupleLiteralExpression(
+                anonymous.Initializers.Select(i => this.TranslateExpression(i.Expression)).ToList());
+        }
+
         private GExpression TranslateMemberAccess(MemberAccessExpressionSyntax member)
         {
             // Member access on a bare-identifier element access (`values[i].M`)
@@ -8897,6 +8922,22 @@ public sealed class CSharpToGSharpTranslator
             {
                 IFieldSymbol positional = field.CorrespondingTupleField ?? field;
                 memberName = positional.Name;
+            }
+
+            // Issue #1934: an anonymous-typed value (`new { A = 1, B = 2 }`) was
+            // lowered to a positional G# tuple literal, so a later named access
+            // `x.A` must be rewritten to the same positional `x.Item1` the tuple
+            // literal actually has. The anonymous type's declaration order is the
+            // tuple's element order, so the property's ordinal among the
+            // anonymous type's properties gives the 1-based `ItemN` index.
+            if (this.context.GetSymbolInfo(member).Symbol is IPropertySymbol { ContainingType.IsAnonymousType: true } anonProperty)
+            {
+                var anonProperties = anonProperty.ContainingType.GetMembers().OfType<IPropertySymbol>().ToList();
+                int ordinal = anonProperties.IndexOf(anonProperty);
+                if (ordinal >= 0)
+                {
+                    memberName = $"Item{ordinal + 1}";
+                }
             }
 
             return new MemberAccessExpression(target, SanitizeIdentifier(memberName));
