@@ -199,7 +199,7 @@ public sealed class CSharpTypeMapper
 
         if (type is ITypeParameterSymbol typeParameter)
         {
-            return new NamedTypeReference(typeParameter.Name);
+            return new NamedTypeReference(CSharpToGSharpTranslator.SanitizeIdentifier(typeParameter.Name));
         }
 
         if (type is INamedTypeSymbol named)
@@ -239,7 +239,7 @@ public sealed class CSharpTypeMapper
             return new NamedTypeReference(this.QualifiedTypeName(named, context));
         }
 
-        return new NamedTypeReference(type.Name);
+        return new NamedTypeReference(CSharpToGSharpTranslator.SanitizeIdentifier(type.Name));
     }
 
     // A nested type is referenced through its containing type(s)
@@ -261,20 +261,20 @@ public sealed class CSharpTypeMapper
     {
         if (named.ContainingType == null)
         {
-            return named.Name;
+            return CSharpToGSharpTranslator.SanitizeIdentifier(named.Name);
         }
 
         // A source nested type only needs qualifying when its simple name is
         // ambiguous within the package (a same-named source homonym exists).
         if (named.Locations.Any(l => l.IsInSource) && !this.HasSourceHomonym(named, context))
         {
-            return named.Name;
+            return CSharpToGSharpTranslator.SanitizeIdentifier(named.Name);
         }
 
         var parts = new List<string>();
         for (INamedTypeSymbol current = named; current != null; current = current.ContainingType)
         {
-            parts.Insert(0, current.Name);
+            parts.Insert(0, CSharpToGSharpTranslator.SanitizeIdentifier(current.Name));
         }
 
         return string.Join(".", parts);
