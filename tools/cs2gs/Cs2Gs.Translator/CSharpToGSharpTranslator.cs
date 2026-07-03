@@ -492,6 +492,35 @@ public sealed class CSharpToGSharpTranslator
         // Monotonic counter for synthesizing spill temporaries (issue #1731).
         private int spillCounter;
 
+        // Issue #1849: when non-null, `SpillOperand` is inside a "null-seam"
+        // expression context — a field/property initializer or a
+        // base(...)/this(...) constructor argument (issue #1731 N1) — that has
+        // no statement to host a spill `let`. `TranslateNullSeamExpression`/
+        // `TranslateNullSeamArgument` open this capture list instead: a
+        // non-trivial operand is recorded here as a would-be synthetic helper
+        // parameter (name + translated operand + resolved type) and replaced
+        // with a bare reference to that parameter, so the surrounding
+        // pattern/range-slice lowering is unaffected — it just ends up reading a
+        // parameter instead of a spilled local. The caller then synthesizes a
+        // private static helper method taking these captures as parameters and
+        // rewrites the null-seam expression into a call to it, passing the
+        // captured operands as arguments (evaluated once, by the caller, in
+        // source order). Null outside a null-seam capture session, in which case
+        // `SpillOperand` falls back to the loud `Unsupported` diagnostic.
+        private List<(string Name, GExpression Operand, GTypeReference Type)> pendingHelperCaptures;
+
+        // Issue #1849: synthetic helper methods (see `pendingHelperCaptures`)
+        // collected while translating the CURRENT aggregate's members, added to
+        // that aggregate's `shared { }` block once the member loop completes
+        // (see `VisitAggregate`). Saved/restored around a nested type
+        // declaration's own recursive `VisitAggregate` call so a nested type's
+        // helpers never leak into its enclosing type.
+        private List<MethodDeclaration> pendingSynthHelpers;
+
+        // Monotonic counter for synthesizing null-seam helper method names
+        // (issue #1849), reset per aggregate alongside `pendingSynthHelpers`.
+        private int synthHelperCounter;
+
         // When translating the body of a lifted owned-value-aggregate receiver
         // method (issue #938), the implicit `this.` of a bare instance-member
         // reference must be made explicit through the receiver name (`self.`),
@@ -905,7 +934,9 @@ public sealed class CSharpToGSharpTranslator
                     continue;
                 }
 
-                result.Add((SanitizeIdentifier(prop.Identifier.Text), this.TranslateExpression(prop.Initializer.Value)));
+                result.Add((
+                    SanitizeIdentifier(prop.Identifier.Text),
+                    this.TranslateNullSeamExpression(prop.Initializer.Value, symbol?.ContainingType)));
             }
 
             return result;
@@ -1137,6 +1168,30 @@ public sealed class CSharpToGSharpTranslator
 
             var symbol = this.context.GetDeclaredSymbol(node) as INamedTypeSymbol;
 
+            // Issue #1849: this aggregate gets its own null-seam synthetic-helper
+            // collection/counter, saved/restored around the whole method so a
+            // nested type declaration's recursive `VisitAggregate` call (below,
+            // via `TranslateMember`) never leaks its helpers into this
+            // (enclosing) type, and vice versa.
+            List<MethodDeclaration> outerSynthHelpers = this.pendingSynthHelpers;
+            int outerSynthHelperCounter = this.synthHelperCounter;
+            this.pendingSynthHelpers = new List<MethodDeclaration>();
+            this.synthHelperCounter = 0;
+            try
+            {
+                return this.VisitAggregateCore(node, kind.Value, symbol);
+            }
+            finally
+            {
+                this.pendingSynthHelpers = outerSynthHelpers;
+                this.synthHelperCounter = outerSynthHelperCounter;
+            }
+        }
+
+        private GMember VisitAggregateCore(TypeDeclarationSyntax node, TypeDeclarationKind kindValue, INamedTypeSymbol symbol)
+        {
+            TypeDeclarationKind? kind = kindValue;
+
             // A `data class`/`data struct` requires at least one field (GS0104) and
             // derives those fields from positional/primary-constructor parameters,
             // not from auto-properties (GS0189). A fieldless record, or a record
@@ -1280,6 +1335,13 @@ public sealed class CSharpToGSharpTranslator
                     }
                 }
             }
+
+            // Issue #1849: fold in any synthetic null-seam helper methods
+            // synthesized while translating this aggregate's fields/properties/
+            // constructors above (see `pendingSynthHelpers`) — always private
+            // static, so they join the `shared { }` block alongside the type's
+            // other static members.
+            sharedMembers.AddRange(this.pendingSynthHelpers);
 
             // OD-T1: if get-only auto-property initializers needed to move into a
             // constructor but the type declares no designated instance constructor,
@@ -2070,7 +2132,7 @@ public sealed class CSharpToGSharpTranslator
                 {
                     initializer = this.CoerceConstantToUnsigned(
                         declarator.Initializer.Value,
-                        this.TranslateExpression(declarator.Initializer.Value));
+                        this.TranslateNullSeamExpression(declarator.Initializer.Value, symbol?.ContainingType));
 
                     // Issue #1072: a non-nullable reference field whose initializer
                     // is nullable (e.g. `?.`-access) is rendered `T?`.
@@ -2396,7 +2458,7 @@ public sealed class CSharpToGSharpTranslator
 
             GExpression initializer = this.CoerceConstantToUnsigned(
                 node.Initializer.Value,
-                this.TranslateExpression(node.Initializer.Value));
+                this.TranslateNullSeamExpression(node.Initializer.Value, symbol?.ContainingType));
 
             // Issue #1072: a non-nullable reference static auto-property whose
             // initializer is nullable (e.g. `GetAttribute<...>()?.Member`) is
@@ -2701,7 +2763,8 @@ public sealed class CSharpToGSharpTranslator
                     // form `init(params) : base(args) { ... }` (sample
                     // ExplicitConstructor.gs; ADR-0115 §B.13). This is how a custom
                     // exception forwards its message to System.Exception's ctor.
-                    baseArguments = this.TranslateArguments(node.Initializer.ArgumentList.Arguments);
+                    baseArguments = this.TranslateNullSeamArguments(
+                        node.Initializer.ArgumentList.Arguments, symbol);
                 }
                 else
                 {
@@ -2718,7 +2781,7 @@ public sealed class CSharpToGSharpTranslator
             {
                 var delegated = new ExpressionStatement(new InvocationExpression(
                     new IdentifierExpression("init"),
-                    this.TranslateArguments(node.Initializer.ArgumentList.Arguments)));
+                    this.TranslateNullSeamArguments(node.Initializer.ArgumentList.Arguments, symbol)));
                 var statements = new List<GStatement> { delegated };
                 statements.AddRange(body.Statements);
                 body = new BlockStatement(statements);
@@ -5452,17 +5515,34 @@ public sealed class CSharpToGSharpTranslator
         // `this` argument list), and G# has no "call an arbitrary parenthesized
         // expression" postfix form to smuggle one in as an immediately-invoked
         // lambda either (ParsePostfixChainCore has no open-paren/invocation
-        // case for a non-name target). So when no seam is active AND `operand`
-        // is non-trivial, silently embedding it (the old, wrong, behavior)
-        // would double-evaluate it — instead this reports the shape as
-        // unsupported so the gap is visible rather than silently wrong, and
-        // still falls back to embedding the untouched operand so translation
-        // keeps producing (compiling, if diagnostically-flagged) output.
+        // case for a non-name target). Issue #1849: when a null-seam capture
+        // session IS active (`TranslateNullSeamExpression`/
+        // `TranslateNullSeamArgument` opened one), `operand` is instead captured
+        // as a synthetic helper parameter — the caller lowers the whole
+        // null-seam expression to a call to a synthesized private static helper,
+        // which gives a real seam for `operand` to be evaluated exactly once.
+        // Only when NO capture session is active either (a shape that reaches
+        // `SpillOperand` from somewhere `TranslateNullSeamExpression` does not
+        // guard, e.g. a future null-seam call site not yet routed through it)
+        // does this fall back to the old, loud `Unsupported` diagnostic — still
+        // embedding the untouched operand so translation keeps producing
+        // (compiling, if diagnostically-flagged) output.
         private GExpression SpillOperand(GExpression operand, SyntaxNode operandSyntaxForDiagnostic)
         {
             if (this.pendingSpillPrologue != null || IsTrivialOperand(operand))
             {
                 return this.SpillOperand(operand);
+            }
+
+            if (this.pendingHelperCaptures != null)
+            {
+                string paramName = $"__p{this.pendingHelperCaptures.Count}";
+                GTypeReference type = operandSyntaxForDiagnostic is ExpressionSyntax operandExpression
+                    ? this.ResolveExpressionType(operandExpression)
+                    : null;
+                this.pendingHelperCaptures.Add(
+                    (paramName, operand, type ?? new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType)));
+                return new IdentifierExpression(paramName);
             }
 
             string message =
@@ -5472,6 +5552,303 @@ public sealed class CSharpToGSharpTranslator
                 "is read more than once (issue #1731 N1).";
             this.context.ReportUnsupported(operandSyntaxForDiagnostic, message);
             return operand;
+        }
+
+        // Issue #1849: translates `expression` at a null-seam site (a field/
+        // property initializer) so that a non-trivial `is`-pattern scrutinee or
+        // range-slice start operand nested inside it is evaluated exactly once
+        // even though the site has no statement to host a spill `let`. When a
+        // spill seam IS active (this null-seam site is unreachable, or is
+        // nested inside one some other way), translation proceeds exactly as
+        // before — this only changes behavior at a genuine null seam. When the
+        // owning type is unknown or `expression`'s type cannot be resolved, a
+        // synthetic helper cannot be synthesized/typed; translation falls back
+        // to the plain path, which still surfaces the existing `Unsupported`
+        // diagnostic via `SpillOperand` if a non-trivial operand is actually
+        // encountered. Otherwise, if translating `expression` captured one or
+        // more non-trivial operands (see `pendingHelperCaptures`), a private
+        // static helper — `private static R __initN(T0 p0, T1 p1, ...) => body;`
+        // — is synthesized into `pendingSynthHelpers` and `expression` is
+        // rewritten to call it, passing the captured operands (translated in
+        // their original left-to-right order) as arguments. Each captured
+        // operand is thus evaluated exactly once, by the CALLER, before the
+        // helper runs the pattern/range-slice logic against the parameter.
+        private GExpression TranslateNullSeamExpression(ExpressionSyntax expression, INamedTypeSymbol containingType)
+        {
+            if (this.pendingSpillPrologue != null)
+            {
+                return this.TranslateExpression(expression);
+            }
+
+            GTypeReference returnType = containingType != null ? this.ResolveExpressionType(expression) : null;
+            if (returnType == null)
+            {
+                return this.TranslateExpression(expression);
+            }
+
+            return this.WrapInNullSeamHelperIfCaptured(
+                () => this.TranslateExpression(expression), returnType, containingType);
+        }
+
+        // Issue #1849: as <see cref="TranslateNullSeamExpression"/>, but for a
+        // whole base(...)/this(...) constructor-initializer argument LIST — each
+        // argument is lowered independently via <see cref="TranslateNullSeamArgument"/>.
+        // A named argument list is left to the existing `TranslateArguments`
+        // reordering-safety logic untouched (out of scope here; named args in a
+        // ctor initializer are rare and that path already reports its own
+        // diagnostics for anything unsafe to reorder).
+        private List<GExpression> TranslateNullSeamArguments(
+            SeparatedSyntaxList<ArgumentSyntax> arguments,
+            IMethodSymbol ctorSymbol)
+        {
+            if (this.pendingSpillPrologue != null || arguments.Any(a => a.NameColon != null))
+            {
+                return this.TranslateArguments(arguments);
+            }
+
+            return arguments.Select(a => this.TranslateNullSeamArgument(a, ctorSymbol)).ToList();
+        }
+
+        // Issue #1849: as <see cref="TranslateNullSeamExpression"/>, but for a
+        // single base(...)/this(...) constructor-initializer argument —
+        // `TranslateArgument` already handles ref/out/nullability-assertion
+        // shapes, so this reuses it as the capture-mode translation delegate
+        // rather than duplicating that logic. Each argument in a base/this
+        // argument list is lowered independently: only an argument that itself
+        // captures a non-trivial operand gets rewritten into a helper call, the
+        // rest of the argument list is untouched.
+        //
+        // Unlike a field/property initializer, a ctor-initializer argument CAN
+        // read the enclosing constructor's own parameters (`: this(s[Next()..j])`)
+        // — and unlike a normal double-embed, a bare reference to one of those
+        // parameters is not just "safe to duplicate", it is only IN SCOPE at all
+        // inside the constructor; if the argument gets rewritten into a call to a
+        // new static helper method, any such parameter reference in the body
+        // would become an undefined identifier unless it is ALSO threaded through
+        // as a same-named helper parameter. `CollectCtorParameterCaptures` finds
+        // every constructor parameter this argument reads and pre-seeds the
+        // capture list with a same-named passthrough capture for each (a
+        // parameter read has no side effect, so its position in the final
+        // parameter list relative to a genuinely spilled operand is immaterial —
+        // only the spilled operands' own relative order matters, and that is
+        // still exactly source order since they are appended by `SpillOperand`
+        // as translation encounters them).
+        private GExpression TranslateNullSeamArgument(ArgumentSyntax argument, IMethodSymbol ctorSymbol)
+        {
+            // Issue #1849 review: a `ref`/`out` argument's value IS the
+            // caller's own variable — a helper cannot `return` it back into
+            // that slot, so a non-trivial nested null-seam operand inside one
+            // (exotic: `ref`/`out` in a base/this ctor-init argument) is never
+            // routed through the helper lowering. `TranslateArgument` still
+            // reports the ordinary loud `Unsupported` diagnostic via
+            // `SpillOperand` if such an operand is actually encountered, since
+            // no capture session is opened here.
+            if (argument.RefKindKeyword.Kind() is SyntaxKind.RefKeyword or SyntaxKind.OutKeyword)
+            {
+                return this.TranslateArgument(argument);
+            }
+
+            INamedTypeSymbol containingType = ctorSymbol?.ContainingType;
+            GTypeReference returnType = containingType != null
+                ? this.ResolveExpressionType(argument.Expression)
+                : null;
+            if (returnType == null)
+            {
+                return this.TranslateArgument(argument);
+            }
+
+            List<(string Name, GExpression Operand, GTypeReference Type)> preSeeded =
+                ctorSymbol != null ? this.CollectCtorParameterCaptures(argument.Expression, ctorSymbol) : null;
+
+            return this.WrapInNullSeamHelperIfCaptured(
+                () => this.TranslateArgument(argument), returnType, containingType, preSeeded);
+        }
+
+        // Issue #1849: finds every DISTINCT parameter of `ctorSymbol` that
+        // `expression` reads, in first-occurrence order, for pre-seeding
+        // <see cref="WrapInNullSeamHelperIfCaptured"/>'s capture list (see
+        // <see cref="TranslateNullSeamArgument"/>). Each is captured as a
+        // same-named passthrough parameter, so no rewriting of the reference
+        // itself is needed — the existing sanitized identifier already reads
+        // correctly as the helper's own parameter of the same name.
+        private List<(string Name, GExpression Operand, GTypeReference Type)> CollectCtorParameterCaptures(
+            ExpressionSyntax expression, IMethodSymbol ctorSymbol)
+        {
+            var seen = new HashSet<IParameterSymbol>(SymbolEqualityComparer.Default);
+            var result = new List<(string Name, GExpression Operand, GTypeReference Type)>();
+            foreach (IdentifierNameSyntax id in expression.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>())
+            {
+                if (this.context.GetSymbolInfo(id).Symbol is IParameterSymbol parameter &&
+                    SymbolEqualityComparer.Default.Equals(parameter.ContainingSymbol, ctorSymbol) &&
+                    seen.Add(parameter))
+                {
+                    string name = SanitizeIdentifier(parameter.Name);
+                    GTypeReference type = this.typeMapper.Map(parameter.Type, this.context, id.GetLocation());
+                    result.Add((name, new IdentifierExpression(name), type));
+                }
+            }
+
+            return result;
+        }
+
+        // Issue #1849: runs `translate` inside a fresh null-seam helper-capture
+        // session (see `pendingHelperCaptures`), optionally pre-seeded with
+        // `preSeededCaptures` (constructor-parameter passthroughs — see
+        // <see cref="TranslateNullSeamArgument"/>). If translating `translate`
+        // captured no NEW (non-pre-seeded) operand, the pre-seed is discarded and
+        // the translated expression is returned unchanged — the common case:
+        // most initializers/arguments contain no non-trivial pattern/range-slice
+        // operand at all, so no helper is warranted just because the expression
+        // happens to read a constructor parameter. Otherwise a private static
+        // helper taking every capture (pre-seeded passthroughs plus newly
+        // spilled operands) as parameters — in capture order, which for the
+        // spilled operands is left-to-right source order since `SpillOperand`
+        // records a capture the first time each non-trivial operand is
+        // translated — is synthesized with `returnType` and queued in
+        // `pendingSynthHelpers`, and a call to it (passing the captured operand
+        // expressions as arguments) is returned in place of the original
+        // expression.
+        private GExpression WrapInNullSeamHelperIfCaptured(
+            Func<GExpression> translate,
+            GTypeReference returnType,
+            INamedTypeSymbol containingType,
+            List<(string Name, GExpression Operand, GTypeReference Type)> preSeededCaptures = null)
+        {
+            List<(string Name, GExpression Operand, GTypeReference Type)> outerCaptures = this.pendingHelperCaptures;
+            var captures = new List<(string Name, GExpression Operand, GTypeReference Type)>();
+            if (preSeededCaptures != null)
+            {
+                captures.AddRange(preSeededCaptures);
+            }
+
+            int preSeedCount = captures.Count;
+            this.pendingHelperCaptures = captures;
+            GExpression body;
+            try
+            {
+                body = translate();
+            }
+            finally
+            {
+                this.pendingHelperCaptures = outerCaptures;
+            }
+
+            if (captures.Count == preSeedCount)
+            {
+                return body;
+            }
+
+            // Issue #1849 review: a capture's own call-site OPERAND (the
+            // argument expression this helper will be invoked with) can itself
+            // reference a sibling capture's synthesized parameter name — this
+            // happens when a null-seam operand is ITSELF nested inside another
+            // null-seam operand (e.g. a range-slice start spilled inside an
+            // is-pattern scrutinee that is also spilled: `Y[Z()..a] is [1,2]`).
+            // The inner spill's `__pN` placeholder only exists as a PARAMETER
+            // inside this helper's own body — it is not in scope at the call
+            // site, so passing it as a sibling argument would emit a dangling
+            // identifier. Detect any such cross-reference and bail to the loud
+            // `Unsupported` diagnostic (re-translating with no capture session
+            // active, so `SpillOperand` reports it) instead of emitting a
+            // broken call.
+            // Pre-seeded ctor-parameter passthroughs (see `TranslateNullSeamArgument`)
+            // are real, in-scope-at-the-call-site names — only a capture
+            // introduced by `SpillOperand` itself (a synthesized `__pN`) is
+            // unsafe to reference from a sibling capture's operand.
+            var paramNames = new HashSet<string>(
+                captures.Skip(preSeedCount).Select(c => c.Name), StringComparer.Ordinal);
+            if (captures.Any(c => ContainsIdentifierReference(c.Operand, paramNames)))
+            {
+                this.pendingHelperCaptures = null;
+                try
+                {
+                    return translate();
+                }
+                finally
+                {
+                    this.pendingHelperCaptures = outerCaptures;
+                }
+            }
+
+            string helperName = this.NextSynthHelperName(containingType);
+            List<Parameter> parameters = captures
+                .Select(c => new Parameter(c.Name, c.Type))
+                .ToList();
+            this.pendingSynthHelpers.Add(new MethodDeclaration(
+                helperName,
+                parameters,
+                returnType,
+                new BlockStatement(new List<GStatement> { new ReturnStatement(body) }),
+                visibility: Visibility.Private));
+
+            return new InvocationExpression(
+                new IdentifierExpression(helperName),
+                captures.Select(c => c.Operand).ToList());
+        }
+
+        // Issue #1849 review: true if `node` (a capture's call-site operand, or
+        // any sub-tree of one) reads an identifier whose name is in `names` —
+        // used by <see cref="WrapInNullSeamHelperIfCaptured"/> to detect a
+        // sibling capture's synthesized `__pN` parameter name leaking into
+        // another capture's own call-site argument. Walks every public
+        // property of the AST node reflectively (rather than hand-listing each
+        // of the ~30 <see cref="GExpression"/> subtypes) so it stays correct
+        // for arbitrarily nested/mixed shapes without needing a matching case
+        // added here every time a new expression node is introduced.
+        private static bool ContainsIdentifierReference(GNode node, ISet<string> names)
+        {
+            if (node == null)
+            {
+                return false;
+            }
+
+            if (node is IdentifierExpression identifier)
+            {
+                return names.Contains(identifier.Name);
+            }
+
+            foreach (System.Reflection.PropertyInfo property in node.GetType().GetProperties())
+            {
+                object value = property.GetValue(node);
+                if (value is GNode child && ContainsIdentifierReference(child, names))
+                {
+                    return true;
+                }
+
+                if (value is System.Collections.IEnumerable items and not string)
+                {
+                    foreach (object item in items)
+                    {
+                        if (item is GNode itemNode && ContainsIdentifierReference(itemNode, names))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        // Issue #1849: picks a synthetic null-seam helper method name
+        // (`__init0`, `__init1`, ...) unique against both `containingType`'s
+        // existing members and every helper already queued for this same
+        // aggregate in `pendingSynthHelpers` (avoids a collision when a type
+        // already happens to declare a same-named member, or between two
+        // helpers synthesized for the same type in one translation pass).
+        private string NextSynthHelperName(INamedTypeSymbol containingType)
+        {
+            var existingNames = new HashSet<string>(
+                containingType.GetMembers().Select(m => m.Name), StringComparer.Ordinal);
+            string name;
+            do
+            {
+                name = $"__init{this.synthHelperCounter++}";
+            }
+            while (existingNames.Contains(name) ||
+                this.pendingSynthHelpers.Any(h => h.Name == name));
+
+            return name;
         }
 
         // As above, but appends the spill declaration directly to an explicit

@@ -342,13 +342,20 @@ namespace Demo
     // bare block-with-trailing-expression is only legal directly inside a
     // lambda arrow body or an if/else branch, and G# has no "invoke an
     // arbitrary parenthesized expression" postfix form to smuggle one in as
-    // an immediately-invoked lambda either. So these two sites cannot be
-    // upgraded to single-evaluation without a G# grammar change; instead the
-    // translator now REPORTS the gap (TranslationSeverity.Unsupported)
-    // instead of silently double-evaluating.) -------------------------------
+    // an immediately-invoked lambda either. #1731 settled for REPORTING the
+    // gap (TranslationSeverity.Unsupported) instead of silently
+    // double-evaluating. Issue #1849 closes the gap for real: the whole
+    // null-seam initializer/argument is lowered to a call to a synthesized
+    // private static helper method, so the non-trivial operand is evaluated
+    // exactly once (by the caller, as the helper-call argument) instead of
+    // re-embedded — see Issue1849NullSeamHelperLoweringTests for the full
+    // helper-lowering coverage (all four sites, static-vs-instance/ctor-
+    // parameter passthrough, name uniquification). These four cases are kept
+    // here, updated to assert the fixed behavior, since they are the exact
+    // reproducers #1731 N1 originally reported as unsupported.) ------------
 
     [Fact]
-    public void FieldInitializer_PatternScrutineeSideEffectingReceiver_ReportsUnsupported()
+    public void FieldInitializer_PatternScrutineeSideEffectingReceiver_LowersToHelper()
     {
         (string printed, TranslationContext context) = TranslateUnitWithContext(@"
 namespace Demo
@@ -367,18 +374,19 @@ namespace Demo
     }
 }");
 
-        // No G# lowering exists to spill a field initializer's operand (issue
-        // #1731 N1): the shape still triple-embeds `GetA()` (once per
-        // sub-pattern test plus the null-guard), but the gap is now surfaced
-        // as a diagnostic rather than silently wrong.
-        Assert.Equal(4, CountOccurrences(printed, "GetA()")); // 1 declaration + 3 uses (was silently the same before N1)
-        Assert.Contains(
+        // Issue #1849: the field initializer is lowered to a call to a
+        // synthesized private static helper, so `GetA()` is evaluated exactly
+        // once (as the helper-call argument) instead of once per sub-pattern
+        // test (the #1731 N1 gap this used to report as Unsupported).
+        Assert.Equal(2, CountOccurrences(printed, "GetA()")); // 1 declaration + 1 call-site use
+        Assert.Contains("__init0(", printed);
+        Assert.DoesNotContain(
             context.Diagnostics,
             d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("1731 N1"));
     }
 
     [Fact]
-    public void FieldInitializer_RangeSliceSideEffectingOperand_ReportsUnsupported()
+    public void FieldInitializer_RangeSliceSideEffectingOperand_LowersToHelper()
     {
         (string printed, TranslationContext context) = TranslateUnitWithContext(@"
 namespace Demo
@@ -395,15 +403,16 @@ namespace Demo
     }
 }");
 
-        Assert.Equal(3, CountOccurrences(printed, "Next()")); // 1 declaration + 2 uses (Slice start + length calc)
+        Assert.Equal(2, CountOccurrences(printed, "Next()")); // 1 declaration + 1 call-site use
         Assert.Contains(".Slice(", printed);
-        Assert.Contains(
+        Assert.Contains("__init0(", printed);
+        Assert.DoesNotContain(
             context.Diagnostics,
             d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("1731 N1"));
     }
 
     [Fact]
-    public void BaseConstructorArgument_PatternScrutineeSideEffectingReceiver_ReportsUnsupported()
+    public void BaseConstructorArgument_PatternScrutineeSideEffectingReceiver_LowersToHelper()
     {
         (string printed, TranslationContext context) = TranslateUnitWithContext(@"
 namespace Demo
@@ -427,15 +436,15 @@ namespace Demo
     }
 }");
 
-        Assert.Equal(4, CountOccurrences(printed, "GetA()")); // 1 declaration + 3 uses
-        Assert.Contains(": base(", printed);
-        Assert.Contains(
+        Assert.Equal(2, CountOccurrences(printed, "GetA()")); // 1 declaration + 1 call-site use
+        Assert.Contains(": base(__init0(", printed);
+        Assert.DoesNotContain(
             context.Diagnostics,
             d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("1731 N1"));
     }
 
     [Fact]
-    public void ThisConstructorArgument_RangeSliceSideEffectingOperand_ReportsUnsupported()
+    public void ThisConstructorArgument_RangeSliceSideEffectingOperand_LowersToHelper()
     {
         (string printed, TranslationContext context) = TranslateUnitWithContext(@"
 namespace Demo
@@ -452,9 +461,10 @@ namespace Demo
     }
 }");
 
-        Assert.Equal(3, CountOccurrences(printed, "Next()")); // 1 declaration + 2 uses (Slice start + length calc)
+        Assert.Equal(2, CountOccurrences(printed, "Next()")); // 1 declaration + 1 call-site use
         Assert.Contains(".Slice(", printed);
-        Assert.Contains(
+        Assert.Contains("__init0(", printed);
+        Assert.DoesNotContain(
             context.Diagnostics,
             d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("1731 N1"));
     }
