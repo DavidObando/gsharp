@@ -3,7 +3,9 @@
 // </copyright>
 
 using System;
+using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Cs2Gs.Pipeline;
 using Xunit;
@@ -115,5 +117,98 @@ public class ProcessRunnerTests
         Assert.False(result.TimedOut);
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(string.Empty, result.Stdout);
+    }
+
+    /// <summary>
+    /// #1817 N1: canceling the caller-supplied token (not the timeout) used to
+    /// let <see cref="OperationCanceledException"/> propagate straight past
+    /// the timeout-only catch filter, skipping <c>KillTree</c> entirely and
+    /// leaking the still-running child. The child must be dead by the time
+    /// the exception reaches the caller.
+    /// </summary>
+    [Fact]
+    public async Task Run_ExternalCancellation_ThrowsAndKillsChild()
+    {
+        using var cts = new CancellationTokenSource();
+        const string marker = "gsharp-1817-external-cancel-probe";
+
+        Task<ProcessRunResult> runTask = ProcessRunner.RunAsync(
+            "/bin/sh",
+            new[] { "-c", $": {marker}; sleep 60" },
+            timeout: TimeSpan.FromSeconds(30),
+            cancellationToken: cts.Token);
+
+        // Let the child actually start before cancelling externally, so this
+        // exercises the external-token path rather than racing process start.
+        await Task.Delay(TimeSpan.FromMilliseconds(300));
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runTask);
+
+        // KillTree runs before the exception is thrown, but reaping is
+        // async relative to our assertion; poll briefly instead of asserting
+        // instantaneously.
+        bool stillRunning = IsProcessRunning(marker);
+        for (int i = 0; i < 20 && stillRunning; i++)
+        {
+            await Task.Delay(100);
+            stillRunning = IsProcessRunning(marker);
+        }
+
+        Assert.False(stillRunning, "External cancellation must kill the child process tree, not leak it.");
+    }
+
+    /// <summary>
+    /// #1817 N2: once the drain-timeout window elapses, <c>using var
+    /// process</c> disposes the stdout/stderr <see cref="System.IO.StreamReader"/>s
+    /// while their read tasks may still be pending, faulting them with
+    /// <see cref="ObjectDisposedException"/>. Left unobserved, that becomes an
+    /// unobserved task exception once the task is garbage collected.
+    /// <see cref="ProcessRunner"/>'s private <c>ObserveWhenDone</c> helper
+    /// must attach a continuation that observes any such late fault.
+    /// </summary>
+    [Fact]
+    public void ObserveWhenDone_LateFaultAfterDrainWindow_IsObservedNotUnobserved()
+    {
+        var pending = new TaskCompletionSource<string>();
+        bool unobserved = false;
+        EventHandler<UnobservedTaskExceptionEventArgs> handler = (_, e) =>
+        {
+            unobserved = true;
+            e.SetObserved();
+        };
+
+        TaskScheduler.UnobservedTaskException += handler;
+        try
+        {
+            System.Reflection.MethodInfo observeWhenDone = typeof(ProcessRunner).GetMethod(
+                "ObserveWhenDone", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            Assert.NotNull(observeWhenDone);
+            observeWhenDone.Invoke(null, new object[] { pending.Task });
+
+            // Simulate the drain-window expiring and `using var process`
+            // disposing the StreamReader out from under the still-pending read.
+            pending.SetException(new ObjectDisposedException("StreamReader"));
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= handler;
+        }
+
+        Assert.False(unobserved, "A late read-task fault must be observed by ObserveWhenDone, not left to the finalizer.");
+    }
+
+    private static bool IsProcessRunning(string marker)
+    {
+        var psi = new ProcessStartInfo("pgrep") { RedirectStandardOutput = true, UseShellExecute = false };
+        psi.ArgumentList.Add("-f");
+        psi.ArgumentList.Add(marker);
+        using Process pgrep = Process.Start(psi);
+        pgrep.WaitForExit(2000);
+        return pgrep.ExitCode == 0;
     }
 }

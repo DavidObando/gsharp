@@ -288,8 +288,22 @@ public sealed class TestParityStage : IMigrationStage
         // translated Console.ReadLine() would otherwise block on inherited
         // stdin. ProcessRunner bounds the run and never inherits stdin (#1748).
         ProcessRunResult result = ProcessRunner.Run(
-            "dotnet", new[] { assemblyPath }, workingDirectory, TimeSpan.FromSeconds(30));
+            "dotnet", new[] { assemblyPath }, workingDirectory, Stage4Timeout());
         return (result.ExitCode, result.Stdout, result.Stderr, result.TimedOut);
+    }
+
+    /// <summary>
+    /// The stage-4 program-under-test timeout, 30s by default. A legit slow
+    /// migrated program on a cold/constrained CI runner can false-positive
+    /// against a fixed 30s, so allow an override via
+    /// <c>CS2GS_STAGE4_TIMEOUT_SEC</c> (#1817 S1).
+    /// </summary>
+    private static TimeSpan Stage4Timeout()
+    {
+        string env = Environment.GetEnvironmentVariable("CS2GS_STAGE4_TIMEOUT_SEC");
+        return int.TryParse(env, out int seconds) && seconds > 0
+            ? TimeSpan.FromSeconds(seconds)
+            : TimeSpan.FromSeconds(30);
     }
 
     private static string EmittedGsRelative(StageExecutionContext context) =>
