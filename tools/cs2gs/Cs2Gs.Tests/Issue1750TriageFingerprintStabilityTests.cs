@@ -183,4 +183,104 @@ public class Issue1750TriageFingerprintStabilityTests
         TriageArtifact otherLiteralArtifact = builder.CompileError(diagnostic, emittedOtherLiteral);
         Assert.Equal(artifact.Fingerprint, otherLiteralArtifact.Fingerprint);
     }
+
+    /// <summary>
+    /// (B1, post-review regression) A construct line prefixed by one or more
+    /// modifier keywords still classifies on the construct keyword that
+    /// follows the modifiers — not on the leading modifier token itself,
+    /// which would otherwise fall through to the generic <c>GSharpConstruct</c>
+    /// bucket and collide structurally distinct gaps (e.g. a `sealed class`
+    /// gap and an `async func` gap both fingerprinting as the same
+    /// unclassified kind).
+    /// </summary>
+    [Theory]
+    [InlineData("sealed class Shape {", "ClassConstruct")]
+    [InlineData("async func Bump(n int32) int32 {", "FuncConstruct")]
+    [InlineData("private func Helper(x int32) int32 {", "FuncConstruct")]
+    [InlineData("public static async func F() {", "FuncConstruct")]
+    public void CompileError_ModifierPrefixedConstruct_ClassifiesOnConstructKeyword(string gsLine, string expectedKind)
+    {
+        var builder = new TriageBuilder("run_1", "2026-06-21T20:00:00Z", "0.2.0+abc", "corpus/Sample");
+        var emitted = new EmittedGsFile(
+            "/abs/Sample.gs",
+            "corpus_Sample/Sample.gs",
+            "/abs/Sample.cs",
+            "func Outer() {\n    " + gsLine + "\n}\n");
+        var diagnostic = new GscDiagnostic("GS0313", "unexpected token", "error", "Sample.gs", 2, 5);
+
+        TriageArtifact artifact = builder.CompileError(diagnostic, emitted);
+
+        Assert.Equal(expectedKind, artifact.OffendingCSharpConstruct.Kind);
+    }
+
+    /// <summary>
+    /// (B1) Two modifier-prefixed constructs of genuinely different kinds
+    /// (`sealed class` vs `async func`) must NOT collapse to the same
+    /// fingerprint — the regression this test guards against classified both
+    /// as the generic bucket, colliding structurally distinct gaps.
+    /// </summary>
+    [Fact]
+    public void CompileError_DifferentModifierPrefixedConstructs_ProduceDifferentFingerprints()
+    {
+        var builder = new TriageBuilder("run_1", "2026-06-21T20:00:00Z", "0.2.0+abc", "corpus/Sample");
+        var diagnostic = new GscDiagnostic("GS0313", "unexpected token", "error", "Sample.gs", 1, 5);
+
+        var emittedSealedClass = new EmittedGsFile(
+            "/abs/Sample.gs", "corpus_Sample/Sample.gs", "/abs/Sample.cs", "sealed class Shape {\n}\n");
+        var emittedAsyncFunc = new EmittedGsFile(
+            "/abs/Sample.gs", "corpus_Sample/Sample.gs", "/abs/Sample.cs", "async func Bump() {\n}\n");
+
+        TriageArtifact a = builder.CompileError(diagnostic, emittedSealedClass);
+        TriageArtifact b = builder.CompileError(diagnostic, emittedAsyncFunc);
+
+        Assert.NotEqual(a.OffendingCSharpConstruct.Kind, b.OffendingCSharpConstruct.Kind);
+        Assert.NotEqual(a.Fingerprint, b.Fingerprint);
+    }
+
+    /// <summary>
+    /// (N1) Two crashes of the same exception type but with structurally
+    /// different messages (after path-strip + normalize) must NOT collapse to
+    /// the same fingerprint — the crash-message shape, not just
+    /// <c>ex.GetType().Name</c>, is part of the fingerprint.
+    /// </summary>
+    [Fact]
+    public void StageCrash_SameExceptionTypeDifferentMessageShape_ProducesDifferentFingerprint()
+    {
+        var builder = new TriageBuilder("run_1", "2026-06-21T20:00:00Z", "0.2.0+abc", "corpus/Sample");
+
+        var exFileNotFound = new InvalidOperationException(
+            "Could not find file '/var/folders/T/cs2gsrun-0a1b2c/App/Program.cs' during stage 2.");
+        var exBadState = new InvalidOperationException(
+            "Operation is not valid due to the current state of the pipeline.");
+
+        TriageArtifact a = builder.StageCrash(MigrationStageKind.Compile, TriageCategory.CompileError, "GS9999", exFileNotFound);
+        TriageArtifact b = builder.StageCrash(MigrationStageKind.Compile, TriageCategory.CompileError, "GS9999", exBadState);
+
+        Assert.Equal(a.OffendingCSharpConstruct.Kind, b.OffendingCSharpConstruct.Kind);
+        Assert.NotEqual(a.Fingerprint, b.Fingerprint);
+    }
+
+    /// <summary>
+    /// (N2) A single-segment absolute path (no interior directory segment,
+    /// e.g. a bare run-scoped <c>/tmp</c> or <c>/root</c>) normalizes exactly
+    /// like a multi-segment path and dedups stably across "runs" that only
+    /// differ in that bare root.
+    /// </summary>
+    [Fact]
+    public void NormalizeShape_NeutralizesSingleSegmentAbsolutePath()
+    {
+        Assert.Equal(
+            Fingerprint.NormalizeShape("failed at 'lit'"),
+            Fingerprint.NormalizeShape("failed at '/tmp'"));
+        Assert.Equal(
+            Fingerprint.NormalizeShape("failed at 'lit'"),
+            Fingerprint.NormalizeShape("failed at '/root'"));
+
+        // And it must not over-match ordinary non-path text containing a slash:
+        // "3/4" is preceded by a digit, so the Unix-path branch must not
+        // treat it as an absolute path (the numbers are still collapsed to
+        // `lit` by the ordinary numeric-literal rule, not the path rule).
+        Assert.Equal("id id lit/lit id id id", Fingerprint.NormalizeShape("the ratio 3/4 is not one"));
+    }
 }
+

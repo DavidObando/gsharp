@@ -36,10 +36,15 @@ public static class Fingerprint
     // segment count and character shape differ machine-to-machine and
     // run-to-run, so they must be neutralized generically — not by matching
     // one known prefix — before anything else looks at the text.
+    // The Unix branch (issue #1750 N2) requires only a boundary before the
+    // leading `/` — not a preceding word character, so it doesn't swallow a
+    // bare fraction like `3/4` — then one or more path segments. Unlike the
+    // prior version, a single-segment absolute path (e.g. a run-scoped `/tmp`
+    // or `/root` with no interior segment) is stripped too.
     private static readonly Regex AbsolutePathPattern = new Regex(
         @"(?:[A-Za-z]:[\\/](?:[^\s""'<>|:]+[\\/])*[^\s""'<>|:]*)" +
         @"|(?:\\\\[^\s""'<>|:]+(?:\\[^\s""'<>|:]+)+)" +
-        @"|(?:/(?:[^\s""'<>|:]+/)+[^\s""'<>|:]*)",
+        @"|(?:(?<![A-Za-z0-9_])/[^\s""'<>|:]+(?:/[^\s""'<>|:]*)*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     // Identifiers: a letter/underscore start then word chars. Collapsed to `id`.

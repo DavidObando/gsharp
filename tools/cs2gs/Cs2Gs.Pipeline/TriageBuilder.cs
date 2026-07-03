@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Cs2Gs.Translator;
@@ -29,6 +30,21 @@ public sealed class TriageBuilder
     private static readonly Regex LeadingTokenPattern = new Regex(
         @"^[A-Za-z_][A-Za-z0-9_]*",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    // Every modifier keyword the G# printer can emit ahead of a construct
+    // keyword (issue #1750 B1), audited from Cs2Gs.CodeModel.Printing.GSharpPrinter:
+    // RenderVisibility (public/internal/private/protected), the unsafe/open/
+    // sealed/abstract prefixes on RenderTypeDeclaration, the open/override
+    // prefixes on RenderProperty, and the open/override/async prefixes on
+    // RenderMethod. `static`, `virtual`, and `export` are not currently emitted
+    // by the printer but are kept in the set defensively so a future modifier
+    // the printer starts emitting doesn't silently collapse back into the
+    // generic bucket.
+    private static readonly HashSet<string> ModifierTokens = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "public", "private", "internal", "protected", "static", "async", "sealed",
+        "abstract", "virtual", "override", "export", "open", "unsafe",
+    };
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TriageBuilder"/> class.
@@ -575,7 +591,22 @@ public sealed class TriageBuilder
         // a `for` construct because the keyword happens to appear inside a
         // string literal; the leading token of that line is `let`, which is
         // unaffected by what the string literal contains.
-        Match leadingToken = LeadingTokenPattern.Match(line.TrimStart());
+        // Skip past any leading modifier run (issue #1750 B1) — G# construct
+        // lines routinely carry modifiers ahead of the actual construct
+        // keyword (`sealed class Shape {`, `async func Bump(...)`,
+        // `private func Helper(...)`, `public static func F()`). Matching only
+        // the very first token misclassifies every modifier-prefixed
+        // construct into the generic bucket, colliding structurally distinct
+        // gaps. Walk forward token-by-token — still by syntactic position,
+        // never by scanning the whole line — until the token isn't a modifier.
+        string remainder = line.TrimStart();
+        Match leadingToken = LeadingTokenPattern.Match(remainder);
+        while (leadingToken.Success && ModifierTokens.Contains(leadingToken.Value))
+        {
+            remainder = remainder.Substring(leadingToken.Index + leadingToken.Length).TrimStart();
+            leadingToken = LeadingTokenPattern.Match(remainder);
+        }
+
         if (!leadingToken.Success)
         {
             return "GSharpConstruct";
