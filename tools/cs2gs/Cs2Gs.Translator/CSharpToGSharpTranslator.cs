@@ -10288,15 +10288,40 @@ public sealed class CSharpToGSharpTranslator
             FromClauseSyntax from = query.FromClause;
             string rangeVar = from.Identifier.Text;
             GExpression current = this.TranslateExpression(from.Expression);
-
-            GTypeReference rangeType = from.Type != null
-                ? this.MapTypeSyntax(from.Type)
-                : (this.context.GetTypeInfo(from.Expression).Type is INamedTypeSymbol { IsGenericType: true } src
-                    ? this.typeMapper.Map(src.TypeArguments[0], this.context, from.GetLocation())
-                    : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType));
+            GTypeReference rangeType = this.ResolveRangeVariableType(from.Type, from.Expression, from);
 
             current = this.LowerQueryBody(query.Body, rangeVar, rangeType, current);
             return current;
+        }
+
+        // Determines a query range variable's element type. An explicit type
+        // (`from T x in xs`) wins; otherwise the type is derived from the source
+        // collection the same way C#'s foreach/query-from does: array element
+        // type, `IEnumerable<T>`'s `T`, or (for a dictionary) the `T` in the
+        // `IEnumerable<KeyValuePair<K,V>>` the dictionary implements — via the
+        // shared `GetEnumerableElementType` helper (issue #1738), not the former
+        // narrow "first generic type argument" guess that mistyped arrays
+        // (`object`) and dictionaries (the key type instead of `KeyValuePair`).
+        private GTypeReference ResolveRangeVariableType(
+            TypeSyntax explicitType, ExpressionSyntax source, SyntaxNode anchor)
+        {
+            if (explicitType != null)
+            {
+                return this.MapTypeSyntax(explicitType);
+            }
+
+            ITypeSymbol sourceType = this.context.GetTypeInfo(source).Type
+                ?? this.context.GetTypeInfo(source).ConvertedType;
+            ITypeSymbol elementType = GetEnumerableElementType(sourceType);
+            if (elementType != null)
+            {
+                return this.typeMapper.Map(elementType, this.context, anchor.GetLocation());
+            }
+
+            this.context.ReportUnsupported(
+                anchor,
+                "query range variable's element type could not be determined from its source collection (ADR-0115 §B).");
+            return new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
         }
 
         private GExpression LowerQueryBody(
@@ -10333,24 +10358,46 @@ public sealed class CSharpToGSharpTranslator
                 }
             }
 
+            // The result element type after this body's select/group runs, used to
+            // type the range variable of an `into` continuation (below). Defaults
+            // to the unchanged range type for an elided identity `select n`.
+            GTypeReference resultType = rangeType;
+
             switch (body.SelectOrGroup)
             {
                 case SelectClauseSyntax select:
                     // An identity projection (`select n`) after another clause is a
                     // no-op the C# compiler elides; keep it only when it transforms.
-                    if (!(select.Expression is IdentifierNameSyntax id && id.Identifier.Text == rangeVar
-                          && body.Clauses.Count > 0))
+                    if (select.Expression is IdentifierNameSyntax id && id.Identifier.Text == rangeVar
+                        && body.Clauses.Count > 0)
                     {
-                        current = this.QueryCall(current, "Select", rangeVar, rangeType, select.Expression);
+                        break;
                     }
 
+                    current = this.QueryCall(current, "Select", rangeVar, rangeType, select.Expression);
+                    resultType = this.context.GetTypeInfo(select.Expression).Type is { } projected
+                        ? this.typeMapper.Map(projected, this.context, select.GetLocation())
+                        : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
                     break;
 
                 default:
                     this.context.ReportUnsupported(
                         body.SelectOrGroup,
                         $"query '{body.SelectOrGroup.Kind()}' has no canonical G# lowering yet (ADR-0115 §B).");
-                    break;
+                    return current;
+            }
+
+            // `... into y ...` (a query continuation) is the C# spec's own sugar
+            // for `from y in (...) ...` — lower it as a nested query body over the
+            // projected sequence rather than silently dropping the continuation's
+            // clauses (issue #1738).
+            if (body.Continuation != null)
+            {
+                current = this.LowerQueryBody(
+                    body.Continuation.Body,
+                    SanitizeIdentifier(body.Continuation.Identifier.Text),
+                    resultType,
+                    current);
             }
 
             return current;

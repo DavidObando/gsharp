@@ -98,6 +98,132 @@ namespace Demo
     }
 
     /// <summary>
+    /// Issue #1738: a query continuation (<c>... into y ...</c>) is C#'s own
+    /// sugar for <c>from y in (...) ...</c> (C# spec §12.20.3); the translator
+    /// must lower both halves rather than silently dropping the continuation's
+    /// clauses (<c>where y > 0 select y</c> was previously lost entirely).
+    /// </summary>
+    [Fact]
+    public void QueryContinuation_LowersBothHalvesOfQuery()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    using System.Collections.Generic;
+    using System.Linq;
+    public static class QueryContinuationHost
+    {
+        public static IEnumerable<int> DoubledPositives(IEnumerable<int> numbers) =>
+            from n in numbers select n * 2 into y where y > 0 select y;
+    }
+}");
+
+        Assert.Contains(".Select((n int32) -> n * 2)", printed);
+        Assert.Contains(".Where((y int32) -> y > 0)", printed);
+        Assert.DoesNotContain("from", printed);
+    }
+
+    /// <summary>
+    /// Issue #1738: a query over an array must type the range variable as the
+    /// array's element type (<c>string</c>), not the former placeholder
+    /// (<c>object</c>) an array (a non-<see cref="INamedTypeSymbol"/> source)
+    /// used to fall back to.
+    /// </summary>
+    [Fact]
+    public void QueryOverArray_TypesRangeVariableAsElementType()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    using System.Linq;
+    public static class QueryArrayHost
+    {
+        public static int[] Lengths(string[] words) =>
+            (from w in words select w.Length).ToArray();
+    }
+}");
+
+        Assert.Contains(".Select((w string) -> w.Length)", printed);
+    }
+
+    /// <summary>
+    /// Issue #1738: a query over a dictionary must type the range variable as
+    /// <c>KeyValuePair&lt;TKey, TValue&gt;</c> (the element type
+    /// <c>IEnumerable&lt;KeyValuePair&lt;K,V&gt;&gt;</c> yields), not the
+    /// dictionary's key type (the former "first generic type argument" guess).
+    /// </summary>
+    [Fact]
+    public void QueryOverDictionary_TypesRangeVariableAsKeyValuePair()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    using System.Collections.Generic;
+    using System.Linq;
+    public static class QueryDictionaryHost
+    {
+        public static IEnumerable<string> Keys(Dictionary<string, int> map) =>
+            from kv in map select kv.Key;
+    }
+}");
+
+        Assert.Contains("KeyValuePair", printed);
+        Assert.Contains("kv.Key", printed);
+    }
+
+    /// <summary>
+    /// Issue #1738 regression: a query over a plain <c>IEnumerable&lt;T&gt;</c>
+    /// source (the common case, already correctly typed before this fix) must
+    /// keep working after generalizing range-variable typing to
+    /// <c>GetEnumerableElementType</c>.
+    /// </summary>
+    [Fact]
+    public void QueryOverIEnumerable_StillTypesRangeVariableCorrectly()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    using System.Collections.Generic;
+    using System.Linq;
+    public static class QueryEnumerableHost
+    {
+        public static IEnumerable<int> Evens(IEnumerable<int> numbers) =>
+            from n in numbers where n % 2 == 0 select n * n;
+    }
+}");
+
+        Assert.Contains(".Where((n int32) -> n % 2 == 0)", printed);
+        Assert.Contains(".Select((n int32) -> n * n)", printed);
+    }
+
+    /// <summary>
+    /// Issue #1738: a query clause with no canonical G# lowering yet (a
+    /// <c>group ... by ...</c> select-or-group, here feeding an <c>into</c>
+    /// continuation) must surface a visible <see
+    /// cref="TranslationSeverity.Unsupported"/> diagnostic rather than being
+    /// silently miscompiled or dropped.
+    /// </summary>
+    [Fact]
+    public void GroupByContinuation_ReportsUnsupportedRatherThanDropping()
+    {
+        TranslationContext context = TranslateForDiagnostics(@"
+namespace Demo
+{
+    using System.Collections.Generic;
+    using System.Linq;
+    public static class QueryGroupHost
+    {
+        public static IEnumerable<IGrouping<int, int>> ByParity(IEnumerable<int> numbers) =>
+            from n in numbers group n by n % 2 into g select g;
+    }
+}");
+
+        Assert.Contains(
+            context.Diagnostics,
+            d => d.IsUnsupported && d.ConstructKind == "GroupClause");
+    }
+
+    /// <summary>
     /// ADR-0115 §B.22: a C# switch expression maps to the G# <c>switch</c>
     /// expression colon form, with type, relational, and constant patterns
     /// (<c>samples/SwitchExpression.gs</c>).
