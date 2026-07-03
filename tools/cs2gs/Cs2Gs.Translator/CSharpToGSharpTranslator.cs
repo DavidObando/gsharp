@@ -1008,7 +1008,17 @@ public sealed class CSharpToGSharpTranslator
                     ? this.CollectGetOnlyAutoPropertyInitializers(node)
                     : new List<(string Name, GExpression Value)>();
 
-            this.CollectStaticFieldInitializers(node);
+            // Issue #1729 (mode 4): staticFieldInitializers is one shared dictionary
+            // reused across the whole recursive VisitAggregate walk. Snapshot the
+            // keys already present (belonging to an enclosing type still being
+            // processed) so that when this invocation's own entries are cleared
+            // below — including after recursing into a nested type declaration,
+            // which runs this same method again — only the entries this
+            // invocation itself added are removed. Without this, a nested type's
+            // exit would wipe the outer type's not-yet-consumed folded fields.
+            var staticFieldInitializersSnapshot = new HashSet<ISymbol>(
+                this.staticFieldInitializers.Keys, SymbolEqualityComparer.Default);
+            this.CollectStaticFieldInitializers(node, symbol);
 
             var instanceMembers = new List<GMember>();
             var sharedMembers = new List<GMember>();
@@ -1096,7 +1106,16 @@ public sealed class CSharpToGSharpTranslator
                 members.Add(new SharedBlock(sharedMembers));
             }
 
-            this.staticFieldInitializers.Clear();
+            // Issue #1729 (mode 4): remove only the entries this invocation added
+            // (see snapshot above), not the whole shared dictionary — an enclosing
+            // type may still have not-yet-consumed folded fields pending.
+            foreach (ISymbol key in this.staticFieldInitializers.Keys.ToList())
+            {
+                if (!staticFieldInitializersSnapshot.Contains(key))
+                {
+                    this.staticFieldInitializers.Remove(key);
+                }
+            }
 
             // A `static class` whose every member was an extension method lifted to
             // top level has no remaining body; drop the class entirely (ADR-0115 §B.5).
@@ -1326,6 +1345,23 @@ public sealed class CSharpToGSharpTranslator
                         return ConstructorLift.None;
                     }
 
+                    // Issue #1729 (mode 5): hoisting a field initializer reorders it
+                    // to the field's declaration position, ahead of every ctor
+                    // statement that follows it in source. That is only safe when
+                    // the assigned target is written exactly once (a repeat write
+                    // would silently discard the first RHS's side effect via the
+                    // dictionary overwrite below) and the RHS cannot itself run
+                    // observable side effects (a call, object creation, or property
+                    // getter) whose relative order versus other field initializers
+                    // would then change. Either condition bails the whole lift so
+                    // the explicit constructor — and its true evaluation order — is
+                    // kept intact instead of silently reordered.
+                    if (fieldInitializers.ContainsKey(targetName) ||
+                        this.ContainsPotentialSideEffect(assignment.Right))
+                    {
+                        return ConstructorLift.None;
+                    }
+
                     fieldInitializers[targetName] = this.TranslateExpression(assignment.Right);
                 }
             }
@@ -1440,6 +1476,76 @@ public sealed class CSharpToGSharpTranslator
 
                 ISymbol symbol = this.context.GetSymbolInfo(name).Symbol;
                 if (symbol is { IsStatic: false } &&
+                    symbol.Kind is SymbolKind.Field or SymbolKind.Property
+                        or SymbolKind.Method or SymbolKind.Event &&
+                    symbol.ContainingType != null &&
+                    InheritsFromOrEquals(containingType, symbol.ContainingType))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Issue #1729 (mode 5): determines whether hoisting <paramref name="expression"/>
+        /// to a field's declaration position could change observable behavior versus
+        /// leaving it in the constructor body — a method/delegate invocation or
+        /// property-getter access may run arbitrary code (I/O, mutation, logging)
+        /// whose order relative to other field initializers would then differ from
+        /// C#'s constructor-body order. Plain reads of fields, locals, parameters,
+        /// constants, and object construction (the idiomatic
+        /// <c>_field = new T(...)</c> field-initializer shape, ADR-0115 §B.3 / T2)
+        /// are treated as side-effect-free and remain safe to hoist.
+        /// </summary>
+        private bool ContainsPotentialSideEffect(ExpressionSyntax expression)
+        {
+            foreach (SyntaxNode node in expression.DescendantNodesAndSelf())
+            {
+                switch (node)
+                {
+                    case InvocationExpressionSyntax:
+                    case AwaitExpressionSyntax:
+                    case AssignmentExpressionSyntax:
+                    case PostfixUnaryExpressionSyntax:
+                        return true;
+                    case PrefixUnaryExpressionSyntax prefix
+                        when prefix.IsKind(SyntaxKind.PreIncrementExpression) ||
+                            prefix.IsKind(SyntaxKind.PreDecrementExpression):
+                        return true;
+                }
+
+                if (node is SimpleNameSyntax name &&
+                    this.context.GetSymbolInfo(name).Symbol is IPropertySymbol)
+                {
+                    // A property access may run an arbitrary getter body.
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Issue #1729 (mode 3): determines whether <paramref name="expression"/>
+        /// reads any static member of <paramref name="containingType"/> (or a base
+        /// of it) — a static field, property, method, or event. A folded static
+        /// constructor assignment whose RHS depends on the type's own static state
+        /// cannot be hoisted to its field's declaration position without risking a
+        /// change to C#'s field-initializers-then-cctor evaluation order.
+        /// </summary>
+        private bool ReferencesStaticMemberOfType(ExpressionSyntax expression, INamedTypeSymbol containingType)
+        {
+            foreach (SyntaxNode node in expression.DescendantNodesAndSelf())
+            {
+                if (node is not SimpleNameSyntax name)
+                {
+                    continue;
+                }
+
+                ISymbol symbol = this.context.GetSymbolInfo(name).Symbol;
+                if (symbol is { IsStatic: true } &&
                     symbol.Kind is SymbolKind.Field or SymbolKind.Property
                         or SymbolKind.Method or SymbolKind.Event &&
                     symbol.ContainingType != null &&
@@ -1731,6 +1837,16 @@ public sealed class CSharpToGSharpTranslator
                 {
                     initializer = lifted;
                 }
+                else if (symbol != null &&
+                    this.staticFieldInitializers.TryGetValue(symbol, out GExpression staticLifted))
+                {
+                    // Issue #1729 (mode 1): a folded `static` constructor
+                    // (`static T() { Field = value; }`) runs *after* the field's own
+                    // inline initializer in C#, so its assigned value — not the
+                    // inline initializer — is the field's true final value. Prefer
+                    // it over `declarator.Initializer` even when both are present.
+                    initializer = staticLifted;
+                }
                 else if (declarator.Initializer != null)
                 {
                     initializer = this.CoerceConstantToUnsigned(
@@ -1744,13 +1860,6 @@ public sealed class CSharpToGSharpTranslator
                         type = this.PromoteIfInitializerNullable(
                             type, symbol.Type, declarator.Initializer.Value);
                     }
-                }
-                else if (symbol != null &&
-                    this.staticFieldInitializers.TryGetValue(symbol, out GExpression staticLifted))
-                {
-                    // The field's value comes from a folded `static` constructor
-                    // (`static T() { Field = value; }`), which G# has no form for.
-                    initializer = staticLifted;
                 }
 
                 var declaration = new FieldDeclaration(
@@ -2326,7 +2435,7 @@ public sealed class CSharpToGSharpTranslator
                 // folded into the corresponding `shared { }` field initializers
                 // (see CollectStaticFieldInitializers / TranslateField) and the
                 // constructor is dropped. Anything more complex is unsupported.
-                if (this.IsFoldableStaticConstructor(node))
+                if (this.IsFoldableStaticConstructor(node, symbol?.ContainingType))
                 {
                     return null;
                 }
@@ -2400,13 +2509,13 @@ public sealed class CSharpToGSharpTranslator
         /// constructor so they can be re-attached to the corresponding fields
         /// (G# has no static-constructor form; ADR-0115 §B.11).
         /// </summary>
-        private void CollectStaticFieldInitializers(TypeDeclarationSyntax node)
+        private void CollectStaticFieldInitializers(TypeDeclarationSyntax node, INamedTypeSymbol typeSymbol)
         {
             foreach (MemberDeclarationSyntax member in node.Members)
             {
                 if (member is not ConstructorDeclarationSyntax ctor ||
                     !ctor.Modifiers.Any(SyntaxKind.StaticKeyword) ||
-                    !this.IsFoldableStaticConstructor(ctor) ||
+                    !this.IsFoldableStaticConstructor(ctor, typeSymbol) ||
                     ctor.Body == null)
                 {
                     continue;
@@ -2425,11 +2534,27 @@ public sealed class CSharpToGSharpTranslator
             }
         }
 
-        private bool IsFoldableStaticConstructor(ConstructorDeclarationSyntax node)
+        /// <summary>
+        /// Issue #1729: a static constructor folds cleanly only when every
+        /// statement is a simple <c>Field = expr;</c> assignment where (mode 2)
+        /// the assigned field belongs to the type declaring the constructor — an
+        /// assignment to another type's static field would be silently dropped,
+        /// since the folded entry is keyed by that other field and never consumed
+        /// — and (mode 3) the RHS does not depend on the type's own static state,
+        /// since hoisting it to the field's declaration position could change
+        /// C#'s field-initializers-then-cctor evaluation order. Anything else is
+        /// reported as unsupported instead of silently folded.
+        /// </summary>
+        private bool IsFoldableStaticConstructor(ConstructorDeclarationSyntax node, INamedTypeSymbol typeSymbol)
         {
             if (node.Body == null)
             {
                 return node.ExpressionBody == null;
+            }
+
+            if (typeSymbol == null)
+            {
+                return false;
             }
 
             foreach (StatementSyntax statement in node.Body.Statements)
@@ -2437,7 +2562,9 @@ public sealed class CSharpToGSharpTranslator
                 if (statement is not ExpressionStatementSyntax expressionStatement ||
                     expressionStatement.Expression is not AssignmentExpressionSyntax assignment ||
                     !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) ||
-                    this.context.GetSymbolInfo(assignment.Left).Symbol is not IFieldSymbol { IsStatic: true })
+                    this.context.GetSymbolInfo(assignment.Left).Symbol is not IFieldSymbol { IsStatic: true } field ||
+                    !SymbolEqualityComparer.Default.Equals(field.ContainingType, typeSymbol) ||
+                    this.ReferencesStaticMemberOfType(assignment.Right, typeSymbol))
                 {
                     return false;
                 }
