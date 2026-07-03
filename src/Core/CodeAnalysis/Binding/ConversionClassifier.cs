@@ -691,6 +691,37 @@ internal sealed class ConversionClassifier
                             ?? TryRecoverReceiverTypeParameterSlot(method, paramIndex, receiverType);
                     }
 
+                    // Issue #1819: the argument may already be bound to a
+                    // CONCRETE same-compilation user type (struct/enum,
+                    // possibly `Nullable<T>`-wrapped) rather than a bare
+                    // `TypeParameterSymbol` — e.g. `Task.FromResult(Pt(42))`
+                    // where `Pt` is a same-compilation struct. The closed CLR
+                    // method still erases the generic slot to `object`
+                    // (same-compilation user types have no CLR backing yet),
+                    // but the call is re-instantiated at emit over the REAL
+                    // symbolic type argument recovered from
+                    // `symbolicMethodTypeArgs` (see
+                    // `BoundImportedCallExpression.TypeArgumentSymbols` and its
+                    // consumer `GetMethodEntityHandle`), which produces a
+                    // MethodSpec closed over the real value/enum type — e.g.
+                    // `Task<Pt>::FromResult<Pt>(!!0)`. Left unrecovered, the
+                    // erased `object` target below classifies the argument as
+                    // a boxing conversion and inserts a `box Pt` ahead of a
+                    // call whose actual (symbolically re-closed) signature
+                    // expects the raw value on the stack — an ilverify
+                    // StackUnexpected ("found ref 'Pt' expected value 'Pt'")
+                    // at the call site, and the identical class of bug for
+                    // any consumer of the awaited/returned result (a local,
+                    // a field, a member-access receiver, or a `??` operand)
+                    // since the erroneous `box` already corrupted the value
+                    // flowing out of the call/await before it ever reaches
+                    // those consumers.
+                    if (substituted == null
+                        && TypeSymbol.IsSameCompilationUserTypeTopLevel(argument.Type))
+                    {
+                        substituted = TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs);
+                    }
+
                     var targetType = substituted ?? TypeSymbol.FromClrType(parameterType);
                     if (argument.Type != targetType
                         && Conversion.Classify(argument.Type, targetType).Exists
