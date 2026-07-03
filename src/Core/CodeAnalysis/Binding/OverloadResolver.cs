@@ -521,6 +521,74 @@ internal sealed class OverloadResolver
     }
 
     /// <summary>
+    /// Issue #1630: single canonical implementation of the G# variadic
+    /// (<c>...T</c>) call-site pack/pass-through protocol, shared by every
+    /// call-binding path that can target a trailing variadic parameter (free
+    /// function, instance/extension method, constructor, primary
+    /// constructor, function-typed-variable indirect call, named-delegate
+    /// direct call). Given the fully-bound argument list and the variadic
+    /// parameter's declared (possibly type-argument-substituted) slice type,
+    /// decides whether the trailing arguments are a pass-through — a single
+    /// argument already typed as the slice itself, mirroring C#'s
+    /// <c>params T[]</c> call-site semantics — or must be packed into a fresh
+    /// <see cref="BoundArrayCreationExpression"/>. In the pack case, every
+    /// trailing element is first run through <see cref="CoerceVariadicElement"/>
+    /// (issue #1493) so implicit conversions — numeric widening, interface
+    /// upcast, nullable lifting, constant narrowing, user-defined implicit
+    /// conversions — are applied to the element before it lands in the slice,
+    /// keeping all call paths in agreement (issue #1630: this used to be
+    /// duplicated by hand at each call site, and two copies had drifted to
+    /// pack raw, uncoerced elements).
+    /// </summary>
+    /// <param name="callSyntax">The syntax node attributed to the packed <see cref="BoundArrayCreationExpression"/> when packing is required.</param>
+    /// <param name="boundArguments">The fully-bound, in-order argument list; length must be at least <paramref name="fixedCount"/>.</param>
+    /// <param name="fixedCount">The number of leading fixed (non-variadic) parameters.</param>
+    /// <param name="sliceType">The (possibly substituted) variadic parameter's slice type.</param>
+    /// <param name="parameterName">The variadic parameter's name, surfaced in GS0154 diagnostics for elements with no valid conversion.</param>
+    /// <param name="locationAt">Maps a trailing argument's index in <paramref name="boundArguments"/> to the source location used for its conversion diagnostics.</param>
+    /// <param name="hasErrors">Set to <see langword="true"/> when any trailing element has no valid conversion to the slice's element type.</param>
+    /// <returns>An argument list of length <paramref name="fixedCount"/> + 1 whose final element is either the pass-through argument or the packed array.</returns>
+    private ImmutableArray<BoundExpression> PackOrPassThroughVariadicArguments(
+        SyntaxNode callSyntax,
+        ImmutableArray<BoundExpression> boundArguments,
+        int fixedCount,
+        SliceTypeSymbol sliceType,
+        string parameterName,
+        Func<int, TextLocation> locationAt,
+        ref bool hasErrors)
+    {
+        var trailingCount = boundArguments.Length - fixedCount;
+        var passThrough = trailingCount == 1 && boundArguments[fixedCount].Type == sliceType;
+
+        var result = ImmutableArray.CreateBuilder<BoundExpression>(fixedCount + 1);
+        for (var i = 0; i < fixedCount; i++)
+        {
+            result.Add(boundArguments[i]);
+        }
+
+        if (passThrough)
+        {
+            result.Add(boundArguments[fixedCount]);
+            return result.MoveToImmutable();
+        }
+
+        var elementType = sliceType.ElementType;
+        var packed = ImmutableArray.CreateBuilder<BoundExpression>(trailingCount);
+        for (var i = fixedCount; i < boundArguments.Length; i++)
+        {
+            packed.Add(CoerceVariadicElement(
+                boundArguments[i],
+                elementType,
+                locationAt(i),
+                parameterName,
+                ref hasErrors));
+        }
+
+        result.Add(new BoundArrayCreationExpression(callSyntax, sliceType, packed.MoveToImmutable()));
+        return result.MoveToImmutable();
+    }
+
+    /// <summary>
     /// Issue #1281: C# §10.2.11 implicit constant expression conversion at a call
     /// site. When <paramref name="argument"/> is a constant integer expression
     /// whose value fits the (possibly narrower or cross-sign) integer parameter
@@ -2641,10 +2709,6 @@ internal sealed class OverloadResolver
 
             var variadicParam = parameters[parameters.Length - 1];
             var variadicSliceType = (SliceTypeSymbol)variadicParam.Type;
-            var elementType = variadicSliceType.ElementType;
-            var trailingCount = requestedArgCount - fixedPrimaryCount;
-            var passThrough = trailingCount == 1
-                && boundArguments[fixedPrimaryCount].Type == variadicSliceType;
 
             var parameterSyntaxV = new ExpressionSyntax[requestedArgCount];
             for (var i = 0; i < requestedArgCount; i++)
@@ -2689,50 +2753,22 @@ internal sealed class OverloadResolver
                 }
             }
 
-            if (!passThrough)
-            {
-                // Issue #1493: coerce each trailing element to the variadic
-                // element type, applying any valid implicit conversion before
-                // the elements are packed.
-                for (var i = fixedPrimaryCount; i < requestedArgCount; i++)
-                {
-                    boundArguments[i] = CoerceVariadicElement(
-                        boundArguments[i],
-                        elementType,
-                        parameterSyntaxV[i].Location,
-                        variadicParam.Name,
-                        ref hasErrorsV);
-                }
-            }
+            // Issue #1630: pack/pass-through the trailing arguments through
+            // the canonical helper (applies #1493 element coercion when
+            // packing).
+            var packedArgs = PackOrPassThroughVariadicArguments(
+                syntax,
+                boundArguments.ToImmutable(),
+                fixedPrimaryCount,
+                variadicSliceType,
+                variadicParam.Name,
+                i => parameterSyntaxV[i].Location,
+                ref hasErrorsV);
 
             if (hasErrorsV)
             {
                 return new BoundErrorExpression(syntax);
             }
-
-            // Build the final argument list: fixed args + a single slice arg.
-            var rebuilt = ImmutableArray.CreateBuilder<BoundExpression>(parameters.Length);
-            for (var i = 0; i < fixedPrimaryCount; i++)
-            {
-                rebuilt.Add(boundArguments[i]);
-            }
-
-            if (passThrough)
-            {
-                rebuilt.Add(boundArguments[fixedPrimaryCount]);
-            }
-            else
-            {
-                var packed = ImmutableArray.CreateBuilder<BoundExpression>(trailingCount);
-                for (var i = fixedPrimaryCount; i < requestedArgCount; i++)
-                {
-                    packed.Add(boundArguments[i]);
-                }
-
-                rebuilt.Add(new BoundArrayCreationExpression(syntax, variadicSliceType, packed.MoveToImmutable()));
-            }
-
-            var packedArgs = rebuilt.MoveToImmutable();
 
             if (classType.IsInline)
             {
@@ -3154,47 +3190,30 @@ internal sealed class OverloadResolver
             // type so a generic variadic init (`init(xs ...T)` on `Box[int32]`)
             // packs into `[]int32`, matching the concrete argument types.
             var sliceType = (SliceTypeSymbol)effectiveParamTypes[parameters.Length - 1];
-            var elementType = sliceType.ElementType;
             var trailingCount = requestedArgCount - fixedCtorParamCount;
             var passThrough = trailingCount == 1
                 && boundArguments[fixedCtorParamCount].Type == sliceType;
 
             if (!passThrough)
             {
+                // Issue #1630: pack the trailing arguments through the
+                // canonical helper (applies #1493 element coercion).
                 var hasVariadicErrors = false;
-
-                // Issue #1493: coerce each trailing element to the variadic
-                // element type, applying any valid implicit conversion before
-                // packing.
-                for (var i = fixedCtorParamCount; i < requestedArgCount; i++)
-                {
-                    boundArguments[i] = CoerceVariadicElement(
-                        boundArguments[i],
-                        elementType,
-                        parameterSyntax[i].Location,
-                        variadicParam.Name,
-                        ref hasVariadicErrors);
-                }
+                var packedArgs = PackOrPassThroughVariadicArguments(
+                    syntax,
+                    boundArguments.ToImmutable(),
+                    fixedCtorParamCount,
+                    sliceType,
+                    variadicParam.Name,
+                    i => parameterSyntax[i].Location,
+                    ref hasVariadicErrors);
 
                 if (hasVariadicErrors)
                 {
                     return new BoundErrorExpression(syntax);
                 }
 
-                var packed = ImmutableArray.CreateBuilder<BoundExpression>(trailingCount);
-                for (var i = fixedCtorParamCount; i < requestedArgCount; i++)
-                {
-                    packed.Add(boundArguments[i]);
-                }
-
-                var rebuilt = ImmutableArray.CreateBuilder<BoundExpression>(parameters.Length);
-                for (var i = 0; i < fixedCtorParamCount; i++)
-                {
-                    rebuilt.Add(boundArguments[i]);
-                }
-
-                rebuilt.Add(new BoundArrayCreationExpression(syntax, sliceType, packed.MoveToImmutable()));
-                boundArguments = rebuilt;
+                boundArguments = packedArgs.ToBuilder();
 
                 var newSyntax = new ExpressionSyntax[parameters.Length];
                 for (var i = 0; i < fixedCtorParamCount; i++)
@@ -4013,39 +4032,22 @@ internal sealed class OverloadResolver
         var permutedArgs = boundArguments;
         if (isVariadic)
         {
+            // Issue #1630: pack/pass-through through the canonical helper
+            // (applies #1493 element coercion when packing).
             var sliceType = (SliceTypeSymbol)functionType.ParameterTypes[functionType.Arity - 1];
-            var trailing = syntax.Arguments.Count - fixedCount;
-            var passThrough = trailing == 1 && boundArguments[fixedCount].Type == sliceType;
-            if (!passThrough)
+            var hasElementErrors = false;
+            permutedArgs = PackOrPassThroughVariadicArguments(
+                syntax,
+                boundArguments,
+                fixedCount,
+                sliceType,
+                calleeName,
+                i => syntax.Arguments[i].Location,
+                ref hasElementErrors);
+
+            if (hasElementErrors)
             {
-                // Issue #1493: coerce each trailing element to the variadic
-                // element type before packing so implicit conversions apply.
-                var elementType = sliceType.ElementType;
-                var hasElementErrors = false;
-                var packed = ImmutableArray.CreateBuilder<BoundExpression>(trailing);
-                for (var i = fixedCount; i < syntax.Arguments.Count; i++)
-                {
-                    packed.Add(CoerceVariadicElement(
-                        boundArguments[i],
-                        elementType,
-                        syntax.Arguments[i].Location,
-                        calleeName,
-                        ref hasElementErrors));
-                }
-
-                if (hasElementErrors)
-                {
-                    return false;
-                }
-
-                var rebuilt = ImmutableArray.CreateBuilder<BoundExpression>(fixedCount + 1);
-                for (var i = 0; i < fixedCount; i++)
-                {
-                    rebuilt.Add(boundArguments[i]);
-                }
-
-                rebuilt.Add(new BoundArrayCreationExpression(syntax, sliceType, packed.MoveToImmutable()));
-                permutedArgs = rebuilt.ToImmutable();
+                return false;
             }
         }
 
@@ -4630,25 +4632,23 @@ internal sealed class OverloadResolver
             ImmutableArray<BoundExpression> fnPermutedArgs = boundArguments.ToImmutable();
             if (fnIsVariadic)
             {
+                // Issue #1630: pack/pass-through through the canonical helper
+                // (applies #1493 element coercion when packing — this path
+                // used to pack raw, uncoerced elements).
                 var fnSliceType = (SliceTypeSymbol)fnType.ParameterTypes[fnType.Arity - 1];
-                var fnTrailing = syntax.Arguments.Count - fnFixedCount;
-                var fnPassThrough = fnTrailing == 1 && boundArguments[fnFixedCount].Type == fnSliceType;
-                if (!fnPassThrough)
+                var hasFnElementErrors = false;
+                fnPermutedArgs = PackOrPassThroughVariadicArguments(
+                    syntax,
+                    fnPermutedArgs,
+                    fnFixedCount,
+                    fnSliceType,
+                    variable.Name,
+                    i => syntax.Arguments[i].Location,
+                    ref hasFnElementErrors);
+
+                if (hasFnElementErrors)
                 {
-                    var fnPacked = ImmutableArray.CreateBuilder<BoundExpression>(fnTrailing);
-                    for (var i = fnFixedCount; i < syntax.Arguments.Count; i++)
-                    {
-                        fnPacked.Add(boundArguments[i]);
-                    }
-
-                    var fnNew = ImmutableArray.CreateBuilder<BoundExpression>(fnFixedCount + 1);
-                    for (var i = 0; i < fnFixedCount; i++)
-                    {
-                        fnNew.Add(boundArguments[i]);
-                    }
-
-                    fnNew.Add(new BoundArrayCreationExpression(syntax, fnSliceType, fnPacked.MoveToImmutable()));
-                    fnPermutedArgs = fnNew.ToImmutable();
+                    return new BoundErrorExpression(null);
                 }
             }
 
@@ -4702,27 +4702,24 @@ internal sealed class OverloadResolver
             ImmutableArray<BoundExpression> ndPermutedArgs = boundArguments.ToImmutable();
             if (ndIsVariadic)
             {
+                // Issue #1630: pack/pass-through through the canonical helper
+                // (applies #1493 element coercion when packing — this path
+                // used to pack raw, uncoerced elements).
                 var ndVariadicParam = namedDelegateSym.Parameters[namedDelegateSym.Parameters.Length - 1];
                 var ndSliceType = (SliceTypeSymbol)ndVariadicParam.Type;
-                var ndElementType = ndSliceType.ElementType;
-                var ndTrailing = syntax.Arguments.Count - ndFixedCount;
-                var ndPassThrough = ndTrailing == 1 && boundArguments[ndFixedCount].Type == ndSliceType;
-                if (!ndPassThrough)
+                var hasNdElementErrors = false;
+                ndPermutedArgs = PackOrPassThroughVariadicArguments(
+                    syntax,
+                    ndPermutedArgs,
+                    ndFixedCount,
+                    ndSliceType,
+                    ndVariadicParam.Name,
+                    i => syntax.Arguments[i].Location,
+                    ref hasNdElementErrors);
+
+                if (hasNdElementErrors)
                 {
-                    var ndPacked = ImmutableArray.CreateBuilder<BoundExpression>(ndTrailing);
-                    for (var i = ndFixedCount; i < syntax.Arguments.Count; i++)
-                    {
-                        ndPacked.Add(boundArguments[i]);
-                    }
-
-                    var ndNew = ImmutableArray.CreateBuilder<BoundExpression>(ndFixedCount + 1);
-                    for (var i = 0; i < ndFixedCount; i++)
-                    {
-                        ndNew.Add(boundArguments[i]);
-                    }
-
-                    ndNew.Add(new BoundArrayCreationExpression(syntax, ndSliceType, ndPacked.MoveToImmutable()));
-                    ndPermutedArgs = ndNew.ToImmutable();
+                    return new BoundErrorExpression(null);
                 }
             }
 
@@ -5345,51 +5342,21 @@ internal sealed class OverloadResolver
             var sliceType = substitution != null
                 ? (SliceTypeSymbol)substituteType(paramSliceType, substitution)
                 : paramSliceType;
-            var elementType = sliceType.ElementType;
-            var trailingCount = syntax.Arguments.Count - fixedParamCount;
 
-            bool passThrough = trailingCount == 1
-                && boundArguments[fixedParamCount].Type == sliceType;
+            // Issue #1630: pack/pass-through through the canonical helper
+            // (applies #1493 element coercion when packing).
+            var packedArgs = PackOrPassThroughVariadicArguments(
+                syntax,
+                boundArguments.ToImmutable(),
+                fixedParamCount,
+                sliceType,
+                variadicParam.Name,
+                i => syntax.Arguments[i].Location,
+                ref hasErrors);
 
-            if (passThrough)
+            if (!hasErrors)
             {
-                // Single trailing []T argument — keep as-is. boundArguments
-                // already has the correct shape (fixedParamCount + 1 entries).
-            }
-            else
-            {
-                // Issue #1493: coerce each trailing element to the variadic
-                // element type so an implicit conversion (reference upcast,
-                // tuple-element, interface, ...) is applied before packing —
-                // the emitter then builds the element with the element type.
-                var convertedElements = new BoundExpression[syntax.Arguments.Count - fixedParamCount];
-                for (var i = fixedParamCount; i < syntax.Arguments.Count; i++)
-                {
-                    convertedElements[i - fixedParamCount] = CoerceVariadicElement(
-                        boundArguments[i],
-                        elementType,
-                        syntax.Arguments[i].Location,
-                        variadicParam.Name,
-                        ref hasErrors);
-                }
-
-                if (!hasErrors)
-                {
-                    var packed = ImmutableArray.CreateBuilder<BoundExpression>(convertedElements.Length);
-                    foreach (var element in convertedElements)
-                    {
-                        packed.Add(element);
-                    }
-
-                    var finalArgs = ImmutableArray.CreateBuilder<BoundExpression>(fixedParamCount + 1);
-                    for (var i = 0; i < fixedParamCount; i++)
-                    {
-                        finalArgs.Add(boundArguments[i]);
-                    }
-
-                    finalArgs.Add(new BoundArrayCreationExpression(syntax, sliceType, packed.MoveToImmutable()));
-                    boundArguments = finalArgs;
-                }
+                boundArguments = packedArgs.ToBuilder();
             }
         }
 
@@ -5906,7 +5873,6 @@ internal sealed class OverloadResolver
             var sliceType = substitution != null
                 ? (SliceTypeSymbol)substituteType(paramSliceType, substitution)
                 : paramSliceType;
-            var elementType = sliceType.ElementType;
             var trailingCount = permutedArguments.Length - fixedCallableParamCount;
 
             var passThrough = trailingCount == 1
@@ -5914,42 +5880,22 @@ internal sealed class OverloadResolver
 
             if (!passThrough)
             {
+                // Issue #1630: pack through the canonical helper (applies
+                // #1493 element coercion).
                 var hasVariadicErrors = false;
-                var converted = new BoundExpression[trailingCount];
-                for (var i = fixedCallableParamCount; i < permutedArguments.Length; i++)
-                {
-                    // Issue #1493: coerce each trailing element to the variadic
-                    // element type so an implicit conversion is applied before
-                    // packing (the emitter then builds the element with the
-                    // element type rather than the argument's static type).
-                    var elementLocation = permutedSyntax[i]?.Location ?? ce.Location;
-                    converted[i - fixedCallableParamCount] = CoerceVariadicElement(
-                        permutedArguments[i],
-                        elementType,
-                        elementLocation,
-                        variadicParam.Name,
-                        ref hasVariadicErrors);
-                }
+                permutedArguments = PackOrPassThroughVariadicArguments(
+                    ce,
+                    permutedArguments,
+                    fixedCallableParamCount,
+                    sliceType,
+                    variadicParam.Name,
+                    i => permutedSyntax[i]?.Location ?? ce.Location,
+                    ref hasVariadicErrors);
 
                 if (hasVariadicErrors)
                 {
                     return new BoundErrorExpression(null);
                 }
-
-                var packed = ImmutableArray.CreateBuilder<BoundExpression>(trailingCount);
-                foreach (var element in converted)
-                {
-                    packed.Add(element);
-                }
-
-                var newArgs = ImmutableArray.CreateBuilder<BoundExpression>(fixedCallableParamCount + 1);
-                for (var i = 0; i < fixedCallableParamCount; i++)
-                {
-                    newArgs.Add(permutedArguments[i]);
-                }
-
-                newArgs.Add(new BoundArrayCreationExpression(ce, sliceType, packed.MoveToImmutable()));
-                permutedArguments = newArgs.ToImmutable();
 
                 var newSyntax = new ExpressionSyntax[fixedCallableParamCount + 1];
                 for (var i = 0; i < fixedCallableParamCount; i++)
