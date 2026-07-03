@@ -232,6 +232,206 @@ public class ReportTests
     }
 
     /// <summary>
+    /// A FAILED run whose triage artifacts are missing on disk (deleted,
+    /// partially copied, etc.) must not be rendered as green: the "no gaps"
+    /// message is conditional on <see cref="ReportModel.IsGreen"/> — positive
+    /// evidence of success — not on <see cref="ReportModel.Gaps"/> merely being
+    /// empty, since a missing artifact silently drops its gap from the list
+    /// (issue #1753).
+    /// </summary>
+    [Fact]
+    public void ReportModel_FailedRun_MissingTriageArtifact_IsNotRenderedAsGreen()
+    {
+        string runDir = NewRunDir("missing-artifact");
+
+        var run = new RunResult
+        {
+            RunId = "2026-03-01T00-00-00Z_missing",
+            Timestamp = "2026-03-01T00:00:00Z",
+            GscVersion = "0.2.0+test",
+            GscPath = "/path/to/gsc.dll",
+            Succeeded = false,
+            Apps = new List<AppResult>
+            {
+                new AppResult
+                {
+                    AppId = "corpus/L1-Console",
+                    Succeeded = false,
+                    FailureCategory = "translation-unsupported",
+                    Stages = new List<StageResult>
+                    {
+                        new StageResult { Stage = "translate", Status = "failed", ArtifactCount = 1 },
+                        new StageResult { Stage = "compile", Status = "skipped" },
+                        new StageResult { Stage = "ilverify", Status = "skipped" },
+                        new StageResult { Stage = "test-parity", Status = "skipped" },
+                    },
+
+                    // Referenced but never written: simulates a deleted/partially
+                    // copied triage artifact.
+                    Artifacts = new List<string> { "corpus_L1-Console/translate-missing.json" },
+                },
+            },
+        };
+        WriteRunJson(runDir, run);
+
+        ReportModel model = ReportModel.FromRunDirectory(runDir);
+
+        Assert.False(model.Succeeded);
+        Assert.Empty(model.Gaps);
+        Assert.Equal(1, model.MissingArtifactCount);
+        Assert.False(model.IsGreen);
+
+        string html = HtmlReportWriter.Render(model);
+        Assert.DoesNotContain("every app is green", html, StringComparison.Ordinal);
+        Assert.Contains("NOT a green run", html, StringComparison.Ordinal);
+        Assert.Contains("Gap data unavailable", html, StringComparison.Ordinal);
+
+        string json = JsonSummaryWriter.Serialize(model);
+        Assert.Contains("\"missingArtifactCount\": 1", json, StringComparison.Ordinal);
+        Assert.Contains("\"isGreen\": false", json, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A FAILED run with no triage artifacts referenced at all (e.g. every
+    /// stage errored before it could emit one) must also not be rendered as
+    /// green — the empty-gaps message must reflect the failed run, not claim
+    /// success by omission (issue #1753).
+    /// </summary>
+    [Fact]
+    public void ReportModel_FailedRun_NoArtifactsReferenced_IsNotRenderedAsGreen()
+    {
+        string runDir = NewRunDir("no-artifacts-failed");
+
+        var run = new RunResult
+        {
+            RunId = "2026-03-01T00-00-01Z_noartifacts",
+            Timestamp = "2026-03-01T00:00:01Z",
+            GscVersion = "0.2.0+test",
+            GscPath = "/path/to/gsc.dll",
+            Succeeded = false,
+            Apps = new List<AppResult>
+            {
+                new AppResult
+                {
+                    AppId = "corpus/L1-Console",
+                    Succeeded = false,
+                    FailureCategory = "pipeline-crash",
+                    Stages = AllStages("skipped"),
+                },
+            },
+        };
+        WriteRunJson(runDir, run);
+
+        ReportModel model = ReportModel.FromRunDirectory(runDir);
+
+        Assert.False(model.Succeeded);
+        Assert.Empty(model.Gaps);
+        Assert.Equal(0, model.MissingArtifactCount);
+        Assert.False(model.IsGreen);
+
+        string html = HtmlReportWriter.Render(model);
+        Assert.DoesNotContain("every app is green", html, StringComparison.Ordinal);
+        Assert.Contains("Run FAILED with no recorded gaps", html, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A genuinely green run — every app succeeded, every referenced artifact
+    /// was readable, and zero gaps were found — must still render as green
+    /// (positive evidence, not merely an empty gap list) and, at the CLI layer,
+    /// still exit 0 (issue #1753).
+    /// </summary>
+    [Fact]
+    public void ReportModel_GenuinelyGreenRun_IsRenderedAsGreen()
+    {
+        string runDir = NewRunDir("genuinely-green");
+
+        var run = new RunResult
+        {
+            RunId = "2026-03-01T00-00-02Z_green",
+            Timestamp = "2026-03-01T00:00:02Z",
+            GscVersion = "0.2.0+test",
+            GscPath = "/path/to/gsc.dll",
+            Succeeded = true,
+            Apps = new List<AppResult>
+            {
+                new AppResult
+                {
+                    AppId = "corpus/L1-Console",
+                    Succeeded = true,
+                    Stages = AllStages("passed"),
+                },
+            },
+        };
+        WriteRunJson(runDir, run);
+
+        ReportModel model = ReportModel.FromRunDirectory(runDir);
+
+        Assert.True(model.Succeeded);
+        Assert.Empty(model.Gaps);
+        Assert.Equal(0, model.MissingArtifactCount);
+        Assert.True(model.IsGreen);
+
+        string html = HtmlReportWriter.Render(model);
+        Assert.Contains("every app is green", html, StringComparison.Ordinal);
+
+        Assert.Equal(0, Cs2Gs.Cli.Program.DetermineMigrateExitCode(model.Succeeded, reportGenerated: true));
+    }
+
+    /// <summary>
+    /// <c>migrate</c> must not swallow a report-generation failure: when
+    /// <c>GenerateReport</c> cannot build/write the report (e.g. a corrupt
+    /// <c>run.json</c>), it surfaces the error on stderr and reports failure
+    /// back to the caller instead of silently returning success, and the
+    /// combined migrate exit code is non-zero even though the migration run
+    /// itself passed (issue #1753).
+    /// </summary>
+    [Fact]
+    public void GenerateReport_WhenRunJsonIsMissing_ReturnsFalseAndSurfacesError()
+    {
+        string runDir = NewRunDir("broken-run-json");
+
+        // No run.json written: ReportModel.FromRunDirectory throws
+        // FileNotFoundException, which GenerateReport must catch, log, and
+        // report back as a failure rather than swallow.
+        TextWriter originalError = Console.Error;
+        var captured = new StringWriter();
+        Console.SetError(captured);
+        bool generated;
+        try
+        {
+            generated = Cs2Gs.Cli.Program.GenerateReport(runDir);
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+
+        Assert.False(generated);
+        Assert.Contains("failed to generate report", captured.ToString(), StringComparison.Ordinal);
+
+        // Even though the run itself would have passed, the report failure
+        // must dominate the exit code (non-zero), so a broken report is never
+        // invisible behind a clean exit 0.
+        Assert.Equal(2, Cs2Gs.Cli.Program.DetermineMigrateExitCode(runSucceeded: true, reportGenerated: generated));
+        Assert.Equal(2, Cs2Gs.Cli.Program.DetermineMigrateExitCode(runSucceeded: false, reportGenerated: generated));
+    }
+
+    /// <summary>
+    /// The migrate exit-code seam in isolation: a successful report always
+    /// yields the run's own pass/fail exit code (0/1); a failed report always
+    /// yields 2, regardless of the run's outcome (issue #1753).
+    /// </summary>
+    [Theory]
+    [InlineData(true, true, 0)]
+    [InlineData(false, true, 1)]
+    [InlineData(true, false, 2)]
+    [InlineData(false, false, 2)]
+    public void DetermineMigrateExitCode_ReportFailureDominates(bool runSucceeded, bool reportGenerated, int expected)
+    {
+        Assert.Equal(expected, Cs2Gs.Cli.Program.DetermineMigrateExitCode(runSucceeded, reportGenerated));
+    }
+
+    /// <summary>
     /// The CLI <c>report --run &lt;dir&gt;</c> verb regenerates both
     /// <c>report.html</c> and <c>summary.json</c> from an existing run directory
     /// without re-running the pipeline (ADR-0115 §F).

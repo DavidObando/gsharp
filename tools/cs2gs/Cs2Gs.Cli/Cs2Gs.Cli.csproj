@@ -38,4 +38,11 @@
     <ProjectReference Include="..\Cs2Gs.Report\Cs2Gs.Report.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Lets Cs2Gs.Tests call the internal migrate exit-code/report-generation
+         seams (GenerateReport, DetermineMigrateExitCode) directly instead of
+         shelling out a full corpus migration just to exercise a failure path. -->
+    <InternalsVisibleTo Include="GSharp.Cs2Gs.Tests" />
+  </ItemGroup>
+
 </Project>

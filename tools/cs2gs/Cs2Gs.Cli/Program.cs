@@ -26,7 +26,12 @@ internal static class Program
     /// Parses the command line and dispatches to a verb.
     /// </summary>
     /// <param name="args">The command-line arguments.</param>
-    /// <returns>The process exit code (non-zero if any app failed).</returns>
+    /// <returns>
+    /// The process exit code: 0 when the run (and, for <c>migrate</c>, its
+    /// report) succeeded, 1 when the run itself found failures/gaps, and 2
+    /// when the tool errored — including when the report could not be
+    /// generated at all, which must never be masked as a clean exit 0.
+    /// </returns>
     internal static async Task<int> Main(string[] args)
     {
         if (args.Length == 0)
@@ -71,6 +76,54 @@ internal static class Program
         Console.Error.WriteLine($"cs2gs: unknown command '{verb}'.");
         PrintUsage();
         return 1;
+    }
+
+    /// <summary>
+    /// Combines the migration outcome with whether the report was actually
+    /// written into the process exit code. Report-generation failure always
+    /// wins (exit 2), regardless of whether every app migrated cleanly — a
+    /// broken/missing report must never look like a clean exit 0, and must be
+    /// distinguishable from "migration ran and found gaps" (exit 1).
+    /// </summary>
+    /// <param name="runSucceeded">Whether every app passed every pipeline stage.</param>
+    /// <param name="reportGenerated">Whether <c>report.html</c>/<c>summary.json</c> were written.</param>
+    /// <returns>0 when the run and the report both succeeded; 2 when the report failed; otherwise 1.</returns>
+    internal static int DetermineMigrateExitCode(bool runSucceeded, bool reportGenerated)
+    {
+        if (!reportGenerated)
+        {
+            return 2;
+        }
+
+        return runSucceeded ? 0 : 1;
+    }
+
+    /// <summary>
+    /// Regenerates <c>report.html</c> + <c>summary.json</c> for the just-completed
+    /// run. Failures here (a malformed triage artifact, a full disk, a missing
+    /// <c>run.json</c>, etc.) are logged to stderr and reported back to the caller
+    /// rather than swallowed, so <see cref="RunMigrateAsync"/> can turn them into a
+    /// non-zero exit code — a broken report must never look like a clean exit 0.
+    /// </summary>
+    /// <param name="runDir">The run directory to build the report from.</param>
+    /// <returns><see langword="true"/> when both artifacts were written; otherwise <see langword="false"/>.</returns>
+    internal static bool GenerateReport(string runDir)
+    {
+        try
+        {
+            ReportModel model = ReportModel.FromRunDirectory(runDir);
+            string htmlPath = HtmlReportWriter.Write(model, runDir);
+            string jsonPath = JsonSummaryWriter.Write(model, runDir);
+            Console.WriteLine();
+            Console.WriteLine($"report:  {htmlPath}");
+            Console.WriteLine($"summary: {jsonPath}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine("cs2gs: failed to generate report: " + ex.Message);
+            return false;
+        }
     }
 
     private static async Task<int> RunMigrateAsync(string[] args)
@@ -118,9 +171,8 @@ internal static class Program
         PrintSummary(result, pipeline.Stages);
 
         string runDir = ResolveRunDir(options.OutputRoot, result.RunId);
-        GenerateReport(runDir);
-
-        return result.Succeeded ? 0 : 1;
+        bool reportGenerated = GenerateReport(runDir);
+        return DetermineMigrateExitCode(result.Succeeded, reportGenerated);
     }
 
     private static int RunReport(string[] args)
@@ -233,23 +285,6 @@ internal static class Program
         string root = Path.GetFullPath(
             outputRoot ?? Path.Combine(Directory.GetCurrentDirectory(), "cs2gs-runs"));
         return Path.Combine(root, runId);
-    }
-
-    private static void GenerateReport(string runDir)
-    {
-        try
-        {
-            ReportModel model = ReportModel.FromRunDirectory(runDir);
-            string htmlPath = HtmlReportWriter.Write(model, runDir);
-            string jsonPath = JsonSummaryWriter.Write(model, runDir);
-            Console.WriteLine();
-            Console.WriteLine($"report:  {htmlPath}");
-            Console.WriteLine($"summary: {jsonPath}");
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine("cs2gs: failed to generate report: " + ex.Message);
-        }
     }
 
     private static (string Corpus, List<string> AppIds, PipelineOptions Options)? ParseMigrateArgs(string[] args)
