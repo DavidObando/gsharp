@@ -9702,6 +9702,26 @@ public sealed class CSharpToGSharpTranslator
             // since they have no per-statement seam of their own to fall back on.
             List<GStatement> outerSpillPrologue = this.pendingSpillPrologue;
             this.pendingSpillPrologue = null;
+
+            // Issue #1736: a lambda is its own mutability/reference-scan scope,
+            // regardless of WHERE the lambda appears. `currentBodyScope` drives
+            // `IsSymbolReassigned` (via `IsLocalReassigned`/`WithParameterShadows`),
+            // which treats a null scope as "never reassigned" — correct only when
+            // reached from a normal method/accessor body (already scoped by
+            // <see cref="TranslateBody"/>). A lambda translated OUTSIDE any body —
+            // a field/property initializer, a folded static-ctor RHS, a ctor
+            // `base(...)`/`this(...)` argument, an attribute argument, etc. — left
+            // `currentBodyScope` null, so a local declared and reassigned entirely
+            // inside the lambda (e.g. `Func<int> f = () => { int i = 0; i++; return
+            // i; };`) was misclassified as immutable and emitted `let i = 0`
+            // followed by an illegal `i++`. Narrowing the scope to the lambda node
+            // itself here — rather than only widening it at each out-of-body call
+            // site — fixes every such position at once and is idempotent when the
+            // lambda is already inside a normal body: the narrower scope is a
+            // subset of the enclosing one that still contains the lambda's own
+            // reassignments, so nothing that worked before regresses.
+            SyntaxNode previousBodyScope = this.currentBodyScope;
+            this.currentBodyScope = lambda;
             try
             {
                 if (lambda.Body is BlockSyntax block)
@@ -9759,6 +9779,7 @@ public sealed class CSharpToGSharpTranslator
             finally
             {
                 this.pendingSpillPrologue = outerSpillPrologue;
+                this.currentBodyScope = previousBodyScope;
             }
         }
 
