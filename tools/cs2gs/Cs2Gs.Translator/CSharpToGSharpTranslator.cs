@@ -3998,14 +3998,36 @@ public sealed class CSharpToGSharpTranslator
         {
             BlockStatement tryBlock = this.TranslateBlock(node.Block);
 
-            var catches = new List<CatchClause>();
-            foreach (CatchClauseSyntax catchClause in node.Catches)
+            // Per-clause exception type symbols, gathered up front so the
+            // rethrow-lowering below (for `when` filters) can look ahead at
+            // *sibling* catch types (issue #1724 follow-up / PR #1821 review).
+            // Rationale: in C#, catch clauses are matched top-to-bottom by type;
+            // when a clause's type matches but its `when` filter is false,
+            // matching CONTINUES to the next sibling clause instead of leaving
+            // the try. The per-catch `if !(filter) { throw ex }` lowering makes a
+            // false filter escape the *whole* try, so a later sibling that would
+            // have caught it in C# never runs. That is only faithful when no
+            // later sibling could plausibly receive the same exception, so we
+            // detect the unsafe shape below and diagnose it instead of silently
+            // emitting wrong control flow.
+            var catchTypeSymbols = new ITypeSymbol[node.Catches.Count];
+            for (int i = 0; i < node.Catches.Count; i++)
             {
+                CatchClauseSyntax c = node.Catches[i];
+                catchTypeSymbols[i] = c.Declaration != null
+                    ? this.context.GetTypeInfo(c.Declaration.Type).Type
+                    : this.context.Compilation.GetTypeByMetadataName("System.Exception");
+            }
+
+            var catches = new List<CatchClause>();
+            for (int catchIndex = 0; catchIndex < node.Catches.Count; catchIndex++)
+            {
+                CatchClauseSyntax catchClause = node.Catches[catchIndex];
                 string variableName = null;
                 GTypeReference exceptionType = null;
                 if (catchClause.Declaration != null)
                 {
-                    ITypeSymbol typeSymbol = this.context.GetTypeInfo(catchClause.Declaration.Type).Type;
+                    ITypeSymbol typeSymbol = catchTypeSymbols[catchIndex];
                     exceptionType = typeSymbol != null
                         ? this.typeMapper.Map(typeSymbol, this.context, catchClause.Declaration.Type.GetLocation())
                         : new NamedTypeReference(catchClause.Declaration.Type.ToString());
@@ -4034,21 +4056,41 @@ public sealed class CSharpToGSharpTranslator
                     BlockStatement body = this.TranslateBlock(catchClause.Block);
                     if (catchClause.Filter != null)
                     {
-                        // G# has no native `catch ... when (filter)` (no Filter on
-                        // CatchClauseSyntax/TryStatementSyntax; grammar has no `when`
-                        // on catch). Lower it faithfully: evaluate the filter first and
-                        // rethrow the caught exception when it is false, so the
-                        // exception propagates exactly as it would in C# instead of
-                        // being silently swallowed (issue #1724). Note: unlike a real
-                        // CLR exception filter, this runs after the stack has already
-                        // unwound into the handler.
-                        GExpression filter = this.TranslateExpression(catchClause.Filter.FilterExpression);
-                        var rethrowIfFalse = new IfStatement(
-                            new UnaryExpression("!", filter),
-                            new BlockStatement(new List<GStatement> { new ThrowStatement(new IdentifierExpression(variableName)) }));
-                        var statements = new List<GStatement> { rethrowIfFalse };
-                        statements.AddRange(body.Statements);
-                        body = new BlockStatement(statements, body.IsUnsafe);
+                        if (this.HasOverlappingLaterSibling(catchTypeSymbols, catchIndex))
+                        {
+                            // A later sibling catch could still receive this
+                            // exception when the filter is false (e.g. it is, or
+                            // is a supertype of, this clause's type, or the
+                            // relationship can't be proven disjoint). Rethrow-
+                            // lowering would make the false-filter case escape the
+                            // whole try instead of falling through to that
+                            // sibling, silently diverging from C#. Report instead
+                            // of emitting the wrong control flow (ADR-0115 §B).
+                            string message = "a 'when' filter on a catch clause that has a later sibling catch whose type could "
+                                + "also receive the exception (e.g. a supertype such as 'Exception', or a type not "
+                                + "provably disjoint) has no faithful G# lowering: a false filter must fall through "
+                                + "to that sibling in C#, but G#'s rethrow-lowering would make it escape the whole "
+                                + "try instead (ADR-0115 §B / issue #1724).";
+                            this.context.ReportUnsupported(catchClause, message);
+                        }
+                        else
+                        {
+                            // G# has no native `catch ... when (filter)` (no Filter on
+                            // CatchClauseSyntax/TryStatementSyntax; grammar has no `when`
+                            // on catch). Lower it faithfully: evaluate the filter first and
+                            // rethrow the caught exception when it is false, so the
+                            // exception propagates exactly as it would in C# instead of
+                            // being silently swallowed (issue #1724). Note: unlike a real
+                            // CLR exception filter, this runs after the stack has already
+                            // unwound into the handler.
+                            GExpression filter = this.TranslateExpression(catchClause.Filter.FilterExpression);
+                            var rethrowIfFalse = new IfStatement(
+                                new UnaryExpression("!", filter),
+                                new BlockStatement(new List<GStatement> { new ThrowStatement(new IdentifierExpression(variableName)) }));
+                            var statements = new List<GStatement> { rethrowIfFalse };
+                            statements.AddRange(body.Statements);
+                            body = new BlockStatement(statements, body.IsUnsafe);
+                        }
                     }
 
                     catches.Add(new CatchClause(variableName, exceptionType, body));
@@ -4064,6 +4106,75 @@ public sealed class CSharpToGSharpTranslator
                 : null;
 
             return new TryStatement(tryBlock, catches, finallyBlock);
+        }
+
+        /// <summary>
+        /// Whether any catch clause after <paramref name="filteredIndex"/> could
+        /// still receive the same exception once the filtered clause's `when`
+        /// is false — i.e. whether rethrow-lowering the filter at
+        /// <paramref name="filteredIndex"/> would diverge from C#'s top-to-bottom,
+        /// fall-through-on-false-filter matching (issue #1724 follow-up).
+        /// </summary>
+        /// <param name="catchTypeSymbols">The resolved exception type per catch clause, in source order.</param>
+        /// <param name="filteredIndex">The index of the `when`-filtered clause being lowered.</param>
+        /// <returns><see langword="true"/> when a later sibling could plausibly match.</returns>
+        private bool HasOverlappingLaterSibling(ITypeSymbol[] catchTypeSymbols, int filteredIndex)
+        {
+            ITypeSymbol filteredType = catchTypeSymbols[filteredIndex];
+            for (int i = filteredIndex + 1; i < catchTypeSymbols.Length; i++)
+            {
+                if (!AreDisjointExceptionTypes(filteredType, catchTypeSymbols[i]))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Whether two exception types can be <em>proven</em> disjoint — no
+        /// runtime exception object can be an instance of both. Only single-
+        /// inheritance class types can be proven disjoint this way (neither
+        /// derives from the other); anything else (unresolved types, interfaces,
+        /// or an equal/derived relationship) is treated conservatively as
+        /// possibly-overlapping, per the "when in doubt, don't silently diverge"
+        /// rule this method exists to serve.
+        /// </summary>
+        /// <param name="left">The first exception type, or <see langword="null"/> if unresolved.</param>
+        /// <param name="right">The second exception type, or <see langword="null"/> if unresolved.</param>
+        /// <returns><see langword="true"/> only when the types are provably disjoint.</returns>
+        private static bool AreDisjointExceptionTypes(ITypeSymbol left, ITypeSymbol right)
+        {
+            if (left == null || right == null)
+            {
+                return false;
+            }
+
+            if (left.TypeKind != TypeKind.Class || right.TypeKind != TypeKind.Class)
+            {
+                return false;
+            }
+
+            if (SymbolEqualityComparer.Default.Equals(left, right))
+            {
+                return false;
+            }
+
+            return !DerivesFromOrEquals(left, right) && !DerivesFromOrEquals(right, left);
+        }
+
+        private static bool DerivesFromOrEquals(ITypeSymbol type, ITypeSymbol potentialBaseOrSelf)
+        {
+            for (ITypeSymbol t = type; t != null; t = t.BaseType)
+            {
+                if (SymbolEqualityComparer.Default.Equals(t, potentialBaseOrSelf))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private GStatement TranslateUsingStatement(UsingStatementSyntax node)

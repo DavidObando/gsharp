@@ -258,26 +258,93 @@ public class BodyTranslationTests
         Assert.Contains("throw ex", body);
     }
 
-    /// <summary>A mix of filtered and unfiltered <c>catch</c> clauses translates
-    /// each independently, in source order: only the filtered clause gets the
-    /// rethrow-if-false prologue (issue #1724).</summary>
+    /// <summary>A filtered catch whose later sibling could still receive the
+    /// same exception (here, a plain <c>Exception</c> catch-all after a filtered
+    /// <c>InvalidOperationException</c>) is NOT rethrow-lowered: in C#, a false
+    /// filter falls through to the later sibling instead of leaving the
+    /// <c>try</c>, and the per-catch <c>throw ex</c> prologue cannot reproduce
+    /// that fall-through (it would make the exception escape the whole
+    /// <c>try</c>, silently skipping the sibling — the exact bug class issue
+    /// #1724 exists to kill). The translator reports it as unsupported instead
+    /// of emitting the wrong control flow.</summary>
     [Fact]
-    public void MixedFilteredAndUnfilteredCatches_OnlyFilteredGetsRethrowPrologue()
+    public void FilteredCatch_WithOverlappingLaterSibling_ReportsUnsupportedInsteadOfRethrowLowering()
     {
-        string body = GetMethodBody(@"
+        (string body, TranslationContext context) = GetMethodBodyAndContext(@"
             try { n = 1; }
             catch (InvalidOperationException ex) when (ex.Message.Length > 0) { n = 2; }
             catch (Exception ex2) { n = 3; }");
 
+        Assert.Contains(
+            context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported
+                && d.Message.Contains("later sibling", StringComparison.OrdinalIgnoreCase));
+
+        // No rethrow prologue was fabricated for the unsafe shape: the filter
+        // condition text must not appear as a synthesized "if !(...)" guard.
+        Assert.DoesNotContain("if !(ex.Message.Length > 0)", body);
+
         int firstCatch = body.IndexOf("} catch (ex InvalidOperationException) {", StringComparison.Ordinal);
-        int ifIndex = body.IndexOf("if !(ex.Message.Length > 0) {", StringComparison.Ordinal);
         int secondCatch = body.IndexOf("} catch (ex2 Exception) {", StringComparison.Ordinal);
+        Assert.True(firstCatch >= 0 && secondCatch > firstCatch);
+    }
 
-        Assert.True(firstCatch >= 0 && ifIndex > firstCatch && secondCatch > ifIndex);
+    /// <summary>Same divergent shape as above, framed around the actual runtime
+    /// behavior it protects: with the filter false, C# falls through to the
+    /// <c>Exception</c> sibling and runs its body — the sibling catch is never
+    /// dead code, so the translator must not treat it as unreachable via a
+    /// silent rethrow-escape. This is captured as the unsupported diagnostic
+    /// (issue #1724 follow-up); no G# "faithful" lowering exists yet.</summary>
+    [Fact]
+    public void FilteredCatch_WithOverlappingLaterSibling_SiblingRemainsReachableNotDeadCode()
+    {
+        (string body, TranslationContext context) = GetMethodBodyAndContext(@"
+            try { n = 1; }
+            catch (InvalidOperationException ex) when (false) { n = 2; }
+            catch (Exception ex2) { n = 3; }");
 
-        // The unfiltered second catch has no rethrow prologue of its own.
-        string secondCatchBody = body.Substring(secondCatch);
-        Assert.DoesNotContain("if !(", secondCatchBody);
+        Assert.Contains(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+
+        // The sibling's body is preserved verbatim in the output — it is never
+        // silently made unreachable by a fabricated "throw ex" escape.
+        Assert.Contains("n = 3", body);
+        int secondCatch = body.IndexOf("} catch (ex2 Exception) {", StringComparison.Ordinal);
+        Assert.True(secondCatch >= 0);
+        Assert.DoesNotContain("throw ex", body.Substring(0, secondCatch));
+    }
+
+    /// <summary>A filtered catch that is the LAST clause in the try is a SAFE
+    /// shape: there is no later sibling to diverge from, so rethrow-lowering
+    /// still applies and no diagnostic is recorded (issue #1724).</summary>
+    [Fact]
+    public void FilteredCatch_Last_StillRethrowLowers_NoDiagnostic()
+    {
+        (string body, TranslationContext context) = GetMethodBodyAndContext(@"
+            try { n = 1; }
+            catch (ArgumentNullException ex0) { n = 9; }
+            catch (InvalidOperationException ex) when (ex.Message.Length > 0) { n = 2; }");
+
+        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("if !(ex.Message.Length > 0) {", body);
+        Assert.Contains("throw ex", body);
+    }
+
+    /// <summary>A filtered catch followed only by sibling catches of provably
+    /// disjoint exception types (unrelated classes, neither a super/subtype of
+    /// the other) is a SAFE shape: no runtime exception object can match both,
+    /// so the false-filter case can never actually need to fall through to that
+    /// sibling, and rethrow-lowering remains correct with no diagnostic.</summary>
+    [Fact]
+    public void FilteredCatch_WithDisjointLaterSibling_StillRethrowLowers_NoDiagnostic()
+    {
+        (string body, TranslationContext context) = GetMethodBodyAndContext(@"
+            try { n = 1; }
+            catch (InvalidOperationException ex) when (ex.Message.Length > 0) { n = 2; }
+            catch (FormatException ex2) { n = 3; }");
+
+        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("if !(ex.Message.Length > 0) {", body);
+        Assert.Contains("throw ex", body);
     }
 
     /// <summary>A pre-declared C# <c>out</c> argument maps to the legacy
@@ -502,6 +569,15 @@ public class BodyTranslationTests
     /// <param name="extraLocals">Optional extra C# locals to declare first.</param>
     /// <returns>The printed G#.</returns>
     private static string GetMethodBody(string statements, string extraLocals = "")
+        => GetMethodBodyAndContext(statements, extraLocals).Printed;
+
+    /// <summary>
+    /// Same as <see cref="GetMethodBody"/>, but also returns the
+    /// <see cref="TranslationContext"/> so callers can assert on recorded
+    /// <see cref="TranslationDiagnostic"/>s (e.g. the sibling-catch-overlap
+    /// diagnostic added for issue #1724's follow-up).
+    /// </summary>
+    private static (string Printed, TranslationContext Context) GetMethodBodyAndContext(string statements, string extraLocals = "")
     {
         string source = $@"
 using System;
@@ -537,6 +613,6 @@ namespace S
             result.Success,
             "Snippet G# must round-trip. Errors:\n" +
                 string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
-        return printed;
+        return (printed, context);
     }
 }
