@@ -1527,7 +1527,12 @@ internal sealed partial class MethodBodyEmitter
         switch (node.Operand)
         {
             case BoundVariableExpression bve:
-                if (!this.TryLoadVariableAddress(bve.Variable))
+                // Issue #1988 (follow-up to #1917/#1982): route through the
+                // narrowing-aware helper so `&narrowedStructLocal` (a
+                // smart-cast-narrowed struct read of a reference-typed slot,
+                // ADR-0069) unboxes instead of taking the address of the
+                // underlying `object` slot — see TryLoadStructVariableAddress.
+                if (!this.TryLoadStructVariableAddress(bve))
                 {
                     throw new InvalidOperationException($"Cannot take address of variable '{bve.Variable.Name}'.");
                 }

@@ -674,6 +674,22 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #1988 (follow-up to #1917/#1982): the four `TryLoadVariableAddress(fas.Receiver)`
+        // calls below (not `TryLoadStructVariableAddress`) are intentional, not
+        // an unmigrated oversight. `fas.Receiver` is a bare `VariableSymbol`,
+        // which — unlike `BoundVariableExpression` — carries no `NarrowedType`.
+        // The binder (`BindFieldAssignmentExpression`) dispatches to this
+        // struct-field-write branch using the receiver's raw DECLARED type
+        // (`variable.Type is StructSymbol`), never a smart-cast-narrowed type,
+        // so a narrowed struct local (e.g. `object oa` narrowed by `oa is
+        // Money`) can never reach here as a struct receiver: `oa.Cents = v`
+        // instead resolves `oa`'s declared `object` type and fails to find
+        // member `Cents` (GS0158) before emission — see
+        // Issue1988NarrowedStructFieldAssignmentBinderTests. `fas.Receiver` is
+        // therefore always the variable's own struct-typed storage, so the
+        // direct `ldarga`/`ldloca` path is correct and the unbox helper does
+        // not apply.
+        //
         // Optimized path: storing default(T) into a value-type field uses
         // ldflda + initobj instead of pushing a value + stfld. This avoids
         // the invalid ldnull;stfld<ValueType> pattern and removes the need
