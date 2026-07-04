@@ -8597,6 +8597,49 @@ public sealed class CSharpToGSharpTranslator
             return test ?? LiteralExpression.Bool(true);
         }
 
+        // Issue #1891: lowers an extended property subpattern's dotted member
+        // path (`Start.X`, `A.B.C`, ...) to nested G# `PropertyPattern` fields —
+        // `Start.X: 0` becomes `Start: { X: 0 }` — since a G# property-pattern
+        // field is a single identifier with no dotted form. Supports any chain
+        // depth; the innermost field carries the actual subpattern translated
+        // against the fully-qualified member-access receiver (so a binding like
+        // `Start.X: var x` still reads `receiver.Start.X`).
+        private PropertyPatternField BuildExtendedPropertyField(
+            ExpressionSyntax memberPath,
+            PatternSyntax leafPattern,
+            GExpression receiver,
+            List<(ISymbol Symbol, GExpression Replacement)> bindings,
+            HashSet<string> usedDesignators)
+        {
+            var names = new List<string>();
+            ExpressionSyntax current = memberPath;
+            while (current is MemberAccessExpressionSyntax memberAccess)
+            {
+                names.Insert(0, memberAccess.Name.Identifier.Text);
+                current = memberAccess.Expression;
+            }
+
+            names.Insert(0, current.ToString());
+
+            GExpression memberReceiver = receiver;
+            for (int i = 0; i < names.Count - 1; i++)
+            {
+                memberReceiver = new MemberAccessExpression(memberReceiver, SanitizeIdentifier(names[i]));
+            }
+
+            string leafName = SanitizeIdentifier(names[^1]);
+            PropertyPatternField field = new PropertyPatternField(
+                leafName,
+                this.TranslatePattern(leafPattern, new MemberAccessExpression(memberReceiver, leafName), bindings, usedDesignators));
+
+            for (int i = names.Count - 2; i >= 0; i--)
+            {
+                field = new PropertyPatternField(SanitizeIdentifier(names[i]), new PropertyPattern(new List<PropertyPatternField> { field }));
+            }
+
+            return field;
+        }
+
         // Resolves the property name each positional subpattern of `recursive`
         // deconstructs to (issue #1887), so a positional pattern can lower to the
         // same nested member-access form a property pattern uses. Returns null
@@ -11726,20 +11769,35 @@ public sealed class CSharpToGSharpTranslator
                 {
                     foreach (SubpatternSyntax sub in recursive.PropertyPatternClause.Subpatterns)
                     {
-                        if (sub.NameColon == null)
+                        if (sub.NameColon != null)
                         {
-                            this.context.ReportUnsupported(sub, "positional subpattern has no canonical G# form yet (ADR-0115 §B).");
+                            string fieldName = SanitizeIdentifier(sub.NameColon.Name.Identifier.Text);
+                            fields.Add(new PropertyPatternField(
+                                fieldName,
+                                this.TranslatePattern(
+                                    sub.Pattern,
+                                    new MemberAccessExpression(receiver, fieldName),
+                                    bindings,
+                                    usedDesignators)));
                             continue;
                         }
 
-                        string fieldName = SanitizeIdentifier(sub.NameColon.Name.Identifier.Text);
-                        fields.Add(new PropertyPatternField(
-                            fieldName,
-                            this.TranslatePattern(
-                                sub.Pattern,
-                                new MemberAccessExpression(receiver, fieldName),
-                                bindings,
-                                usedDesignators)));
+                        if (sub.ExpressionColon != null)
+                        {
+                            // Issue #1891: an extended property subpattern
+                            // (`Start.X: 0`) parses as `ExpressionColon`, not
+                            // `NameColon`. G#'s property-pattern field is a single
+                            // identifier (no dotted member path), so the chain
+                            // lowers to nested `PropertyPattern`s instead —
+                            // `Start.X: 0` becomes `Start: { X: 0 }`, agreeing
+                            // with the nested-pattern form a user could already
+                            // write directly. Works to any chain depth.
+                            fields.Add(this.BuildExtendedPropertyField(
+                                sub.ExpressionColon.Expression, sub.Pattern, receiver, bindings, usedDesignators));
+                            continue;
+                        }
+
+                        this.context.ReportUnsupported(sub, "positional subpattern has no canonical G# form yet (ADR-0115 §B).");
                     }
                 }
 
