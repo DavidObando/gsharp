@@ -63,6 +63,9 @@ public static class GNodeSamples
             [typeof(MemberAccessExpression)] = () => Expr(new MemberAccessExpression(Id("a"), "B")),
             [typeof(InvocationExpression)] = () => Expr(new InvocationExpression(Id("f"), List<GExpression>(Id("v")))),
             [typeof(IndexExpression)] = () => Expr(new IndexExpression(Id("a"), Int("0"))),
+            [typeof(FromEndIndexExpression)] = () => Expr(new IndexExpression(Id("a"), new FromEndIndexExpression(Int("1")))),
+            [typeof(RangeIndexExpression)] = () => Expr(new IndexExpression(
+                Id("a"), new RangeIndexExpression(Int("1"), new FromEndIndexExpression(Int("1"))))),
             [typeof(FieldInitializer)] = CompositeLiteralSample,
             [typeof(CompositeLiteralExpression)] = CompositeLiteralSample,
             [typeof(ObjectCreationInitializerExpression)] = () => Expr(new ObjectCreationInitializerExpression(
@@ -210,6 +213,10 @@ public static class GNodeSamples
                 new ConstantPattern(Int("2")))),
             [typeof(NotPattern)] = () => Pattern(new NotPattern(new ConstantPattern(Int("1")))),
             [typeof(ParenthesizedPattern)] = () => Pattern(new ParenthesizedPattern(new ConstantPattern(Int("1")))),
+            [typeof(ListPattern)] = () => Pattern(new ListPattern(List<GPattern>(
+                new ConstantPattern(Int("1")), new SlicePattern(null), new ConstantPattern(Int("4"))))),
+            [typeof(SlicePattern)] = () => Pattern(new ListPattern(List<GPattern>(
+                new DiscardPattern(), new SlicePattern("rest")))),
 
             // Type references.
             [typeof(NamedTypeReference)] = () => Field(new NamedTypeReference("List", List<GTypeReference>(Type("int32")))),

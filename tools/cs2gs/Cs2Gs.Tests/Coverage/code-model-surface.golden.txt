@@ -13,6 +13,7 @@ ConditionalAccessExpression
 ConditionalReceiverExpression
 ConversionExpression
 DefaultValueExpression
+FromEndIndexExpression
 IdentifierExpression
 IfExpression
 IncrementDecrementExpression
@@ -26,6 +27,7 @@ NonNullAssertionExpression
 ObjectCreationInitializerExpression
 OutArgumentExpression
 ParenthesizedExpression
+RangeIndexExpression
 StackAllocExpression
 SwitchExpression
 ThisExpression
@@ -77,10 +79,12 @@ TypeDeclaration
 BinaryPattern
 ConstantPattern
 DiscardPattern
+ListPattern
 NotPattern
 ParenthesizedPattern
 PropertyPattern
 RelationalPattern
+SlicePattern
 TypePattern
 
 [GTypeReference]
