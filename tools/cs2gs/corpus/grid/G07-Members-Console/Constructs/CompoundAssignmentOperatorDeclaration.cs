@@ -1,4 +1,9 @@
-// inventory: OperatorDeclaration — C#14 user-defined instance compound assignment operator += (probe)
+// inventory: OperatorDeclaration — C#14 user-defined instance compound assignment
+// operator += has no canonical G# form (G# operator declarations are
+// binary/unary only, ADR-0035); the translator reports this as a loud
+// CS2GS-GAP (issue #1908) instead of emitting `operator +=`, which fails
+// round-trip parse (GS0005). Tracked as a known/open gap in
+// tools/cs2gs/triage/gaps.json so the corpus sanity check tolerates it.
 using System;
 
 namespace Corpus.Grid07

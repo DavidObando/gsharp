@@ -14,9 +14,13 @@ namespace Corpus.Grid07
             AttributeListFixture.Run();
             BaseConstructorInitializerFixture.Run();
 
+            // CompoundAssignmentOperatorDeclarationFixture (issue #1908): the C#14
+            // instance `operator +=` declaration is a recorded/tracked CS2GS-GAP —
+            // it has no canonical G# form (ADR-0035), so the translate stage for
+            // this app fails by design and is tolerated via tools/cs2gs/triage/gaps.json.
+            CompoundAssignmentOperatorDeclarationFixture.Run();
+
             // QUARANTINED (see Quarantined/):
-            //  * CompoundAssignmentOperatorDeclarationFixture — C#14 instance
-            //    `operator +=` fails round-trip (GS0005 Unexpected token <PlusEqualsToken>).
             //  * FieldExpressionFixture — C#14 `field` keyword: CS2GS-GAP placeholder +
             //    CS2GS-ROUNDTRIP (GS0288).
             ConstructorDeclarationFixture.Run();
