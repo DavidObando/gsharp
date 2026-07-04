@@ -1467,10 +1467,40 @@ internal sealed class StateMachineEmitter
     public int EmitAsyncKickoffBody(FunctionSymbol function, AsyncStateMachinePlan plan, bool driveSynchronously = false)
     {
         var smStruct = plan.StateMachine.MaterializeAsStructSymbol();
-        var smTypeDef = this.getStructTypeToken(smStruct);
+
+        // Issue #2030 (gap 2): when the kickoff method (or its enclosing
+        // type) is generic, `smStruct` carries its OWN reified type
+        // parameters (set by RegisterStateMachineEnclosingGenerics) — these
+        // encode as Var(idx) when referenced from WITHIN an SM member
+        // (MoveNext etc., a legitimate self-instantiation). But this kickoff
+        // body is NOT a member of the SM struct: it is a member of the
+        // kickoff's own (possibly non-generic) enclosing type. Referencing
+        // the SM type here must instantiate it over the kickoff's ORIGINAL
+        // in-scope type parameters (enclosing class TPs as Var, the
+        // kickoff's own TPs as MVar) — mirroring the iterator kickoff's
+        // `kickoffSmType` pattern elsewhere in this file — otherwise the
+        // emitted `!0` self-instantiation is meaningless outside the SM
+        // struct (BadImageFormatException at load).
+        var kickoffClassTPs = function.ReceiverType is StructSymbol kickoffRecv
+            ? (kickoffRecv.Definition ?? kickoffRecv).TypeParameters
+            : ImmutableArray<TypeParameterSymbol>.Empty;
+        if (kickoffClassTPs.IsDefault)
+        {
+            kickoffClassTPs = ImmutableArray<TypeParameterSymbol>.Empty;
+        }
+
+        var kickoffMethodTPs = function.TypeParameters.IsDefaultOrEmpty
+            ? ImmutableArray<TypeParameterSymbol>.Empty
+            : function.TypeParameters;
+        var kickoffScopeTPs = kickoffClassTPs.AddRange(kickoffMethodTPs);
+        var kickoffSmStruct = kickoffScopeTPs.IsDefaultOrEmpty
+            ? smStruct
+            : StructSymbol.Construct(smStruct, kickoffScopeTPs.CastArray<TypeSymbol>());
+
+        var smTypeDef = this.getStructTypeToken(kickoffSmStruct);
         var builderInfo = plan.StateMachine.BuilderInfo;
-        var stateFieldHandle = this.resolveFieldToken(smStruct, plan.FieldMap.StateField);
-        var builderFieldHandle = this.resolveFieldToken(smStruct, plan.FieldMap.BuilderField);
+        var stateFieldHandle = this.resolveFieldToken(kickoffSmStruct, plan.FieldMap.StateField);
+        var builderFieldHandle = this.resolveFieldToken(kickoffSmStruct, plan.FieldMap.BuilderField);
 
         var il = new InstructionEncoder(new BlobBuilder());
 
@@ -1491,7 +1521,7 @@ internal sealed class StateMachineEmitter
         // Copy this (for instance methods)
         if (plan.FieldMap.ThisField != null && function.IsInstanceMethod)
         {
-            var thisFieldHandle = this.resolveFieldToken(smStruct, plan.FieldMap.ThisField);
+            var thisFieldHandle = this.resolveFieldToken(kickoffSmStruct, plan.FieldMap.ThisField);
             il.LoadLocalAddress(0);
             il.LoadArgument(0);
             il.OpCode(ILOpCode.Stfld);
@@ -1503,7 +1533,7 @@ internal sealed class StateMachineEmitter
         var paramIndex = 0;
         foreach (var copy in plan.KickoffPlan.ParameterCopies)
         {
-            var fieldHandle = this.resolveFieldToken(smStruct, copy.Field);
+            var fieldHandle = this.resolveFieldToken(kickoffSmStruct, copy.Field);
             il.LoadLocalAddress(0);
             il.LoadArgument(paramIndex + paramSlotShift);
             il.OpCode(ILOpCode.Stfld);
@@ -1529,7 +1559,7 @@ internal sealed class StateMachineEmitter
 
         // Start is generic: Start<TStateMachine>(ref TStateMachine).
         // We need a MethodSpec for Start<SM>.
-        var startMethodSpec = this.GetStateMachineStartMethodSpec(builderInfo.StartMethod, smStruct, plan.FieldMap.BuilderField.Type);
+        var startMethodSpec = this.GetStateMachineStartMethodSpec(builderInfo.StartMethod, kickoffSmStruct, plan.FieldMap.BuilderField.Type);
         il.OpCode(ILOpCode.Call);
         il.Token(startMethodSpec);
 
@@ -1578,7 +1608,7 @@ internal sealed class StateMachineEmitter
         // VALUETYPE token.
         var localsSigBlob = new BlobBuilder();
         var localsEncoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(awaiterClrType != null ? 2 : 1);
-        this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), smStruct);
+        this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), kickoffSmStruct);
         if (awaiterClrType != null)
         {
             this.encodeClrType(localsEncoder.AddVariable().Type(), awaiterClrType);

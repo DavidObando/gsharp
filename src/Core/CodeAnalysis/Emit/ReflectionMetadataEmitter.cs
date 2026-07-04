@@ -2974,8 +2974,19 @@ internal sealed class ReflectionMetadataEmitter
         {
             if (asyncSmPlansByStruct.TryGetValue(s, out var smPlan))
             {
-                this.stateMachines.EmitStateMachineMoveNext(smPlan);
-                this.stateMachines.EmitStateMachineSetStateMachine(smPlan);
+                // Issue #2030 (gap 2): mirror the TypeDef emission above —
+                // MoveNext/SetStateMachine bodies must see the same
+                // outer-method-TP → SM-TP remap as the FieldDefs, or a
+                // reference to a hoisted field/local whose declared type was
+                // the kickoff's own type parameter (e.g. the retVal local for
+                // `async func Foo[U](x U) U`) encodes as a dangling method
+                // type-var (`!!0`) instead of the SM's own class type-var
+                // (`!0`) — unverifiable IL / BadImageFormatException at load.
+                using (this.PushSmRemap(s))
+                {
+                    this.stateMachines.EmitStateMachineMoveNext(smPlan);
+                    this.stateMachines.EmitStateMachineSetStateMachine(smPlan);
+                }
             }
         }
 
@@ -10439,8 +10450,8 @@ internal sealed class ReflectionMetadataEmitter
     // kickoff method's real Task<T?> return type is closed over the emitted
     // Nullable<UserT> instead of falling back to the erased Task<object>.
     private static bool IsAsyncUserDefinedResultType(TypeSymbol type)
-        => type is StructSymbol or InterfaceSymbol or EnumSymbol
-        || (type is NullableTypeSymbol nullableUserVt && nullableUserVt.UnderlyingType is StructSymbol or InterfaceSymbol or EnumSymbol);
+        => type is StructSymbol or InterfaceSymbol or EnumSymbol or TypeParameterSymbol
+        || (type is NullableTypeSymbol nullableUserVt && nullableUserVt.UnderlyingType is StructSymbol or InterfaceSymbol or EnumSymbol or TypeParameterSymbol);
 
     /// <summary>
     /// ADR-0122 §9 / issue #1035: builds a standalone method signature for a
