@@ -704,7 +704,7 @@ internal sealed partial class ExpressionBinder
                 // Issue #950: enforce `protected` property assignment.
                 if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propDeclaringType, this.function))
                 {
-                    Diagnostics.ReportProtectedMemberInaccessible(syntax.FieldIdentifier.Location, prop.Name, propDeclaringType.Name);
+                    Diagnostics.ReportProtectedMemberInaccessible(syntax.FieldIdentifier.Location, prop.Name, propDeclaringType.Name, prop.Accessibility);
                 }
 
                 // Issue #1132: writing a property of a read-only value-type
@@ -759,7 +759,7 @@ internal sealed partial class ExpressionBinder
         // type and its derived types may write it.
         if (!AccessibilityChecker.IsAccessible(field.Accessibility, fieldDeclaringType, this.function))
         {
-            Diagnostics.ReportProtectedMemberInaccessible(syntax.FieldIdentifier.Location, field.Name, fieldDeclaringType.Name);
+            Diagnostics.ReportProtectedMemberInaccessible(syntax.FieldIdentifier.Location, field.Name, fieldDeclaringType.Name, field.Accessibility);
         }
 
         // Issue #947: a read-only field of `this` may be assigned inside the
@@ -1128,6 +1128,15 @@ internal sealed partial class ExpressionBinder
         // declaring struct as the owner for both the read access and assignment.
         if (TypeMemberModel.TryGetFieldIncludingInherited(structSym, memberName, MemberQuery.Instance(MemberKinds.Field), out var field, out var declaringType))
         {
+            // Issue #950 / #2044: enforce `protected`/`private` field access —
+            // mirrors the plain field-write and field-read checks; a compound
+            // assignment (`f.x += 1`) both reads and writes `x`, so accessible
+            // gets the same single diagnostic at the operator location.
+            if (!AccessibilityChecker.IsAccessible(field.Accessibility, declaringType, this.function))
+            {
+                Diagnostics.ReportProtectedMemberInaccessible(syntax.OperatorToken.Location, field.Name, declaringType.Name, field.Accessibility);
+            }
+
             if (field.IsReadOnly
                 && !IsReadOnlyFieldAssignmentAllowed(field, declaringType, ReceiverExpressionIsThis(boundReceiver)))
             {
@@ -1155,12 +1164,18 @@ internal sealed partial class ExpressionBinder
         }
 
         // ADR-0051: check properties.
-        if (TypeMemberModel.TryGetProperty(structSym, memberName, out var prop))
+        if (TypeMemberModel.TryGetProperty(structSym, memberName, out var prop, out var propDeclaringType))
         {
             if (!prop.HasGetter || !prop.HasSetter)
             {
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
                 return new BoundErrorExpression(null);
+            }
+
+            // Issue #950 / #2044: enforce `protected`/`private` property access.
+            if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propDeclaringType, this.function))
+            {
+                Diagnostics.ReportProtectedMemberInaccessible(syntax.OperatorToken.Location, prop.Name, propDeclaringType.Name, prop.Accessibility);
             }
 
             // Issue #1132: compound-mutating a property of a read-only value-type

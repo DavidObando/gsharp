@@ -1416,20 +1416,23 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
-    /// Issue #950: GS0379 — a <c>protected</c> member of <paramref name="declaringTypeName"/>
-    /// was accessed from code that is neither the declaring type nor a type
-    /// deriving from it. A <c>protected</c> member is only reachable from the
-    /// declaring type and the bodies of its derived types.
+    /// Issue #950 / #2044: GS0379 — a <c>protected</c> or <c>private</c>
+    /// member of <paramref name="declaringTypeName"/> was accessed (read,
+    /// written, or called) from code outside its accessibility. A
+    /// <c>protected</c> member is only reachable from the declaring type and
+    /// the bodies of its derived types; a <c>private</c> member is only
+    /// reachable from the declaring type itself.
     /// </summary>
     /// <param name="location">The text location of the offending access.</param>
-    /// <param name="memberName">The protected member's name.</param>
+    /// <param name="memberName">The inaccessible member's name.</param>
     /// <param name="declaringTypeName">The declaring type's name.</param>
-    public void ReportProtectedMemberInaccessible(TextLocation location, string memberName, string declaringTypeName)
+    /// <param name="accessibility">The member's accessibility (<see cref="Accessibility.Protected"/> or <see cref="Accessibility.Private"/>).</param>
+    public void ReportProtectedMemberInaccessible(TextLocation location, string memberName, string declaringTypeName, Accessibility accessibility = Accessibility.Protected)
     {
-        Report(
-            location,
-            "GS0379",
-            $"'{declaringTypeName}.{memberName}' is inaccessible due to its protection level: a 'protected' member is only accessible within '{declaringTypeName}' and types derived from it.");
+        var message = accessibility == Accessibility.Private
+            ? $"'{declaringTypeName}.{memberName}' is inaccessible due to its protection level: a 'private' member is only accessible within '{declaringTypeName}'."
+            : $"'{declaringTypeName}.{memberName}' is inaccessible due to its protection level: a 'protected' member is only accessible within '{declaringTypeName}' and types derived from it.";
+        Report(location, "GS0379", message);
     }
 
     /// <summary>
