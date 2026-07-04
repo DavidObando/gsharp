@@ -474,6 +474,19 @@ public sealed class Lexer
                         kind = SyntaxKind.ShiftRightEqualsToken;
                         position++;
                     }
+                    else if (Current == '>')
+                    {
+                        position++;
+                        if (Current == '=')
+                        {
+                            kind = SyntaxKind.UnsignedShiftRightEqualsToken;
+                            position++;
+                        }
+                        else
+                        {
+                            kind = SyntaxKind.UnsignedShiftRightToken;
+                        }
+                    }
                     else
                     {
                         kind = SyntaxKind.ShiftRightToken;

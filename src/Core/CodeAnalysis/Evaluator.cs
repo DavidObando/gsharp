@@ -2818,6 +2818,8 @@ public sealed class Evaluator
                 return NarrowToResultType(NumericShl(left, (int)right), resultType);
             case BoundBinaryOperatorKind.ShiftRight:
                 return NarrowToResultType(NumericShr(left, (int)right), resultType);
+            case BoundBinaryOperatorKind.UnsignedShiftRight:
+                return NarrowToResultType(NumericShrUnsigned(left, (int)right), resultType);
             case BoundBinaryOperatorKind.Less:
             case BoundBinaryOperatorKind.LessOrEquals:
             case BoundBinaryOperatorKind.Greater:
@@ -3018,6 +3020,26 @@ public sealed class Evaluator
         nint li => li >> r,
         nuint li => li >> r,
         _ => throw new InvalidOperationException($"Unsupported >> on {l?.GetType()}"),
+    };
+
+    // Issue #1880: `>>>` always performs a LOGICAL (zero-fill) shift, emitted
+    // as CLR `shr.un`, regardless of the operand's signedness. For signed
+    // types this differs from `>>` (which is arithmetic/sign-extending);
+    // reinterpret the bit pattern as unsigned before shifting, then convert
+    // back to the original signed representation.
+    private static object NumericShrUnsigned(object l, int r) => l switch
+    {
+        int li => unchecked((int)((uint)li >> r)),
+        long li => unchecked((long)((ulong)li >> r)),
+        uint li => li >> r,
+        ulong li => li >> r,
+        sbyte li => unchecked((sbyte)((byte)li >> r)),
+        byte li => li >> r,
+        short li => unchecked((short)((ushort)li >> r)),
+        ushort li => li >> r,
+        nint li => unchecked((nint)((nuint)li >> r)),
+        nuint li => li >> r,
+        _ => throw new InvalidOperationException($"Unsupported >>> on {l?.GetType()}"),
     };
 
     private static int NumericCompare(object l, object r) => l switch

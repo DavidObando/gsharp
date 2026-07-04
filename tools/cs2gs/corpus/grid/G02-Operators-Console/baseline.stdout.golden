@@ -51,3 +51,5 @@ SuppressNullableWarningExpression: value=present len=7
 TypeOfExpression: int=Int32 string=String double=System.Double
 UnaryMinusExpression: negated=-5 double=-2.5 expr=-7
 UnaryPlusExpression: plus=5 double=2.5
+UnsignedRightShiftAssignmentExpression: v=6 w=1073741816
+UnsignedRightShiftExpression: a=8 logical=2147483644 arithmetic=-4 long=9223372036854775804 uint=2147483644

@@ -80,6 +80,8 @@ public enum SyntaxKind
     GreaterOrEqualsToken,
     ShiftRightToken,
     ShiftRightEqualsToken,
+    UnsignedShiftRightToken,
+    UnsignedShiftRightEqualsToken,
 
     // ADR-0047: annotation lead-in token
     AtToken,

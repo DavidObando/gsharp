@@ -1607,7 +1607,7 @@ internal sealed partial class ExpressionBinder
         // otherwise widen the count to the LEFT operand's type and leave the
         // shift unbound.
         if (boundOperator == null
-            && (operatorKind == SyntaxKind.ShiftLeftToken || operatorKind == SyntaxKind.ShiftRightToken)
+            && (operatorKind == SyntaxKind.ShiftLeftToken || operatorKind == SyntaxKind.ShiftRightToken || operatorKind == SyntaxKind.UnsignedShiftRightToken)
             && IsIntegerType(boundLeft.Type)
             && (IsIntegerType(boundRight.Type) || boundRight.Type == TypeSymbol.Char)
             && boundRight.Type != TypeSymbol.Int32

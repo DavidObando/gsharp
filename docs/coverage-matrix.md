@@ -251,6 +251,8 @@ TypeParameter
 TypeParameterList
 TypePattern
 UnaryExpression
+UnsignedShiftRightEqualsToken
+UnsignedShiftRightToken
 UsingKeyword
 UsingStatement
 VarKeyword
@@ -594,6 +596,16 @@ StarToken Product (uint16,uint16) -> uint16
 StarToken Product (uint32,uint32) -> uint32
 StarToken Product (uint64,uint64) -> uint64
 StarToken Product (uint8,uint8) -> uint8
+UnsignedShiftRightToken UnsignedShiftRight (int16,int32) -> int16
+UnsignedShiftRightToken UnsignedShiftRight (int32,int32) -> int32
+UnsignedShiftRightToken UnsignedShiftRight (int64,int32) -> int64
+UnsignedShiftRightToken UnsignedShiftRight (int8,int32) -> int8
+UnsignedShiftRightToken UnsignedShiftRight (nint,int32) -> nint
+UnsignedShiftRightToken UnsignedShiftRight (nuint,int32) -> nuint
+UnsignedShiftRightToken UnsignedShiftRight (uint16,int32) -> uint16
+UnsignedShiftRightToken UnsignedShiftRight (uint32,int32) -> uint32
+UnsignedShiftRightToken UnsignedShiftRight (uint64,int32) -> uint64
+UnsignedShiftRightToken UnsignedShiftRight (uint8,int32) -> uint8
 
 [BoundUnaryOperator]
 BangToken LogicalNegation (bool) -> bool

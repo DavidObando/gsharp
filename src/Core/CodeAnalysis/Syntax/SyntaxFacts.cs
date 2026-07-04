@@ -52,6 +52,7 @@ public static class SyntaxFacts
             case SyntaxKind.PercentToken:                // remainder
             case SyntaxKind.ShiftLeftToken:              // shift left
             case SyntaxKind.ShiftRightToken:             // shift right
+            case SyntaxKind.UnsignedShiftRightToken:     // unsigned (logical) shift right
             case SyntaxKind.AmpersandToken:              // bitwise and
             case SyntaxKind.AmpersandHatToken:           // bit clear (and not)
                 return 5;
@@ -111,6 +112,7 @@ public static class SyntaxFacts
             case SyntaxKind.AmpersandHatEqualsToken:   baseOperatorKind = SyntaxKind.AmpersandHatToken; return true;
             case SyntaxKind.ShiftLeftEqualsToken:      baseOperatorKind = SyntaxKind.ShiftLeftToken; return true;
             case SyntaxKind.ShiftRightEqualsToken:     baseOperatorKind = SyntaxKind.ShiftRightToken; return true;
+            case SyntaxKind.UnsignedShiftRightEqualsToken: baseOperatorKind = SyntaxKind.UnsignedShiftRightToken; return true;
             default:                                   baseOperatorKind = SyntaxKind.BadToken; return false;
         }
 #pragma warning restore SA1025 // Code should not contain multiple whitespace in a row
@@ -390,6 +392,10 @@ public static class SyntaxFacts
                 return ">>";
             case SyntaxKind.ShiftRightEqualsToken:
                 return ">>=";
+            case SyntaxKind.UnsignedShiftRightToken:
+                return ">>>";
+            case SyntaxKind.UnsignedShiftRightEqualsToken:
+                return ">>>=";
             case SyntaxKind.AtToken:
                 return "@";
 

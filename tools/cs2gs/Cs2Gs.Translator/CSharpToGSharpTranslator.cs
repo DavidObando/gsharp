@@ -5263,7 +5263,8 @@ public sealed class CSharpToGSharpTranslator
             // numeric promotion below, which would wrongly coerce the count to
             // the LHS type, e.g. `uint32(count)` → GS0129).
             if (assignment.IsKind(SyntaxKind.LeftShiftAssignmentExpression) ||
-                assignment.IsKind(SyntaxKind.RightShiftAssignmentExpression))
+                assignment.IsKind(SyntaxKind.RightShiftAssignmentExpression) ||
+                assignment.IsKind(SyntaxKind.UnsignedRightShiftAssignmentExpression))
             {
                 return rhs;
             }

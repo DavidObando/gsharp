@@ -35,6 +35,14 @@ public enum BoundBinaryOperatorKind
     ShiftRight,
 
     /// <summary>
+    /// Used when the UnsignedShiftRightToken (<c>&gt;&gt;&gt;</c>) is used as a
+    /// binary operator. Unlike <see cref="ShiftRight"/>, this always performs
+    /// a logical (zero-fill) shift regardless of operand signedness, emitted
+    /// as CLR <c>shr.un</c>.
+    /// </summary>
+    UnsignedShiftRight,
+
+    /// <summary>
     /// Used when the AmpersandToken is used as a binary operator.
     /// </summary>
     BitwiseAnd,

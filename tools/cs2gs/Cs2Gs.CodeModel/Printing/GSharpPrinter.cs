@@ -372,7 +372,7 @@ public static class GSharpPrinter
     // level-0 fallback comment on GetBinaryOperatorPrecedence.
     private static int GetBinaryPrecedence(string op) => op switch
     {
-        "*" or "/" or "%" or "<<" or ">>" or "&" or "&^" => 5,
+        "*" or "/" or "%" or "<<" or ">>" or ">>>" or "&" or "&^" => 5,
         "+" or "-" or "|" or "^" => 4,
         "==" or "!=" or "<" or "<=" or ">" or ">=" or "is" or "as" => 3,
         "&&" => 2,
