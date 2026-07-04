@@ -13904,6 +13904,7 @@ public sealed class CSharpToGSharpTranslator
         {
             GExpression subject = this.TranslateExpression(node.GoverningExpression);
             var arms = new List<SwitchArm>();
+            bool hasTotalArm = false;
 
             foreach (SwitchExpressionArmSyntax arm in node.Arms)
             {
@@ -13948,6 +13949,42 @@ public sealed class CSharpToGSharpTranslator
                 }
 
                 arms.Add(new SwitchArm(pattern, body, guard));
+
+                // A guarded discard (`case _ when …`) can still fail at run
+                // time, so — mirroring gsc's own exhaustiveness rule
+                // (diagnostics.md GS0176: "a guarded discard … does not act
+                // as a total/default arm") — only an unguarded discard/`default`
+                // arm counts as total. `pattern` is `null` for a real C#
+                // discard (`_ =>`); it is a `DiscardPattern` node (not `null`)
+                // for a `var v =>` arm, which also always matches (it never
+                // narrows, so it is total too — see `TranslatePattern`'s
+                // `VarPatternSyntax` case above).
+                hasTotalArm |= guard == null && (pattern == null || pattern is DiscardPattern);
+            }
+
+            // Issue #1962: a C# switch expression can be exhaustive purely by
+            // its TYPE arms (e.g. every case of a sealed hierarchy is covered,
+            // or a `bool`'s `true`/`false` are both present) with no `_`/`var`
+            // catch-all at all — Roslyn proves that exhaustive and requires no
+            // default arm. gsc's own exhaustiveness check has no equivalent
+            // type-hierarchy proof: it only recognizes a literal unguarded
+            // discard/`default:` arm as total (see GS0176 above), so the
+            // translated arm set would otherwise trip GS0176 even though the
+            // source compiled cleanly. Synthesize a trailing default arm that
+            // mirrors C#'s own runtime behavior for an unmatched switch
+            // expression value (an implicit throw — C#'s own
+            // `SwitchExpressionException`) so gsc accepts the switch and a
+            // genuinely-unreachable value still fails loudly instead of
+            // silently miscompiling.
+            if (!hasTotalArm)
+            {
+                GTypeReference resultType = this.ResolveExpressionType(node);
+                GExpression unmatchedThrow = new ThrowExpression(
+                    BuildConstruction(
+                        new NamedTypeReference("InvalidOperationException"),
+                        new List<GExpression> { LiteralExpression.String("Unmatched switch expression value.") }),
+                    resultType);
+                arms.Add(new SwitchArm(null, unmatchedThrow, null));
             }
 
             return new SwitchExpression(subject, arms);
