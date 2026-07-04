@@ -2753,6 +2753,19 @@ internal sealed class OverloadResolver
                     continue;
                 }
 
+                // Issue #2069/#2084: force the wrap for a func/arrow literal
+                // argument flowing into a NAMED delegate parameter — see the
+                // matching comment at the other constructor-argument path
+                // (above in this file) for the full rationale. This is the
+                // fixed-portion loop for a variadic constructor's arguments.
+                if (parameter.Type is DelegateTypeSymbol namedDelegateCtorFixedTarget
+                    && argument.Type is FunctionTypeSymbol
+                    && !ReferenceEquals(argument.Type, namedDelegateCtorFixedTarget))
+                {
+                    boundArguments[i] = conversions.BindConversion(parameterSyntaxV[i].Location, argument, parameter.Type);
+                    continue;
+                }
+
                 if (argument.Type != parameter.Type
                     && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
                 {
