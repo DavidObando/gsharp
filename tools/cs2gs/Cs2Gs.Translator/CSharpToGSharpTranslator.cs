@@ -10658,11 +10658,23 @@ public sealed class CSharpToGSharpTranslator
                         continue;
                     }
 
-                    string memberName = sub.NameColon?.Name.Identifier.Text
-                        ?? sub.ExpressionColon?.Expression.ToString();
-                    GExpression memberAccess = new MemberAccessExpression(memberReceiver, SanitizeIdentifier(memberName));
-                    ITypeSymbol memberType = this.TryGetSubpatternMemberType(sub);
-                    GExpression memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern, memberType, isNestedPatternMember: true);
+                    GExpression memberTest;
+                    if (sub.NameColon != null)
+                    {
+                        string memberName = sub.NameColon.Name.Identifier.Text;
+                        GExpression memberAccess = new MemberAccessExpression(memberReceiver, SanitizeIdentifier(memberName));
+                        ITypeSymbol memberType = this.TryGetSubpatternMemberType(sub);
+                        memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern, memberType, isNestedPatternMember: true);
+                    }
+                    else
+                    {
+                        // Issue #1971: an extended subpattern (`Start.X: 0`)
+                        // dotted chain needs a per-intermediate nullable-guard,
+                        // not a single flat member access — see
+                        // <see cref="TranslateExtendedPropertyMemberTest"/>.
+                        memberTest = this.TranslateExtendedPropertyMemberTest(sub.ExpressionColon.Expression, sub.Pattern, memberReceiver);
+                    }
+
                     test = test == null ? memberTest : new BinaryExpression(test, "&&", memberTest);
                 }
             }
@@ -10764,20 +10776,12 @@ public sealed class CSharpToGSharpTranslator
             };
         }
 
-        // Issue #1891: lowers an extended property subpattern's dotted member
-        // path (`Start.X`, `A.B.C`, ...) to nested G# `PropertyPattern` fields —
-        // `Start.X: 0` becomes `Start: { X: 0 }` — since a G# property-pattern
-        // field is a single identifier with no dotted form. Supports any chain
-        // depth; the innermost field carries the actual subpattern translated
-        // against the fully-qualified member-access receiver (so a binding like
-        // `Start.X: var x` still reads `receiver.Start.X`).
-        private PropertyPatternField BuildExtendedPropertyField(
-            ExpressionSyntax memberPath,
-            PatternSyntax leafPattern,
-            GExpression receiver,
-            List<(ISymbol Symbol, GExpression Replacement)> bindings,
-            HashSet<string> usedDesignators,
-            List<GExpression> guards)
+        // Splits an extended property subpattern's dotted member path
+        // (`Start.X`, `A.B.C`, ...) into its leaf-to-root identifier chain
+        // (`["Start", "X"]`, `["A", "B", "C"]`), unsanitized. Shared by the
+        // is-form guard builder (<see cref="TranslateExtendedPropertyMemberTest"/>)
+        // and the switch-arm nested-field builder (<see cref="ExtendedPropertyFieldTree"/>).
+        private static List<string> SplitMemberPath(ExpressionSyntax memberPath)
         {
             var names = new List<string>();
             ExpressionSyntax current = memberPath;
@@ -10788,26 +10792,85 @@ public sealed class CSharpToGSharpTranslator
             }
 
             names.Insert(0, current.ToString());
+            return names;
+        }
+
+        // Issue #1971 (follow-up to #1891/#1969): a C# extended property
+        // subpattern (`Start.X: 0`) implicitly null-checks every intermediate
+        // member of the dotted chain — `null` at any step means the whole
+        // pattern doesn't match (no throw), mirroring how a nested recursive
+        // pattern (`{ Start: { X: 0 } }`) against a nullable-typed field is
+        // bound (see `PatternBinder.BindPropertyPattern`'s issue #1923 comment,
+        // and the corresponding null guard `MethodBodyEmitter.EmitPropertyPattern`
+        // emits for a `NullableTypeSymbol` subject). The is-form lowering
+        // previously flattened the whole path into a single raw member-access
+        // chain (`recv.Start.X == 0`) with no such guard: G#'s non-null-by-default
+        // type contract means a raw `ldfld` on a null intermediate NREs instead of
+        // falling through like C# does. This walks the chain once, building the
+        // nested member access AND an `!= nil` guard for each intermediate step
+        // whose DECLARED type is a nullable reference (a non-nullable
+        // intermediate keeps the guard-free raw access — G#'s own non-null
+        // contract already guarantees it, so no guard is needed there).
+        private GExpression TranslateExtendedPropertyMemberTest(
+            ExpressionSyntax memberPath,
+            PatternSyntax leafPattern,
+            GExpression receiver)
+        {
+            List<string> names = SplitMemberPath(memberPath);
+
+            // `intermediateExprs[i]` is the sub-expression whose runtime value
+            // is used as the receiver for the access producing `names[i + 1]`
+            // (e.g. for `Start.X`, `intermediateExprs[0]` is the `Start`
+            // sub-expression — its declared nullability decides whether a
+            // guard is needed before reading `.X`). Walked positionally from
+            // the outermost `MemberAccessExpressionSyntax` inward, so it lines
+            // up with `names` regardless of repeated identifiers in the chain.
+            var intermediateExprs = new ExpressionSyntax[names.Count - 1];
+            ExpressionSyntax current = memberPath;
+            int pos = names.Count - 1;
+            while (current is MemberAccessExpressionSyntax memberAccess)
+            {
+                pos--;
+                intermediateExprs[pos] = memberAccess.Expression;
+                current = memberAccess.Expression;
+            }
 
             GExpression memberReceiver = receiver;
+            GExpression guard = null;
             for (int i = 0; i < names.Count - 1; i++)
             {
                 memberReceiver = new MemberAccessExpression(memberReceiver, SanitizeIdentifier(names[i]));
+
+                ITypeSymbol declaredType = this.ResolveDeclaredReceiverType(
+                    this.context.GetTypeInfo(intermediateExprs[i]).Type, intermediateExprs[i]);
+                if (declaredType is { IsReferenceType: true } && declaredType.NullableAnnotation == NullableAnnotation.Annotated)
+                {
+                    GExpression stepGuard = new BinaryExpression(memberReceiver, "!=", LiteralExpression.Null());
+                    guard = guard == null ? stepGuard : new BinaryExpression(guard, "&&", stepGuard);
+                }
             }
 
             string leafName = SanitizeIdentifier(names[^1]);
-            PropertyPatternField field = new PropertyPatternField(
-                leafName,
-                this.TranslatePattern(leafPattern, new MemberAccessExpression(memberReceiver, leafName), bindings, usedDesignators, guards));
+            GExpression finalMemberAccess = new MemberAccessExpression(memberReceiver, leafName);
+            ITypeSymbol leafType = this.context.GetTypeInfo(memberPath).Type;
+            GExpression leafTest = this.TranslatePatternTest(finalMemberAccess, leafPattern, leafType, isNestedPatternMember: true);
 
-            for (int i = names.Count - 2; i >= 0; i--)
-            {
-                field = new PropertyPatternField(SanitizeIdentifier(names[i]), new PropertyPattern(new List<PropertyPatternField> { field }));
-            }
-
-            return field;
+            return guard == null ? leafTest : new BinaryExpression(guard, "&&", leafTest);
         }
 
+        // Issue #1891: lowers an extended property subpattern's dotted member
+        // path (`Start.X`, `A.B.C`, ...) to nested G# `PropertyPattern` fields —
+        // `Start.X: 0` becomes `Start: { X: 0 }` — since a G# property-pattern
+        // field is a single identifier with no dotted form. Supports any chain
+        // depth; the innermost field carries the actual subpattern translated
+        // against the fully-qualified member-access receiver (so a binding like
+        // `Start.X: var x` still reads `receiver.Start.X`).
+        //
+        // Issue #1971: multiple subpatterns sharing a leftmost identifier
+        // prefix (`{ A.B: 0, A.C: 1 }`) are grouped through
+        // <see cref="ExtendedPropertyFieldTree"/> before being converted, so
+        // they merge into one nested field (`{ A: { B: 0, C: 1 } }`) instead of
+        // emitting the same top-level field name twice.
         // Resolves the property name each positional subpattern of `recursive`
         // deconstructs to (issue #1887), so a positional pattern can lower to the
         // same nested member-access form a property pattern uses. Returns null
@@ -14768,6 +14831,8 @@ public sealed class CSharpToGSharpTranslator
                 var fields = new List<PropertyPatternField>();
                 if (recursive.PropertyPatternClause != null)
                 {
+                    var extendedFieldTrees = new Dictionary<string, ExtendedPropertyFieldTree>();
+                    var extendedFieldRootOrder = new List<string>();
                     foreach (SubpatternSyntax sub in recursive.PropertyPatternClause.Subpatterns)
                     {
                         if (sub.NameColon != null)
@@ -14794,12 +14859,48 @@ public sealed class CSharpToGSharpTranslator
                             // `Start.X: 0` becomes `Start: { X: 0 }`, agreeing
                             // with the nested-pattern form a user could already
                             // write directly. Works to any chain depth.
-                            fields.Add(this.BuildExtendedPropertyField(
-                                sub.ExpressionColon.Expression, sub.Pattern, receiver, bindings, usedDesignators, guards));
+                            //
+                            // Issue #1971: multiple subpatterns sharing a
+                            // leftmost identifier (`{ A.B: 0, A.C: 1 }`) must
+                            // merge into ONE nested field (`{ A: { B: 0, C: 1 } }`)
+                            // instead of emitting the top-level field `A` twice —
+                            // grouped here via `extendedFieldTrees`, keyed by the
+                            // sanitized root identifier, and converted once all
+                            // subpatterns have been scanned. `fields` reserves the
+                            // root's position at its FIRST occurrence so field
+                            // order still matches the source.
+                            List<string> names = SplitMemberPath(sub.ExpressionColon.Expression);
+                            string rootName = SanitizeIdentifier(names[0]);
+                            if (!extendedFieldTrees.TryGetValue(rootName, out ExtendedPropertyFieldTree tree))
+                            {
+                                tree = new ExtendedPropertyFieldTree();
+                                extendedFieldTrees[rootName] = tree;
+                                extendedFieldRootOrder.Add(rootName);
+                                fields.Add(null); // placeholder, filled in after the loop
+                            }
+
+                            tree.Insert(names, 1, sub.Pattern);
                             continue;
                         }
 
                         this.context.ReportUnsupported(sub, "positional subpattern has no canonical G# form yet (ADR-0115 §B).");
+                    }
+
+                    if (extendedFieldRootOrder.Count > 0)
+                    {
+                        int placeholderIndex = 0;
+                        foreach (string rootName in extendedFieldRootOrder)
+                        {
+                            while (fields[placeholderIndex] != null)
+                            {
+                                placeholderIndex++;
+                            }
+
+                            ExtendedPropertyFieldTree tree = extendedFieldTrees[rootName];
+                            List<PropertyPatternField> childFields = tree.ConvertChildren(
+                                this, new MemberAccessExpression(receiver, rootName), bindings, usedDesignators, guards);
+                            fields[placeholderIndex] = new PropertyPatternField(rootName, new PropertyPattern(childFields));
+                        }
                     }
                 }
 
@@ -15577,6 +15678,77 @@ public sealed class CSharpToGSharpTranslator
             /// expression that could re-run a side effect).
             /// </summary>
             public IReadOnlyList<GExpression> DimensionSizes { get; }
+        }
+
+        // Issue #1971: groups extended property subpatterns (`{ A.B: 0, A.C: 1 }`,
+        // parsed as `ExpressionColon`) sharing a leftmost identifier prefix so
+        // <see cref="TranslateRecursivePattern"/> can merge them into ONE nested
+        // `PropertyPattern` field (`{ A: { B: 0, C: 1 } }`) instead of emitting
+        // the same top-level field name twice — works to any shared-prefix depth
+        // (`{ A.B.C: 0, A.B.D: 1 }` merges at `A.B` too).
+        private sealed class ExtendedPropertyFieldTree
+        {
+            // Preserves first-occurrence order of each child name at this
+            // level, so the emitted field order matches the source's leftmost
+            // occurrence of each shared prefix (mirrors how a hand-written
+            // nested pattern would read).
+            private readonly List<string> order = new List<string>();
+            private readonly Dictionary<string, PatternSyntax> leaves = new Dictionary<string, PatternSyntax>();
+            private readonly Dictionary<string, ExtendedPropertyFieldTree> children = new Dictionary<string, ExtendedPropertyFieldTree>();
+
+            public void Insert(List<string> names, int index, PatternSyntax leafPattern)
+            {
+                string name = names[index];
+                if (index == names.Count - 1)
+                {
+                    if (!this.leaves.ContainsKey(name) && !this.children.ContainsKey(name))
+                    {
+                        this.order.Add(name);
+                    }
+
+                    this.leaves[name] = leafPattern;
+                    return;
+                }
+
+                if (!this.children.TryGetValue(name, out ExtendedPropertyFieldTree child))
+                {
+                    child = new ExtendedPropertyFieldTree();
+                    this.children[name] = child;
+                    if (!this.leaves.ContainsKey(name))
+                    {
+                        this.order.Add(name);
+                    }
+                }
+
+                child.Insert(names, index + 1, leafPattern);
+            }
+
+            public List<PropertyPatternField> ConvertChildren(
+                DeclarationVisitor translator,
+                GExpression parentReceiver,
+                List<(ISymbol Symbol, GExpression Replacement)> bindings,
+                HashSet<string> usedDesignators,
+                List<GExpression> guards)
+            {
+                var fields = new List<PropertyPatternField>();
+                foreach (string name in this.order)
+                {
+                    GExpression memberReceiver = new MemberAccessExpression(parentReceiver, name);
+                    if (this.leaves.TryGetValue(name, out PatternSyntax leafPattern))
+                    {
+                        fields.Add(new PropertyPatternField(
+                            name,
+                            translator.TranslatePattern(leafPattern, memberReceiver, bindings, usedDesignators, guards)));
+                        continue;
+                    }
+
+                    ExtendedPropertyFieldTree child = this.children[name];
+                    List<PropertyPatternField> childFields = child.ConvertChildren(translator, memberReceiver, bindings, usedDesignators, guards);
+                    fields.Add(new PropertyPatternField(name, new PropertyPattern(childFields)));
+                }
+
+                return fields;
+            }
         }
     }
 }
