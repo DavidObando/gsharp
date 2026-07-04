@@ -173,10 +173,12 @@ class Outer {
     [Fact]
     public void DerivedClass_BareNameDoesNotSeeBasePrivateField()
     {
-        // Unlike `protected`, `private` is NOT inherited: a base class's
-        // private field must not be exposed as a bare name inside a derived
-        // type's methods (matching C#: unqualified lookup never finds a
-        // base's private members, so the name simply doesn't resolve).
+        // Issue #2060 (follow-up to #2044): a base class's private field is
+        // not inherited, but a bare (unqualified) reference to it from a
+        // derived type's method now reports the same inaccessible-member
+        // diagnostic (GS0472) as the qualified `this.Secret` / `obj.Secret`
+        // form, instead of the misleading "undefined variable" (GS0125) it
+        // used to surface.
         var source = @"
 open class Base {
     private var Secret int32
@@ -191,7 +193,8 @@ class Derived : Base {
 0
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0125");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0472");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0125");
     }
 
     private static EvaluationResult Evaluate(string source)
