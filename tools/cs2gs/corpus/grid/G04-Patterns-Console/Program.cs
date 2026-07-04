@@ -24,6 +24,7 @@ namespace Corpus.Grid04
             RecursivePatternFixture.Run();
             RelationalPatternFixture.Run();
             SwitchExpressionFixture.Run();
+            TypePatternFixture.Run();
         }
     }
 }

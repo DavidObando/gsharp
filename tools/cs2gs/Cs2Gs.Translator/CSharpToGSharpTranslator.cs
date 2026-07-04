@@ -11526,6 +11526,15 @@ public sealed class CSharpToGSharpTranslator
         {
             switch (pattern)
             {
+                // Issue #1890: Roslyn parses a bare TYPE name after a combinator
+                // (e.g. `int or Widget`) as a ConstantPattern over an identifier
+                // — same ambiguity as the boolean-test path's
+                // `IsTypeReferencePattern` check — so it must be recognized as a
+                // type test before falling through to the literal-equality case
+                // below.
+                case ConstantPatternSyntax constant when this.IsTypeReferencePattern(constant.Expression):
+                    return new TypePattern("_", this.MapTypeSyntax((TypeSyntax)constant.Expression));
+
                 case ConstantPatternSyntax constant:
                     return new ConstantPattern(this.TranslateExpression(constant.Expression));
 
@@ -11543,6 +11552,15 @@ public sealed class CSharpToGSharpTranslator
                     return new TypePattern(
                         SanitizeIdentifier(variable.Identifier.Text),
                         this.MapTypeSyntax(declaration.Type));
+
+                // Issue #1890: a bare-type arm (`int =>`, no binder) is Roslyn's
+                // `TypePatternSyntax` — same shape as `DeclarationPatternSyntax`
+                // but with no designation at all. G#'s own `TypePattern` grammar
+                // always requires a designator before `is`, but treats `_` as a
+                // real discard there (PatternBinder.BindTypePattern's `isDiscard`
+                // check), so no binding is introduced — this is the bare form.
+                case TypePatternSyntax typePattern:
+                    return new TypePattern("_", this.MapTypeSyntax(typePattern.Type));
 
                 // `var v` (a top-level switch arm, or a nested `{ Prop: var v }`
                 // subpattern — this method recurses for both) ALWAYS matches, so
