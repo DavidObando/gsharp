@@ -75,8 +75,8 @@ namespace Corpus.Issue2010
         string printed = GSharpPrinter.Print(unit);
 
         TypeDeclaration multi = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Multi");
-        Assert.Contains(multi.Members.OfType<MethodDeclaration>(), m => m.Name == "__explicit_IGreeter__Greet");
-        Assert.Contains(multi.Members.OfType<MethodDeclaration>(), m => m.Name == "__explicit_IWelcomer__Greet");
+        Assert.Contains(multi.Members.OfType<MethodDeclaration>(), m => m.Name == "__explicit_Corpus_Issue2010_IGreeter__Greet");
+        Assert.Contains(multi.Members.OfType<MethodDeclaration>(), m => m.Name == "__explicit_Corpus_Issue2010_IWelcomer__Greet");
         Assert.Contains("hi", printed, StringComparison.Ordinal);
         Assert.Contains("welcome", printed, StringComparison.Ordinal);
 
@@ -120,7 +120,7 @@ namespace Corpus.Issue2010
 
         TypeDeclaration loudHost = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "LoudHost");
         Assert.Contains(loudHost.Members.OfType<MethodDeclaration>(), m => m.Name == "Greet");
-        Assert.Contains(loudHost.Members.OfType<MethodDeclaration>(), m => m.Name == "__explicit_IGreeter__Greet");
+        Assert.Contains(loudHost.Members.OfType<MethodDeclaration>(), m => m.Name == "__explicit_Corpus_Issue2010_IGreeter__Greet");
         Assert.Contains("hello-public", printed, StringComparison.Ordinal);
         Assert.Contains("hello-explicit", printed, StringComparison.Ordinal);
 
@@ -128,6 +128,82 @@ namespace Corpus.Issue2010
             context.Diagnostics,
             d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("explicit interface", StringComparison.OrdinalIgnoreCase));
         AssertRoundTripParses(printed);
+    }
+
+    /// <summary>
+    /// Follow-up fix: two SAME-SIMPLE-NAME interfaces declared in DIFFERENT
+    /// namespaces (<c>NsA.IBar</c> and <c>NsB.IBar</c>) previously mangled
+    /// to the identical <c>__explicit_IBar__M</c> name (bare simple name),
+    /// producing a hard GS0264 duplicate-signature collision instead of the
+    /// intended per-interface distinctness. The mangle now embeds the
+    /// interface's namespace-qualified name, so the two implementations
+    /// mangle to distinct names and both survive.
+    /// </summary>
+    [Fact]
+    public void TwoSameSimpleNameInterfacesFromDifferentNamespaces_MangleDistinctly()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("NsA.cs", @"
+namespace NsA
+{
+    public interface IBar
+    {
+        string M();
+    }
+}"),
+            ("NsB.cs", @"
+namespace NsB
+{
+    public interface IBar
+    {
+        string M();
+    }
+}"),
+            ("Multi.cs", @"
+using NsA;
+using NsB;
+
+namespace Corpus.Issue2010
+{
+    public class Multi : NsA.IBar, NsB.IBar
+    {
+        string NsA.IBar.M()
+        {
+            return ""from-a"";
+        }
+
+        string NsB.IBar.M()
+        {
+            return ""from-b"";
+        }
+    }
+}"),
+        });
+        Assert.True(
+            project.BoundWithoutErrors,
+            "Snippet should bind with no C# errors: " +
+                string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = project.Documents.Single(d => d.FilePath == "Multi.cs");
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        string printed = GSharpPrinter.Print(unit);
+
+        TypeDeclaration multi = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Multi");
+        var mangledNames = multi.Members.OfType<MethodDeclaration>().Select(m => m.Name).ToList();
+
+        // The two mangled names must be DISTINCT — this is the regression this
+        // fix addresses (previously both would be "__explicit_IBar__M").
+        Assert.Equal(2, mangledNames.Distinct(StringComparer.Ordinal).Count());
+        Assert.Contains(mangledNames, n => n.StartsWith("__explicit_NsA_IBar__M", StringComparison.Ordinal));
+        Assert.Contains(mangledNames, n => n.StartsWith("__explicit_NsB_IBar__M", StringComparison.Ordinal));
+        Assert.Contains("from-a", printed, StringComparison.Ordinal);
+        Assert.Contains("from-b", printed, StringComparison.Ordinal);
+
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("explicit interface", StringComparison.OrdinalIgnoreCase));
     }
 
     private static void AssertRoundTripParses(string rendered)

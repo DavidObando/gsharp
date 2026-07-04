@@ -69,7 +69,7 @@ namespace Corpus.Issue1911
 }");
         string printed = GSharpPrinter.Print(unit);
 
-        Assert.Contains("__explicit_IGreeter__Greet() string {", printed, StringComparison.Ordinal);
+        Assert.Contains("__explicit_Corpus_Issue1911_IGreeter__Greet() string {", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(
             context.Diagnostics,
             d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("explicit interface", StringComparison.OrdinalIgnoreCase));

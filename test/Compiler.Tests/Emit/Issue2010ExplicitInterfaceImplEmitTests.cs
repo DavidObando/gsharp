@@ -44,11 +44,11 @@ public class Issue2010ExplicitInterfaceImplEmitTests
         }
 
         class Both : IFoo, IBaz {
-            func __explicit_IFoo__Bar() string {
+            func __explicit_GapCheck_IFoo__Bar() string {
                 return "foo"
             }
 
-            func __explicit_IBaz__Bar() string {
+            func __explicit_GapCheck_IBaz__Bar() string {
                 return "baz"
             }
         }
@@ -86,11 +86,11 @@ public class Issue2010ExplicitInterfaceImplEmitTests
             {
                 var md = reader.GetMethodDefinition(mh);
                 var name = reader.GetString(md.Name);
-                if (name == "__explicit_IFoo__Bar")
+                if (name == "__explicit_GapCheck_IFoo__Bar")
                 {
                     fooBody++;
                 }
-                else if (name == "__explicit_IBaz__Bar")
+                else if (name == "__explicit_GapCheck_IBaz__Bar")
                 {
                     bazBody++;
                 }

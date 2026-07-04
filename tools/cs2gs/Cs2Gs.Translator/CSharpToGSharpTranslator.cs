@@ -519,6 +519,22 @@ public sealed class CSharpToGSharpTranslator
         // integer; `decimal` is a widening target of every integral source. Used by
         // the call-site argument coercion (issue #1281) to drop a redundant explicit
         // conversion when gsc already widens the operand implicitly.
+
+        /// <summary>
+        /// Namespace/nesting-qualified name of an interface type, with every
+        /// '.' replaced by '_' so the result is a single valid identifier
+        /// segment (must stay in sync with the equivalent computation in
+        /// <c>DeclarationBinder.TryResolveExplicitInterfaceImplementation</c>,
+        /// which reconstructs the same string from the G# side as
+        /// <c>PackageName + "." + Name</c>, and with the file-level namespace
+        /// flattening in <see cref="ResolvePackage"/> that determines what a
+        /// translated interface's G# package name actually is).
+        /// </summary>
+        private static readonly SymbolDisplayFormat QualifiedInterfaceNameFormat = new SymbolDisplayFormat(
+            typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
+            genericsOptions: SymbolDisplayGenericsOptions.None,
+            globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Omitted);
+
         private static readonly Dictionary<SpecialType, HashSet<SpecialType>> NumericWideningTargets = new()
         {
             [SpecialType.System_SByte] = new() { SpecialType.System_Int16, SpecialType.System_Int32, SpecialType.System_Int64, SpecialType.System_IntPtr, SpecialType.System_Single, SpecialType.System_Double, SpecialType.System_Decimal },
@@ -2838,8 +2854,42 @@ public sealed class CSharpToGSharpTranslator
             // #1911 "force public, drop on exact-signature collision" handling
             // is preserved unchanged for external interfaces.
             bool isExplicitInterfaceImpl = symbol != null && symbol.ExplicitInterfaceImplementations.Length > 0;
+
+            // Issue #2010 follow-up: Roslyn's ExplicitInterfaceImplementations
+            // can hold MORE THAN ONE entry — this happens when the explicit
+            // member also satisfies an inherited/re-declared same-signature
+            // member on a BASE interface (e.g. `void IBar.M(){}` where
+            // `interface IBar : IFoo` and IFoo already declares `M`). The
+            // mangled-name + CLR-MethodImpl scheme below wires exactly ONE
+            // interface slot per mangled method, so it only applies when
+            // there is a SINGLE entry and it is a G# user interface. Any
+            // other shape (mixed user+external, or >1 user entries) falls
+            // back to the pre-#2010 (#1911) named/forced-public path: the
+            // method keeps its plain name, and gsc's ordinary implicit
+            // name+signature interface-dispatch matching then satisfies
+            // every entry uniformly (no explicit MethodImpl row needed) —
+            // lossier (loses C#'s "not publicly callable by name"
+            // semantics) but correct, and consistent with the existing
+            // external-interface handling.
             bool isUserInterfaceExplicitImpl = isExplicitInterfaceImpl &&
+                symbol.ExplicitInterfaceImplementations.Length == 1 &&
                 symbol.ExplicitInterfaceImplementations[0].ContainingType.Locations.Any(l => l.IsInSource);
+
+            if (isExplicitInterfaceImpl && symbol.ExplicitInterfaceImplementations.Length > 1 &&
+                symbol.ExplicitInterfaceImplementations.All(e => e.ContainingType.Locations.Any(l => l.IsInSource)))
+            {
+                string names = string.Join(", ", symbol.ExplicitInterfaceImplementations.Select(e => e.ContainingType.Name));
+                string multiEntryMessage =
+                    $"explicit interface implementation '{FormatExplicitInterfaceName(symbol)}' satisfies more than one " +
+                    $"G# user interface member in one C# declaration ({names}), likely via interface inheritance " +
+                    "(a base interface re-declaring the same signature). The issue #2010 mangled-name + CLR MethodImpl " +
+                    "scheme only wires a single interface slot per mangled method, so this falls back to the #1911 " +
+                    "named/forced-public path instead of mangling — the method keeps its plain name and every " +
+                    "interface's slot is satisfied via ordinary implicit name+signature dispatch (known gap: the " +
+                    "method becomes publicly callable by name, unlike real C# explicit-impl semantics).";
+                this.context.Report(new TranslationDiagnostic(
+                    nameof(SyntaxKind.MethodDeclaration), multiEntryMessage, node.GetLocation(), TranslationSeverity.Info));
+            }
 
             if (isExplicitInterfaceImpl && !isUserInterfaceExplicitImpl)
             {
@@ -3043,19 +3093,31 @@ public sealed class CSharpToGSharpTranslator
         /// Issue #2010: mangles an explicit interface implementation's name
         /// into the reserved <c>__explicit_&lt;Interface&gt;__&lt;Member&gt;</c>
         /// convention gsc's binder recognizes (see
-        /// <c>DeclarationBinder.TryParseExplicitInterfaceImplName</c>). Using
-        /// the interface's own simple name keeps two explicit implementations
-        /// of the same member from two different interfaces from colliding —
-        /// each gets its own name, its own MethodDef, and (via the binder/
-        /// emitter) its own MethodImpl row into its own interface's slot.
+        /// <c>DeclarationBinder.TryParseExplicitInterfaceImplName</c>).
+        /// Only called when <see cref="IMethodSymbol.ExplicitInterfaceImplementations"/>
+        /// has exactly one entry (see the caller in <see cref="TranslateMethod"/>),
+        /// so indexing <c>[0]</c> here is safe.
+        ///
+        /// Follow-up fix: the interface component is the interface's
+        /// NAMESPACE-QUALIFIED name (dots sanitized to underscores), not its
+        /// bare simple name — two same-simple-name interfaces declared in
+        /// different namespaces (e.g. <c>Foo.IBar</c> and <c>Baz.IBar</c>)
+        /// previously mangled to the identical name and collided (GS0264).
+        /// The binder-side match in
+        /// <c>DeclarationBinder.TryResolveExplicitInterfaceImplementation</c>
+        /// builds the same qualified-name string from the G# interface's
+        /// package + name and must stay in sync with this method.
         /// </summary>
         private static string MangleExplicitInterfaceImplName(IMethodSymbol symbol)
         {
             ISymbol explicitMember = symbol.ExplicitInterfaceImplementations[0];
-            string interfaceName = SanitizeIdentifier(explicitMember.ContainingType.Name);
+            string interfaceName = SanitizeIdentifier(QualifyInterfaceName(explicitMember.ContainingType));
             string memberName = SanitizeIdentifier(explicitMember.Name);
             return $"__explicit_{interfaceName}__{memberName}";
         }
+
+        private static string QualifyInterfaceName(INamedTypeSymbol interfaceType)
+            => interfaceType.ToDisplayString(QualifiedInterfaceNameFormat).Replace('.', '_');
 
         /// <summary>
         /// Issue #1911: finds the sibling method on the same containing type that

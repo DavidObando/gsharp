@@ -6897,7 +6897,7 @@ internal sealed class DeclarationBinder
             }
 
             if (!TryParseExplicitInterfaceImplName(candidate.Name, out var explicitIfaceName, out var explicitMemberName) ||
-                explicitIfaceName != iface.Name ||
+                explicitIfaceName != QualifyInterfaceName(iface) ||
                 explicitMemberName != imethod.Name)
             {
                 continue;
@@ -6921,6 +6921,43 @@ internal sealed class DeclarationBinder
 
     private static ImmutableArray<ParameterSymbol> GetCallableParameters(FunctionSymbol method)
         => method.ExplicitReceiverParameter == null ? method.Parameters : method.Parameters.RemoveAt(0);
+
+    /// <summary>
+    /// Namespace/nesting-qualified name of a G# interface, dots sanitized to
+    /// underscores — must stay in sync with the equivalent computation in
+    /// <c>CSharpToGSharpTranslator.QualifyInterfaceName</c>, which builds the
+    /// same string from the pre-translation C# interface symbol. Follow-up
+    /// to issue #2010: bare simple names collided across namespaces
+    /// (<c>Foo.IBar</c> vs <c>Baz.IBar</c>); qualifying by package name (G#'s
+    /// analogue of a C# namespace) plus any containing-type nesting fixes it.
+    /// </summary>
+    private static string QualifyInterfaceName(InterfaceSymbol iface)
+    {
+        var parts = new List<string>();
+        for (TypeSymbol current = iface; current != null; current = GetContainingType(current))
+        {
+            parts.Insert(0, current.Name);
+        }
+
+        if (!string.IsNullOrEmpty(iface.PackageName))
+        {
+            // The package name itself may be dotted (e.g. "Corpus.Grid06"),
+            // mirroring a multi-segment C# namespace — split it into its own
+            // segments rather than inserting one dotted string, or the final
+            // '_' join below would leave a stray '.' in the result.
+            parts.InsertRange(0, iface.PackageName.Split('.'));
+        }
+
+        return string.Join("_", parts);
+    }
+
+    private static TypeSymbol GetContainingType(TypeSymbol type) => type switch
+    {
+        StructSymbol s => s.ContainingType,
+        InterfaceSymbol i => i.ContainingType,
+        EnumSymbol e => e.ContainingType,
+        _ => null,
+    };
 
     /// <summary>
     /// Issue #2010: the reserved mangled-name convention a G# method uses to
