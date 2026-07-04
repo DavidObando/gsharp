@@ -5385,6 +5385,23 @@ internal sealed class OverloadResolver
             return new BoundErrorExpression(syntax);
         }
 
+        // Issue #1931: stash the function's own (explicit or inferred) type
+        // arguments on the bound node so the emitter's MethodSpec construction
+        // can use this authoritative bind-time result instead of re-deriving
+        // it via structural unification (which can fail for uninformative
+        // argument shapes like a bare `nil`).
+        var methodTypeArguments = default(ImmutableArray<TypeSymbol>);
+        if (function.IsGeneric && substitution != null)
+        {
+            var methodTypeArgsBuilder = ImmutableArray.CreateBuilder<TypeSymbol>(function.TypeParameters.Length);
+            foreach (var tp in function.TypeParameters)
+            {
+                methodTypeArgsBuilder.Add(substitution[tp]);
+            }
+
+            methodTypeArguments = methodTypeArgsBuilder.MoveToImmutable();
+        }
+
         if (substitution != null)
         {
             var returnType = substituteType(function.Type, substitution);
@@ -5393,16 +5410,16 @@ internal sealed class OverloadResolver
                 returnType = wrapAsTask(returnType);
             }
 
-            return CreatePossiblyElidedCall(function, boundArguments.ToImmutable(), returnType);
+            return CreatePossiblyElidedCall(function, boundArguments.ToImmutable(), returnType, methodTypeArguments);
         }
 
         if (function.IsAsync && !isAsyncIteratorReturnType(function.Type))
         {
             var asyncReturn = wrapAsTask(function.Type);
-            return CreatePossiblyElidedCall(function, boundArguments.ToImmutable(), asyncReturn);
+            return CreatePossiblyElidedCall(function, boundArguments.ToImmutable(), asyncReturn, methodTypeArguments);
         }
 
-        return CreatePossiblyElidedCall(function, boundArguments.ToImmutable(), returnType: null);
+        return CreatePossiblyElidedCall(function, boundArguments.ToImmutable(), returnType: null, methodTypeArguments);
     }
 
     /// <summary>
@@ -5445,14 +5462,14 @@ internal sealed class OverloadResolver
     /// Argument binding still ran above so wrong-type diagnostics on the
     /// elided arguments are reported normally.
     /// </summary>
-    private BoundExpression CreatePossiblyElidedCall(FunctionSymbol function, ImmutableArray<BoundExpression> arguments, TypeSymbol returnType)
+    private BoundExpression CreatePossiblyElidedCall(FunctionSymbol function, ImmutableArray<BoundExpression> arguments, TypeSymbol returnType, ImmutableArray<TypeSymbol> methodTypeArguments = default)
     {
         if (KnownAttributes.IsConditionallyElided(function.Attributes, Scope.PreprocessorSymbols))
         {
-            return new BoundCallExpression(null, function, ImmutableArray<BoundExpression>.Empty, returnType, isConditionalElided: true);
+            return new BoundCallExpression(null, function, ImmutableArray<BoundExpression>.Empty, returnType, isConditionalElided: true) { MethodTypeArguments = methodTypeArguments };
         }
 
-        return new BoundCallExpression(null, function, arguments, returnType);
+        return new BoundCallExpression(null, function, arguments, returnType) { MethodTypeArguments = methodTypeArguments };
     }
 
     public BoundExpression BindExtensionFunctionCall(BoundExpression receiver, FunctionSymbol extension, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, ImmutableArray<string> argumentNames = default)
@@ -5644,6 +5661,22 @@ internal sealed class OverloadResolver
             }
         }
 
+        // Issue #1931: stash the extension function's own (explicit or
+        // inferred) type arguments on the bound node so the emitter's
+        // MethodSpec construction can use this authoritative bind-time result
+        // instead of re-deriving it via structural unification.
+        var extensionMethodTypeArguments = default(ImmutableArray<TypeSymbol>);
+        if (extension.IsGeneric && substitution != null)
+        {
+            var extensionMethodTypeArgsBuilder = ImmutableArray.CreateBuilder<TypeSymbol>(extension.TypeParameters.Length);
+            foreach (var tp in extension.TypeParameters)
+            {
+                extensionMethodTypeArgsBuilder.Add(substitution[tp]);
+            }
+
+            extensionMethodTypeArguments = extensionMethodTypeArgsBuilder.MoveToImmutable();
+        }
+
         if (substitution != null)
         {
             var returnType = substituteType(extension.Type, substitution);
@@ -5652,7 +5685,7 @@ internal sealed class OverloadResolver
                 returnType = wrapAsTask(returnType);
             }
 
-            return new BoundCallExpression(null, extension, convertedArgs.MoveToImmutable(), returnType);
+            return new BoundCallExpression(null, extension, convertedArgs.MoveToImmutable(), returnType) { MethodTypeArguments = extensionMethodTypeArguments };
         }
 
         // Issue #1376: an async receiver-clause (extension) function's call-site
@@ -5662,10 +5695,10 @@ internal sealed class OverloadResolver
         if (extension.IsAsync && !isAsyncIteratorReturnType(extension.Type))
         {
             var asyncReturn = wrapAsTask(extension.Type);
-            return new BoundCallExpression(null, extension, convertedArgs.MoveToImmutable(), asyncReturn);
+            return new BoundCallExpression(null, extension, convertedArgs.MoveToImmutable(), asyncReturn) { MethodTypeArguments = extensionMethodTypeArguments };
         }
 
-        return new BoundCallExpression(null, extension, convertedArgs.MoveToImmutable());
+        return new BoundCallExpression(null, extension, convertedArgs.MoveToImmutable()) { MethodTypeArguments = extensionMethodTypeArguments };
     }
 
     public BoundExpression BindUserInstanceCall(BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, ImmutableArray<string> argumentNames = default, TypeParameterSymbol constrainedReceiverTypeParameter = null)
@@ -6017,18 +6050,43 @@ internal sealed class OverloadResolver
             convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArguments[i], expectedType, method.Parameters[i + parameterOffset]));
         }
 
+        // Issue #1931: stash the method's own (explicit or inferred) type
+        // arguments on the bound node regardless of whether they affect the
+        // return type below, so the emitter's MethodSpec construction can use
+        // this authoritative bind-time result instead of re-deriving it via
+        // structural unification (which can fail for uninformative argument
+        // shapes like a bare `nil`).
+        ImmutableArray<TypeSymbol> methodTypeArguments = default;
+        if (method.IsGeneric && substitution != null)
+        {
+            var methodTypeArgsBuilder = ImmutableArray.CreateBuilder<TypeSymbol>(method.TypeParameters.Length);
+            foreach (var tp in method.TypeParameters)
+            {
+                methodTypeArgsBuilder.Add(substitution[tp]);
+            }
+
+            methodTypeArguments = methodTypeArgsBuilder.MoveToImmutable();
+        }
+
+        BoundUserInstanceCallExpression MakeCall(TypeSymbol returnTypeOverride)
+        {
+            var result = new BoundUserInstanceCallExpression(null, receiver, method, convertedArgs.ToImmutable(), returnTypeOverride, constrainedReceiverTypeParameter, constrainedReceiverTypeParameter?.InterfaceConstraint);
+            result.MethodTypeArguments = methodTypeArguments;
+            return result;
+        }
+
         if (substitution != null)
         {
             var substitutedReturn = substituteType(method.Type, substitution);
             if (method.IsAsync && !isAsyncIteratorReturnType(method.Type))
             {
                 substitutedReturn = wrapAsTask(substitutedReturn);
-                return new BoundUserInstanceCallExpression(null, receiver, method, convertedArgs.ToImmutable(), substitutedReturn, constrainedReceiverTypeParameter, constrainedReceiverTypeParameter?.InterfaceConstraint);
+                return MakeCall(substitutedReturn);
             }
 
             if (!ReferenceEquals(substitutedReturn, method.Type))
             {
-                return new BoundUserInstanceCallExpression(null, receiver, method, convertedArgs.ToImmutable(), substitutedReturn, constrainedReceiverTypeParameter, constrainedReceiverTypeParameter?.InterfaceConstraint);
+                return MakeCall(substitutedReturn);
             }
         }
 
@@ -6038,10 +6096,10 @@ internal sealed class OverloadResolver
         if (method.IsAsync && !isAsyncIteratorReturnType(method.Type))
         {
             var asyncReturn = wrapAsTask(method.Type);
-            return new BoundUserInstanceCallExpression(null, receiver, method, convertedArgs.ToImmutable(), asyncReturn, constrainedReceiverTypeParameter, constrainedReceiverTypeParameter?.InterfaceConstraint);
+            return MakeCall(asyncReturn);
         }
 
-        return new BoundUserInstanceCallExpression(null, receiver, method, convertedArgs.ToImmutable(), returnTypeOverride: null, constrainedReceiverTypeParameter, constrainedReceiverTypeParameter?.InterfaceConstraint);
+        return MakeCall(returnTypeOverride: null);
     }
 
     private static Dictionary<TypeParameterSymbol, TypeSymbol> TryBuildReceiverSubstitution(TypeSymbol receiverType)

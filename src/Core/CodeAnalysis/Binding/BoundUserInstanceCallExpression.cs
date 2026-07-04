@@ -56,6 +56,23 @@ public sealed class BoundUserInstanceCallExpression : BoundExpression
     public ImmutableArray<BoundExpression> Arguments { get; }
 
     /// <summary>
+    /// Gets the call-site (explicit or inferred) method type arguments for a
+    /// generic instance method call, positionally aligned with
+    /// <see cref="FunctionSymbol.TypeParameters"/> on <see cref="Method"/>, or
+    /// a default (empty) array for a non-generic method. Issue #1931: bind
+    /// time already resolves this substitution (from an explicit `[T]` list or
+    /// argument-type inference) to convert arguments/return type, but that
+    /// substitution was previously discarded once bound whenever it did not
+    /// affect the return type — forcing the emitter to blindly re-derive the
+    /// method type arguments via structural unification over the (possibly
+    /// uninformative, e.g. a bare <c>nil</c>) argument expressions, which can
+    /// fail even though the call was validly bound. Stashing the resolved
+    /// arguments here lets the emitter use the authoritative bind-time result
+    /// directly.
+    /// </summary>
+    public ImmutableArray<TypeSymbol> MethodTypeArguments { get; internal set; }
+
+    /// <summary>
     /// Gets the type parameter whose user-declared interface constraint backs
     /// this call when it dispatches through a constraint (issue #1052), e.g.
     /// <c>x.Area()</c> where <c>x : T</c> and <c>T : IShape</c>. The emitter then
