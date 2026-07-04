@@ -200,7 +200,12 @@ public static class AsyncIteratorRewriter
             // DefaultInterpolatedStringHandler emitted for interpolated strings
             // (ADR-0055 / issue #368). A ByRef-like type cannot be an instance
             // field, so it must stay a MoveNext local rather than be hoisted.
-            if (node.Variable.Type?.ClrType?.IsByRefLike == true)
+            // Issue #1919: use the metadata-load-safe TypeSymbol.IsByRefLike
+            // helper — a raw Type.IsByRefLike read throws NotSupportedException
+            // for a cross-context TypeBuilderInstantiation (e.g. a delegate
+            // local closed over a MetadataLoadContext type under gsc's
+            // `/reference:` mode).
+            if (TypeSymbol.IsByRefLike(node.Variable.Type))
             {
                 base.VisitVariableDeclaration(node);
                 return;
