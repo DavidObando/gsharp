@@ -118,6 +118,80 @@ var wide ISink[object] = narrow
     }
 
     [Fact]
+    public void CovariantOutInterface_Int32ToObject_StillDiagnoses()
+    {
+        // Review follow-up (blocking finding on PR #1955): CLR generic-interface
+        // variance (ECMA-335 II.9.7) applies only to reference-typed type
+        // arguments. `int32` boxes implicitly to `object` (ADR-0045), but that
+        // is NOT the same as a variance-compatible reference conversion — the
+        // emitter's variance path emits no box/cast, so accepting this would
+        // produce unsound IL. Must still fail with GS0155, mirroring C#'s
+        // CS0266 rejection of `IEnumerable<int> -> IEnumerable<object>`.
+        var source = @"
+interface ISource[out T] {
+    func Get() T;
+}
+
+class IntSource : ISource[int32] {
+    func Get() int32 { return 1 }
+}
+
+var source ISource[int32] = IntSource{}
+var widened ISource[object] = source
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Cannot convert"));
+    }
+
+    [Fact]
+    public void ContravariantInInterface_ObjectToInt32_StillDiagnoses()
+    {
+        // Contravariant equivalent of the guardrail above: narrowing
+        // `ISink[object]` to `ISink[int32]` must not be treated as a
+        // variance-compatible reference conversion either.
+        var source = @"
+interface ISink[in T] {
+    func Accept(value T) string;
+}
+
+class ObjectSink : ISink[object] {
+    func Accept(value object) string { return value.ToString() }
+}
+
+var sink ISink[object] = ObjectSink{}
+var narrowed ISink[int32] = sink
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Cannot convert"));
+    }
+
+    [Fact]
+    public void CovariantOutInterface_UserStructToObject_StillDiagnoses()
+    {
+        // A user-defined generic struct type argument is also a value type
+        // and must be excluded from variance eligibility the same way a
+        // primitive is.
+        var source = @"
+struct Point {
+    var x int32
+}
+
+interface ISource[out T] {
+    func Get() T;
+}
+
+class PointSource : ISource[Point] {
+    func Get() Point { return Point{ x: 1 } }
+}
+
+var source ISource[Point] = PointSource{}
+var widened ISource[object] = source
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Cannot convert"));
+    }
+
+    [Fact]
     public void ClassConstrainedTypeParameter_ToStringConcat_Binds()
     {
         // Bug B, exact reported shape: `T.ToString()` under a `class`

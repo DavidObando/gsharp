@@ -994,6 +994,22 @@ public sealed class Conversion
             switch (typeParameters[i].Variance)
             {
                 case TypeParameterVariance.Out:
+                    // CLR generic-interface variance (ECMA-335 II.9.7) is
+                    // defined only for REFERENCE-typed type arguments; the
+                    // emitter (MethodBodyEmitter.IsReferenceCompatible, which
+                    // calls back into this same method) emits no cast/box for
+                    // a variance conversion, so a value-type argument (a
+                    // primitive, enum, or user struct) would produce
+                    // unverifiable/unsound IL even though it boxes implicitly
+                    // to `object` (ADR-0045). Reject before considering
+                    // `Classify` at all — a value-type argument on either
+                    // side means the two constructed interfaces are genuinely
+                    // different CLR types, not variance-compatible ones.
+                    if (!IsReferenceTypeArgument(fromArg) || !IsReferenceTypeArgument(toArg))
+                    {
+                        return false;
+                    }
+
                     // Covariant: the source argument must implicitly
                     // convert to the target argument (string -> object).
                     var covariant = Classify(fromArg, toArg);
@@ -1005,6 +1021,13 @@ public sealed class Conversion
                     break;
 
                 case TypeParameterVariance.In:
+                    // Same reference-type-only restriction as the `Out` case
+                    // above, applied symmetrically to the contravariant slot.
+                    if (!IsReferenceTypeArgument(fromArg) || !IsReferenceTypeArgument(toArg))
+                    {
+                        return false;
+                    }
+
                     // Contravariant: the TARGET argument must implicitly
                     // convert to the SOURCE argument (object -> string),
                     // so the narrower interface accepts the wider one.
@@ -1024,6 +1047,26 @@ public sealed class Conversion
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Review follow-up (#1927/PR #1955): reports whether a variance type
+    /// argument is a CLR reference type. CLR generic-interface variance
+    /// (ECMA-335 II.9.7) only applies to reference-typed arguments; a value
+    /// type (primitive, enum, or user struct) boxes to satisfy `Classify`'s
+    /// implicit-conversion check but the emitter's variance path emits no
+    /// box/cast, so it must never be treated as variance-eligible.
+    /// </summary>
+    private static bool IsReferenceTypeArgument(TypeSymbol type)
+    {
+        return type switch
+        {
+            null => false,
+            EnumSymbol => false,
+            StructSymbol s => s.IsClass,
+            TypeParameterSymbol tp => tp.HasReferenceTypeConstraint,
+            _ => type.ClrType is not { IsValueType: true },
+        };
     }
 
     /// <summary>
