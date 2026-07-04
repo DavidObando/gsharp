@@ -636,7 +636,10 @@ internal sealed class StateMachineEmitter
             // outer method's TPs.
             var kickoffSmType = classTPs.IsDefaultOrEmpty
                 ? smClass
-                : StructSymbol.Construct(smClass, scopeTPs.CastArray<TypeSymbol>());
+                // Issue #2037: project imported constructed-generic hoisted
+                // field types across reflection contexts (MLC / cs2gs) before
+                // MakeGenericType, mirroring #1958's InterfaceSymbol/StructSymbol fix.
+                : StructSymbol.Construct(smClass, scopeTPs.CastArray<TypeSymbol>(), this.emitCtx.References.MapClrTypeToReferences);
 
             this.lambdaBodies[getEnumerator] = Lowerer.Lower(new BoundBlockStatement(null,
                 ImmutableArray.Create<BoundStatement>(
@@ -969,7 +972,8 @@ internal sealed class StateMachineEmitter
             // right type arguments. Non-generic iterators keep the open class.
             var kickoffSmType = classTPs.IsDefaultOrEmpty
                 ? smClass
-                : StructSymbol.Construct(smClass, scopeTPs.CastArray<TypeSymbol>());
+                // Issue #2037: same MLC cross-reflection-context projection as above.
+                : StructSymbol.Construct(smClass, scopeTPs.CastArray<TypeSymbol>(), this.emitCtx.References.MapClrTypeToReferences);
             this.IteratorKickoffBodies[plan.Function] = Lowerer.Lower(new BoundBlockStatement(null,
                 ImmutableArray.Create<BoundStatement>(
                 new BoundReturnStatement(null, this.CreateAsyncIteratorKickoffLiteral(kickoffSmType, stateField, builderField, parameterFields, plan.Function.Parameters, thisProxyField, plan.Function)))));

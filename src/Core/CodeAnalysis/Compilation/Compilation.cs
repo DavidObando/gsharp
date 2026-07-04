@@ -398,7 +398,10 @@ public class Compilation
         // (Go/C# closure semantics). Must run after side-effect spilling
         // and before the async / iterator state-machine lowerers so they
         // see the boxed captures rather than the snapshot-by-value pattern.
-        program = Lowering.CaptureBoxingRewriter.Lower(program);
+        // Issue #2037: thread the MLC cross-reflection-context projector so
+        // box classes hoisting an imported constructed generic over an
+        // enclosing type parameter don't erase it under cs2gs.
+        program = Lowering.CaptureBoxingRewriter.Lower(program, (References ?? Symbols.ReferenceResolver.Default()).MapClrTypeToReferences);
 
         var (lowered, loweredProgram, lowerDiagnostics) = LowerForEmit(program, References ?? Symbols.ReferenceResolver.Default());
         if (lowerDiagnostics.Any(d => d.IsError))
@@ -510,7 +513,10 @@ public class Compilation
         // (Go/C# closure semantics). Must run after side-effect spilling
         // and before the async / iterator state-machine lowerers so they
         // see the boxed captures rather than the snapshot-by-value pattern.
-        program = Lowering.CaptureBoxingRewriter.Lower(program);
+        // Issue #2037: thread the MLC cross-reflection-context projector so
+        // box classes hoisting an imported constructed generic over an
+        // enclosing type parameter don't erase it under cs2gs.
+        program = Lowering.CaptureBoxingRewriter.Lower(program, (References ?? Symbols.ReferenceResolver.Default()).MapClrTypeToReferences);
 
         var (lowered, loweredProgram, lowerDiagnostics) = LowerForEmit(program, References ?? Symbols.ReferenceResolver.Default());
         if (lowerDiagnostics.Any(d => d.IsError))

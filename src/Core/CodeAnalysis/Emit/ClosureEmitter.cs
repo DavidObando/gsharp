@@ -413,7 +413,10 @@ internal sealed class ClosureEmitter
         StructSymbol constructedClass = closureClass;
         if (!origTPs.IsDefaultOrEmpty)
         {
-            constructedClass = SynthesizedClosureReifier.Reify(closureClass, origTPs);
+            // Issue #2037: project imported constructed-generic capture field
+            // types across reflection contexts (MLC / cs2gs) before
+            // MakeGenericType, mirroring #1958's InterfaceSymbol/StructSymbol fix.
+            constructedClass = SynthesizedClosureReifier.Reify(closureClass, origTPs, this.emitCtx.References.MapClrTypeToReferences);
         }
 
         var rewriter = new CaptureRewriter(closureClass, captureFields, invokeMethod.ThisParameter);

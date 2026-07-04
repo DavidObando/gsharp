@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Binding;
@@ -71,8 +72,18 @@ internal static class CaptureBoxingRewriter
     /// </para>
     /// </remarks>
     /// <param name="program">The bound program to lower.</param>
+    /// <param name="mapClrType">
+    /// Issue #2037: optional projector applied to a box class's constructed
+    /// CLR type arguments before <c>MakeGenericType</c> (mirrors the #1958
+    /// fix threaded through <see cref="StructSymbol.Construct"/>). Pass
+    /// <see cref="ReferenceResolver.MapClrTypeToReferences"/> when the box
+    /// might hoist a capture typed as an imported constructed generic over an
+    /// enclosing type parameter under a cross-reflection-context (MLC)
+    /// compile; <see langword="null"/> preserves the erase-on-mismatch
+    /// fallback for same-compilation-only callers.
+    /// </param>
     /// <returns>The lowered program (or the original when nothing changed).</returns>
-    public static BoundProgram Lower(BoundProgram program)
+    public static BoundProgram Lower(BoundProgram program, Func<Type, Type> mapClrType = null)
     {
         var counter = 0;
         var newStructs = new List<StructSymbol>();
@@ -82,7 +93,7 @@ internal static class CaptureBoxingRewriter
 
         foreach (var pair in program.Functions)
         {
-            var (newBody, lambdaUpdates) = RewriteFunctionBody(pair.Key, pair.Value, program, newStructs, ref counter);
+            var (newBody, lambdaUpdates) = RewriteFunctionBody(pair.Key, pair.Value, program, newStructs, ref counter, mapClrType);
             newFunctions[pair.Key] = newBody;
             if (!ReferenceEquals(newBody, pair.Value))
             {
@@ -152,7 +163,8 @@ internal static class CaptureBoxingRewriter
         BoundBlockStatement body,
         BoundProgram program,
         List<StructSymbol> newStructs,
-        ref int counter)
+        ref int counter,
+        Func<Type, Type> mapClrType)
     {
         var emptyUpdates = new Dictionary<FunctionSymbol, BoundBlockStatement>();
 
@@ -215,7 +227,7 @@ internal static class CaptureBoxingRewriter
             FieldSymbol fieldSymbol = boxClass.Fields[0];
             if (!origTPs.IsDefaultOrEmpty)
             {
-                boxReference = SynthesizedClosureReifier.Reify(boxClass, origTPs);
+                boxReference = SynthesizedClosureReifier.Reify(boxClass, origTPs, mapClrType);
                 fieldSymbol = boxReference.Fields[0];
             }
 
