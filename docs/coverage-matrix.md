@@ -99,6 +99,7 @@ ForEllipsisStatement
 ForInfiniteStatement
 ForKeyword
 ForRangeStatement
+ForTupleRangeStatement
 FromEndIndexExpression
 FuncKeyword
 FunctionDeclaration

@@ -138,6 +138,7 @@ public static class GNodeSamples
                 new LocalDeclarationStatement(BindingKind.Var, "i", initializer: Int("0")),
                 new IncrementDecrementStatement(Id("i"), "++")),
             [typeof(ForInStatement)] = () => Stmts(new ForInStatement("item", Id("items"), Block())),
+            [typeof(ForTupleInStatement)] = () => Stmts(new ForTupleInStatement(new[] { "a", "b" }, Id("items"), Block())),
             [typeof(ThrowStatement)] = () => Stmts(new ThrowStatement(
                 new InvocationExpression(Id("Exception"), List<GExpression>(LiteralExpression.String("boom"))))),
             [typeof(DeferStatement)] = () => Stmts(new DeferStatement(new InvocationExpression(Id("cleanup")))),

@@ -4283,6 +4283,15 @@ internal sealed class DeclarationBinder
                     : new[] { forRange.FirstIdentifier.Text };
                 return TryFindInstanceMemberReference(forRange.Body, forbiddenNames, WithShadowed(shadowedNames, forRangeNames), out offendingName, out offendingLocation);
 
+            case ForTupleRangeStatementSyntax forTupleRange:
+                if (TryFindInstanceMemberReference(forTupleRange.Collection, forbiddenNames, shadowedNames, out offendingName, out offendingLocation))
+                {
+                    return true;
+                }
+
+                var forTupleRangeNames = forTupleRange.Identifiers.Select(t => t.Text);
+                return TryFindInstanceMemberReference(forTupleRange.Body, forbiddenNames, WithShadowed(shadowedNames, forTupleRangeNames), out offendingName, out offendingLocation);
+
             case ForEllipsisStatementSyntax forEllipsis:
                 if (TryFindInstanceMemberReference(forEllipsis.LowerBound, forbiddenNames, shadowedNames, out offendingName, out offendingLocation) ||
                     TryFindInstanceMemberReference(forEllipsis.UpperBound, forbiddenNames, shadowedNames, out offendingName, out offendingLocation))

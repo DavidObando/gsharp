@@ -299,10 +299,11 @@ namespace Demo
     }
 
     /// <summary>
-    /// A <c>foreach</c> over a tuple deconstruction iterates a single element and
-    /// deconstructs it inside the body (<c>for __deconN in xs { let (a, b) =
-    /// __deconN; … }</c>). The G# two-name <c>for k, v in xs</c> form is
-    /// index/element iteration, NOT tuple deconstruction (ADR-0115 §B).
+    /// A <c>foreach</c> over a tuple deconstruction translates directly to G#'s
+    /// first-class deconstructing for-in header (<c>for (a, b) in xs { … }</c>,
+    /// issue #1922) instead of a hidden temp variable plus a separate
+    /// <c>let (a, b) = tmp</c> statement. The G# two-name <c>for k, v in xs</c>
+    /// form is index/element iteration, NOT tuple deconstruction (ADR-0115 §B).
     /// </summary>
     [Fact]
     public void ForEachVariable_TupleDeconstruction_DeconstructsElementInBody()
@@ -325,8 +326,8 @@ namespace Demo
     }
 }");
 
-        Assert.Matches(@"for __decon\d+ in xs", printed);
-        Assert.Matches(@"let \(a, b\) = __decon\d+", printed);
+        Assert.Contains("for (a, b) in xs {", printed);
+        Assert.DoesNotContain("__decon", printed);
         Assert.DoesNotContain("for a, b in xs", printed);
     }
 

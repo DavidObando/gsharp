@@ -195,6 +195,7 @@ public enum SyntaxKind
     ForConditionStatement,
     ForClauseStatement,
     ForRangeStatement,
+    ForTupleRangeStatement,
     WhileStatement,
     DoWhileStatement,
     LabeledStatement,

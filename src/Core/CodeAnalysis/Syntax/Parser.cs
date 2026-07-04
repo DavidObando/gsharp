@@ -5536,6 +5536,16 @@ public class Parser
             return ParseForInfiniteStatement();
         }
 
+        // Issue #1922: `for (a, b, ...) in coll { ... }` — checked before
+        // `LooksLikeForRange` (which requires an identifier right after
+        // `for`, so it never matches here) and before `LooksLikeForClause`
+        // (whose plain semicolon scan would otherwise misparse the `(a, b)`
+        // header as a parenthesized C-style-for expression).
+        if (LooksLikeForTupleRange())
+        {
+            return ParseForTupleRangeStatement();
+        }
+
         if (LooksLikeForRange())
         {
             return ParseForRangeStatement();
@@ -5552,6 +5562,55 @@ public class Parser
         }
 
         return ParseForConditionStatement();
+    }
+
+    private bool LooksLikeForTupleRange()
+    {
+        // `for ( <ident> (, <ident>)+ ) in <expr> { ... }` — at least two
+        // identifiers (arity ≥ 2, matching TupleTypeSymbol's minimum) so this
+        // never collides with a parenthesized boolean condition such as
+        // `for (x > 0) { ... }` (no comma) or a single-name grouped
+        // expression `for (x) in xs { ... }` isn't legal G# anyway, but the
+        // 2+ identifier requirement keeps this check unambiguous and cheap.
+        if (Peek(1).Kind != SyntaxKind.OpenParenthesisToken || Peek(2).Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        int o = 3;
+        var sawComma = false;
+        while (Peek(o).Kind == SyntaxKind.CommaToken && Peek(o + 1).Kind == SyntaxKind.IdentifierToken)
+        {
+            sawComma = true;
+            o += 2;
+        }
+
+        if (!sawComma || Peek(o).Kind != SyntaxKind.CloseParenthesisToken)
+        {
+            return false;
+        }
+
+        return Peek(o + 1).Kind == SyntaxKind.IdentifierToken && Peek(o + 1).Text == "in";
+    }
+
+    private StatementSyntax ParseForTupleRangeStatement()
+    {
+        var keyword = MatchToken(SyntaxKind.ForKeyword);
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        nodesAndSeparators.Add(MatchToken(SyntaxKind.IdentifierToken));
+        while (Current.Kind == SyntaxKind.CommaToken)
+        {
+            nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            nodesAndSeparators.Add(MatchToken(SyntaxKind.IdentifierToken));
+        }
+
+        var identifiers = new SeparatedSyntaxList<SyntaxToken>(nodesAndSeparators.ToImmutable());
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        var inToken = MatchToken(SyntaxKind.IdentifierToken); // contextual `in`, guarded by LooksLikeForTupleRange
+        var collection = ParseExpressionInBodyHeader(allowEmptyStructLiteralCollection: true);
+        var body = ParseStatement();
+        return new ForTupleRangeStatementSyntax(syntaxTree, keyword, openParen, identifiers, closeParen, inToken, collection, body);
     }
 
     private bool LooksLikeForRange()

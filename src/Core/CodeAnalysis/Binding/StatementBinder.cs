@@ -175,6 +175,8 @@ internal sealed class StatementBinder
                 return BindForClauseStatement((ForClauseStatementSyntax)syntax);
             case SyntaxKind.ForRangeStatement:
                 return BindForRangeStatement((ForRangeStatementSyntax)syntax);
+            case SyntaxKind.ForTupleRangeStatement:
+                return BindForTupleRangeStatement((ForTupleRangeStatementSyntax)syntax);
             case SyntaxKind.WhileStatement:
                 return BindWhileStatement((WhileStatementSyntax)syntax);
             case SyntaxKind.LockStatement:
@@ -1217,6 +1219,91 @@ internal sealed class StatementBinder
 
         Diagnostics.ReportDeconstructionRequiresTupleOrDataStruct(syntax.OpenParenToken.Location, initializer.Type);
         return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+    }
+
+    /// <summary>
+    /// Issue #1922: the <c>for (a, b) in coll { ... }</c> loop-prelude hook
+    /// passed to <see cref="BindForRangeStatementCore"/>. Declares one
+    /// read-only local per identifier (visible to the loop body, matching
+    /// <see cref="BindTupleDeconstructionStatement"/>'s tuple/data-struct
+    /// handling) and returns the field-extraction statements to prepend —
+    /// reading each element straight off <paramref name="elementVariable"/>
+    /// instead of a redundant synthetic temp, since the loop variable already
+    /// is one.
+    /// </summary>
+    /// <param name="identifiers">The parenthesized loop-target identifiers.</param>
+    /// <param name="closeParenLocation">Location used for an arity-mismatch diagnostic.</param>
+    /// <param name="openParenLocation">Location used for a wrong-shape-initializer diagnostic.</param>
+    /// <param name="elementVariable">The already-declared, single, hidden loop variable.</param>
+    /// <returns>The bound field-extraction statements, or empty on error (identifiers still get error-typed locals so the body doesn't cascade "undefined variable" diagnostics).</returns>
+    private ImmutableArray<BoundStatement> BindForTupleLoopPrelude(
+        SeparatedSyntaxList<SyntaxToken> identifiers,
+        TextLocation closeParenLocation,
+        TextLocation openParenLocation,
+        VariableSymbol elementVariable)
+    {
+        var elementType = elementVariable.Type;
+        var elementAccessBase = new BoundVariableExpression(null, elementVariable);
+
+        if (elementType is TupleTypeSymbol tupleType)
+        {
+            if (identifiers.Count != tupleType.Arity)
+            {
+                Diagnostics.ReportDeconstructionFieldCountMismatch(closeParenLocation, tupleType.Arity, identifiers.Count);
+                DeclareErrorTypedLocals(identifiers);
+                return ImmutableArray<BoundStatement>.Empty;
+            }
+
+            var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+            for (var i = 0; i < identifiers.Count; i++)
+            {
+                var elemType = tupleType.ElementTypes[i];
+                var elemVar = bindLocalVariable(identifiers[i], isReadOnly: true, elemType);
+                var access = new BoundTupleElementAccessExpression(null, elementAccessBase, tupleType, i);
+                statements.Add(new BoundVariableDeclaration(null, elemVar, access));
+            }
+
+            return statements.ToImmutable();
+        }
+
+        if (elementType is StructSymbol structType && (structType.IsData || structType.IsInline))
+        {
+            var fields = structType.Fields;
+            if (identifiers.Count != fields.Length)
+            {
+                Diagnostics.ReportDeconstructionFieldCountMismatch(closeParenLocation, fields.Length, identifiers.Count);
+                DeclareErrorTypedLocals(identifiers);
+                return ImmutableArray<BoundStatement>.Empty;
+            }
+
+            var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+            for (var i = 0; i < identifiers.Count; i++)
+            {
+                var field = fields[i];
+                var elemVar = bindLocalVariable(identifiers[i], isReadOnly: true, field.Type);
+                var access = new BoundFieldAccessExpression(null, elementAccessBase, structType, field);
+                statements.Add(new BoundVariableDeclaration(null, elemVar, access));
+            }
+
+            return statements.ToImmutable();
+        }
+
+        if (elementType != TypeSymbol.Error)
+        {
+            Diagnostics.ReportDeconstructionRequiresTupleOrDataStruct(openParenLocation, elementType);
+        }
+
+        DeclareErrorTypedLocals(identifiers);
+        return ImmutableArray<BoundStatement>.Empty;
+    }
+
+    /// <summary>Declares each identifier as an error-typed local so a deconstruction failure doesn't cascade "variable doesn't exist" diagnostics through the loop body.</summary>
+    private void DeclareErrorTypedLocals(SeparatedSyntaxList<SyntaxToken> identifiers)
+    {
+        for (var i = 0; i < identifiers.Count; i++)
+        {
+            bindLocalVariable(identifiers[i], isReadOnly: true, TypeSymbol.Error);
+        }
     }
 
     private BoundStatement BindNamedDeconstructionStatement(NamedDeconstructionStatementSyntax syntax)
@@ -3400,6 +3487,51 @@ internal sealed class StatementBinder
         return BindForRangeStatementCore(syntax, labelName: null, originatingSyntax: syntax);
     }
 
+    private BoundStatement BindForTupleRangeStatement(ForTupleRangeStatementSyntax syntax)
+    {
+        return BindForTupleRangeStatementCore(syntax, labelName: null, originatingSyntax: syntax);
+    }
+
+    /// <summary>
+    /// Issue #1922: binds <c>for (a, b, ...) in coll { ... }</c> by
+    /// synthesizing a hidden single-identifier <see cref="ForRangeStatementSyntax"/>
+    /// (same shape cs2gs used to hand-emit as a temp variable plus a separate
+    /// <c>let (a, b) = tmp</c>) and delegating to
+    /// <see cref="BindForRangeStatementCore"/>'s <c>bindLoopPrelude</c> hook —
+    /// so every iteration strategy (arrays, slices, dictionaries, CLR/pattern
+    /// enumerables, sequences, strings) keeps working with zero duplication.
+    /// </summary>
+    /// <param name="syntax">The deconstructing for-range syntax.</param>
+    /// <param name="labelName">The ADR-0070 label, or <see langword="null"/>.</param>
+    /// <param name="originatingSyntax">Syntax node used for the resulting bound node.</param>
+    /// <returns>The bound for-range statement.</returns>
+    private BoundStatement BindForTupleRangeStatementCore(ForTupleRangeStatementSyntax syntax, string labelName, SyntaxNode originatingSyntax)
+    {
+        var tempName = $"<fortuple{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
+        var tempIdentifier = new SyntaxToken(syntax.SyntaxTree, SyntaxKind.IdentifierToken, syntax.OpenParenToken.Position, tempName, null);
+        var syntheticForRange = new ForRangeStatementSyntax(
+            syntax.SyntaxTree,
+            syntax.Keyword,
+            tempIdentifier,
+            commaToken: null,
+            secondIdentifier: null,
+            colonEqualsToken: null,
+            rangeKeyword: null,
+            inToken: syntax.InToken,
+            collection: syntax.Collection,
+            body: syntax.Body);
+
+        return BindForRangeStatementCore(
+            syntheticForRange,
+            labelName,
+            originatingSyntax,
+            bindLoopPrelude: elementVariable => BindForTupleLoopPrelude(
+                syntax.Identifiers,
+                syntax.CloseParenToken.Location,
+                syntax.OpenParenToken.Location,
+                elementVariable));
+    }
+
     /// <summary>
     /// Core for-range binder; accepts an optional ADR-0070 label name that is
     /// pushed onto the loop stack so a nested <c>break label</c> / <c>continue
@@ -3408,8 +3540,21 @@ internal sealed class StatementBinder
     /// <param name="syntax">The for-range syntax.</param>
     /// <param name="labelName">The ADR-0070 label, or <see langword="null"/>.</param>
     /// <param name="originatingSyntax">Syntax node used for the resulting bound node.</param>
+    /// <param name="bindLoopPrelude">
+    /// Issue #1922: optional hook invoked with the newly-declared single loop
+    /// variable, still inside its scope, right before the body is bound.
+    /// Lets <c>for (a, b) in coll</c> declare its deconstructed element
+    /// locals (visible to the body) and return the field-extraction
+    /// statements to prepend, reusing this method's entire iteration-strategy
+    /// dispatch (arrays, slices, dictionaries, CLR/pattern enumerables,
+    /// sequences, strings) instead of duplicating it.
+    /// </param>
     /// <returns>The bound for-range statement.</returns>
-    private BoundStatement BindForRangeStatementCore(ForRangeStatementSyntax syntax, string labelName, SyntaxNode originatingSyntax)
+    private BoundStatement BindForRangeStatementCore(
+        ForRangeStatementSyntax syntax,
+        string labelName,
+        SyntaxNode originatingSyntax,
+        Func<VariableSymbol, ImmutableArray<BoundStatement>> bindLoopPrelude = null)
     {
         var collection = bindExpression(syntax.Collection);
 
@@ -3610,7 +3755,12 @@ internal sealed class StatementBinder
             valueVariable = bindLocalVariable(syntax.FirstIdentifier, isReadOnly: false, type: singleVarType);
         }
 
+        var prelude = bindLoopPrelude?.Invoke(valueVariable) ?? ImmutableArray<BoundStatement>.Empty;
         var body = BindLoopBody(syntax.Body, labelName, out var breakLabel, out var continueLabel);
+        if (!prelude.IsEmpty)
+        {
+            body = new BoundBlockStatement(originatingSyntax, prelude.Add(body));
+        }
 
         scope = scope.Parent;
 
@@ -3979,6 +4129,8 @@ internal sealed class StatementBinder
                 BindForClauseStatementCore((ForClauseStatementSyntax)inner, syntax, labelName),
             SyntaxKind.ForRangeStatement =>
                 BindForRangeStatementCore((ForRangeStatementSyntax)inner, labelName, syntax),
+            SyntaxKind.ForTupleRangeStatement =>
+                BindForTupleRangeStatementCore((ForTupleRangeStatementSyntax)inner, labelName, syntax),
             SyntaxKind.AwaitForRangeStatement =>
                 BindAwaitForRangeStatementCore((AwaitForRangeStatementSyntax)inner, labelName, syntax),
             _ => BindStatement(inner),
@@ -3996,6 +4148,7 @@ internal sealed class StatementBinder
             SyntaxKind.ForConditionStatement => true,
             SyntaxKind.ForClauseStatement => true,
             SyntaxKind.ForRangeStatement => true,
+            SyntaxKind.ForTupleRangeStatement => true,
             SyntaxKind.AwaitForRangeStatement => true,
             _ => false,
         };

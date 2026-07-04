@@ -104,7 +104,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | FinallyClause | FinallyClauseSyntax | ADR-0115 §B.27 |  |  |  |  |
 | FixedStatement | FixedStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FixedStatement.cs | https://github.com/DavidObando/gsharp/issues/1933 | Compiles end-to-end under the ilverify allow-unsafe policy (issue #1933); IL is unverifiable by design, not a gsc defect. |
 | ForEachStatement | ForEachStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/ForEachStatement.cs |  |  |
-| ForEachVariableStatement | ForEachVariableStatementSyntax | ADR-0115 §B |  |  | https://github.com/DavidObando/gsharp/issues/1922 | Translates; blocked by gsc ValueTuple deconstruction (issue #1922). |
+| ForEachVariableStatement | ForEachVariableStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/TupleExpression.cs | https://github.com/DavidObando/gsharp/issues/1922 | Sync foreach tuple-deconstruction translates to first-class G# `for (a, b) in xs`; ValueTuple deconstruction now supported by gsc (issue #1922 fixed). await foreach still lowers via temp+let (no first-class async form). |
 | GenericName | GenericNameSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/GenericName.cs |  |  |
 | GetAccessorDeclaration | AccessorDeclarationSyntax | ADR-0115 §B.11 |  |  |  |  |
 | GlobalStatement | GlobalStatementSyntax | ADR-0115 §B.11 |  |  |  | Entry-class hoisting (T3): top-level statements. |

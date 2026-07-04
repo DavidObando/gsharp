@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
@@ -166,6 +167,19 @@ public class TypeSymbol : Symbol
         if (clrType.IsPointer)
         {
             return PointerTypeSymbol.Get(FromClrType(clrType.GetElementType()));
+        }
+
+        // Issue #1922: a `System.ValueTuple<...>`/`System.Tuple<...>` CLR type
+        // reaching here (e.g. the element type of `for x in list` over an
+        // imported `List[(T1, T2)]`, resolved via reflection rather than
+        // parsed from G# tuple-literal syntax) must map back onto GSharp's own
+        // `TupleTypeSymbol` — not a plain `ImportedTypeSymbol` — so downstream
+        // binders (deconstruction, member access) recognize it as a tuple.
+        // Same arity ceiling as `TupleTypeSymbol.BuildClrType` (2–7): higher
+        // arities and the `Rest`-chained 8+ shapes are left as imported types.
+        if (TryGetTupleTypeSymbol(clrType, out var tupleTypeSymbol))
+        {
+            return tupleTypeSymbol;
         }
 
         // Compare by FullName so types loaded from a MetadataLoadContext (carrying the
@@ -761,5 +775,38 @@ public class TypeSymbol : Symbol
 
                 break;
         }
+    }
+
+    /// <summary>
+    /// Issue #1922: recognizes a closed generic <c>System.ValueTuple&lt;...&gt;</c>
+    /// or <c>System.Tuple&lt;...&gt;</c> CLR type (arity 2–7, matching
+    /// <see cref="TupleTypeSymbol"/>'s own CLR-backing ceiling) and maps it onto
+    /// the equivalent <see cref="TupleTypeSymbol"/> by recursively resolving
+    /// each generic argument through <see cref="FromClrType"/>.
+    /// </summary>
+    /// <param name="clrType">The candidate CLR type.</param>
+    /// <param name="tupleTypeSymbol">The resulting tuple symbol, if matched.</param>
+    /// <returns><see langword="true"/> if <paramref name="clrType"/> is a supported tuple shape.</returns>
+    private static bool TryGetTupleTypeSymbol(Type clrType, out TupleTypeSymbol tupleTypeSymbol)
+    {
+        tupleTypeSymbol = null;
+        if (!clrType.IsGenericType || clrType.IsGenericTypeDefinition)
+        {
+            return false;
+        }
+
+        var defName = clrType.GetGenericTypeDefinition().FullName;
+        var isTupleFamily = defName is "System.ValueTuple`2" or "System.ValueTuple`3" or "System.ValueTuple`4"
+            or "System.ValueTuple`5" or "System.ValueTuple`6" or "System.ValueTuple`7"
+            or "System.Tuple`2" or "System.Tuple`3" or "System.Tuple`4"
+            or "System.Tuple`5" or "System.Tuple`6" or "System.Tuple`7";
+        if (!isTupleFamily)
+        {
+            return false;
+        }
+
+        var elementTypes = clrType.GetGenericArguments().Select(FromClrType).ToImmutableArray();
+        tupleTypeSymbol = TupleTypeSymbol.Get(elementTypes);
+        return true;
     }
 }

@@ -11442,16 +11442,27 @@ public sealed class CSharpToGSharpTranslator
             // sequence whose element is a tuple. G#'s two-name `for k, v in xs`
             // form is NOT tuple deconstruction — it is index/element iteration
             // (the key is the int32 index), so emitting `for a, b in xs` would
-            // bind `a` to the loop index. Instead iterate a single element and
-            // deconstruct it inside the body: `for __deconN in xs { let (a, b) =
-            // __deconN; <body> }` (ADR-0115 §B).
+            // bind `a` to the loop index. Issue #1922: G# now has a first-class
+            // deconstructing loop header, `for (a, b) in xs { <body> }`, so a
+            // synchronous foreach translates directly to that instead of a
+            // hidden temp variable plus a separate `let (a, b) = tmp` (ADR-0115
+            // §B's older form). G# has no first-class `await for (a, b) in`
+            // form, so `await foreach` keeps the older temp+let lowering.
             List<string> names = new List<string>();
             CollectForEachVariableNames(node.Variable, names);
 
             if (names.Count >= 2)
             {
-                string pair = $"__decon{this.deconCounter++}";
+                bool isAwait = !node.AwaitKeyword.IsKind(SyntaxKind.None);
                 BlockStatement body = this.TranslateStatementAsBlock(node.Statement);
+                var iterable = this.TranslateReceiverWithNullForgiveness(node.Expression);
+
+                if (!isAwait)
+                {
+                    return new ForTupleInStatement(names, iterable, body);
+                }
+
+                string pair = $"__decon{this.deconCounter++}";
                 var statements = new List<GStatement>(body.Statements.Count + 1)
                 {
                     new TupleDeconstructionStatement(
@@ -11461,11 +11472,7 @@ public sealed class CSharpToGSharpTranslator
                 };
                 statements.AddRange(body.Statements);
 
-                return new ForInStatement(
-                    pair,
-                    this.TranslateReceiverWithNullForgiveness(node.Expression),
-                    new BlockStatement(statements),
-                    isAwait: !node.AwaitKeyword.IsKind(SyntaxKind.None));
+                return new ForInStatement(pair, iterable, new BlockStatement(statements), isAwait: true);
             }
 
             this.context.ReportUnsupported(

@@ -81,6 +81,9 @@ public class Issue1675SyntaxNodeChildEnumerationTests
 
         // lock statement (issue #1885)
         "package p\nclass Gate {}\nfunc F(g Gate) {\n  lock g {\n    var x = 1\n  }\n}\n",
+
+        // first-class deconstructing for-in (issue #1922)
+        "package p\nfunc F(xs [](int32, int32)) {\n  for (a, b) in xs {\n  }\n}\n",
     };
 
     /// <summary>
