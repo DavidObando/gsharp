@@ -327,6 +327,7 @@ public class Compilation
     /// <returns>An emit result.</returns>
     public EmitResult Emit()
     {
+        PrepareReferencesForBinding(assemblyName: null);
         var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
         var syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
 
@@ -438,6 +439,7 @@ public class Compilation
     /// <returns>An emit result.</returns>
     public EmitResult Emit(Stream peStream, Stream pdbStream, Stream refStream, Stream docStream, string assemblyName = null, string assemblyVersion = null)
     {
+        PrepareReferencesForBinding(assemblyName);
         var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
         var syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
 
@@ -633,6 +635,16 @@ public class Compilation
     private static void EmitAssembly(BoundProgram program, Stream peStream, ReferenceResolver references, string assemblyName = null, string assemblyVersion = null, bool metadataOnly = false, Lowering.Async.AsyncStateMachineRewriteResult asyncRewriteResult = null, IteratorRewriteResult iteratorRewriteResult = null, AsyncIteratorRewriteResult asyncIteratorRewriteResult = null, DebugInformationOptions debugInformation = null, Stream pdbStream = null)
     {
         ReflectionMetadataEmitter.Emit(program, peStream, references, assemblyName, metadataOnly, asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult, debugInformation, pdbStream, assemblyVersion);
+    }
+
+    private void PrepareReferencesForBinding(string assemblyName)
+    {
+        if (References == null)
+        {
+            return;
+        }
+
+        References.CurrentAssemblyName = assemblyName ?? References.CurrentAssemblyName;
     }
 
     /// <summary>

@@ -5092,6 +5092,11 @@ public sealed class Binder
 
         if (scope.TryLookupImportedClass(name, declaration: null, out var importedClass))
         {
+            if (ImportedTypeSymbol.TryCreateSemanticAggregate(importedClass.ClassType, scope.References, out var aggregate))
+            {
+                return aggregate;
+            }
+
             return TypeSymbol.FromClrType(importedClass.ClassType);
         }
 

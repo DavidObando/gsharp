@@ -112,6 +112,38 @@ internal sealed class CustomAttributeEncoder
             value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
     }
 
+    public void EmitStringPairAttribute(EntityHandle parent, string typeName, Type fallbackType, string firstValue, string secondValue)
+    {
+        var attrType = this.emitCtx.References.TryResolveType(typeName, out var resolved)
+            ? resolved
+            : fallbackType;
+        var attrTypeRef = this.getTypeReference(attrType);
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(2, r => r.Void(), p =>
+            {
+                p.AddParameter().Type().String();
+                p.AddParameter().Type().String();
+            });
+
+        var ctorRef = this.emitCtx.Metadata.AddMemberReference(
+            attrTypeRef,
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
+
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001); // Prolog
+        valueBlob.WriteSerializedString(firstValue);
+        valueBlob.WriteSerializedString(secondValue);
+        valueBlob.WriteUInt16(0); // NumNamed
+
+        this.emitCtx.Metadata.AddCustomAttribute(
+            parent: parent,
+            constructor: ctorRef,
+            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
+    }
+
     public void EmitIsReadOnlyAttributeOnParameter(ParameterHandle paramHandle)
     {
         var ctorRef = this.wellKnown.GetIsReadOnlyAttributeCtorRef();

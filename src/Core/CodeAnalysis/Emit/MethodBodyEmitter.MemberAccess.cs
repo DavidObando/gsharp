@@ -445,6 +445,10 @@ internal sealed partial class MethodBodyEmitter
         {
             fieldHandle = this.outer.ResolveFieldToken(fieldContainer, fa.Field);
         }
+        else if (fa.Receiver?.Type is StructSymbol receiverStruct)
+        {
+            fieldHandle = this.outer.ResolveFieldToken(receiverStruct, fa.Field);
+        }
         else if (this.outer.cache.StructFieldDefs.TryGetValue(fa.Field, out var defHandle))
         {
             fieldHandle = defHandle;
@@ -547,6 +551,10 @@ internal sealed partial class MethodBodyEmitter
         else if (fieldContainer != null)
         {
             fieldHandle = this.outer.ResolveFieldToken(fieldContainer, fas.Field);
+        }
+        else if (fas.Receiver?.Type is StructSymbol receiverStruct)
+        {
+            fieldHandle = this.outer.ResolveFieldToken(receiverStruct, fas.Field);
         }
         else if (this.outer.cache.StructFieldDefs.TryGetValue(fas.Field, out var defHandle))
         {

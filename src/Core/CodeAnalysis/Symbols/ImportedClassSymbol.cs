@@ -32,12 +32,14 @@ public sealed class ImportedClassSymbol : Symbol
     /// <c>Comparer&lt;!TResult&gt;</c> TypeSpec rather than the erased
     /// <c>Comparer&lt;object&gt;</c>. <c>null</c> for an ordinary imported class.
     /// </param>
-    public ImportedClassSymbol(Type type, ExpressionSyntax declaration, ImportedTypeSymbol symbolicReceiver = null)
+    /// <param name="references">The active reference resolver for imported-assembly visibility checks.</param>
+    public ImportedClassSymbol(Type type, ExpressionSyntax declaration, ImportedTypeSymbol symbolicReceiver = null, ReferenceResolver references = null)
         : base(type.FullName)
     {
         ClassType = type;
         Declaration = declaration;
         SymbolicReceiver = symbolicReceiver;
+        References = references;
     }
 
     /// <inheritdoc/>
@@ -59,6 +61,13 @@ public sealed class ImportedClassSymbol : Symbol
     public ImportedTypeSymbol SymbolicReceiver { get; }
 
     /// <summary>
+    /// Gets the active reference resolver for the current compilation, when
+    /// available. Used so imported-member lookup can honor friendship from
+    /// <c>InternalsVisibleTo</c> on referenced assemblies.
+    /// </summary>
+    public ReferenceResolver References { get; }
+
+    /// <summary>
     /// Gets the imported class declaration.
     /// </summary>
     public ExpressionSyntax Declaration { get; }
@@ -75,15 +84,16 @@ public sealed class ImportedClassSymbol : Symbol
     public bool TryLookupMember(string text, NameExpressionSyntax ne, out MemberInfo member)
     {
         _ = ne;
-        var property = ClrTypeUtilities.SafeGetProperty(ClassType, text, BindingFlags.Public | BindingFlags.Static);
-        if (property != null && property.GetIndexParameters().Length == 0)
+        var bindingFlags = GetImportedMemberBindingFlags();
+        var property = ClrTypeUtilities.SafeGetProperty(ClassType, text, bindingFlags);
+        if (property != null && property.GetIndexParameters().Length == 0 && IsVisibleToCurrentCompilation(property))
         {
             member = property;
             return true;
         }
 
-        var field = ClrTypeUtilities.SafeGetField(ClassType, text, BindingFlags.Public | BindingFlags.Static);
-        if (field != null)
+        var field = ClrTypeUtilities.SafeGetField(ClassType, text, bindingFlags);
+        if (field != null && IsVisibleToCurrentCompilation(field))
         {
             member = field;
             return true;
@@ -176,7 +186,9 @@ public sealed class ImportedClassSymbol : Symbol
         isAmbiguous = false;
         ambiguousMethods = ImmutableArray<MethodInfo>.Empty;
         isExpanded = false;
-        var methods = ClrTypeUtilities.SafeGetMethods(ClassType, BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public);
+        var methods = ClrTypeUtilities.SafeGetMethods(ClassType, GetImportedMemberBindingFlags(includeInstance: true))
+            .Where(IsVisibleToCurrentCompilation)
+            .ToArray();
         var nameMatches = methods.Where(m => m.Name == text).ToList();
         if (nameMatches.Count == 0)
         {
@@ -422,6 +434,36 @@ public sealed class ImportedClassSymbol : Symbol
         }
 
         return flags;
+    }
+
+    private BindingFlags GetImportedMemberBindingFlags(bool includeInstance = false)
+    {
+        var flags = BindingFlags.Public | BindingFlags.Static;
+        if (includeInstance)
+        {
+            flags |= BindingFlags.Instance;
+        }
+
+        if (References?.CanAccessInternalMembers(ClassType.Assembly) == true)
+        {
+            flags |= BindingFlags.NonPublic;
+        }
+
+        return flags;
+    }
+
+    private bool IsVisibleToCurrentCompilation(MethodBase method)
+        => method.IsPublic || (method.IsAssembly && References?.CanAccessInternalMembers(method.DeclaringType?.Assembly) == true);
+
+    private bool IsVisibleToCurrentCompilation(FieldInfo field)
+        => field.IsPublic || (field.IsAssembly && References?.CanAccessInternalMembers(field.DeclaringType?.Assembly) == true);
+
+    private bool IsVisibleToCurrentCompilation(PropertyInfo property)
+    {
+        var getter = property.GetMethod;
+        var setter = property.SetMethod;
+        return (getter != null && IsVisibleToCurrentCompilation(getter))
+            || (setter != null && IsVisibleToCurrentCompilation(setter));
     }
 
     /// <summary>

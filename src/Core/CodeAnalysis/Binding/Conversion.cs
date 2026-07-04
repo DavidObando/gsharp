@@ -79,6 +79,20 @@ public sealed class Conversion
             return Conversion.Identity;
         }
 
+        if (from is StructSymbol { ClrType: not null } fromImportedStruct
+            && to is ImportedTypeSymbol
+            && ClrTypeUtilities.AreSame(fromImportedStruct.ClrType, to.ClrType))
+        {
+            return Conversion.Identity;
+        }
+
+        if (from is ImportedTypeSymbol
+            && to is StructSymbol { ClrType: not null } toImportedStruct
+            && ClrTypeUtilities.AreSame(from.ClrType, toImportedStruct.ClrType))
+        {
+            return Conversion.Identity;
+        }
+
         // Issue #1018: the bottom (`never`) type of a throw-expression is
         // implicitly convertible to ANY target type — a throw never yields a
         // value, so it satisfies any target without a runtime conversion.

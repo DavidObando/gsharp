@@ -1377,7 +1377,8 @@
     "status": "Translated",
     "rule": "ADR-0115 \u00A7B.5",
     "rationale": "None",
-    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/MethodDeclaration.cs"
+    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/MethodDeclaration.cs",
+    "notes": "Receiver-clause functions now retain their G# extension semantics across compiled assembly references (issue #1929)."
   },
   {
     "kind": "ModuloAssignmentExpression",
@@ -2040,7 +2041,7 @@
     "rule": "ADR-0115 \u00A7B.4",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/StructDeclaration.cs",
-    "notes": "Generic-struct ctor zip declined (issue #1915)."
+    "notes": "Generic-struct ctor zip declined (issue #1915). Cross-assembly G# metadata now preserves imported data-struct / primary-constructor semantics (issue #1929)."
   },
   {
     "kind": "Subpattern",

@@ -655,7 +655,20 @@ internal sealed partial class ExpressionBinder
             clrType = importedClass.ClassType;
         }
 
-        return TryBindClrConstructorFromType(clrType, syntax, out result, openGenericDefinition, symbolicTypeArgs);
+        if (TryBindClrConstructorFromType(clrType, syntax, out result, openGenericDefinition, symbolicTypeArgs))
+        {
+            return true;
+        }
+
+        if (openGenericDefinition == null
+            && ImportedTypeSymbol.TryCreateSemanticAggregate(clrType, scope.References, out var aggregate)
+            && aggregate.HasPrimaryConstructor)
+        {
+            result = overloads.BindConstructorCallExpression(syntax, aggregate);
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -4566,7 +4579,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var importedClass = new ImportedClassSymbol(declaringType, ce);
+        var importedClass = new ImportedClassSymbol(declaringType, ce, references: scope.References);
 
         // Issue #833: for an extension call the symbolic-argument vector
         // includes the receiver as slot 0 to mirror the static-dispatch

@@ -588,7 +588,7 @@ public sealed class BoundScope
             var typeName = import.Target + "." + name;
             if (References.TryResolveType(typeName, out var type))
             {
-                importedClass = new ImportedClassSymbol(type, declaration);
+                importedClass = new ImportedClassSymbol(type, declaration, references: References);
                 return true;
             }
         }
