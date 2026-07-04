@@ -442,6 +442,14 @@ public static class GSharpPrinter
             case IndexExpression index:
                 return $"{RenderExpression(index.Target, indent)}[{RenderExpression(index.Index, indent)}]";
 
+            case FromEndIndexExpression fromEnd:
+                return $"^{RenderExpression(fromEnd.Operand, indent)}";
+
+            case RangeIndexExpression range:
+                var rangeStart = range.Start != null ? RenderExpression(range.Start, indent) : string.Empty;
+                var rangeEnd = range.End != null ? RenderExpression(range.End, indent) : string.Empty;
+                return $"{rangeStart}..{rangeEnd}";
+
             case CompositeLiteralExpression composite:
                 var inits = string.Join(", ", composite.FieldInitializers.Select(f => $"{f.Name}: {RenderExpression(f.Value, indent)}"));
                 return $"{RenderType(composite.Type)}{{{inits}}}";
@@ -748,6 +756,17 @@ public static class GSharpPrinter
 
             case ParenthesizedPattern paren:
                 return $"({RenderPattern(paren.Pattern, indent)})";
+
+            case ListPattern list:
+                return $"[{string.Join(", ", list.Elements.Select(e => RenderPattern(e, indent)))}]";
+
+            case SlicePattern slice:
+                if (slice.Pattern != null)
+                {
+                    return $"..{RenderPattern(slice.Pattern, indent)}";
+                }
+
+                return slice.Designator != null ? $"..{slice.Designator}" : "..";
 
             default:
                 throw new ArgumentException($"Unsupported pattern: {pattern?.GetType().Name}");

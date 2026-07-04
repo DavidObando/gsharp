@@ -199,3 +199,50 @@ public sealed class ParenthesizedPattern : GPattern
     /// <summary>Gets the inner pattern.</summary>
     public GPattern Pattern { get; }
 }
+
+/// <summary>
+/// A list pattern <c>[1, .., 4]</c> matching an array/slice element-by-element,
+/// with at most one <see cref="SlicePattern"/> element (issue #1889, spec
+/// §Pattern matching, <c>ListPattern</c>).
+/// </summary>
+public sealed class ListPattern : GPattern
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ListPattern"/> class.
+    /// </summary>
+    /// <param name="elements">The element patterns, in source order.</param>
+    public ListPattern(IReadOnlyList<GPattern> elements)
+    {
+        Elements = elements ?? new List<GPattern>();
+    }
+
+    /// <summary>Gets the element patterns, in source order.</summary>
+    public IReadOnlyList<GPattern> Elements { get; }
+}
+
+/// <summary>
+/// A slice ("rest") subpattern inside a <see cref="ListPattern"/>, e.g. the
+/// <c>..</c> in <c>[1, .., 4]</c> — a discard slice, a named capture
+/// <c>..rest</c> binding the middle slice to a new <c>[]T</c> variable, or a
+/// nested sub-pattern matched against the middle slice (issue #1889, spec
+/// §Pattern matching, <c>SlicePattern</c>).
+/// </summary>
+public sealed class SlicePattern : GPattern
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SlicePattern"/> class.
+    /// </summary>
+    /// <param name="designator">The capture name, or <see langword="null"/> for a discard/nested-pattern slice.</param>
+    /// <param name="pattern">The nested sub-pattern matched against the slice, or <see langword="null"/>.</param>
+    public SlicePattern(string designator, GPattern pattern = null)
+    {
+        Designator = designator;
+        Pattern = pattern;
+    }
+
+    /// <summary>Gets the capture name, or <see langword="null"/>.</summary>
+    public string Designator { get; }
+
+    /// <summary>Gets the nested sub-pattern matched against the slice, or <see langword="null"/>.</summary>
+    public GPattern Pattern { get; }
+}

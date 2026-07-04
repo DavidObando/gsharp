@@ -24,6 +24,13 @@ DiscardPattern: 2 -> nonzero
 DiscardPattern: -5 -> negative
 ExpressionColon: line starts on y-axis = True
 ExpressionColon: line ends above 4 = True
+ListPattern: exact length match
+ListPattern: edge slice match
+ListPattern: empty match
+ListPattern: head=10 restLength=2
+ListPattern: switch(edges) = edges expected
+ListPattern: switch(empty) = empty expected
+ListPattern: switch(single:7) = single expected
 NotPattern: "abc" is not null = True
 NotPattern: "abc" is not int = True
 NotPattern: null is not null = False

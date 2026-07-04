@@ -165,6 +165,50 @@ public sealed class IndexExpression : GExpression
 }
 
 /// <summary>
+/// A from-end index <c>^n</c>, used as (part of) an <see cref="IndexExpression"/>
+/// index (issue #1889, spec §Pattern matching / array slicing).
+/// </summary>
+public sealed class FromEndIndexExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="FromEndIndexExpression"/> class.
+    /// </summary>
+    /// <param name="operand">The distance-from-end operand.</param>
+    public FromEndIndexExpression(GExpression operand)
+    {
+        Operand = operand;
+    }
+
+    /// <summary>Gets the distance-from-end operand.</summary>
+    public GExpression Operand { get; }
+}
+
+/// <summary>
+/// A range <c>start..end</c>, used as an <see cref="IndexExpression"/> index to
+/// slice an array (issue #1889). Either bound may be <see langword="null"/> for
+/// an open range (<c>start..</c> / <c>..end</c> / <c>..</c>).
+/// </summary>
+public sealed class RangeIndexExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="RangeIndexExpression"/> class.
+    /// </summary>
+    /// <param name="start">The start bound, or <see langword="null"/> for the start of the target.</param>
+    /// <param name="end">The end bound, or <see langword="null"/> for the end of the target.</param>
+    public RangeIndexExpression(GExpression start, GExpression end)
+    {
+        Start = start;
+        End = end;
+    }
+
+    /// <summary>Gets the start bound, or <see langword="null"/>.</summary>
+    public GExpression Start { get; }
+
+    /// <summary>Gets the end bound, or <see langword="null"/>.</summary>
+    public GExpression End { get; }
+}
+
+/// <summary>
 /// A field initializer inside a composite literal (<c>Name: value</c>).
 /// </summary>
 public sealed class FieldInitializer : GNode

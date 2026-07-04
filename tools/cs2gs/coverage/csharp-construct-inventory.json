@@ -1293,9 +1293,11 @@
   {
     "kind": "ListPattern",
     "nodeType": "ListPatternSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1889"
+    "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/ListPattern.cs",
+    "notes": "is-test path lowers to a length test (\u0060==\u0060 exact / \u0060\u003E=\u0060 with a slice) ANDed with per-element index tests; switch-arm path emits a native G# \u0060ListPattern\u0060 (\u0060[1, .., 4]\u0060) since gsc has its own structural list-pattern matching (issue #1889, resolved). Element \u0060var\u0060 binders reuse the #1888 discard\u002Bsubstitution mechanism; \u0060int x\u0060 declaration-pattern elements map to native \u0060TypePattern\u0060. Deferral: gsc\u0027s \u0060BindListPattern\u0060 only accepts array/slice-typed discriminants (not e.g. \u0060List\u003CT\u003E\u0060), a pre-existing gsc scope boundary, not a cs2gs limitation."
   },
   {
     "kind": "LoadDirectiveTrivia",
@@ -1995,9 +1997,11 @@
   {
     "kind": "SlicePattern",
     "nodeType": "SlicePatternSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1889"
+    "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/ListPattern.cs",
+    "notes": "is-test path materializes the slice-bound value via native G# range slicing (\u0060receiver[prefix..^suffix]\u0060, using new \u0060RangeIndexExpression\u0060/\u0060FromEndIndexExpression\u0060 CodeModel nodes) and binds it by substitution; switch-arm path emits a native G# \u0060SlicePattern\u0060 (\u0060..rest\u0060/\u0060..\u0060) since gsc has real runtime slice-capture support (issue #1889, resolved)."
   },
   {
     "kind": "SpreadElement",

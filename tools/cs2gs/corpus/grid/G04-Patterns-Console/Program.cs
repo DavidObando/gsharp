@@ -16,6 +16,7 @@ namespace Corpus.Grid04
             DeclarationPatternFixture.Run();
             DiscardPatternFixture.Run();
             ExpressionColonFixture.Run();
+            ListPatternFixture.Run();
             NotPatternFixture.Run();
             OrPatternFixture.Run();
             ParenthesizedPatternFixture.Run();

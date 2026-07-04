@@ -6,12 +6,12 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | Status | Count |
 | --- | --- |
 | Unclassified | 0 |
-| Translated | 214 |
+| Translated | 216 |
 | Lowered | 12 |
 | UnsupportedByDesign | 56 |
-| Gap | 39 |
+| Gap | 37 |
 
-## Translated (214)
+## Translated (216)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -126,6 +126,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | LeftShiftExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LeftShiftExpression.cs |  |  |
 | LessThanExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LessThanExpression.cs |  |  |
 | LessThanOrEqualExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LessThanOrEqualExpression.cs |  |  |
+| ListPattern | ListPatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/ListPattern.cs |  | is-test path lowers to a length test (`==` exact / `>=` with a slice) ANDed with per-element index tests; switch-arm path emits a native G# `ListPattern` (`[1, .., 4]`) since gsc has its own structural list-pattern matching (issue #1889, resolved). Element `var` binders reuse the #1888 discard+substitution mechanism; `int x` declaration-pattern elements map to native `TypePattern`. Deferral: gsc's `BindListPattern` only accepts array/slice-typed discriminants (not e.g. `List<T>`), a pre-existing gsc scope boundary, not a cs2gs limitation. |
 | LocalDeclarationStatement | LocalDeclarationStatementSyntax | ADR-0115 §B.3 |  |  |  |  |
 | LocalFunctionStatement | LocalFunctionStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/LocalFunctionStatement.cs |  | Static local functions call through their `let` binding directly; generic local functions translate to G#'s `let Name[T, ...] = func (...) ... { ... }` (issue #1886, fixed). |
 | LockStatement | LockStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/LockStatement.cs |  |  |
@@ -186,6 +187,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | SimpleMemberAccessExpression | MemberAccessExpressionSyntax | ADR-0115 §B |  |  |  |  |
 | SingleVariableDesignation | SingleVariableDesignationSyntax | ADR-0115 §B.30 |  | tools/cs2gs/corpus/grid/G09-Functions-Console/Constructs/DeclarationExpression.cs |  |  |
 | SizeOfExpression | SizeOfExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/SizeOfExpression.cs |  |  |
+| SlicePattern | SlicePatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/ListPattern.cs |  | is-test path materializes the slice-bound value via native G# range slicing (`receiver[prefix..^suffix]`, using new `RangeIndexExpression`/`FromEndIndexExpression` CodeModel nodes) and binds it by substitution; switch-arm path emits a native G# `SlicePattern` (`..rest`/`..`) since gsc has real runtime slice-capture support (issue #1889, resolved). |
 | StackAllocArrayCreationExpression | StackAllocArrayCreationExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/StackAllocArrayCreationExpression.cs | https://github.com/DavidObando/gsharp/issues/1933 | Compiles end-to-end under the ilverify allow-unsafe policy (issue #1933); stackalloc's localloc IL is unverifiable by design, not a gsc defect. |
 | StringLiteralExpression | LiteralExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/StringLiteralExpression.cs |  |  |
 | StructConstraint | ClassOrStructConstraintSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/StructConstraint.cs |  |  |
@@ -308,7 +310,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | XmlText | XmlTextSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | XmlTextAttribute | XmlTextAttributeSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 
-## Gap (39)
+## Gap (37)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -338,14 +340,12 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | JoinIntoClause | JoinIntoClauseSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1902 | Query syntax lowered to the method-call chain, mirroring Roslyn. |
 | LabeledStatement | LabeledStatementSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1884 |  |
 | LetClause | LetClauseSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1902 | Query syntax lowered to the method-call chain, mirroring Roslyn. |
-| ListPattern | ListPatternSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1889 |  |
 | PointerMemberAccessExpression | MemberAccessExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1905 | p->X lowered to p.X; (*p).X compiles. |
 | PrimaryConstructorBaseType | PrimaryConstructorBaseTypeSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1909 |  |
 | RangeExpression | RangeExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1896 | Lowers to .Slice(...) which gsc cannot resolve on arrays/strings. |
 | RefExpression | RefExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1900 | ref argument/return seam (&x pass-by-address). |
 | RefType | RefTypeSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1900 |  |
 | RemoveAccessorDeclaration | AccessorDeclarationSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1899 |  |
-| SlicePattern | SlicePatternSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1889 |  |
 | SpreadElement | SpreadElementSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1897 |  |
 | TypePattern | TypePatternSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1890 | Bare-type switch-expression arms; is/case binder forms work (DeclarationPattern). |
 | UncheckedExpression | CheckedExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1881 |  |
