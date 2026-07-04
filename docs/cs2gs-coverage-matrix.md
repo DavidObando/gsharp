@@ -98,7 +98,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | FieldDeclaration | FieldDeclarationSyntax | ADR-0115 §B.3 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/FieldDeclaration.cs |  |  |
 | FileScopedNamespaceDeclaration | FileScopedNamespaceDeclarationSyntax | ADR-0115 §B.1 |  |  |  |  |
 | FinallyClause | FinallyClauseSyntax | ADR-0115 §B.27 |  |  |  |  |
-| FixedStatement | FixedStatementSyntax | ADR-0115 §B |  |  | https://github.com/DavidObando/gsharp/issues/1933 | Compiles; ilverify-by-design (issue #1933). |
+| FixedStatement | FixedStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FixedStatement.cs | https://github.com/DavidObando/gsharp/issues/1933 | Compiles end-to-end under the ilverify allow-unsafe policy (issue #1933); IL is unverifiable by design, not a gsc defect. |
 | ForEachStatement | ForEachStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/ForEachStatement.cs |  |  |
 | ForEachVariableStatement | ForEachVariableStatementSyntax | ADR-0115 §B |  |  | https://github.com/DavidObando/gsharp/issues/1922 | Translates; blocked by gsc ValueTuple deconstruction (issue #1922). |
 | GenericName | GenericNameSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/GenericName.cs |  |  |
@@ -159,7 +159,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | ParenthesizedPattern | ParenthesizedPatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/ParenthesizedPattern.cs |  |  |
 | ParenthesizedVariableDesignation | ParenthesizedVariableDesignationSyntax | ADR-0115 §B.30 |  |  |  |  |
 | PointerIndirectionExpression | PrefixUnaryExpressionSyntax | ADR-0115 §B |  |  | https://github.com/DavidObando/gsharp/issues/1925 | Compiles; ilverify-by-design (issue #1933). *(p + i) misbinds in gsc (issue #1925). |
-| PointerType | PointerTypeSyntax | ADR-0115 §B |  |  | https://github.com/DavidObando/gsharp/issues/1933 | Pointer IL is unverifiable by design — pipeline policy issue #1933; compile-level green. |
+| PointerType | PointerTypeSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/PointerType.cs | https://github.com/DavidObando/gsharp/issues/1933 | Compiles end-to-end under the ilverify allow-unsafe policy (issue #1933); pointer IL is unverifiable by design, not a gsc defect. |
 | PostDecrementExpression | PostfixUnaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/PostDecrementExpression.cs |  |  |
 | PostIncrementExpression | PostfixUnaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/PostIncrementExpression.cs |  |  |
 | PreDecrementExpression | PrefixUnaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/PreDecrementExpression.cs |  |  |
@@ -184,7 +184,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | SimpleMemberAccessExpression | MemberAccessExpressionSyntax | ADR-0115 §B |  |  |  |  |
 | SingleVariableDesignation | SingleVariableDesignationSyntax | ADR-0115 §B.30 |  | tools/cs2gs/corpus/grid/G09-Functions-Console/Constructs/DeclarationExpression.cs |  |  |
 | SizeOfExpression | SizeOfExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/SizeOfExpression.cs |  |  |
-| StackAllocArrayCreationExpression | StackAllocArrayCreationExpressionSyntax | ADR-0115 §B |  |  | https://github.com/DavidObando/gsharp/issues/1933 | Translates and compiles; IL is unverifiable by design — pipeline policy issue #1933. |
+| StackAllocArrayCreationExpression | StackAllocArrayCreationExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/StackAllocArrayCreationExpression.cs | https://github.com/DavidObando/gsharp/issues/1933 | Compiles end-to-end under the ilverify allow-unsafe policy (issue #1933); stackalloc's localloc IL is unverifiable by design, not a gsc defect. |
 | StringLiteralExpression | LiteralExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/StringLiteralExpression.cs |  |  |
 | StructConstraint | ClassOrStructConstraintSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/StructConstraint.cs |  |  |
 | StructDeclaration | StructDeclarationSyntax | ADR-0115 §B.4 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/StructDeclaration.cs |  | Generic-struct ctor zip declined (issue #1915). |

@@ -21,6 +21,16 @@ namespace Cs2Gs.Pipeline;
 public static class CorpusDiscovery
 {
     /// <summary>
+    /// The marker file (empty, sibling to the <c>.csproj</c>) that opts an app
+    /// into <see cref="CorpusApp.AllowUnsafeIl"/> (issue #1933): stage 3
+    /// treats the app's known-unverifiable unsafe IL (pointer writes,
+    /// <c>fixed</c>, <c>stackalloc</c>) as expected rather than gating,
+    /// mirroring the always-on <see cref="IlVerifyRunner.KnownIlVerifyFalsePositives"/>
+    /// ignore bundle but opt-in per app.
+    /// </summary>
+    public const string AllowUnsafeIlMarkerFileName = "ilverify.allow-unsafe";
+
+    /// <summary>
     /// Discovers the non-test corpus apps under <paramref name="corpusDirectory"/>,
     /// ordered by id so the simplest app is migrated first.
     /// </summary>
@@ -61,6 +71,8 @@ public static class CorpusDiscovery
 
             (string testsProject, string testsBaseline) = FindSiblingTestOracle(fullCorpus, folderName);
 
+            bool allowUnsafeIl = File.Exists(Path.Combine(projectDir, AllowUnsafeIlMarkerFileName));
+
             apps.Add(new CorpusApp(
                 id,
                 projectPath,
@@ -68,7 +80,8 @@ public static class CorpusDiscovery
                 stdoutGolden,
                 referencedAssemblies: null,
                 testsProjectPath: testsProject,
-                testsBaselinePath: testsBaseline));
+                testsBaselinePath: testsBaseline,
+                allowUnsafeIl: allowUnsafeIl));
         }
 
         return apps;

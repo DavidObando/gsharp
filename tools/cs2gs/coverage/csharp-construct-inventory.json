@@ -883,8 +883,9 @@
     "status": "Translated",
     "rule": "ADR-0115 \u00A7B",
     "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FixedStatement.cs",
     "issue": "https://github.com/DavidObando/gsharp/issues/1933",
-    "notes": "Compiles; ilverify-by-design (issue #1933)."
+    "notes": "Compiles end-to-end under the ilverify allow-unsafe policy (issue #1933); IL is unverifiable by design, not a gsc defect."
   },
   {
     "kind": "ForEachStatement",
@@ -1639,8 +1640,9 @@
     "status": "Translated",
     "rule": "ADR-0115 \u00A7B",
     "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/PointerType.cs",
     "issue": "https://github.com/DavidObando/gsharp/issues/1933",
-    "notes": "Pointer IL is unverifiable by design \u2014 pipeline policy issue #1933; compile-level green."
+    "notes": "Compiles end-to-end under the ilverify allow-unsafe policy (issue #1933); pointer IL is unverifiable by design, not a gsc defect."
   },
   {
     "kind": "PositionalPatternClause",
@@ -2010,8 +2012,9 @@
     "status": "Translated",
     "rule": "ADR-0115 \u00A7B",
     "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/StackAllocArrayCreationExpression.cs",
     "issue": "https://github.com/DavidObando/gsharp/issues/1933",
-    "notes": "Translates and compiles; IL is unverifiable by design \u2014 pipeline policy issue #1933."
+    "notes": "Compiles end-to-end under the ilverify allow-unsafe policy (issue #1933); stackalloc\u0027s localloc IL is unverifiable by design, not a gsc defect."
   },
   {
     "kind": "StringLiteralExpression",

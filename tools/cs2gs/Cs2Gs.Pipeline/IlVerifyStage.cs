@@ -15,6 +15,13 @@ namespace Cs2Gs.Pipeline;
 /// compile with the repo-pinned <c>dotnet-ilverify</c> (<see cref="IlVerifyRunner"/>).
 /// Pass gate: <c>ilverify</c> reports no errors after the two documented
 /// false-positive bundles are ignored (<see cref="IlVerifyRunner.KnownIlVerifyFalsePositives"/>).
+/// Apps with <see cref="CorpusApp.AllowUnsafeIl"/> set (issue #1933) get one
+/// more allowance: unsafe C# (pointer writes, <c>fixed</c>, <c>stackalloc</c>)
+/// lowers to IL that is unverifiable BY DESIGN — not a gsc defect, the
+/// csc-compiled baseline of the same C# fails ilverify identically — so a
+/// failure with at least one parsed error is treated as expected and does not
+/// gate. A tool crash (non-zero exit, zero parsed errors) still gates for
+/// those apps too: that signals a broken verifier run, not unsafe IL.
 /// On a real error the category is <c>ilverify-failure</c>, one triage artifact
 /// per distinct error code + failing-method skeleton, and the app
 /// short-circuits. Runs only after stage 2 publishes the emitted assembly path;
@@ -65,6 +72,14 @@ public sealed class IlVerifyStage : IMigrationStage
             result.Output ?? string.Empty);
 
         if (result.Succeeded)
+        {
+            return Task.FromResult(StageOutcome.Passed());
+        }
+
+        // Unsafe-IL allowance (#1933): the app opted into
+        // CorpusApp.AllowUnsafeIl and ilverify actually parsed error(s) (as
+        // opposed to a bare tool crash) — expected-unverifiable, not a gate.
+        if (context.App.AllowUnsafeIl && result.Errors.Count > 0)
         {
             return Task.FromResult(StageOutcome.Passed());
         }
