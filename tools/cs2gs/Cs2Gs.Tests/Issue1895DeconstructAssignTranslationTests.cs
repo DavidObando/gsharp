@@ -36,9 +36,9 @@ namespace Cs2Gs.Tests;
 /// Spilling the RHS as a single statement (rather than one assignment per
 /// element) also preserves C#'s evaluate-then-assign-all semantics, so an
 /// aliasing swap (<c>(a, b) = (b, a)</c>) is lowered correctly. A NESTED
-/// target (<c>((a, b), c) = ...</c>) has no flat <c>t0, t1, ...</c> shape to
-/// spill into, so it stays a loud CS2GS-GAP rather than risk a silent
-/// miscompile.
+/// target (<c>((a, b), c) = ...</c>) recurses: the nested arm gets its own
+/// temp, which a SECOND <c>let (...) = temp</c> statement then further
+/// deconstructs (issue #1974).
 /// </summary>
 public class Issue1895DeconstructAssignTranslationTests
 {
@@ -168,14 +168,12 @@ namespace Corpus.Issue1895
     }
 
     [Fact]
-    public void NestedTarget_StaysLoudGap()
+    public void NestedTarget_LowersToChainedDeconstructionStatements()
     {
-        // `((a, b), c) = ...` has no flat target-list shape for G#'s native
-        // `let (t0, t1, ...) = rhs` deconstruction binding to spill into, so
-        // it must keep reporting the CS2GS-GAP rather than risk a silent
-        // miscompile.
-        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
-            new[] { ("Source.cs", @"
+        // `((a, b), c) = ((4, 5), 6)` (issue #1974): the outer temp holding the
+        // nested element is deconstructed by a SECOND native `let (...) = ...`
+        // binding rather than gapping.
+        string rendered = Render(@"
 namespace Corpus.Issue1895
 {
     public class Holder
@@ -190,15 +188,14 @@ namespace Corpus.Issue1895
         }
     }
 }
-") });
+");
 
-        Assert.True(project.BoundWithoutErrors);
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-        Assert.Contains(
-            context.Diagnostics,
-            d => d.Message.Contains("nested tuple target", StringComparison.Ordinal));
+        Assert.Contains("let (__decon0, __decon1) = ((4, 5), 6)", rendered, StringComparison.Ordinal);
+        Assert.Contains("let (__decon2, __decon3) = __decon0", rendered, StringComparison.Ordinal);
+        Assert.Contains("a = __decon2", rendered, StringComparison.Ordinal);
+        Assert.Contains("b = __decon3", rendered, StringComparison.Ordinal);
+        Assert.Contains("c = __decon1", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
     }
 
     [Fact]
