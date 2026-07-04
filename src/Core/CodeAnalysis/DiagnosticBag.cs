@@ -694,6 +694,25 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports that a generic local function (issue #1886) references a type parameter owned by an
+    /// enclosing generic method or class (issue #1940). A generic local function is hoisted to its own
+    /// top-level static method carrying only its own type-parameter list as CLR method-generic (MVAR)
+    /// slots; the enclosing method/class type parameter has no corresponding slot on that hoisted method,
+    /// so referencing it (in a parameter type, return type, local declaration, or body expression) would
+    /// silently emit invalid IL (an unresolvable MVAR/VAR reference) that crashes at run time with
+    /// <c>InvalidProgramException</c> instead of failing to compile.
+    /// </summary>
+    /// <param name="location">The text location of the declaration's identifier.</param>
+    /// <param name="name">The name of the declared local function.</param>
+    /// <param name="enclosingTypeParameterName">The name of the referenced enclosing type parameter.</param>
+    public void ReportGenericLocalFunctionCannotReferenceEnclosingTypeParameter(TextLocation location, string name, string enclosingTypeParameterName)
+    {
+        var message = $"Generic local function '{name}' cannot reference '{enclosingTypeParameterName}', a type parameter of an enclosing method or class. " +
+            "A generic local function is emitted as its own generic method and cannot close over an enclosing type parameter.";
+        Report(location, "GS0468", message);
+    }
+
+    /// <summary>
     /// Reports a file-level <c>@assembly:</c> annotation whose name is not
     /// <c>InternalsVisibleTo</c> — the only assembly-scoped annotation gsc
     /// currently understands (issue #1929/#1953 friend-assembly opt-in).
