@@ -80,7 +80,7 @@ internal sealed partial class ExpressionBinder
         var declared = function.Type ?? TypeSymbol.Void;
         if (function.IsAsync && !isAsyncIteratorReturnType(declared))
         {
-            return lambdas.WrapAsTask(declared);
+            return lambdas.WrapAsTask(declared, function.AsyncReturnsValueTask);
         }
 
         return declared;
@@ -3134,7 +3134,7 @@ internal sealed partial class ExpressionBinder
                 var substitutedReturn = Binder.SubstituteType(method.Type, substitution, scope.References.MapClrTypeToReferences);
                 if (method.IsAsync && !isAsyncIteratorReturnType(method.Type))
                 {
-                    substitutedReturn = lambdas.WrapAsTask(substitutedReturn);
+                    substitutedReturn = lambdas.WrapAsTask(substitutedReturn, method.AsyncReturnsValueTask);
                     return MakeStaticGenericCall(substitutedReturn);
                 }
 
@@ -3146,7 +3146,7 @@ internal sealed partial class ExpressionBinder
 
             if (method.IsAsync && !isAsyncIteratorReturnType(method.Type))
             {
-                var asyncReturn = lambdas.WrapAsTask(method.Type);
+                var asyncReturn = lambdas.WrapAsTask(method.Type, method.AsyncReturnsValueTask);
                 return MakeStaticGenericCall(asyncReturn);
             }
 

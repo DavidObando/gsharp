@@ -1523,6 +1523,7 @@ internal sealed class DeclarationBinder
                     ValidateVariadicParameterShape(methodSyntax.Parameters);
 
                     var returnType = bindReturnTypeClause(methodSyntax.Type, methodSyntax.IsAsync) ?? TypeSymbol.Void;
+                    returnType = NormalizeAsyncDeclaredReturnType(returnType, methodSyntax.IsAsync, out var returnTypeIsValueTask);
                     var methodAccessibility = resolveAccessibility(methodSyntax.AccessibilityModifier);
                     var methodParameters = parameters.ToImmutable();
                     var methodReturnRefKind = ValidateReturnRefKind(methodSyntax, returnType);
@@ -1669,6 +1670,7 @@ internal sealed class DeclarationBinder
                     methodSymbol.TypeParameters = methodTypeParameters;
                     methodSymbol.ReturnRefKind = methodReturnRefKind;
                     methodSymbol.IsAsync = methodSyntax.IsAsync || isAsyncIteratorReturnType(returnType);
+                    methodSymbol.AsyncReturnsValueTask = returnTypeIsValueTask;
                     methodSymbol.IsUnsafe = methodSyntax.IsUnsafe || syntax.IsUnsafe;
 
                     // Issue #987: a no-body `open func F() R;` inside a class is
@@ -2338,6 +2340,7 @@ internal sealed class DeclarationBinder
                     ValidateVariadicParameterShape(methodSyntax.Parameters);
 
                     var returnType = bindReturnTypeClause(methodSyntax.Type, methodSyntax.IsAsync) ?? TypeSymbol.Void;
+                    returnType = NormalizeAsyncDeclaredReturnType(returnType, methodSyntax.IsAsync, out var returnTypeIsValueTask);
                     var methodAccessibility = resolveAccessibility(methodSyntax.AccessibilityModifier);
                     var methodReturnRefKind = ValidateReturnRefKind(methodSyntax, returnType);
 
@@ -2354,6 +2357,7 @@ internal sealed class DeclarationBinder
                     methodSymbol.TypeParameters = methodTypeParameters;
                     methodSymbol.ReturnRefKind = methodReturnRefKind;
                     methodSymbol.IsAsync = methodSyntax.IsAsync || isAsyncIteratorReturnType(returnType);
+                    methodSymbol.AsyncReturnsValueTask = returnTypeIsValueTask;
                     methodSymbol.IsUnsafe = methodSyntax.IsUnsafe || syntax.IsUnsafe;
 
                     if (!methodSyntax.Annotations.IsDefaultOrEmpty)
@@ -5012,6 +5016,7 @@ internal sealed class DeclarationBinder
             ValidateVariadicParameterShape(methodSyntax.Parameters);
 
             var returnType = bindReturnTypeClause(methodSyntax.Type, methodSyntax.IsAsync) ?? TypeSymbol.Void;
+            returnType = NormalizeAsyncDeclaredReturnType(returnType, methodSyntax.IsAsync, out var returnTypeIsValueTask);
             var methodReturnRefKind = ValidateReturnRefKind(methodSyntax, returnType);
 
             // ADR-0085 / issue #726: an interface method whose declaration
@@ -5045,6 +5050,7 @@ internal sealed class DeclarationBinder
                 receiverType: isStaticInterfaceMethod ? null : (TypeSymbol)interfaceSymbol);
             methodSymbol.ReturnRefKind = methodReturnRefKind;
             methodSymbol.IsAsync = methodSyntax.IsAsync || isAsyncIteratorReturnType(returnType);
+            methodSymbol.AsyncReturnsValueTask = returnTypeIsValueTask;
             methodSymbol.IsUnsafe = methodSyntax.IsUnsafe;
             methodSymbol.TypeParameters = methodTypeParameters;
             if (isStaticInterfaceMethod)
@@ -5631,6 +5637,11 @@ internal sealed class DeclarationBinder
             // ADR-0041: bind the return type with async-aware alias resolution.
             var type = bindReturnTypeClause(syntax.Type, syntax.IsAsync) ?? TypeSymbol.Void;
 
+            // Issue #1918: unwrap an explicit `Task[T]` / `ValueTask[T]` async
+            // return-type annotation to its awaited result, remembering which
+            // wrapper was requested.
+            type = NormalizeAsyncDeclaredReturnType(type, syntax.IsAsync, out var typeIsValueTask);
+
             // Issue #490 (ADR-0060 follow-up): a `ref` return modifier on the declaration
             // is only valid when an explicit return-type clause is present, the function is
             // not async, and the return is not a sequence/async-sequence (the state-machine
@@ -5792,6 +5803,7 @@ internal sealed class DeclarationBinder
                     explicitReceiverParameter);
                 function.TypeParameters = typeParameters;
                 function.IsAsync = syntax.IsAsync || isAsyncIteratorReturnType(type);
+                function.AsyncReturnsValueTask = typeIsValueTask;
                 function.IsUnsafe = syntax.IsUnsafe;
                 function.ReturnRefKind = returnRefKind;
                 Binder.AttachDocumentation(function, syntax);
@@ -5824,6 +5836,7 @@ internal sealed class DeclarationBinder
             function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package, accessibility);
             function.TypeParameters = typeParameters;
             function.IsAsync = syntax.IsAsync || isAsyncIteratorReturnType(type);
+            function.AsyncReturnsValueTask = typeIsValueTask;
             function.IsUnsafe = syntax.IsUnsafe;
             function.ReturnRefKind = returnRefKind;
             Binder.AttachDocumentation(function, syntax);
@@ -6490,6 +6503,33 @@ internal sealed class DeclarationBinder
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Issue #1918: an <c>async func</c> may spell its return-type clause as an
+    /// explicit <c>Task</c> / <c>Task[T]</c> / <c>ValueTask</c> / <c>ValueTask[T]</c>
+    /// wrapper instead of the bare awaited result <c>T</c> (the implicit-wrap
+    /// form). When it does, the declared wrapper is unwrapped here so
+    /// <see cref="FunctionSymbol.Type"/> always holds the awaited result — the
+    /// same invariant the implicit form already established — and the caller
+    /// records which wrapper was requested (<paramref name="isValueTask"/>) so
+    /// the state machine / observable return type can be built to match.
+    /// </summary>
+    /// <param name="declaredType">The return-type clause as bound by <c>bindReturnTypeClause</c>.</param>
+    /// <param name="isAsync">Whether the declaration carries the <c>async</c> modifier.</param>
+    /// <param name="isValueTask">Set to <c>true</c> when the declared wrapper was <c>ValueTask</c> / <c>ValueTask[T]</c>.</param>
+    /// <returns>The awaited result type when a wrapper was unwrapped; otherwise <paramref name="declaredType"/> unchanged.</returns>
+    private static TypeSymbol NormalizeAsyncDeclaredReturnType(TypeSymbol declaredType, bool isAsync, out bool isValueTask)
+    {
+        isValueTask = false;
+        if (!isAsync || declaredType == null)
+        {
+            return declaredType;
+        }
+
+        return AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(declaredType, out var awaited, out isValueTask)
+            ? awaited
+            : declaredType;
     }
 
     /// <summary>

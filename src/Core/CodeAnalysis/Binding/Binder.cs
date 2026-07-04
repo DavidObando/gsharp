@@ -220,7 +220,7 @@ public sealed class Binder
             getRefKindFromModifier: GetRefKindFromModifier,
             refKindToString: RefKindToString,
             createErasedFunctionLiteralAdapter: (literal, targetFunctionType) => lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType),
-            wrapAsTask: t => lambdas.WrapAsTask(t),
+            wrapAsTask: (t, useValueTask) => lambdas.WrapAsTask(t, useValueTask),
             isAsyncIteratorReturnType: IsAsyncIteratorReturnType,
             tryGetFunctionLiteral: LambdaBinder.TryGetFunctionLiteral,
             inferTypeArguments: InferTypeArguments,

@@ -7,6 +7,10 @@ AwaitExpression: viaArg=8
 AwaitExpressionConfigureAwait: value=11
 AwaitExpressionConfigureAwait: void-task awaited
 AwaitExpressionConfigureAwait: chained=42
+AwaitExpressionValueTask: ready=5
+AwaitExpressionValueTask: completed ValueTask awaited
+AwaitExpressionValueTask: triple=15
+AwaitExpressionValueTask: NoteAsync ran
 AwaitExpressionWhenAll: result[0]=1
 AwaitExpressionWhenAll: result[1]=4
 AwaitExpressionWhenAll: result[2]=9

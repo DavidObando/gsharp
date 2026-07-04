@@ -277,6 +277,18 @@ public sealed class FunctionSymbol : Symbol
     public bool IsAsync { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether this async function's declared
+    /// return-type clause explicitly spelled a <c>ValueTask</c> / <c>ValueTask[T]</c>
+    /// wrapper (issue #1918) rather than the default (implicit or explicit
+    /// <c>Task</c> / <c>Task[T]</c>) wrapper. <see cref="Type"/> still holds the
+    /// unwrapped awaited result (<c>T</c>, or <see cref="TypeSymbol.Void"/> for
+    /// bare <c>ValueTask</c>) — this flag only steers which BCL wrapper /
+    /// async-method-builder the state machine and observable call-site return
+    /// type use.
+    /// </summary>
+    public bool AsyncReturnsValueTask { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether this (ADR-0122 / issue #1014)
     /// function constitutes an <c>unsafe</c> context — either because the
     /// declaration carried the <c>unsafe</c> modifier (<c>unsafe func</c>) or

@@ -133,7 +133,7 @@ internal sealed class OverloadResolver
     private readonly Func<SyntaxToken, RefKind> getRefKindFromModifier;
     private readonly Func<RefKind, string> refKindToString;
     private readonly Func<BoundFunctionLiteralExpression, FunctionTypeSymbol, BoundFunctionLiteralExpression> createErasedFunctionLiteralAdapter;
-    private readonly Func<TypeSymbol, TypeSymbol> wrapAsTask;
+    private readonly Func<TypeSymbol, bool, TypeSymbol> wrapAsTask;
     private readonly Func<TypeSymbol, bool> isAsyncIteratorReturnType;
     private readonly TryGetFunctionLiteralDelegate tryGetFunctionLiteral;
     private readonly Action<TypeSymbol, TypeSymbol, Dictionary<TypeParameterSymbol, TypeSymbol>> inferTypeArguments;
@@ -257,7 +257,7 @@ internal sealed class OverloadResolver
         Func<SyntaxToken, RefKind> getRefKindFromModifier,
         Func<RefKind, string> refKindToString,
         Func<BoundFunctionLiteralExpression, FunctionTypeSymbol, BoundFunctionLiteralExpression> createErasedFunctionLiteralAdapter,
-        Func<TypeSymbol, TypeSymbol> wrapAsTask,
+        Func<TypeSymbol, bool, TypeSymbol> wrapAsTask,
         Func<TypeSymbol, bool> isAsyncIteratorReturnType,
         TryGetFunctionLiteralDelegate tryGetFunctionLiteral,
         Action<TypeSymbol, TypeSymbol, Dictionary<TypeParameterSymbol, TypeSymbol>> inferTypeArguments,
@@ -5407,7 +5407,7 @@ internal sealed class OverloadResolver
             var returnType = substituteType(function.Type, substitution);
             if (function.IsAsync && !isAsyncIteratorReturnType(function.Type))
             {
-                returnType = wrapAsTask(returnType);
+                returnType = wrapAsTask(returnType, function.AsyncReturnsValueTask);
             }
 
             return CreatePossiblyElidedCall(function, boundArguments.ToImmutable(), returnType, methodTypeArguments);
@@ -5415,7 +5415,7 @@ internal sealed class OverloadResolver
 
         if (function.IsAsync && !isAsyncIteratorReturnType(function.Type))
         {
-            var asyncReturn = wrapAsTask(function.Type);
+            var asyncReturn = wrapAsTask(function.Type, function.AsyncReturnsValueTask);
             return CreatePossiblyElidedCall(function, boundArguments.ToImmutable(), asyncReturn, methodTypeArguments);
         }
 
@@ -5682,7 +5682,7 @@ internal sealed class OverloadResolver
             var returnType = substituteType(extension.Type, substitution);
             if (extension.IsAsync && !isAsyncIteratorReturnType(extension.Type))
             {
-                returnType = wrapAsTask(returnType);
+                returnType = wrapAsTask(returnType, extension.AsyncReturnsValueTask);
             }
 
             return new BoundCallExpression(null, extension, convertedArgs.MoveToImmutable(), returnType) { MethodTypeArguments = extensionMethodTypeArguments };
@@ -5694,7 +5694,7 @@ internal sealed class OverloadResolver
         // free-function and user-instance-call paths.
         if (extension.IsAsync && !isAsyncIteratorReturnType(extension.Type))
         {
-            var asyncReturn = wrapAsTask(extension.Type);
+            var asyncReturn = wrapAsTask(extension.Type, extension.AsyncReturnsValueTask);
             return new BoundCallExpression(null, extension, convertedArgs.MoveToImmutable(), asyncReturn) { MethodTypeArguments = extensionMethodTypeArguments };
         }
 
@@ -6080,7 +6080,7 @@ internal sealed class OverloadResolver
             var substitutedReturn = substituteType(method.Type, substitution);
             if (method.IsAsync && !isAsyncIteratorReturnType(method.Type))
             {
-                substitutedReturn = wrapAsTask(substitutedReturn);
+                substitutedReturn = wrapAsTask(substitutedReturn, method.AsyncReturnsValueTask);
                 return MakeCall(substitutedReturn);
             }
 
@@ -6095,7 +6095,7 @@ internal sealed class OverloadResolver
         // expression's static type matches the kickoff method's return type.
         if (method.IsAsync && !isAsyncIteratorReturnType(method.Type))
         {
-            var asyncReturn = wrapAsTask(method.Type);
+            var asyncReturn = wrapAsTask(method.Type, method.AsyncReturnsValueTask);
             return MakeCall(asyncReturn);
         }
 
