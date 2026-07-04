@@ -137,8 +137,7 @@ public static class GNodeSamples
             [typeof(ForInStatement)] = () => Stmts(new ForInStatement("item", Id("items"), Block())),
             [typeof(ThrowStatement)] = () => Stmts(new ThrowStatement(
                 new InvocationExpression(Id("Exception"), List<GExpression>(LiteralExpression.String("boom"))))),
-            [typeof(DeferStatement)] = () => Stmts(new DeferStatement(Block(
-                new ExpressionStatement(new InvocationExpression(Id("cleanup")))))),
+            [typeof(DeferStatement)] = () => Stmts(new DeferStatement(new InvocationExpression(Id("cleanup")))),
             [typeof(RawStatement)] = () => Stmts(new RawStatement("let raw = 1")),
             [typeof(CatchClause)] = TrySample,
             [typeof(TryStatement)] = TrySample,

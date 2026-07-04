@@ -370,21 +370,23 @@ public sealed class ThrowStatement : GStatement
 }
 
 /// <summary>
-/// A <c>defer</c> statement (minimal node; the body runs on scope exit).
+/// A <c>defer</c> statement. Per ADR-0030, the operand is a single call
+/// expression that runs on scope exit (LIFO); G# has no block-bodied
+/// <c>defer { … }</c> form.
 /// </summary>
 public sealed class DeferStatement : GStatement
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="DeferStatement"/> class.
     /// </summary>
-    /// <param name="body">The deferred block.</param>
-    public DeferStatement(BlockStatement body)
+    /// <param name="call">The deferred call expression.</param>
+    public DeferStatement(GExpression call)
     {
-        Body = body;
+        Call = call;
     }
 
-    /// <summary>Gets the deferred block.</summary>
-    public BlockStatement Body { get; }
+    /// <summary>Gets the deferred call expression.</summary>
+    public GExpression Call { get; }
 }
 
 /// <summary>
