@@ -314,6 +314,10 @@ internal sealed class DeclarationBinder
             // parameters; the value is recorded on the parameter symbol for
             // call-site default substitution.
             conversions.BindAndAttachParameterDefaultValue(parameterSyntax, delegateParam);
+
+            // Issue #1913: delegate parameters can carry `@Attr` annotations
+            // same as any other parameter list.
+            BindAndAttachParameterAttributes(parameterSyntax, delegateParam);
             parameters.Add(delegateParam);
         }
 
@@ -935,6 +939,10 @@ internal sealed class DeclarationBinder
 
                 var primaryCtorParam = new ParameterSymbol(paramName, paramType, isVariadic, declaringSyntax: paramSyntax.Identifier, isScoped: paramSyntax.IsScoped);
                 conversions.BindAndAttachParameterDefaultValue(paramSyntax, primaryCtorParam);
+
+                // Issue #1913: primary-constructor parameters can carry
+                // `@Attr` annotations same as any other parameter list.
+                BindAndAttachParameterAttributes(paramSyntax, primaryCtorParam);
                 ctorBuilder.Add(primaryCtorParam);
                 fields.Add(new FieldSymbol(paramName, paramType, Accessibility.Public, isReadOnly: syntax.IsInline));
             }
@@ -1796,7 +1804,12 @@ internal sealed class DeclarationBinder
                             Diagnostics.ReportParameterAlreadyDeclared(indexParamSyntax.Location, indexParamName);
                         }
 
-                        indexerParamBuilder.Add(new ParameterSymbol(indexParamName, indexParamType, declaringSyntax: indexParamSyntax.Identifier));
+                        var indexerParam = new ParameterSymbol(indexParamName, indexParamType, declaringSyntax: indexParamSyntax.Identifier);
+
+                        // Issue #1913: indexer parameters can carry `@Attr`
+                        // annotations same as any other parameter list.
+                        BindAndAttachParameterAttributes(indexParamSyntax, indexerParam);
+                        indexerParamBuilder.Add(indexerParam);
                     }
 
                     indexerParameters = indexerParamBuilder.ToImmutable();
