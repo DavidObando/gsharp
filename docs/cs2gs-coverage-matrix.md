@@ -6,12 +6,12 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | Status | Count |
 | --- | --- |
 | Unclassified | 0 |
-| Translated | 233 |
-| Lowered | 19 |
+| Translated | 237 |
+| Lowered | 17 |
 | UnsupportedByDesign | 56 |
-| Gap | 13 |
+| Gap | 11 |
 
-## Translated (233)
+## Translated (237)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -110,10 +110,15 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | FixedStatement | FixedStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FixedStatement.cs | https://github.com/DavidObando/gsharp/issues/1933 | Compiles end-to-end under the ilverify allow-unsafe policy (issue #1933); IL is unverifiable by design, not a gsc defect. |
 | ForEachStatement | ForEachStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/ForEachStatement.cs |  |  |
 | ForEachVariableStatement | ForEachVariableStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/TupleExpression.cs | https://github.com/DavidObando/gsharp/issues/1922 | Sync foreach tuple-deconstruction translates to first-class G# `for (a, b) in xs`; ValueTuple deconstruction now supported by gsc (issue #1922 fixed). await foreach still lowers via temp+let (no first-class async form). |
+| FunctionPointerCallingConvention | FunctionPointerCallingConventionSyntax | ADR-0122 §9 / ADR-0095 |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FunctionPointerType.cs | https://github.com/DavidObando/gsharp/issues/1906 | managed/`managed`/`unmanaged[Cdecl|Stdcall|Thiscall|Fastcall]` translate; bare `unmanaged` (platform-default ABI) and combined/custom conventions stay an Unsupported/ByDesign sub-case (no fixed G# CallingConvention equivalent). |
+| FunctionPointerParameter | FunctionPointerParameterSyntax | ADR-0122 §9 / ADR-0095 |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FunctionPointerType.cs | https://github.com/DavidObando/gsharp/issues/1906 |  |
+| FunctionPointerParameterList | FunctionPointerParameterListSyntax | ADR-0122 §9 / ADR-0095 |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FunctionPointerType.cs | https://github.com/DavidObando/gsharp/issues/1906 |  |
+| FunctionPointerType | FunctionPointerTypeSyntax | ADR-0122 §9 / ADR-0095 |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FunctionPointerType.cs | https://github.com/DavidObando/gsharp/issues/1906 | delegate*<...>/delegate* managed<...> map to G#'s managed `*func(T) R`; delegate* unmanaged[Cdecl|Stdcall|Thiscall|Fastcall]<...> maps to G#'s raw `unmanaged[CC] (T) -> R`. Bare `delegate* unmanaged<...>` and a combined/custom `[CC]` list are an Unsupported/ByDesign sub-case (issue #1906). |
+| FunctionPointerUnmanagedCallingConvention | FunctionPointerUnmanagedCallingConventionSyntax | ADR-0095 |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FunctionPointerType.cs | https://github.com/DavidObando/gsharp/issues/1906 |  |
+| FunctionPointerUnmanagedCallingConventionList | FunctionPointerUnmanagedCallingConventionListSyntax | ADR-0095 |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FunctionPointerType.cs | https://github.com/DavidObando/gsharp/issues/1906 |  |
 | GenericName | GenericNameSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/GenericName.cs |  |  |
 | GetAccessorDeclaration | AccessorDeclarationSyntax | ADR-0115 §B.11 |  |  |  |  |
 | GlobalStatement | GlobalStatementSyntax | ADR-0115 §B.11 |  |  |  | Entry-class hoisting (T3): top-level statements. |
-| GotoStatement | GotoStatementSyntax | ADR-0139 |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/GotoStatement.cs |  |  |
 | GreaterThanExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/GreaterThanExpression.cs |  |  |
 | GreaterThanOrEqualExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/GreaterThanOrEqualExpression.cs |  |  |
 | IdentifierName | IdentifierNameSyntax | ADR-0115 §B.12 |  |  |  |  |
@@ -132,7 +137,6 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | InvocationExpression | InvocationExpressionSyntax | ADR-0115 §B |  |  |  |  |
 | IsExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/IsExpression.cs |  |  |
 | IsPatternExpression | IsPatternExpressionSyntax | ADR-0115 §B.36 |  |  |  |  |
-| LabeledStatement | LabeledStatementSyntax | ADR-0139 |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/LabeledStatement.cs |  |  |
 | LeftShiftAssignmentExpression | AssignmentExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LeftShiftAssignmentExpression.cs |  |  |
 | LeftShiftExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LeftShiftExpression.cs |  |  |
 | LessThanExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LessThanExpression.cs |  |  |
@@ -162,7 +166,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | ObjectInitializerExpression | InitializerExpressionSyntax | ADR-0115 §B.11 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/ObjectCreationExpression.cs |  |  |
 | OmittedArraySizeExpression | OmittedArraySizeExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/OmittedArraySizeExpression.cs |  |  |
 | OmittedTypeArgument | OmittedTypeArgumentSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/OmittedTypeArgument.cs |  | nameof(List<>)/typeof(List<>) forms green (C#14); typeof of an unbound generic emits the bare generic-definition name (typeof(List)), which gsc's binder now resolves via arity-suffixed CLR lookup (issue #1915, fixed). |
-| OperatorDeclaration | OperatorDeclarationSyntax | ADR-0115 §B.31 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/OperatorDeclaration.cs |  | C#14 instance compound-assignment operators (op_AdditionAssignment and siblings) have no canonical G# form and are reported as a loud CS2GS-GAP instead of emitting invalid `operator +=` syntax (issue #1908, fixed; tracked as a known/open gap in tools/cs2gs/triage/gaps.json, grid app G07); Equals(object) is-pattern override fails ilverify (issue #1917). |
+| OperatorDeclaration | OperatorDeclarationSyntax | ADR-0115 §B.31 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/OperatorDeclaration.cs |  | C#14 instance compound-assignment operators fail round-trip (issue #1908); Equals(object) is-pattern override fails ilverify (issue #1917). |
 | OrAssignmentExpression | AssignmentExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/OrAssignmentExpression.cs |  |  |
 | OrPattern | BinaryPatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/OrPattern.cs |  |  |
 | Parameter | ParameterSyntax | ADR-0115 §B.5 |  |  |  |  |
@@ -249,7 +253,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | YieldBreakStatement | YieldStatementSyntax | ADR-0115 §B.34 |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/YieldBreakStatement.cs |  | Issue #994 (resolved). |
 | YieldReturnStatement | YieldStatementSyntax | ADR-0115 §B.34 |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/YieldReturnStatement.cs |  |  |
 
-## Lowered (19)
+## Lowered (17)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -260,8 +264,6 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | ExplicitInterfaceSpecifier | ExplicitInterfaceSpecifierSyntax | ADR-0091 / ADR-0115 §B |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/ExplicitInterfaceSpecifier.cs |  | G# has no explicit-interface-implementation surface (ADR-0091 rejected an 'IFoo.M(this)' spelling); a lone explicit impl lowers to a plain public method (fixes the prior ilverify miss, issue #1911). An explicit impl coexisting with a same-signature public method is dropped in favor of the public method (disclosed semantic-loss diagnostic, not covered by this fixture's stdout parity); two explicit impls of different interfaces with no public sibling de-duplicate to one surviving public method with no semantic loss. |
 | ForStatement | ForStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/ForStatement.cs |  | Lowered to a while loop when clauses demand it (issue #1732 incrementor-on-continue fix). |
 | FromClause | FromClauseSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/FromClauseSelectMany.cs |  | First from lowers to the source receiver; a second/subsequent from lowers to SelectMany with a transparent-identifier tuple result selector (issue #1902). |
-| GotoCaseStatement | GotoStatementSyntax | ADR-0139 |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/GotoCaseStatement.cs |  | Issue #1884: lowered to a plain `goto` targeting a synthesized label placed at the top of the matching case's translated body (no switch re-evaluation, so C# fall-through/evaluation order is preserved). |
-| GotoDefaultStatement | GotoStatementSyntax | ADR-0139 |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/GotoDefaultStatement.cs |  | Issue #1884: lowered like `goto case` (see GotoCaseStatement), targeting a synthesized label at the top of the default section's translated body. |
 | GroupClause | GroupClauseSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/GroupClause.cs |  | Query syntax lowered to the method-call chain, mirroring Roslyn (GroupBy, with identity-projection elision matching `select n`). |
 | JoinClause | JoinClauseSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/JoinClause.cs |  | Query syntax lowered to the method-call chain, mirroring Roslyn (Join with a transparent-identifier tuple result selector). |
 | JoinIntoClause | JoinIntoClauseSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/JoinIntoClause.cs |  | Query syntax lowered to the method-call chain, mirroring Roslyn (GroupJoin, with the `into` group variable typed `sequence[T]`). |
@@ -334,18 +336,16 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | XmlText | XmlTextSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | XmlTextAttribute | XmlTextAttributeSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 
-## Gap (13)
+## Gap (11)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| FunctionPointerCallingConvention | FunctionPointerCallingConventionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |
-| FunctionPointerParameter | FunctionPointerParameterSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |
-| FunctionPointerParameterList | FunctionPointerParameterListSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |
-| FunctionPointerType | FunctionPointerTypeSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |
-| FunctionPointerUnmanagedCallingConvention | FunctionPointerUnmanagedCallingConventionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |
-| FunctionPointerUnmanagedCallingConventionList | FunctionPointerUnmanagedCallingConventionListSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |
+| GotoCaseStatement | GotoStatementSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1884 |  |
+| GotoDefaultStatement | GotoStatementSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1884 |  |
+| GotoStatement | GotoStatementSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1884 |  |
 | ImplicitElementAccess | ImplicitElementAccessSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1897 |  |
 | ImplicitStackAllocArrayCreationExpression | ImplicitStackAllocArrayCreationExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1897 | ADR-0124 stackalloc surface. |
+| LabeledStatement | LabeledStatementSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1884 |  |
 | PointerMemberAccessExpression | MemberAccessExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1905 | p->X lowered to p.X; (*p).X compiles. |
 | RangeExpression | RangeExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1896 | Lowers to .Slice(...) which gsc cannot resolve on arrays/strings. |
 | RefExpression | RefExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1900 | ref argument/return seam (&x pass-by-address). |

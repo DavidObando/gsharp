@@ -94,6 +94,7 @@ TypePattern
 [GTypeReference]
 ArrayTypeReference
 ArrowTypeReference
+FunctionPointerTypeReference
 NamedTypeReference
 PointerTypeReference
 TupleTypeReference

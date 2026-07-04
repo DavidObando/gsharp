@@ -9,10 +9,11 @@
 // file, see CorpusDiscovery.AllowUnsafeIlMarkerFileName and
 // IlVerifyStage.ExecuteAsync), which treats an ilverify failure as expected
 // rather than gating, so FixedStatement/PointerType/StackAlloc now run
-// end-to-end. FunctionPointerType and RefType stay quarantined — those fail
-// earlier (stage 1 translate / gsc compile), unrelated to the unsafe-IL
-// policy. PointerMemberAccessExpression (`p->X`) is no longer quarantined
-// (issue #1905).
+// end-to-end. RefType stays quarantined — it fails earlier (stage 1
+// translate / gsc compile), unrelated to the unsafe-IL policy.
+// PointerMemberAccessExpression (`p->X`) is no longer quarantined (issue
+// #1905). FunctionPointerType is no longer quarantined (issue #1906):
+// managed function pointers now map to G#'s `*func(T) R` (ADR-0122 §9).
 using System;
 using Corpus.Grid12.Constructs;
 
@@ -24,11 +25,10 @@ namespace Corpus.Grid12
         {
             FixedStatementFixture.Run();
 
-            // QUARANTINED: FunctionPointerType. Stage 1 (translate) fails with
-            // CS2GS-GAP: "unsafe function-pointer type 'delegate*<int, int>'
-            // has no canonical G# form; G# does not support function-pointer
-            // types." See Constructs/FunctionPointerType.cs.quarantined.
-            // FunctionPointerTypeFixture.Run();
+            // Issue #1906: managed function pointers (`delegate*<...>` /
+            // `delegate* managed<...>`) now map to G#'s managed `*func(T) R`
+            // form (ADR-0122 §9).
+            FunctionPointerTypeFixture.Run();
 
             // Issue #1905: `p->X` now lowers to gsc's own native `->`
             // pointer-member operator (was silently emitted as bare `p.X`,

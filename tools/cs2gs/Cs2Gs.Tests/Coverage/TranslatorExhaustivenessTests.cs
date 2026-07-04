@@ -78,21 +78,38 @@ public class TranslatorExhaustivenessTests
     [Fact]
     public void UnregisteredConstruct_IsClassifiedAsGap()
     {
-        // A function-pointer type (`delegate*<…>`, FunctionPointerType) currently
-        // has no translation rule and is deliberately NOT in the
-        // UnsupportedByDesign registry, so the choke point must classify this as
-        // an accidental gap (tracked as issue #1906). (The C# 14 `field` keyword —
-        // the previous probe here — gained a translation in #1907.) If this
-        // construct gains a translation (or a registry entry), swap the snippet
-        // for another unregistered kind — the mechanism under test is the
-        // classification.
-        TranslationContext context = Translate(
-            "namespace S { public unsafe class C { public delegate*<int, int> M() { return null; } } }");
+        // Issue #1906: the function-pointer-type snippet previously probed
+        // here now TRANSLATES (delegate*<...> maps to G#'s *func(T) R /
+        // unmanaged[CC] (T) -> R forms), so it can no longer serve as an
+        // "accidental gap" probe. Rather than pin this test to whatever real
+        // C# construct happens to still be unimplemented today — which would
+        // only break again the next time cs2gs gains coverage — this drives
+        // the exact choke point (TranslationContext.ReportUnsupported)
+        // directly against a synthetic, deliberately-unregistered kind:
+        // NumericLiteralExpression is a fully-implemented, always-supported
+        // construct that will never be added to the UnsupportedByDesign
+        // registry, so ReportUnsupported must classify it as an accidental
+        // Gap. This makes the test permanently meaningful regardless of how
+        // much real coverage cs2gs gains.
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Fixture.cs", "class C { int M() => 1; }") });
+        Assert.True(
+            project.BoundWithoutErrors,
+            "fixture should bind with no C# errors:\n" + string.Join("\n", project.ErrorDiagnostics));
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+
+        var literal = document.GetRoot().DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax>()
+            .Single();
+        Assert.Equal(SyntaxKind.NumericLiteralExpression, literal.Kind());
+        Assert.False(
+            UnsupportedByDesign.TryGetRationale(literal.Kind(), out _),
+            "probe kind must stay unregistered for this test to be meaningful");
+
+        context.ReportUnsupported(literal, "synthetic gap probe (test-only; not a real translation gap)");
 
         TranslationDiagnostic diagnostic = context.Diagnostics.FirstOrDefault(d => d.IsUnsupported);
-        Assert.True(
-            diagnostic is not null,
-            "expected the function-pointer type to be unsupported; if it translates now, update this test's snippet.");
+        Assert.True(diagnostic is not null, "expected the synthetic probe to record an Unsupported diagnostic.");
         Assert.Equal(UnsupportedClassification.Gap, diagnostic.Classification);
         Assert.Equal(UnsupportedRationale.None, diagnostic.Rationale);
     }
