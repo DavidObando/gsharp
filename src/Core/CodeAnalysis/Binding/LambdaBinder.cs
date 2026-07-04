@@ -325,15 +325,22 @@ internal sealed class LambdaBinder
         var savedNarrowed = binderCtx.NarrowedVariables.ToList();
         binderCtx.NarrowedVariables.Clear();
 
+        // Issue #2027: a function literal (lambda OR local function — this
+        // method binds both) is its own goto/label frame; isolate it from
+        // the enclosing function's labels and loop stack.
+        var savedFrame = EnterNestedFrame();
+
         BoundStatement body;
         try
         {
             body = bindBlockStatement(syntax.Body);
+            FinalizeNestedFrameLabels();
         }
         finally
         {
             binderCtx.NarrowedVariables.Clear();
             binderCtx.NarrowedVariables.AddRange(savedNarrowed);
+            RestoreNestedFrame(savedFrame);
         }
 
         Scope = outerScope;
@@ -676,15 +683,24 @@ internal sealed class LambdaBinder
         var savedNarrowed = binderCtx.NarrowedVariables.ToList();
         binderCtx.NarrowedVariables.Clear();
 
+        // Issue #2027: an arrow lambda is its own goto/label frame — a
+        // block-bodied arrow lambda (`x => { ...; goto foo; foo: ...; }`)
+        // can contain loops and labels of its own, so isolate it from the
+        // enclosing function's labels and loop stack exactly like the
+        // function-literal path above.
+        var savedFrame = EnterNestedFrame();
+
         BoundExpression boundBody;
         try
         {
             boundBody = bindLambdaBodyExpression(syntax.Body);
+            FinalizeNestedFrameLabels();
         }
         finally
         {
             binderCtx.NarrowedVariables.Clear();
             binderCtx.NarrowedVariables.AddRange(savedNarrowed);
+            RestoreNestedFrame(savedFrame);
         }
 
         Scope = outerScope;
@@ -942,6 +958,84 @@ internal sealed class LambdaBinder
         }
 
         return element;
+    }
+
+    /// <summary>
+    /// Issue #2027: snapshots the enclosing frame's <c>goto</c>/label state
+    /// (<see cref="BinderContext.UserLabels"/>, <see cref="BinderContext.DefinedUserLabels"/>,
+    /// <see cref="BinderContext.UnresolvedGotoLabels"/>) and its
+    /// <see cref="BinderContext.LoopStack"/>, then resets all four to a
+    /// fresh empty state so a nested function-literal body (a lambda OR a
+    /// local function — both bind through <see cref="BindFunctionLiteralExpression"/>
+    /// / <see cref="BindLambdaExpression"/>) gets its own isolated goto/label
+    /// namespace and loop-label stack, matching ADR-0070's "label namespace
+    /// is local to the enclosing function" rule and C#'s prohibition on
+    /// cross-frame <c>goto</c> flow. Pair with <see cref="RestoreNestedFrame"/>.
+    /// </summary>
+    private NestedFrameState EnterNestedFrame()
+    {
+        var saved = new NestedFrameState(binderCtx);
+        binderCtx.UserLabels.Clear();
+        binderCtx.DefinedUserLabels.Clear();
+        binderCtx.UnresolvedGotoLabels.Clear();
+        binderCtx.LoopStack.Clear();
+        return saved;
+    }
+
+    /// <summary>
+    /// Issue #2027: reports GS0469 for any <c>goto</c> in the just-bound
+    /// nested frame that targets a label never declared inside that SAME
+    /// frame — the <see cref="StatementBinder.FinalizeUserLabels"/>
+    /// equivalent for a lambda / local-function body. Must run before
+    /// <see cref="RestoreNestedFrame"/> restores the outer label state, so a
+    /// nested-frame goto is checked only against the nested frame's own
+    /// labels (never silently satisfied by an outer label of the same
+    /// name).
+    /// </summary>
+    private void FinalizeNestedFrameLabels()
+    {
+        foreach (var entry in binderCtx.UnresolvedGotoLabels)
+        {
+            Diagnostics.ReportUndefinedGotoLabel(entry.Value, entry.Key);
+        }
+
+        binderCtx.UnresolvedGotoLabels.Clear();
+    }
+
+    /// <summary>
+    /// Issue #2027: restores the enclosing frame's goto/label state and
+    /// loop stack captured by <see cref="EnterNestedFrame"/>, undoing the
+    /// isolation so the enclosing function's own goto/label resolution
+    /// continues exactly as if the nested body had never been bound.
+    /// </summary>
+    private void RestoreNestedFrame(NestedFrameState saved)
+    {
+        binderCtx.UserLabels.Clear();
+        foreach (var kvp in saved.UserLabels)
+        {
+            binderCtx.UserLabels[kvp.Key] = kvp.Value;
+        }
+
+        binderCtx.DefinedUserLabels.Clear();
+        foreach (var name in saved.DefinedUserLabels)
+        {
+            binderCtx.DefinedUserLabels.Add(name);
+        }
+
+        binderCtx.UnresolvedGotoLabels.Clear();
+        foreach (var kvp in saved.UnresolvedGotoLabels)
+        {
+            binderCtx.UnresolvedGotoLabels[kvp.Key] = kvp.Value;
+        }
+
+        // BinderContext.LoopStack.ToArray() orders elements top-of-stack
+        // first; push back bottom-first so the restored stack's top matches
+        // the snapshot exactly.
+        binderCtx.LoopStack.Clear();
+        for (var i = saved.LoopStack.Length - 1; i >= 0; i--)
+        {
+            binderCtx.LoopStack.Push(saved.LoopStack[i]);
+        }
     }
 
     private static TypeSymbol ResolveLexicalEnclosingType(FunctionSymbol outerFunction)
@@ -1450,6 +1544,31 @@ internal sealed class LambdaBinder
         var collector = new CapturedVariableCollector(paramSet, seen, captured, outVarCollector.Declared);
         collector.RewriteStatement(body);
         return captured.ToImmutable();
+    }
+
+    /// <summary>
+    /// Issue #2027: immutable snapshot of the four pieces of
+    /// <see cref="BinderContext"/> state that must be per-frame — taken by
+    /// <see cref="EnterNestedFrame"/> and consumed by
+    /// <see cref="RestoreNestedFrame"/>.
+    /// </summary>
+    private readonly struct NestedFrameState
+    {
+        public NestedFrameState(BinderContext ctx)
+        {
+            UserLabels = new Dictionary<string, BoundLabel>(ctx.UserLabels);
+            DefinedUserLabels = new HashSet<string>(ctx.DefinedUserLabels);
+            UnresolvedGotoLabels = new Dictionary<string, TextLocation>(ctx.UnresolvedGotoLabels);
+            LoopStack = ctx.LoopStack.ToArray();
+        }
+
+        public Dictionary<string, BoundLabel> UserLabels { get; }
+
+        public HashSet<string> DefinedUserLabels { get; }
+
+        public Dictionary<string, TextLocation> UnresolvedGotoLabels { get; }
+
+        public (string LabelName, BoundLabel BreakLabel, BoundLabel ContinueLabel)[] LoopStack { get; }
     }
 
     // Issue #1451: collects the locals declared by inline `out var`/`out let`
