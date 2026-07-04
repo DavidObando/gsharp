@@ -11517,9 +11517,17 @@ public sealed class CSharpToGSharpTranslator
                 // a genuine gap rather than a silent zero-arg guess.
                 if (this.context.GetTypeInfo(implicitParamsAnonymousMethod).ConvertedType is INamedTypeSymbol { DelegateInvokeMethod: { } invokeMethod })
                 {
+                    // The body can never reference these params (C# gives them no
+                    // source names here), so reusing the delegate's DECLARED param
+                    // name (e.g. `Action<string>.Invoke`'s `obj`) would silently
+                    // shadow an outer captured local of the same name. Keep
+                    // MapParameter's type/refkind mapping but override the name
+                    // with a fresh `__anon{n}` identifier C# source can't produce.
+                    int index = 0;
                     foreach (IParameterSymbol invokeParameter in invokeMethod.Parameters)
                     {
-                        parameters.Add(this.MapParameter(invokeParameter, implicitParamsAnonymousMethod));
+                        Parameter mapped = this.MapParameter(invokeParameter, implicitParamsAnonymousMethod);
+                        parameters.Add(new Parameter($"__anon{index++}", mapped.Type, mapped.IsVariadic, mapped.RefKind, mapped.DefaultValue, mapped.Attributes));
                     }
                 }
                 else

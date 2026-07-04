@@ -32,6 +32,17 @@ namespace Corpus.Grid09
                 Console.WriteLine($"AnonymousMethodExpression: shout {s}!");
             };
             shout("hey");
+
+            // Parameterless anonymous method targeting Action<string>: the
+            // synthesized param must NOT reuse Invoke's declared param name
+            // ("obj"), else it silently shadows the captured outer "obj"
+            // local below and the call argument leaks into the body instead.
+            string obj = "captured";
+            Action<string> shoutObj = delegate
+            {
+                Console.WriteLine($"AnonymousMethodExpression: shoutObj={obj}");
+            };
+            shoutObj("ignored");
         }
     }
 }

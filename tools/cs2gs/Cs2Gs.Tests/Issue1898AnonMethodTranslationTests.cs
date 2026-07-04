@@ -111,6 +111,38 @@ namespace Corpus.Issue1898
     }
 
     [Fact]
+    public void ParameterlessDelegateBlock_SynthesizedParamNeverShadowsCapturedOuterLocal()
+    {
+        // Bug: synthesizing the Action<string>.Invoke param with its DECLARED
+        // name ("obj") would shadow the outer captured `obj` local — the body
+        // can never reference the delegate's own param (it has no source name
+        // in this form), so a fresh non-source name is required.
+        string rendered = Render(@"
+using System;
+
+namespace Corpus.Issue1898
+{
+    public class Holder
+    {
+        public void Describe()
+        {
+            int obj = 42;
+            Action<string> a = delegate
+            {
+                Console.WriteLine(obj);
+            };
+            a(""ignored"");
+        }
+    }
+}
+");
+
+        Assert.DoesNotContain("(obj string)", rendered, StringComparison.Ordinal);
+        Assert.Contains("Console.WriteLine(obj)", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
     public void TwoParameters_LowersToBlockBodiedFunctionLiteral()
     {
         string rendered = Render(@"
