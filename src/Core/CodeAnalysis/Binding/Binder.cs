@@ -360,6 +360,17 @@ public sealed class Binder
                                     continue;
                                 }
 
+                                // Issue #2044: `private` is not inherited (unlike
+                                // `protected`) — a base class's private field must
+                                // not be exposed as a bare name inside a derived
+                                // type's methods. Only the declaring type itself
+                                // (t == receiverStruct) sees its own private fields
+                                // this way.
+                                if (fld.Accessibility == Accessibility.Private && !ReferenceEquals(t, receiverStruct))
+                                {
+                                    continue;
+                                }
+
                                 if (seenMembers.Add(fld.Name))
                                 {
                                     scope.TryDeclareVariable(new ImplicitFieldVariableSymbol(function.ThisParameter, t, fld));
@@ -383,6 +394,14 @@ public sealed class Binder
                                 // property shadows that property for bare access; the
                                 // property stays reachable as `this.<property>`.
                                 if (paramNames.Contains(prop.Name))
+                                {
+                                    continue;
+                                }
+
+                                // Issue #2044: a base class's private property must
+                                // not be exposed as a bare name inside a derived
+                                // type's methods (private is not inherited).
+                                if (prop.Accessibility == Accessibility.Private && !ReferenceEquals(t, receiverStruct))
                                 {
                                     continue;
                                 }

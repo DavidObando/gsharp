@@ -5701,10 +5701,11 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        // Issue #950: enforce `protected` property access against the declaring type.
+        // Issue #950 / #2044: enforce `protected`/`private` property access
+        // against the declaring type.
         if (!AccessibilityChecker.IsAccessible(prop.Accessibility, declaringType, this.function))
         {
-            Diagnostics.ReportProtectedMemberInaccessible(member.IdentifierToken.Location, prop.Name, declaringType.Name);
+            Diagnostics.ReportMemberInaccessible(member.IdentifierToken.Location, prop.Name, declaringType.Name, prop.Accessibility);
         }
 
         var receiver = new BoundVariableExpression(null, function.ThisParameter);
@@ -5788,10 +5789,11 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        // Issue #950: enforce `protected` property assignment against the declaring type.
+        // Issue #950 / #2044: enforce `protected`/`private` property
+        // assignment against the declaring type.
         if (!AccessibilityChecker.IsAccessible(prop.Accessibility, declaringType, this.function))
         {
-            Diagnostics.ReportProtectedMemberInaccessible(memberLocation, prop.Name, declaringType.Name);
+            Diagnostics.ReportMemberInaccessible(memberLocation, prop.Name, declaringType.Name, prop.Accessibility);
         }
 
         var converted = conversions.BindConversion(valueLocation, value, prop.Type);

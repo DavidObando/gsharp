@@ -3327,11 +3327,12 @@ internal sealed partial class ExpressionBinder
                         // GS0204 if the field carries `@Obsolete`.
                         reportObsoleteUseIfApplicable(ne.IdentifierToken.Location, field, $"{declaringType.Name}.{field.Name}");
 
-                        // Issue #950: enforce `protected` field access — only the
-                        // declaring type and its derived types may read it.
+                        // Issue #950 / #2044: enforce `protected`/`private` field
+                        // access — only the declaring type (and, for
+                        // `protected`, its derived types) may read it.
                         if (!AccessibilityChecker.IsAccessible(field.Accessibility, declaringType, this.function))
                         {
-                            Diagnostics.ReportProtectedMemberInaccessible(ne.IdentifierToken.Location, field.Name, declaringType.Name);
+                            Diagnostics.ReportMemberInaccessible(ne.IdentifierToken.Location, field.Name, declaringType.Name, field.Accessibility);
                         }
 
                         // ADR-0122 §10 / issue #1035: a fixed-size buffer field
@@ -3358,10 +3359,11 @@ internal sealed partial class ExpressionBinder
                             return new BoundErrorExpression(null);
                         }
 
-                        // Issue #950: enforce `protected` property access.
+                        // Issue #950 / #2044: enforce `protected`/`private`
+                        // property access.
                         if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propDeclaringType, this.function))
                         {
-                            Diagnostics.ReportProtectedMemberInaccessible(ne.IdentifierToken.Location, prop.Name, propDeclaringType.Name);
+                            Diagnostics.ReportMemberInaccessible(ne.IdentifierToken.Location, prop.Name, propDeclaringType.Name, prop.Accessibility);
                         }
 
                         return ApplyMemberNarrowing(new BoundPropertyAccessExpression(null, receiver, structSym, prop));
@@ -5596,7 +5598,7 @@ internal sealed partial class ExpressionBinder
 
                 if (!AccessibilityChecker.IsAccessible(field.Accessibility, fieldDeclaringType, this.function))
                 {
-                    Diagnostics.ReportProtectedMemberInaccessible(ne.IdentifierToken.Location, field.Name, fieldDeclaringType.Name);
+                    Diagnostics.ReportMemberInaccessible(ne.IdentifierToken.Location, field.Name, fieldDeclaringType.Name, field.Accessibility);
                 }
 
                 return ApplyMemberNarrowing(new BoundFieldAccessExpression(null, receiver, fieldDeclaringType, field));
@@ -5612,7 +5614,7 @@ internal sealed partial class ExpressionBinder
 
                 if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propDeclaringType, this.function))
                 {
-                    Diagnostics.ReportProtectedMemberInaccessible(ne.IdentifierToken.Location, prop.Name, propDeclaringType.Name);
+                    Diagnostics.ReportMemberInaccessible(ne.IdentifierToken.Location, prop.Name, propDeclaringType.Name, prop.Accessibility);
                 }
 
                 return ApplyMemberNarrowing(new BoundPropertyAccessExpression(null, receiver, propDeclaringType, prop));
