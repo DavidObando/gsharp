@@ -5167,6 +5167,25 @@ public sealed class CSharpToGSharpTranslator
                     }
                 }
 
+                // Issue #1954: `var g2 = grid;` — a simple `var` local initialized
+                // directly from another local/parameter/field that is ITSELF a
+                // tracked flat-lowered multi-dim array (see `multiDimArrays`)
+                // aliases the SAME flat backing array, so `g2` is registered under
+                // the SAME `MultiDimArrayInfo` (any rank) rather than losing
+                // tracking and reporting the loud gap on its first `g2[i, j]`
+                // access. An explicitly-typed declaration, or a RHS that is
+                // anything other than a bare name/member reference to a tracked
+                // symbol (a method call, a conditional, ...), is not "simple
+                // aliasing" and is left to report the gap as before.
+                if (!hasExplicitType &&
+                    declarator.Initializer?.Value is IdentifierNameSyntax or MemberAccessExpressionSyntax &&
+                    this.context.GetSymbolInfo(declarator.Initializer.Value).Symbol is { } rhsAliasSymbol &&
+                    this.multiDimArrays.TryGetValue(rhsAliasSymbol, out MultiDimArrayInfo aliasedInfo) &&
+                    this.context.GetDeclaredSymbol(declarator) is { } declaredAliasSymbol)
+                {
+                    this.multiDimArrays[declaredAliasSymbol] = aliasedInfo;
+                }
+
                 // Issue #1894: a local's declared type normally only reaches
                 // CSharpTypeMapper.Map when an explicit type clause is emitted
                 // below — but when the declared type equals the initializer's
@@ -5589,6 +5608,31 @@ public sealed class CSharpToGSharpTranslator
             }
 
             ExpressionSyntax indexSyntax = elementAccess.ArgumentList.Arguments[0].Expression;
+            ITypeSymbol indexType = this.context.GetTypeInfo(indexSyntax).Type;
+            if (indexType != null &&
+                IsNonNullableValueType(indexType) &&
+                IsIntegerNotWideningToInt32(indexType))
+            {
+                ITypeSymbol int32Type =
+                    this.context.Compilation.GetSpecialType(SpecialType.System_Int32);
+                return this.CoerceOperandTo(index, int32Type);
+            }
+
+            return index;
+        }
+
+        // Issue #1954: a multi-index access's flat index is rebuilt with real
+        // arithmetic (`i0*dim1 + i1`, each `dim` an int32 hoisted `let`/
+        // literal — see `TranslateMultiDimElementAccess`), unlike the
+        // single-index path above where the index is handed unmodified to
+        // gsc's own indexer, which itself accepts any integer kind (#1279).
+        // Mixing a wide index (`long`/`ulong`/`nint`/`nuint`) into that int32
+        // arithmetic needs the same widening-coercion rule `CoerceIndexToInt32`
+        // applies, so this mirrors its tail check directly against the index
+        // syntax rather than re-deriving it from an `ElementAccessExpression`
+        // argument-count/indexer-target shape that does not apply here.
+        private GExpression CoerceMultiDimIndexToInt32(ExpressionSyntax indexSyntax, GExpression index)
+        {
             ITypeSymbol indexType = this.context.GetTypeInfo(indexSyntax).Type;
             if (indexType != null &&
                 IsNonNullableValueType(indexType) &&
@@ -10601,6 +10645,18 @@ public sealed class CSharpToGSharpTranslator
         /// field, parameter, or return value — see the deliberate scope note on
         /// <see cref="multiDimArrays"/>) reports the loud gap instead of
         /// silently collapsing to 1-D.
+        /// <para>
+        /// Issue #1954: a flat index that is in range overall
+        /// (<c>0 &lt;= flat &lt; dim0*dim1*...</c>) is not necessarily in range
+        /// PER DIMENSION — <c>grid[r, c]</c> with <c>r &lt; rows</c> but
+        /// <c>c &gt;= cols</c> can still land at a flat index
+        /// <c>r*cols + c &lt; rows*cols</c>, silently reading/writing the WRONG
+        /// cell instead of C#'s per-dimension <c>IndexOutOfRangeException</c>.
+        /// Every index is therefore range-checked against its own dimension
+        /// size (<c>0 &lt;= i_k &lt; dim_k</c>) before the flat index is used,
+        /// throwing <c>IndexOutOfRangeException</c> to match C#'s crash instead
+        /// of continuing on to the wrong cell.
+        /// </para>
         /// </summary>
         private GExpression TranslateMultiDimElementAccess(ElementAccessExpressionSyntax elementAccess, int rank)
         {
@@ -10619,8 +10675,13 @@ public sealed class CSharpToGSharpTranslator
                     target, this.TranslateExpression(elementAccess.ArgumentList.Arguments[0].Expression));
             }
 
+            // Each index is spilled (issue #1731 machinery) so a non-trivial
+            // index expression (a call, a mutating pre/post-increment, ...) is
+            // evaluated exactly once even though it is read again below by the
+            // per-dimension bounds check.
             List<GExpression> indexArguments = elementAccess.ArgumentList.Arguments
-                .Select(a => this.TranslateExpression(a.Expression))
+                .Select(a => this.SpillOperand(
+                    this.CoerceMultiDimIndexToInt32(a.Expression, this.TranslateExpression(a.Expression))))
                 .ToList();
 
             // Row-major flattening: acc = i0; acc = acc*dim1 + i1; acc = acc*dim2 + i2; ...
@@ -10631,7 +10692,25 @@ public sealed class CSharpToGSharpTranslator
                     new BinaryExpression(flatIndex, "*", info.DimensionSizes[i]), "+", indexArguments[i]);
             }
 
-            return new IndexExpression(target, flatIndex);
+            GExpression inBoundsCheck = null;
+            for (int i = 0; i < rank; i++)
+            {
+                GExpression dimensionInBounds = new BinaryExpression(
+                    new BinaryExpression(indexArguments[i], ">=", LiteralExpression.Int("0")),
+                    "&&",
+                    new BinaryExpression(indexArguments[i], "<", info.DimensionSizes[i]));
+                inBoundsCheck = inBoundsCheck == null
+                    ? dimensionInBounds
+                    : new BinaryExpression(inBoundsCheck, "&&", dimensionInBounds);
+            }
+
+            GTypeReference int32Type = this.typeMapper.Map(
+                this.context.Compilation.GetSpecialType(SpecialType.System_Int32), this.context, elementAccess.GetLocation());
+            GExpression outOfRangeThrow = new ThrowExpression(
+                BuildConstruction(new NamedTypeReference("IndexOutOfRangeException"), Array.Empty<GExpression>()),
+                int32Type);
+
+            return new IndexExpression(target, new IfExpression(inBoundsCheck, flatIndex, outOfRangeThrow));
         }
 
         private GExpression TranslateStackAlloc(StackAllocArrayCreationExpressionSyntax node)

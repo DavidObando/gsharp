@@ -72,12 +72,26 @@ namespace Corpus.Issue1893
         Assert.Contains("let gridDim1", rendered, StringComparison.Ordinal);
         Assert.Contains("let grid = [gridDim0 * gridDim1]int32", rendered, StringComparison.Ordinal);
 
-        // Every write keeps both indices, flattened row-major (r * cols + c).
-        Assert.Contains("grid[0 * gridDim1 + 0] = 1", rendered, StringComparison.Ordinal);
-        Assert.Contains("grid[1 * gridDim1 + 2] = 6", rendered, StringComparison.Ordinal);
+        // Every write keeps both indices, flattened row-major (r * cols + c),
+        // guarded by a per-dimension bounds check (issue #1954) that throws
+        // instead of silently landing on the wrong cell.
+        Assert.Contains(
+            "grid[if 0 >= 0 && 0 < gridDim0 && (0 >= 0 && 0 < gridDim1) { 0 * gridDim1 + 0 } " +
+                "else { throw IndexOutOfRangeException()",
+            rendered,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "grid[if 1 >= 0 && 1 < gridDim0 && (2 >= 0 && 2 < gridDim1) { 1 * gridDim1 + 2 } " +
+                "else { throw IndexOutOfRangeException()",
+            rendered,
+            StringComparison.Ordinal);
 
-        // The read in the sum loop also keeps both indices.
-        Assert.Contains("grid[r * gridDim1 + c]", rendered, StringComparison.Ordinal);
+        // The read in the sum loop also keeps both indices and the bounds check.
+        Assert.Contains(
+            "grid[if r >= 0 && r < gridDim0 && (c >= 0 && c < gridDim1) { r * gridDim1 + c } " +
+                "else { throw IndexOutOfRangeException()",
+            rendered,
+            StringComparison.Ordinal);
 
         // GetLength(0)/GetLength(1) resolve to the tracked per-dimension sizes,
         // not a call into a rank-1 CLR array's GetLength (which would throw).
@@ -111,8 +125,13 @@ namespace Corpus.Issue1893
         Assert.DoesNotContain("object", rendered, StringComparison.Ordinal);
 
         // The read keeps both indices, flattened against the constant column
-        // count (3) inferred from the initializer's shape.
-        Assert.Contains("lit[1 * 3 + 2]", rendered, StringComparison.Ordinal);
+        // count (3) inferred from the initializer's shape, guarded by the same
+        // per-dimension bounds check (issue #1954).
+        Assert.Contains(
+            "lit[if 1 >= 0 && 1 < 2 && (2 >= 0 && 2 < 3) { 1 * 3 + 2 } " +
+                "else { throw IndexOutOfRangeException()",
+            rendered,
+            StringComparison.Ordinal);
 
         AssertRoundTripParses(rendered);
     }
