@@ -17,6 +17,9 @@ ForEachStatement: square=4
 ForEachStatement: square=9
 ForEachStatement: square=16
 ForEachStatement: total=30
+SimpleLambdaExpression: doubled=30
+SimpleLambdaExpression: combined=42
+SimpleLambdaExpression: zero-arg async lambda ran
 TryStatement: loop step 1 total=10
 TryStatement: loop step 2 total=30
 TryStatement: loop step 3 total=60
