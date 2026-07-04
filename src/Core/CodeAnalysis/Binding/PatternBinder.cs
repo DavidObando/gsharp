@@ -333,7 +333,20 @@ internal sealed class PatternBinder
             return new BoundPropertyPattern(syntax, discriminantType, fields.ToImmutable());
         }
 
-        if (discriminantType is not StructSymbol structType)
+        // Issue #1923: a property pattern against a nullable CLASS-typed
+        // subject (`Address?`) is legal — it implicitly requires the value to
+        // be non-null (mirroring C#'s recursive-pattern rule that `null`
+        // never matches `{ ... }`). Unwrap to the underlying struct/class for
+        // field lookup; the emitter inserts the corresponding null guard
+        // before reading any field. A nullable VALUE-type struct (`Nullable<T>`
+        // CLR boxing) is a different, more involved shape and is not unwrapped
+        // here — it still reports GS0172.
+        var lookupType = discriminantType is NullableTypeSymbol nullableDiscriminant
+            && IsReferenceType(nullableDiscriminant.UnderlyingType)
+            ? nullableDiscriminant.UnderlyingType
+            : discriminantType;
+
+        if (lookupType is not StructSymbol structType)
         {
             Diagnostics.ReportPropertyPatternRequiresStructOrClass(syntax.OpenBraceToken.Location, discriminantType);
             return new BoundPropertyPattern(syntax, discriminantType, fields.ToImmutable());
@@ -357,6 +370,19 @@ internal sealed class PatternBinder
     // Issue #1887: resolve a tuple's synthetic Item1..ItemN field by name so a
     // property/positional pattern (`{ Item1: 0, Item2: 0 }`) binds against a
     // ValueTuple subject the same way it does against a struct's real fields.
+    // Issue #1923: true when `type` is a CLR reference type — either a
+    // user-declared `class` (StructSymbol.IsClass) or an imported/CLR type
+    // whose ClrType reports IsValueType == false. Used to decide whether a
+    // nullable discriminant (`T?`) can be unwrapped for a property pattern
+    // (nullable value-type structs, which box as `Nullable<T>`, are a
+    // different shape and are intentionally excluded).
+    private static bool IsReferenceType(TypeSymbol type) => type switch
+    {
+        StructSymbol s => s.IsClass,
+        { ClrType: { IsValueType: false } } => true,
+        _ => false,
+    };
+
     private static bool TryGetTupleField(TupleTypeSymbol tupleType, string name, out FieldSymbol field)
     {
         field = null;

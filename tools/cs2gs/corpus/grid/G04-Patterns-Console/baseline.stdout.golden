@@ -68,6 +68,9 @@ RecursivePattern: person has a Lima-range zip
 RecursivePattern: name length 3 = True
 RecursivePattern: nested var binds address city = Lima
 RecursivePattern: routed to routed via Cusco
+RecursivePattern: nested property pattern = True
+RecursivePattern: classify = ada
+RecursivePattern: boxed match = True
 RelationalPattern: -10 degrees is freezing
 RelationalPattern: 0 degrees is cold
 RelationalPattern: 15 degrees is cold

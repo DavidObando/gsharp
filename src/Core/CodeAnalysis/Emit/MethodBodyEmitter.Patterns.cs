@@ -300,11 +300,24 @@ internal sealed partial class MethodBodyEmitter
     private void EmitPropertyPattern(BoundPropertyPattern pp, Action loadValue, TypeSymbol valueType, LabelHandle failLabel)
     {
         // Property patterns apply to GSharp struct/class discriminants.
-        // If the discriminant is a nullable class reference, the binder
-        // does not narrow on its own; we do not emit a null check here
-        // because a non-nullable static type carries the contract that
-        // the value is non-null. Fields are accessed via ldfld on the
-        // value (struct: ldfld on value, class: ldfld through ref).
+        // Fields are accessed via ldfld on the value (struct: ldfld on
+        // value, class: ldfld through ref).
+        //
+        // Issue #1923: a nullable CLASS-typed subject (`Address?`) is
+        // accepted by the binder (PatternBinder.BindPropertyPattern) on the
+        // understanding that `null` never matches `{ ... }` — mirroring C#'s
+        // recursive-pattern rule. Emit that guard here: load the value once
+        // and branch to failLabel when it is null (empty stack on the
+        // failure path, matching every other pattern's contract), then
+        // continue field emission against the underlying reference type.
+        if (valueType is NullableTypeSymbol nullableValueType
+            && !ReflectionMetadataEmitter.IsValueTypeSymbol(nullableValueType.UnderlyingType))
+        {
+            loadValue();
+            this.il.Branch(ILOpCode.Brfalse, failLabel);
+            valueType = nullableValueType.UnderlyingType;
+        }
+
         if (valueType is TupleTypeSymbol tupleType)
         {
             // Issue #1887: cs2gs lowers a C# positional pattern over a raw

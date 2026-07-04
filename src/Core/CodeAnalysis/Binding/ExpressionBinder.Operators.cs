@@ -1539,6 +1539,33 @@ internal sealed partial class ExpressionBinder
     {
         var boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
 
+        // Issue #1923: boxed-constant equality (`answer == 42` where `answer`
+        // is typed `object`). The operator table only registers the
+        // homogeneous `object == object -> bool` arm, so a non-`object`
+        // operand (e.g. an `int32` constant on the other side) previously
+        // fell through to GS0129 "operator not defined for 'object' and
+        // 'int32'" even though C# boxes the value-type operand and compares
+        // by reference identity. When exactly one side is `object` and the
+        // OTHER side has an implicit (boxing) conversion to `object`, box it
+        // and rebind the homogeneous `object == object` operator.
+        if (boundOperator == null && (operatorKind == SyntaxKind.EqualsEqualsToken || operatorKind == SyntaxKind.BangEqualsToken))
+        {
+            if (boundLeft.Type == TypeSymbol.Object
+                && boundRight.Type != TypeSymbol.Object
+                && Conversion.Classify(boundRight.Type, TypeSymbol.Object).IsImplicit)
+            {
+                boundRight = conversions.BindConversion(rightLocation, boundRight, TypeSymbol.Object);
+                boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
+            }
+            else if (boundRight.Type == TypeSymbol.Object
+                && boundLeft.Type != TypeSymbol.Object
+                && Conversion.Classify(boundLeft.Type, TypeSymbol.Object).IsImplicit)
+            {
+                boundLeft = conversions.BindConversion(leftLocation, boundLeft, TypeSymbol.Object);
+                boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
+            }
+        }
+
         // issue #1144: constant integer-literal adaptation (C#-style
         // constant-expression conversion). When exactly one operand is a
         // compile-time constant integer literal and the OTHER operand is a

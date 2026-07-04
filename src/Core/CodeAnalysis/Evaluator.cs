@@ -3546,6 +3546,18 @@ public sealed class Evaluator
             return false;
         }
 
+        // Issue #1923: every GSharp struct/class value is implicitly
+        // convertible (boxable) to `object` — an `is object` / `object o`
+        // type-test against a struct/class-typed subject always succeeds,
+        // exactly like the emitter's `isinst object` (which never fails for
+        // a non-null reference). The base-class walk below only chases
+        // `StructType`/`BaseClass` links, which never reach the universal
+        // `object` top type, so this must be checked first.
+        if (targetType == TypeSymbol.Object)
+        {
+            return true;
+        }
+
         if (value is StructValue sv)
         {
             for (var t = sv.StructType; t != null; t = t.BaseClass)

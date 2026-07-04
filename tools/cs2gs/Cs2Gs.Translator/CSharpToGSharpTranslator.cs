@@ -8233,7 +8233,7 @@ public sealed class CSharpToGSharpTranslator
                         new TypeExpression(this.MapTypeSyntax(typePattern.Type)));
 
                 case RecursivePatternSyntax recursive:
-                    return this.TranslateRecursivePatternTest(receiver, recursive, receiverSyntax);
+                    return this.TranslateRecursivePatternTest(receiver, recursive, receiverSyntax, receiverType);
 
                 case VarPatternSyntax varPattern:
                     // `x is var v` ALWAYS matches (it also matches `null`, unlike a
@@ -8509,7 +8509,7 @@ public sealed class CSharpToGSharpTranslator
         }
 
         private GExpression TranslateRecursivePatternTest(
-            GExpression receiver, RecursivePatternSyntax recursive, ExpressionSyntax receiverSyntax = null)
+            GExpression receiver, RecursivePatternSyntax recursive, ExpressionSyntax receiverSyntax = null, ITypeSymbol receiverType = null)
         {
             // Bind the designator (`is { } x`, `is Circle c`) to the narrowed
             // receiver so later references read the matched value (ADR-0069 smart
@@ -8534,9 +8534,39 @@ public sealed class CSharpToGSharpTranslator
             bool receiverIsValueType = recursive.Type == null &&
                 this.context.SemanticModel.GetOperation(recursive) is IRecursivePatternOperation { MatchedType.IsValueType: true };
 
+            // Issue #1923: a NESTED bare recursive pattern (`{ Address: { City:
+            // "Lima" } }`) recurses into this method with `receiver` bound to the
+            // member access (`person.Address`) and its declared/flow type passed
+            // through as `receiverType`. Unlike C#, where every reference type is
+            // nullable at runtime and a defensive `!= null` is always legal, G#'s
+            // null model treats a non-nullable reference type as truly non-null —
+            // `!= nil` against one is rejected (GS0129). Skip the null check when
+            // the member's G# type is a non-nullable reference; the member-access
+            // sub-tests below are then the whole test, matching the value-type
+            // treatment above.
+            //
+            // `receiverType` (when it comes from `TranslateIsPattern`'s
+            // `GetTypeInfo(...).Type`) is Roslyn's FLOW type, which reports
+            // `NullableAnnotation.None` — not `Annotated` — for a `T?` local once
+            // the corpus's nullable annotations context is disabled (the common
+            // case here, see `IsNullableInitializer`). That would make a truly
+            // nullable top-level receiver like `person` look non-nullable and
+            // wrongly drop its guard. `ResolveDeclaredReceiverType` prefers the
+            // bound symbol's own DECLARED type (`ILocalSymbol.Type`, etc.), which
+            // reliably preserves the syntactic `?` regardless of context state;
+            // it falls back to `receiverType` itself only when no symbol binds
+            // (e.g. the constructed `person.Address` member access from the
+            // property-pattern loop below, whose `receiverType` already comes
+            // from a declared property/field symbol via
+            // <see cref="TryGetSubpatternMemberType"/>).
+            ITypeSymbol declaredReceiverType = this.ResolveDeclaredReceiverType(receiverType, receiverSyntax);
+            bool receiverIsNonNullableReference = recursive.Type == null
+                && declaredReceiverType is { IsReferenceType: true }
+                && declaredReceiverType.NullableAnnotation != NullableAnnotation.Annotated;
+
             GExpression test = recursive.Type != null
                 ? new BinaryExpression(receiver, "is", new TypeExpression(this.MapTypeSyntax(recursive.Type)))
-                : receiverIsValueType ? null : new BinaryExpression(receiver, "!=", LiteralExpression.Null());
+                : (receiverIsValueType || receiverIsNonNullableReference) ? null : new BinaryExpression(receiver, "!=", LiteralExpression.Null());
 
             if (recursive.PropertyPatternClause != null)
             {
@@ -8551,7 +8581,8 @@ public sealed class CSharpToGSharpTranslator
                     string memberName = sub.NameColon?.Name.Identifier.Text
                         ?? sub.ExpressionColon?.Expression.ToString();
                     GExpression memberAccess = new MemberAccessExpression(receiver, SanitizeIdentifier(memberName));
-                    GExpression memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern);
+                    ITypeSymbol memberType = this.TryGetSubpatternMemberType(sub);
+                    GExpression memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern, memberType);
                     test = test == null ? memberTest : new BinaryExpression(test, "&&", memberTest);
                 }
             }
@@ -8595,6 +8626,62 @@ public sealed class CSharpToGSharpTranslator
             // receiver: no null check applies and no member test was emitted, so
             // the pattern always matches.
             return test ?? LiteralExpression.Bool(true);
+        }
+
+        // Issue #1923: prefers the DECLARED symbol type bound to
+        // <paramref name="receiverSyntax"/> (an `ILocalSymbol`/`IParameterSymbol`/
+        // `IPropertySymbol`/`IFieldSymbol`'s own `.Type`) over
+        // <paramref name="receiverType"/> when available, falling back to
+        // <paramref name="receiverType"/> itself otherwise (e.g. a synthesized
+        // member-access receiver whose type already came from a declared
+        // property/field symbol). Mirrors <see cref="IsNullableInitializer"/>'s
+        // "declared annotation survives a disabled nullable context" fallback:
+        // `receiverType`, when sourced from `GetTypeInfo(expr).Type` (Roslyn's
+        // flow-sensitive converted type), reports `NullableAnnotation.None` for
+        // a `T?` local/parameter once the corpus compiles with nullable
+        // annotations disabled, which would make a genuinely nullable receiver
+        // look non-nullable.
+        private ITypeSymbol ResolveDeclaredReceiverType(ITypeSymbol receiverType, ExpressionSyntax receiverSyntax)
+        {
+            if (receiverSyntax == null)
+            {
+                return receiverType;
+            }
+
+            ISymbol symbol = this.context.GetSymbolInfo(receiverSyntax).Symbol;
+            return symbol switch
+            {
+                ILocalSymbol l => l.Type,
+                IParameterSymbol p => p.Type,
+                IPropertySymbol pr => pr.Type,
+                IFieldSymbol f => f.Type,
+                _ => receiverType,
+            };
+        }
+
+        // Issue #1923: resolves the DECLARED C# type of a named property-pattern
+        // subpattern's member (`sub.NameColon.Name`, e.g. `Address` in
+        // `{ Address: { City: "Lima" } }`), so a NESTED bare recursive pattern
+        // can tell whether its receiver is a non-nullable reference type — and
+        // therefore whether the `!= nil` guard `TranslateRecursivePatternTest`
+        // would otherwise emit is even legal in G#'s stricter null model.
+        // Returns null for an expression-colon subpattern (`sub.ExpressionColon`)
+        // or when the identifier does not bind to a property/field, in which
+        // case the caller conservatively falls back to emitting the guard.
+        private ITypeSymbol TryGetSubpatternMemberType(SubpatternSyntax sub)
+        {
+            if (sub.NameColon == null)
+            {
+                return null;
+            }
+
+            ISymbol symbol = this.context.SemanticModel.GetSymbolInfo(sub.NameColon.Name).Symbol;
+            return symbol switch
+            {
+                IPropertySymbol p => p.Type,
+                IFieldSymbol f => f.Type,
+                _ => null,
+            };
         }
 
         // Resolves the property name each positional subpattern of `recursive`
@@ -10982,6 +11069,28 @@ public sealed class CSharpToGSharpTranslator
             // zero, matching the C# `(int)` truncation semantics, so e.g.
             // `(int)Math.Floor(d + 0.5)` is behavior-faithful.
             ITypeSymbol targetSymbol = this.context.GetTypeInfo(cast.Type).Type;
+
+            // Issue #1923: `(object)x` / `(object?)x` over a REFERENCE-typed
+            // `x` (a class, not a value type) is a pure upcast on the CLR — no
+            // boxing IL is produced, unlike the value-type case the `T(expr)`
+            // form exists for. Translating it as a real conversion-call would
+            // need a `T?(expr)`-shaped cast for a nullable source/target,
+            // which has no canonical G# parse form; more importantly it is
+            // unnecessary, since the underlying pattern/member tests below a
+            // reference upcast behave identically whether performed through
+            // the boxed `object` reference or directly on the original
+            // reference (e.g. a subsequent `is RpPerson` downcast test). Drop
+            // the cast and translate the operand alone, letting the
+            // surrounding context (a spill's inferred type, a switch/`is`
+            // subject) drive typing, mirroring gsc's own no-op upcast lowering
+            // for class → object (see `Conversion.Classify`, issue #1229).
+            ITypeSymbol sourceSymbol = this.context.GetTypeInfo(cast.Expression).Type;
+            if (targetSymbol is { SpecialType: SpecialType.System_Object }
+                && sourceSymbol is { IsReferenceType: true })
+            {
+                return this.TranslateExpression(cast.Expression);
+            }
+
             GTypeReference targetType = targetSymbol != null
                 ? this.typeMapper.Map(targetSymbol, this.context, cast.Type.GetLocation())
                 : new NamedTypeReference(cast.Type.ToString());
