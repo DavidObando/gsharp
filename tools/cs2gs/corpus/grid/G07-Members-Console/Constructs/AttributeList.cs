@@ -1,8 +1,6 @@
 // inventory: AttributeList — BCL attributes applied to a type and a member,
-// plus (issue #1921, fixed) a user-defined attribute class applied to a type.
-// QUARANTINED sub-probes:
-//   * an attribute on a parameter ([Note] int seed) is SILENTLY dropped from the
-//     emitted G# (no diagnostic; not observable via stdout without reflection).
+// a user-defined attribute class applied to a type (issue #1921, fixed), and
+// (issue #1913, fixed) a user-defined attribute applied to a PARAMETER.
 using System;
 using System.Linq;
 using System.Reflection;
@@ -46,6 +44,19 @@ namespace Corpus.Grid07
     {
     }
 
+    // Issue #1913: an attribute on a PARAMETER (e.g. `[Note] int seed`) used to
+    // be silently dropped from the emitted G# — no diagnostic, and not
+    // observable via stdout without reflection (which is exactly why this
+    // probe reads the parameter's custom attributes back via `MethodInfo`
+    // rather than just exercising the method's return value).
+    public class GaugedGadget
+    {
+        public int Measure([Note("gauged seed")] int seed)
+        {
+            return seed * 2;
+        }
+    }
+
     public static class AttributeListFixture
     {
         public static void Run()
@@ -59,6 +70,19 @@ namespace Corpus.Grid07
                 .OfType<NoteAttribute>()
                 .First();
             Console.WriteLine("AttributeList: note=" + note.Text);
+
+            ParameterInfo seedParameter = typeof(GaugedGadget)
+                .GetMethod("Measure")
+                .GetParameters()
+                .Single();
+            NoteAttribute paramNote = seedParameter.GetCustomAttributes(true)
+                .OfType<NoteAttribute>()
+                .First();
+            Console.WriteLine("AttributeList: paramNote=" + paramNote.Text);
+
+            GaugedGadget gaugedGadget = new GaugedGadget();
+            Console.WriteLine("AttributeList: measured=" + gaugedGadget.Measure(21).ToString());
         }
     }
 }
+

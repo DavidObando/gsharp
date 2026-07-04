@@ -4,6 +4,8 @@ ArrowExpressionClause: tripled=63
 AttributeList: old=42
 AttributeList: renew=42
 AttributeList: note=hand-written note
+AttributeList: paramNote=gauged seed
+AttributeList: measured=42
 BaseConstructorInitializer: kind=truck wheels=6
 ConstructorDeclaration: blank=unassigned@0
 ConstructorDeclaration: assigned=kim@12

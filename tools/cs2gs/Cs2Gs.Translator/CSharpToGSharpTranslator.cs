@@ -3249,7 +3249,22 @@ public sealed class CSharpToGSharpTranslator
 
             GExpression defaultValue = this.BuildOptionalParameterDefault(symbol, type, fallbackNode);
 
-            return new Parameter(SanitizeIdentifier(symbol.Name), type, variadic, refKind, defaultValue);
+            // Issue #1913: a parameter's own attributes (e.g. `[Note] int x`) live on
+            // its `ParameterSyntax`, not on `fallbackNode` (which can be the whole
+            // parameter LIST when `symbol` came from `MapParameters`). Resolve the
+            // parameter's declaring syntax directly from the symbol so both call
+            // paths route through the same `MapAttributes` helper every other
+            // declaration kind already uses — otherwise the attribute is silently
+            // dropped with no diagnostic.
+            ParameterSyntax parameterSyntax = symbol.DeclaringSyntaxReferences
+                .Select(syntaxReference => syntaxReference.GetSyntax())
+                .OfType<ParameterSyntax>()
+                .FirstOrDefault();
+            List<AttributeUse> attributes = parameterSyntax != null
+                ? this.MapAttributes(parameterSyntax.AttributeLists)
+                : null;
+
+            return new Parameter(SanitizeIdentifier(symbol.Name), type, variadic, refKind, defaultValue, attributes);
         }
 
         /// <summary>
@@ -3399,20 +3414,52 @@ public sealed class CSharpToGSharpTranslator
                         }
                     }
 
-                    string attributeName = attribute.Name.ToString();
-                    int aliasSeparator = attributeName.IndexOf("::", System.StringComparison.Ordinal);
-                    if (aliasSeparator >= 0)
-                    {
-                        // Strip a `global::` (or extern-alias) qualifier; G# has no
-                        // alias-qualified name syntax.
-                        attributeName = attributeName.Substring(aliasSeparator + 2);
-                    }
+                    string attributeName = this.TranslateAttributeName(attribute.Name);
 
                     attributes.Add(new AttributeUse(attributeName, arguments, target));
                 }
             }
 
             return attributes;
+        }
+
+        // Issue #1913: a C# 11 generic attribute (`[Tag<int>]`) parses its type
+        // arguments in ANGLE brackets, so `nameSyntax.ToString()` carries them as
+        // `Tag<int>` verbatim. G# has no angle-bracket syntax at all (ADR-0020) —
+        // every generic construct, including a generic attribute, spells its
+        // type-argument list in SQUARE brackets. Reuse the same
+        // <see cref="MapTypeArguments"/>/<see cref="GSharpPrinter.RenderTypeReference"/>
+        // path a generic type reference or generic call already routes through,
+        // rather than hand-rolling the bracket text, so an unsupported/unresolvable
+        // type argument still gets the placeholder the type mapper already emits.
+        private string TranslateAttributeName(NameSyntax nameSyntax)
+        {
+            string attributeName = nameSyntax.ToString();
+            int aliasSeparator = attributeName.IndexOf("::", System.StringComparison.Ordinal);
+            if (aliasSeparator >= 0)
+            {
+                // Strip a `global::` (or extern-alias) qualifier; G# has no
+                // alias-qualified name syntax.
+                attributeName = attributeName.Substring(aliasSeparator + 2);
+            }
+
+            GenericNameSyntax generic = nameSyntax switch
+            {
+                GenericNameSyntax g => g,
+                QualifiedNameSyntax { Right: GenericNameSyntax g } => g,
+                AliasQualifiedNameSyntax { Name: GenericNameSyntax g } => g,
+                _ => null,
+            };
+
+            if (generic == null)
+            {
+                return attributeName;
+            }
+
+            IReadOnlyList<GTypeReference> typeArguments = this.MapTypeArguments(generic);
+            string baseName = attributeName.Substring(0, attributeName.IndexOf('<'));
+            string typeArgumentList = string.Join(", ", typeArguments.Select(GSharpPrinter.RenderTypeReference));
+            return $"{baseName}[{typeArgumentList}]";
         }
 
         // Issue #1731 N1: attribute-argument expressions here can never be an

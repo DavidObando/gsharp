@@ -1516,6 +1516,7 @@ internal sealed class DeclarationBinder
                         {
                             var classMethodParam = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
                             conversions.BindAndAttachParameterDefaultValue(parameterSyntax, classMethodParam);
+                            BindAndAttachParameterAttributes(parameterSyntax, classMethodParam);
                             parameters.Add(classMethodParam);
                         }
                     }
@@ -2333,6 +2334,7 @@ internal sealed class DeclarationBinder
                         {
                             var staticMethodParam = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
                             conversions.BindAndAttachParameterDefaultValue(parameterSyntax, staticMethodParam);
+                            BindAndAttachParameterAttributes(parameterSyntax, staticMethodParam);
                             parameters.Add(staticMethodParam);
                         }
                     }
@@ -5018,6 +5020,7 @@ internal sealed class DeclarationBinder
                 {
                     var ifaceMethodParam = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
                     conversions.BindAndAttachParameterDefaultValue(parameterSyntax, ifaceMethodParam);
+                    BindAndAttachParameterAttributes(parameterSyntax, ifaceMethodParam);
                     parameters.Add(ifaceMethodParam);
                 }
             }
@@ -5536,6 +5539,34 @@ internal sealed class DeclarationBinder
         {
             CheckVariancePosition(n.UnderlyingType, isOutput, location);
             return;
+        }
+    }
+
+    // Issue #1913: member-declared functions (instance/shared methods on a
+    // struct/class, interface method declarations, constructors) each parse
+    // their own per-parameter annotation list but — unlike free/package-level
+    // functions (see the dedicated loop in BindFunctionDeclaration below) —
+    // never bound or attached it to the resulting ParameterSymbol, so the
+    // attribute silently never reached the emitter. Shared here so every
+    // parameter-binding call site gets the same `@Attr` → ParameterSymbol
+    // wiring the emitter already expects (AttributeTargetKind.Param).
+    private void BindAndAttachParameterAttributes(ParameterSyntax parameterSyntax, ParameterSymbol parameterSymbol)
+    {
+        if (parameterSyntax.Annotations.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        var paramAttrs = BindAttributes(
+            parameterSyntax.Annotations,
+            AttributeTargetKind.Param,
+            Binder.ParameterAllowedTargets,
+            "a parameter declaration",
+            System.AttributeTargets.Parameter);
+
+        if (!paramAttrs.IsDefaultOrEmpty)
+        {
+            parameterSymbol.SetAttributes(paramAttrs);
         }
     }
 
@@ -7647,6 +7678,7 @@ internal sealed class DeclarationBinder
             {
                 var ctorParam = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
                 conversions.BindAndAttachParameterDefaultValue(parameterSyntax, ctorParam);
+                BindAndAttachParameterAttributes(parameterSyntax, ctorParam);
                 parameters.Add(ctorParam);
             }
         }
@@ -7996,7 +8028,10 @@ internal sealed class DeclarationBinder
 
         // 2) Resolve attribute type (C#-style: `Foo` then `FooAttribute`).
         var nameText = annotation.GetNameText();
-        var attrType = ResolveAttributeType(nameText, annotation, out var nameIsExact);
+        bool nameIsExact;
+        var attrType = annotation.HasTypeArgumentList
+            ? this.ResolveGenericAttributeType(nameText, annotation, out nameIsExact)
+            : ResolveAttributeType(nameText, annotation, out nameIsExact);
         if (attrType == null)
         {
             return null;
@@ -8096,6 +8131,116 @@ internal sealed class DeclarationBinder
         }
 
         return new BoundAttribute(annotation, attrType, targetKind, positional.ToImmutable(), named.ToImmutable());
+    }
+
+    // Issue #1913: resolves a C# 11-style generic attribute application
+    // (`@Tag[int32]`) to its CLOSED attribute type. Mirrors
+    // <see cref="ResolveAttributeType"/>'s exact-then-`Attribute`-suffixed
+    // two-try lookup, but existence is probed via the silent, arity-aware
+    // `scope.TryLookupTypeAlias` (no diagnostics on a miss) exactly the way
+    // <see cref="TryResolveUserNestedTypeExpression"/> gates a speculative
+    // generic-type probe elsewhere — so trying the exact name first and
+    // falling back to the suffixed name never reports a spurious
+    // "type not found" for the name that loses. Once the winning name is
+    // picked, the real close-the-generic-type work is delegated to the SAME
+    // `bindTypeClause` callback an ordinary generic type reference
+    // (`List[int32]`) already goes through, by building a synthetic
+    // `TypeClauseSyntax` out of the annotation's own tokens — no separate
+    // generic-attribute-construction logic to maintain.
+    private TypeSymbol ResolveGenericAttributeType(string name, AnnotationSyntax annotation, out bool nameIsExact)
+    {
+        nameIsExact = true;
+        var nameLocation = GetAnnotationNameLocation(annotation);
+        var arity = annotation.TypeArguments.Count;
+
+        var simpleName = name;
+        var dotIndex = string.IsNullOrEmpty(name) ? -1 : name.LastIndexOf('.');
+        if (dotIndex >= 0)
+        {
+            simpleName = name.Substring(dotIndex + 1);
+        }
+
+        // The `Attribute`-suffix retry only ever applies to a simple
+        // (non-dotted) name, same as `ResolveAttributeType` — a dotted name's
+        // last segment is resolved by `bindTypeClause` itself via the
+        // reference-assembly path, which does its own suffix-free lookup.
+        var directExists = dotIndex < 0
+            && !string.IsNullOrEmpty(simpleName)
+            && scope.TryLookupTypeAlias(simpleName, arity, out _);
+
+        string suffixedName = null;
+        var suffixedExists = false;
+        if (dotIndex < 0 && !string.IsNullOrEmpty(simpleName) && !simpleName.EndsWith("Attribute", StringComparison.Ordinal))
+        {
+            suffixedName = simpleName + "Attribute";
+            suffixedExists = scope.TryLookupTypeAlias(suffixedName, arity, out _);
+        }
+
+        if (directExists && suffixedExists)
+        {
+            Diagnostics.ReportAmbiguousAttributeName(nameLocation, name);
+        }
+
+        string resolvedLastSegment;
+        if (directExists)
+        {
+            nameIsExact = true;
+            resolvedLastSegment = simpleName;
+        }
+        else if (suffixedExists)
+        {
+            nameIsExact = false;
+            resolvedLastSegment = suffixedName;
+        }
+        else if (dotIndex < 0)
+        {
+            Diagnostics.ReportAttributeTypeNotFound(nameLocation, name);
+            return null;
+        }
+        else
+        {
+            // Dotted/qualified generic attribute name (e.g.
+            // `System.Foo<int>`): no local-scope suffix retry applies, so try
+            // the exact spelling and let `bindTypeClause` report GS0113 if it
+            // doesn't resolve.
+            resolvedLastSegment = simpleName;
+        }
+
+        var syntheticTypeClause = BuildSyntheticGenericAttributeTypeClause(annotation, resolvedLastSegment);
+        return bindTypeClause(syntheticTypeClause);
+    }
+
+    // Issue #1913: builds the `TypeClauseSyntax` that `ResolveGenericAttributeType`
+    // feeds to `bindTypeClause`, reusing the annotation's own name/type-argument
+    // tokens verbatim (only the LAST segment's identifier may need renaming for
+    // the `Attribute`-suffix retry — the suffix retry only ever fires for a
+    // single-segment name, so no other segment ever needs renaming).
+    private static TypeClauseSyntax BuildSyntheticGenericAttributeTypeClause(AnnotationSyntax annotation, string lastSegmentText)
+    {
+        var segments = annotation.NameSegments;
+        var lastIndex = segments.Length - 1;
+        var lastSegmentToken = segments[lastIndex];
+        var renamedLast = lastSegmentToken.Text == lastSegmentText
+            ? lastSegmentToken
+            : new SyntaxToken(annotation.SyntaxTree, SyntaxKind.IdentifierToken, lastSegmentToken.Position, lastSegmentText, null);
+
+        var identifier = lastIndex == 0 ? renamedLast : segments[0];
+        var qualifierIdentifiers = lastIndex == 0
+            ? ImmutableArray<SyntaxToken>.Empty
+            : segments.RemoveAt(0).SetItem(lastIndex - 1, renamedLast);
+
+        return new TypeClauseSyntax(
+            annotation.SyntaxTree,
+            openBracketToken: null,
+            lengthToken: null,
+            closeBracketToken: null,
+            identifier,
+            annotation.DotTokens,
+            qualifierIdentifiers,
+            annotation.TypeArgumentOpenBracketToken,
+            annotation.TypeArguments,
+            annotation.TypeArgumentCloseBracketToken,
+            questionToken: null);
     }
 
     private TypeSymbol ResolveAttributeType(string name, AnnotationSyntax annotation, out bool nameIsExact)
