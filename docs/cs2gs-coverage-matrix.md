@@ -6,12 +6,12 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | Status | Count |
 | --- | --- |
 | Unclassified | 0 |
-| Translated | 233 |
+| Translated | 239 |
 | Lowered | 19 |
 | UnsupportedByDesign | 56 |
-| Gap | 13 |
+| Gap | 7 |
 
-## Translated (233)
+## Translated (239)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -110,6 +110,12 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | FixedStatement | FixedStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FixedStatement.cs | https://github.com/DavidObando/gsharp/issues/1933 | Compiles end-to-end under the ilverify allow-unsafe policy (issue #1933); IL is unverifiable by design, not a gsc defect. |
 | ForEachStatement | ForEachStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/ForEachStatement.cs |  |  |
 | ForEachVariableStatement | ForEachVariableStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/TupleExpression.cs | https://github.com/DavidObando/gsharp/issues/1922 | Sync foreach tuple-deconstruction translates to first-class G# `for (a, b) in xs`; ValueTuple deconstruction now supported by gsc (issue #1922 fixed). await foreach still lowers via temp+let (no first-class async form). |
+| FunctionPointerCallingConvention | FunctionPointerCallingConventionSyntax | ADR-0122 §9 / ADR-0095 |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FunctionPointerType.cs | https://github.com/DavidObando/gsharp/issues/1906 | managed/`managed`/`unmanaged[Cdecl|Stdcall|Thiscall|Fastcall]` translate; bare `unmanaged` (platform-default ABI) and combined/custom conventions stay an Unsupported/ByDesign sub-case (no fixed G# CallingConvention equivalent). |
+| FunctionPointerParameter | FunctionPointerParameterSyntax | ADR-0122 §9 / ADR-0095 |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FunctionPointerType.cs | https://github.com/DavidObando/gsharp/issues/1906 |  |
+| FunctionPointerParameterList | FunctionPointerParameterListSyntax | ADR-0122 §9 / ADR-0095 |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FunctionPointerType.cs | https://github.com/DavidObando/gsharp/issues/1906 |  |
+| FunctionPointerType | FunctionPointerTypeSyntax | ADR-0122 §9 / ADR-0095 |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FunctionPointerType.cs | https://github.com/DavidObando/gsharp/issues/1906 | delegate*<...>/delegate* managed<...> map to G#'s managed `*func(T) R`; delegate* unmanaged[Cdecl|Stdcall|Thiscall|Fastcall]<...> maps to G#'s raw `unmanaged[CC] (T) -> R`. Bare `delegate* unmanaged<...>` and a combined/custom `[CC]` list are an Unsupported/ByDesign sub-case (issue #1906). |
+| FunctionPointerUnmanagedCallingConvention | FunctionPointerUnmanagedCallingConventionSyntax | ADR-0095 |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FunctionPointerType.cs | https://github.com/DavidObando/gsharp/issues/1906 |  |
+| FunctionPointerUnmanagedCallingConventionList | FunctionPointerUnmanagedCallingConventionListSyntax | ADR-0095 |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FunctionPointerType.cs | https://github.com/DavidObando/gsharp/issues/1906 |  |
 | GenericName | GenericNameSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/GenericName.cs |  |  |
 | GetAccessorDeclaration | AccessorDeclarationSyntax | ADR-0115 §B.11 |  |  |  |  |
 | GlobalStatement | GlobalStatementSyntax | ADR-0115 §B.11 |  |  |  | Entry-class hoisting (T3): top-level statements. |
@@ -334,16 +340,10 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | XmlText | XmlTextSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | XmlTextAttribute | XmlTextAttributeSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 
-## Gap (13)
+## Gap (7)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| FunctionPointerCallingConvention | FunctionPointerCallingConventionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |
-| FunctionPointerParameter | FunctionPointerParameterSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |
-| FunctionPointerParameterList | FunctionPointerParameterListSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |
-| FunctionPointerType | FunctionPointerTypeSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |
-| FunctionPointerUnmanagedCallingConvention | FunctionPointerUnmanagedCallingConventionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |
-| FunctionPointerUnmanagedCallingConventionList | FunctionPointerUnmanagedCallingConventionListSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |
 | ImplicitElementAccess | ImplicitElementAccessSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1897 |  |
 | ImplicitStackAllocArrayCreationExpression | ImplicitStackAllocArrayCreationExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1897 | ADR-0124 stackalloc surface. |
 | PointerMemberAccessExpression | MemberAccessExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1905 | p->X lowered to p.X; (*p).X compiles. |

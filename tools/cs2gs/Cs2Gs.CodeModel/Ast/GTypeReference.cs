@@ -3,6 +3,7 @@
 // </copyright>
 
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 
 namespace Cs2Gs.CodeModel.Ast;
 
@@ -145,4 +146,45 @@ public sealed class ArrowTypeReference : GTypeReference
 
     /// <summary>Gets a value indicating whether the delegate is asynchronous.</summary>
     public bool IsAsync { get; }
+}
+
+/// <summary>
+/// A C# unsafe function-pointer type (<c>delegate*&lt;...&gt;</c>, issue #1906),
+/// rendered in one of G#'s two function-pointer forms: the <b>managed</b> form
+/// <c>*func(T1, T2) R</c> (ADR-0122 §9, callable directly via <c>calli</c>), or
+/// the <b>unmanaged</b> raw form <c>unmanaged[CC] (T1, T2) -&gt; R</c>
+/// (ADR-0095), whose ABI is given by <see cref="CallingConvention"/>.
+/// </summary>
+public sealed class FunctionPointerTypeReference : GTypeReference
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="FunctionPointerTypeReference"/> class.
+    /// </summary>
+    /// <param name="isManaged">Whether this is the managed <c>*func(T) R</c> form.</param>
+    /// <param name="callingConvention">The unmanaged calling convention; ignored when <paramref name="isManaged"/> is <see langword="true"/>.</param>
+    /// <param name="parameterTypes">The function pointer's parameter types.</param>
+    /// <param name="returnType">The return type, or <see langword="null"/> for a void-returning pointer.</param>
+    public FunctionPointerTypeReference(
+        bool isManaged,
+        CallingConvention callingConvention,
+        IReadOnlyList<GTypeReference> parameterTypes,
+        GTypeReference returnType)
+    {
+        IsManaged = isManaged;
+        CallingConvention = callingConvention;
+        ParameterTypes = parameterTypes ?? new List<GTypeReference>();
+        ReturnType = returnType;
+    }
+
+    /// <summary>Gets a value indicating whether this is the managed <c>*func(T) R</c> form.</summary>
+    public bool IsManaged { get; }
+
+    /// <summary>Gets the unmanaged calling convention. Ignored when <see cref="IsManaged"/> is <see langword="true"/>.</summary>
+    public CallingConvention CallingConvention { get; }
+
+    /// <summary>Gets the function pointer's parameter types.</summary>
+    public IReadOnlyList<GTypeReference> ParameterTypes { get; }
+
+    /// <summary>Gets the return type, or <see langword="null"/> for a void-returning pointer.</summary>
+    public GTypeReference ReturnType { get; }
 }

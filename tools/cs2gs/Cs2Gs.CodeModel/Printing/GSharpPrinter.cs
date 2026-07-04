@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using Cs2Gs.CodeModel.Ast;
 
@@ -168,8 +169,50 @@ public static class GSharpPrinter
                 var returns = RenderArrowReturn(arrow.ReturnTypes);
                 return $"{prefix}({parameters}) -> {returns}";
 
+            case FunctionPointerTypeReference functionPointer:
+                return RenderFunctionPointer(functionPointer);
+
             default:
                 throw new ArgumentException($"Unsupported type reference: {type?.GetType().Name}");
+        }
+    }
+
+    private static string RenderFunctionPointer(FunctionPointerTypeReference functionPointer)
+    {
+        var parameters = string.Join(", ", functionPointer.ParameterTypes.Select(RenderType));
+        if (functionPointer.IsManaged)
+        {
+            // ADR-0122 §9: the managed function pointer omits the return type
+            // entirely for a void-returning pointer, e.g. `*func(int)`.
+            return functionPointer.ReturnType is null
+                ? $"*func({parameters})"
+                : $"*func({parameters}) {RenderType(functionPointer.ReturnType)}";
+        }
+
+        // ADR-0095 §2: the unmanaged raw form always spells the return type
+        // explicitly, using `void` for a void-returning pointer.
+        var returnText = functionPointer.ReturnType is null ? "void" : RenderType(functionPointer.ReturnType);
+        return $"unmanaged[{RenderCallingConvention(functionPointer.CallingConvention)}] ({parameters}) -> {returnText}";
+    }
+
+    private static string RenderCallingConvention(CallingConvention callingConvention)
+    {
+        // The G# `[CC]` identifier slot (see gsc's Binder.cs) recognises
+        // "Cdecl"/"Stdcall"/"Thiscall"/"Fastcall" — capitalized-first-letter
+        // spellings, distinct from the .NET CallingConvention enum's own
+        // "StdCall"/"ThisCall"/"FastCall" member names.
+        switch (callingConvention)
+        {
+            case CallingConvention.Cdecl:
+                return "Cdecl";
+            case CallingConvention.StdCall:
+                return "Stdcall";
+            case CallingConvention.ThisCall:
+                return "Thiscall";
+            case CallingConvention.FastCall:
+                return "Fastcall";
+            default:
+                throw new ArgumentException($"Unsupported calling convention: {callingConvention}");
         }
     }
 
