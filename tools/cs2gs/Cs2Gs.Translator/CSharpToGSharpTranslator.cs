@@ -882,10 +882,12 @@ public sealed class CSharpToGSharpTranslator
             value is byte or sbyte or short or ushort or int or uint or long or ulong;
 
         /// <summary>
-        /// Determines whether a C# property is a get-only auto-property
-        /// (<c>{ get; }</c>, body-less, no <c>set</c>/<c>init</c> accessor). Such a
-        /// property has a backing field and is settable in the declaring type's
-        /// constructor; it maps to an init-only G# auto-property (OD-T1).
+        /// Determines whether a C# property is a plain auto-property whose value
+        /// is set once at construction — a get-only auto-property (<c>{ get; }</c>)
+        /// or a get+init auto-property (<c>{ get; init; }</c>), body-less, no
+        /// <c>set</c> accessor. Both shapes have a backing field settable only in
+        /// the declaring type's constructor; they map to an init-only G#
+        /// auto-property (OD-T1; issue #946 for the init-accessor case).
         /// </summary>
         private static bool IsGetOnlyAutoProperty(PropertyDeclarationSyntax prop)
         {
@@ -902,13 +904,13 @@ public sealed class CSharpToGSharpTranslator
 
             bool hasGet = accessors.Any(a => a.IsKind(SyntaxKind.GetAccessorDeclaration));
             bool hasSet = accessors.Any(a => a.IsKind(SyntaxKind.SetAccessorDeclaration));
-            bool hasInit = accessors.Any(a => a.IsKind(SyntaxKind.InitAccessorDeclaration));
-            return hasGet && !hasSet && !hasInit;
+            return hasGet && !hasSet;
         }
 
         /// <summary>
-        /// Collects the inline initializers of get-only auto-properties
-        /// (<c>public List&lt;T&gt; Items { get; } = new();</c>). G# has no property
+        /// Collects the inline initializers of get-only/get+init auto-properties
+        /// (<c>public List&lt;T&gt; Items { get; } = new();</c>,
+        /// <c>public string Text { get; init; } = "empty";</c>). G# has no property
         /// member initializer, so the initialization is moved into the type's
         /// <c>init(...)</c> constructor body (OD-T1). Only meaningful for a plain
         /// class/struct that keeps an explicit constructor (not a lifted primary
@@ -5227,8 +5229,19 @@ public sealed class CSharpToGSharpTranslator
         /// </summary>
         private List<AssignmentExpressionSyntax> CollectEmbeddedAssignments(ExpressionSyntax expression, bool includeSelf)
         {
+            // Issue #1892: an object/`with`/collection initializer's
+            // `Field = value` elements (InitializerExpressionSyntax's
+            // children — ObjectInitializerExpression, WithInitializerExpression,
+            // CollectionInitializerExpression, ComplexElementInitializerExpression)
+            // are AssignmentExpressionSyntax nodes syntactically, but they are
+            // composite-literal/with-expression MEMBERS, not real value-position
+            // assignments — do not descend into an initializer looking for
+            // embedded assignments to hoist, or every initializer member gets
+            // hoisted into a stray bare `Field = value;` statement in front of
+            // the (correct) literal/with-expression that already carries it.
             bool DescendGuard(SyntaxNode node) =>
-                node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax or AssignmentExpressionSyntax);
+                node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax or
+                    AssignmentExpressionSyntax or InitializerExpressionSyntax);
 
             IEnumerable<AssignmentExpressionSyntax> Scan(ExpressionSyntax root) =>
                 root.DescendantNodesAndSelf(descendIntoChildren: DescendGuard).OfType<AssignmentExpressionSyntax>();

@@ -1132,9 +1132,7 @@
     "status": "Translated",
     "rule": "ADR-0115 \u00A7B.11",
     "rationale": "None",
-    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/PropertyDeclaration.cs",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1892",
-    "notes": "Blocked when targeted by object initializers (issue #1892)."
+    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/InitAccessorDeclaration.cs"
   },
   {
     "kind": "InterfaceDeclaration",
@@ -1506,10 +1504,10 @@
   {
     "kind": "ObjectInitializerExpression",
     "nodeType": "InitializerExpressionSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1892",
-    "notes": "Initializer assignments emitted as stray statements."
+    "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/ObjectCreationExpression.cs"
   },
   {
     "kind": "OmittedArraySizeExpression",
@@ -2410,17 +2408,18 @@
   {
     "kind": "WithExpression",
     "nodeType": "WithExpressionSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.4",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1892",
-    "notes": "Stray bare assignment emitted before the with-expression."
+    "fixture": "tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/RecordDeclaration.cs"
   },
   {
     "kind": "WithInitializerExpression",
     "nodeType": "InitializerExpressionSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.4",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1892"
+    "fixture": "tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/RecordDeclaration.cs"
   },
   {
     "kind": "XmlCDataSection",
