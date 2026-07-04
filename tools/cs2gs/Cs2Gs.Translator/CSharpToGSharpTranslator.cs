@@ -632,21 +632,72 @@ public sealed class CSharpToGSharpTranslator
         {
             ISymbol symbol = this.context.GetDeclaredSymbol(node);
             var cases = new List<EnumCase>();
+
+            // Issue #1912 N1: reinterpret each constant's bits per the C# enum's
+            // OWN underlying type (byte/short/int/long and their unsigned
+            // counterparts) via the shared `ToEnumBitPattern` helper (also used by
+            // `MapEnumConstant`) rather than `Convert.ToInt64` directly —
+            // `Convert.ToInt64` throws `OverflowException` on a `ulong` constant
+            // above `long.MaxValue` (e.g. a `[Flags] enum X : ulong` high-bit
+            // member), which would otherwise crash the translator.
+            SpecialType underlyingType = (symbol as INamedTypeSymbol)?.EnumUnderlyingType?.SpecialType ?? SpecialType.System_Int32;
+
+            // Issue #1912: explicit case values (`Banana = 2`, `Unknown = -1`, a
+            // `[Flags]` bit-combination, or an alias like `DefaultError =
+            // ServerError`) must survive translation — a plain re-numbering
+            // silently changes the runtime int32 value. The semantic model has
+            // already constant-folded every member (including alias references
+            // and bitwise-OR flag combinations) onto `IFieldSymbol.ConstantValue`,
+            // so we read the resolved value directly rather than re-parsing the
+            // C# initializer expression; only members whose resolved value
+            // diverges from the default auto-numbered ordinal need an explicit
+            // `= value` in the emitted G# (matching C# §19.4's own auto-numbering
+            // continuation rule for the members that follow an explicit one).
+            int nextOrdinal = 0;
             foreach (EnumMemberDeclarationSyntax member in node.Members)
             {
-                if (member.EqualsValue != null)
+                int? explicitValue = null;
+                if (this.context.GetDeclaredSymbol(member) is IFieldSymbol { HasConstantValue: true } fieldSymbol)
                 {
-                    this.context.Report(new TranslationDiagnostic(
-                        nameof(SyntaxKind.EnumMemberDeclaration),
-                        $"enum case '{member.Identifier.Text}' has an explicit value; the value is dropped (ADR-0115 §B.11 maps enum cases by name).",
-                        member.GetLocation(),
-                        TranslationSeverity.Info));
+                    long signedBits = unchecked((long)ToEnumBitPattern(fieldSymbol.ConstantValue, underlyingType));
+                    if (signedBits < int.MinValue || signedBits > int.MaxValue)
+                    {
+                        // G# enums are always int32-backed (issue #1912 doesn't
+                        // extend to non-default underlying types); a value outside
+                        // int32 range has no faithful G# spelling, so fall back to
+                        // the (already-wrong, but non-crashing) auto-numbered
+                        // ordinal and flag it visibly rather than silently.
+                        this.context.Report(new TranslationDiagnostic(
+                            nameof(SyntaxKind.EnumMemberDeclaration),
+                            $"enum case '{member.Identifier.Text}' has a constant value outside the int32 range G# enums support; the value is dropped.",
+                            member.GetLocation(),
+                            TranslationSeverity.Info));
+                        nextOrdinal++;
+                        cases.Add(new EnumCase(SanitizeIdentifier(member.Identifier.Text)));
+                        continue;
+                    }
+
+                    var constantValue = (int)signedBits;
+                    if (constantValue != nextOrdinal)
+                    {
+                        explicitValue = constantValue;
+                    }
+
+                    nextOrdinal = constantValue + 1;
+                }
+                else
+                {
+                    nextOrdinal++;
                 }
 
-                cases.Add(new EnumCase(SanitizeIdentifier(member.Identifier.Text)));
+                cases.Add(new EnumCase(SanitizeIdentifier(member.Identifier.Text), explicitValue: explicitValue));
             }
 
-            return new EnumDeclaration(SanitizeIdentifier(node.Identifier.Text), cases, MapVisibility(symbol, this.context, node));
+            return new EnumDeclaration(
+                SanitizeIdentifier(node.Identifier.Text),
+                cases,
+                MapVisibility(symbol, this.context, node),
+                attributes: this.MapAttributes(node.AttributeLists));
         }
 
         public override GMember DefaultVisit(SyntaxNode node)
@@ -1092,14 +1143,14 @@ public sealed class CSharpToGSharpTranslator
         /// <summary>
         /// Issue #1733: resolves an enum-typed constant's boxed underlying integral
         /// value to the qualified enum-member reference(s) it represents
-        /// (<c>EnumType.Member</c>), rather than the raw integer. <see
-        /// cref="VisitEnumDeclaration"/> drops the C# explicit case values, so
-        /// translated enums are renumbered by declaration order; emitting the bare
-        /// underlying int (as <c>IParameterSymbol.ExplicitDefaultValue</c> /
-        /// <c>SemanticModel.GetConstantValue</c> box it) would silently bind to
-        /// whichever member happens to hold that ordinal under the NEW numbering —
-        /// wrong, and worse than a compile error because it is silent. Resolving to
-        /// the member NAME instead lets it track the renumbering correctly.
+        /// (<c>EnumType.Member</c>), rather than the raw integer. This callsite has
+        /// no G# enum-literal syntax available (it feeds a parameter default value /
+        /// attribute argument position, not an enum-declaration case), so the
+        /// runtime-correct spelling is always the qualified member reference — this
+        /// is unrelated to whether <see cref="VisitEnumDeclaration"/> preserves
+        /// explicit case values (issue #1912, fixed) since a BCL enum (e.g.
+        /// <c>System.IO.FileAttributes</c>) has no G# declaration to renumber in
+        /// the first place.
         /// A <c>[Flags]</c> combination (`A | B`) with no single matching member is
         /// decomposed into the OR of the matching member names; a value that
         /// matches no member (and no flag combination) has no safe G# spelling and
