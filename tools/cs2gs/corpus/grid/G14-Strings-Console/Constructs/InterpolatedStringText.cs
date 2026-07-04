@@ -19,6 +19,13 @@ namespace Corpus.Grid14
             // Literal braces in a plain (non-interpolated) string need no
             // escaping at all in C# or G#.
             Console.WriteLine("plain braces: {x} and {{y}}");
+
+            // Issue #2015: a raw interpolated string with 3 `$` sigils uses a
+            // WIDER `{{{`/`}}}` hole delimiter. A literal `{{`/`}}` run (shorter
+            // than the 3-brace delimiter width) is genuine literal text and must
+            // NOT be collapsed like the 1-dollar case above.
+            Console.WriteLine($$$"""RawInterpolatedStringText: literal braces {{ and }} stay doubled""");
+            Console.WriteLine($$$"""RawInterpolatedStringText: hole value={{{x}}} done""");
         }
     }
 }

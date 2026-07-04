@@ -13011,6 +13011,27 @@ public sealed class CSharpToGSharpTranslator
 
         private GExpression TranslateInterpolatedString(InterpolatedStringExpressionSyntax interpolated)
         {
+            // Issue #2015: the number of leading `$` characters on the string-start
+            // token (StringStartToken.Text, e.g. "$\"", "$$\"\"\"", "$$$\"\"\"")
+            // determines the interpolation-hole delimiter width N for THIS string.
+            // For classic/N==1 interpolated strings (including 1-dollar raw
+            // strings), a brace run of exactly 2 in the text token is Roslyn's
+            // "escaped single literal brace" (see #1882) and must collapse to 1.
+            // For raw interpolated strings with N>=2 dollars, brace-doubling is
+            // NOT an escape at all: per the C# spec, any brace run SHORTER than N
+            // is embedded verbatim, and any run of length >= N is already split by
+            // the parser into (literal remainder) + (an actual hole, handled by
+            // the InterpolationSyntax case below) — so InterpolatedStringTextSyntax
+            // content for N>=2 never needs unescaping and must be copied as-is.
+            int dollarCount = 0;
+            while (dollarCount < interpolated.StringStartToken.Text.Length
+                && interpolated.StringStartToken.Text[dollarCount] == '$')
+            {
+                dollarCount++;
+            }
+
+            bool isClassicSingleDollar = dollarCount <= 1;
+
             var parts = new List<InterpolationPart>();
             foreach (InterpolatedStringContentSyntax content in interpolated.Contents)
             {
@@ -13023,10 +13044,10 @@ public sealed class CSharpToGSharpTranslator
                         // see Lexer.cs), so `{`/`}` are always plain literal chars in G#
                         // and need no escaping at all. Unescape here or the doubled
                         // braces get copied verbatim into the G# output.
-                        string unescapedBraces = text.TextToken.ValueText
-                            .Replace("{{", "{")
-                            .Replace("}}", "}");
-                        parts.Add(InterpolationPart.Literal(unescapedBraces));
+                        string literalText = isClassicSingleDollar
+                            ? text.TextToken.ValueText.Replace("{{", "{").Replace("}}", "}")
+                            : text.TextToken.ValueText;
+                        parts.Add(InterpolationPart.Literal(literalText));
                         break;
 
                     case InterpolationSyntax hole:
