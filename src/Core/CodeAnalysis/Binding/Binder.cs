@@ -224,7 +224,7 @@ public sealed class Binder
             isAsyncIteratorReturnType: IsAsyncIteratorReturnType,
             tryGetFunctionLiteral: LambdaBinder.TryGetFunctionLiteral,
             inferTypeArguments: InferTypeArguments,
-            substituteType: SubstituteType,
+            substituteType: (t, subst) => SubstituteType(t, subst, scope.References.MapClrTypeToReferences),
             satisfiesConstraint: SatisfiesConstraint,
             describeConstraint: DescribeConstraint,
             getCurrentFunction: () => this.function,
@@ -4005,7 +4005,50 @@ public sealed class Binder
         return null;
     }
 
+    /// <summary>
+    /// Substitutes type parameters in <paramref name="type"/> using
+    /// <paramref name="substitution"/>. Equivalent to calling the
+    /// <see cref="SubstituteType(TypeSymbol, Dictionary{TypeParameterSymbol, TypeSymbol}, Func{Type, Type})"/>
+    /// overload with a <see langword="null"/> CLR-type mapper (safe for
+    /// single-reflection-context callers, i.e. every compile that does not
+    /// pass an explicit <c>/r:</c> reference set to <c>gsc</c>).
+    /// </summary>
+    /// <param name="type">The type to substitute.</param>
+    /// <param name="substitution">The type-parameter to type-argument map.</param>
+    /// <returns>The substituted type.</returns>
     internal static TypeSymbol SubstituteType(TypeSymbol type, Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
+        => SubstituteType(type, substitution, null);
+
+    /// <summary>
+    /// Issue #1926: <paramref name="mapClrType"/> projects a substituted type
+    /// argument's <see cref="TypeSymbol.ClrType"/> into the SAME reflection
+    /// context as the constructed generic's <c>OpenDefinition</c> before
+    /// calling <see cref="Type.MakeGenericType(Type[])"/>. Well-known
+    /// primitive <see cref="TypeSymbol"/>s (e.g. <see cref="TypeSymbol.Int32"/>)
+    /// always carry the host process's live <c>typeof(int)</c>, but a
+    /// <c>gsc</c> compile that supplies an explicit <c>/r:</c> reference set
+    /// resolves imported generics (e.g. <c>IReadOnlyList[T]</c>) through an
+    /// isolated <see cref="System.Reflection.MetadataLoadContext"/>.
+    /// <c>MakeGenericType</c> throws when its generic-definition and
+    /// type-argument <see cref="Type"/>s come from different reflection
+    /// contexts, so closing a generic extension's receiver clause (or any
+    /// other generic member) over a primitive silently fell back to the
+    /// erased <c>object</c>-argument form — which then fails an interface
+    /// conversion check that would otherwise succeed (GS0155: <c>List[T]</c>
+    /// not convertible to a receiver-clause's <c>IReadOnlyList[T]</c>). Passing
+    /// <c>null</c> (the default, single-context callers) skips the projection
+    /// and keeps prior behaviour identical.
+    /// </summary>
+    /// <param name="type">The type to substitute.</param>
+    /// <param name="substitution">The type-parameter to type-argument map.</param>
+    /// <param name="mapClrType">
+    /// Projects a host CLR <see cref="Type"/> into the reflection context that
+    /// the type being substituted was resolved from (typically
+    /// <see cref="Symbols.ReferenceResolver.MapClrTypeToReferences"/>), or
+    /// <see langword="null"/> to skip the projection.
+    /// </param>
+    /// <returns>The substituted type.</returns>
+    internal static TypeSymbol SubstituteType(TypeSymbol type, Dictionary<TypeParameterSymbol, TypeSymbol> substitution, Func<Type, Type> mapClrType)
     {
         if (type is TypeParameterSymbol tp)
         {
@@ -4014,19 +4057,19 @@ public sealed class Binder
 
         if (type is NullableTypeSymbol n)
         {
-            var inner = SubstituteType(n.UnderlyingType, substitution);
+            var inner = SubstituteType(n.UnderlyingType, substitution, mapClrType);
             return ReferenceEquals(inner, n.UnderlyingType) ? type : NullableTypeSymbol.Get(inner);
         }
 
         if (type is SliceTypeSymbol s)
         {
-            var inner = SubstituteType(s.ElementType, substitution);
+            var inner = SubstituteType(s.ElementType, substitution, mapClrType);
             return ReferenceEquals(inner, s.ElementType) ? type : SliceTypeSymbol.Get(inner);
         }
 
         if (type is ArrayTypeSymbol a)
         {
-            var inner = SubstituteType(a.ElementType, substitution);
+            var inner = SubstituteType(a.ElementType, substitution, mapClrType);
             return ReferenceEquals(inner, a.ElementType) ? type : ArrayTypeSymbol.Get(inner, a.Length);
         }
 
@@ -4036,13 +4079,13 @@ public sealed class Binder
             // receiver of a generic extension lowers to a concrete
             // `sequence[U]` at the call site (and downstream
             // `BindExtensionFunctionCall` sees a matching parameter type).
-            var inner = SubstituteType(seq.ElementType, substitution);
+            var inner = SubstituteType(seq.ElementType, substitution, mapClrType);
             return ReferenceEquals(inner, seq.ElementType) ? type : SequenceTypeSymbol.Get(inner);
         }
 
         if (type is AsyncSequenceTypeSymbol aseq)
         {
-            var inner = SubstituteType(aseq.ElementType, substitution);
+            var inner = SubstituteType(aseq.ElementType, substitution, mapClrType);
             return ReferenceEquals(inner, aseq.ElementType) ? type : AsyncSequenceTypeSymbol.Get(inner);
         }
 
@@ -4057,8 +4100,8 @@ public sealed class Binder
             // reference against the unsubstituted method type parameter and
             // fails verification against the closed kickoff return. Directly
             // analogous to the tuple branch below (#813).
-            var newKey = SubstituteType(map.KeyType, substitution);
-            var newValue = SubstituteType(map.ValueType, substitution);
+            var newKey = SubstituteType(map.KeyType, substitution, mapClrType);
+            var newValue = SubstituteType(map.ValueType, substitution, mapClrType);
             return ReferenceEquals(newKey, map.KeyType) && ReferenceEquals(newValue, map.ValueType)
                 ? type
                 : MapTypeSymbol.Get(newKey, newValue);
@@ -4077,7 +4120,7 @@ public sealed class Binder
             var changed = false;
             foreach (var elem in tup.ElementTypes)
             {
-                var substituted = SubstituteType(elem, substitution);
+                var substituted = SubstituteType(elem, substitution, mapClrType);
                 if (!ReferenceEquals(substituted, elem))
                 {
                     changed = true;
@@ -4095,12 +4138,12 @@ public sealed class Binder
             var builder = ImmutableArray.CreateBuilder<TypeSymbol>(fn.ParameterTypes.Length);
             foreach (var paramType in fn.ParameterTypes)
             {
-                var substituted = SubstituteType(paramType, substitution);
+                var substituted = SubstituteType(paramType, substitution, mapClrType);
                 changed |= !ReferenceEquals(substituted, paramType);
                 builder.Add(substituted);
             }
 
-            var substitutedReturn = SubstituteType(fn.ReturnType, substitution);
+            var substitutedReturn = SubstituteType(fn.ReturnType, substitution, mapClrType);
             changed |= !ReferenceEquals(substitutedReturn, fn.ReturnType);
 
             // ADR-0102 follow-up / issue #818: preserve the per-parameter
@@ -4129,7 +4172,7 @@ public sealed class Binder
             var structChanged = false;
             foreach (var arg in ss.TypeArguments)
             {
-                var substituted = SubstituteType(arg, substitution);
+                var substituted = SubstituteType(arg, substitution, mapClrType);
                 structChanged |= !ReferenceEquals(substituted, arg);
                 newStructArgs.Add(substituted);
             }
@@ -4148,7 +4191,7 @@ public sealed class Binder
         // `Box`1+Tag`1<int32>` rather than the open `Box`1+Tag`1<!0>`.
         if (type is StructSymbol nestedRef && nestedRef.TypeArguments.IsDefaultOrEmpty)
         {
-            var newEnclosing = StructSymbol.SubstituteEnclosingArguments(nestedRef, t => SubstituteType(t, substitution));
+            var newEnclosing = StructSymbol.SubstituteEnclosingArguments(nestedRef, t => SubstituteType(t, substitution, mapClrType));
             if (!newEnclosing.IsDefault)
             {
                 return StructSymbol.ConstructNested(nestedRef.Definition ?? nestedRef, newEnclosing);
@@ -4166,7 +4209,7 @@ public sealed class Binder
             var ifaceChanged = false;
             foreach (var arg in ifaceType.TypeArguments)
             {
-                var substituted = SubstituteType(arg, substitution);
+                var substituted = SubstituteType(arg, substitution, mapClrType);
                 ifaceChanged |= !ReferenceEquals(substituted, arg);
                 newIfaceArgs.Add(substituted);
             }
@@ -4188,7 +4231,7 @@ public sealed class Binder
             var anyFree = false;
             foreach (var arg in it.TypeArguments)
             {
-                var substituted = SubstituteType(arg, substitution);
+                var substituted = SubstituteType(arg, substitution, mapClrType);
                 if (!ReferenceEquals(substituted, arg))
                 {
                     changed = true;
@@ -4221,7 +4264,7 @@ public sealed class Binder
                         break;
                     }
 
-                    clrArgs[i] = clr;
+                    clrArgs[i] = mapClrType != null ? mapClrType(clr) : clr;
                 }
 
                 if (allClr)
