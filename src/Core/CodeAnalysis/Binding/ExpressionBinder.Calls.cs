@@ -64,6 +64,15 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
+            // Issue #2059: a `with` update is a write to the named field —
+            // enforce the same `protected`/`private` accessibility rule as a
+            // plain assignment / composite literal member init (issue #950 /
+            // #2044 / #2059).
+            if (!AccessibilityChecker.IsAccessible(field.Accessibility, declaringType, this.function))
+            {
+                Diagnostics.ReportMemberInaccessible(initSyntax.FieldIdentifier.Location, field.Name, declaringType.Name, field.Accessibility);
+            }
+
             var valueExpr = BindExpression(initSyntax.Value);
             valueExpr = conversions.BindConversion(initSyntax.Value.Location, valueExpr, field.Type);
             explicitValues[fieldName] = (field, declaringType, valueExpr);
