@@ -611,6 +611,16 @@ public sealed class CSharpToGSharpTranslator
         private readonly HashSet<SyntaxNode> suppressedAssignments =
             new HashSet<SyntaxNode>();
 
+        // Caches the G# value expression a value-position deconstruction
+        // assignment (`(a, b) = (1, 2)` used as a value, not a bare statement)
+        // was lowered to, keyed by its LHS tuple-target syntax node. Populated
+        // once by <see cref="LowerTupleAssignmentForValue"/> when the write is
+        // hoisted (see <see cref="FlattenChainedAssignment"/>); read back when
+        // `TranslateExpression` later revisits the (now suppressed) assignment
+        // node in its original position (issue #1974).
+        private readonly Dictionary<TupleExpressionSyntax, GExpression> tupleAssignmentValues =
+            new Dictionary<TupleExpressionSyntax, GExpression>();
+
         // Static-field initializers lifted out of a `static` constructor body
         // (`static T() { Field = value; }`). G# has no static constructor, so a
         // simple static ctor is folded into the corresponding `shared { }` field
@@ -6815,29 +6825,25 @@ public sealed class CSharpToGSharpTranslator
                 // preserves C#'s evaluate-then-assign-all semantics (handles
                 // aliasing such as the swap `(a, b) = (b, a)`); issue #1895,
                 // ADR-0115 §B. A NESTED target (`((a, b), c) = ...`) has no
-                // flat `t0, t1, ...` shape to spill into — gap loudly rather
-                // than risk a silent miscompile.
+                // flat `t0, t1, ...` shape at the top level, but is lowered by
+                // recursing: the nested arm gets its own temp, which is then
+                // deconstructed by a SECOND `let (...) = temp` statement
+                // (issue #1974) — G#'s grammar only needs a flat name list per
+                // statement, and nothing stops chaining several of them.
                 if (assignment.Left is TupleExpressionSyntax leftTuple)
                 {
-                    if (leftTuple.Arguments.Any(a => a.Expression is TupleExpressionSyntax))
+                    if (HasNonIdentifierDeconstructionTarget(leftTuple))
                     {
-                        string message = "a nested tuple target in a deconstruction-assignment " +
-                            "('((a, b), c) = ...') has no canonical G# form yet " +
-                            "(issue #1895); G#'s tuple-deconstruction binding only " +
-                            "supports a flat target list.";
-                        this.context.ReportUnsupported(assignment, message);
-                    }
-                    else if (leftTuple.Arguments.Any(a => a.Expression is not IdentifierNameSyntax and not DeclarationExpressionSyntax))
-                    {
-                        // A non-identifier target (`arr[i]`, `obj.F`, ...) in a
-                        // deconstruction-assignment. C# evaluates all LHS storage
-                        // references BEFORE the RHS; `LowerTupleAssignment` spills
-                        // the RHS first and writes targets afterward, reversing
-                        // that order. For a plain identifier there is nothing to
-                        // evaluate (no side effect), so the reorder is safe; for
-                        // anything else (element/member access, deref, ...) it can
-                        // silently miscompile if the RHS mutates state the target
-                        // expression reads (issue #1895). Gap loudly instead.
+                        // A non-identifier target (`arr[i]`, `obj.F`, ...) anywhere
+                        // in the (possibly nested) target shape. C# evaluates all
+                        // LHS storage references BEFORE the RHS; `LowerTuplePattern`
+                        // spills the RHS first and writes targets afterward,
+                        // reversing that order. For a plain identifier (or a new
+                        // `var`/nested-`var` binding) there is nothing to evaluate
+                        // (no side effect), so the reorder is safe; for anything
+                        // else (element/member access, deref, ...) it can silently
+                        // miscompile if the RHS mutates state the target expression
+                        // reads (issue #1895). Gap loudly instead.
                         string message = "a non-identifier target ('arr[i]', 'obj.F', ...) in a " +
                             "deconstruction-assignment has no safe G# lowering yet (issue #1895): " +
                             "C# evaluates LHS storage references before the right-hand side, but " +
@@ -7187,6 +7193,8 @@ public sealed class CSharpToGSharpTranslator
             // be a parenthesized nested assignment.
             var lefts = new List<(GExpression Target, string Op)>();
             ExpressionSyntax current = assignment;
+            TupleExpressionSyntax tupleLink = null;
+            ExpressionSyntax tupleLinkRight = null;
             while (true)
             {
                 ExpressionSyntax unwrapped = current;
@@ -7197,6 +7205,18 @@ public sealed class CSharpToGSharpTranslator
 
                 if (unwrapped is not AssignmentExpressionSyntax link)
                 {
+                    break;
+                }
+
+                if (link.Left is TupleExpressionSyntax linkTuple)
+                {
+                    // A deconstruction-assignment link (`(a, b) = ...`) used in
+                    // value position, either standalone (`var r = ((x, y) = (1,
+                    // 2));`) or feeding an outer chain (`x = (a, b) = (1, 2);`).
+                    // It has no single further "target" of its own, so the
+                    // chain walk ends here (issue #1974).
+                    tupleLink = linkTuple;
+                    tupleLinkRight = link.Right;
                     break;
                 }
 
@@ -7218,7 +7238,34 @@ public sealed class CSharpToGSharpTranslator
                 safeTargets[i] = this.MakeDuplicationSafeTarget(lefts[i].Target, statements);
             }
 
-            GExpression value = this.TranslateExpression(current);
+            GExpression value;
+            if (tupleLink != null)
+            {
+                if (HasNonIdentifierDeconstructionTarget(tupleLink))
+                {
+                    // Same evaluation-order hazard as the statement-position gap
+                    // above (issue #1895), reached here via the value-position
+                    // path instead (issue #1974).
+                    string message = "a non-identifier target ('arr[i]', 'obj.F', ...) in a " +
+                        "deconstruction-assignment has no safe G# lowering yet (issue #1895): " +
+                        "C# evaluates LHS storage references before the right-hand side, but " +
+                        "G#'s lowering must spill the right-hand side first, which would " +
+                        "silently reverse evaluation order for a side-effecting target.";
+                    this.context.ReportUnsupported(tupleLink, message);
+                    value = new IdentifierExpression("nil");
+                }
+                else
+                {
+                    (List<GStatement> tupleStatements, GExpression tupleValue) =
+                        this.LowerTupleAssignmentForValue(tupleLink, tupleLinkRight);
+                    statements.AddRange(tupleStatements);
+                    value = tupleValue;
+                }
+            }
+            else
+            {
+                value = this.TranslateExpression(current);
+            }
 
             // Walk the chain innermost-out, assigning to each target in turn.
             // C# assigns the SAME rhs VALUE to every target in a run of plain
@@ -7318,30 +7365,87 @@ public sealed class CSharpToGSharpTranslator
             _ => null,
         };
 
+        // True when a discard element — either the bare-assignment form
+        // (`(x, _) = ...`) or the declaration form (`(x, var _) = ...`,
+        // parsed as a `DeclarationExpressionSyntax` wrapping a
+        // `DiscardDesignationSyntax`).
+        private bool IsDeconstructionDiscard(ExpressionSyntax targetExpr) =>
+            (targetExpr is IdentifierNameSyntax discardCandidate &&
+                discardCandidate.Identifier.ValueText == "_" &&
+                this.IsTrueDiscard(discardCandidate)) ||
+                targetExpr is DeclarationExpressionSyntax { Designation: DiscardDesignationSyntax };
+
+        // Recursively checks every leaf of a (possibly nested) deconstruction
+        // *assignment* target for a non-identifier storage reference (`arr[i]`,
+        // `obj.F`, ...). A nested tuple target or a new `var`/nested-`var`
+        // binding is always safe (no pre-existing storage to evaluate before
+        // the RHS); only an existing-variable write needs to be a bare
+        // identifier (issue #1895/#1974).
+        private static bool HasNonIdentifierDeconstructionTarget(TupleExpressionSyntax tuple) =>
+            tuple.Arguments.Any(a => a.Expression switch
+            {
+                TupleExpressionSyntax nested => HasNonIdentifierDeconstructionTarget(nested),
+                DeclarationExpressionSyntax => false,
+                IdentifierNameSyntax => false,
+                _ => true,
+            });
+
+        // Statement-position deconstruction assignment (`(a, b) = (x, y);`):
+        // the resulting per-element values are never read back, so discards
+        // stay true discards (no temp allocated for them).
         private IEnumerable<GStatement> LowerTupleAssignment(
             TupleExpressionSyntax leftTuple,
             ExpressionSyntax right)
         {
-            int count = leftTuple.Arguments.Count;
-            var temps = new List<string>(count);
+            var statements = new List<GStatement>();
+            this.LowerTuplePattern(leftTuple, this.TranslateExpression(right), forceRealTemps: false, statements);
+            return statements;
+        }
 
+        // Expression-position deconstruction assignment (`var r = ((x, y) =
+        // (1, 2));`, `M((a, b) = e)`, ...): the assignment's VALUE — a tuple
+        // of the assigned elements, in target order — is needed by the
+        // enclosing expression, so every element (including a discard) is
+        // captured in a real temp and the value is rebuilt as a tuple literal
+        // over those temps (issue #1974).
+        private (List<GStatement> Statements, GExpression Value) LowerTupleAssignmentForValue(
+            TupleExpressionSyntax leftTuple,
+            ExpressionSyntax right)
+        {
+            var statements = new List<GStatement>();
+            List<GExpression> values = this.LowerTuplePattern(leftTuple, this.TranslateExpression(right), forceRealTemps: true, statements);
+            GExpression value = new TupleLiteralExpression(values);
+            this.tupleAssignmentValues[leftTuple] = value;
+            return (statements, value);
+        }
+
+        // Core recursive lowering shared by the statement- and
+        // expression-position forms above. `rhsValue` is the G# expression to
+        // deconstruct — the fully translated original right-hand side on the
+        // OUTERMOST call, or a bare temp-identifier read on a recursive call
+        // for a nested target (already single-evaluation-safe, so it needs no
+        // further spilling). Returns each element's resulting value (`null`
+        // for a true discard when `forceRealTemps` is false, since nothing
+        // captures its value in that case).
+        private List<GExpression> LowerTuplePattern(
+            TupleExpressionSyntax pattern,
+            GExpression rhsValue,
+            bool forceRealTemps,
+            List<GStatement> statements)
+        {
+            int count = pattern.Arguments.Count;
+            var temps = new List<string>(count);
             for (int i = 0; i < count; i++)
             {
-                ExpressionSyntax targetExpr = leftTuple.Arguments[i].Expression;
+                ExpressionSyntax targetExpr = pattern.Arguments[i].Expression;
 
-                // A true discard element — either the bare-assignment form
-                // (`(x, _) = ...`) or the declaration form (`(x, var _) = ...`,
-                // parsed as a `DeclarationExpressionSyntax` wrapping a
-                // `DiscardDesignationSyntax`) — needs no temp at all: G#'s
-                // native deconstruction binding already treats a literal `_`
-                // name as a discard.
-                temps.Add(
-                    (targetExpr is IdentifierNameSyntax discardCandidate &&
-                        discardCandidate.Identifier.ValueText == "_" &&
-                        this.IsTrueDiscard(discardCandidate)) ||
-                        targetExpr is DeclarationExpressionSyntax { Designation: DiscardDesignationSyntax }
-                        ? "_"
-                        : $"__decon{this.deconCounter++}");
+                // A nested tuple target needs its own real temp to recurse
+                // into, even when `forceRealTemps` is false — its own leaves
+                // decide their own discard-ness independently below.
+                bool needsRealTemp = forceRealTemps ||
+                    targetExpr is TupleExpressionSyntax ||
+                    !this.IsDeconstructionDiscard(targetExpr);
+                temps.Add(needsRealTemp ? $"__decon{this.deconCounter++}" : "_");
             }
 
             // Spill the WHOLE right-hand side in one native decon-binding.
@@ -7351,19 +7455,32 @@ public sealed class CSharpToGSharpTranslator
             // internals, never reassigned. This is exactly the mechanism the
             // declaration form (`var (a, b) = e`) already uses, so it inherits
             // the same RHS-shape support for free.
-            var statements = new List<GStatement>
-            {
-                new TupleDeconstructionStatement(BindingKind.Let, temps, this.TranslateExpression(right)),
-            };
+            statements.Add(new TupleDeconstructionStatement(BindingKind.Let, temps, rhsValue));
 
+            var values = new List<GExpression>(count);
             for (int i = 0; i < count; i++)
             {
+                ExpressionSyntax targetExpr = pattern.Arguments[i].Expression;
                 if (temps[i] == "_")
                 {
+                    values.Add(null);
                     continue;
                 }
 
-                ExpressionSyntax targetExpr = leftTuple.Arguments[i].Expression;
+                var tempRead = (GExpression)new IdentifierExpression(temps[i]);
+
+                if (targetExpr is TupleExpressionSyntax nestedTuple)
+                {
+                    // Nested target (`((a, b), c) = ...`): the outer temp
+                    // holds the nested element's value, itself a tuple — spill
+                    // IT with a second native decon-binding rather than trying
+                    // to flatten every depth into one `let (...)` (issue
+                    // #1974). The recursive rhsValue is already a bare temp
+                    // read, so no further spill is needed before recursing.
+                    List<GExpression> nestedValues = this.LowerTuplePattern(nestedTuple, tempRead, forceRealTemps, statements);
+                    values.Add(forceRealTemps ? new TupleLiteralExpression(nestedValues) : null);
+                    continue;
+                }
 
                 if (targetExpr is DeclarationExpressionSyntax declaration)
                 {
@@ -7379,6 +7496,7 @@ public sealed class CSharpToGSharpTranslator
 
                     if (name == "_")
                     {
+                        values.Add(forceRealTemps ? tempRead : null);
                         continue;
                     }
 
@@ -7400,7 +7518,8 @@ public sealed class CSharpToGSharpTranslator
                         binding,
                         name,
                         type: null,
-                        initializer: new IdentifierExpression(temps[i])));
+                        initializer: tempRead));
+                    values.Add(new IdentifierExpression(name));
                     continue;
                 }
 
@@ -7408,10 +7527,11 @@ public sealed class CSharpToGSharpTranslator
                 // the spilled value back.
                 statements.Add(new AssignmentStatement(
                     this.TranslateExpression(targetExpr),
-                    new IdentifierExpression(temps[i])));
+                    tempRead));
+                values.Add(tempRead);
             }
 
-            return statements;
+            return values;
         }
 
         private bool TryGetDeconstructionTargets(
@@ -10010,6 +10130,18 @@ public sealed class CSharpToGSharpTranslator
                     // (now up-to-date) target (issue #1723).
                     if (this.suppressedAssignments.Contains(nestedAssignment))
                     {
+                        // A deconstruction assignment (`(a, b) = ...`) has no
+                        // single "target" to read back — LowerTupleAssignmentForValue
+                        // already computed its value (a tuple of the assigned
+                        // elements) when the write was hoisted; reuse it rather
+                        // than trying to read `nestedAssignment.Left` (a tuple
+                        // TARGET pattern, not a value expression) (issue #1974).
+                        if (nestedAssignment.Left is TupleExpressionSyntax leftTuplePattern &&
+                            this.tupleAssignmentValues.TryGetValue(leftTuplePattern, out GExpression cachedTupleValue))
+                        {
+                            return cachedTupleValue;
+                        }
+
                         GExpression hoistedTarget = this.TranslateExpression(nestedAssignment.Left);
 
                         // Issue #1907: `x ??= y` only runs its assignment when `x`
