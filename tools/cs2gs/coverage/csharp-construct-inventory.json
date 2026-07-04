@@ -1006,23 +1006,28 @@
   {
     "kind": "GotoCaseStatement",
     "nodeType": "GotoStatementSyntax",
-    "status": "Gap",
+    "status": "Lowered",
+    "rule": "ADR-0139",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1884"
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/GotoCaseStatement.cs",
+    "notes": "Issue #1884: lowered to a plain \u0060goto\u0060 targeting a synthesized label placed at the top of the matching case\u0027s translated body (no switch re-evaluation, so C# fall-through/evaluation order is preserved)."
   },
   {
     "kind": "GotoDefaultStatement",
     "nodeType": "GotoStatementSyntax",
-    "status": "Gap",
+    "status": "Lowered",
+    "rule": "ADR-0139",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1884"
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/GotoDefaultStatement.cs",
+    "notes": "Issue #1884: lowered like \u0060goto case\u0060 (see GotoCaseStatement), targeting a synthesized label at the top of the default section\u0027s translated body."
   },
   {
     "kind": "GotoStatement",
     "nodeType": "GotoStatementSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0139",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1884"
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/GotoStatement.cs"
   },
   {
     "kind": "GreaterThanExpression",
@@ -1243,9 +1248,10 @@
   {
     "kind": "LabeledStatement",
     "nodeType": "LabeledStatementSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0139",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1884"
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/LabeledStatement.cs"
   },
   {
     "kind": "LeftShiftAssignmentExpression",

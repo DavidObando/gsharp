@@ -923,6 +923,11 @@ public sealed class Binder
                 statements.Add(statement);
             }
 
+            // Issue #1884: all TLS global statements share the synthesized
+            // entry point's label namespace, so undefined `goto` targets are
+            // only checked once every global statement has been bound.
+            tlsBinder.statements.FinalizeUserLabels();
+
             // Forward the per-function binder's diagnostics back into the
             // global diagnostic bag so callers see them on
             // BoundGlobalScope.Diagnostics.
@@ -1091,6 +1096,7 @@ public sealed class Binder
                 {
                     var binder = new Binder(parentScope, function);
                     var body = binder.statements.BindStatement(function.Declaration.Body);
+                    binder.statements.FinalizeUserLabels();
                     var lowered = Lowerer.Lower(body);
 
                     if (function.Type != TypeSymbol.Void && !IsIteratorReturnType(function.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
@@ -1139,6 +1145,7 @@ public sealed class Binder
                 {
                     var binder = new Binder(parentScope, method);
                     var body = binder.statements.BindStatement(method.Declaration.Body);
+                    binder.statements.FinalizeUserLabels();
                     var lowered = Lowerer.Lower(body, structSym);
 
                     if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
@@ -1292,6 +1299,7 @@ public sealed class Binder
                 {
                     var ctorBinder = new Binder(parentScope, ctor.Function);
                     var ctorBody = ctorBinder.statements.BindStatement(ctor.Declaration.Body);
+                    ctorBinder.statements.FinalizeUserLabels();
 
                     // ADR-0065 §2 Rule 3: a `convenience init` body must begin
                     // with a `init(args)` self-delegation expression-statement.
@@ -1571,6 +1579,7 @@ public sealed class Binder
         {
             var binder = new Binder(parentScope, method);
             var body = binder.statements.BindStatement(method.Declaration.Body);
+            binder.statements.FinalizeUserLabels();
             var lowered = Lowerer.Lower(body);
 
             if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
@@ -1614,6 +1623,7 @@ public sealed class Binder
         {
             var binder = new Binder(parentScope, accessor);
             var body = binder.statements.BindStatement(bodySyntax);
+            binder.statements.FinalizeUserLabels();
             var lowered = Lowerer.Lower(body);
 
             if (requireAllPathsReturn && !ControlFlowGraph.AllPathsReturn(lowered))
@@ -1658,6 +1668,7 @@ public sealed class Binder
         {
             var binder = new Binder(parentScope, member);
             var body = binder.statements.BindStatement(bodySyntax);
+            binder.statements.FinalizeUserLabels();
             var lowered = Lowerer.Lower(body, structSym);
 
             if (allPathsReturnLocation != null && !ControlFlowGraph.AllPathsReturn(lowered))
@@ -1698,6 +1709,7 @@ public sealed class Binder
         {
             var binder = new Binder(parentScope, method);
             var body = binder.statements.BindStatement(method.Declaration.Body);
+            binder.statements.FinalizeUserLabels();
             var lowered = Lowerer.Lower(body, structSym);
 
             if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))

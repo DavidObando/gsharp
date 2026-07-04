@@ -4947,6 +4947,8 @@ public class Parser
                 return ParseUsingStatement();
             case SyntaxKind.DeferKeyword:
                 return ParseDeferStatement();
+            case SyntaxKind.GotoKeyword:
+                return ParseGotoStatement();
             case SyntaxKind.GoKeyword:
                 return ParseGoStatement();
             case SyntaxKind.SelectKeyword:
@@ -5005,12 +5007,11 @@ public class Parser
                 if (Current.Kind == SyntaxKind.IdentifierToken &&
                     Peek(1).Kind == SyntaxKind.ColonToken)
                 {
-                    // ADR-0070: `label: loop-statement`. We accept any inner
-                    // statement here and rely on the binder to issue GS0294
-                    // when the inner statement is not a loop — this gives a
-                    // single high-quality diagnostic rather than a cascade of
-                    // confused parser errors.
-                    return ParseLabeledLoopStatement();
+                    // ADR-0070 / issue #1884: `label: statement`. A label on a
+                    // loop names it for `break`/`continue`; a label on any
+                    // other statement is a `goto` target. The binder tells
+                    // the two apart.
+                    return ParseLabeledStatement();
                 }
 
                 if (Current.Kind == SyntaxKind.IdentifierToken &&
@@ -6007,6 +6008,17 @@ public class Parser
         return new ContinueStatementSyntax(syntaxTree, keyword, label);
     }
 
+    private StatementSyntax ParseGotoStatement()
+    {
+        // Issue #1884: `goto label` — an unconditional jump to a `label:`
+        // statement elsewhere in the enclosing function. The target
+        // identifier is mandatory (unlike the optional labeled
+        // `break`/`continue` target), so no same-line restriction is needed.
+        var keyword = MatchToken(SyntaxKind.GotoKeyword);
+        var label = MatchToken(SyntaxKind.IdentifierToken);
+        return new GotoStatementSyntax(syntaxTree, keyword, label);
+    }
+
     private SyntaxToken TryParseLoopTargetLabel(SyntaxToken keyword)
     {
         // ADR-0070: an optional bare identifier on the same source line names
@@ -6027,7 +6039,7 @@ public class Parser
         return NextToken();
     }
 
-    private StatementSyntax ParseLabeledLoopStatement()
+    private StatementSyntax ParseLabeledStatement()
     {
         var label = MatchToken(SyntaxKind.IdentifierToken);
         var colon = MatchToken(SyntaxKind.ColonToken);

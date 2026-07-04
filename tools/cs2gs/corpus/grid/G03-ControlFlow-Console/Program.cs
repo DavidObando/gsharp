@@ -18,7 +18,11 @@ namespace Corpus.Grid03
             EmptyStatementFixture.Run();
             ForEachStatementFixture.Run();
             ForStatementFixture.Run();
+            GotoCaseStatementFixture.Run();
+            GotoDefaultStatementFixture.Run();
+            GotoStatementFixture.Run();
             IfStatementFixture.Run();
+            LabeledStatementFixture.Run();
             LocalFunctionStatementFixture.Run();
             LockStatementFixture.Run();
             ReturnStatementFixture.Run();

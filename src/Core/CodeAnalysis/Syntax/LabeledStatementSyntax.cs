@@ -5,10 +5,11 @@
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
-/// Represents a labeled statement of the form <c>name: loop-statement</c>
-/// (ADR-0070). Only loop statements may carry a label; the binder reports
-/// GS0294 when a non-loop statement is labeled but accepts the inner statement
-/// so subsequent diagnostics are not suppressed.
+/// Represents a labeled statement of the form <c>name: statement</c>
+/// (ADR-0070, extended by issue #1884). A label on a loop statement names it
+/// for <c>break</c>/<c>continue</c> (ADR-0070); a label on any other
+/// statement is a <c>goto</c> target (issue #1884). A duplicate label name
+/// within the same enclosing function is reported as GS0470.
 /// </summary>
 public sealed class LabeledStatementSyntax : StatementSyntax
 {

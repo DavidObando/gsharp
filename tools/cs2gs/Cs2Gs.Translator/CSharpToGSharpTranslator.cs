@@ -4853,6 +4853,12 @@ public sealed class CSharpToGSharpTranslator
                 case ContinueStatementSyntax:
                     return new[] { (GStatement)new ContinueStatement() };
 
+                case LabeledStatementSyntax labeledStatement:
+                    return this.TranslateLabeledStatement(labeledStatement);
+
+                case GotoStatementSyntax gotoStatement:
+                    return this.TranslateGotoStatement(gotoStatement);
+
                 case DoStatementSyntax doStatement:
                     if (this.TryTranslateLoopWithConditionHoist(
                             doStatement.Condition,
@@ -5835,6 +5841,119 @@ public sealed class CSharpToGSharpTranslator
                     return false;
             }
         }
+
+        private IEnumerable<GStatement> TranslateLabeledStatement(LabeledStatementSyntax labeledStatement)
+        {
+            // C# `label: statement;` is a single statement wrapper; G# has the
+            // identical `label: statement` form (ADR-0070, generalized by
+            // ADR-0139 / issue #1884). The inner statement can expand into more
+            // than one G# statement (e.g. a declaration that needs a spill
+            // prologue); the label is attached to the FIRST emitted statement
+            // only — C# source has no way to target a position mid-expansion,
+            // so this is a faithful mapping.
+            string label = SanitizeIdentifier(labeledStatement.Identifier.Text);
+            List<GStatement> inner = this.TranslateStatement(labeledStatement.Statement).ToList();
+            if (inner.Count == 0)
+            {
+                return new[] { (GStatement)new LabeledStatement(label, new BlockStatement(new List<GStatement>())) };
+            }
+
+            var result = new List<GStatement> { new LabeledStatement(label, inner[0]) };
+            result.AddRange(inner.Skip(1));
+            return result;
+        }
+
+        private IEnumerable<GStatement> TranslateGotoStatement(GotoStatementSyntax gotoStatement)
+        {
+            switch (gotoStatement.Kind())
+            {
+                case SyntaxKind.GotoCaseStatement:
+                case SyntaxKind.GotoDefaultStatement:
+                    // ADR-0139 / issue #1884: `goto case K;` jumps to the
+                    // statement list of the case labeled with the constant K
+                    // WITHOUT re-evaluating the switch subject; `goto default;`
+                    // jumps to the default section. Neither re-enters the
+                    // switch, so both lower to a plain `goto` targeting a
+                    // synthesized label placed at the top of the target arm's
+                    // body (see TranslateSwitchStatement).
+                    SwitchLabelSyntax target = this.ResolveGotoCaseOrDefaultTarget(gotoStatement);
+                    if (target == null)
+                    {
+                        this.context.ReportUnsupported(gotoStatement, "goto target case/default label could not be resolved.");
+                        return new[] { (GStatement)new RawStatement($"// unsupported: {gotoStatement.Kind()}") };
+                    }
+
+                    return new[] { (GStatement)new GotoStatement(GotoCaseOrDefaultLabelName(target)) };
+
+                default:
+                    // Plain `goto label;` — Expression is the label name as an
+                    // IdentifierNameSyntax (verified against Roslyn 4.14).
+                    string label = SanitizeIdentifier(((IdentifierNameSyntax)gotoStatement.Expression).Identifier.Text);
+                    return new[] { (GStatement)new GotoStatement(label) };
+            }
+        }
+
+        /// <summary>
+        /// Resolves the <see cref="SwitchLabelSyntax"/> that a <c>goto case
+        /// K;</c> / <c>goto default;</c> statement targets, by walking up to
+        /// the nearest enclosing <c>switch</c> and matching on compile-time
+        /// constant value (issue #1884). Returns <c>null</c> if the enclosing
+        /// switch or matching label cannot be found (malformed input; the
+        /// caller reports a translation gap).
+        /// </summary>
+        private SwitchLabelSyntax ResolveGotoCaseOrDefaultTarget(GotoStatementSyntax gotoStatement)
+        {
+            SwitchStatementSyntax enclosingSwitch = gotoStatement.Ancestors().OfType<SwitchStatementSyntax>().FirstOrDefault();
+            if (enclosingSwitch == null)
+            {
+                return null;
+            }
+
+            if (gotoStatement.Kind() == SyntaxKind.GotoDefaultStatement)
+            {
+                return enclosingSwitch.Sections
+                    .SelectMany(section => section.Labels)
+                    .OfType<DefaultSwitchLabelSyntax>()
+                    .FirstOrDefault();
+            }
+
+            Optional<object> targetValue = this.context.SemanticModel.GetConstantValue(gotoStatement.Expression);
+            if (!targetValue.HasValue)
+            {
+                return null;
+            }
+
+            foreach (SwitchSectionSyntax section in enclosingSwitch.Sections)
+            {
+                foreach (SwitchLabelSyntax label in section.Labels)
+                {
+                    if (label is CaseSwitchLabelSyntax caseLabel)
+                    {
+                        Optional<object> caseValue = this.context.SemanticModel.GetConstantValue(caseLabel.Value);
+                        if (caseValue.HasValue && Equals(targetValue.Value, caseValue.Value))
+                        {
+                            return caseLabel;
+                        }
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// The synthesized G# label name for a <c>goto case</c>/<c>goto
+        /// default</c> target (issue #1884). Keyed by the target label's own
+        /// source position (<see cref="SyntaxNode.SpanStart"/>), which is
+        /// unique within the file and stable across the two independent call
+        /// sites that must agree on the name: the arm that defines the label
+        /// (<see cref="TranslateSwitchStatement"/>) and the <c>goto</c> that
+        /// targets it (<see cref="ResolveGotoCaseOrDefaultTarget"/> callers).
+        /// </summary>
+        private static string GotoCaseOrDefaultLabelName(SwitchLabelSyntax label)
+            => label is DefaultSwitchLabelSyntax
+                ? $"__gotoDefault{label.SpanStart}"
+                : $"__gotoCase{label.SpanStart}";
 
         private GStatement TranslateThrow(ThrowStatementSyntax throwStatement)
         {
@@ -13423,6 +13542,18 @@ public sealed class CSharpToGSharpTranslator
             GExpression subject = this.TranslateExpression(node.Expression);
             var cases = new List<SwitchStatementCase>();
 
+            // Issue #1884: a `goto case K;` / `goto default;` anywhere in this
+            // switch (but not in a nested switch, whose own gotos target its
+            // own labels) needs a synthesized label at the top of the arm it
+            // targets, so the goto can be lowered to a plain `goto`.
+            var gotoTargets = new HashSet<SwitchLabelSyntax>(
+                node.DescendantNodes()
+                    .OfType<GotoStatementSyntax>()
+                    .Where(g => (g.Kind() == SyntaxKind.GotoCaseStatement || g.Kind() == SyntaxKind.GotoDefaultStatement)
+                             && g.Ancestors().OfType<SwitchStatementSyntax>().First() == node)
+                    .Select(this.ResolveGotoCaseOrDefaultTarget)
+                    .Where(target => target != null));
+
             foreach (SwitchSectionSyntax section in node.Sections)
             {
                 // A G# switch-statement arm carries a single pattern; a C# section
@@ -13476,11 +13607,17 @@ public sealed class CSharpToGSharpTranslator
                         case CaseSwitchLabelSyntax valueLabel:
                             cases.Add(new SwitchStatementCase(
                                 new ConstantPattern(this.TranslateExpression(valueLabel.Value)),
-                                this.TranslateSwitchSectionBody(section)));
+                                this.TranslateSwitchSectionBody(
+                                    section,
+                                    gotoTargets.Contains(valueLabel) ? GotoCaseOrDefaultLabelName(valueLabel) : null)));
                             break;
 
-                        case DefaultSwitchLabelSyntax:
-                            cases.Add(new SwitchStatementCase(null, this.TranslateSwitchSectionBody(section)));
+                        case DefaultSwitchLabelSyntax defaultLabel:
+                            cases.Add(new SwitchStatementCase(
+                                null,
+                                this.TranslateSwitchSectionBody(
+                                    section,
+                                    gotoTargets.Contains(defaultLabel) ? GotoCaseOrDefaultLabelName(defaultLabel) : null)));
                             break;
 
                         default:
@@ -13495,7 +13632,7 @@ public sealed class CSharpToGSharpTranslator
             return new SwitchStatement(subject, cases);
         }
 
-        private BlockStatement TranslateSwitchSectionBody(SwitchSectionSyntax section)
+        private BlockStatement TranslateSwitchSectionBody(SwitchSectionSyntax section, string injectLabel = null)
         {
             var statements = new List<GStatement>();
             foreach (StatementSyntax statement in section.Statements)
@@ -13508,6 +13645,22 @@ public sealed class CSharpToGSharpTranslator
                 }
 
                 statements.AddRange(this.TranslateStatement(statement));
+            }
+
+            if (injectLabel != null)
+            {
+                // Issue #1884: this arm is the target of a `goto case`/`goto
+                // default` elsewhere in the switch; attach the synthesized
+                // label to the first statement (or, for an empty arm, to an
+                // empty block) so the goto has something concrete to jump to.
+                if (statements.Count == 0)
+                {
+                    statements.Add(new LabeledStatement(injectLabel, new BlockStatement(new List<GStatement>())));
+                }
+                else
+                {
+                    statements[0] = new LabeledStatement(injectLabel, statements[0]);
+                }
             }
 
             return new BlockStatement(statements);

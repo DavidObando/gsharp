@@ -23,6 +23,10 @@ ForEachStatement: stock[pen] = 4
 ForStatement: converging loop total = 30
 ForStatement: hits with continue skipping i%4==1 = 7
 ForStatement: countdown digits = 54321
+GotoCaseStatement: trace = case1,case2
+GotoDefaultStatement: trace = case7,default
+GotoStatement: backward loop finished at count = 3
+GotoStatement: forward jump left step = 1
 IfStatement: score 55 -> grade F
 IfStatement: score 65 -> grade F
 IfStatement: score 75 -> grade C
@@ -30,6 +34,7 @@ IfStatement: score 85 -> grade B
 IfStatement: score 95 -> grade A
 IfStatement: 12 is even (if without else)
 IfStatement: 12 is between 10 and 20 (nested if)
+LabeledStatement: total = 3
 LocalFunctionStatement: Add(3, 4) = 7
 LocalFunctionStatement: AddSeed(7) with captured seed = 12
 LocalFunctionStatement: Square(6) = 36

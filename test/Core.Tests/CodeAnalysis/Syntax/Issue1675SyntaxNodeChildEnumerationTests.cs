@@ -87,6 +87,9 @@ public class Issue1675SyntaxNodeChildEnumerationTests
 
         // first-class deconstructing for-in (issue #1922)
         "package p\nfunc F(xs [](int32, int32)) {\n  for (a, b) in xs {\n  }\n}\n",
+
+        // issue #1884: goto / general label statement
+        "package p\nfunc F() {\n  var a = 0\n  retry:\n  a = a + 1\n  if a < 3 {\n    goto retry\n  }\n}\n",
     };
 
     /// <summary>
