@@ -3370,7 +3370,9 @@ public sealed class CSharpToGSharpTranslator
             // seeds the compiler-synthesized backing field, not the property
             // itself — carry it over or the field silently starts at default(T).
             GExpression backingInitializer = fieldKeywordBackingName != null && node.Initializer != null
-                ? this.TranslateNullSeamExpression(node.Initializer.Value, symbol?.ContainingType)
+                ? this.CoerceConstantToUnsigned(
+                    node.Initializer.Value,
+                    this.TranslateNullSeamExpression(node.Initializer.Value, symbol?.ContainingType))
                 : null;
             GMember backingField = fieldKeywordBackingName != null
                 ? new FieldDeclaration(BindingKind.Var, fieldKeywordBackingName, backingType, initializer: backingInitializer, visibility: Visibility.Private)
