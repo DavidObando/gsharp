@@ -292,6 +292,36 @@ namespace Corpus.Issue1901
     }
 
     /// <summary>
+    /// Regression test: <c>Task.WhenAll(params ReadOnlySpan&lt;Task&gt;)</c> is a BCL
+    /// overload from a REFERENCED assembly, never translated as a declaration
+    /// (only user-declared callees route through <c>MapParameter</c>'s matching
+    /// gap). There is nothing for a call-site gap to stay "consistent" with here,
+    /// so — unlike the user-declared <see cref="ParamsCollection_ReadOnlySpan_ExpandedCall_ReportsUnsupported"/>
+    /// case above — this must fall back to the pre-issue-1901 ordinary argument
+    /// translation silently, with no Unsupported diagnostic.
+    /// </summary>
+    [Fact]
+    public void ParamsCollection_ExternalBclReadOnlySpanOverload_ExpandedCall_TranslatesWithoutGap()
+    {
+        string rendered = Render(@"
+using System.Threading.Tasks;
+namespace Corpus.Issue1901
+{
+    public class BclParamsCollections
+    {
+        public static async Task Run()
+        {
+            await Task.WhenAll(Task.CompletedTask, Task.CompletedTask);
+        }
+    }
+}
+");
+
+        Assert.Contains("Task.WhenAll(Task.CompletedTask, Task.CompletedTask)", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    /// <summary>
     /// A lambda default that is not a primitive/enum/null constant (here
     /// <c>decimal</c>) has no gsc literal form; the translator must gap loudly
     /// rather than substitute the wrong value AND type via <c>nil</c>.

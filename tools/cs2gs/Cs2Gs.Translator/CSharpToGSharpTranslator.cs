@@ -11111,11 +11111,23 @@ public sealed class CSharpToGSharpTranslator
                 // reach for). Anything else — params Span<T>/ReadOnlySpan<T> (the
                 // PREFERRED C#13 overload), HashSet<T>, a [CollectionBuilder] type,
                 // or a collection type with other than one type argument — has no
-                // gsc construction form. Gap loudly instead of emitting a
-                // List[T]{...} that silently mismatches the declared parameter type.
-                this.context.ReportUnsupported(
-                    callSyntax,
-                    $"params collection of type '{paramsCollectionArg.Parameter.Type}' has no gsc construction form.");
+                // gsc construction form.
+                //
+                // Only gap when the callee itself is declared IN SOURCE: MapParameter
+                // gaps that same declaration (issue #1901 follow-up), and a half-
+                // translated callee with no working caller is what we're guarding
+                // against here — so both sides need to stay consistent. A callee from
+                // a REFERENCED assembly (e.g. BCL `Task.WhenAll(params ReadOnlySpan<Task>)`)
+                // is never translated as a declaration in the first place, so there is
+                // nothing to stay consistent with; fall back to the pre-#1901 ordinary
+                // argument translation silently, exactly as it worked before this PR.
+                if (targetMethod?.DeclaringSyntaxReferences.IsEmpty == false)
+                {
+                    this.context.ReportUnsupported(
+                        callSyntax,
+                        $"params collection of type '{paramsCollectionArg.Parameter.Type}' has no gsc construction form.");
+                }
+
                 return this.TranslateArguments(arguments);
             }
 
