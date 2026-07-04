@@ -4101,6 +4101,25 @@ public sealed class CSharpToGSharpTranslator
                     }
                 }
 
+                // Issue #1894: a local's declared type normally only reaches
+                // CSharpTypeMapper.Map when an explicit type clause is emitted
+                // below — but when the declared type equals the initializer's
+                // natural type (the common case, e.g. `Index x = ^3;` or the
+                // `var`-inferred equivalent), the type clause is elided entirely
+                // and Map is never called, so an Index/Range-typed local would
+                // slip through with no diagnostic. Check the bound local symbol's
+                // type directly so every Index/Range local gaps loudly regardless
+                // of whether a type clause ends up in the printed G#.
+                if (this.context.GetDeclaredSymbol(declarator) is ILocalSymbol { Type: { } localType } &&
+                    CSharpTypeMapper.IsSystemIndexOrRange(localType))
+                {
+                    this.context.Report(new TranslationDiagnostic(
+                        localType.Name,
+                        $"local '{declarator.Identifier.Text}' has type 'System.{localType.Name}', which has no canonical G# type — see CSharpTypeMapper.Map (issue #1894).",
+                        declarator.GetLocation(),
+                        TranslationSeverity.Unsupported));
+                }
+
                 BindingKind binding;
                 if (isConst)
                 {
@@ -4460,6 +4479,23 @@ public sealed class CSharpToGSharpTranslator
 
             return index;
         }
+
+        // Issue #1894: whether `expression` sits directly in a bracketed index
+        // argument position (`recv[EXPR]` / `recv?[EXPR]`) — the one position
+        // where gsc's own parser recognises a leading `^` as a from-end marker
+        // rather than one's-complement (Parser.ParseIndexBound). A `^n` nested
+        // any deeper (e.g. as a `RangeExpressionSyntax` bound, `recv[a..^n]`) is
+        // NOT a direct argument — the translator pre-lowers ranges to
+        // `Slice(start, length)` arithmetic outside any bracket, so a `^` bound
+        // there is handled by the gap path above, not this one.
+        private static bool IsDirectIndexBracketArgument(ExpressionSyntax expression) =>
+            expression.Parent is ArgumentSyntax
+            {
+                Parent: BracketedArgumentListSyntax
+                {
+                    Parent: ElementAccessExpressionSyntax or ElementBindingExpressionSyntax,
+                },
+            };
 
         // Reports whether the element-access target indexes by `int32`: a C# array,
         // or a type whose bound indexer takes a single `int32` parameter (such as
@@ -7869,6 +7905,27 @@ public sealed class CSharpToGSharpTranslator
                     return this.TranslateBinaryExpression(binary);
 
                 case PrefixUnaryExpressionSyntax prefix:
+                    // Issue #1894: a C# from-end index `^n` (SyntaxKind.IndexExpression)
+                    // shares its `^` token with bitwise complement, and gsc's own G#
+                    // grammar only recognises a bare `^n` as "from-end" INSIDE an
+                    // index bracket (Parser.ParseIndexBound) — everywhere else `^n`
+                    // parses as the one's-complement operator. G# has no
+                    // `System.Index` value type, so a from-end index printed outside
+                    // a direct `[...]`/`?[...]` bracket (bound to a local, passed as
+                    // an argument, returned, used as a range bound, ...) would
+                    // silently re-bind to the wrong (complemented) integer instead of
+                    // gapping loudly. Only the direct bracket-argument position is
+                    // safe to emit as a bare `^n`; every other position reports a gap.
+                    if (prefix.IsKind(SyntaxKind.IndexExpression) && !IsDirectIndexBracketArgument(prefix))
+                    {
+                        this.context.Report(new TranslationDiagnostic(
+                            "IndexExpression",
+                            "a from-end index '^n' has no canonical G# form outside a direct '[...]' index bracket: G# has no 'System.Index' value type, so storing, returning, or otherwise reusing '^n' apart from the bracket it indexes cannot preserve from-end semantics (issue #1894).",
+                            prefix.GetLocation(),
+                            TranslationSeverity.Unsupported));
+                        return LiteralExpression.Int("0");
+                    }
+
                     // G# uses the Go-style `^` for bitwise complement; C# spells it
                     // `~`. Every other prefix operator token is identical.
                     string prefixOp = prefix.IsKind(SyntaxKind.BitwiseNotExpression)
