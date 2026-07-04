@@ -18,9 +18,13 @@ namespace Corpus.Grid05
             var (a, b) = t;
             Console.WriteLine($"TupleExpression: deconstructed={a},{b}");
 
-            // QUARANTINED (GS0127): deconstruction-assignment into existing
-            // locals ((x, y) = (y, x)) — the translator emits the targets as
-            // read-only 'let' bindings, so 'x = __decon0' fails to compile.
+            // Deconstruction-ASSIGNMENT to existing locals (issue #1895): a
+            // swap spills the whole RHS once via `let (t0, t1) = rhs` then
+            // writes back element-wise, so aliasing is handled correctly.
+            int swapA = 10;
+            int swapB = 20;
+            (swapA, swapB) = (swapB, swapA);
+            Console.WriteLine($"TupleExpression: swapped={swapA},{swapB}");
 
             // Nested tuple.
             var nested = ((1, 2), "pair");
