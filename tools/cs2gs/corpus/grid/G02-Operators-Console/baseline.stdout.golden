@@ -7,7 +7,7 @@ BitwiseAndExpression: int=8 bool=False
 BitwiseNotExpression: notFive=-6 notZero=-1
 BitwiseOrExpression: int=14 bool=True
 CastExpression: truncated=3 half=3.5 letter=B narrowed=44
-CoalesceAssignmentExpression: name=fallback keep=kept
+CoalesceAssignmentExpression: name=fallback keep=kept count=9 keptCount=3
 CoalesceExpression: first=value picked=21
 ConditionalAccessExpression: len=5 nullLen=-1
 ConditionalExpression: max=9 label=even clamped=5

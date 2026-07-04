@@ -799,7 +799,15 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
             open = AppendFormattedValue;
         }
 
-        var clrType = holeType?.ClrType;
+        // Issue #1916: a `T?` hole over a value type must close over
+        // `Nullable<T>`, not the bare `TypeSymbol.ClrType` (which is the
+        // underlying `T` per NullableTypeSymbol's ctor) — the value pushed on
+        // the stack for a nullable-typed local/expression is the full
+        // `Nullable<T>` struct, so closing the generic method over `T` leaves
+        // a StackUnexpected mismatch at the call site (found Nullable<T>,
+        // expected T). GetEffectiveClrType returns `Nullable<T>` for
+        // value-type nullables and `holeType.ClrType` for everything else.
+        var clrType = NullableTypeSymbol.GetEffectiveClrType(holeType);
         if (clrType != null)
         {
             // Primitive / BCL / reference holes close over their concrete CLR

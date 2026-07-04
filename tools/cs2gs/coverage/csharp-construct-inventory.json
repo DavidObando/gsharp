@@ -405,8 +405,7 @@
     "rule": "ADR-0115 \u00A7B",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/CoalesceAssignmentExpression.cs",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1916",
-    "notes": "On nullable value types the emitted G# fails ilverify (gsc issue #1916); string form is green."
+    "notes": "Nullable value-type targets now emit verifiable IL (issue #1916, resolved); reference and value-type forms are both green."
   },
   {
     "kind": "CoalesceExpression",
