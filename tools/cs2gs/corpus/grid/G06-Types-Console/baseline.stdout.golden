@@ -30,3 +30,4 @@ StructDeclaration: sum=12
 StructDeclaration: product=42
 StructDeclaration: area=25
 TypeAliasDeclaration: count=42
+TypeAliasDeclaration: pair=2,hi!

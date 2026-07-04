@@ -2342,7 +2342,7 @@
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/TypeAliasDeclaration.cs",
     "issue": "https://github.com/DavidObando/gsharp/issues/1914",
-    "notes": "Plain \u002B simple-alias green; alias-any-type (C#12) unsupported (issue #1914)."
+    "notes": "Plain \u002B simple-alias green; alias-any-type (C#12) tuple-RHS green too (issue #1914; array/pointer/nullable-value-type RHS forms remain unexercised)."
   },
   {
     "kind": "UsingStatement",

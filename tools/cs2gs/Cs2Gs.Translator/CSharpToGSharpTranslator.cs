@@ -259,14 +259,46 @@ public sealed class CSharpToGSharpTranslator
 
         foreach (UsingDirectiveSyntax directive in usings)
         {
-            if (directive.Name is null)
+            // C# 12 alias-any-type directives (`using X = (int, string);`,
+            // arrays, pointers, nullable value types, ...) put a non-name
+            // TypeSyntax where a plain dotted name used to be the only option;
+            // `directive.Name` is null for those (issue #1914). `NamespaceOrType`
+            // is the generalized property that covers both forms.
+            TypeSyntax namespaceOrType = directive.NamespaceOrType;
+            if (namespaceOrType is null)
             {
                 context.ReportUnsupported(directive, "using directive without a resolvable name.");
                 continue;
             }
 
-            string name = directive.Name.ToString();
             string alias = directive.Alias?.Name.Identifier.Text;
+
+            if (namespaceOrType is not NameSyntax)
+            {
+                // G#'s `import` statement (ImportSyntax) only spells a
+                // dotted-identifier path, so a tuple/array/pointer/nullable
+                // alias target has no faithful import line to emit. That is
+                // harmless: every USE of the alias resolves through the
+                // semantic model straight to its underlying type (e.g. a
+                // tuple-alias use-site maps to G#'s positional
+                // TupleTypeReference the same as a written-out tuple type), so
+                // the alias fully expands at each reference without needing an
+                // import (issue #1914). Only array/pointer/nullable-value-type
+                // RHS forms remain unexercised by the corpus; tuple RHS is the
+                // one this issue asks for.
+                if (alias != null)
+                {
+                    context.Report(new TranslationDiagnostic(
+                        nameof(SyntaxKind.UsingDirective),
+                        $"'using {alias} = {namespaceOrType}' aliases a type G#'s import statement cannot spell; omitted from the import block, but every use of '{alias}' still expands to its underlying G# type (issue #1914).",
+                        directive.GetLocation(),
+                        TranslationSeverity.Warning));
+                }
+
+                continue;
+            }
+
+            string name = namespaceOrType.ToString();
 
             if (!directive.StaticKeyword.IsKind(SyntaxKind.None))
             {
