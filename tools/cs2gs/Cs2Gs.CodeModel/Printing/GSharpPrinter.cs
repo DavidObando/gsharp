@@ -652,8 +652,16 @@ public static class GSharpPrinter
 
     private static string RenderCollectionInitializer(CollectionInitializerExpression collection, int indent)
     {
-        // Canonical form: drop the empty `()` on a zero-argument construction
-        // so `List[int32](){...}` renders as `List[int32]{...}`.
+        // Canonical form: drop the empty `()` on a zero-argument GENERIC
+        // construction so `List[int32](){...}` renders as `List[int32]{...}`
+        // — gsc's parser recognises a bare `Type[args]{ ... }` as a collection
+        // initializer for ANY element shape (`BraceLooksLikeGenericCollectionInitializer`).
+        // A NON-generic zero-arg target (`IndexKeyed()`) has no such carve-out:
+        // gsc's bare `Identifier{ ... }` grammar commits to a STRUCT LITERAL
+        // (`Identifier :` fields only, `IsStructLiteralFollowingBrace`) and
+        // silently fails to parse a `key: value`/`[key] = value` collection
+        // element there (issue #1967) — so the `()` must stay so the parser
+        // takes its `LooksLikeCollectionInitializerBrace` path instead.
         string target;
         if (collection.Target == null)
         {
@@ -663,11 +671,11 @@ public static class GSharpPrinter
             // property (lowered to `.Add(...)` calls by gsc).
             target = string.Empty;
         }
-        else if (collection.Target is InvocationExpression invocation && invocation.Arguments.Count == 0)
+        else if (collection.Target is InvocationExpression invocation
+            && invocation.Arguments.Count == 0
+            && invocation.TypeArguments.Count > 0)
         {
-            var typeArgs = invocation.TypeArguments.Count == 0
-                ? string.Empty
-                : $"[{string.Join(", ", invocation.TypeArguments.Select(RenderType))}]";
+            var typeArgs = $"[{string.Join(", ", invocation.TypeArguments.Select(RenderType))}]";
             target = $"{RenderExpression(invocation.Target, indent)}{typeArgs}";
         }
         else
