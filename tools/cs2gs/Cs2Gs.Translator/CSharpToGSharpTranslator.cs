@@ -6678,22 +6678,63 @@ public sealed class CSharpToGSharpTranslator
         /// </summary>
         private List<AssignmentExpressionSyntax> CollectEmbeddedAssignments(ExpressionSyntax expression, bool includeSelf)
         {
-            // Issue #1892: an object/`with`/collection initializer's
-            // `Field = value` elements (InitializerExpressionSyntax's
-            // children — ObjectInitializerExpression, WithInitializerExpression,
-            // CollectionInitializerExpression, ComplexElementInitializerExpression)
-            // are AssignmentExpressionSyntax nodes syntactically, but they are
+            // Issue #1892: an object/`with` initializer's `Field = value`
+            // elements (InitializerExpressionSyntax children of kind
+            // ObjectInitializerExpression/WithInitializerExpression) are
+            // AssignmentExpressionSyntax nodes syntactically, but they are
             // composite-literal/with-expression MEMBERS, not real value-position
-            // assignments — do not descend into an initializer looking for
-            // embedded assignments to hoist, or every initializer member gets
-            // hoisted into a stray bare `Field = value;` statement in front of
-            // the (correct) literal/with-expression that already carries it.
-            bool DescendGuard(SyntaxNode node) =>
-                node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax or
-                    AssignmentExpressionSyntax or InitializerExpressionSyntax);
+            // assignments — collecting the member assignment itself would hoist
+            // every initializer member into a stray bare `Field = value;`
+            // statement in front of the (correct) literal/with-expression that
+            // already carries it. Array/collection initializer elements
+            // (ArrayInitializerExpression/CollectionInitializerExpression), by
+            // contrast, are plain VALUES — an `AssignmentExpressionSyntax`
+            // element there (`new[] { x = 5 }`) is a genuine value-position
+            // assignment and must still be collected.
+            //
+            // Issue #1947: even for a skipped member-assignment, its VALUE may
+            // itself embed a genuine value-position assignment
+            // (`new T { A = (x = 3) }`) — that must still be found/hoisted, so
+            // the member assignment's Right is scanned rather than skipped
+            // wholesale.
+            static bool IsInitializerMember(AssignmentExpressionSyntax assignment) =>
+                assignment.Parent is InitializerExpressionSyntax initializer &&
+                (initializer.IsKind(SyntaxKind.ObjectInitializerExpression) || initializer.IsKind(SyntaxKind.WithInitializerExpression));
 
-            IEnumerable<AssignmentExpressionSyntax> Scan(ExpressionSyntax root) =>
-                root.DescendantNodesAndSelf(descendIntoChildren: DescendGuard).OfType<AssignmentExpressionSyntax>();
+            IEnumerable<AssignmentExpressionSyntax> Scan(SyntaxNode node)
+            {
+                if (node is AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax)
+                {
+                    yield break;
+                }
+
+                if (node is AssignmentExpressionSyntax assignment)
+                {
+                    if (IsInitializerMember(assignment))
+                    {
+                        foreach (AssignmentExpressionSyntax found in Scan(assignment.Right))
+                        {
+                            yield return found;
+                        }
+
+                        yield break;
+                    }
+
+                    // Outermost assignment: its own descendants are NOT scanned
+                    // further here — a chained link (`a = b = c`) is walked by
+                    // FlattenChainedAssignment instead.
+                    yield return assignment;
+                    yield break;
+                }
+
+                foreach (SyntaxNode child in node.ChildNodes())
+                {
+                    foreach (AssignmentExpressionSyntax found in Scan(child))
+                    {
+                        yield return found;
+                    }
+                }
+            }
 
             IEnumerable<AssignmentExpressionSyntax> candidates = includeSelf || expression is not AssignmentExpressionSyntax rootAssignment
                 ? Scan(expression)
