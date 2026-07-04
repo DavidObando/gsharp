@@ -8105,6 +8105,14 @@ public sealed class CSharpToGSharpTranslator
                     {
                         this.patternBindings[varBound] = receiver;
                     }
+                    else if (varPattern.Designation is ParenthesizedVariableDesignationSyntax)
+                    {
+                        // `var (a, b)` binds the deconstructed elements; G# has no
+                        // canonical form for that, so keep the loud gap rather than
+                        // silently emit a bindingless match (issue #1888). `var _`
+                        // (discard designation) correctly stays a bindingless always-true.
+                        this.context.ReportUnsupported(varPattern, "var pattern with tuple designation ('var (a, b)') has no canonical G# form yet (ADR-0115 §B).");
+                    }
 
                     return LiteralExpression.Bool(true);
 
@@ -11087,6 +11095,10 @@ public sealed class CSharpToGSharpTranslator
                     {
                         bindings.Add((varBound, receiver));
                     }
+                    else if (varPattern.Designation is ParenthesizedVariableDesignationSyntax)
+                    {
+                        this.context.ReportUnsupported(varPattern, "var pattern with tuple designation ('var (a, b)') has no canonical G# form yet (ADR-0115 §B).");
+                    }
 
                     return new DiscardPattern();
 
@@ -11181,7 +11193,11 @@ public sealed class CSharpToGSharpTranslator
 
                         fields.Add(new PropertyPatternField(
                             SanitizeIdentifier(memberName),
-                            this.TranslatePattern(sub.Pattern, bindings, usedDesignators)));
+                            this.TranslatePattern(
+                                sub.Pattern,
+                                new MemberAccessExpression(receiver, SanitizeIdentifier(memberName)),
+                                bindings,
+                                usedDesignators)));
                     }
                 }
 

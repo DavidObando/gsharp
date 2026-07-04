@@ -180,6 +180,37 @@ namespace Corpus.Issue1888
         AssertRoundTripParses(rendered);
     }
 
+    [Fact]
+    public void IsPattern_VarTupleDesignation_StaysLoudGap()
+    {
+        // `var (a, b)` deconstructs — G# has no canonical form, so it must keep
+        // reporting the CS2GS-GAP rather than silently emit a bindingless match.
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Source.cs", @"
+namespace Corpus.Issue1888
+{
+    public class Holder
+    {
+        public bool Describe((int, int) point)
+        {
+            if (point is var (a, b))
+            {
+                return a == b;
+            }
+
+            return false;
+        }
+    }
+}
+") });
+
+        Assert.True(project.BoundWithoutErrors);
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.Contains(context.Diagnostics, d => d.Message.Contains("tuple designation", StringComparison.Ordinal));
+    }
+
     private static void AssertRoundTripParses(string rendered)
     {
         RoundTripResult result = GSharpRoundTrip.Validate(rendered);
