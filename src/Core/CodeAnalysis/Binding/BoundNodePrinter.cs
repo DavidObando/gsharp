@@ -48,6 +48,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.VariableDeclaration:
                 WriteVariableDeclaration((BoundVariableDeclaration)node, writer);
                 break;
+            case BoundNodeKind.LocalFunctionDeclaration:
+                WriteLocalFunctionDeclaration((BoundLocalFunctionDeclaration)node, writer);
+                break;
             case BoundNodeKind.IfStatement:
                 WriteIfStatement((BoundIfStatement)node, writer);
                 break;
@@ -417,6 +420,31 @@ public static class BoundNodePrinter
 
         writer.WriteSpace();
         node.Initializer.WriteTo(writer);
+        writer.WriteLine();
+    }
+
+    private static void WriteLocalFunctionDeclaration(BoundLocalFunctionDeclaration node, IndentedTextWriter writer)
+    {
+        writer.WriteKeyword(SyntaxKind.LetKeyword);
+        writer.WriteSpace();
+        writer.WriteIdentifier(node.Literal.Function.Name);
+        writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken);
+        for (var i = 0; i < node.Literal.Function.TypeParameters.Length; i++)
+        {
+            if (i > 0)
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            writer.WriteIdentifier(node.Literal.Function.TypeParameters[i].Name);
+        }
+
+        writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
+        writer.WriteSpace();
+        writer.WritePunctuation(SyntaxKind.EqualsToken);
+        writer.WriteSpace();
+        node.Literal.WriteTo(writer);
         writer.WriteLine();
     }
 

@@ -330,6 +330,7 @@ LabelStatement
 LenExpression
 ListPattern
 LiteralExpression
+LocalFunctionDeclaration
 MakeChannelExpression
 MapDeleteExpression
 MapLiteralExpression

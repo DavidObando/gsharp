@@ -6,12 +6,12 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | Status | Count |
 | --- | --- |
 | Unclassified | 0 |
-| Translated | 209 |
+| Translated | 210 |
 | Lowered | 12 |
 | UnsupportedByDesign | 56 |
-| Gap | 44 |
+| Gap | 43 |
 
-## Translated (209)
+## Translated (210)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -127,7 +127,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | LessThanExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LessThanExpression.cs |  |  |
 | LessThanOrEqualExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LessThanOrEqualExpression.cs |  |  |
 | LocalDeclarationStatement | LocalDeclarationStatementSyntax | ADR-0115 §B.3 |  |  |  |  |
-| LocalFunctionStatement | LocalFunctionStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/LocalFunctionStatement.cs | https://github.com/DavidObando/gsharp/issues/1886 | static local functions mislower at call sites; generic local functions unrepresentable (issue #1886). |
+| LocalFunctionStatement | LocalFunctionStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/LocalFunctionStatement.cs |  | Static local functions call through their `let` binding directly; generic local functions translate to G#'s `let Name[T, ...] = func (...) ... { ... }` (issue #1886, fixed). |
 | LockStatement | LockStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/LockStatement.cs |  |  |
 | LogicalAndExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LogicalAndExpression.cs |  |  |
 | LogicalNotExpression | PrefixUnaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LogicalNotExpression.cs |  |  |
@@ -160,6 +160,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | ParenthesizedVariableDesignation | ParenthesizedVariableDesignationSyntax | ADR-0115 §B.30 |  |  |  |  |
 | PointerIndirectionExpression | PrefixUnaryExpressionSyntax | ADR-0115 §B |  |  | https://github.com/DavidObando/gsharp/issues/1925 | Compiles; ilverify-by-design (issue #1933). *(p + i) misbinds in gsc (issue #1925). |
 | PointerType | PointerTypeSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/PointerType.cs | https://github.com/DavidObando/gsharp/issues/1933 | Compiles end-to-end under the ilverify allow-unsafe policy (issue #1933); pointer IL is unverifiable by design, not a gsc defect. |
+| PositionalPatternClause | PositionalPatternClauseSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/PositionalPatternClause.cs | https://github.com/DavidObando/gsharp/issues/1887 | Fixed (was SILENT MISTRANSLATION, issue #1887): a positional subpattern lowers to the same member-access form a property subpattern uses (tuple Item1/Item2, or a record's property via its Deconstruct). Switch-expression bare positional patterns over a raw TUPLE are also supported: gsc's property-pattern binder/emitter/evaluator now accept a ValueTuple subject (previously GS0172). |
 | PostDecrementExpression | PostfixUnaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/PostDecrementExpression.cs |  |  |
 | PostIncrementExpression | PostfixUnaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/PostIncrementExpression.cs |  |  |
 | PreDecrementExpression | PrefixUnaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/PreDecrementExpression.cs |  |  |
@@ -303,7 +304,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | XmlText | XmlTextSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | XmlTextAttribute | XmlTextAttributeSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 
-## Gap (44)
+## Gap (43)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -336,7 +337,6 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | ListPattern | ListPatternSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1889 |  |
 | ObjectInitializerExpression | InitializerExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1892 | Initializer assignments emitted as stray statements. |
 | PointerMemberAccessExpression | MemberAccessExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1905 | p->X lowered to p.X; (*p).X compiles. |
-| PositionalPatternClause | PositionalPatternClauseSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1887 | SILENT MISTRANSLATION: sub-patterns dropped to match-anything case { }. |
 | PrimaryConstructorBaseType | PrimaryConstructorBaseTypeSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1909 |  |
 | RangeExpression | RangeExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1896 | Lowers to .Slice(...) which gsc cannot resolve on arrays/strings. |
 | RefExpression | RefExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1900 | ref argument/return seam (&x pass-by-address). |

@@ -19,6 +19,7 @@ namespace Corpus.Grid04
             NotPatternFixture.Run();
             OrPatternFixture.Run();
             ParenthesizedPatternFixture.Run();
+            PositionalPatternClauseFixture.Run();
             RecursivePatternFixture.Run();
             RelationalPatternFixture.Run();
             SwitchExpressionFixture.Run();

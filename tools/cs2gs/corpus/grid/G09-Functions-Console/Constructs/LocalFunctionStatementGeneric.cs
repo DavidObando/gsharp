@@ -1,4 +1,6 @@
 // inventory: LocalFunctionStatement
+// Issue #1886: generic local functions (`T Echo<T>(T v)`) now translate to G#'s
+// `let Echo[T] = func (value T) T { ... }` generic function-literal syntax.
 using System;
 
 namespace Corpus.Grid09
@@ -7,9 +9,13 @@ namespace Corpus.Grid09
     {
         public static void Run()
         {
-            // QUARANTINED (GS0113): generic local functions (T Echo<T>(T v))
-            // are emitted as 'let Echo = func (value T) T { ... }' — G#
-            // lambdas cannot declare type parameters, so 'T' does not resolve.
+            T Echo<T>(T v)
+            {
+                return v;
+            }
+
+            Console.WriteLine($"LocalFunctionStatementGeneric: Echo(7)={Echo(7)}");
+            Console.WriteLine($"LocalFunctionStatementGeneric: Echo(\"hi\")={Echo("hi")}");
 
             // Local function used as a Func<> value.
             static int Square(int x)
