@@ -127,7 +127,11 @@ public static class BaseCallForwarderRewriter
             program.Interfaces,
             program.Enums,
             program.Globals,
-            program.Delegates);
+            program.Delegates)
+        {
+            Imports = program.Imports,
+            FriendAssemblies = program.FriendAssemblies,
+        };
     }
 
     private static bool ContainsYield(BoundStatement statement)

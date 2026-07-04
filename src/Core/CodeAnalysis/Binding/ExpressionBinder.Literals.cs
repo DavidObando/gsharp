@@ -515,7 +515,7 @@ internal sealed partial class ExpressionBinder
     {
         var typeName = syntax.TypeIdentifier.Text;
 
-        StructSymbol structSymbol;
+        StructSymbol structSymbol = null;
         if (resolvedDefinition != null)
         {
             structSymbol = resolvedDefinition;
@@ -539,16 +539,32 @@ internal sealed partial class ExpressionBinder
                 // parameterless ctor, then assign each named member).
                 if (syntax.TypeArgumentList == null
                     && scope.TryLookupImportedClass(typeName, declaration: null, out var importedClass)
-                    && importedClass.ClassType is { IsValueType: false, IsGenericTypeDefinition: false })
+                    && importedClass.ClassType is { IsGenericTypeDefinition: false })
                 {
-                    return BindImportedClassLiteralExpression(syntax, importedClass.ClassType);
+                    if (ImportedTypeSymbol.TryCreateSemanticAggregate(importedClass.ClassType, scope.References, out var importedAggregate))
+                    {
+                        structSymbol = importedAggregate;
+                    }
+                    else if (!importedClass.ClassType.IsValueType)
+                    {
+                        return BindImportedClassLiteralExpression(syntax, importedClass.ClassType);
+                    }
+                    else
+                    {
+                        Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, typeName);
+                        return new BoundErrorExpression(null);
+                    }
                 }
-
-                Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, typeName);
-                return new BoundErrorExpression(null);
+                else if (structSymbol == null)
+                {
+                    Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, typeName);
+                    return new BoundErrorExpression(null);
+                }
             }
-
-            structSymbol = resolvedStruct;
+            else
+            {
+                structSymbol = resolvedStruct;
+            }
         }
 
         // ADR-0047 §6 / #175: struct/class literal `Foo{ ... }` is a

@@ -119,6 +119,13 @@ public sealed class ReferenceResolver : IDisposable
     // and behaviour is byte-for-byte identical to before this ADR.
     private Dictionary<string, int> warmNameIndex;
 
+    /// <summary>
+    /// Gets or sets the simple name of the assembly currently being compiled.
+    /// When populated, imported-member lookup may honor
+    /// <c>InternalsVisibleTo</c> friendship on referenced assemblies.
+    /// </summary>
+    public string CurrentAssemblyName { get; set; }
+
     private ReferenceResolver(ImmutableArray<Assembly> assemblies, MetadataLoadContext metadataContext)
         : this(assemblies, metadataContext, ImmutableArray<string>.Empty)
     {
@@ -228,6 +235,17 @@ public sealed class ReferenceResolver : IDisposable
     /// (issue #340).
     /// </summary>
     public ImmutableArray<string> MissingTransitiveReferences => missingTransitiveReferences;
+
+    /// <summary>
+    /// Returns <see langword="true"/> when <paramref name="assembly"/>'s
+    /// internal surface is visible to the current compilation, either because
+    /// it is the same assembly or because it grants friendship via
+    /// <c>InternalsVisibleTo</c>.
+    /// </summary>
+    /// <param name="assembly">The referenced assembly to inspect.</param>
+    /// <returns><see langword="true"/> when internal members are visible.</returns>
+    public bool CanAccessInternalMembers(Assembly assembly)
+        => ImportedAssemblySemantics.GrantsInternalAccessTo(assembly, CurrentAssemblyName);
 
     /// <summary>
     /// Recovers the on-disk path that <paramref name="assembly"/> was

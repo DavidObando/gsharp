@@ -140,6 +140,7 @@ internal static class CaptureBoxingRewriter
             program.Delegates)
         {
             Imports = program.Imports,
+            FriendAssemblies = program.FriendAssemblies,
         };
 
         return result;

@@ -206,6 +206,7 @@ public class Parser
     {
         var package = ParsePackage();
         var imports = ParseImports();
+        var assemblyAttributes = ParseFileLevelAssemblyAttributes();
         var members = ParseMembers();
         var endOfFileToken = MatchToken(SyntaxKind.EndOfFileToken);
         var junction = ImmutableArray.CreateBuilder<MemberSyntax>();
@@ -220,7 +221,36 @@ public class Parser
         }
 
         junction.AddRange(members);
-        return new CompilationUnitSyntax(syntaxTree, junction.ToImmutable(), endOfFileToken);
+        return new CompilationUnitSyntax(syntaxTree, assemblyAttributes, junction.ToImmutable(), endOfFileToken);
+    }
+
+    /// <summary>
+    /// Parses a leading run of file-level <c>@assembly:Name(...)</c>
+    /// annotations, sitting after <c>import</c>s and before the first member.
+    /// This is the producer-side opt-in surface for assembly-scoped custom
+    /// attributes (chiefly <c>@assembly:InternalsVisibleTo("Foo.Tests")</c> —
+    /// see ADR-0047 §2/§7 and issue #1929/#1953). Only annotations that
+    /// explicitly carry the <c>assembly:</c> use-site target are consumed
+    /// here; anything else is left for <see cref="ParseMembers"/> to attach
+    /// to the next declaration as usual.
+    /// </summary>
+    private ImmutableArray<AnnotationSyntax> ParseFileLevelAssemblyAttributes()
+    {
+        if (Current.Kind != SyntaxKind.AtToken)
+        {
+            return ImmutableArray<AnnotationSyntax>.Empty;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<AnnotationSyntax>();
+        while (Current.Kind == SyntaxKind.AtToken
+            && Peek(1).Kind == SyntaxKind.IdentifierToken
+            && Peek(1).Text == "assembly"
+            && Peek(2).Kind == SyntaxKind.ColonToken)
+        {
+            builder.Add(ParseAnnotation());
+        }
+
+        return builder.ToImmutable();
     }
 
     private PackageSyntax ParsePackage()

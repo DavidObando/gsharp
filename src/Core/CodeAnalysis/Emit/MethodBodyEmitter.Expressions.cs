@@ -1096,7 +1096,7 @@ internal sealed partial class MethodBodyEmitter
                 // accessor (`dup; <value>; callvirt set_X`) rather than a stfld.
                 if (init.Property != null)
                 {
-                    var setterHandle = this.ResolveStructLiteralSetter(literal.StructType, init.Property, isGeneric);
+                    var setterHandle = this.ResolveStructLiteralSetter(literal.StructType, init.Property, isGeneric || literal.StructType.ClrType != null);
                     this.il.OpCode(ILOpCode.Dup);
                     this.EmitExpression(init.Value);
                     this.il.OpCode(ILOpCode.Callvirt);
@@ -1105,7 +1105,7 @@ internal sealed partial class MethodBodyEmitter
                 }
 
                 EntityHandle fieldHandle;
-                if (isGeneric)
+                if (isGeneric || literal.StructType.ClrType != null)
                 {
                     fieldHandle = this.outer.ResolveFieldToken(literal.StructType, init.Field);
                 }
@@ -1149,7 +1149,7 @@ internal sealed partial class MethodBodyEmitter
             // managed-pointer receiver means a non-virtual `call`.
             if (init.Property != null)
             {
-                var setterHandle = this.ResolveStructLiteralSetter(literal.StructType, init.Property, isGeneric);
+                var setterHandle = this.ResolveStructLiteralSetter(literal.StructType, init.Property, isGeneric || literal.StructType.ClrType != null);
                 this.il.LoadLocalAddress(slot);
                 this.EmitExpression(init.Value);
                 this.il.OpCode(ILOpCode.Call);
@@ -1158,7 +1158,7 @@ internal sealed partial class MethodBodyEmitter
             }
 
             EntityHandle fieldHandle;
-            if (isGeneric)
+            if (isGeneric || literal.StructType.ClrType != null)
             {
                 fieldHandle = this.outer.ResolveFieldToken(literal.StructType, init.Field);
             }

@@ -1429,7 +1429,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        classSymbol = new ImportedClassSymbol(typeSymbol.ClrType, declaration);
+        classSymbol = new ImportedClassSymbol(typeSymbol.ClrType, declaration, references: scope.References);
         return true;
     }
 
@@ -1571,7 +1571,7 @@ internal sealed partial class ExpressionBinder
             var fullTypeName = currentPath + "." + typeNameSyntax.IdentifierToken.Text;
             if (scope.References.TryResolveType(fullTypeName, out var type))
             {
-                importedClass = new ImportedClassSymbol(type, typeNameSyntax);
+                importedClass = new ImportedClassSymbol(type, typeNameSyntax, references: scope.References);
                 rightPart = remainder;
                 return true;
             }
@@ -2538,7 +2538,7 @@ internal sealed partial class ExpressionBinder
             var symbolicReceiver = typeArgs.Any(static a => TypeSymbol.ContainsTypeParameter(a) || a.ClrType == null)
                 ? ImportedTypeSymbol.GetConstructed(closed, openClrType, typeArgs)
                 : null;
-            constructedImported = new ImportedClassSymbol(closed, receiverSyntax, symbolicReceiver);
+            constructedImported = new ImportedClassSymbol(closed, receiverSyntax, symbolicReceiver, scope.References);
             return true;
         }
         catch (ArgumentException)
@@ -3755,7 +3755,7 @@ internal sealed partial class ExpressionBinder
 
             if (scope.References.TryResolveNestedType(classSymbol.ClassType, name, out var nestedType))
             {
-                nestedClassSymbol = new ImportedClassSymbol(nestedType, nameExpr);
+                nestedClassSymbol = new ImportedClassSymbol(nestedType, nameExpr, references: scope.References);
                 return true;
             }
 
@@ -3776,7 +3776,7 @@ internal sealed partial class ExpressionBinder
                 var innerNameText = innerName.IdentifierToken.Text;
                 if (scope.References.TryResolveNestedType(intermediateSymbol.ClassType, innerNameText, out var deepNested))
                 {
-                    nestedClassSymbol = new ImportedClassSymbol(deepNested, innerName);
+                    nestedClassSymbol = new ImportedClassSymbol(deepNested, innerName, references: scope.References);
                     return true;
                 }
             }

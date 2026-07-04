@@ -1878,7 +1878,13 @@ internal sealed class MemberLookup
             MethodInfo[] methods;
             try
             {
-                methods = type.GetMethods(BindingFlags.Public | BindingFlags.Static);
+                var flags = BindingFlags.Public | BindingFlags.Static;
+                if (this.binderCtx.References.CanAccessInternalMembers(type.Assembly))
+                {
+                    flags |= BindingFlags.NonPublic;
+                }
+
+                methods = type.GetMethods(flags);
             }
             catch
             {
@@ -1892,7 +1898,7 @@ internal sealed class MemberLookup
                     continue;
                 }
 
-                if (!HasExtensionAttribute(method))
+                if (!HasExtensionAttribute(method) || !IsVisibleImportedMethod(method))
                 {
                     continue;
                 }
@@ -1964,7 +1970,7 @@ internal sealed class MemberLookup
                         continue;
                     }
 
-                    if (!IsStaticClass(type) || !HasExtensionAttribute(type))
+                    if (!IsStaticClass(type) || !HasExtensionAttribute(type) || !IsVisibleImportedType(type))
                     {
                         continue;
                     }
@@ -2026,6 +2032,12 @@ internal sealed class MemberLookup
     /// alongside <see cref="ClrTypeUtilities.ClearCache"/>.
     /// </summary>
     internal static void ClearCache() => MethodsIncludingSelfAndInterfacesCache.Clear();
+
+    private bool IsVisibleImportedMethod(MethodBase method)
+        => method.IsPublic || (method.IsAssembly && this.binderCtx.References.CanAccessInternalMembers(method.DeclaringType?.Assembly));
+
+    private bool IsVisibleImportedType(Type type)
+        => type.IsPublic || type.IsNestedPublic || ((type.IsNotPublic || type.IsNestedAssembly) && this.binderCtx.References.CanAccessInternalMembers(type.Assembly));
 
     /// <summary>
     /// Returns the callable parameter slice of <paramref name="method"/> —

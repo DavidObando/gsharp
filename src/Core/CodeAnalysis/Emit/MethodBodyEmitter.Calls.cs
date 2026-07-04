@@ -204,6 +204,10 @@ internal sealed partial class MethodBodyEmitter
             var openMethod = ResolveOpenInterfaceMethod(receiverIface, call.Method);
             methodHandle = this.outer.ResolveUserInterfaceInstanceMethodToken(receiverIface, openMethod);
         }
+        else if (call.Method.ReceiverType is StructSymbol importedReceiver && importedReceiver.ClrType != null)
+        {
+            methodHandle = this.outer.ResolveUserInstanceMethodToken(importedReceiver, call.Method);
+        }
         else if (this.outer.cache.MethodHandles.TryGetValue(call.Method, out var defHandle))
         {
             methodHandle = defHandle;

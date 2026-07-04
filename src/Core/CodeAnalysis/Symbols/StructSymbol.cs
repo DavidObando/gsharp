@@ -192,7 +192,41 @@ public sealed class StructSymbol : TypeSymbol
         ImmutableArray<ParameterSymbol> primaryConstructorParameters,
         bool isOpen,
         StructSymbol baseClass)
-        : base(name)
+        : this(name, fields, accessibility, declaration, packageName, isData, isInline, isClass, primaryConstructorParameters, isOpen, baseClass, clrType: null)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="StructSymbol"/> class for
+    /// a metadata-backed aggregate that still needs G#-level semantics during
+    /// binding/emission (for example an imported value type compiled from G#).
+    /// </summary>
+    /// <param name="name">The aggregate type name.</param>
+    /// <param name="fields">The field declarations in source order.</param>
+    /// <param name="accessibility">The CLR accessibility.</param>
+    /// <param name="declaration">The declaring syntax node, or <see langword="null"/> for imported types.</param>
+    /// <param name="packageName">The package/namespace the type lives in.</param>
+    /// <param name="isData">True for <c>data struct</c> declarations.</param>
+    /// <param name="isInline">True for <c>inline struct</c> declarations.</param>
+    /// <param name="isClass">True for <c>class</c> declarations.</param>
+    /// <param name="primaryConstructorParameters">The Kotlin-style primary constructor parameters.</param>
+    /// <param name="isOpen">True when this class was declared with the <c>open</c> modifier.</param>
+    /// <param name="baseClass">The base class symbol.</param>
+    /// <param name="clrType">The backing CLR type for imported aggregates, or <see langword="null"/> for same-compilation user types.</param>
+    public StructSymbol(
+        string name,
+        ImmutableArray<FieldSymbol> fields,
+        Accessibility accessibility,
+        StructDeclarationSyntax declaration,
+        string packageName,
+        bool isData,
+        bool isInline,
+        bool isClass,
+        ImmutableArray<ParameterSymbol> primaryConstructorParameters,
+        bool isOpen,
+        StructSymbol baseClass,
+        Type clrType)
+        : base(name, clrType)
     {
         Fields = fields;
         Accessibility = accessibility;

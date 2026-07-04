@@ -120,6 +120,7 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
             program.Globals)
         {
             Imports = program.Imports,
+            FriendAssemblies = program.FriendAssemblies,
         };
     }
 

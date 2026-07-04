@@ -19,6 +19,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -3294,10 +3295,78 @@ internal sealed class ReflectionMetadataEmitter
                 this.emitCtx.AssemblyVersionOverride);
         }
 
+        this.EmitGSharpTypeSemantics(assemblyHandle);
+
+        // Issue #1929/#1953: producer-declared friend assemblies. Each
+        // `@assembly:InternalsVisibleTo("Foo")` annotation becomes a real
+        // System.Runtime.CompilerServices.InternalsVisibleToAttribute row so
+        // cross-assembly internal access is genuine producer opt-in — no
+        // consumer-side name heuristic (see ImportedAssemblySemantics).
+        this.EmitFriendAssemblyAttributes(assemblyHandle);
+
         // 2. NullableContextAttribute(1) — declares the assembly's default
         // nullable context as "annotated" so C# consumers see non-null by
         // default for GSharp types (GSharp has no null references).
         this.EmitNullableContextAttribute(assemblyHandle);
+    }
+
+    private void EmitFriendAssemblyAttributes(AssemblyDefinitionHandle assemblyHandle)
+    {
+        foreach (var friend in this.emitCtx.Program.FriendAssemblies)
+        {
+            this.customAttrEncoder.EmitStringAttribute(
+                assemblyHandle,
+                "System.Runtime.CompilerServices.InternalsVisibleToAttribute",
+                typeof(System.Runtime.CompilerServices.InternalsVisibleToAttribute),
+                friend);
+        }
+    }
+
+    private void EmitGSharpTypeSemantics(AssemblyDefinitionHandle assemblyHandle)
+    {
+        foreach (var type in this.emitCtx.Program.Structs)
+        {
+            if (type.IsClass
+                || (!type.IsData && !type.HasPrimaryConstructor)
+                || !this.cache.StructTypeDefs.TryGetValue(type, out var handle))
+            {
+                continue;
+            }
+
+            // Issue #1953 follow-up: pair each primary-ctor parameter name
+            // with its backing field's metadata token (0 when no backing
+            // field is found, e.g. a property-backed parameter), so the
+            // importer (ImportedTypeSymbol.BuildPrimaryConstructorParameters)
+            // can recover the parameter's type via the exact field even when
+            // a future lowering/mangling pass makes the parameter name differ
+            // from the field name — falling back to name matching only when
+            // no token was recorded.
+            var fieldsByName = type.Fields.ToDictionary(f => f.Name, StringComparer.Ordinal);
+            var parameterEntries = type.PrimaryConstructorParameters.Select(p =>
+            {
+                var token = 0;
+                if (fieldsByName.TryGetValue(p.Name, out var backingField)
+                    && this.cache.StructFieldDefs.TryGetValue(backingField, out var fieldHandle))
+                {
+                    token = MetadataTokens.GetToken(fieldHandle);
+                }
+
+                return $"{p.Name}:{token.ToString(CultureInfo.InvariantCulture)}";
+            });
+
+            var payload = string.Join(
+                "|",
+                MetadataTokens.GetToken(handle).ToString(CultureInfo.InvariantCulture),
+                "struct",
+                type.IsData ? "1" : "0",
+                string.Join(",", parameterEntries));
+            this.customAttrEncoder.EmitStringPairAttribute(
+                assemblyHandle,
+                "System.Reflection.AssemblyMetadataAttribute",
+                typeof(System.Reflection.AssemblyMetadataAttribute),
+                ImportedAssemblySemantics.TypeSemanticsMetadataKey,
+                payload);
+        }
     }
 
     /// <summary>
@@ -7310,6 +7379,15 @@ internal sealed class ReflectionMetadataEmitter
             return this.GetUserStructFieldRef(containingType, field);
         }
 
+        if (!this.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle) && containingType.ClrType != null)
+        {
+            var importedField = containingType.ClrType.GetField(field.Name, BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+            if (importedField != null)
+            {
+                return this.GetFieldReference(importedField);
+            }
+        }
+
         return this.cache.StructFieldDefs[field];
     }
 
@@ -7525,7 +7603,17 @@ internal sealed class ReflectionMetadataEmitter
 
     internal EntityHandle ResolveUserInstanceMethodToken(StructSymbol containingType, FunctionSymbol method)
     {
-        if (!this.cache.MethodHandles.TryGetValue(method, out var openDef))
+        if (!this.cache.MethodHandles.TryGetValue(method, out var openDef)
+            && containingType.ClrType != null)
+        {
+            var importedMethod = FindImportedMethod(containingType.ClrType, method, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (importedMethod != null)
+            {
+                return this.GetMethodReference(importedMethod);
+            }
+        }
+
+        if (!this.cache.MethodHandles.TryGetValue(method, out openDef))
         {
             throw new InvalidOperationException(
                 $"Instance method '{method.Name}' has no emitted handle.");
@@ -7590,6 +7678,15 @@ internal sealed class ReflectionMetadataEmitter
         if (!this.cache.MethodHandles.TryGetValue(method, out var openDef)
             && !this.cache.FunctionHandles.TryGetValue(method, out openDef))
         {
+            if (containingType.ClrType != null)
+            {
+                var importedMethod = FindImportedMethod(containingType.ClrType, method, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                if (importedMethod != null)
+                {
+                    return this.GetMethodReference(importedMethod);
+                }
+            }
+
             throw new InvalidOperationException(
                 $"Static method '{method.Name}' has no emitted handle.");
         }
@@ -7700,6 +7797,17 @@ internal sealed class ReflectionMetadataEmitter
 
         if (!this.cache.PropertyAccessorHandles.TryGetValue(defProp, out var handles))
         {
+            if (containingType.ClrType != null)
+            {
+                var bindingFlags = (property.IsStatic ? BindingFlags.Static : BindingFlags.Instance) | BindingFlags.Public | BindingFlags.NonPublic;
+                var importedProperty = containingType.ClrType.GetProperty(defProp.Name, bindingFlags);
+                var importedAccessor = wantSetter ? importedProperty?.SetMethod : importedProperty?.GetMethod;
+                if (importedAccessor != null)
+                {
+                    return this.GetMethodReference(importedAccessor);
+                }
+            }
+
             throw new InvalidOperationException(
                 $"Property '{property.Name}' has no emitted accessor handles.");
         }
@@ -8094,7 +8202,54 @@ internal sealed class ReflectionMetadataEmitter
             return this.GetUserStructTypeSpec(structType);
         }
 
+        if (structType.ClrType != null)
+        {
+            return this.GetElementTypeToken(structType);
+        }
+
         return this.cache.StructTypeDefs[structType];
+    }
+
+    private static MethodInfo FindImportedMethod(Type declaringType, FunctionSymbol method, BindingFlags bindingFlags)
+    {
+        foreach (var candidate in declaringType.GetMethods(bindingFlags))
+        {
+            if (!string.Equals(candidate.Name, method.Name, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var parameters = candidate.GetParameters();
+            if (parameters.Length != method.Parameters.Length)
+            {
+                continue;
+            }
+
+            var matches = true;
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                var candidateType = parameters[i].ParameterType;
+                var methodType = method.Parameters[i].Type.ClrType;
+                if (parameters[i].ParameterType.IsByRef != (method.Parameters[i].RefKind != RefKind.None))
+                {
+                    matches = false;
+                    break;
+                }
+
+                if (methodType != null && candidateType != methodType && candidateType != methodType.MakeByRefType())
+                {
+                    matches = false;
+                    break;
+                }
+            }
+
+            if (matches)
+            {
+                return candidate;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -9992,6 +10147,12 @@ internal sealed class ReflectionMetadataEmitter
         }
         else if (type is StructSymbol structSym)
         {
+            if (structSym.ClrType != null)
+            {
+                this.EncodeClrType(encoder, structSym.ClrType);
+                return;
+            }
+
             // ADR-0087 §3 R2: a user-declared generic struct encodes as
             // GENERICINST<def><args>. For a constructed instance the args
             // come from TypeArguments; for the open definition itself we

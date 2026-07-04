@@ -259,4 +259,14 @@ public sealed class BoundProgram
     /// the PDB emitter uses this to produce per-file <c>ImportScope</c> chains.
     /// </summary>
     public ImmutableArray<ImportSymbol> Imports { get; internal set; } = ImmutableArray<ImportSymbol>.Empty;
+
+    /// <summary>
+    /// Gets the distinct friend-assembly names declared via
+    /// <c>@assembly:InternalsVisibleTo("...")</c> (issue #1929/#1953).
+    /// Populated from <see cref="BoundGlobalScope.FriendAssemblies"/>; the
+    /// emitter writes one real
+    /// <see cref="System.Runtime.CompilerServices.InternalsVisibleToAttribute"/>
+    /// row per entry.
+    /// </summary>
+    public ImmutableArray<string> FriendAssemblies { get; internal set; } = ImmutableArray<string>.Empty;
 }

@@ -28,6 +28,7 @@ public class Compilation
     private BoundGlobalScope globalScope;
     private BoundProgram boundProgram;
     private ImmutableHashSet<string> preprocessorSymbols = ImmutableHashSet<string>.Empty;
+    private string assemblyName;
     private DebugInformationOptions debugInformation = new();
 
     /// <summary>
@@ -188,6 +189,32 @@ public class Compilation
     public System.Collections.Immutable.ImmutableHashSet<SyntaxTree> DirtyBodyTrees { get; set; }
 
     /// <summary>
+    /// Gets or sets the assembly-identity override (e.g. from MSBuild's
+    /// <c>AssemblyName</c> or the SDK). Setting this immediately pushes the
+    /// value onto <see cref="References"/>'s
+    /// <see cref="ReferenceResolver.CurrentAssemblyName"/> so binding-time
+    /// internal-visibility checks (<see cref="Symbols.ImportedAssemblySemantics.GrantsInternalAccessTo"/>)
+    /// see the correct consumer name regardless of whether the caller reads
+    /// <see cref="Diagnostics"/>/<see cref="GlobalScope"/> before or after
+    /// calling <c>Emit</c>. Previously this was only set inside <c>Emit</c>,
+    /// so any earlier access to the lazy <see cref="GlobalScope"/> (which
+    /// caches per-consumer-assembly visibility, see
+    /// <c>ImportedTypeSymbol.AggregateCache</c>) would freeze visibility with
+    /// an empty assembly name. Callers that know the target assembly name
+    /// up front (the gsc CLI, the language server) should set this before
+    /// touching <see cref="GlobalScope"/> or <see cref="Diagnostics"/>.
+    /// </summary>
+    public string AssemblyName
+    {
+        get => assemblyName;
+        set
+        {
+            assemblyName = value;
+            PrepareReferencesForBinding(value);
+        }
+    }
+
+    /// <summary>
     /// Gets the global scope.
     /// </summary>
     public BoundGlobalScope GlobalScope
@@ -196,6 +223,12 @@ public class Compilation
         {
             if (globalScope == null)
             {
+                // Belt-and-braces: make sure References sees the current
+                // assembly name before the (possibly cached, see
+                // ImportedTypeSymbol.AggregateCache) binding pass runs, even
+                // if the caller only ever set AssemblyName and never called
+                // Emit.
+                PrepareReferencesForBinding(assemblyName);
                 var globalScope = ReusedGlobalScope
                     ?? Binder.BindGlobalScope(Previous?.GlobalScope, SyntaxTrees, References, ImplicitSystemImport, PreprocessorSymbols, IsLibrary);
                 Interlocked.CompareExchange(ref this.globalScope, globalScope, null);
@@ -438,6 +471,7 @@ public class Compilation
     /// <returns>An emit result.</returns>
     public EmitResult Emit(Stream peStream, Stream pdbStream, Stream refStream, Stream docStream, string assemblyName = null, string assemblyVersion = null)
     {
+        AssemblyName = assemblyName ?? AssemblyName;
         var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
         var syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
 
@@ -633,6 +667,16 @@ public class Compilation
     private static void EmitAssembly(BoundProgram program, Stream peStream, ReferenceResolver references, string assemblyName = null, string assemblyVersion = null, bool metadataOnly = false, Lowering.Async.AsyncStateMachineRewriteResult asyncRewriteResult = null, IteratorRewriteResult iteratorRewriteResult = null, AsyncIteratorRewriteResult asyncIteratorRewriteResult = null, DebugInformationOptions debugInformation = null, Stream pdbStream = null)
     {
         ReflectionMetadataEmitter.Emit(program, peStream, references, assemblyName, metadataOnly, asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult, debugInformation, pdbStream, assemblyVersion);
+    }
+
+    private void PrepareReferencesForBinding(string assemblyName)
+    {
+        if (References == null)
+        {
+            return;
+        }
+
+        References.CurrentAssemblyName = assemblyName ?? References.CurrentAssemblyName;
     }
 
     /// <summary>

@@ -110,6 +110,14 @@ public class Program
                     ImplicitSystemImport = parsed.ImplicitSystemImport,
                     IsLibrary = parsed.Target == OutputTarget.Library,
                     Logger = logger,
+
+                    // Issue #1929/#1953: set as early as possible (right at
+                    // construction) rather than only inside Emit(), so
+                    // binding-time internal-visibility checks
+                    // (ImportedAssemblySemantics.GrantsInternalAccessTo) see
+                    // the correct consumer assembly name even if something
+                    // forces GlobalScope/Diagnostics before Emit runs.
+                    AssemblyName = parsed.AssemblyName,
                     DebugInformation =
                     {
                         Format = parsed.DebugFormat,

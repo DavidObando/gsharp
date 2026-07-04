@@ -6,6 +6,8 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Reflection;
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Documentation;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -18,6 +20,7 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 public sealed class ImportedTypeSymbol : TypeSymbol
 {
     private static readonly ConcurrentDictionary<Type, ImportedTypeSymbol> Cache = new();
+    private static readonly ConcurrentDictionary<(Type Type, string ConsumerAssembly), StructSymbol> AggregateCache = new();
 
     private ImportedTypeSymbol(Type type)
         : base(type.FullName ?? type.Name, type)
@@ -132,11 +135,307 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         return AssemblyDocumentationProvider.Resolve(OpenDefinition ?? Type) ?? base.GetDocumentation();
     }
 
+    internal static bool TryCreateSemanticAggregate(Type type, ReferenceResolver references, out StructSymbol aggregate)
+    {
+        aggregate = null;
+        if (type == null
+            || !type.IsValueType
+            || type.IsPrimitive
+            || type.IsEnum
+            || type.IsGenericParameter
+            || !ImportedAssemblySemantics.TryGetTypeSemantics(type, out var semantics)
+            || !semantics.IsValueType)
+        {
+            return false;
+        }
+
+        var cacheKey = (type, references?.CurrentAssemblyName ?? string.Empty);
+        aggregate = AggregateCache.GetOrAdd(cacheKey, static key => BuildSemanticAggregate(key.Type, key.ConsumerAssembly));
+        return aggregate != null;
+    }
+
     /// <summary>
     /// Removes all entries from the static type cache. Called by
     /// <see cref="ReferenceResolver.Dispose"/> to release stale
     /// <see cref="Type"/> objects backed by a disposed metadata load context
     /// that would otherwise pin the context's memory indefinitely.
     /// </summary>
-    internal static void ClearCache() => Cache.Clear();
+    internal static void ClearCache()
+    {
+        Cache.Clear();
+        AggregateCache.Clear();
+    }
+
+    private static StructSymbol BuildSemanticAggregate(Type type, string consumerAssemblyName)
+    {
+        if (!ImportedAssemblySemantics.TryGetTypeSemantics(type, out var semantics))
+        {
+            return null;
+        }
+
+        var includeInternal = ImportedAssemblySemantics.GrantsInternalAccessTo(type.Assembly, consumerAssemblyName);
+        var bindingFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+        var fieldBuilder = ImmutableArray.CreateBuilder<FieldSymbol>();
+        var fieldByToken = new System.Collections.Generic.Dictionary<int, FieldSymbol>();
+        foreach (var field in ClrTypeUtilities.SafeGetFields(type, bindingFlags))
+        {
+            if (field.IsStatic || !IsVisible(field, includeInternal) || field.IsSpecialName || field.Name.StartsWith("<", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var fieldSymbol = new FieldSymbol(
+                field.Name,
+                TypeSymbol.FromClrType(field.FieldType),
+                MapAccessibility(field),
+                isReadOnly: field.IsInitOnly);
+            fieldBuilder.Add(fieldSymbol);
+            fieldByToken[field.MetadataToken] = fieldSymbol;
+        }
+
+        var propertyBuilder = ImmutableArray.CreateBuilder<PropertySymbol>();
+        foreach (var property in ClrTypeUtilities.SafeGetProperties(type, bindingFlags))
+        {
+            if (property.GetIndexParameters().Length != 0)
+            {
+                continue;
+            }
+
+            var getter = property.GetMethod;
+            var setter = property.SetMethod;
+            if ((getter == null || !IsVisible(getter, includeInternal))
+                && (setter == null || !IsVisible(setter, includeInternal)))
+            {
+                continue;
+            }
+
+            propertyBuilder.Add(new PropertySymbol(
+                property.Name,
+                ClrNullability.GetPropertyTypeSymbol(property),
+                GetPropertyAccessibility(property),
+                hasGetter: getter != null && IsVisible(getter, includeInternal),
+                hasSetter: setter != null && IsVisible(setter, includeInternal),
+                isAutoProperty: false,
+                isVirtual: (getter ?? setter)?.IsVirtual == true,
+                isOverride: (getter ?? setter)?.GetBaseDefinition() != (getter ?? setter),
+                isStatic: (getter ?? setter)?.IsStatic == true,
+                isInitOnly: setter != null && IsInitOnlySetter(setter)));
+        }
+
+        var aggregate = new StructSymbol(
+            name: type.Name,
+            fields: fieldBuilder.ToImmutable(),
+            accessibility: MapTypeAccessibility(type),
+            declaration: null,
+            packageName: type.Namespace,
+            isData: semantics.IsData,
+            isInline: false,
+            isClass: false,
+            primaryConstructorParameters: BuildPrimaryConstructorParameters(fieldBuilder.ToImmutable(), propertyBuilder.ToImmutable(), fieldByToken, semantics),
+            isOpen: false,
+            baseClass: null,
+            clrType: type);
+
+        aggregate.SetProperties(propertyBuilder.ToImmutable());
+        aggregate.SetMethods(BuildMethods(type, aggregate, includeInternal));
+        aggregate.SetStaticMethods(BuildStaticMethods(type, aggregate, includeInternal));
+        return aggregate;
+    }
+
+    private static ImmutableArray<ParameterSymbol> BuildPrimaryConstructorParameters(
+        ImmutableArray<FieldSymbol> fields,
+        ImmutableArray<PropertySymbol> properties,
+        System.Collections.Generic.Dictionary<int, FieldSymbol> fieldByToken,
+        ImportedTypeSemantics semantics)
+    {
+        if (semantics.PrimaryConstructorParameterNames.IsDefaultOrEmpty)
+        {
+            return ImmutableArray<ParameterSymbol>.Empty;
+        }
+
+        var fieldMap = fields.ToDictionary(f => f.Name, StringComparer.Ordinal);
+        var propertyMap = properties.ToDictionary(p => p.Name, StringComparer.Ordinal);
+        var tokens = semantics.PrimaryConstructorParameterFieldTokens;
+        var builder = ImmutableArray.CreateBuilder<ParameterSymbol>(semantics.PrimaryConstructorParameterNames.Length);
+        for (var i = 0; i < semantics.PrimaryConstructorParameterNames.Length; i++)
+        {
+            var name = semantics.PrimaryConstructorParameterNames[i];
+
+            // Prefer the exact backing field recorded by metadata token
+            // (issue #1953 follow-up) — this is immune to the parameter name
+            // ever diverging from the field name (renames, lowering,
+            // mangling). Only fall back to a name-based lookup when no token
+            // was recorded (older payload shape) or the token failed to
+            // resolve (e.g. a property-backed parameter).
+            if (!tokens.IsDefaultOrEmpty
+                && i < tokens.Length
+                && tokens[i] != 0
+                && fieldByToken != null
+                && fieldByToken.TryGetValue(tokens[i], out var tokenField))
+            {
+                builder.Add(new ParameterSymbol(name, tokenField.Type));
+                continue;
+            }
+
+            if (fieldMap.TryGetValue(name, out var field))
+            {
+                builder.Add(new ParameterSymbol(name, field.Type));
+                continue;
+            }
+
+            if (propertyMap.TryGetValue(name, out var property))
+            {
+                builder.Add(new ParameterSymbol(name, property.Type));
+            }
+        }
+
+        return builder.ToImmutable();
+    }
+
+    private static ImmutableArray<FunctionSymbol> BuildMethods(Type type, StructSymbol aggregate, bool includeInternal)
+    {
+        var methods = ClrTypeUtilities.SafeGetMethods(type, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        var builder = ImmutableArray.CreateBuilder<FunctionSymbol>();
+        foreach (var method in methods)
+        {
+            if (method.IsSpecialName || !IsVisible(method, includeInternal))
+            {
+                continue;
+            }
+
+            builder.Add(BuildMethodSymbol(method, aggregate, isStatic: false));
+        }
+
+        return builder.ToImmutable();
+    }
+
+    private static ImmutableArray<FunctionSymbol> BuildStaticMethods(Type type, StructSymbol aggregate, bool includeInternal)
+    {
+        var methods = ClrTypeUtilities.SafeGetMethods(type, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+        var builder = ImmutableArray.CreateBuilder<FunctionSymbol>();
+        foreach (var method in methods)
+        {
+            if (method.IsSpecialName || !IsVisible(method, includeInternal))
+            {
+                continue;
+            }
+
+            var symbol = BuildMethodSymbol(method, aggregate, isStatic: true);
+            symbol.IsStatic = true;
+            symbol.StaticOwnerType = aggregate;
+            builder.Add(symbol);
+        }
+
+        return builder.ToImmutable();
+    }
+
+    private static FunctionSymbol BuildMethodSymbol(MethodInfo method, StructSymbol aggregate, bool isStatic)
+    {
+        var parameters = method.GetParameters()
+            .Select(parameter => new ParameterSymbol(
+                parameter.Name ?? "arg",
+                ClrNullability.GetParameterTypeSymbol(parameter),
+                refKind: GetRefKind(parameter)))
+            .ToImmutableArray();
+        return new FunctionSymbol(
+            method.Name,
+            parameters,
+            ClrNullability.GetReturnTypeSymbol(method),
+            declaration: null,
+            package: null,
+            accessibility: MapAccessibility(method),
+            receiverType: isStatic ? null : aggregate);
+    }
+
+    private static RefKind GetRefKind(ParameterInfo parameter)
+    {
+        if (!parameter.ParameterType.IsByRef)
+        {
+            return RefKind.None;
+        }
+
+        if (parameter.IsOut)
+        {
+            return RefKind.Out;
+        }
+
+        return IsInParameter(parameter) ? RefKind.In : RefKind.Ref;
+    }
+
+    private static bool IsVisible(FieldInfo field, bool includeInternal)
+        => field.IsPublic || (includeInternal && field.IsAssembly);
+
+    private static bool IsVisible(MethodBase method, bool includeInternal)
+        => method.IsPublic || (includeInternal && method.IsAssembly);
+
+    private static Accessibility MapTypeAccessibility(Type type)
+    {
+        if (type.IsNested)
+        {
+            if (type.IsNestedPublic)
+            {
+                return Accessibility.Public;
+            }
+
+            if (type.IsNestedAssembly)
+            {
+                return Accessibility.Internal;
+            }
+
+            if (type.IsNestedFamily)
+            {
+                return Accessibility.Protected;
+            }
+
+            return Accessibility.Private;
+        }
+
+        return type.IsPublic ? Accessibility.Public : Accessibility.Internal;
+    }
+
+    private static Accessibility MapAccessibility(FieldInfo field)
+        => field.IsPublic ? Accessibility.Public
+            : field.IsAssembly ? Accessibility.Internal
+            : field.IsFamily ? Accessibility.Protected
+            : Accessibility.Private;
+
+    private static Accessibility MapAccessibility(MethodBase method)
+        => method.IsPublic ? Accessibility.Public
+            : method.IsAssembly ? Accessibility.Internal
+            : method.IsFamily ? Accessibility.Protected
+            : Accessibility.Private;
+
+    private static Accessibility GetPropertyAccessibility(PropertyInfo property)
+    {
+        var accessor = property.GetMethod ?? property.SetMethod;
+        return accessor == null ? Accessibility.Private : MapAccessibility(accessor);
+    }
+
+    private static bool IsInitOnlySetter(MethodInfo setter)
+    {
+        try
+        {
+            var requiredModifiers = setter.ReturnParameter.GetRequiredCustomModifiers();
+            return requiredModifiers.Any(m => string.Equals(m.FullName, "System.Runtime.CompilerServices.IsExternalInit", StringComparison.Ordinal));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsInParameter(ParameterInfo parameter)
+    {
+        try
+        {
+            return parameter.GetRequiredCustomModifiers()
+                .Any(m => string.Equals(m.FullName, "System.Runtime.InteropServices.InAttribute", StringComparison.Ordinal))
+                || parameter.IsIn;
+        }
+        catch
+        {
+            return parameter.IsIn;
+        }
+    }
 }
