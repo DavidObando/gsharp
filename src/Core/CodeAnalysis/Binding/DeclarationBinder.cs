@@ -8010,6 +8010,21 @@ internal sealed class DeclarationBinder
             {
                 if (argSyntax is NamedArgumentExpressionSyntax namedArg)
                 {
+                    // Issue #1921 code review (GS0466): the emitter can only
+                    // write named args against an already-emitted CLR type
+                    // (it resolves the target member via reflection); a
+                    // same-compilation user attribute has no ClrType yet, so
+                    // reject named args on it here instead of silently
+                    // dropping them at emit time.
+                    if (attrType is StructSymbol { ClrType: null })
+                    {
+                        Diagnostics.ReportNamedArgumentsNotSupportedOnUserAttribute(
+                            namedArg.NameToken.Location,
+                            nameIsExact ? nameText : (nameText + "Attribute"),
+                            namedArg.NameToken.Text);
+                        continue;
+                    }
+
                     if (!TryBindAttributeArgument(namedArg.Expression, out var value, out var valueType))
                     {
                         Diagnostics.ReportAttributeArgumentNotConstant(namedArg.Expression.Location);

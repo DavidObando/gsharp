@@ -135,6 +135,81 @@ run()
         Assert.Contains("found=True", output);
     }
 
+    [Fact]
+    public void OverloadedExplicitCtors_SameArity_SelectsMatchingParameterType()
+    {
+        // Code-review follow-up: two `init(...)` overloads with the same
+        // arity but different parameter types used to be disambiguated by
+        // declaration order alone (whichever came first in
+        // EffectiveExplicitConstructors), regardless of the actual argument
+        // type. `@Tag(42)` must select the int32 overload, not string.
+        const string Source = @"package Issue1921Overload
+import System
+
+class TagAttribute : Attribute {
+    var Which int32 = 0
+    init(x string) {
+        Which = 1
+    }
+    init(x int32) {
+        Which = 2
+    }
+}
+
+@Tag(42)
+class Widget {
+}
+
+func run() {
+    var t Type = typeof(Widget)
+    var attrs = t.GetCustomAttributes(true)
+    for var i int32 = 0; i < attrs.Length; i += 1 {
+        if attrs[i].GetType().Name == ""TagAttribute"" {
+            var a TagAttribute = attrs[i] as TagAttribute
+            Console.WriteLine(""Which:"" + a.Which.ToString())
+        }
+    }
+}
+
+run()
+";
+
+        var output = CompileAndRun(Source, nameof(OverloadedExplicitCtors_SameArity_SelectsMatchingParameterType));
+        Assert.Contains("Which:2", output);
+    }
+
+    [Fact]
+    public void OverloadedExplicitCtors_AmbiguousArgument_ReportsGS9998()
+    {
+        // A `string` overload and an `Object` overload both accept a string
+        // argument (everything is assignable to Object) — genuinely
+        // ambiguous, no argument-type information can disambiguate. Must be
+        // rejected with a diagnostic rather than silently picking whichever
+        // came first in declaration order.
+        const string Source = @"package Issue1921Ambiguous
+import System
+
+class TagAttribute : Attribute {
+    init(x string) {
+    }
+    init(x Object) {
+    }
+}
+
+@Tag(""hello"")
+class Widget {
+}
+";
+
+        using var peStream = new MemoryStream();
+        var tree = SyntaxTree.Parse(SourceText.From(Source));
+        var compilation = new Compilation(tree);
+        var result = compilation.Emit(peStream);
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS9998");
+    }
+
     private static string CompileAndRun(string source, string contextName)
     {
         using var peStream = new MemoryStream();

@@ -705,6 +705,23 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Issue #1921 code review: reports GS0466 when a named (property/field
+    /// style) argument is used on a same-compilation user-defined attribute
+    /// type. The emitter has no way to resolve the target member's CLR type
+    /// for a type that hasn't been emitted yet, so named-arg emission for
+    /// user attributes is not supported; rejecting it here at bind time turns
+    /// what would otherwise be a silently-dropped argument into a clear
+    /// compile error instead.
+    /// </summary>
+    /// <param name="location">The source location of the named argument.</param>
+    /// <param name="attributeName">The display name of the attribute type.</param>
+    /// <param name="argumentName">The name of the rejected named argument.</param>
+    public void ReportNamedArgumentsNotSupportedOnUserAttribute(TextLocation location, string attributeName, string argumentName)
+    {
+        Report(location, "GS0466", $"Named argument '{argumentName}' is not supported on user-defined attribute '{attributeName}': named arguments on same-compilation attribute types are not yet implemented. Use a constructor argument instead.");
+    }
+
+    /// <summary>
     /// Reports that the operand of a channel-receive expression (<c>&lt;-ch</c>) is not a channel (Phase 5.5 / ADR-0022).
     /// </summary>
     /// <param name="location">The text location of the operand.</param>

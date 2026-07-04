@@ -94,6 +94,41 @@ public class AttributeBinderTests
     }
 
     [Fact]
+    public void Issue1921_NamedArgumentOnUserAttribute_ReportsGS0466()
+    {
+        // Code-review follow-up: a named (property/field-style) argument on a
+        // same-compilation user attribute type used to bind clean and then be
+        // silently dropped by the emitter (never written to metadata). It
+        // must now be rejected at bind time with a clear diagnostic instead.
+        var source = """
+            class NoteAttribute : Attribute {
+                var Tag string = ""
+            }
+
+            @Note(Tag: "x")
+            func Helper() {
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0466" && d.Message.Contains("Tag"));
+    }
+
+    [Fact]
+    public void Issue1921_NamedArgumentOnClrAttribute_StillWorks()
+    {
+        // Sanity check: the GS0466 rejection is scoped to same-compilation
+        // user attribute types only; a CLR-imported attribute with named args
+        // (e.g. System.Diagnostics.Conditional's implicit named-arg support
+        // via AttributeUsage) must be unaffected. Using a positional-only CLR
+        // attribute here since most BCL attributes usable from G# take no
+        // named args; this asserts no GS0466 leaks onto the CLR path.
+        var globalScope = BindSource("@Obsolete(\"msg\")\nfunc Helper() {\n}\n");
+
+        Assert.DoesNotContain(GetBinderDiagnostics(globalScope), d => d.Id == "GS0466");
+    }
+
+    [Fact]
     public void Reports_Invalid_Use_Site_Target_On_Function()
     {
         // `@field:` is not valid on a function declaration.

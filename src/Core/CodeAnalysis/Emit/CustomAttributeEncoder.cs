@@ -577,14 +577,15 @@ internal sealed class CustomAttributeEncoder
     /// <see cref="StructSymbol"/> fields/properties (including nested-enum
     /// underlying types, <see cref="System.Type"/> arguments, etc.) is a
     /// separate, considerably larger feature than closing the GS0200
-    /// recognition gap this issue is about; named arguments on a user
-    /// attribute are silently dropped rather than crashing, matching the
-    /// existing "unknown member — skip silently" behavior in
-    /// <see cref="WriteCustomAttributeNamedArg"/> for the CLR path.
+    /// recognition gap this issue is about. Named arguments on a
+    /// same-compilation user attribute are now rejected at bind time (GS0466,
+    /// see <c>DeclarationBinder.BindAttribute</c>), so <paramref name="attr"/>
+    /// never carries any by the time it reaches the emitter — this method
+    /// only ever writes <c>NumNamed = 0</c>.
     /// </remarks>
     private void EmitUserBoundAttribute(EntityHandle parent, StructSymbol attributeType, BoundAttribute attr)
     {
-        if (!this.TryResolveUserAttributeConstructor(attributeType, attr.PositionalArguments.Length, out var ctorToken, out var paramTypes))
+        if (!this.TryResolveUserAttributeConstructor(attributeType, attr, out var ctorToken, out var paramTypes))
         {
             return;
         }
@@ -607,23 +608,30 @@ internal sealed class CustomAttributeEncoder
 
     /// <summary>
     /// Selects the primary or an explicit constructor of <paramref name="attributeType"/>
-    /// whose arity exactly matches <paramref name="argCount"/> and returns the
-    /// already-correct emit-ready <see cref="EntityHandle"/> for it (a bare
-    /// <c>MethodDef</c>, or — for a constructed generic attribute type — a
-    /// <c>MemberRef</c> parented at the constructed TypeSpec; both cases are
-    /// handled by the injected resolver delegates, the same ones used for
-    /// `newobj` against a user constructor). Returns <see langword="false"/>
-    /// when no arity match exists or a parameter's type has no
-    /// <see cref="TypeSymbol.ClrType"/> (an as-yet-unemitted user type used as
-    /// an attribute constructor parameter — unsupported, same as the CLR path
-    /// bailing out when it can't resolve a parameter type).
+    /// whose arity matches <paramref name="attr"/>'s positional argument count
+    /// AND whose parameter types actually accept the supplied argument values
+    /// (the same <see cref="ArgAssignable"/> check <see cref="ResolveAttributeConstructor"/>
+    /// uses for CLR-imported attribute types), returning the already-correct
+    /// emit-ready <see cref="EntityHandle"/> for it (a bare <c>MethodDef</c>,
+    /// or — for a constructed generic attribute type — a <c>MemberRef</c>
+    /// parented at the constructed TypeSpec; both cases are handled by the
+    /// injected resolver delegates, the same ones used for `newobj` against a
+    /// user constructor). Returns <see langword="false"/> when no arity match
+    /// exists or a parameter's type has no <see cref="TypeSymbol.ClrType"/>
+    /// (an as-yet-unemitted user type used as an attribute constructor
+    /// parameter — unsupported, same as the CLR path bailing out when it
+    /// can't resolve a parameter type). Throws <see cref="EmitDiagnosticException"/>
+    /// (surfaced as GS9998) when two or more same-arity explicit constructors
+    /// both accept the supplied arguments — overload resolution has no way to
+    /// silently guess which one the user meant (issue #1921 code review).
     /// </summary>
     private bool TryResolveUserAttributeConstructor(
         StructSymbol attributeType,
-        int argCount,
+        BoundAttribute attr,
         out EntityHandle ctorToken,
         out Type[] paramTypes)
     {
+        var argCount = attr.PositionalArguments.Length;
         ctorToken = default;
         paramTypes = null;
 
@@ -638,6 +646,10 @@ internal sealed class CustomAttributeEncoder
 
         if (this.resolveExplicitCtorToken != null)
         {
+            ConstructorSymbol matchedCtor = null;
+            Type[] matchedParamTypes = null;
+            ConstructorSymbol ambiguousCtor = null;
+
             foreach (var ctor in attributeType.EffectiveExplicitConstructors)
             {
                 if (ctor.Parameters.Length != argCount)
@@ -645,12 +657,37 @@ internal sealed class CustomAttributeEncoder
                     continue;
                 }
 
-                if (!TryGetClrParameterTypes(ctor.Parameters, out paramTypes))
+                if (!TryGetClrParameterTypes(ctor.Parameters, out var candidateParamTypes))
                 {
                     continue;
                 }
 
-                ctorToken = this.resolveExplicitCtorToken(attributeType, ctor);
+                if (!ArgumentsAssignable(attr.PositionalArguments, candidateParamTypes))
+                {
+                    continue;
+                }
+
+                if (matchedCtor != null)
+                {
+                    ambiguousCtor = ctor;
+                    break;
+                }
+
+                matchedCtor = ctor;
+                matchedParamTypes = candidateParamTypes;
+            }
+
+            if (ambiguousCtor != null)
+            {
+                EmitDiagnosticException.Throw(
+                    attr.Syntax,
+                    $"Ambiguous constructor for attribute '{attributeType.Name}': more than one 'init(...)' overload with {argCount} parameter(s) accepts the given argument types. Add an explicit conversion or change the argument types to disambiguate.");
+            }
+
+            if (matchedCtor != null)
+            {
+                ctorToken = this.resolveExplicitCtorToken(attributeType, matchedCtor);
+                paramTypes = matchedParamTypes;
                 return true;
             }
         }
@@ -793,6 +830,27 @@ internal sealed class CustomAttributeEncoder
         }
 
         return IsTriviallyConvertible(supplied.GetType(), paramType);
+    }
+
+    /// <summary>
+    /// Issue #1921 code review (overload disambiguation): checks every
+    /// positional argument against the corresponding same-compilation
+    /// constructor parameter type using the same <see cref="ArgAssignable"/>
+    /// rule the CLR-attribute path applies via <see cref="ParametersMatch"/>.
+    /// No params-array expansion — no G# constructor declaration can express
+    /// a trailing params array.
+    /// </summary>
+    private static bool ArgumentsAssignable(ImmutableArray<BoundAttributeArgument> positional, Type[] paramTypes)
+    {
+        for (int i = 0; i < paramTypes.Length; i++)
+        {
+            if (!ArgAssignable(positional[i].Value, paramTypes[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
