@@ -363,6 +363,27 @@ public sealed class FunctionSymbol : Symbol
     /// </summary>
     public System.Reflection.MethodInfo ExplicitInterfaceSlot { get; set; }
 
+    /// <summary>
+    /// Gets or sets the in-compilation (G#) interface member this method
+    /// explicitly implements (issue #2010). Set when the method's declared
+    /// name matches the reserved <c>__explicit_&lt;Interface&gt;__&lt;Member&gt;</c>
+    /// mangled-name convention (see
+    /// <see cref="Binding.DeclarationBinder.TryParseExplicitInterfaceImplName"/>)
+    /// and a matching abstract member is found on one of the containing
+    /// type's declared interfaces. Unlike <see cref="ExplicitInterfaceSlot"/>
+    /// (which binds to an external CLR interface resolved via reflection),
+    /// this points at the interface member's own <see cref="FunctionSymbol"/>
+    /// within the same compilation — the emitter resolves it to a MethodDef
+    /// or (for a constructed generic interface) a MemberRef/TypeSpec token
+    /// and binds a <c>MethodImpl</c> row so the CLR routes interface dispatch
+    /// to this method's own distinct body instead of relying on name-based
+    /// virtual dispatch. Because the mangled name is unique per interface,
+    /// two explicit implementations of same-name/same-signature members from
+    /// different interfaces no longer collide (no more GS0264 duplicate, no
+    /// more dropped body). Defaults to <c>null</c> for ordinary methods.
+    /// </summary>
+    public FunctionSymbol ExplicitInterfaceMember { get; set; }
+
     /// <summary>Gets a value indicating whether this function is a P/Invoke stub (ADR-0086).</summary>
     public bool IsPInvoke => PInvokeMetadata != null;
 
