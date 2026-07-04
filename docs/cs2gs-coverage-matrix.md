@@ -6,12 +6,12 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | Status | Count |
 | --- | --- |
 | Unclassified | 0 |
-| Translated | 222 |
+| Translated | 223 |
 | Lowered | 12 |
 | UnsupportedByDesign | 56 |
-| Gap | 31 |
+| Gap | 30 |
 
-## Translated (222)
+## Translated (223)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -24,6 +24,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | AllowsConstraintClause | AllowsConstraintClauseSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/AllowsConstraintClause.cs |  | C#13 allows ref struct passes E2E (grid G08). |
 | AndAssignmentExpression | AssignmentExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/AndAssignmentExpression.cs |  |  |
 | AndPattern | BinaryPatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/AndPattern.cs |  |  |
+| AnonymousMethodExpression | AnonymousMethodExpressionSyntax | ADR-0115 §B.20 |  | tools/cs2gs/corpus/grid/G09-Functions-Console/Constructs/AnonymousMethodExpression.cs |  |  |
 | Argument | ArgumentSyntax | ADR-0115 §B |  |  |  |  |
 | ArgumentList | ArgumentListSyntax | ADR-0115 §B |  |  |  |  |
 | ArrayCreationExpression | ArrayCreationExpressionSyntax | ADR-0115 §B.16 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/ArrayCreationExpression.cs | https://github.com/DavidObando/gsharp/issues/1893 | 1-D/jagged green; rank>1 (issue #1893) flat-lowers a tracked local's rectangular `new T[d0, d1, ...]`/`new T[,]{{...}}` to a single backing array with hoisted per-dimension sizes, preserving every index (see ArrayCreationExpressionMultiDim.cs, parity-verified). An untracked rank>1 shape (field/parameter/no-initializer) reports the CS2GS-GAP instead of silently collapsing to 1-D. |
@@ -316,11 +317,10 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | XmlText | XmlTextSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | XmlTextAttribute | XmlTextAttributeSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 
-## Gap (31)
+## Gap (30)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| AnonymousMethodExpression | AnonymousMethodExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1898 |  |
 | CheckedExpression | CheckedExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1881 |  |
 | EnumMemberDeclaration | EnumMemberDeclarationSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1912 | Explicit values, [Flags], negative and alias members erased to sequential ordinals — parity-verified divergence. |
 | ExplicitInterfaceSpecifier | ExplicitInterfaceSpecifierSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1911 |  |

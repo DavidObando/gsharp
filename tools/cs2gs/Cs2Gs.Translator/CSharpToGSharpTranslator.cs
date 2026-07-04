@@ -8130,6 +8130,13 @@ public sealed class CSharpToGSharpTranslator
                 case ParenthesizedLambdaExpressionSyntax parenLambda:
                     return this.TranslateLambda(parenLambda);
 
+                // `delegate (params) { … }` is semantically a block-bodied lambda
+                // (C# spec §12.19); route it through the same lowering rather than
+                // a parallel path so closures, spills, and mutability scoping all
+                // just work (issue #1898).
+                case AnonymousMethodExpressionSyntax anonymousMethod:
+                    return this.TranslateLambda(anonymousMethod);
+
                 case AwaitExpressionSyntax awaitExpression:
                     return new AwaitExpression(this.TranslateExpression(awaitExpression.Expression));
 
@@ -11484,6 +11491,7 @@ public sealed class CSharpToGSharpTranslator
             ParameterListSyntax parameterList = lambda switch
             {
                 ParenthesizedLambdaExpressionSyntax paren => paren.ParameterList,
+                AnonymousMethodExpressionSyntax anonymousMethod => anonymousMethod.ParameterList,
                 _ => null,
             };
 
@@ -11496,6 +11504,37 @@ public sealed class CSharpToGSharpTranslator
                 foreach (ParameterSyntax parameter in parameterList.Parameters)
                 {
                     parameters.Add(this.MapLambdaParameter(parameter));
+                }
+            }
+            else if (lambda is AnonymousMethodExpressionSyntax implicitParamsAnonymousMethod)
+            {
+                // `delegate { … }` (no parameter list at all, distinct from
+                // `delegate () { … }`) binds to whatever parameter list the target
+                // delegate type declares (C# spec §12.19) — the block simply may
+                // not reference them. G# function literals always name params
+                // explicitly, so synthesize them from the converted delegate
+                // type's Invoke signature; if that type can't be resolved, this is
+                // a genuine gap rather than a silent zero-arg guess.
+                if (this.context.GetTypeInfo(implicitParamsAnonymousMethod).ConvertedType is INamedTypeSymbol { DelegateInvokeMethod: { } invokeMethod })
+                {
+                    // The body can never reference these params (C# gives them no
+                    // source names here), so reusing the delegate's DECLARED param
+                    // name (e.g. `Action<string>.Invoke`'s `obj`) would silently
+                    // shadow an outer captured local of the same name. Keep
+                    // MapParameter's type/refkind mapping but override the name
+                    // with a fresh `__anon{n}` identifier C# source can't produce.
+                    int index = 0;
+                    foreach (IParameterSymbol invokeParameter in invokeMethod.Parameters)
+                    {
+                        Parameter mapped = this.MapParameter(invokeParameter, implicitParamsAnonymousMethod);
+                        parameters.Add(new Parameter($"__anon{index++}", mapped.Type, mapped.IsVariadic, mapped.RefKind, mapped.DefaultValue, mapped.Attributes));
+                    }
+                }
+                else
+                {
+                    this.context.ReportUnsupported(
+                        implicitParamsAnonymousMethod,
+                        "parameterless 'delegate { … }' anonymous method whose target delegate type could not be resolved; cannot infer its parameter list (ADR-0115 §B).");
                 }
             }
 

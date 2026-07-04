@@ -1,3 +1,8 @@
+AnonymousMethodExpression: inc(41)=42
+AnonymousMethodExpression: answer=42
+AnonymousMethodExpression: greet=hi
+AnonymousMethodExpression: shout hey!
+AnonymousMethodExpression: shoutObj=captured
 ConditionalAccessExpression: nullHandler=null
 ConditionalAccessExpression: got ping
 ConditionalAccessExpression: missed=none
