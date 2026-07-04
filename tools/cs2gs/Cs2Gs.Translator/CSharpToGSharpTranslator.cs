@@ -540,6 +540,11 @@ public sealed class CSharpToGSharpTranslator
         // Monotonic counter for synthesizing spill temporaries (issue #1731).
         private int spillCounter;
 
+        // Issue #1897: numbers the `__spreadN` temporary built to lower a
+        // collection-expression spread element (see
+        // <see cref="TranslateSpreadCollectionExpression"/>).
+        private int spreadCounter;
+
         // Issue #1849: when non-null, `SpillOperand` is inside a "null-seam"
         // expression context — a field/property initializer or a
         // base(...)/this(...) constructor argument (issue #1731 N1) — that has
@@ -8324,6 +8329,9 @@ public sealed class CSharpToGSharpTranslator
                 case StackAllocArrayCreationExpressionSyntax stackAlloc:
                     return this.TranslateStackAlloc(stackAlloc);
 
+                case ImplicitStackAllocArrayCreationExpressionSyntax implicitStackAlloc:
+                    return this.TranslateImplicitStackAlloc(implicitStackAlloc);
+
                 case CollectionExpressionSyntax collectionExpression:
                     return this.TranslateCollectionExpression(collectionExpression);
 
@@ -9348,6 +9356,23 @@ public sealed class CSharpToGSharpTranslator
             return new StackAllocExpression(elementType, count ?? LiteralExpression.Int("0"), elements);
         }
 
+        // Issue #1897: the implicit-typed form `stackalloc[] { 5, 6, 7 }` (no
+        // element-type spelled at all — C# infers it from the initializer/
+        // target). Maps to the same G# count-inferred initializer shape
+        // (`stackalloc []T{a, b, …}`) as the explicit omitted-size form
+        // (`stackalloc int[] { … }`, handled by <see cref="TranslateStackAlloc"/>);
+        // the element type is recovered from the expression's converted type
+        // (`Span<T>`/`T*`) since there is no type syntax on this node to read.
+        private GExpression TranslateImplicitStackAlloc(ImplicitStackAllocArrayCreationExpressionSyntax node)
+        {
+            GTypeReference elementType = this.GetArrayElementType(node, null);
+            List<GExpression> elements = node.Initializer.Expressions.Select(this.TranslateExpression).ToList();
+            GExpression count = LiteralExpression.Int(
+                node.Initializer.Expressions.Count.ToString(CultureInfo.InvariantCulture));
+
+            return new StackAllocExpression(elementType, count, elements);
+        }
+
         private GExpression TranslateImplicitArrayCreation(ImplicitArrayCreationExpressionSyntax creation)
         {
             GTypeReference elementType = this.GetArrayElementType(creation, null);
@@ -9427,9 +9452,14 @@ public sealed class CSharpToGSharpTranslator
             // emitted into a malformed `[]KeyValuePair[…]{}` literal (ADR-0115 §B).
             ITypeSymbol target = this.context.GetTypeInfo(collection).ConvertedType
                 ?? this.context.GetTypeInfo(collection).Type;
-            if (collection.Elements.Count == 0 &&
+            bool isConstructibleClassTarget =
                 target is INamedTypeSymbol { TypeKind: TypeKind.Class } namedTarget &&
-                this.typeMapper.Map(namedTarget, this.context, collection.GetLocation()) is NamedTypeReference targetRef)
+                this.typeMapper.Map(namedTarget, this.context, collection.GetLocation()) is NamedTypeReference;
+            NamedTypeReference targetRef = isConstructibleClassTarget
+                ? (NamedTypeReference)this.typeMapper.Map((INamedTypeSymbol)target, this.context, collection.GetLocation())
+                : null;
+
+            if (collection.Elements.Count == 0 && isConstructibleClassTarget)
             {
                 return new InvocationExpression(
                     new IdentifierExpression(targetRef.Name),
@@ -9437,27 +9467,101 @@ public sealed class CSharpToGSharpTranslator
                     targetRef.TypeArguments.Count > 0 ? targetRef.TypeArguments : null);
             }
 
-            // C# 12 collection expression `[a, b, c]`. The target type (array,
-            // span, or any IEnumerable<T>) supplies the element type, so it maps to
-            // the canonical G# slice literal `[]T{ … }` (ADR-0115 §B). Spread
-            // elements `[..xs]` have no G# composite-literal form yet.
             GTypeReference elementType = this.GetCollectionElementType(collection);
+
+            // A spread element (`[a, ..rest, b]`) has no G# composite-literal
+            // form (gsc's own collection-initializer grammar only has bare,
+            // keyed, and indexed elements — no spread). It lowers to a
+            // build-and-append temporary: a `List[T]` populated via `Add`/
+            // `AddRange` calls hoisted into the enclosing statement's prologue
+            // (issue #1897), then — for an array/span target — converted back
+            // via `.ToArray()`.
+            if (collection.Elements.Any(e => e is SpreadElementSyntax))
+            {
+                return this.TranslateSpreadCollectionExpression(collection, elementType, isConstructibleClassTarget);
+            }
+
+            // A `List<T>`/`HashSet<T>`/... collection-expression target maps to
+            // the canonical G# collection-initializer form (`List[int32]{...}`,
+            // ADR-0117) — NOT the array/slice literal `[]T{...}`, which does not
+            // convert to a constructed collection class (issue #1897).
+            if (isConstructibleClassTarget)
+            {
+                var initElements = new List<CollectionInitializerElement>();
+                foreach (CollectionElementSyntax element in collection.Elements)
+                {
+                    var expressionElement = (ExpressionElementSyntax)element;
+                    initElements.Add(new CollectionInitializerElement(
+                        this.CoerceCollectionElement(expressionElement.Expression, elementType)));
+                }
+
+                return new CollectionInitializerExpression(
+                    BuildConstruction(targetRef, new List<GExpression>()), initElements);
+            }
+
+            // C# 12 collection expression `[a, b, c]` targeting an array/span.
+            // The target type supplies the element type, so it maps to the
+            // canonical G# slice literal `[]T{ … }` (ADR-0115 §B).
             var elements = new List<GExpression>();
             foreach (CollectionElementSyntax element in collection.Elements)
             {
-                if (element is ExpressionElementSyntax expressionElement)
-                {
-                    elements.Add(this.CoerceCollectionElement(expressionElement.Expression, elementType));
-                }
-                else
-                {
-                    this.context.ReportUnsupported(
-                        element,
-                        $"collection-expression element '{element.Kind()}' (spread) has no canonical G# composite-literal form yet (ADR-0115 §B).");
-                }
+                var expressionElement = (ExpressionElementSyntax)element;
+                elements.Add(this.CoerceCollectionElement(expressionElement.Expression, elementType));
             }
 
             return new ArrayLiteralExpression(elementType, elements);
+        }
+
+        private GExpression TranslateSpreadCollectionExpression(
+            CollectionExpressionSyntax collection, GTypeReference elementType, bool isConstructibleClassTarget)
+        {
+            if (this.pendingSpillPrologue == null)
+            {
+                string message =
+                    "a collection-expression spread element here has no enclosing statement to host the " +
+                    "build-and-append lowering it needs (e.g. a field/property initializer); emitted an " +
+                    "identifier placeholder (ADR-0115 §B).";
+                this.context.ReportUnsupported(collection, message);
+                return new IdentifierExpression("nil");
+            }
+
+            string temp = $"__spread{this.spreadCounter++}";
+            this.pendingSpillPrologue.Add(new LocalDeclarationStatement(
+                BindingKind.Let,
+                temp,
+                type: null,
+                initializer: new InvocationExpression(
+                    new IdentifierExpression("List"),
+                    new List<GExpression>(),
+                    new List<GTypeReference> { elementType })));
+
+            foreach (CollectionElementSyntax element in collection.Elements)
+            {
+                if (element is SpreadElementSyntax spread)
+                {
+                    this.pendingSpillPrologue.Add(new ExpressionStatement(new InvocationExpression(
+                        new MemberAccessExpression(new IdentifierExpression(temp), "AddRange"),
+                        new List<GExpression> { this.TranslateExpression(spread.Expression) })));
+                }
+                else
+                {
+                    var expressionElement = (ExpressionElementSyntax)element;
+                    this.pendingSpillPrologue.Add(new ExpressionStatement(new InvocationExpression(
+                        new MemberAccessExpression(new IdentifierExpression(temp), "Add"),
+                        new List<GExpression> { this.CoerceCollectionElement(expressionElement.Expression, elementType) })));
+                }
+            }
+
+            if (isConstructibleClassTarget)
+            {
+                return new IdentifierExpression(temp);
+            }
+
+            // `List[T].ToArray()` is the real (non-generic) BCL instance
+            // method — no bracket type argument (unlike the LINQ
+            // `Enumerable.ToArray[T]()` extension method).
+            return new InvocationExpression(
+                new MemberAccessExpression(new IdentifierExpression(temp), "ToArray"));
         }
 
         private GExpression CoerceCollectionElement(ExpressionSyntax element, GTypeReference elementType)

@@ -20,6 +20,7 @@ namespace Corpus.Grid05
             ObjectCreationExpressionFixture.Run();
             OmittedArraySizeExpressionFixture.Run();
             RangeExpressionFixture.Run();
+            StackAllocArrayCreationExpressionFixture.Run();
             TupleExpressionFixture.Run();
         }
     }
