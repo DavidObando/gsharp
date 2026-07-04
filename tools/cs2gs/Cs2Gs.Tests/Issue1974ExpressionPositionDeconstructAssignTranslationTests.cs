@@ -143,6 +143,11 @@ namespace Corpus.Issue1974
         Assert.Contains("x = __decon0", rendered, StringComparison.Ordinal);
         Assert.Contains("let r = (__decon0, __decon1)", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("(__decon0, _)", rendered, StringComparison.Ordinal);
+
+        // Issue #2099: the discard still gets a real temp to feed the
+        // expression's value, but `_` isn't a real assignable location — no
+        // stray `_ = __decon1;` write-back should be emitted for it.
+        Assert.DoesNotContain("_ = __decon", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 

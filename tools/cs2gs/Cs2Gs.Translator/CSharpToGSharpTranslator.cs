@@ -7375,6 +7375,27 @@ public sealed class CSharpToGSharpTranslator
                 this.IsTrueDiscard(discardCandidate)) ||
                 targetExpr is DeclarationExpressionSyntax { Designation: DiscardDesignationSyntax };
 
+        // True when EVERY leaf of a (possibly nested) tuple pattern is a
+        // discard, e.g. `(_, _)` or `(_, (_, _))` — the whole arm is then
+        // dead and can be skipped without allocating any temp or recursing
+        // into it (issue #2099, item 3).
+        private bool IsAllDiscardTuple(TupleExpressionSyntax pattern)
+        {
+            foreach (ArgumentSyntax argument in pattern.Arguments)
+            {
+                ExpressionSyntax element = argument.Expression;
+                bool elementIsAllDiscard = element is TupleExpressionSyntax nestedTuple
+                    ? this.IsAllDiscardTuple(nestedTuple)
+                    : this.IsDeconstructionDiscard(element);
+                if (!elementIsAllDiscard)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         // Recursively checks every leaf of a (possibly nested) deconstruction
         // *assignment* target for a non-identifier storage reference (`arr[i]`,
         // `obj.F`, ...). A nested tuple target or a new `var`/nested-`var`
@@ -7440,11 +7461,14 @@ public sealed class CSharpToGSharpTranslator
                 ExpressionSyntax targetExpr = pattern.Arguments[i].Expression;
 
                 // A nested tuple target needs its own real temp to recurse
-                // into, even when `forceRealTemps` is false — its own leaves
-                // decide their own discard-ness independently below.
+                // into — UNLESS every leaf underneath it is itself a true
+                // discard, in which case the whole nested arm is dead and
+                // recursing into it would only emit a pointless inner
+                // `let (_, _) = __deconN` binding (issue #2099, item 3).
                 bool needsRealTemp = forceRealTemps ||
-                    targetExpr is TupleExpressionSyntax ||
-                    !this.IsDeconstructionDiscard(targetExpr);
+                    (targetExpr is TupleExpressionSyntax nestedDiscardCheck
+                        ? !this.IsAllDiscardTuple(nestedDiscardCheck)
+                        : !this.IsDeconstructionDiscard(targetExpr));
                 temps.Add(needsRealTemp ? $"__decon{this.deconCounter++}" : "_");
             }
 
@@ -7524,10 +7548,19 @@ public sealed class CSharpToGSharpTranslator
                 }
 
                 // An existing local (or member/element access) target: write
-                // the spilled value back.
-                statements.Add(new AssignmentStatement(
-                    this.TranslateExpression(targetExpr),
-                    tempRead));
+                // the spilled value back. A discard target still gets a real
+                // temp here (`forceRealTemps=true`, e.g. expression-position
+                // `(x, _) = (1, 2)`) so its value can be reconstructed into
+                // the outer tuple, but `_` isn't a real assignable location —
+                // skip the write itself to avoid emitting a stray, dead
+                // `_ = __decon1;` statement (issue #2099).
+                if (!this.IsDeconstructionDiscard(targetExpr))
+                {
+                    statements.Add(new AssignmentStatement(
+                        this.TranslateExpression(targetExpr),
+                        tempRead));
+                }
+
                 values.Add(tempRead);
             }
 
