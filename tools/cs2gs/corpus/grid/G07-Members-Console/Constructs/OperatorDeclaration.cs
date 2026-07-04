@@ -1,8 +1,10 @@
 // inventory: OperatorDeclaration — user-defined +, ==/!=, < and > operators
-// QUARANTINED sub-probe: overriding Equals(object) with `obj is Money other && ...`
-// compiles but fails ilverify (StackUnexpected: found address of 'object', expected
-// readonly address of 'Money' in Money::Equals). The override is omitted; the C#
-// build accepts CS0660/CS0661 warnings.
+// Issue #1917 (fixed): an Equals(object) override using `obj is Money other &&
+// ...` used to compile but fail ilverify (StackUnexpected: found address of
+// 'object', expected readonly address of 'Money' in Money::Equals). The
+// struct field-access emitter took the address of the ORIGINAL `object`-typed
+// parameter slot instead of unboxing the smart-cast-narrowed value first. See
+// MethodBodyEmitter.TryLoadStructVariableAddress.
 using System;
 
 namespace Corpus.Grid07
@@ -45,6 +47,16 @@ namespace Corpus.Grid07
         {
             return left._cents > right._cents;
         }
+
+        public override bool Equals(object? obj)
+        {
+            return obj is Money other && _cents == other._cents;
+        }
+
+        public override int GetHashCode()
+        {
+            return _cents.GetHashCode();
+        }
     }
 
     public static class OperatorDeclarationFixture
@@ -59,6 +71,10 @@ namespace Corpus.Grid07
             Console.WriteLine("OperatorDeclaration: not-equal=" + (five != three ? "true" : "false"));
             Console.WriteLine("OperatorDeclaration: less=" + (three < five ? "true" : "false"));
             Console.WriteLine("OperatorDeclaration: greater=" + (three > five ? "true" : "false"));
+
+            object boxedEight = eight;
+            Console.WriteLine("OperatorDeclaration: equals-override=" + (boxedEight.Equals(new Money(800)) ? "true" : "false"));
+            Console.WriteLine("OperatorDeclaration: equals-override-mismatch=" + (boxedEight.Equals("not money") ? "true" : "false"));
         }
     }
 }

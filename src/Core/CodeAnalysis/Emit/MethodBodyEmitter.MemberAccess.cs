@@ -500,7 +500,7 @@ internal sealed partial class MethodBodyEmitter
             // `ldfld` directly — avoiding a wasteful `ldobj` of the whole struct.
             this.EmitExpression(deref.Operand);
         }
-        else if (!receiverIsClass && fa.Receiver is BoundVariableExpression bv && this.TryLoadVariableAddress(bv.Variable))
+        else if (!receiverIsClass && fa.Receiver is BoundVariableExpression bv && this.TryLoadStructVariableAddress(bv))
         {
             // address is on the stack
         }
@@ -1189,7 +1189,7 @@ internal sealed partial class MethodBodyEmitter
         if (ReflectionMetadataEmitter.IsValueTypeSymbol(receiver.Type))
         {
             if (receiver is BoundVariableExpression bve
-                && this.TryLoadVariableAddress(bve.Variable))
+                && this.TryLoadStructVariableAddress(bve))
             {
                 return;
             }
@@ -1384,6 +1384,47 @@ internal sealed partial class MethodBodyEmitter
         return false;
     }
 
+    /// <summary>
+    /// Loads the address of a struct-typed receiver that is a bare variable
+    /// read, honoring ADR-0069 smart-cast narrowing (issue #1917). When the
+    /// variable's OWN declared type already agrees with the receiver's
+    /// (possibly narrowed) struct type, the address is the variable's own
+    /// storage — delegates to <see cref="TryLoadVariableAddress"/>
+    /// (ldarga/ldloca). When the receiver is a NARROWED read of a variable
+    /// declared as a REFERENCE type (e.g. an `object`/interface-typed
+    /// parameter smart-cast to a struct by an <c>is</c> test — `obj is Money
+    /// &amp;&amp; obj.Cents`), the variable's slot holds a boxed reference, not
+    /// struct storage: taking its address directly pushes the address of
+    /// the `object` SLOT, which a subsequent `ldfld`/`ldflda Money::…`
+    /// rejects at verification time (ilverify: "found address of 'object',
+    /// expected readonly address of 'Money'" — the CLR JIT tolerates the
+    /// mismatched stack shape, but ilverify's stricter typed-stack model does
+    /// not). The correct sequence loads the boxed reference then
+    /// <c>unbox</c>es it: this yields a controlled-mutability (read-only)
+    /// managed pointer directly to the embedded value — matching both what
+    /// ilverify expects and what csc emits for the equivalent C# pattern.
+    /// </summary>
+    /// <param name="bve">The struct-typed variable-read receiver.</param>
+    /// <returns><see langword="true"/> once the address (or unboxed pointer) is on the stack.</returns>
+    private bool TryLoadStructVariableAddress(BoundVariableExpression bve)
+    {
+        var declaredType = bve.Variable.Type;
+        var effectiveType = bve.Type;
+        if (bve.NarrowedType == null
+            || ReflectionMetadataEmitter.IsValueTypeSymbol(declaredType)
+            || declaredType?.ClrType?.IsValueType == true)
+        {
+            // No boxing narrowing involved (or the variable's own slot is
+            // already a value type) — safe to take the variable's own address.
+            return this.TryLoadVariableAddress(bve.Variable);
+        }
+
+        this.EmitLoadVariable(bve.Variable);
+        this.il.OpCode(ILOpCode.Unbox);
+        this.il.Token(this.outer.GetElementTypeToken(effectiveType));
+        return true;
+    }
+
     private bool TryLoadVariableAddress(VariableSymbol variable)
     {
         if (variable is ParameterSymbol ps && this.parameters.TryGetValue(ps, out var argIndex))
@@ -1488,7 +1529,7 @@ internal sealed partial class MethodBodyEmitter
             // the struct's address, so load the pointer directly before ldflda.
             this.EmitExpression(deref.Operand);
         }
-        else if (!receiverIsClass && fa.Receiver is BoundVariableExpression bv && this.TryLoadVariableAddress(bv.Variable))
+        else if (!receiverIsClass && fa.Receiver is BoundVariableExpression bv && this.TryLoadStructVariableAddress(bv))
         {
             // address already on stack
         }
