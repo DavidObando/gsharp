@@ -2604,7 +2604,7 @@ public sealed class CSharpToGSharpTranslator
                 var symbol = this.context.GetDeclaredSymbol(declarator) as IEventSymbol;
 
                 GTypeReference type = symbol != null
-                    ? this.typeMapper.Map(
+                    ? this.typeMapper.MapEventType(
                         symbol.Type.WithNullableAnnotation(NullableAnnotation.NotAnnotated),
                         this.context,
                         declarator.GetLocation())
@@ -2630,7 +2630,7 @@ public sealed class CSharpToGSharpTranslator
             var symbol = this.context.GetDeclaredSymbol(node) as IEventSymbol;
 
             GTypeReference type = symbol != null
-                ? this.typeMapper.Map(
+                ? this.typeMapper.MapEventType(
                     symbol.Type.WithNullableAnnotation(NullableAnnotation.NotAnnotated),
                     this.context,
                     node.GetLocation())
@@ -2663,17 +2663,9 @@ public sealed class CSharpToGSharpTranslator
         {
             // `public delegate R Name(params);` → G# named delegate type alias
             // `type Name = delegate func(params) R` (ADR-0059). Generic delegates
-            // are gapped explicitly: `NamedDelegateDeclaration` has no type-parameter
-            // slot yet (ADR-0059 "Follow-up work" only covers the binder/emitter
-            // side of generics, not this translator).
-            if (node.TypeParameterList != null)
-            {
-                this.context.ReportUnsupported(
-                    node,
-                    $"generic delegate '{node.Identifier.Text}' has no canonical G# declaration mapping yet; named delegate type aliases (ADR-0059) do not support type parameters in cs2gs.");
-                return null;
-            }
-
+            // (issue #1960) carry their type parameters into the bracket section,
+            // `type Name[T] = delegate func(params) R` — gsc's binder/emitter
+            // support this (ADR-0059 "Follow-up work", issue #1503; GS0234 retired).
             var symbol = this.context.GetDeclaredSymbol(node) as INamedTypeSymbol;
             IMethodSymbol invoke = symbol?.DelegateInvokeMethod;
 
@@ -2681,13 +2673,15 @@ public sealed class CSharpToGSharpTranslator
             GTypeReference returnType = invoke != null && invoke.ReturnsVoid
                 ? null
                 : this.MapTypeSyntax(node.ReturnType);
+            List<TypeParameter> typeParameters = this.MapTypeParameters(symbol);
 
             return new NamedDelegateDeclaration(
                 SanitizeIdentifier(node.Identifier.Text),
                 parameters,
                 returnType,
                 MapVisibility(symbol, this.context, node),
-                this.MapAttributes(node.AttributeLists));
+                this.MapAttributes(node.AttributeLists),
+                typeParameters);
         }
 
         /// <summary>
@@ -5661,6 +5655,30 @@ public sealed class CSharpToGSharpTranslator
             return new InvocationExpression(new MemberAccessExpression(receiver, "ToString"));
         }
 
+        // Issue #1960 item 2: true when `assignment` is a `+=`/`-=` whose LEFT
+        // side is delegate-typed (TypeKind.Delegate covers both a named delegate
+        // and Action/Func-shaped BCL delegates) but is NOT a declared C# event —
+        // i.e. a raw delegate multicast combine/remove, which has no G# form.
+        // A real event access (`obj.Ticked += handler`) resolves to an
+        // IEventSymbol and is excluded so it keeps flowing through the normal
+        // compound-assignment path (G#'s event-subscription `+=`/`-=`).
+        private bool IsDelegateMulticastCombine(AssignmentExpressionSyntax assignment, out string op)
+        {
+            op = assignment.OperatorToken.Text;
+            if (!assignment.IsKind(SyntaxKind.AddAssignmentExpression) &&
+                !assignment.IsKind(SyntaxKind.SubtractAssignmentExpression))
+            {
+                return false;
+            }
+
+            if (this.context.GetSymbolInfo(assignment.Left).Symbol is IEventSymbol)
+            {
+                return false;
+            }
+
+            return this.context.GetTypeInfo(assignment.Left).Type?.TypeKind == TypeKind.Delegate;
+        }
+
         // For a compound numeric assignment `x OP= y` (`+= -= *= /= %= &= |= ^=`),
         // G# requires the RHS to share the LHS's numeric type; a mismatched RHS is
         // coerced to the LHS type via the conversion-call form (e.g. `x += int64(y)`).
@@ -6454,6 +6472,26 @@ public sealed class CSharpToGSharpTranslator
         {
             switch (expression)
             {
+                case AssignmentExpressionSyntax assignment when this.IsDelegateMulticastCombine(assignment, out string combineOp):
+                    // Issue #1960 item 2: `handler += Second;` / `handler -= Second;`
+                    // on a plain delegate-typed target (NOT a declared `event` —
+                    // those already lower to G#'s dedicated event-subscription
+                    // `+=`/`-=` form, ADR-0052/ADR-0036) has no G# equivalent.
+                    // G#'s `+=`/`-=` syntax binds ONLY to an actual CLR event
+                    // (Parser.cs's `EventSubscriptionExpressionSyntax`; the binder's
+                    // general compound-assignment fallback has no `+`/`-` operator
+                    // for delegate/function types, and `Delegate.Combine`/`Remove`
+                    // are reachable only from the compiler's own synthesized event
+                    // accessors, not from ordinary call-expression binding). Rather
+                    // than emit `+=`/`-=` that fails to bind in gsc, gap loudly.
+                    string combineMessage =
+                        $"delegate multicast '{combineOp}' on a non-event delegate-typed target has no G# equivalent: " +
+                        "G#'s '+='/'-=' syntax binds only to a declared CLR event, and 'Delegate.Combine'/'Delegate.Remove' " +
+                        "are reachable only from the compiler's own synthesized event accessors, not from ordinary call " +
+                        "binding (issue #1960).";
+                    this.context.ReportUnsupported(assignment, combineMessage);
+                    return new RawStatement($"// unsupported: delegate multicast '{combineOp}'");
+
                 case AssignmentExpressionSyntax assignment:
                     string op = assignment.OperatorToken.Text;
                     GExpression assignRhs = this.CoerceConstantToUnsigned(
@@ -13904,6 +13942,7 @@ public sealed class CSharpToGSharpTranslator
         {
             GExpression subject = this.TranslateExpression(node.GoverningExpression);
             var arms = new List<SwitchArm>();
+            bool hasTotalArm = false;
 
             foreach (SwitchExpressionArmSyntax arm in node.Arms)
             {
@@ -13948,6 +13987,42 @@ public sealed class CSharpToGSharpTranslator
                 }
 
                 arms.Add(new SwitchArm(pattern, body, guard));
+
+                // A guarded discard (`case _ when …`) can still fail at run
+                // time, so — mirroring gsc's own exhaustiveness rule
+                // (diagnostics.md GS0176: "a guarded discard … does not act
+                // as a total/default arm") — only an unguarded discard/`default`
+                // arm counts as total. `pattern` is `null` for a real C#
+                // discard (`_ =>`); it is a `DiscardPattern` node (not `null`)
+                // for a `var v =>` arm, which also always matches (it never
+                // narrows, so it is total too — see `TranslatePattern`'s
+                // `VarPatternSyntax` case above).
+                hasTotalArm |= guard == null && (pattern == null || pattern is DiscardPattern);
+            }
+
+            // Issue #1962: a C# switch expression can be exhaustive purely by
+            // its TYPE arms (e.g. every case of a sealed hierarchy is covered,
+            // or a `bool`'s `true`/`false` are both present) with no `_`/`var`
+            // catch-all at all — Roslyn proves that exhaustive and requires no
+            // default arm. gsc's own exhaustiveness check has no equivalent
+            // type-hierarchy proof: it only recognizes a literal unguarded
+            // discard/`default:` arm as total (see GS0176 above), so the
+            // translated arm set would otherwise trip GS0176 even though the
+            // source compiled cleanly. Synthesize a trailing default arm that
+            // mirrors C#'s own runtime behavior for an unmatched switch
+            // expression value (an implicit throw — C#'s own
+            // `SwitchExpressionException`) so gsc accepts the switch and a
+            // genuinely-unreachable value still fails loudly instead of
+            // silently miscompiling.
+            if (!hasTotalArm)
+            {
+                GTypeReference resultType = this.ResolveExpressionType(node);
+                GExpression unmatchedThrow = new ThrowExpression(
+                    BuildConstruction(
+                        new NamedTypeReference("InvalidOperationException"),
+                        new List<GExpression> { LiteralExpression.String("Unmatched switch expression value.") }),
+                    resultType);
+                arms.Add(new SwitchArm(null, unmatchedThrow, null));
             }
 
             return new SwitchExpression(subject, arms);

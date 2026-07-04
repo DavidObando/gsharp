@@ -193,6 +193,17 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
+            // Issue #2067: `&Foo.Private` (method-group-to-delegate /
+            // function-pointer conversion) must enforce the declaring
+            // struct's `protected`/`private` accessibility the same way
+            // BindUserInstanceCall does for regular calls (issue #2058) —
+            // this is a separate binder path (ldftn), so it needs its own gate.
+            if (target.StaticOwnerType is StructSymbol methodDeclaringType
+                && !AccessibilityChecker.IsAccessible(target.Accessibility, methodDeclaringType, getCurrentFunction()))
+            {
+                Diagnostics.ReportMemberInaccessible(syntax.OperatorToken.Location, target.Name, methodDeclaringType.Name, target.Accessibility);
+            }
+
             var fpParamTypes = ImmutableArray.CreateBuilder<TypeSymbol>(target.Parameters.Length);
             foreach (var p in target.Parameters)
             {
