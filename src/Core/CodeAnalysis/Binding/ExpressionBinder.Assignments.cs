@@ -701,10 +701,11 @@ internal sealed partial class ExpressionBinder
                     return new BoundErrorExpression(null);
                 }
 
-                // Issue #950: enforce `protected` property assignment.
+                // Issue #950 / #2044: enforce `protected`/`private` property
+                // assignment.
                 if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propDeclaringType, this.function))
                 {
-                    Diagnostics.ReportProtectedMemberInaccessible(syntax.FieldIdentifier.Location, prop.Name, propDeclaringType.Name);
+                    Diagnostics.ReportMemberInaccessible(syntax.FieldIdentifier.Location, prop.Name, propDeclaringType.Name, prop.Accessibility);
                 }
 
                 // Issue #1132: writing a property of a read-only value-type
@@ -755,11 +756,12 @@ internal sealed partial class ExpressionBinder
 
         var receiverIsThisField = ReceiverVariableIsThis(variable);
 
-        // Issue #950: enforce `protected` field assignment — only the declaring
-        // type and its derived types may write it.
+        // Issue #950 / #2044: enforce `protected`/`private` field assignment
+        // — only the declaring type (and, for `protected`, its derived
+        // types) may write it.
         if (!AccessibilityChecker.IsAccessible(field.Accessibility, fieldDeclaringType, this.function))
         {
-            Diagnostics.ReportProtectedMemberInaccessible(syntax.FieldIdentifier.Location, field.Name, fieldDeclaringType.Name);
+            Diagnostics.ReportMemberInaccessible(syntax.FieldIdentifier.Location, field.Name, fieldDeclaringType.Name, field.Accessibility);
         }
 
         // Issue #947: a read-only field of `this` may be assigned inside the
@@ -1134,6 +1136,14 @@ internal sealed partial class ExpressionBinder
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
             }
 
+            // Issue #950 / #2044: enforce `protected`/`private` field
+            // compound-assignment (`+=`/`-=`) — mirrors the plain-`=` check
+            // in BindFieldAssignmentExpression / BindMemberFieldAssignmentExpression.
+            if (!AccessibilityChecker.IsAccessible(field.Accessibility, declaringType, this.function))
+            {
+                Diagnostics.ReportMemberInaccessible(memberNameSyntax.IdentifierToken.Location, field.Name, declaringType.Name, field.Accessibility);
+            }
+
             // Issue #1132: compound-mutating a field of a read-only value-type
             // receiver mutates the value in the read-only slot — reject it.
             // Reference-type receivers and `this` are exempt.
@@ -1155,12 +1165,19 @@ internal sealed partial class ExpressionBinder
         }
 
         // ADR-0051: check properties.
-        if (TypeMemberModel.TryGetProperty(structSym, memberName, out var prop))
+        if (TypeMemberModel.TryGetProperty(structSym, memberName, out var prop, out var propDeclaringType))
         {
             if (!prop.HasGetter || !prop.HasSetter)
             {
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
                 return new BoundErrorExpression(null);
+            }
+
+            // Issue #950 / #2044: enforce `protected`/`private` property
+            // compound-assignment.
+            if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propDeclaringType, this.function))
+            {
+                Diagnostics.ReportMemberInaccessible(memberNameSyntax.IdentifierToken.Location, prop.Name, propDeclaringType.Name, prop.Accessibility);
             }
 
             // Issue #1132: compound-mutating a property of a read-only value-type
@@ -1719,6 +1736,15 @@ internal sealed partial class ExpressionBinder
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
                 }
 
+                // Issue #950 / #2044: enforce `protected`/`private` field
+                // assignment through a chained/expression receiver (e.g.
+                // `a.B.C = v`, `GetObj().Field = v`) — mirrors the
+                // simple-receiver check in BindFieldAssignmentExpression.
+                if (!AccessibilityChecker.IsAccessible(field.Accessibility, declaringType, this.function))
+                {
+                    Diagnostics.ReportMemberInaccessible(syntax.FieldIdentifier.Location, field.Name, declaringType.Name, field.Accessibility);
+                }
+
                 reportObsoleteUseIfApplicable(
                     syntax.FieldIdentifier.Location,
                     field,
@@ -1729,12 +1755,19 @@ internal sealed partial class ExpressionBinder
             }
 
             // ADR-0051: check properties before reporting "unable to find member".
-            if (TypeMemberModel.TryGetProperty(structSym, fieldName, out var prop))
+            if (TypeMemberModel.TryGetProperty(structSym, fieldName, out var prop, out var propDeclaringType))
             {
                 if (!prop.HasSetter)
                 {
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
                     return new BoundErrorExpression(null);
+                }
+
+                // Issue #950 / #2044: enforce `protected`/`private` property
+                // assignment through a chained/expression receiver.
+                if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propDeclaringType, this.function))
+                {
+                    Diagnostics.ReportMemberInaccessible(syntax.FieldIdentifier.Location, prop.Name, propDeclaringType.Name, prop.Accessibility);
                 }
 
                 var propConverted = conversions.BindConversion(syntax.Value.Location, value, prop.Type);

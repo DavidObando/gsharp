@@ -1433,6 +1433,48 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Issue #2044: GS0472 — a <c>private</c> member of
+    /// <paramref name="declaringTypeName"/> was accessed (read or written)
+    /// from code outside that type's body. A <c>private</c> member is only
+    /// reachable from within its declaring top-level type (including any
+    /// nested types declared inside it).
+    /// </summary>
+    /// <param name="location">The text location of the offending access.</param>
+    /// <param name="memberName">The private member's name.</param>
+    /// <param name="declaringTypeName">The declaring type's name.</param>
+    public void ReportPrivateMemberInaccessible(TextLocation location, string memberName, string declaringTypeName)
+    {
+        Report(
+            location,
+            "GS0472",
+            $"'{declaringTypeName}.{memberName}' is inaccessible due to its protection level: a 'private' member is only accessible within '{declaringTypeName}'.");
+    }
+
+    /// <summary>
+    /// Issue #2044: reports the inaccessible-member diagnostic matching
+    /// <paramref name="accessibility"/> (GS0379 for <c>protected</c>, GS0472
+    /// for <c>private</c>). Callers gate this behind
+    /// <see cref="Symbols.AccessibilityChecker.IsAccessible"/> returning
+    /// <see langword="false"/>, so <paramref name="accessibility"/> is always
+    /// one of those two values here.
+    /// </summary>
+    /// <param name="location">The text location of the offending access.</param>
+    /// <param name="memberName">The inaccessible member's name.</param>
+    /// <param name="declaringTypeName">The declaring type's name.</param>
+    /// <param name="accessibility">The member's declared accessibility.</param>
+    public void ReportMemberInaccessible(TextLocation location, string memberName, string declaringTypeName, Accessibility accessibility)
+    {
+        if (accessibility == Accessibility.Private)
+        {
+            ReportPrivateMemberInaccessible(location, memberName, declaringTypeName);
+        }
+        else
+        {
+            ReportProtectedMemberInaccessible(location, memberName, declaringTypeName);
+        }
+    }
+
+    /// <summary>
     /// Issue #950: GS0380 — the <c>protected</c> modifier appears on a member
     /// (or nested type) whose enclosing type is not an inheritable
     /// <c>open class</c>. Nothing can derive from a non-<c>open</c> class, a
