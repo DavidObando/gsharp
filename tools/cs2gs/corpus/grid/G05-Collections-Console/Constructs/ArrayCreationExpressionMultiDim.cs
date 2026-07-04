@@ -1,14 +1,4 @@
-// inventory: ArrayCreationExpression — QUARANTINED at test-parity (SILENT
-// DIVERGENCE): translate and compile PASS, but 'new int[2, 3]' is emitted as
-// the 1-D G# array 'let grid = [2]int32' and every 'grid[r, c]' access drops
-// the second index ('grid[0] = 1; grid[0] = 2; ...'), so grid.GetLength(1)
-// throws at runtime.
-//   expected stdout: 'ArrayCreationExpressionMultiDim: sum=21 rows=2 cols=3'
-//   actual stdout:   '' (crash: System.IndexOutOfRangeException: Array does
-//                    not have that many dimensions. at System.Array.GetLength)
-// The literal form 'new int[,] { { 1, 2, 3 }, { 4, 5, 6 } }' separately fails
-// gsc compile: GS0155 "Cannot convert type '[]object' to 'int32'." because it
-// lowers to []int32{[]object{1, 2, 3}, []object{4, 5, 6}}.
+// inventory: ArrayCreationExpression — multi-dim rank>1 sub-case (#1893).
 using System;
 
 namespace Corpus.Grid05

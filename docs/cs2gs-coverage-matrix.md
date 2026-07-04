@@ -25,7 +25,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | AndPattern | BinaryPatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/AndPattern.cs |  |  |
 | Argument | ArgumentSyntax | ADR-0115 §B |  |  |  |  |
 | ArgumentList | ArgumentListSyntax | ADR-0115 §B |  |  |  |  |
-| ArrayCreationExpression | ArrayCreationExpressionSyntax | ADR-0115 §B.16 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/ArrayCreationExpression.cs | https://github.com/DavidObando/gsharp/issues/1893 | Multi-dim arrays silently lowered to 1-D (issue #1893, parity-verified); 1-D/jagged green. |
+| ArrayCreationExpression | ArrayCreationExpressionSyntax | ADR-0115 §B.16 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/ArrayCreationExpression.cs | https://github.com/DavidObando/gsharp/issues/1893 | 1-D/jagged green; rank>1 (issue #1893) flat-lowers a tracked local's rectangular `new T[d0, d1, ...]`/`new T[,]{{...}}` to a single backing array with hoisted per-dimension sizes, preserving every index (see ArrayCreationExpressionMultiDim.cs, parity-verified). An untracked rank>1 shape (field/parameter/no-initializer) reports the CS2GS-GAP instead of silently collapsing to 1-D. |
 | ArrayInitializerExpression | InitializerExpressionSyntax | ADR-0115 §B.16 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/ArrayInitializerExpression.cs |  |  |
 | ArrayRankSpecifier | ArrayRankSpecifierSyntax | ADR-0115 §B.16 |  |  |  |  |
 | ArrayType | ArrayTypeSyntax | ADR-0115 §B.16 |  |  |  |  |

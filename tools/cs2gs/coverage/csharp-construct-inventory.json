@@ -123,7 +123,7 @@
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/ArrayCreationExpression.cs",
     "issue": "https://github.com/DavidObando/gsharp/issues/1893",
-    "notes": "Multi-dim arrays silently lowered to 1-D (issue #1893, parity-verified); 1-D/jagged green."
+    "notes": "1-D/jagged green; rank\u003E1 (issue #1893) flat-lowers a tracked local\u0027s rectangular \u0060new T[d0, d1, ...]\u0060/\u0060new T[,]{{...}}\u0060 to a single backing array with hoisted per-dimension sizes, preserving every index (see ArrayCreationExpressionMultiDim.cs, parity-verified). An untracked rank\u003E1 shape (field/parameter/no-initializer) reports the CS2GS-GAP instead of silently collapsing to 1-D."
   },
   {
     "kind": "ArrayInitializerExpression",
