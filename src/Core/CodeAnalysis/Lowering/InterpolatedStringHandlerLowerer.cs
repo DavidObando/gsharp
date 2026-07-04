@@ -652,7 +652,10 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
         // `AppendFormatted(string)` would return the first reflected match
         // regardless of the hole's type, producing invalid IL or an
         // InvalidCastException at run time.
-        var valueClr = holeType?.ClrType;
+        // Issue #1916 sibling: use the effective (Nullable<T>-aware) CLR
+        // type so overload resolution sees the real runtime stack shape for
+        // nullable value-type holes, not just the bare underlying type.
+        var valueClr = NullableTypeSymbol.GetEffectiveClrType(holeType);
         if (shapeCandidates.Count > 0 && valueClr != null)
         {
             var argTypes = new System.Type[1 + extra];
@@ -746,7 +749,9 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
             return (open, default);
         }
 
-        var clrType = holeType?.ClrType;
+        // Issue #1916 sibling: close over the effective (Nullable<T>-aware)
+        // CLR type, matching the fix in the sibling `CloseAppendFormatted`.
+        var clrType = NullableTypeSymbol.GetEffectiveClrType(holeType);
         if (clrType != null)
         {
             return (open.MakeGenericMethod(clrType), default);
@@ -799,7 +804,15 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
             open = AppendFormattedValue;
         }
 
-        var clrType = holeType?.ClrType;
+        // Issue #1916: a `T?` hole over a value type must close over
+        // `Nullable<T>`, not the bare `TypeSymbol.ClrType` (which is the
+        // underlying `T` per NullableTypeSymbol's ctor) — the value pushed on
+        // the stack for a nullable-typed local/expression is the full
+        // `Nullable<T>` struct, so closing the generic method over `T` leaves
+        // a StackUnexpected mismatch at the call site (found Nullable<T>,
+        // expected T). GetEffectiveClrType returns `Nullable<T>` for
+        // value-type nullables and `holeType.ClrType` for everything else.
+        var clrType = NullableTypeSymbol.GetEffectiveClrType(holeType);
         if (clrType != null)
         {
             // Primitive / BCL / reference holes close over their concrete CLR
