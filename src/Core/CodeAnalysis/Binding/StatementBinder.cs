@@ -88,6 +88,7 @@ internal sealed class StatementBinder
     private readonly Func<FunctionSymbol> getCurrentFunction;
     private readonly Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression> bindLambdaWithTargetType;
     private readonly Func<VariableDeclarationSyntax, BoundStatement> bindGenericLocalFunctionDeclaration;
+    private readonly Action<TextLocation, string, BoundFunctionLiteralExpression> checkNonGenericLocalFunctionEnclosingTypeParameterReference;
 
     public StatementBinder(
         BinderContext binderCtx,
@@ -107,7 +108,8 @@ internal sealed class StatementBinder
         BindVariableDeclarationAttributesDelegate bindVariableDeclarationAttributes,
         Func<FunctionSymbol> getCurrentFunction,
         Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression> bindLambdaWithTargetType = null,
-        Func<VariableDeclarationSyntax, BoundStatement> bindGenericLocalFunctionDeclaration = null)
+        Func<VariableDeclarationSyntax, BoundStatement> bindGenericLocalFunctionDeclaration = null,
+        Action<TextLocation, string, BoundFunctionLiteralExpression> checkNonGenericLocalFunctionEnclosingTypeParameterReference = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
         this.conversions = conversions ?? throw new ArgumentNullException(nameof(conversions));
@@ -127,6 +129,7 @@ internal sealed class StatementBinder
         this.getCurrentFunction = getCurrentFunction ?? throw new ArgumentNullException(nameof(getCurrentFunction));
         this.bindLambdaWithTargetType = bindLambdaWithTargetType;
         this.bindGenericLocalFunctionDeclaration = bindGenericLocalFunctionDeclaration;
+        this.checkNonGenericLocalFunctionEnclosingTypeParameterReference = checkNonGenericLocalFunctionEnclosingTypeParameterReference;
     }
 
     private DiagnosticBag Diagnostics => binderCtx.Diagnostics;
@@ -979,6 +982,27 @@ internal sealed class StatementBinder
                 var initializer = bindExpression(syntax.Initializer);
                 variableType = type ?? initializer.Type;
                 convertedInitializer = conversions.BindConversion(syntax.Initializer.Location, initializer, variableType);
+
+                // Issue #2016: a NON-generic named local function (`let`/`var`/`const
+                // Name = func (...) ... {...}`, no `[T, ...]` of its own — the sibling
+                // case of #1940's generic local function) that directly references an
+                // enclosing type parameter in its own parameter/return type or body
+                // can silently emit invalid IL. Check the just-bound literal now,
+                // while it's still available with its identifier's name/location.
+                //
+                // Follow-up review of #2024: the original gate here required
+                // `syntax.Keyword?.Kind == SyntaxKind.LetKeyword`, which let a `var`-
+                // declared local function of the exact same zero-capture shape sail
+                // through uncaught (the emitter's hoisting path doesn't distinguish
+                // let/var/const — only "is this a function-literal initializer").
+                // The check now keys off the bound initializer's kind
+                // (BoundFunctionLiteralExpression) rather than the declaring keyword,
+                // so it fires uniformly for `let`, `var`, and `const` forms.
+                if (initializer is BoundFunctionLiteralExpression functionLiteral
+                    && checkNonGenericLocalFunctionEnclosingTypeParameterReference != null)
+                {
+                    checkNonGenericLocalFunctionEnclosingTypeParameterReference(syntax.Identifier.Location, syntax.Identifier.Text, functionLiteral);
+                }
             }
         }
 

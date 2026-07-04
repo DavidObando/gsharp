@@ -415,16 +415,13 @@ internal sealed class PatternBinder
 
     private BoundPattern BindListPattern(ListPatternSyntax syntax, TypeSymbol discriminantType)
     {
-        TypeSymbol elementType = TypeSymbol.Error;
-        if (discriminantType is ArrayTypeSymbol arrayType)
-        {
-            elementType = arrayType.ElementType;
-        }
-        else if (discriminantType is SliceTypeSymbol sliceType)
-        {
-            elementType = sliceType.ElementType;
-        }
-        else
+        // Issue #1951: accept any array-shaped discriminant, not just the
+        // in-compilation ArrayTypeSymbol/SliceTypeSymbol — a metadata/CLR
+        // array (e.g. the type of `Array.Empty<int>()`, or any imported
+        // BCL `T[]`) is genuinely array-shaped too. Reuse the same
+        // recognition ExpressionBinder uses for array/span slicing.
+        var elementType = ExpressionBinder.GetArraySliceElementType(discriminantType) ?? TypeSymbol.Error;
+        if (elementType == TypeSymbol.Error)
         {
             Diagnostics.ReportListPatternRequiresArrayOrSlice(syntax.OpenSquareBracketToken.Location, discriminantType);
         }

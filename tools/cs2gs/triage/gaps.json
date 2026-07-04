@@ -30,6 +30,20 @@
         "corpus/L2-Library"
       ],
       "notes": "G#-level semantics lost across assembly references blocks library test-parity (issue #1929); L3 parity is gated on the same family plus parser issue #1924."
+    },
+    {
+      "fingerprint": "sha256:6f8792050be1d47fac7ce41e95e0648de72bd0620f11414aff2e5dff56919e29",
+      "issue": 1908,
+      "status": "wontfix",
+      "title": "[cs2gs] Unsupported C# construct 'OperatorDeclaration' has no canonical G# form (corpus/G07-Members-Console)",
+      "stage": "translate",
+      "diagnosticId": "CS2GS-GAP",
+      "constructKind": "OperatorDeclaration",
+      "firstSeenRun": "2026-07-04T13-11-51Z_438d1f",
+      "apps": [
+        "corpus/G07-Members-Console"
+      ],
+      "notes": "C# 14 instance compound-assignment operator declarations (`operator +=` and siblings) have no canonical G# form: G# operator declarations are binary/unary only (ADR-0035) and there is no lossless mechanical rewrite to a binary operator, since the compound form mutates instance state in place. The translator reports this loudly (CS2GS-GAP) instead of emitting the invalid `operator +=` G# syntax that used to fail round-trip parse with GS0005 (issue #1908, fixed). Deliberately not translated pending a future G# language-level decision for compound-assignment operator declarations."
     }
   ]
 }

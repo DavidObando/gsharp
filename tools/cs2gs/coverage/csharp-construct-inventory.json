@@ -1561,7 +1561,7 @@
     "rule": "ADR-0115 \u00A7B.31",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/OperatorDeclaration.cs",
-    "notes": "C#14 instance compound-assignment operators fail round-trip (issue #1908); Equals(object) is-pattern override fails ilverify (issue #1917)."
+    "notes": "C#14 instance compound-assignment operators (op_AdditionAssignment and siblings) have no canonical G# form and are reported as a loud CS2GS-GAP instead of emitting invalid \u0060operator \u002B=\u0060 syntax (issue #1908, fixed; tracked as a known/open gap in tools/cs2gs/triage/gaps.json, grid app G07); Equals(object) is-pattern override fails ilverify (issue #1917)."
   },
   {
     "kind": "OperatorMemberCref",
