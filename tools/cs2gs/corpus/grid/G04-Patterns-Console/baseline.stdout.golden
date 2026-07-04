@@ -64,6 +64,11 @@ PositionalPatternClause: (0, 0) tuple-> origin
 PositionalPatternClause: (0, 4) tuple-> y-axis
 PositionalPatternClause: (3, 0) tuple-> x-axis
 PositionalPatternClause: (3, 4) tuple-> ne
+PositionalPatternClause: typed (0, 0) -> typed-origin
+PositionalPatternClause: typed (3, 0) -> typed-x-axis
+PositionalPatternClause: typed (3, 4) -> typed-ne
+PositionalPatternClause: line (0, 0)->(3, 4) -> starts-at-origin
+PositionalPatternClause: line (1, 1)->(3, 4) -> other-start
 RecursivePattern: person is in Lima = True
 RecursivePattern: person has a Lima-range zip
 RecursivePattern: name length 3 = True

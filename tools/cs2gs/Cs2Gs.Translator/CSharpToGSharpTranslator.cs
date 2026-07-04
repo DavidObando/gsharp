@@ -10080,8 +10080,28 @@ public sealed class CSharpToGSharpTranslator
             // receiver; the member-access sub-tests below are the whole test
             // (and if there happen to be none, e.g. every position is a discard,
             // `true` is the correct always-matches result).
+            IOperation patternOperation = this.context.SemanticModel.GetOperation(recursive);
             bool receiverIsValueType = recursive.Type == null &&
-                this.context.SemanticModel.GetOperation(recursive) is IRecursivePatternOperation { MatchedType.IsValueType: true };
+                patternOperation is IRecursivePatternOperation { MatchedType.IsValueType: true };
+
+            // Issue #1943: a NULLABLE value-type receiver (`(int, int)?`)
+            // narrows to the SAME non-nullable `MatchedType` a non-nullable
+            // value-type receiver (`(int, int)`) does, so the check above can't
+            // tell the two apart — but unlike the non-nullable case, it CAN be
+            // null at runtime; skipping its guard the same way would let a null
+            // subject fault the member-access chain below (`p.Item1` on a null
+            // `p`). `IPatternOperation.InputType` (the pattern's UN-narrowed
+            // input type, unlike `MatchedType`) still reports the original
+            // `System.Nullable<T>`, so it reliably distinguishes the two shapes
+            // regardless of the corpus's nullable-annotations context (the same
+            // concern `ResolveDeclaredReceiverType` documents below for a
+            // reference-type receiver). G# models a value-type `T?` directly
+            // (no `Nullable<T>` member surface, see
+            // <see cref="TranslateMemberAccess"/>'s `Value`/`HasValue` rewrite)
+            // and relies on the same Kotlin-style smart-cast a reference-type
+            // receiver does, so the guard is the same `!= nil` test.
+            bool receiverIsNullableValueType = recursive.Type == null &&
+                patternOperation is IPatternOperation { InputType.OriginalDefinition.SpecialType: SpecialType.System_Nullable_T };
 
             // Issue #1923: a NESTED bare recursive pattern (`{ Address: { City:
             // "Lima" } }`) recurses into this method with `receiver` bound to the
@@ -10123,7 +10143,25 @@ public sealed class CSharpToGSharpTranslator
 
             GExpression test = recursive.Type != null
                 ? new BinaryExpression(receiver, "is", new TypeExpression(this.MapTypeSyntax(recursive.Type)))
-                : (receiverIsValueType || receiverIsNonNullableReference) ? null : new BinaryExpression(receiver, "!=", LiteralExpression.Null());
+                : ((receiverIsValueType && !receiverIsNullableValueType) || receiverIsNonNullableReference) ? null : new BinaryExpression(receiver, "!=", LiteralExpression.Null());
+
+            // Issue #1943/#1545: gsc's `&&`/`||` short-circuit narrowing
+            // classifier (`SmartCastStability.TryClassifyNilGuardLeaf`,
+            // `referenceNullableOnly: true`) deliberately rejects a nullable
+            // VALUE type — narrowing `Nullable<T>` to `T` is not an IL no-op
+            // the way narrowing a nullable reference is, and the short-circuit
+            // path doesn't emit the unwrap (a separately-tracked gsc-side
+            // gap). So `candidate != nil && candidate.Item1 == 0` does NOT
+            // smart-cast `candidate` inside the `&&` chain and fails to
+            // compile (GS0158, "Cannot find member Item1"). The member
+            // accesses below must instead force-unwrap explicitly (`candidate
+            // !! .Item1`, the same `!!` rewrite <see cref="TranslateMemberAccess"/>
+            // already uses for a C# `Nullable<T>.Value` read) — safe here
+            // because `test`'s own `!= nil` guard already proved it non-null
+            // at runtime.
+            GExpression memberReceiver = receiverIsNullableValueType
+                ? new NonNullAssertionExpression(receiver)
+                : receiver;
 
             if (recursive.PropertyPatternClause != null)
             {
@@ -10137,7 +10175,7 @@ public sealed class CSharpToGSharpTranslator
 
                     string memberName = sub.NameColon?.Name.Identifier.Text
                         ?? sub.ExpressionColon?.Expression.ToString();
-                    GExpression memberAccess = new MemberAccessExpression(receiver, SanitizeIdentifier(memberName));
+                    GExpression memberAccess = new MemberAccessExpression(memberReceiver, SanitizeIdentifier(memberName));
                     ITypeSymbol memberType = this.TryGetSubpatternMemberType(sub);
                     GExpression memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern, memberType, isNestedPatternMember: true);
                     test = test == null ? memberTest : new BinaryExpression(test, "&&", memberTest);
@@ -10173,7 +10211,7 @@ public sealed class CSharpToGSharpTranslator
                         continue;
                     }
 
-                    GExpression memberAccess = new MemberAccessExpression(receiver, SanitizeIdentifier(memberName));
+                    GExpression memberAccess = new MemberAccessExpression(memberReceiver, SanitizeIdentifier(memberName));
                     GExpression memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern, isNestedPatternMember: true);
                     test = test == null ? memberTest : new BinaryExpression(test, "&&", memberTest);
                 }
@@ -10253,7 +10291,8 @@ public sealed class CSharpToGSharpTranslator
             PatternSyntax leafPattern,
             GExpression receiver,
             List<(ISymbol Symbol, GExpression Replacement)> bindings,
-            HashSet<string> usedDesignators)
+            HashSet<string> usedDesignators,
+            List<GExpression> guards)
         {
             var names = new List<string>();
             ExpressionSyntax current = memberPath;
@@ -10274,7 +10313,7 @@ public sealed class CSharpToGSharpTranslator
             string leafName = SanitizeIdentifier(names[^1]);
             PropertyPatternField field = new PropertyPatternField(
                 leafName,
-                this.TranslatePattern(leafPattern, new MemberAccessExpression(memberReceiver, leafName), bindings, usedDesignators));
+                this.TranslatePattern(leafPattern, new MemberAccessExpression(memberReceiver, leafName), bindings, usedDesignators, guards));
 
             for (int i = names.Count - 2; i >= 0; i--)
             {
@@ -13592,7 +13631,8 @@ public sealed class CSharpToGSharpTranslator
                 // out of scope.
                 var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
                 var usedDesignators = new HashSet<string>(StringComparer.Ordinal);
-                GPattern pattern = this.TranslatePattern(arm.Pattern, subject, bindings, usedDesignators);
+                var guards = new List<GExpression>();
+                GPattern pattern = this.TranslatePattern(arm.Pattern, subject, bindings, usedDesignators, guards);
 
                 foreach ((ISymbol symbol, GExpression replacement) in bindings)
                 {
@@ -13604,9 +13644,16 @@ public sealed class CSharpToGSharpTranslator
                 try
                 {
                     // Issue #991: C# `when` guards now have a canonical G# form.
+                    // Issue #1943: a typed positional/property subpattern that
+                    // has no room in its `TypePattern` GPattern node (a
+                    // constant/relational/nested test) was collected into
+                    // `guards` above instead; AND it together with any explicit
+                    // `when` clause (`case Point p when p.X == 0 && p.Y == 0 &&
+                    // <user guard>:`).
                     guard = arm.WhenClause != null
                         ? this.TranslateExpression(arm.WhenClause.Condition)
                         : null;
+                    guard = CombinePatternGuards(guards, guard);
                     body = this.TranslateExpression(arm.Expression);
                 }
                 finally
@@ -13657,7 +13704,8 @@ public sealed class CSharpToGSharpTranslator
                         case CasePatternSwitchLabelSyntax patternLabel:
                             var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
                             var usedDesignators = new HashSet<string>(StringComparer.Ordinal);
-                            GPattern pattern = this.TranslatePattern(patternLabel.Pattern, subject, bindings, usedDesignators);
+                            var guards = new List<GExpression>();
+                            GPattern pattern = this.TranslatePattern(patternLabel.Pattern, subject, bindings, usedDesignators, guards);
 
                             // Issue #1730: install the pattern's bindings before
                             // translating the `when` guard and the case body, so
@@ -13674,9 +13722,14 @@ public sealed class CSharpToGSharpTranslator
                             try
                             {
                                 // Issue #991: C# `when` guards now have a canonical G# form.
+                                // Issue #1943: see the switch-EXPRESSION arm above —
+                                // a typed positional/property subpattern with no
+                                // room in its `TypePattern` node is collected into
+                                // `guards` and AND-ed with any explicit `when`.
                                 guard = patternLabel.WhenClause != null
                                     ? this.TranslateExpression(patternLabel.WhenClause.Condition)
                                     : null;
+                                guard = CombinePatternGuards(guards, guard);
                                 patternBody = this.TranslateSwitchSectionBody(section);
                             }
                             finally
@@ -13855,11 +13908,35 @@ public sealed class CSharpToGSharpTranslator
             }
         }
 
+        // Issue #1943: AND-folds every boolean test `TranslatePattern` collected
+        // into `guards` (a typed positional/property subpattern with no room in
+        // its `TypePattern` GPattern node — see `TranslateRecursivePattern`'s
+        // `PositionalPatternClause` branch) together with the arm's own explicit
+        // `when` clause, if any. Returns <see langword="null"/> when there is
+        // nothing to guard on, so a plain arm with no synthesized test and no
+        // `when` clause keeps emitting no guard at all.
+        private static GExpression CombinePatternGuards(List<GExpression> guards, GExpression whenGuard)
+        {
+            GExpression combined = null;
+            foreach (GExpression guardTest in guards)
+            {
+                combined = combined == null ? guardTest : new BinaryExpression(combined, "&&", guardTest);
+            }
+
+            if (whenGuard == null)
+            {
+                return combined;
+            }
+
+            return combined == null ? whenGuard : new BinaryExpression(combined, "&&", whenGuard);
+        }
+
         private GPattern TranslatePattern(
             PatternSyntax pattern,
             GExpression receiver,
             List<(ISymbol Symbol, GExpression Replacement)> bindings,
-            HashSet<string> usedDesignators)
+            HashSet<string> usedDesignators,
+            List<GExpression> guards)
         {
             switch (pattern)
             {
@@ -13922,7 +13999,7 @@ public sealed class CSharpToGSharpTranslator
                     return new DiscardPattern();
 
                 case RecursivePatternSyntax recursive:
-                    return this.TranslateRecursivePattern(recursive, receiver, bindings, usedDesignators);
+                    return this.TranslateRecursivePattern(recursive, receiver, bindings, usedDesignators, guards);
 
                 // Issue #992: C# `and` / `or` pattern combinators map to G#
                 // `and` / `or`. C# `BinaryPatternSyntax` carries an `and`/`or`
@@ -13931,19 +14008,19 @@ public sealed class CSharpToGSharpTranslator
                     when binary.OperatorToken.IsKind(SyntaxKind.AndKeyword) || binary.OperatorToken.IsKind(SyntaxKind.OrKeyword):
                     return new BinaryPattern(
                         binary.OperatorToken.IsKind(SyntaxKind.AndKeyword),
-                        this.TranslatePattern(binary.Left, receiver, bindings, usedDesignators),
-                        this.TranslatePattern(binary.Right, receiver, bindings, usedDesignators));
+                        this.TranslatePattern(binary.Left, receiver, bindings, usedDesignators, guards),
+                        this.TranslatePattern(binary.Right, receiver, bindings, usedDesignators, guards));
 
                 // Issue #992: C# `not <pattern>` maps to G# `not <pattern>`.
                 case UnaryPatternSyntax unary
                     when unary.OperatorToken.IsKind(SyntaxKind.NotKeyword):
-                    return new NotPattern(this.TranslatePattern(unary.Pattern, receiver, bindings, usedDesignators));
+                    return new NotPattern(this.TranslatePattern(unary.Pattern, receiver, bindings, usedDesignators, guards));
 
                 case ParenthesizedPatternSyntax parenthesized:
-                    return new ParenthesizedPattern(this.TranslatePattern(parenthesized.Pattern, receiver, bindings, usedDesignators));
+                    return new ParenthesizedPattern(this.TranslatePattern(parenthesized.Pattern, receiver, bindings, usedDesignators, guards));
 
                 case ListPatternSyntax listPattern:
-                    return this.TranslateListPattern(listPattern, receiver, bindings, usedDesignators);
+                    return this.TranslateListPattern(listPattern, receiver, bindings, usedDesignators, guards);
 
                 default:
                     this.context.ReportUnsupported(
@@ -13968,7 +14045,8 @@ public sealed class CSharpToGSharpTranslator
             ListPatternSyntax listPattern,
             GExpression receiver,
             List<(ISymbol Symbol, GExpression Replacement)> bindings,
-            HashSet<string> usedDesignators)
+            HashSet<string> usedDesignators,
+            List<GExpression> guards)
         {
             SeparatedSyntaxList<PatternSyntax> elements = listPattern.Patterns;
             int sliceIndex = FindSlicePatternIndex(elements);
@@ -13980,7 +14058,7 @@ public sealed class CSharpToGSharpTranslator
                 PatternSyntax element = elements[i];
                 if (element is SlicePatternSyntax slice)
                 {
-                    translated.Add(this.TranslateSlicePattern(slice, receiver, i, elements.Count - i - 1, bindings, usedDesignators));
+                    translated.Add(this.TranslateSlicePattern(slice, receiver, i, elements.Count - i - 1, bindings, usedDesignators, guards));
                     continue;
                 }
 
@@ -13991,7 +14069,7 @@ public sealed class CSharpToGSharpTranslator
                 }
 
                 GExpression elementReceiver = this.BuildListElementReceiver(receiver, lengthAccess, i, elements.Count, sliceIndex);
-                translated.Add(this.TranslatePattern(element, elementReceiver, bindings, usedDesignators));
+                translated.Add(this.TranslatePattern(element, elementReceiver, bindings, usedDesignators, guards));
             }
 
             return new ListPattern(translated);
@@ -14011,7 +14089,8 @@ public sealed class CSharpToGSharpTranslator
             int prefixCount,
             int suffixCount,
             List<(ISymbol Symbol, GExpression Replacement)> bindings,
-            HashSet<string> usedDesignators)
+            HashSet<string> usedDesignators,
+            List<GExpression> guards)
         {
             switch (slice.Pattern)
             {
@@ -14036,7 +14115,7 @@ public sealed class CSharpToGSharpTranslator
 
                 default:
                     GExpression sliceValue = BuildSliceExpression(receiver, prefixCount, suffixCount);
-                    return new SlicePattern(designator: null, this.TranslatePattern(slice.Pattern, sliceValue, bindings, usedDesignators));
+                    return new SlicePattern(designator: null, this.TranslatePattern(slice.Pattern, sliceValue, bindings, usedDesignators, guards));
             }
         }
 
@@ -14044,7 +14123,8 @@ public sealed class CSharpToGSharpTranslator
             RecursivePatternSyntax recursive,
             GExpression receiver,
             List<(ISymbol Symbol, GExpression Replacement)> bindings,
-            HashSet<string> usedDesignators)
+            HashSet<string> usedDesignators,
+            List<GExpression> guards)
         {
             // A pure property pattern (`{ A: 0, B: 0 }`) with no type maps to the
             // G# property pattern; a typed recursive pattern (`Circle { Radius: var r }`)
@@ -14065,7 +14145,8 @@ public sealed class CSharpToGSharpTranslator
                                     sub.Pattern,
                                     new MemberAccessExpression(receiver, fieldName),
                                     bindings,
-                                    usedDesignators)));
+                                    usedDesignators,
+                                    guards)));
                             continue;
                         }
 
@@ -14080,7 +14161,7 @@ public sealed class CSharpToGSharpTranslator
                             // with the nested-pattern form a user could already
                             // write directly. Works to any chain depth.
                             fields.Add(this.BuildExtendedPropertyField(
-                                sub.ExpressionColon.Expression, sub.Pattern, receiver, bindings, usedDesignators));
+                                sub.ExpressionColon.Expression, sub.Pattern, receiver, bindings, usedDesignators, guards));
                             continue;
                         }
 
@@ -14121,7 +14202,8 @@ public sealed class CSharpToGSharpTranslator
                                 sub.Pattern,
                                 new MemberAccessExpression(receiver, SanitizeIdentifier(memberName)),
                                 bindings,
-                                usedDesignators)));
+                                usedDesignators,
+                                guards)));
                     }
                 }
 
@@ -14180,11 +14262,21 @@ public sealed class CSharpToGSharpTranslator
                 // as the typed property-pattern branch above — carries only a
                 // designator and a type, no room for an extra equality/relational
                 // test. A `var` positional subpattern still binds cleanly (a member
-                // access on the designator); anything else has no canonical G#
-                // form in this position (ADR-0115 §B) and is reported loudly rather
-                // than silently dropped. The untyped bare-tuple arm form above
-                // (`(0, 0) =>`) is unaffected and fully supports constant/
-                // relational positional subpatterns.
+                // access on the designator).
+                //
+                // Issue #1943: anything else (a constant/relational/nested
+                // positional subpattern, e.g. `Point(0, 0)`, `Point(> 0, _)`)
+                // generalizes the same lowering the untyped bare-tuple arm form
+                // already uses (`TranslateRecursivePatternTest`'s
+                // `PositionalPatternClause` loop) — a boolean member-access test —
+                // but since a `TypePattern` has no room for it, the test is
+                // appended to the arm's `guards` list instead, to be AND-ed with
+                // any explicit `when` clause by the caller (`case Point p when
+                // p.X == 0 && p.Y == 0:`). Any designator a nested subpattern
+                // binds (e.g. `Point(Sub(var a, 0), _)`) is captured into
+                // `bindings` the same way the property-pattern loop above does,
+                // so it is installed/removed on the same schedule as every other
+                // arm-scoped binding.
                 SeparatedSyntaxList<SubpatternSyntax> subs = recursive.PositionalPatternClause.Subpatterns;
                 string[] memberNames = this.TryGetPositionalMemberNames(recursive, subs.Count);
                 for (int i = 0; i < subs.Count; i++)
@@ -14198,8 +14290,15 @@ public sealed class CSharpToGSharpTranslator
                     }
 
                     string memberName = sub.NameColon?.Name.Identifier.Text ?? memberNames?[i];
-                    if (memberName != null &&
-                        sub.Pattern is VarPatternSyntax { Designation: SingleVariableDesignationSyntax posBound } &&
+                    if (memberName == null)
+                    {
+                        this.context.ReportUnsupported(
+                            sub,
+                            "typed positional subpattern has no canonical G# form yet (ADR-0115 §B).");
+                        continue;
+                    }
+
+                    if (sub.Pattern is VarPatternSyntax { Designation: SingleVariableDesignationSyntax posBound } &&
                         this.context.GetDeclaredSymbol(posBound) is { } posBoundSymbol)
                     {
                         bindings.Add((
@@ -14207,13 +14306,29 @@ public sealed class CSharpToGSharpTranslator
                             new MemberAccessExpression(
                                 new IdentifierExpression(designator),
                                 SanitizeIdentifier(memberName))));
+                        continue;
                     }
-                    else
+
+                    GExpression memberAccess = new MemberAccessExpression(
+                        new IdentifierExpression(designator), SanitizeIdentifier(memberName));
+                    var bindingsBefore = new HashSet<ISymbol>(this.patternBindings.Keys, SymbolEqualityComparer.Default);
+                    GExpression memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern, isNestedPatternMember: true);
+                    foreach (ISymbol added in this.patternBindings.Keys.ToList())
                     {
-                        this.context.ReportUnsupported(
-                            sub,
-                            "typed positional subpattern other than a 'var' binding has no canonical G# form yet (ADR-0115 §B).");
+                        if (!bindingsBefore.Contains(added))
+                        {
+                            // A nested subpattern (e.g. `Point(Sub(var a, 0), _)`)
+                            // binds its own designator directly into
+                            // `patternBindings` (the same mechanism an `is`
+                            // expression uses). Route it through `bindings` too so
+                            // the caller's install/remove-around-guard-and-body
+                            // scoping (mirroring the `is`-expression pattern
+                            // above) cleans it up like every other arm binding.
+                            bindings.Add((added, this.patternBindings[added]));
+                        }
                     }
+
+                    guards.Add(memberTest);
                 }
             }
 
