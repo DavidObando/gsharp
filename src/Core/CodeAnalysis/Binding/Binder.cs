@@ -2564,7 +2564,7 @@ public sealed class Binder
                         return null;
                     }
 
-                    element = InterfaceSymbol.Construct(iface, typeArgs);
+                    element = InterfaceSymbol.Construct(iface, typeArgs, scope.References.MapClrTypeToReferences);
                 }
                 else if (element is StructSymbol genericStruct)
                 {
@@ -2580,7 +2580,7 @@ public sealed class Binder
                         return null;
                     }
 
-                    element = StructSymbol.Construct(genericStruct, typeArgs);
+                    element = StructSymbol.Construct(genericStruct, typeArgs, scope.References.MapClrTypeToReferences);
                 }
                 else if (element is DelegateTypeSymbol genericDelegate)
                 {
@@ -2816,8 +2816,8 @@ public sealed class Binder
             {
                 var ownArgs = deepestStruct.TypeArguments;
                 deepest = ownArgs.IsDefaultOrEmpty
-                    ? StructSymbol.ConstructNested(deepestStruct.Definition ?? deepestStruct, enclosingArgs)
-                    : StructSymbol.ConstructNestedGeneric(deepestStruct.Definition ?? deepestStruct, enclosingArgs, ownArgs);
+                    ? StructSymbol.ConstructNested(deepestStruct.Definition ?? deepestStruct, enclosingArgs, scope.References.MapClrTypeToReferences)
+                    : StructSymbol.ConstructNestedGeneric(deepestStruct.Definition ?? deepestStruct, enclosingArgs, ownArgs, scope.References.MapClrTypeToReferences);
             }
         }
 
@@ -2911,9 +2911,9 @@ public sealed class Binder
         switch (definition)
         {
             case StructSymbol genericStruct when genericStruct.IsGenericDefinition && genericStruct.TypeParameters.Length == typeArgs.Length:
-                return StructSymbol.Construct(genericStruct, typeArgs);
+                return StructSymbol.Construct(genericStruct, typeArgs, scope.References.MapClrTypeToReferences);
             case InterfaceSymbol genericIface when genericIface.IsGenericDefinition && genericIface.TypeParameters.Length == typeArgs.Length:
-                return InterfaceSymbol.Construct(genericIface, typeArgs);
+                return InterfaceSymbol.Construct(genericIface, typeArgs, scope.References.MapClrTypeToReferences);
             case DelegateTypeSymbol genericDelegate when genericDelegate.IsGenericDefinition && genericDelegate.TypeParameters.Length == typeArgs.Length:
                 return DelegateTypeSymbol.Construct(genericDelegate, typeArgs);
             default:
@@ -4212,7 +4212,7 @@ public sealed class Binder
             }
 
             return structChanged
-                ? StructSymbol.Construct(ss.Definition, newStructArgs.MoveToImmutable())
+                ? StructSymbol.Construct(ss.Definition, newStructArgs.MoveToImmutable(), mapClrType)
                 : type;
         }
 
@@ -4228,7 +4228,7 @@ public sealed class Binder
             var newEnclosing = StructSymbol.SubstituteEnclosingArguments(nestedRef, t => SubstituteType(t, substitution, mapClrType));
             if (!newEnclosing.IsDefault)
             {
-                return StructSymbol.ConstructNested(nestedRef.Definition ?? nestedRef, newEnclosing);
+                return StructSymbol.ConstructNested(nestedRef.Definition ?? nestedRef, newEnclosing, mapClrType);
             }
         }
 
@@ -4249,7 +4249,7 @@ public sealed class Binder
             }
 
             return ifaceChanged
-                ? InterfaceSymbol.Construct(ifaceType.Definition, newIfaceArgs.MoveToImmutable())
+                ? InterfaceSymbol.Construct(ifaceType.Definition, newIfaceArgs.MoveToImmutable(), mapClrType)
                 : type;
         }
 
@@ -4309,7 +4309,14 @@ public sealed class Binder
                     }
                     catch (System.ArgumentException)
                     {
-                        // Fall through to the erased constructed form below.
+                        // MakeGenericType can legitimately throw ArgumentException for CLR
+                        // generic constraint reasons (e.g. unmanaged/ref-struct constraints),
+                        // not only cross-reflection-context mismatches, so this is NOT always
+                        // a bug. Log for diagnosability and fall through to the erased
+                        // constructed form so both debug and release builds degrade gracefully
+                        // rather than crash.
+                        var assertMessage = $"Binder.SubstituteType: MakeGenericType failed for '{it.OpenDefinition}' with args [{string.Join(", ", clrArgs.Select(t => t.ToString()))}] even after mapClrType projection.";
+                        System.Diagnostics.Debug.WriteLine(assertMessage);
                     }
                 }
             }

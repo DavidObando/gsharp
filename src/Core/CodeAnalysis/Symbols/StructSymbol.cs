@@ -6,6 +6,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -66,6 +67,14 @@ public sealed class StructSymbol : TypeSymbol
     // parameter (`Middle.Label : T`) surfaces closed regardless of when the map
     // is first computed. Empty for every other symbol.
     private ImmutableArray<TypeParameterSymbol> nestedOwnTypeParameters = ImmutableArray<TypeParameterSymbol>.Empty;
+
+    // Issue #1958: the projector supplied to Construct()/ConstructNested()/
+    // ConstructNestedGeneric(), retained so the (lazily computed, see
+    // GetSubstitutedFields/GetSubstitutedProperties) member substitution can
+    // close constructed-generic member types in the right reflection context.
+    // Null for definitions and for constructed instances built without a
+    // projector (single-context callers; unchanged behavior).
+    private Func<Type, Type> mapClrType;
     private ImmutableArray<FieldSymbol> substitutedFields;
     private ImmutableArray<FieldSymbol> substitutedFieldsSource;
     private bool substitutedFieldsComputed;
@@ -1226,8 +1235,15 @@ public sealed class StructSymbol : TypeSymbol
     /// </summary>
     /// <param name="definition">The generic definition to instantiate. Must have <see cref="IsGenericDefinition"/> true; otherwise returned unchanged.</param>
     /// <param name="typeArguments">The type arguments. Length must match <see cref="TypeParameters"/>.</param>
+    /// <param name="mapClrType">
+    /// Issue #1958: projects a host CLR <see cref="Type"/> into the reflection
+    /// context (typically a <see cref="System.Reflection.MetadataLoadContext"/>) that a
+    /// member's constructed generic CLR type was resolved from, mirroring
+    /// <c>InterfaceSymbol.Construct</c>'s <c>mapClrType</c> (issue #1926 / PR #1956).
+    /// Pass <see langword="null"/> (the default) for single-context callers.
+    /// </param>
     /// <returns>A constructed <see cref="StructSymbol"/> whose <see cref="Definition"/> is the original.</returns>
-    public static StructSymbol Construct(StructSymbol definition, ImmutableArray<TypeSymbol> typeArguments)
+    public static StructSymbol Construct(StructSymbol definition, ImmutableArray<TypeSymbol> typeArguments, Func<Type, Type> mapClrType = null)
     {
         if (definition == null || !definition.IsGenericDefinition)
         {
@@ -1235,7 +1251,7 @@ public sealed class StructSymbol : TypeSymbol
         }
 
         var key = BuildArgsKey(typeArguments);
-        return ConstructedCache.GetOrAdd((definition, key), _ => CreateConstructed(definition, typeArguments));
+        return ConstructedCache.GetOrAdd((definition, key), _ => CreateConstructed(definition, typeArguments, mapClrType));
     }
 
     /// <summary>
@@ -1254,8 +1270,9 @@ public sealed class StructSymbol : TypeSymbol
     /// </summary>
     /// <param name="nestedDefinition">The open nested-type definition (its <see cref="Definition"/> is used).</param>
     /// <param name="enclosingTypeArguments">The flattened enclosing construction arguments in CLR order (outermost first), aligned with <see cref="CollectEnclosingTypeParameters(TypeSymbol)"/>.</param>
+    /// <param name="mapClrType">Issue #1958: see <see cref="Construct(StructSymbol, ImmutableArray{TypeSymbol}, Func{Type, Type})"/>.</param>
     /// <returns>A constructed nested reference, or <paramref name="nestedDefinition"/> unchanged when no enclosing arguments apply.</returns>
-    public static StructSymbol ConstructNested(StructSymbol nestedDefinition, ImmutableArray<TypeSymbol> enclosingTypeArguments)
+    public static StructSymbol ConstructNested(StructSymbol nestedDefinition, ImmutableArray<TypeSymbol> enclosingTypeArguments, Func<Type, Type> mapClrType = null)
     {
         if (nestedDefinition == null || enclosingTypeArguments.IsDefaultOrEmpty)
         {
@@ -1264,7 +1281,7 @@ public sealed class StructSymbol : TypeSymbol
 
         var def = nestedDefinition.Definition ?? nestedDefinition;
         var key = BuildArgsKey(enclosingTypeArguments);
-        return ConstructedNestedCache.GetOrAdd((def, key), _ => CreateConstructedNested(def, enclosingTypeArguments));
+        return ConstructedNestedCache.GetOrAdd((def, key), _ => CreateConstructedNested(def, enclosingTypeArguments, mapClrType));
     }
 
     /// <summary>
@@ -1286,11 +1303,13 @@ public sealed class StructSymbol : TypeSymbol
     /// <param name="nestedDefinition">The open nested-type definition (its <see cref="Definition"/> is used).</param>
     /// <param name="enclosingTypeArguments">The flattened enclosing construction arguments in CLR order (outermost first), aligned with <see cref="CollectEnclosingTypeParameters(TypeSymbol)"/>. May be empty when the enclosing type is open but the nested type carries own arguments.</param>
     /// <param name="ownTypeArguments">The nested type's own type arguments.</param>
+    /// <param name="mapClrType">Issue #1958: see <see cref="Construct(StructSymbol, ImmutableArray{TypeSymbol}, Func{Type, Type})"/>.</param>
     /// <returns>A constructed nested-generic reference, or <paramref name="nestedDefinition"/> unchanged when neither vector applies.</returns>
     public static StructSymbol ConstructNestedGeneric(
         StructSymbol nestedDefinition,
         ImmutableArray<TypeSymbol> enclosingTypeArguments,
-        ImmutableArray<TypeSymbol> ownTypeArguments)
+        ImmutableArray<TypeSymbol> ownTypeArguments,
+        Func<Type, Type> mapClrType = null)
     {
         if (nestedDefinition == null)
         {
@@ -1301,7 +1320,7 @@ public sealed class StructSymbol : TypeSymbol
         // two representations remain reference-equal and share one cache.
         if (ownTypeArguments.IsDefaultOrEmpty)
         {
-            return ConstructNested(nestedDefinition, enclosingTypeArguments);
+            return ConstructNested(nestedDefinition, enclosingTypeArguments, mapClrType);
         }
 
         // No enclosing arguments to thread: this is an ordinary construction of
@@ -1311,7 +1330,7 @@ public sealed class StructSymbol : TypeSymbol
         // arguments substitute exactly as for a top-level generic.
         if (enclosingTypeArguments.IsDefaultOrEmpty)
         {
-            return Construct(nestedDefinition.Definition ?? nestedDefinition, ownTypeArguments);
+            return Construct(nestedDefinition.Definition ?? nestedDefinition, ownTypeArguments, mapClrType);
         }
 
         var def = nestedDefinition.Definition ?? nestedDefinition;
@@ -1319,7 +1338,7 @@ public sealed class StructSymbol : TypeSymbol
         var ownKey = BuildArgsKey(ownTypeArguments);
         return ConstructedNestedGenericCache.GetOrAdd(
             (def, enclosingKey, ownKey),
-            _ => CreateConstructedNestedGeneric(def, enclosingTypeArguments, ownTypeArguments));
+            _ => CreateConstructedNestedGeneric(def, enclosingTypeArguments, ownTypeArguments, mapClrType));
     }
 
     /// <summary>
@@ -1489,7 +1508,7 @@ public sealed class StructSymbol : TypeSymbol
         var builder = ImmutableArray.CreateBuilder<TypeSymbol>(parameters.Length);
         foreach (var p in parameters)
         {
-            builder.Add(SubstituteTypeForConstruction(p.Type, subst));
+            builder.Add(SubstituteTypeForConstruction(p.Type, subst, mapClrType));
         }
 
         return builder.MoveToImmutable();
@@ -1607,7 +1626,7 @@ public sealed class StructSymbol : TypeSymbol
         _ => ImmutableArray<TypeParameterSymbol>.Empty,
     };
 
-    private static StructSymbol CreateConstructed(StructSymbol definition, ImmutableArray<TypeSymbol> typeArguments)
+    private static StructSymbol CreateConstructed(StructSymbol definition, ImmutableArray<TypeSymbol> typeArguments, Func<Type, Type> mapClrType)
     {
         var subst = new Dictionary<TypeParameterSymbol, TypeSymbol>(definition.TypeParameters.Length);
         for (var i = 0; i < definition.TypeParameters.Length; i++)
@@ -1618,7 +1637,7 @@ public sealed class StructSymbol : TypeSymbol
         var substitutedFields = ImmutableArray.CreateBuilder<FieldSymbol>(definition.Fields.Length);
         foreach (var f in definition.Fields)
         {
-            substitutedFields.Add(new FieldSymbol(f.Name, SubstituteTypeForConstruction(f.Type, subst), f.Accessibility));
+            substitutedFields.Add(new FieldSymbol(f.Name, SubstituteTypeForConstruction(f.Type, subst, mapClrType), f.Accessibility));
         }
 
         var substitutedPrimary = ImmutableArray<ParameterSymbol>.Empty;
@@ -1627,7 +1646,7 @@ public sealed class StructSymbol : TypeSymbol
             var b = ImmutableArray.CreateBuilder<ParameterSymbol>(definition.PrimaryConstructorParameters.Length);
             foreach (var p in definition.PrimaryConstructorParameters)
             {
-                b.Add(new ParameterSymbol(p.Name, SubstituteTypeForConstruction(p.Type, subst), isVariadic: p.IsVariadic, isScoped: p.IsScoped));
+                b.Add(new ParameterSymbol(p.Name, SubstituteTypeForConstruction(p.Type, subst, mapClrType), isVariadic: p.IsVariadic, isScoped: p.IsScoped));
             }
 
             substitutedPrimary = b.MoveToImmutable();
@@ -1648,12 +1667,13 @@ public sealed class StructSymbol : TypeSymbol
 
         constructed.Definition = definition;
         constructed.TypeArguments = typeArguments;
+        constructed.mapClrType = mapClrType;
         if (!definition.Interfaces.IsDefaultOrEmpty)
         {
             var substitutedIfaces = ImmutableArray.CreateBuilder<InterfaceSymbol>(definition.Interfaces.Length);
             foreach (var iface in definition.Interfaces)
             {
-                substitutedIfaces.Add((InterfaceSymbol)SubstituteTypeForConstruction(iface, subst));
+                substitutedIfaces.Add((InterfaceSymbol)SubstituteTypeForConstruction(iface, subst, mapClrType));
             }
 
             constructed.SetInterfaces(substitutedIfaces.MoveToImmutable());
@@ -1668,7 +1688,7 @@ public sealed class StructSymbol : TypeSymbol
             var substitutedClrIfaces = ImmutableArray.CreateBuilder<TypeSymbol>(definition.ImplementedClrInterfaces.Length);
             foreach (var iface in definition.ImplementedClrInterfaces)
             {
-                substitutedClrIfaces.Add(SubstituteTypeForConstruction(iface, subst));
+                substitutedClrIfaces.Add(SubstituteTypeForConstruction(iface, subst, mapClrType));
             }
 
             constructed.SetImplementedClrInterfaces(substitutedClrIfaces.MoveToImmutable());
@@ -1720,7 +1740,7 @@ public sealed class StructSymbol : TypeSymbol
     // definition and substitute lazily against that map, so a field/property/
     // return of the nested type whose type is an enclosing parameter surfaces
     // closed (e.g. `Tag.V : int32` on `Box[int32].Tag`).
-    private static StructSymbol CreateConstructedNested(StructSymbol definition, ImmutableArray<TypeSymbol> enclosingTypeArguments)
+    private static StructSymbol CreateConstructedNested(StructSymbol definition, ImmutableArray<TypeSymbol> enclosingTypeArguments, Func<Type, Type> mapClrType)
     {
         var constructed = new StructSymbol(
             definition.Name,
@@ -1737,6 +1757,7 @@ public sealed class StructSymbol : TypeSymbol
 
         constructed.Definition = definition;
         constructed.EnclosingTypeArguments = enclosingTypeArguments;
+        constructed.mapClrType = mapClrType;
         constructed.ContainingType = definition.ContainingType;
         constructed.SetInterfaces(definition.Interfaces);
         if (!definition.ImplementedClrInterfaces.IsDefaultOrEmpty)
@@ -1766,7 +1787,8 @@ public sealed class StructSymbol : TypeSymbol
     private static StructSymbol CreateConstructedNestedGeneric(
         StructSymbol definition,
         ImmutableArray<TypeSymbol> enclosingTypeArguments,
-        ImmutableArray<TypeSymbol> ownTypeArguments)
+        ImmutableArray<TypeSymbol> ownTypeArguments,
+        Func<Type, Type> mapClrType)
     {
         var constructed = new StructSymbol(
             definition.Name,
@@ -1784,6 +1806,7 @@ public sealed class StructSymbol : TypeSymbol
         constructed.Definition = definition;
         constructed.TypeArguments = ownTypeArguments;
         constructed.EnclosingTypeArguments = enclosingTypeArguments;
+        constructed.mapClrType = mapClrType;
 
         // Capture the nested type's own type parameters BEFORE the emitter
         // re-ordinalizes the nested TypeDef over the flattened enclosing+own
@@ -1881,7 +1904,7 @@ public sealed class StructSymbol : TypeSymbol
             var builder = ImmutableArray.CreateBuilder<FieldSymbol>(source.Length);
             foreach (var f in source)
             {
-                var newType = SubstituteTypeForConstruction(f.Type, subst);
+                var newType = SubstituteTypeForConstruction(f.Type, subst, mapClrType);
                 builder.Add(ReferenceEquals(newType, f.Type)
                     ? f
                     : new FieldSymbol(f.Name, newType, f.Accessibility));
@@ -1907,7 +1930,7 @@ public sealed class StructSymbol : TypeSymbol
             return substitutedProperties;
         }
 
-        var result = SubstituteProperties(source, GetSubstitutionMap());
+        var result = SubstituteProperties(source, GetSubstitutionMap(), mapClrType);
         substitutedProperties = result;
         substitutedPropertiesSource = source;
         substitutedPropertiesComputed = true;
@@ -1925,7 +1948,7 @@ public sealed class StructSymbol : TypeSymbol
             return substitutedStaticProperties;
         }
 
-        var result = SubstituteProperties(source, GetSubstitutionMap());
+        var result = SubstituteProperties(source, GetSubstitutionMap(), mapClrType);
         substitutedStaticProperties = result;
         substitutedStaticPropertiesSource = source;
         substitutedStaticPropertiesComputed = true;
@@ -1934,7 +1957,8 @@ public sealed class StructSymbol : TypeSymbol
 
     private static ImmutableArray<PropertySymbol> SubstituteProperties(
         ImmutableArray<PropertySymbol> properties,
-        Dictionary<TypeParameterSymbol, TypeSymbol> subst)
+        Dictionary<TypeParameterSymbol, TypeSymbol> subst,
+        Func<Type, Type> mapClrType)
     {
         if (properties.IsDefaultOrEmpty)
         {
@@ -1944,7 +1968,7 @@ public sealed class StructSymbol : TypeSymbol
         var builder = ImmutableArray.CreateBuilder<PropertySymbol>(properties.Length);
         foreach (var p in properties)
         {
-            var newType = SubstituteTypeForConstruction(p.Type, subst);
+            var newType = SubstituteTypeForConstruction(p.Type, subst, mapClrType);
 
             var newParams = p.Parameters;
             var paramsChanged = false;
@@ -1953,7 +1977,7 @@ public sealed class StructSymbol : TypeSymbol
                 var pb = ImmutableArray.CreateBuilder<ParameterSymbol>(p.Parameters.Length);
                 foreach (var par in p.Parameters)
                 {
-                    var st = SubstituteTypeForConstruction(par.Type, subst);
+                    var st = SubstituteTypeForConstruction(par.Type, subst, mapClrType);
                     paramsChanged |= !ReferenceEquals(st, par.Type);
                     pb.Add(new ParameterSymbol(par.Name, st, isVariadic: par.IsVariadic, isScoped: par.IsScoped));
                 }
@@ -2084,7 +2108,7 @@ public sealed class StructSymbol : TypeSymbol
     private static ImmutableArray<ParameterSymbol> CallableParametersOf(FunctionSymbol method)
         => method.ExplicitReceiverParameter == null ? method.Parameters : method.Parameters.RemoveAt(0);
 
-    private static TypeSymbol SubstituteTypeForConstruction(TypeSymbol type, Dictionary<TypeParameterSymbol, TypeSymbol> subst)
+    private static TypeSymbol SubstituteTypeForConstruction(TypeSymbol type, Dictionary<TypeParameterSymbol, TypeSymbol> subst, Func<Type, Type> mapClrType = null)
     {
         if (type is TypeParameterSymbol tp)
         {
@@ -2105,13 +2129,13 @@ public sealed class StructSymbol : TypeSymbol
             var structChanged = false;
             for (var i = 0; i < ss.TypeArguments.Length; i++)
             {
-                var substituted = SubstituteTypeForConstruction(ss.TypeArguments[i], subst);
+                var substituted = SubstituteTypeForConstruction(ss.TypeArguments[i], subst, mapClrType);
                 substitutedStructArgs.Add(substituted);
                 structChanged |= !ReferenceEquals(substituted, ss.TypeArguments[i]);
             }
 
             return structChanged
-                ? StructSymbol.Construct(ss.Definition, substitutedStructArgs.MoveToImmutable())
+                ? StructSymbol.Construct(ss.Definition, substitutedStructArgs.MoveToImmutable(), mapClrType)
                 : type;
         }
 
@@ -2123,10 +2147,10 @@ public sealed class StructSymbol : TypeSymbol
         // distinct from the constructed-generic branch above.
         if (type is StructSymbol nestedRef && nestedRef.TypeArguments.IsDefaultOrEmpty)
         {
-            var newEnclosing = SubstituteEnclosingArguments(nestedRef, t => SubstituteTypeForConstruction(t, subst));
+            var newEnclosing = SubstituteEnclosingArguments(nestedRef, t => SubstituteTypeForConstruction(t, subst, mapClrType));
             if (!newEnclosing.IsDefault)
             {
-                return ConstructNested(nestedRef.Definition ?? nestedRef, newEnclosing);
+                return ConstructNested(nestedRef.Definition ?? nestedRef, newEnclosing, mapClrType);
             }
         }
 
@@ -2136,7 +2160,7 @@ public sealed class StructSymbol : TypeSymbol
             var changed = false;
             for (var i = 0; i < iface.TypeArguments.Length; i++)
             {
-                var substituted = SubstituteTypeForConstruction(iface.TypeArguments[i], subst);
+                var substituted = SubstituteTypeForConstruction(iface.TypeArguments[i], subst, mapClrType);
                 substitutedArgs.Add(substituted);
                 changed |= !ReferenceEquals(substituted, iface.TypeArguments[i]);
             }
@@ -2146,7 +2170,7 @@ public sealed class StructSymbol : TypeSymbol
                 return iface;
             }
 
-            return InterfaceSymbol.Construct(iface.Definition, substitutedArgs.MoveToImmutable());
+            return InterfaceSymbol.Construct(iface.Definition, substitutedArgs.MoveToImmutable(), mapClrType);
         }
 
         if (type is ImportedTypeSymbol imported
@@ -2157,7 +2181,7 @@ public sealed class StructSymbol : TypeSymbol
             var changed = false;
             for (var i = 0; i < imported.TypeArguments.Length; i++)
             {
-                var substituted = SubstituteTypeForConstruction(imported.TypeArguments[i], subst);
+                var substituted = SubstituteTypeForConstruction(imported.TypeArguments[i], subst, mapClrType);
                 substitutedArgs.Add(substituted);
                 changed |= !ReferenceEquals(substituted, imported.TypeArguments[i]);
             }
@@ -2167,10 +2191,17 @@ public sealed class StructSymbol : TypeSymbol
                 return imported;
             }
 
+            // Issue #1958: project each resolved CLR arg into the same
+            // reflection context as `imported.OpenDefinition` before calling
+            // MakeGenericType — mirrors InterfaceSymbol.SubstituteType's
+            // mapClrType fix. Without this, a raw host CLR type mixed with an
+            // MLC-resolved open definition throws ArgumentException and
+            // silently erases the substitution.
             var resolvedClrArgs = new System.Type[substitutedArgs.Count];
             for (var i = 0; i < substitutedArgs.Count; i++)
             {
-                resolvedClrArgs[i] = substitutedArgs[i].ClrType ?? typeof(object);
+                var clr = substitutedArgs[i].ClrType ?? typeof(object);
+                resolvedClrArgs[i] = mapClrType != null ? mapClrType(clr) : clr;
             }
 
             try
@@ -2180,25 +2211,33 @@ public sealed class StructSymbol : TypeSymbol
             }
             catch (ArgumentException)
             {
+                // MakeGenericType can legitimately throw ArgumentException for CLR
+                // generic constraint reasons (e.g. unmanaged/ref-struct constraints),
+                // not only cross-reflection-context mismatches, so this is NOT always
+                // a bug. Log for diagnosability and fall back to the erased
+                // constructed form so both debug and release builds degrade
+                // gracefully rather than crash.
+                var assertMessage = $"StructSymbol.SubstituteTypeForConstruction: MakeGenericType failed for '{imported.OpenDefinition}' with args [{string.Join(", ", resolvedClrArgs.Select(t => t.ToString()))}] even after mapClrType projection.";
+                System.Diagnostics.Debug.WriteLine(assertMessage);
                 return imported;
             }
         }
 
         if (type is NullableTypeSymbol n)
         {
-            var inner = SubstituteTypeForConstruction(n.UnderlyingType, subst);
+            var inner = SubstituteTypeForConstruction(n.UnderlyingType, subst, mapClrType);
             return ReferenceEquals(inner, n.UnderlyingType) ? type : NullableTypeSymbol.Get(inner);
         }
 
         if (type is SliceTypeSymbol s)
         {
-            var inner = SubstituteTypeForConstruction(s.ElementType, subst);
+            var inner = SubstituteTypeForConstruction(s.ElementType, subst, mapClrType);
             return ReferenceEquals(inner, s.ElementType) ? type : SliceTypeSymbol.Get(inner);
         }
 
         if (type is ArrayTypeSymbol a)
         {
-            var inner = SubstituteTypeForConstruction(a.ElementType, subst);
+            var inner = SubstituteTypeForConstruction(a.ElementType, subst, mapClrType);
             return ReferenceEquals(inner, a.ElementType) ? type : ArrayTypeSymbol.Get(inner, a.Length);
         }
 
@@ -2208,8 +2247,8 @@ public sealed class StructSymbol : TypeSymbol
         // `map[int32, string]` on the constructed instantiation.
         if (type is MapTypeSymbol map)
         {
-            var substKey = SubstituteTypeForConstruction(map.KeyType, subst);
-            var substValue = SubstituteTypeForConstruction(map.ValueType, subst);
+            var substKey = SubstituteTypeForConstruction(map.KeyType, subst, mapClrType);
+            var substValue = SubstituteTypeForConstruction(map.ValueType, subst, mapClrType);
             return ReferenceEquals(substKey, map.KeyType) && ReferenceEquals(substValue, map.ValueType)
                 ? type
                 : MapTypeSymbol.Get(substKey, substValue);
@@ -2228,7 +2267,7 @@ public sealed class StructSymbol : TypeSymbol
             var delegateChanged = false;
             for (var i = 0; i < del.TypeArguments.Length; i++)
             {
-                var substituted = SubstituteTypeForConstruction(del.TypeArguments[i], subst);
+                var substituted = SubstituteTypeForConstruction(del.TypeArguments[i], subst, mapClrType);
                 substitutedDelegateArgs.Add(substituted);
                 delegateChanged |= !ReferenceEquals(substituted, del.TypeArguments[i]);
             }
@@ -2248,12 +2287,12 @@ public sealed class StructSymbol : TypeSymbol
             var changed = false;
             for (var i = 0; i < fn.ParameterTypes.Length; i++)
             {
-                var substituted = SubstituteTypeForConstruction(fn.ParameterTypes[i], subst);
+                var substituted = SubstituteTypeForConstruction(fn.ParameterTypes[i], subst, mapClrType);
                 substitutedParams.Add(substituted);
                 changed |= !ReferenceEquals(substituted, fn.ParameterTypes[i]);
             }
 
-            var substitutedReturn = SubstituteTypeForConstruction(fn.ReturnType, subst);
+            var substitutedReturn = SubstituteTypeForConstruction(fn.ReturnType, subst, mapClrType);
             changed |= !ReferenceEquals(substitutedReturn, fn.ReturnType);
 
             if (!changed)
