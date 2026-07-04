@@ -10,16 +10,21 @@ namespace Corpus.Grid10.Constructs
     {
         public static async Task RunAsync()
         {
-            // NOTE: an explicit Task<int>[] array literal is avoided on purpose —
-            // the generic-element array creation (`new Task<int>[] { ... }`) is a
-            // separate construct that currently fails G# round-trip parsing
-            // (GS0005 on `[]Task[int32]{...}`). WhenAll's params form still
-            // exercises the deterministic composition.
-            Task<int> first = Task.FromResult(1);
-            Task<int> second = Task.FromResult(4);
-            Task<int> third = Task.FromResult(9);
+            // Issue #1924 (resolved): the generic-element array creation
+            // (`new Task<int>[] { ... }`) previously failed G# round-trip
+            // parsing (GS0005 on `[]Task[int32]{...}`) because the array-of-
+            // generic-element-type literal only handled a bare identifier
+            // element and had no way to consume the element's own
+            // type-argument list. Now exercised directly alongside WhenAll's
+            // params form.
+            Task<int>[] tasks = new Task<int>[]
+            {
+                Task.FromResult(1),
+                Task.FromResult(4),
+                Task.FromResult(9),
+            };
 
-            int[] results = await Task.WhenAll(first, second, third);
+            int[] results = await Task.WhenAll(tasks);
             int total = 0;
             for (int i = 0; i < results.Length; i++)
             {
