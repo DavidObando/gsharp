@@ -116,12 +116,10 @@ internal sealed partial class MethodBodyEmitter
         // when the source shape needs symbolic encoding, take the reified
         // Invoke / .ctor MemberRefs parented at the `Func<UserType>` TypeSpec
         // rather than reflecting over the type-erased `Func<object>`.
-        this.EmitExpression(source);
-        this.il.OpCode(ILOpCode.Dup);
-        this.il.OpCode(ILOpCode.Ldvirtftn);
+        EntityHandle invokeRef;
         if (sourceNeedsSymbolic)
         {
-            this.il.Token(this.outer.GetFunctionDelegateInvokeRef(sourceFn));
+            invokeRef = this.outer.GetFunctionDelegateInvokeRef(sourceFn);
         }
         else
         {
@@ -129,13 +127,48 @@ internal sealed partial class MethodBodyEmitter
             var sourceInvoke = sourceDelegateType.GetMethod("Invoke")
                 ?? throw new InvalidOperationException(
                     $"Delegate type '{sourceDelegateType.FullName}' has no Invoke method.");
-            this.il.Token(this.outer.GetMethodReference(sourceInvoke));
+            invokeRef = this.outer.GetMethodReference(sourceInvoke);
         }
 
-        this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(sourceNeedsSymbolic
+        var ctorRef = sourceNeedsSymbolic
             ? this.outer.GetFunctionDelegateCtorRef(sourceFn)
-            : this.outer.GetDelegateCtorReference(targetDelegateType));
+            : (EntityHandle)this.outer.GetDelegateCtorReference(targetDelegateType);
+
+        this.EmitNullGuardedDelegateToDelegateAdaptation(source, invokeRef, ctorRef);
+    }
+
+    /// <summary>
+    /// Issue #2066: emits the shared <c>dup / ldvirtftn / newobj</c>
+    /// delegate-to-delegate adaptation sequence, guarded so a <c>null</c>
+    /// source (e.g. an unsubscribed field-like event snapshotted into a
+    /// function/delegate-typed local) flows through as <c>null</c> instead of
+    /// unconditionally rebuilding a delegate. Without the guard, `ldvirtftn`
+    /// resolves the (non-null) Invoke method pointer even over a `null`
+    /// instance reference, and the subsequent `newobj` then throws
+    /// <see cref="ArgumentException"/> at runtime ("Delegate to an instance
+    /// method cannot have null 'this'") because the CLR delegate ctor
+    /// requires a non-null target for an instance-method pointer.
+    /// </summary>
+    private void EmitNullGuardedDelegateToDelegateAdaptation(BoundExpression source, EntityHandle invokeRef, EntityHandle ctorRef)
+    {
+        this.EmitExpression(source);
+        this.il.OpCode(ILOpCode.Dup);
+        var notNullLabel = this.il.DefineLabel();
+        var doneLabel = this.il.DefineLabel();
+        this.il.Branch(ILOpCode.Brtrue, notNullLabel);
+
+        // Null path: the single remaining copy on the stack (consumed by the
+        // `brtrue` check above) is already `null`, which is a valid value of
+        // the target delegate type — nothing further to emit.
+        this.il.Branch(ILOpCode.Br, doneLabel);
+
+        this.il.MarkLabel(notNullLabel);
+        this.il.OpCode(ILOpCode.Dup);
+        this.il.OpCode(ILOpCode.Ldvirtftn);
+        this.il.Token(invokeRef);
+        this.il.OpCode(ILOpCode.Newobj);
+        this.il.Token(ctorRef);
+        this.il.MarkLabel(doneLabel);
     }
 
     /// <summary>
@@ -166,7 +199,9 @@ internal sealed partial class MethodBodyEmitter
 
         // Delegate-to-delegate adaptation (CLR delegate value → named
         // delegate): wrap the source delegate's Invoke in a new named
-        // delegate instance using `dup; ldvirtftn; newobj`.
+        // delegate instance using `dup; ldvirtftn; newobj`. Issue #2066:
+        // null-guarded via EmitNullGuardedDelegateToDelegateAdaptation so an
+        // unsubscribed (null) source flows through as null.
         if (sourceFn?.ClrType != null && ClrTypeUtilities.IsDelegateType(sourceFn.ClrType))
         {
             var sourceDelegateType = this.outer.ResolveDelegateClrType(sourceFn);
@@ -174,12 +209,7 @@ internal sealed partial class MethodBodyEmitter
                 ?? throw new InvalidOperationException(
                     $"Delegate type '{sourceDelegateType.FullName}' has no Invoke method.");
 
-            this.EmitExpression(source);
-            this.il.OpCode(ILOpCode.Dup);
-            this.il.OpCode(ILOpCode.Ldvirtftn);
-            this.il.Token(this.outer.GetMethodReference(sourceInvoke));
-            this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(ctorHandle);
+            this.EmitNullGuardedDelegateToDelegateAdaptation(source, this.outer.GetMethodReference(sourceInvoke), ctorHandle);
             return;
         }
 
