@@ -5719,14 +5719,14 @@ internal sealed class OverloadResolver
 
     public BoundExpression BindUserInstanceCall(BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, ImmutableArray<string> argumentNames = default, TypeParameterSymbol constrainedReceiverTypeParameter = null)
     {
-        // Issue #950: enforce `protected` method access — only the declaring
-        // type and its derived types may call it. The emitted IL also carries
-        // CIL `family` accessibility so the CLR enforces the same rule.
-        if (method.Accessibility == Accessibility.Protected
-            && method.ReceiverType is StructSymbol protMethodDeclaringType
-            && !AccessibilityChecker.IsAccessible(method.Accessibility, protMethodDeclaringType, getCurrentFunction()))
+        // Issue #950 / #2058: enforce `protected`/`private` method access —
+        // only the declaring type (and, for `protected`, its derived types)
+        // may call it. The emitted IL also carries the matching CIL
+        // accessibility so the CLR enforces the same rule.
+        if (method.ReceiverType is StructSymbol methodDeclaringType
+            && !AccessibilityChecker.IsAccessible(method.Accessibility, methodDeclaringType, getCurrentFunction()))
         {
-            Diagnostics.ReportProtectedMemberInaccessible(ce.Identifier.Location, method.Name, protMethodDeclaringType.Name);
+            Diagnostics.ReportMemberInaccessible(ce.Identifier.Location, method.Name, methodDeclaringType.Name, method.Accessibility);
         }
 
         var parameterOffset = method.ExplicitReceiverParameter == null ? 0 : 1;
