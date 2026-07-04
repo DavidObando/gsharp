@@ -8028,7 +8028,21 @@ public class Parser
         // non-identifier type clause (`[][]int32{ … }`, `[]*int32{ … }`, …).
         // Parse the element recursively when the token after `]` does not begin
         // a plain identifier element; otherwise keep the flat identifier form.
-        if (Current.Kind != SyntaxKind.IdentifierToken)
+        //
+        // Issue #1924: an array-of-generic literal (`[]Task[int32]{ … }`) or an
+        // array of a dotted/qualified named type (`[]Outer.Inner{ … }`) also
+        // needs the recursive `ParseTypeClause()` route — the flat identifier
+        // fast path below has no way to consume a trailing `[T, ...]`
+        // type-argument list or a `.Member` qualifier tail. `TryScanTypeClause`
+        // (used by the expression-position generic-call/index disambiguation)
+        // already parses these composite shapes in TYPE position, so the same
+        // `[` / `.` lookahead used there disambiguates here too — a `[` or `.`
+        // right after the element identifier can only start a type-argument
+        // list or dotted-name tail in this array-element-type position, never
+        // an index or member-access expression.
+        if (Current.Kind != SyntaxKind.IdentifierToken
+            || Peek(1).Kind == SyntaxKind.OpenSquareBracketToken
+            || Peek(1).Kind == SyntaxKind.DotToken)
         {
             var nestedElementType = ParseTypeClause();
             var (nestedOpenBrace, nestedElements, nestedCloseBrace, nestedHasElements) = ParseOptionalArrayInitializer();
