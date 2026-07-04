@@ -62,6 +62,24 @@ public sealed class CSharpTypeMapper
             return new NamedTypeReference(UnsupportedPlaceholderType);
         }
 
+        // Issue #1894: `System.Index`/`System.Range` have no canonical G# value
+        // type. G#'s own `^n`/`a..b` syntax exists only as bracket-scoped index
+        // sugar (gsc's Parser.ParseIndexBound) that lowers directly against the
+        // collection it indexes — there is no reusable value carrying from-end
+        // semantics. Mapping the type through as a bare name would let a local,
+        // parameter, field, or return type of type Index/Range compile and then
+        // silently misbehave at runtime (a stored `^n` re-parses elsewhere as
+        // one's-complement, not from-end). Gap loudly instead.
+        if (IsSystemIndexOrRange(type))
+        {
+            context.Report(new TranslationDiagnostic(
+                type.Name,
+                $"'System.{type.Name}' has no canonical G# type: G# has no reusable from-end index/range value, only bracket-scoped '^n'/'a..b' sugar, so a {type.Name}-typed local/parameter/field/return cannot carry from-end semantics correctly (issue #1894).",
+                location,
+                TranslationSeverity.Unsupported));
+            return new NamedTypeReference(UnsupportedPlaceholderType);
+        }
+
         // A C# unsafe pointer type (`T*`, `void*`) maps to the canonical G#
         // PREFIX pointer form `*T` (spec §"Byref/pointer syntax exists as
         // `*T`"; grammar `'*' TypeClause '?'?`). A `void*` (no element type)
@@ -121,6 +139,17 @@ public sealed class CSharpTypeMapper
         GTypeReference mapped = this.MapCore(type, context, location);
         return nullableReference ? WithNullable(mapped, true) : mapped;
     }
+
+    /// <summary>
+    /// Issue #1894: whether <paramref name="type"/> is the BCL <c>System.Index</c>
+    /// or <c>System.Range</c> struct — the two from-end-indexing value types that
+    /// have no canonical G# representation (see <see cref="MapCore"/>).
+    /// </summary>
+    /// <param name="type">The C# type symbol to check.</param>
+    /// <returns><see langword="true"/> when <paramref name="type"/> is <c>System.Index</c> or <c>System.Range</c>.</returns>
+    internal static bool IsSystemIndexOrRange(ITypeSymbol type) =>
+        type is INamedTypeSymbol { ContainingNamespace.Name: "System", ContainingNamespace.ContainingNamespace.IsGlobalNamespace: true } named
+            && (named.Name == "Index" || named.Name == "Range");
 
     private static GTypeReference WithNullable(GTypeReference reference, bool isNullable)
     {
