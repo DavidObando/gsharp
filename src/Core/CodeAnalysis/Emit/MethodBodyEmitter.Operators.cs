@@ -152,6 +152,21 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #2023: checked integral negation (`-x` where x could be the
+        // type's MinValue) must trap on overflow, matching #1881's checked
+        // Sum/Difference/Product. Roslyn's own approach is followed: lower
+        // `-x` to `0 - x` and emit it via the same overflow-trapping `sub.ovf`
+        // used for checked binary subtraction, rather than the plain `neg`
+        // opcode (whose 2's-complement semantics silently wrap MinValue back
+        // to itself). This must happen *before* the generic
+        // `this.EmitExpression(u.Operand)` below because the constant `0`
+        // has to be pushed first.
+        if (u.Op.Kind == BoundUnaryOperatorKind.Negation && u.IsChecked && IsIntegralNegationOperand(u.Op.OperandType))
+        {
+            this.EmitCheckedIntegralNegation(u);
+            return;
+        }
+
         this.EmitExpression(u.Operand);
         switch (u.Op.Kind)
         {
@@ -185,6 +200,65 @@ internal sealed partial class MethodBodyEmitter
             || u.Op.Kind == BoundUnaryOperatorKind.Negation)
         {
             EmitSubI4Truncation(u.Op.Type);
+        }
+    }
+
+    /// <summary>
+    /// Issue #2023: true when <paramref name="operandType"/> is one of the
+    /// signed integral primitives that unary negation (ADR-0044) is defined
+    /// over — the only shapes where a checked context can observe overflow
+    /// (floating-point negation never traps: IEEE 754 negation is exact, and
+    /// <see cref="TypeSymbol.Decimal"/> negation is handled by
+    /// <c>decimal.op_UnaryNegation</c>, which is symmetric around zero and
+    /// never overflows either).
+    /// </summary>
+    private static bool IsIntegralNegationOperand(TypeSymbol operandType) =>
+        operandType == TypeSymbol.Int8
+        || operandType == TypeSymbol.Int16
+        || operandType == TypeSymbol.Int32
+        || operandType == TypeSymbol.Int64
+        || operandType == TypeSymbol.NInt;
+
+    /// <summary>
+    /// Issue #2023: emits <c>checked(0 - x)</c> for an integral unary
+    /// negation bound inside a <c>checked(...)</c>/<c>checked { }</c>
+    /// context. The constant zero is pushed first (per ECMA-335 III.3.62's
+    /// binary-numeric-operator table an <c>int32</c> literal freely combines
+    /// with an <c>int32</c>-, sub-<c>int32</c>-, or native-int-typed value —
+    /// only <c>int64</c> requires the widened <c>int64</c> zero), then the
+    /// operand, then <c>sub.ovf</c> (never the <c>.un</c> variant: negation is
+    /// only ever defined over the signed integral primitives). For the
+    /// sub-<c>int32</c> operand widths (<c>sbyte</c>/<c>short</c>) the CLR
+    /// promotes both operands to <c>int32</c> before subtracting, so
+    /// <c>sub.ovf</c> alone cannot observe the exact-<c>MinValue</c>
+    /// overflow (e.g. <c>0 - sbyte.MinValue</c> == 128, which fits an
+    /// <c>int32</c> comfortably); a checked narrowing conversion
+    /// (<c>conv.ovf.i1</c>/<c>conv.ovf.i2</c>) back to the operand's own
+    /// width closes that gap, mirroring how checked narrowing conversions
+    /// (issue #1881) already trap the same shape.
+    /// </summary>
+    private void EmitCheckedIntegralNegation(BoundUnaryExpression u)
+    {
+        var operandType = u.Op.OperandType;
+        if (operandType == TypeSymbol.Int64)
+        {
+            this.il.LoadConstantI8(0);
+        }
+        else
+        {
+            this.il.LoadConstantI4(0);
+        }
+
+        this.EmitExpression(u.Operand);
+        this.il.OpCode(ILOpCode.Sub_ovf);
+
+        if (operandType == TypeSymbol.Int8)
+        {
+            this.il.OpCode(ILOpCode.Conv_ovf_i1);
+        }
+        else if (operandType == TypeSymbol.Int16)
+        {
+            this.il.OpCode(ILOpCode.Conv_ovf_i2);
         }
     }
 

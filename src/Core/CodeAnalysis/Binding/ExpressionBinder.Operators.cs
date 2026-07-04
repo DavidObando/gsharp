@@ -112,7 +112,14 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        return new BoundUnaryExpression(null, boundOperator, boundOperand);
+        // Issue #2023: unary negation on an integral operand bound inside a
+        // `checked` context traps on overflow (e.g. `checked(-int.MinValue)`),
+        // mirroring #1881's checked Sum/Difference/Product. Mirroring
+        // BoundBinaryExpression, the flag is threaded unconditionally from
+        // the current checked/unchecked context; every operator kind other
+        // than Negation (and Negation over float/double/decimal, which never
+        // overflows) simply ignores it downstream.
+        return new BoundUnaryExpression(null, boundOperator, boundOperand, binderCtx.IsCheckedContext);
     }
 
     /// <summary>ADR-0039: Binds <c>&amp;expr</c> — takes managed pointer to an lvalue.</summary>
