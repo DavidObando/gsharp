@@ -452,16 +452,23 @@ internal sealed partial class ExpressionBinder
     // just like the bare struct/enum case. Symbol-based detection (not
     // ClrType.IsValueType, which is null for in-flight user types) is
     // required to recognize it below.
+    //
+    // Issue #2030: a bare or nullable-wrapped open type parameter (e.g.
+    // `await` on a `Task[U]` produced by calling another generic async
+    // function from within a generic caller) reaches here the same way —
+    // its `ClrType` is erased to `object`, just like a same-compilation
+    // struct/enum. Build the symbolic awaiter type (`TaskAwaiter[U]`) so the
+    // emitted awaiter pool field and `GetAwaiter()`/`GetResult()` call sites
+    // agree on `!!0`/`!0` instead of the erased `object`.
     private static bool IsAwaiterTypeArgumentCandidate(TypeSymbol a) =>
-        a is StructSymbol or InterfaceSymbol or EnumSymbol
-        || (a is NullableTypeSymbol nt && nt.UnderlyingType is StructSymbol or InterfaceSymbol or EnumSymbol);
+        a is StructSymbol or InterfaceSymbol or EnumSymbol or TypeParameterSymbol
+        || (a is NullableTypeSymbol nt && nt.UnderlyingType is StructSymbol or InterfaceSymbol or EnumSymbol or TypeParameterSymbol);
 
     private static TypeSymbol TryGetAwaiterTypeSymbol(TypeSymbol awaitableType)
     {
         if (awaitableType is not ImportedTypeSymbol importedAwaitable
             || importedAwaitable.OpenDefinition == null
             || importedAwaitable.TypeArguments.IsDefaultOrEmpty
-            || importedAwaitable.HasTypeParameterArgument
             || !importedAwaitable.TypeArguments.Any(IsAwaiterTypeArgumentCandidate))
         {
             return null;

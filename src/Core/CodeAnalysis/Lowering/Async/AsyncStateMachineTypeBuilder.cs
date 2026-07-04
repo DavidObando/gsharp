@@ -115,8 +115,8 @@ public static class AsyncStateMachineTypeBuilder
         sm.StateField = stateField;
 
         var builderFieldType = TypeSymbol.FromClrType(builderInfo.BuilderType);
-        if ((kickoff.Type is StructSymbol or InterfaceSymbol or EnumSymbol
-                || (kickoff.Type is NullableTypeSymbol nullableUserVt3 && nullableUserVt3.UnderlyingType is StructSymbol or InterfaceSymbol or EnumSymbol))
+        if ((kickoff.Type is StructSymbol or InterfaceSymbol or EnumSymbol or TypeParameterSymbol
+                || (kickoff.Type is NullableTypeSymbol nullableUserVt3 && nullableUserVt3.UnderlyingType is StructSymbol or InterfaceSymbol or EnumSymbol or TypeParameterSymbol))
             && builderInfo.BuilderType is { IsConstructedGenericType: true } builderClrType)
         {
             builderFieldType = ImportedTypeSymbol.GetConstructed(
@@ -244,8 +244,19 @@ public static class AsyncStateMachineTypeBuilder
                 // and falls through. Erase to `object` the same way the bare
                 // struct/enum case does, using symbol-based detection instead
                 // of the null ClrType.
-                if (kickoff.Type is StructSymbol or InterfaceSymbol or EnumSymbol
-                    || (kickoff.Type is NullableTypeSymbol nullableUserVt2 && nullableUserVt2.UnderlyingType is StructSymbol or InterfaceSymbol or EnumSymbol))
+                //
+                // Issue #2030 (gap 1): a bare or nullable-wrapped open method
+                // type parameter (`U` / `U?`) has no `ClrType` either — it
+                // reaches here the same way. Erase to `object` too, so the
+                // reflection-only pipeline below can still resolve a
+                // `Task<object>` / `AsyncTaskMethodBuilder<object>` shape to
+                // discover the builder's members (Create/Start/SetResult/…).
+                // The SM's actual field/return type is re-widened to the real
+                // open type parameter afterward (see the `builderFieldType`
+                // override in `Build` and `ResultTypeSymbol`), so the emitted
+                // IL still carries `!!0`/`!0`, not `object`.
+                if (kickoff.Type is StructSymbol or InterfaceSymbol or EnumSymbol or TypeParameterSymbol
+                    || (kickoff.Type is NullableTypeSymbol nullableUserVt2 && nullableUserVt2.UnderlyingType is StructSymbol or InterfaceSymbol or EnumSymbol or TypeParameterSymbol))
                 {
                     inner = references.MapClrTypeToReferences(typeof(object));
                 }
