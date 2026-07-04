@@ -8006,7 +8006,16 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     internal EntityHandle ResolveUserCtorTokenForPrimary(StructSymbol structType)
     {
-        if (!this.cache.ClassPrimaryCtorHandles.TryGetValue(structType, out var primaryDef))
+        // Issue #1920: the primary ctor's MethodDef is keyed by the OPEN
+        // definition (RegisterConstructedTypeAliases only mirrors it onto a
+        // CONSTRUCTED StructSymbol when that exact instance is referenced
+        // from a top-level function/lambda body — a construction inside a
+        // class/struct instance or shared method never runs through that
+        // collector). Look up via Definition first, matching the sibling
+        // ResolveUserCtorTokenForDefault (issue #810) and
+        // ResolveConstructedBaseParameterlessCtorToken (issue #1055).
+        var ctorKey = structType.Definition ?? structType;
+        if (!this.cache.ClassPrimaryCtorHandles.TryGetValue(ctorKey, out var primaryDef))
         {
             throw new InvalidOperationException($"Type '{structType.Name}' has no emitted primary ctor.");
         }

@@ -1,7 +1,7 @@
 AllowsConstraintClause: int=held
 AllowsConstraintClause: string=held
 ClassConstraint: kept=pinned
-ClassConstraint: tag=1
+ClassConstraint: tag=0
 ConstructorConstraint: marks=3
 DefaultConstraint: string=value
 DefaultConstraint: null=null
@@ -12,7 +12,7 @@ GenericName: explicit-string=b
 OmittedTypeArgument: nameof=List
 OmittedTypeArgument: nameof-two-arity=Dictionary
 StructConstraint: int=64
-StructConstraint: tag=2
+StructConstraint: tag=0
 TypeArgumentList: evens=2
 TypeArgumentList: first-even=2
 TypeArgumentList: odds=1
