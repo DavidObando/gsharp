@@ -900,6 +900,21 @@ such a call is rejected outright. Restructure so the deferred work takes its
 arguments by value, or wrap the by-ref call in a `func` captured by the
 `defer`.
 
+## Non-constant explicit enum member value (GS0467)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0467 | Error | An enum member's explicit `= expr` value isn't a constant int32 expression. |
+
+Issue #1912 adds explicit enum-member values (`Banana = 2`, `Unknown = -1`,
+`ReadWrite = Read | Write`, or an alias `DefaultError = ServerError`), constant-
+folded at bind time since G# has no general enum-member initializer semantics
+(a member's runtime value must be knowable without executing any code). The
+folder accepts int literals; unary `+`/`-`/`^` (ones-complement); the binary
+operators `+ - | & ^ << >>`; parenthesized sub-expressions; and references to
+already-declared sibling members by bare name. Anything else (a function call,
+a non-sibling identifier, a floating-point literal, …) is rejected with GS0467.
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |

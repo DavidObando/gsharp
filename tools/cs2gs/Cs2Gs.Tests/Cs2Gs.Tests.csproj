@@ -20,6 +20,15 @@
     <ProjectReference Include="..\Cs2Gs.Pipeline\Cs2Gs.Pipeline.csproj" />
     <ProjectReference Include="..\Cs2Gs.Report\Cs2Gs.Report.csproj" />
     <ProjectReference Include="..\Cs2Gs.Cli\Cs2Gs.Cli.csproj" />
+
+    <!-- Issue #1912 review follow-up: the e2e tests shell out to the built
+         gsc.dll (see Issue1912ExplicitEnumValueTranslationTests.FindCompiler)
+         rather than referencing it as an assembly. Without this reference,
+         `dotnet test` run in isolation on this project can silently compile
+         and run against a stale gsc.dll left over from a previous build.
+         ReferenceOutputAssembly=false: only needed for build ordering, this
+         project never calls into Compiler's API directly. -->
+    <ProjectReference Include="..\..\..\src\Compiler\Compiler.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>

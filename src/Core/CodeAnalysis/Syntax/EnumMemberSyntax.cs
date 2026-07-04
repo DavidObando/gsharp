@@ -16,6 +16,8 @@ public sealed class EnumMemberSyntax : SyntaxNode
     private SyntaxToken payloadOpenParenthesis;
     private SeparatedSyntaxList<ParameterSyntax> payloadParameters;
     private SyntaxToken payloadCloseParenthesis;
+    private SyntaxToken equalsToken;
+    private ExpressionSyntax value;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EnumMemberSyntax"/> class.
@@ -91,6 +93,37 @@ public sealed class EnumMemberSyntax : SyntaxNode
 
     /// <summary>Gets a value indicating whether this case has a payload parameter list.</summary>
     public bool HasPayload => PayloadOpenParenthesis != null;
+
+    /// <summary>
+    /// Gets the <c>=</c> token for an explicit member value (issue #1912),
+    /// e.g. <c>Banana = 2</c>. Null when the member has no explicit value.
+    /// </summary>
+    public SyntaxToken EqualsToken
+    {
+        get => equalsToken;
+        internal set
+        {
+            equalsToken = value;
+            InvalidateCachedSpan();
+        }
+    }
+
+    /// <summary>
+    /// Gets the explicit constant-value expression (issue #1912) following
+    /// <see cref="EqualsToken"/>. Null when the member has no explicit value.
+    /// </summary>
+    public ExpressionSyntax Value
+    {
+        get => value;
+        internal set
+        {
+            this.value = value;
+            InvalidateCachedSpan();
+        }
+    }
+
+    /// <summary>Gets a value indicating whether this member has an explicit constant-value expression.</summary>
+    public bool HasExplicitValue => EqualsToken != null;
 
     /// <summary>Attaches the given annotation list to this enum member and returns this same instance for fluent parser use.</summary>
     /// <param name="annotations">The annotation list to attach (may be empty).</param>

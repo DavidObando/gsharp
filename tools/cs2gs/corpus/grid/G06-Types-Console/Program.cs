@@ -14,10 +14,8 @@ namespace Corpus.Grid06
             ClassDeclarationFixture.Run();
             DestructorDeclarationFixture.Run();
             EnumDeclarationFixture.Run();
+            EnumMemberDeclarationFixture.Run();
 
-            // QUARANTINED (see Quarantined/): EnumMemberDeclarationFixture — explicit
-            // enum member values are SILENTLY dropped (translate+compile pass; stdout
-            // parity catches 'banana=2' vs 'banana=1'); [Flags] is erased too.
             ExplicitInterfaceSpecifierFixture.Run();
             InterfaceDeclarationFixture.Run();
 

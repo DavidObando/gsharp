@@ -395,7 +395,9 @@ internal sealed class DeclarationBinder
             System.AttributeTargets.Enum));
 
         var seenMemberNames = new HashSet<string>();
+        var declaredValues = new Dictionary<string, int>();
         var members = ImmutableArray.CreateBuilder<EnumMemberSymbol>();
+        var nextValue = 0;
         foreach (var memberSyntax in syntax.Members)
         {
             var memberName = memberSyntax.Identifier.Text;
@@ -405,7 +407,26 @@ internal sealed class DeclarationBinder
                 continue;
             }
 
-            var memberSymbol = new EnumMemberSymbol(memberName, enumSymbol, members.Count);
+            var memberValue = nextValue;
+            if (memberSyntax.HasExplicitValue)
+            {
+                // Issue #1912: an explicit constant value (`Banana = 2`, `Unknown = -1`,
+                // `ReadWrite = Read | Write`, or an alias `DefaultError = ServerError`)
+                // overrides the auto-numbered default; later implicit members continue
+                // counting up from it, matching C# §19.4.
+                if (TryFoldEnumMemberValue(memberSyntax.Value, declaredValues, out var folded))
+                {
+                    memberValue = folded;
+                }
+                else
+                {
+                    Diagnostics.ReportEnumMemberValueNotConstant(memberSyntax.Value.Location, memberName, name);
+                }
+            }
+
+            var memberSymbol = new EnumMemberSymbol(memberName, enumSymbol, memberValue);
+            declaredValues[memberName] = memberValue;
+            nextValue = memberValue + 1;
             Binder.AttachDocumentation(memberSymbol, memberSyntax);
 
             // Issue #188 / ADR-0047 §3: bind any `@Foo` annotations attached
@@ -439,6 +460,126 @@ internal sealed class DeclarationBinder
         }
 
         return enumSymbol;
+    }
+
+    /// <summary>
+    /// Issue #1912: constant-folds an enum member's explicit value expression
+    /// into an int32, without going through the general expression binder (an
+    /// enum member value must be foldable at bind time, before the enum type
+    /// itself is fully declared). Supports int literals, unary <c>+</c>/<c>-</c>/<c>^</c>
+    /// (ones-complement), the binary operators <c>+ - | &amp; ^ &lt;&lt; &gt;&gt;</c>,
+    /// parenthesized sub-expressions, and references to already-declared
+    /// sibling members by bare name (the common C# alias idiom, e.g.
+    /// <c>DefaultError = ServerError</c>).
+    /// </summary>
+    /// <param name="expression">The member's <c>= expr</c> value expression.</param>
+    /// <param name="declaredValues">The already-bound sibling members, by name.</param>
+    /// <param name="value">The folded int32 value, when folding succeeds.</param>
+    /// <returns><see langword="true"/> if <paramref name="expression"/> folded to a constant int32.</returns>
+    private static bool TryFoldEnumMemberValue(ExpressionSyntax expression, IReadOnlyDictionary<string, int> declaredValues, out int value)
+    {
+        switch (expression)
+        {
+            case ParenthesizedExpressionSyntax paren:
+                return TryFoldEnumMemberValue(paren.Expression, declaredValues, out value);
+
+            case LiteralExpressionSyntax literal:
+                switch (literal.Value)
+                {
+                    case int i:
+                        value = i;
+                        return true;
+                    case long l when l is >= int.MinValue and <= int.MaxValue:
+                        value = (int)l;
+                        return true;
+                    default:
+                        value = 0;
+                        return false;
+                }
+
+            case NameExpressionSyntax name:
+                return declaredValues.TryGetValue(name.IdentifierToken.Text, out value);
+
+            case UnaryExpressionSyntax unary:
+                // Issue #1912 follow-up: the lexer types a decimal literal one past
+                // int.MaxValue (e.g. 2147483648) as uint per the integer-literal type
+                // lattice, since it doesn't fit int. Negating that literal (int.MinValue,
+                // 1 << 31, etc.) is a common real value (sign-bit flags), so special-case
+                // a uint literal directly under unary minus and fold via long to avoid
+                // overflow.
+                if (unary.OperatorToken.Kind == SyntaxKind.MinusToken &&
+                    unary.Operand is LiteralExpressionSyntax { Value: uint negatedLiteral } &&
+                    negatedLiteral <= (uint)int.MaxValue + 1)
+                {
+                    value = unchecked((int)-(long)negatedLiteral);
+                    return true;
+                }
+
+                if (!TryFoldEnumMemberValue(unary.Operand, declaredValues, out var operandValue))
+                {
+                    value = 0;
+                    return false;
+                }
+
+                switch (unary.OperatorToken.Kind)
+                {
+                    case SyntaxKind.PlusToken:
+                        value = operandValue;
+                        return true;
+                    case SyntaxKind.MinusToken:
+                        value = -operandValue;
+                        return true;
+                    case SyntaxKind.HatToken:
+                        value = ~operandValue;
+                        return true;
+                    default:
+                        value = 0;
+                        return false;
+                }
+
+            case BinaryExpressionSyntax binary:
+                if (!TryFoldEnumMemberValue(binary.Left, declaredValues, out var leftValue) ||
+                    !TryFoldEnumMemberValue(binary.Right, declaredValues, out var rightValue))
+                {
+                    value = 0;
+                    return false;
+                }
+
+                switch (binary.OperatorToken.Kind)
+                {
+                    case SyntaxKind.PlusToken:
+                        value = leftValue + rightValue;
+                        return true;
+                    case SyntaxKind.MinusToken:
+                        value = leftValue - rightValue;
+                        return true;
+                    case SyntaxKind.PipeToken:
+                        value = leftValue | rightValue;
+                        return true;
+                    case SyntaxKind.AmpersandToken:
+                        value = leftValue & rightValue;
+                        return true;
+                    case SyntaxKind.HatToken:
+                        value = leftValue ^ rightValue;
+                        return true;
+                    case SyntaxKind.AmpersandHatToken:
+                        value = leftValue & ~rightValue;
+                        return true;
+                    case SyntaxKind.ShiftLeftToken:
+                        value = leftValue << rightValue;
+                        return true;
+                    case SyntaxKind.ShiftRightToken:
+                        value = leftValue >> rightValue;
+                        return true;
+                    default:
+                        value = 0;
+                        return false;
+                }
+
+            default:
+                value = 0;
+                return false;
+        }
     }
 
     /// <summary>

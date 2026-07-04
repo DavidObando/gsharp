@@ -430,7 +430,7 @@ public static class GSharpPrinter
                 return "this";
 
             case MemberAccessExpression member:
-                return $"{RenderExpression(member.Target, indent)}.{member.MemberName}";
+                return $"{RenderExpression(member.Target, indent)}{(member.IsArrow ? "->" : ".")}{member.MemberName}";
 
             case InvocationExpression invocation:
                 var typeArgs = invocation.TypeArguments.Count == 0
@@ -1296,9 +1296,17 @@ public static class GSharpPrinter
     {
         var pad = Indent(indent);
         var cases = declaration.Cases.Select(c =>
-            c.PayloadParameters.Count == 0
+        {
+            var text = c.PayloadParameters.Count == 0
                 ? c.Name
-                : $"{c.Name}({RenderParameterList(c.PayloadParameters)})");
+                : $"{c.Name}({RenderParameterList(c.PayloadParameters)})";
+
+            // Issue #1912: preserve an explicit constant value (`Banana = 2`,
+            // `Unknown = -1`, a resolved `[Flags]`/alias value) so translated
+            // G# keeps the C# runtime int32 value instead of a re-numbered
+            // sequential ordinal.
+            return c.ExplicitValue is int explicitValue ? $"{text} = {explicitValue}" : text;
+        });
         var sb = new StringBuilder();
         sb.Append(RenderAttributeBlock(declaration.Attributes, indent));
         sb.Append(pad);

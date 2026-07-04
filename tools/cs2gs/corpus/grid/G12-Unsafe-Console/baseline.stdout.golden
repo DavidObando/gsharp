@@ -3,6 +3,8 @@ FixedStatement: third=7
 FixedStatement: secondPlusHundred=105
 FixedStatement: first=42
 FixedStatement: firstChar=a
+PointerMemberAccessExpression: X=10 Y=2 Sum=12
+PointerMemberAccessExpression-Chained: X=10
 PointerType: x=5 read=5
 PointerType: doubleIndirect x=9
 ScopedType: data=1,7,3
