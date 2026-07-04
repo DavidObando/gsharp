@@ -14,17 +14,18 @@ namespace Corpus.Grid12.Constructs
             {
                 fixed (int* p = numbers)
                 {
-                    // NOTE: `sum += *(p + i);` is avoided on purpose — gsc
-                    // rejects the emitted `*(p + i)` with GS0129 "Binary
-                    // operator '+=' is not defined for types 'int32' and
-                    // '**int32'" (deref of a parenthesized pointer-arithmetic
-                    // expression misbinds). Pointer element access `p[i]` and
-                    // a hoisted `int* q = p + i` both compile and cover the
-                    // same reads.
+                    // Issue #1925 (fixed): `sum += *(p + i);` used to be
+                    // rejected with GS0129 "Binary operator '+=' is not
+                    // defined for types 'int32' and '**int32'" — the
+                    // dereference of a parenthesized pointer-arithmetic
+                    // expression misbound its RHS as a pointer-to-pointer.
+                    // Pointer element access `p[i]` and a hoisted
+                    // `int* q = p + i` cover the same reads; this exercises
+                    // the direct `*(p + i)` shape too.
                     int sum = 0;
                     for (int i = 0; i < numbers.Length; i++)
                     {
-                        sum += p[i];
+                        sum += *(p + i);
                     }
 
                     Console.WriteLine($"FixedStatement: sum={sum}");
@@ -32,6 +33,12 @@ namespace Corpus.Grid12.Constructs
                     int* q = p + 2;
                     Console.WriteLine($"FixedStatement: third={*q}");
                     *p = 42;
+
+                    // Issue #1925 (fixed): compound assignment through a
+                    // parenthesized pointer-arithmetic dereference target
+                    // (`*(p + i) += v`) now parses and binds.
+                    *(p + 1) += 100;
+                    Console.WriteLine($"FixedStatement: secondPlusHundred={numbers[1]}");
                 }
             }
 
@@ -48,3 +55,4 @@ namespace Corpus.Grid12.Constructs
         }
     }
 }
+
