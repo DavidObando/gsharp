@@ -10410,6 +10410,23 @@ public sealed class CSharpToGSharpTranslator
                 : this.TranslateReceiverWithNullForgiveness(member.Expression);
             string memberName = member.Name.Identifier.Text;
 
+            // Issue #1905: C# pointer member access (`p->X`) and plain member
+            // access (`p.X`) both parse as MemberAccessExpressionSyntax,
+            // distinguished only by member.Kind() (PointerMemberAccessExpression
+            // for `->`). gsc rejects a bare `p.X` on a pointer receiver
+            // (GS0158) — but gsc's own G# grammar already has a native `->`
+            // operator (sugar for `(*p).X`, ADR-0122 §4 / issue #1034) that its
+            // parser desugars at parse time. Printing the arrow directly reuses
+            // that existing, already-correct G# feature: it handles field,
+            // property, and method-call receivers, chains (`a->b->c`, each
+            // `->` recursing through this method) and lvalue targets
+            // identically to `.`. (The hand-written `(*p).X` form the arrow
+            // desugars to also round-trips as a *read*, but gsc's parser fails
+            // to re-parse that explicit parenthesized form as an *assignment
+            // target* — a separate, narrower parser gap the native `->` sugar
+            // avoids entirely.)
+            bool isArrow = member.IsKind(SyntaxKind.PointerMemberAccessExpression);
+
             // A C# tuple element access (`item.Name`, `item.Price`) lowers to the
             // positional G# tuple field `.Item1`/`.Item2`, because G# tuples are
             // positional and carry no element names (ADR-0115 §B.4). The default
@@ -10438,7 +10455,7 @@ public sealed class CSharpToGSharpTranslator
                 }
             }
 
-            return new MemberAccessExpression(target, SanitizeIdentifier(memberName));
+            return new MemberAccessExpression(target, SanitizeIdentifier(memberName), isArrow);
         }
 
         /// <summary>

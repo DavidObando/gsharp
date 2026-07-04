@@ -430,7 +430,7 @@ public static class GSharpPrinter
                 return "this";
 
             case MemberAccessExpression member:
-                return $"{RenderExpression(member.Target, indent)}.{member.MemberName}";
+                return $"{RenderExpression(member.Target, indent)}{(member.IsArrow ? "->" : ".")}{member.MemberName}";
 
             case InvocationExpression invocation:
                 var typeArgs = invocation.TypeArguments.Count == 0

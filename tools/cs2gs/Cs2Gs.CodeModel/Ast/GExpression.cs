@@ -96,10 +96,20 @@ public sealed class MemberAccessExpression : GExpression
     /// </summary>
     /// <param name="target">The receiver expression.</param>
     /// <param name="memberName">The member name.</param>
-    public MemberAccessExpression(GExpression target, string memberName)
+    /// <param name="isArrow">
+    /// Whether this access lowers from a C# pointer member access (<c>p-&gt;X</c>,
+    /// issue #1905). G# has its own native <c>-&gt;</c> operator (sugar for
+    /// <c>(*p).X</c>, ADR-0122 §4 / issue #1034) that the parser desugars at
+    /// parse time; printing the arrow directly (rather than a hand-rolled
+    /// <c>(*p).X</c>) reuses that existing, already-correct G# feature and
+    /// avoids a distinct parser gap where the explicit parenthesized-deref
+    /// form fails to parse as an assignment target.
+    /// </param>
+    public MemberAccessExpression(GExpression target, string memberName, bool isArrow = false)
     {
         Target = target;
         MemberName = memberName;
+        IsArrow = isArrow;
     }
 
     /// <summary>Gets the receiver expression.</summary>
@@ -107,6 +117,9 @@ public sealed class MemberAccessExpression : GExpression
 
     /// <summary>Gets the member name.</summary>
     public string MemberName { get; }
+
+    /// <summary>Gets a value indicating whether to print the G# native <c>-&gt;</c> pointer-member operator instead of <c>.</c>.</summary>
+    public bool IsArrow { get; }
 }
 
 /// <summary>
