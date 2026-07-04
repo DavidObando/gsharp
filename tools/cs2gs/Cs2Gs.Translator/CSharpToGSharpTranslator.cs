@@ -1695,6 +1695,7 @@ public sealed class CSharpToGSharpTranslator
             }
 
             (GTypeReference baseType, List<GTypeReference> interfaces) = this.MapBaseClause(symbol, node, kind.Value);
+            List<GExpression> baseConstructorArguments = this.MapPrimaryConstructorBaseArguments(node, baseType);
             List<TypeParameter> typeParameters = this.MapTypeParameters(symbol);
             IReadOnlyList<Parameter> primaryCtor = lift.DropConstructor
                 ? lift.PrimaryParameters
@@ -1751,6 +1752,7 @@ public sealed class CSharpToGSharpTranslator
                 typeParameters: typeParameters,
                 primaryConstructorParameters: primaryCtor,
                 baseType: baseType,
+                baseConstructorArguments: baseConstructorArguments,
                 interfaces: interfaces,
                 members: members,
                 visibility: MapVisibility(symbol, this.context, node),
@@ -3763,6 +3765,37 @@ public sealed class CSharpToGSharpTranslator
             return (baseType, interfaces);
         }
 
+        /// <summary>
+        /// Issue #1909: maps a C# <c>: Base(args)</c> base-class initializer
+        /// (Roslyn's <see cref="PrimaryConstructorBaseTypeSyntax"/> — the only base-list
+        /// entry kind that carries an argument list; an implemented interface is
+        /// always a plain <see cref="SimpleBaseTypeSyntax"/>) onto the G# primary
+        /// constructor's own base-call syntax <c>class Derived(...) : Base(args)</c>
+        /// (Parser.cs `baseCtorOpenParen` / `BaseConstructorArguments`). Returns
+        /// <see langword="null"/> when the base clause has no explicit call — the
+        /// G# emitter then synthesizes the implicit parameterless base chain
+        /// (ADR-0065 §5), matching a C# base with no arguments (or no base at all).
+        /// </summary>
+        private List<GExpression> MapPrimaryConstructorBaseArguments(TypeDeclarationSyntax node, GTypeReference baseType)
+        {
+            if (baseType == null || node.BaseList == null)
+            {
+                return null;
+            }
+
+            foreach (BaseTypeSyntax baseTypeSyntax in node.BaseList.Types)
+            {
+                if (baseTypeSyntax is PrimaryConstructorBaseTypeSyntax primaryBase)
+                {
+                    return primaryBase.ArgumentList.Arguments
+                        .Select(a => this.TranslateExpression(a.Expression))
+                        .ToList();
+                }
+            }
+
+            return null;
+        }
+
         private static bool IsIEquatableOf(INamedTypeSymbol iface, INamedTypeSymbol self)
         {
             return iface.IsGenericType &&
@@ -3870,11 +3903,17 @@ public sealed class CSharpToGSharpTranslator
             return new TypeParameter(SanitizeIdentifier(tp.Name), legacy, flags, variance);
         }
 
+        // Issue #1909: `TypeDeclarationSyntax.ParameterList` carries a primary
+        // constructor's parameter list for EVERY declaration kind that supports one
+        // — `record`/`record struct` (their positional parameter list, in C# 9+)
+        // as well as a plain `class`/`struct` (C# 12 primary constructors). All map
+        // the same way onto a G# primary constructor (ADR-0065 §5), so the check no
+        // longer needs to special-case `RecordDeclarationSyntax`.
         private IReadOnlyList<Parameter> MapPrimaryConstructor(TypeDeclarationSyntax node)
         {
-            if (node is RecordDeclarationSyntax record && record.ParameterList != null)
+            if (node.ParameterList != null)
             {
-                return this.MapParameterList(record.ParameterList);
+                return this.MapParameterList(node.ParameterList);
             }
 
             return null;

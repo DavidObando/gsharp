@@ -1263,7 +1263,17 @@ public static class GSharpPrinter
         var baseParts = new List<string>();
         if (declaration.BaseType != null)
         {
-            baseParts.Add(RenderType(declaration.BaseType));
+            var baseTypeText = RenderType(declaration.BaseType);
+            if (declaration.BaseConstructorArguments != null)
+            {
+                // Issue #1909: `: Base(args)` forwards this type's primary-ctor
+                // parameters (or other expressions) to the base class's
+                // designated constructor (Parser.cs `baseCtorOpenParen`).
+                var baseArgs = string.Join(", ", declaration.BaseConstructorArguments.Select(a => RenderExpression(a, indent)));
+                baseTypeText += $"({baseArgs})";
+            }
+
+            baseParts.Add(baseTypeText);
         }
 
         baseParts.AddRange(declaration.Interfaces.Select(RenderType));
