@@ -831,10 +831,12 @@
   {
     "kind": "ExtensionBlockDeclaration",
     "nodeType": "ExtensionBlockDeclarationSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.19",
     "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G13-Extensions-Console/Constructs/ExtensionBlockDeclaration.cs",
     "issue": "https://github.com/DavidObando/gsharp/issues/1879",
-    "notes": "C# 14 headline; classic this-param extensions map to receiver funcs and are green (grid G13)."
+    "notes": "C# 14 \u0060extension(T x)\u0060/\u0060extension(T)\u0060 block members map onto the same target as a classic this-param extension method (ADR-0115 \u00A7B.19): an instance method/property lowers to a receiver-clause func (a property becomes a get-only func, since G#\u0027s prop grammar has no receiver clause, with call sites rewritten to a zero-arg call); a static member becomes a plain shared member of the declaring class, with call sites rewritten from the extended type\u0027s name to the real owner. An enum receiver and a settable instance extension property are each reported as an explicit gap (grid G13)."
   },
   {
     "kind": "ExtensionMemberCref",

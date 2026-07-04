@@ -12,18 +12,9 @@ namespace Corpus.Grid13
     {
         private static void Main()
         {
-            // QUARANTINED: ExtensionBlockDeclaration — the C# 14 `extension`
-            // container block (instance methods, extension properties, and
-            // static extension members alike). Stage 1 (translate) fails with
-            // CS2GS-GAP: "'ExtensionBlockDeclaration' has no canonical G#
-            // declaration mapping; recorded for triage (ADR-0115 §B)." for
-            // both `extension(string s)` and receiverless `extension(string)`.
-            // See ExtensionBlockDeclaration.cs.quarantined,
-            // ExtensionBlockProperty.cs.quarantined, and
-            // ExtensionBlockStatic.cs.quarantined.
-            // ExtensionBlockDeclarationFixture.Run();
-            // ExtensionBlockPropertyFixture.Run();
-            // ExtensionBlockStaticFixture.Run();
+            ExtensionBlockDeclarationFixture.Run();
+            ExtensionBlockPropertyFixture.Run();
+            ExtensionBlockStaticFixture.Run();
             ExtensionMethodsClassicFixture.Run();
             ExtensionMethodsGenericFixture.Run();
         }

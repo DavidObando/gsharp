@@ -1,3 +1,9 @@
+ExtensionBlockDeclaration: doubled=8
+ExtensionBlockDeclaration: shout=GRID!
+ExtensionBlockProperty: doubledLength=12
+ExtensionBlockProperty: firstAndLast=c..s
+ExtensionBlockStatic: meaning=forty-two
+ExtensionBlockStatic: repeat=ababab
 ExtensionMethodsClassic: bracketed=[hi]
 ExtensionMethodsClassic: squared=49
 ExtensionMethodsClassic: userType=42
