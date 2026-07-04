@@ -517,7 +517,7 @@ internal static class KnownAttributes
             return;
         }
 
-        if (attributeType is StructSymbol structSym && structSym.IsAttributeClass)
+        if (attributeType is StructSymbol structSym && structSym.DerivesFromSystemAttribute())
         {
             if (TryReadAttributeUsageFromBound(structSym.Attributes, out var v, out var am))
             {

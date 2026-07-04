@@ -751,7 +751,13 @@ internal sealed class ReflectionMetadataEmitter
         // dedup-cached root resolver) and wellKnown's GetIsReadOnlyAttributeCtorRef.
         // It owns every custom-attribute blob-encoding helper; the assembly-
         // level orchestrators on this root forward into it.
-        this.customAttrEncoder = new CustomAttributeEncoder(this.emitCtx, this.wellKnown, this.GetTypeReference);
+        this.customAttrEncoder = new CustomAttributeEncoder(
+            this.emitCtx,
+            this.wellKnown,
+            this.GetTypeReference,
+            this.ResolveUserCtorTokenForPrimary,
+            this.ResolveUserCtorTokenForDefault,
+            this.ResolveUserCtorTokenForExplicit);
 
         // PR-E-12: MethodBodyPlanner owns the per-body planning orchestrators
         // (CollectLocalsAndLabels and friends) that drive SlotPlanner's
