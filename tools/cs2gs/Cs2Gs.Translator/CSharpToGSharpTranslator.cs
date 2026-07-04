@@ -13480,19 +13480,37 @@ public sealed class CSharpToGSharpTranslator
         // to the open type (issue #1915: gsc's binder now resolves a bare
         // imported generic name inside `typeof(...)` to the CLR open generic
         // definition via an arity-suffixed reflection lookup).
+        // `typeof(IEnumerable<>)` over an unbound generic has no bound symbol for
+        // the omitted type argument, so the general type mapper cannot resolve it.
+        // Issue #2012 (S1): G# has no `Name<>`/`Name<,>` comma-count unbound-generic
+        // spelling; the canonical form carries the requested arity explicitly via
+        // `_` placeholder bracket type arguments (issue #1989/#2011) —
+        // `typeof(IEnumerable<>)` maps to `typeof(IEnumerable[_])`,
+        // `typeof(Dictionary<,>)` maps to `typeof(Dictionary[_, _])`, etc. This
+        // form always resolves the arity-suffixed generic and never falls back
+        // to a same-named non-generic type (unlike the older bare-name form,
+        // which stayed ambiguous for same-base-name multi-arity families such
+        // as `Func`/`Action`).
         private GTypeReference MapTypeOfOperand(TypeSyntax type)
         {
-            if (IsUnboundGeneric(type, out string unboundName))
+            if (IsUnboundGeneric(type, out string unboundName, out int arity))
             {
-                return new NamedTypeReference(unboundName);
+                var placeholders = new GTypeReference[arity];
+                for (int i = 0; i < arity; i++)
+                {
+                    placeholders[i] = new NamedTypeReference("_");
+                }
+
+                return new NamedTypeReference(unboundName, placeholders);
             }
 
             return this.MapTypeSyntax(type);
         }
 
-        private static bool IsUnboundGeneric(TypeSyntax type, out string name)
+        private static bool IsUnboundGeneric(TypeSyntax type, out string name, out int arity)
         {
             name = null;
+            arity = 0;
             GenericNameSyntax generic = type switch
             {
                 GenericNameSyntax g => g,
@@ -13507,6 +13525,7 @@ public sealed class CSharpToGSharpTranslator
             }
 
             name = generic.Identifier.Text;
+            arity = generic.TypeArgumentList.Arguments.Count;
             return true;
         }
 
