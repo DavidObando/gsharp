@@ -78,19 +78,19 @@ public class TranslatorExhaustivenessTests
     [Fact]
     public void UnregisteredConstruct_IsClassifiedAsGap()
     {
-        // Checked expressions (`checked(...)`) currently have no translation
-        // rule and are deliberately NOT in the UnsupportedByDesign registry,
-        // so the choke point must classify this as an accidental gap. If
-        // this construct gains a translation (or a registry entry), swap the
-        // snippet for another unregistered kind — the mechanism under test
-        // is the classification.
+        // The C# 14 `field` keyword (FieldExpression) currently has no
+        // translation rule and is deliberately NOT in the
+        // UnsupportedByDesign registry, so the choke point must classify
+        // this as an accidental gap. If this construct gains a translation
+        // (or a registry entry), swap the snippet for another unregistered
+        // kind — the mechanism under test is the classification.
         TranslationContext context = Translate(
-            "namespace S { public static class C { public static void M() { int x = checked(1 + 1); } } }");
+            "namespace S { public class C { public int P { get => field; set => field = value; } } }");
 
         TranslationDiagnostic diagnostic = context.Diagnostics.FirstOrDefault(d => d.IsUnsupported);
         Assert.True(
             diagnostic is not null,
-            "expected the checked expression to be unsupported; if it translates now, update this test's snippet.");
+            "expected the field-expression property to be unsupported; if it translates now, update this test's snippet.");
         Assert.Equal(UnsupportedClassification.Gap, diagnostic.Classification);
         Assert.Equal(UnsupportedRationale.None, diagnostic.Rationale);
     }

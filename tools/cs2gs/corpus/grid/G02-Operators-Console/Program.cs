@@ -16,6 +16,7 @@ namespace Corpus.Grid02
             BitwiseNotExpressionFixture.Run();
             BitwiseOrExpressionFixture.Run();
             CastExpressionFixture.Run();
+            CheckedExpressionFixture.Run();
             CoalesceAssignmentExpressionFixture.Run();
             CoalesceExpressionFixture.Run();
             ConditionalAccessExpressionFixture.Run();
@@ -59,6 +60,7 @@ namespace Corpus.Grid02
             TypeOfExpressionFixture.Run();
             UnaryMinusExpressionFixture.Run();
             UnaryPlusExpressionFixture.Run();
+            UncheckedExpressionFixture.Run();
             UnsignedRightShiftAssignmentExpressionFixture.Run();
             UnsignedRightShiftExpressionFixture.Run();
         }

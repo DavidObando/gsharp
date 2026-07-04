@@ -24,10 +24,14 @@ public sealed class BlockStatement : GStatement
     /// </summary>
     /// <param name="statements">The contained statements.</param>
     /// <param name="isUnsafe">Whether this block is an <c>unsafe { … }</c> block (ADR-0122 / issue #1014).</param>
-    public BlockStatement(IReadOnlyList<GStatement> statements = null, bool isUnsafe = false)
+    /// <param name="isChecked">Whether this block is a <c>checked { … }</c> block (issue #1881).</param>
+    /// <param name="isUnchecked">Whether this block is an <c>unchecked { … }</c> block (issue #1881).</param>
+    public BlockStatement(IReadOnlyList<GStatement> statements = null, bool isUnsafe = false, bool isChecked = false, bool isUnchecked = false)
     {
         Statements = statements ?? new List<GStatement>();
         IsUnsafe = isUnsafe;
+        IsChecked = isChecked;
+        IsUnchecked = isUnchecked;
     }
 
     /// <summary>Gets the contained statements.</summary>
@@ -38,6 +42,18 @@ public sealed class BlockStatement : GStatement
     /// introducing an unsafe context (ADR-0122 / issue #1014).
     /// </summary>
     public bool IsUnsafe { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether this block is a <c>checked { … }</c> block
+    /// introducing a checked arithmetic context (issue #1881).
+    /// </summary>
+    public bool IsChecked { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether this block is an <c>unchecked { … }</c> block
+    /// introducing an unchecked arithmetic context (issue #1881).
+    /// </summary>
+    public bool IsUnchecked { get; }
 }
 
 /// <summary>

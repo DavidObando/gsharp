@@ -2797,11 +2797,15 @@ public sealed class Evaluator
         switch (b.Op.Kind)
         {
             case BoundBinaryOperatorKind.Sum:
-                return NarrowToResultType(NumericAdd(left, right), resultType);
+                // Issue #1881: `checked(...)` traps on overflow (matching the
+                // emitter's `add.ovf`/`conv.ovf.*`); the narrowing back to a
+                // sub-int32 result type must also be range-checked in that
+                // context (e.g. `checked(byte.MaxValue + one)`).
+                return NarrowToResultType(b.IsChecked ? NumericAddChecked(left, right) : NumericAdd(left, right), resultType, b.IsChecked);
             case BoundBinaryOperatorKind.Difference:
-                return NarrowToResultType(NumericSub(left, right), resultType);
+                return NarrowToResultType(b.IsChecked ? NumericSubChecked(left, right) : NumericSub(left, right), resultType, b.IsChecked);
             case BoundBinaryOperatorKind.Product:
-                return NarrowToResultType(NumericMul(left, right), resultType);
+                return NarrowToResultType(b.IsChecked ? NumericMulChecked(left, right) : NumericMul(left, right), resultType, b.IsChecked);
             case BoundBinaryOperatorKind.Quotient:
                 return NarrowToResultType(NumericDiv(left, right), resultType);
             case BoundBinaryOperatorKind.Remainder:
@@ -2866,6 +2870,36 @@ public sealed class Evaluator
         _ => throw new InvalidOperationException($"Unsupported + on {l?.GetType()} and {r?.GetType()}"),
     };
 
+    // Issue #1881: `checked(a + b)` — identical shape to <see cref="NumericAdd"/>
+    // but every integral arm runs in a checked context (the `checked(...)`
+    // operator applies lexically to every arithmetic operator nested inside
+    // it, including switch-expression arms) so int/long/uint/ulong/nint/nuint
+    // trap with <see cref="OverflowException"/> instead of wrapping. Narrower
+    // widths (sbyte/byte/short/ushort/char) promote to `int` for the add
+    // itself (which cannot overflow at that width) — their overflow check
+    // happens when the result narrows back in <see cref="NarrowToResultType"/>.
+    // Floating-point and decimal are unaffected by `checked`/`unchecked` in C#
+    // (float/double never trap; decimal always does), so their arms are
+    // identical to the unchecked version.
+    private static object NumericAddChecked(object l, object r) => l switch
+    {
+        int li when r is int ri => (object)checked(li + ri),
+        long li when r is long ri => (object)checked(li + ri),
+        uint li when r is uint ri => (object)checked(li + ri),
+        ulong li when r is ulong ri => (object)checked(li + ri),
+        sbyte li when r is sbyte ri => (object)checked(li + ri),
+        byte li when r is byte ri => (object)checked(li + ri),
+        short li when r is short ri => (object)checked(li + ri),
+        ushort li when r is ushort ri => (object)checked(li + ri),
+        nint li when r is nint ri => (object)checked(li + ri),
+        nuint li when r is nuint ri => (object)checked(li + ri),
+        float li when r is float ri => (object)(li + ri),
+        double li when r is double ri => (object)(li + ri),
+        decimal li when r is decimal ri => (object)(li + ri),
+        char li when r is char ri => (object)checked(li + ri),
+        _ => throw new InvalidOperationException($"Unsupported + on {l?.GetType()} and {r?.GetType()}"),
+    };
+
     private static object NumericSub(object l, object r) => l switch
     {
         int li when r is int ri => li - ri,
@@ -2884,6 +2918,26 @@ public sealed class Evaluator
         _ => throw new InvalidOperationException($"Unsupported - on {l?.GetType()} and {r?.GetType()}"),
     };
 
+    // Issue #1881: checked counterpart of <see cref="NumericSub"/> — see
+    // <see cref="NumericAddChecked"/> for why this mirrors the arm shapes.
+    private static object NumericSubChecked(object l, object r) => l switch
+    {
+        int li when r is int ri => (object)checked(li - ri),
+        long li when r is long ri => (object)checked(li - ri),
+        uint li when r is uint ri => (object)checked(li - ri),
+        ulong li when r is ulong ri => (object)checked(li - ri),
+        sbyte li when r is sbyte ri => (object)checked(li - ri),
+        byte li when r is byte ri => (object)checked(li - ri),
+        short li when r is short ri => (object)checked(li - ri),
+        ushort li when r is ushort ri => (object)checked(li - ri),
+        nint li when r is nint ri => (object)checked(li - ri),
+        nuint li when r is nuint ri => (object)checked(li - ri),
+        float li when r is float ri => (object)(li - ri),
+        double li when r is double ri => (object)(li - ri),
+        decimal li when r is decimal ri => (object)(li - ri),
+        _ => throw new InvalidOperationException($"Unsupported - on {l?.GetType()} and {r?.GetType()}"),
+    };
+
     private static object NumericMul(object l, object r) => l switch
     {
         int li when r is int ri => li * ri,
@@ -2899,6 +2953,26 @@ public sealed class Evaluator
         float li when r is float ri => li * ri,
         double li when r is double ri => li * ri,
         decimal li when r is decimal ri => li * ri,
+        _ => throw new InvalidOperationException($"Unsupported * on {l?.GetType()} and {r?.GetType()}"),
+    };
+
+    // Issue #1881: checked counterpart of <see cref="NumericMul"/> — see
+    // <see cref="NumericAddChecked"/> for why this mirrors the arm shapes.
+    private static object NumericMulChecked(object l, object r) => l switch
+    {
+        int li when r is int ri => (object)checked(li * ri),
+        long li when r is long ri => (object)checked(li * ri),
+        uint li when r is uint ri => (object)checked(li * ri),
+        ulong li when r is ulong ri => (object)checked(li * ri),
+        sbyte li when r is sbyte ri => (object)checked(li * ri),
+        byte li when r is byte ri => (object)checked(li * ri),
+        short li when r is short ri => (object)checked(li * ri),
+        ushort li when r is ushort ri => (object)checked(li * ri),
+        nint li when r is nint ri => (object)checked(li * ri),
+        nuint li when r is nuint ri => (object)checked(li * ri),
+        float li when r is float ri => (object)(li * ri),
+        double li when r is double ri => (object)(li * ri),
+        decimal li when r is decimal ri => (object)(li * ri),
         _ => throw new InvalidOperationException($"Unsupported * on {l?.GetType()} and {r?.GetType()}"),
     };
 
@@ -3061,34 +3135,42 @@ public sealed class Evaluator
         _ => throw new InvalidOperationException($"Unsupported comparison on {l?.GetType()} and {r?.GetType()}"),
     };
 
-    private static object NarrowToResultType(object value, TypeSymbol resultType)
+    private static object NarrowToResultType(object value, TypeSymbol resultType, bool isChecked = false)
     {
         // C# arithmetic on sub-int types promotes to int. To preserve the
         // operator's declared result type (e.g. byte + byte → byte) we
         // narrow back here. Other widths already match their CLR type.
+        // Issue #1881: inside a `checked` context the narrowing back to the
+        // sub-int32 result type is itself overflow-checked (matching the
+        // emitter's `conv.ovf.*` narrowing conversions).
         if (resultType == TypeSymbol.Int8)
         {
-            return unchecked((sbyte)Convert.ToInt32(value));
+            var i32 = Convert.ToInt32(value);
+            return isChecked ? checked((sbyte)i32) : unchecked((sbyte)i32);
         }
 
         if (resultType == TypeSymbol.UInt8)
         {
-            return unchecked((byte)Convert.ToInt32(value));
+            var i32 = Convert.ToInt32(value);
+            return isChecked ? checked((byte)i32) : unchecked((byte)i32);
         }
 
         if (resultType == TypeSymbol.Int16)
         {
-            return unchecked((short)Convert.ToInt32(value));
+            var i32 = Convert.ToInt32(value);
+            return isChecked ? checked((short)i32) : unchecked((short)i32);
         }
 
         if (resultType == TypeSymbol.UInt16)
         {
-            return unchecked((ushort)Convert.ToInt32(value));
+            var i32 = Convert.ToInt32(value);
+            return isChecked ? checked((ushort)i32) : unchecked((ushort)i32);
         }
 
         if (resultType == TypeSymbol.Char)
         {
-            return unchecked((char)Convert.ToInt32(value));
+            var i32 = Convert.ToInt32(value);
+            return isChecked ? checked((char)i32) : unchecked((char)i32);
         }
 
         // Issue #615: when the result type is an enum, produce a properly-typed
@@ -4392,7 +4474,12 @@ public sealed class Evaluator
             // ADR-0044: numeric conversions across the primitive lattice.
             // Cast unchecked to match the IL `conv.*` opcodes' truncation
             // semantics (Convert.ChangeType throws on overflow instead).
-            return UncheckedNumericConvert(value, node.Type.ClrType);
+            // Issue #1881: inside a `checked` context (node.IsChecked), route
+            // through the overflow-trapping conversion instead, matching the
+            // emitter's `conv.ovf.*` opcodes.
+            return node.IsChecked
+                ? CheckedNumericConvert(value, node.Type.ClrType)
+                : UncheckedNumericConvert(value, node.Type.ClrType);
         }
         else
         {
@@ -4494,6 +4581,91 @@ public sealed class Evaluator
             _ => Convert.ChangeType(value, to, System.Globalization.CultureInfo.InvariantCulture),
         };
     }
+
+    // Issue #1881: checked counterpart of <see cref="UncheckedNumericConvert"/>.
+    // Float/double sources use a direct `checked` cast per target (matching
+    // C#'s own checked-conversion truncation/range-check semantics, including
+    // trapping on NaN/Infinity). Every integral/char source first widens
+    // losslessly to <see cref="Int128"/> — which exactly preserves both sign
+    // and full magnitude for every supported width, including `ulong`/`nuint`,
+    // unlike a `long` intermediate which would misread the top bit of an
+    // unsigned 64-bit value — then a single checked narrowing switch below
+    // range-checks against the true value regardless of the source's
+    // signedness. decimal is unaffected by checked/unchecked in C# (decimal
+    // arithmetic/conversions always overflow-check), so it reuses the
+    // unchecked path's decimal handling.
+    private static object CheckedNumericConvert(object value, Type to)
+    {
+        if (value is decimal || to.IsSameAs(typeof(decimal)))
+        {
+            return UncheckedNumericConvert(value, to);
+        }
+
+        if (value is float fv)
+        {
+            return CheckedFloatingConvert(fv, to);
+        }
+
+        if (value is double dv)
+        {
+            return CheckedFloatingConvert(dv, to);
+        }
+
+        Int128 asInt128 = value switch
+        {
+            sbyte x => x,
+            byte x => x,
+            short x => x,
+            ushort x => x,
+            int x => x,
+            uint x => x,
+            long x => x,
+            ulong x => x,
+            nint x => x,
+            nuint x => (ulong)x,
+            char x => x,
+            bool x => x ? 1 : 0,
+            _ => throw new InvalidOperationException($"Unsupported checked conversion source {value?.GetType()}"),
+        };
+
+        return CheckedNarrowFromInt128(asInt128, to);
+    }
+
+    private static object CheckedNarrowFromInt128(Int128 v, Type to) => checked(to switch
+    {
+        Type t when t.IsSameAs(typeof(sbyte)) => (object)(sbyte)v,
+        Type t when t.IsSameAs(typeof(byte)) => (object)(byte)v,
+        Type t when t.IsSameAs(typeof(short)) => (object)(short)v,
+        Type t when t.IsSameAs(typeof(ushort)) => (object)(ushort)v,
+        Type t when t.IsSameAs(typeof(int)) => (object)(int)v,
+        Type t when t.IsSameAs(typeof(uint)) => (object)(uint)v,
+        Type t when t.IsSameAs(typeof(long)) => (object)(long)v,
+        Type t when t.IsSameAs(typeof(ulong)) => (object)(ulong)v,
+        Type t when t.IsSameAs(typeof(nint)) => (object)(nint)(long)v,
+        Type t when t.IsSameAs(typeof(nuint)) => (object)(nuint)(ulong)v,
+        Type t when t.IsSameAs(typeof(char)) => (object)(char)(ushort)v,
+        Type t when t.IsSameAs(typeof(float)) => (object)(float)v,
+        Type t when t.IsSameAs(typeof(double)) => (object)(double)v,
+        _ => throw new InvalidOperationException($"Unsupported checked conversion target {to}"),
+    });
+
+    private static object CheckedFloatingConvert(double d, Type to) => checked(to switch
+    {
+        Type t when t.IsSameAs(typeof(sbyte)) => (object)(sbyte)d,
+        Type t when t.IsSameAs(typeof(byte)) => (object)(byte)d,
+        Type t when t.IsSameAs(typeof(short)) => (object)(short)d,
+        Type t when t.IsSameAs(typeof(ushort)) => (object)(ushort)d,
+        Type t when t.IsSameAs(typeof(int)) => (object)(int)d,
+        Type t when t.IsSameAs(typeof(uint)) => (object)(uint)d,
+        Type t when t.IsSameAs(typeof(long)) => (object)(long)d,
+        Type t when t.IsSameAs(typeof(ulong)) => (object)(ulong)d,
+        Type t when t.IsSameAs(typeof(nint)) => (object)(nint)(long)d,
+        Type t when t.IsSameAs(typeof(nuint)) => (object)(nuint)(ulong)d,
+        Type t when t.IsSameAs(typeof(char)) => (object)(char)(ushort)d,
+        Type t when t.IsSameAs(typeof(float)) => (object)(float)d,
+        Type t when t.IsSameAs(typeof(double)) => d,
+        _ => throw new InvalidOperationException($"Unsupported checked conversion target {to}"),
+    });
 
     private object EvaluateImportedCallExpression(BoundImportedCallExpression node)
     {

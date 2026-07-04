@@ -1,10 +1,4 @@
 // inventory: CheckedStatement
-// NOTE: quarantined sub-case (stage-4 silent divergence, STDOUT-MISMATCH):
-//   checked { int wrapped = max + one; } inside try/catch(OverflowException) —
-//   C# throws and prints "overflow caught = True"; the migrated G# emits the
-//   checked statement as a plain block (overflow semantics NOT preserved) and
-//   prints "unexpected wrap = -2147483648" / "overflow caught = False".
-// Only non-overflowing arithmetic is kept inside the checked block below.
 using System;
 
 namespace Corpus.Grid03.Constructs
@@ -27,6 +21,28 @@ namespace Corpus.Grid03.Constructs
                 int y = x + 1;
                 Console.WriteLine($"CheckedStatement: checked sum without overflow = {y}");
             }
+
+            // issue #1881: the overflow-in-try/catch(OverflowException) case —
+            // previously quarantined because cs2gs erased the checked context,
+            // silently wrapping instead of throwing.
+            bool caught = false;
+            int wrapped = 0;
+            try
+            {
+                int max = int.MaxValue;
+                int one = 1;
+                checked
+                {
+                    wrapped = max + one;
+                }
+            }
+            catch (OverflowException)
+            {
+                caught = true;
+            }
+
+            Console.WriteLine($"CheckedStatement: overflow caught = {caught}");
+            Console.WriteLine($"CheckedStatement: unexpected wrap = {wrapped}");
         }
     }
 }

@@ -40,6 +40,7 @@ ChanKeyword
 ChannelReceiveExpression
 ChannelSendStatement
 CharacterToken
+CheckedExpression
 ClassKeyword
 CloseBraceToken
 CloseParenthesisToken
@@ -251,6 +252,7 @@ TypeParameter
 TypeParameterList
 TypePattern
 UnaryExpression
+UncheckedExpression
 UnsignedShiftRightEqualsToken
 UnsignedShiftRightToken
 UsingKeyword

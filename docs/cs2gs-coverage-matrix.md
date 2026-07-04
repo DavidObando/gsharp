@@ -6,12 +6,12 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | Status | Count |
 | --- | --- |
 | Unclassified | 0 |
-| Translated | 228 |
+| Translated | 229 |
 | Lowered | 17 |
 | UnsupportedByDesign | 56 |
-| Gap | 20 |
+| Gap | 19 |
 
-## Translated (228)
+## Translated (229)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -56,9 +56,10 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | CatchDeclaration | CatchDeclarationSyntax | ADR-0115 §B.27 |  |  |  |  |
 | CatchFilterClause | CatchFilterClauseSyntax | ADR-0115 §B.27 |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/CatchFilterClause.cs |  | A when-filter with an overlapping later sibling catch has no faithful lowering (issue #1724 area). |
 | CharacterLiteralExpression | LiteralExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/CharacterLiteralExpression.cs |  |  |
-| CheckedStatement | CheckedStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/CheckedStatement.cs | https://github.com/DavidObando/gsharp/issues/1881 | Overflow semantics silently erased — emitted as a plain block (issue #1881, parity-verified divergence); non-overflow subset green. |
+| CheckedExpression | CheckedExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/CheckedExpression.cs | https://github.com/DavidObando/gsharp/issues/1881 |  |
+| CheckedStatement | CheckedStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/CheckedStatement.cs | https://github.com/DavidObando/gsharp/issues/1881 | gsc gained native checked/unchecked expression + block support (issue #1881); overflow semantics preserved, including the overflow-in-try/catch(OverflowException) sub-case. Stdout parity verified (grid G03). |
 | ClassConstraint | ClassOrStructConstraintSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/ClassConstraint.cs |  |  |
-| ClassDeclaration | ClassDeclarationSyntax | ADR-0115 §B.4 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/ClassDeclaration.cs |  | C#12 primary ctors now map to native G# primary constructors (issue #1909, resolved); partial parts across multiple declarations/files now merge into one G# type declaration (issue #1910, resolved). |
+| ClassDeclaration | ClassDeclarationSyntax | ADR-0115 §B.4 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/ClassDeclaration.cs |  | C#12 primary ctors dropped (issue #1909); partial parts across multiple declarations/files now merge into one G# type declaration (issue #1910, resolved). |
 | CoalesceAssignmentExpression | AssignmentExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/CoalesceAssignmentExpression.cs |  | Nullable value-type targets now emit verifiable IL (issue #1916, resolved); reference and value-type forms are both green. |
 | CoalesceExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/CoalesceExpression.cs |  | Binary ?? (issue #941, resolved). |
 | CollectionExpression | CollectionExpressionSyntax | ADR-0115 §B.36 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/CollectionExpression.cs | https://github.com/DavidObando/gsharp/issues/1897 | Array targets green; List<T> targets fail conversion; spread unsupported (issues #1897). |
@@ -103,7 +104,6 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | ExtensionBlockDeclaration | ExtensionBlockDeclarationSyntax | ADR-0115 §B.19 |  | tools/cs2gs/corpus/grid/G13-Extensions-Console/Constructs/ExtensionBlockDeclaration.cs | https://github.com/DavidObando/gsharp/issues/1879 | C# 14 `extension(T x)`/`extension(T)` block members map onto the same target as a classic this-param extension method (ADR-0115 §B.19): an instance method/property lowers to a receiver-clause func (a property becomes a get-only func, since G#'s prop grammar has no receiver clause, with call sites rewritten to a zero-arg call); a static member becomes a plain shared member of the declaring class, with call sites rewritten from the extended type's name to the real owner. An enum receiver and a settable instance extension property are each reported as an explicit gap (grid G13). |
 | FalseLiteralExpression | LiteralExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/FalseLiteralExpression.cs |  |  |
 | FieldDeclaration | FieldDeclarationSyntax | ADR-0115 §B.3 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/FieldDeclaration.cs |  |  |
-| FieldExpression | FieldExpressionSyntax | ADR-0051 §2 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/FieldExpression.cs |  |  |
 | FileScopedNamespaceDeclaration | FileScopedNamespaceDeclarationSyntax | ADR-0115 §B.1 |  |  |  |  |
 | FinallyClause | FinallyClauseSyntax | ADR-0115 §B.27 |  |  |  |  |
 | FixedStatement | FixedStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FixedStatement.cs | https://github.com/DavidObando/gsharp/issues/1933 | Compiles end-to-end under the ilverify allow-unsafe policy (issue #1933); IL is unverifiable by design, not a gsc defect. |
@@ -176,7 +176,6 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | PreDecrementExpression | PrefixUnaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/PreDecrementExpression.cs |  |  |
 | PreIncrementExpression | PrefixUnaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/PreIncrementExpression.cs |  |  |
 | PredefinedType | PredefinedTypeSyntax | ADR-0115 §B.12 |  |  |  |  |
-| PrimaryConstructorBaseType | PrimaryConstructorBaseTypeSyntax | ADR-0065 §5 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/PrimaryConstructorBaseType.cs |  | A derived primary-ctor class's `: Base(arg)` forwarding call now maps to the G# base-call form `class Derived(...) : Base(args) { ... }` (issue #1909, resolved). |
 | PropertyDeclaration | PropertyDeclarationSyntax | ADR-0115 §B.11 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/PropertyDeclaration.cs |  |  |
 | PropertyPatternClause | PropertyPatternClauseSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/RecursivePattern.cs |  | Property sub-patterns; designator collisions fixed in issue #1839. |
 | QualifiedName | QualifiedNameSyntax | ADR-0115 §B.12 |  |  |  |  |
@@ -228,7 +227,8 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | TypePattern | TypePatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/TypePattern.cs |  | Bare-type switch-arm (`int =>`, no binder — issue #1890, resolved): lowers to G#'s own discard-designator type pattern `_ is T` (`PatternBinder.BindTypePattern`'s `isDiscard` check), since gsc's own `TypePattern` grammar always requires a designator token before `is` but treats `_` as a non-binding discard there. Roslyn parses a bare user-type name (e.g. `Widget =>`) as a `ConstantPatternSyntax` over an identifier rather than `TypePatternSyntax`; the switch-arm path now shares the boolean-test path's `IsTypeReferencePattern` type-vs-constant disambiguation to still route it to `_ is T`. |
 | UnaryMinusExpression | PrefixUnaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/UnaryMinusExpression.cs |  |  |
 | UnaryPlusExpression | PrefixUnaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/UnaryPlusExpression.cs |  |  |
-| UncheckedStatement | CheckedStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/UncheckedStatement.cs |  | Wrap-around parity verified (grid G03). |
+| UncheckedExpression | CheckedExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/UncheckedExpression.cs | https://github.com/DavidObando/gsharp/issues/1881 |  |
+| UncheckedStatement | CheckedStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/UncheckedStatement.cs | https://github.com/DavidObando/gsharp/issues/1881 | Wrap-around parity verified (grid G03). |
 | UnsafeStatement | UnsafeStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/UnsafeStatement.cs |  |  |
 | UnsignedRightShiftAssignmentExpression | AssignmentExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/UnsignedRightShiftAssignmentExpression.cs |  |  |
 | UnsignedRightShiftExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/UnsignedRightShiftExpression.cs |  |  |
@@ -328,11 +328,11 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | XmlText | XmlTextSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | XmlTextAttribute | XmlTextAttributeSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 
-## Gap (20)
+## Gap (19)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| CheckedExpression | CheckedExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1881 |  |
+| FieldExpression | FieldExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1907 | C# 14 field keyword. |
 | FunctionPointerCallingConvention | FunctionPointerCallingConventionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |
 | FunctionPointerParameter | FunctionPointerParameterSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |
 | FunctionPointerParameterList | FunctionPointerParameterListSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |
@@ -346,8 +346,8 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | ImplicitStackAllocArrayCreationExpression | ImplicitStackAllocArrayCreationExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1897 | ADR-0124 stackalloc surface. |
 | LabeledStatement | LabeledStatementSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1884 |  |
 | PointerMemberAccessExpression | MemberAccessExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1905 | p->X lowered to p.X; (*p).X compiles. |
+| PrimaryConstructorBaseType | PrimaryConstructorBaseTypeSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1909 |  |
 | RangeExpression | RangeExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1896 | Lowers to .Slice(...) which gsc cannot resolve on arrays/strings. |
 | RefExpression | RefExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1900 | ref argument/return seam (&x pass-by-address). |
 | RefType | RefTypeSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1900 |  |
 | SpreadElement | SpreadElementSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1897 |  |
-| UncheckedExpression | CheckedExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1881 |  |

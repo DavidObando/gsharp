@@ -7,6 +7,9 @@ BitwiseAndExpression: int=8 bool=False
 BitwiseNotExpression: notFive=-6 notZero=-1
 BitwiseOrExpression: int=14 bool=True
 CastExpression: truncated=3 half=3.5 letter=B narrowed=44
+CheckedExpression: sum=1002000 product=2000000000
+CheckedExpression: overflow caught=True wrapped=0
+CheckedExpression: byte overflow caught=True
 CoalesceAssignmentExpression: name=fallback keep=kept count=9 keptCount=3
 CoalesceExpression: first=value picked=21
 ConditionalAccessExpression: len=5 nullLen=-1
@@ -51,5 +54,8 @@ SuppressNullableWarningExpression: value=present len=7
 TypeOfExpression: int=Int32 string=String double=System.Double
 UnaryMinusExpression: negated=-5 double=-2.5 expr=-7
 UnaryPlusExpression: plus=5 double=2.5
+UncheckedExpression: wrapped=-2147483648
+UncheckedExpression: wrappedU=0
+UncheckedExpression: narrowed=44
 UnsignedRightShiftAssignmentExpression: v=6 w=1073741816
 UnsignedRightShiftExpression: a=8 logical=2147483644 arithmetic=-4 long=9223372036854775804 uint=2147483644

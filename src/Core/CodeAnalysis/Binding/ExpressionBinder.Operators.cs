@@ -1377,7 +1377,10 @@ internal sealed partial class ExpressionBinder
             boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, boundOperator.Type);
         }
 
-        return new BoundBinaryExpression(null, boundLeft, boundOperator, boundRight);
+        // Issue #1881: Sum/Difference/Product bound inside a `checked`
+        // context trap on overflow; every other operator kind ignores the
+        // flag (comparisons, bitwise ops, etc. never overflow-check).
+        return new BoundBinaryExpression(null, boundLeft, boundOperator, boundRight, binderCtx.IsCheckedContext);
     }
 
     /// <summary>
