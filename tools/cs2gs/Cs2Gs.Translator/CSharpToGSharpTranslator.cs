@@ -51,6 +51,15 @@ public sealed class CSharpToGSharpTranslator
     // pass per compilation.
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, HashSet<INamedTypeSymbol>> SubclassedBaseTypesCache = new();
 
+    // Issue #1910: a `partial` class/struct/interface/record has ONE symbol but
+    // MULTIPLE `TypeDeclarationSyntax` parts (one per file/declaration). Each
+    // part used to be translated independently, emitting a complete, duplicate
+    // G# type declaration per part (GS0102) instead of one merged declaration.
+    // Cached per `Compilation` for the same reason as `SubclassedBaseTypesCache`
+    // above: it is a pure function of the source symbol tree, invariant across
+    // every document translated from the same compilation.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>>> PartialTypePartsCache = new();
+
     /// <summary>
     /// Translates a loaded C# document into a G# <see cref="CompilationUnit"/>,
     /// recording any unsupported constructs on a fresh context. Use
@@ -96,7 +105,10 @@ public sealed class CSharpToGSharpTranslator
         IMethodSymbol entryPoint = context.Compilation.GetEntryPoint(default);
         INamedTypeSymbol entryType = entryPoint?.ContainingType;
 
-        var visitor = new DeclarationVisitor(context, new CSharpTypeMapper(), openBases, staticUsingTargets, entryPoint);
+        Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts =
+            GetOrCollectPartialTypeParts(context.Compilation);
+
+        var visitor = new DeclarationVisitor(context, new CSharpTypeMapper(), openBases, staticUsingTargets, entryPoint, partialTypeParts);
 
         var members = new List<GNode>();
         var trailingStatements = new List<GNode>();
@@ -175,6 +187,48 @@ public sealed class CSharpToGSharpTranslator
     private static HashSet<INamedTypeSymbol> GetOrCollectSubclassedBaseTypes(Compilation compilation)
     {
         return SubclassedBaseTypesCache.GetValue(compilation, CollectSubclassedBaseTypes);
+    }
+
+    /// <summary>
+    /// Issue #1910: maps every <c>partial</c> type symbol declared with more
+    /// than one <see cref="TypeDeclarationSyntax"/> part to its parts, ordered
+    /// deterministically (file path, then position) so every document
+    /// translated from this compilation agrees on which part is the "primary"
+    /// one (parts[0]) — the one declaration point that actually emits the
+    /// merged G# type. A partial record's part carrying the positional
+    /// parameter list is preferred first: only that part can supply the G#
+    /// primary-constructor parameters (<see cref="DeclarationVisitor.MapPrimaryConstructor"/>).
+    /// </summary>
+    private static Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> GetOrCollectPartialTypeParts(Compilation compilation)
+    {
+        return PartialTypePartsCache.GetValue(compilation, CollectPartialTypeParts);
+    }
+
+    private static Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> CollectPartialTypeParts(Compilation compilation)
+    {
+        var result = new Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>>(SymbolEqualityComparer.Default);
+        foreach (INamedTypeSymbol type in EnumerateNamedTypes(compilation.Assembly.GlobalNamespace))
+        {
+            if (type.DeclaringSyntaxReferences.Length <= 1)
+            {
+                continue;
+            }
+
+            List<TypeDeclarationSyntax> parts = type.DeclaringSyntaxReferences
+                .Select(r => r.GetSyntax())
+                .OfType<TypeDeclarationSyntax>()
+                .OrderByDescending(p => p is RecordDeclarationSyntax record && record.ParameterList != null)
+                .ThenBy(p => p.SyntaxTree.FilePath, StringComparer.Ordinal)
+                .ThenBy(p => p.SpanStart)
+                .ToList();
+
+            if (parts.Count > 1)
+            {
+                result[type] = parts;
+            }
+        }
+
+        return result;
     }
 
     private static HashSet<INamedTypeSymbol> CollectSubclassedBaseTypes(Compilation compilation)
@@ -372,6 +426,13 @@ public sealed class CSharpToGSharpTranslator
         private readonly TranslationContext context;
         private readonly CSharpTypeMapper typeMapper;
         private readonly HashSet<INamedTypeSymbol> subclassedBases;
+
+        // Issue #1910: every `partial` type symbol with more than one
+        // declaration part, mapped to its parts in canonical (deterministic)
+        // order — see `CSharpToGSharpTranslator.CollectPartialTypeParts`. Only
+        // `parts[0]` (the "primary" part) is translated into a G# type
+        // declaration; every other part's members are merged into it.
+        private readonly Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts;
 
         // Issue #1201 / ADR-0134: the types targeted by `using static X` in this
         // document. A bare reference to one of their static members is left
@@ -585,12 +646,14 @@ public sealed class CSharpToGSharpTranslator
             CSharpTypeMapper typeMapper,
             HashSet<INamedTypeSymbol> subclassedBases,
             HashSet<INamedTypeSymbol> staticUsingTargets,
-            IMethodSymbol entryPoint)
+            IMethodSymbol entryPoint,
+            Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts)
         {
             this.context = context;
             this.typeMapper = typeMapper;
             this.subclassedBases = subclassedBases;
             this.staticUsingTargets = staticUsingTargets ?? new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+            this.partialTypeParts = partialTypeParts ?? new Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>>(SymbolEqualityComparer.Default);
 
             // `entryPoint` is threaded in by the caller (`TranslateDocument`)
             // instead of being recomputed here: `Compilation.GetEntryPoint`
@@ -968,10 +1031,10 @@ public sealed class CSharpToGSharpTranslator
         /// constructor, not a record).
         /// </summary>
         private List<(string Name, GExpression Value)> CollectGetOnlyAutoPropertyInitializers(
-            TypeDeclarationSyntax node)
+            IReadOnlyList<MemberDeclarationSyntax> members)
         {
             var result = new List<(string Name, GExpression Value)>();
-            foreach (PropertyDeclarationSyntax prop in node.Members.OfType<PropertyDeclarationSyntax>())
+            foreach (PropertyDeclarationSyntax prop in members.OfType<PropertyDeclarationSyntax>())
             {
                 if (prop.Modifiers.Any(SyntaxKind.StaticKeyword) ||
                     prop.Initializer == null ||
@@ -979,6 +1042,10 @@ public sealed class CSharpToGSharpTranslator
                 {
                     continue;
                 }
+
+                // Issue #1910: a merged-in property from another partial part
+                // lives in a different `SyntaxTree`.
+                using IDisposable modelScope = this.context.UseSemanticModelFor(prop.SyntaxTree);
 
                 var symbol = this.context.GetDeclaredSymbol(prop) as IPropertySymbol;
                 if (symbol != null &&
@@ -1001,9 +1068,9 @@ public sealed class CSharpToGSharpTranslator
         /// the same type via <c>: this(...)</c>. Such a constructor is the place
         /// into which get-only auto-property initializers are injected (OD-T1).
         /// </summary>
-        private static bool HasDesignatedInstanceConstructor(TypeDeclarationSyntax node)
+        private static bool HasDesignatedInstanceConstructor(IReadOnlyList<MemberDeclarationSyntax> members)
         {
-            return node.Members
+            return members
                 .OfType<ConstructorDeclarationSyntax>()
                 .Any(c => !c.Modifiers.Any(SyntaxKind.StaticKeyword) &&
                     (c.Initializer == null || c.Initializer.ThisOrBaseKeyword.IsKind(SyntaxKind.BaseKeyword)));
@@ -1221,6 +1288,25 @@ public sealed class CSharpToGSharpTranslator
 
             var symbol = this.context.GetDeclaredSymbol(node) as INamedTypeSymbol;
 
+            // Issue #1910: a `partial` type is declared once per file/part but
+            // has a single symbol. Only the "primary" part (parts[0], see
+            // `CSharpToGSharpTranslator.CollectPartialTypeParts`) emits a G#
+            // type declaration; its member loop below merges in every other
+            // part's members so the type is declared exactly once (GS0102 was
+            // the two-full-declarations symptom). A non-primary part therefore
+            // contributes nothing of its own here.
+            List<TypeDeclarationSyntax> otherParts = null;
+            if (symbol != null && this.partialTypeParts.TryGetValue(symbol, out List<TypeDeclarationSyntax> parts))
+            {
+                bool isPrimaryPart = parts[0].SyntaxTree == node.SyntaxTree && parts[0].Span == node.Span;
+                if (!isPrimaryPart)
+                {
+                    return null;
+                }
+
+                otherParts = parts.Skip(1).ToList();
+            }
+
             // Issue #1849: this aggregate gets its own null-seam synthetic-helper
             // collection/counter, saved/restored around the whole method so a
             // nested type declaration's recursive `VisitAggregate` call (below,
@@ -1232,7 +1318,7 @@ public sealed class CSharpToGSharpTranslator
             this.synthHelperCounter = 0;
             try
             {
-                return this.VisitAggregateCore(node, kind.Value, symbol);
+                return this.VisitAggregateCore(node, kind.Value, symbol, otherParts);
             }
             finally
             {
@@ -1241,7 +1327,11 @@ public sealed class CSharpToGSharpTranslator
             }
         }
 
-        private GMember VisitAggregateCore(TypeDeclarationSyntax node, TypeDeclarationKind kindValue, INamedTypeSymbol symbol)
+        private GMember VisitAggregateCore(
+            TypeDeclarationSyntax node,
+            TypeDeclarationKind kindValue,
+            INamedTypeSymbol symbol,
+            IReadOnlyList<TypeDeclarationSyntax> otherParts)
         {
             TypeDeclarationKind? kind = kindValue;
 
@@ -1294,6 +1384,19 @@ public sealed class CSharpToGSharpTranslator
                     TranslationSeverity.Info));
             }
 
+            // Issue #1910: merge in every other partial part's members (from any
+            // file) so the constructor-lift/static-initializer/property-inits
+            // passes below and the main member loop see the FULL member set,
+            // not just this (primary) part's own `node.Members`.
+            List<MemberDeclarationSyntax> mergedMembers = node.Members.ToList();
+            if (otherParts != null)
+            {
+                foreach (TypeDeclarationSyntax part in otherParts)
+                {
+                    mergedMembers.AddRange(part.Members);
+                }
+            }
+
             // T2 (ADR-0115 §B.3): canonicalize immutable-field initialization.
             // A `let` field is read-only after construction but — like a C#
             // `readonly` field (issue #947) — is assignable inside the declaring
@@ -1302,7 +1405,7 @@ public sealed class CSharpToGSharpTranslator
             // constructor is a simple parameter-to-member copy; non-liftable
             // constructors keep their explicit `init` and assign the `let`
             // fields directly, which is now valid G#.
-            ConstructorLift lift = this.AnalyzeConstructorLift(node, symbol, kind.Value);
+            ConstructorLift lift = this.AnalyzeConstructorLift(node, mergedMembers, symbol, kind.Value);
 
             // OD-T1: when the explicit constructor is kept (not lifted to a primary
             // constructor) and the type is a plain class/struct, get-only
@@ -1311,7 +1414,7 @@ public sealed class CSharpToGSharpTranslator
             List<(string Name, GExpression Value)> propertyCtorInits =
                 !lift.DropConstructor &&
                     (kind == TypeDeclarationKind.Class || kind == TypeDeclarationKind.Struct)
-                    ? this.CollectGetOnlyAutoPropertyInitializers(node)
+                    ? this.CollectGetOnlyAutoPropertyInitializers(mergedMembers)
                     : new List<(string Name, GExpression Value)>();
 
             // Issue #1729 (mode 4): staticFieldInitializers is one shared dictionary
@@ -1324,12 +1427,16 @@ public sealed class CSharpToGSharpTranslator
             // exit would wipe the outer type's not-yet-consumed folded fields.
             var staticFieldInitializersSnapshot = new HashSet<ISymbol>(
                 this.staticFieldInitializers.Keys, SymbolEqualityComparer.Default);
-            this.CollectStaticFieldInitializers(node, symbol);
+            this.CollectStaticFieldInitializers(mergedMembers, symbol);
 
             var instanceMembers = new List<GMember>();
             var sharedMembers = new List<GMember>();
-            foreach (MemberDeclarationSyntax member in node.Members)
+            foreach (MemberDeclarationSyntax member in mergedMembers)
             {
+                // Issue #1910: a merged-in member from another partial part lives
+                // in a different `SyntaxTree`; resolve it (and everything nested
+                // inside it) through that tree's own semantic model.
+                using IDisposable modelScope = this.context.UseSemanticModelFor(member.SyntaxTree);
                 foreach ((GMember translated, bool isStatic) in this.TranslateMember(member, kind.Value, lift, propertyCtorInits))
                 {
                     // A C# operator overload translates to a receiver-clause
@@ -1403,7 +1510,7 @@ public sealed class CSharpToGSharpTranslator
             // arises in practice.
             if (propertyCtorInits.Count > 0 &&
                 kind == TypeDeclarationKind.Class &&
-                !HasDesignatedInstanceConstructor(node))
+                !HasDesignatedInstanceConstructor(mergedMembers))
             {
                 var initStatements = propertyCtorInits
                     .Select(p => (GStatement)new AssignmentStatement(new IdentifierExpression(p.Name), p.Value))
@@ -1504,6 +1611,7 @@ public sealed class CSharpToGSharpTranslator
         /// </summary>
         private ConstructorLift AnalyzeConstructorLift(
             TypeDeclarationSyntax node,
+            IReadOnlyList<MemberDeclarationSyntax> members,
             INamedTypeSymbol symbol,
             TypeDeclarationKind kind)
         {
@@ -1523,7 +1631,7 @@ public sealed class CSharpToGSharpTranslator
                 return ConstructorLift.None;
             }
 
-            List<ConstructorDeclarationSyntax> instanceCtors = node.Members
+            List<ConstructorDeclarationSyntax> instanceCtors = members
                 .OfType<ConstructorDeclarationSyntax>()
                 .Where(c => !c.Modifiers.Any(SyntaxKind.StaticKeyword))
                 .ToList();
@@ -1542,6 +1650,11 @@ public sealed class CSharpToGSharpTranslator
             {
                 return ConstructorLift.None;
             }
+
+            // Issue #1910: the constructor may be a merged-in member from a
+            // different partial part/file; resolve it (and everything it
+            // references) through that tree's own semantic model.
+            using IDisposable modelScope = this.context.UseSemanticModelFor(ctor.SyntaxTree);
 
             var ctorSymbol = this.context.GetDeclaredSymbol(ctor) as IMethodSymbol;
             if (ctorSymbol == null)
@@ -2951,14 +3064,22 @@ public sealed class CSharpToGSharpTranslator
         /// constructor so they can be re-attached to the corresponding fields
         /// (G# has no static-constructor form; ADR-0115 §B.11).
         /// </summary>
-        private void CollectStaticFieldInitializers(TypeDeclarationSyntax node, INamedTypeSymbol typeSymbol)
+        private void CollectStaticFieldInitializers(IReadOnlyList<MemberDeclarationSyntax> members, INamedTypeSymbol typeSymbol)
         {
-            foreach (MemberDeclarationSyntax member in node.Members)
+            foreach (MemberDeclarationSyntax member in members)
             {
                 if (member is not ConstructorDeclarationSyntax ctor ||
                     !ctor.Modifiers.Any(SyntaxKind.StaticKeyword) ||
-                    !this.IsFoldableStaticConstructor(ctor, typeSymbol) ||
                     ctor.Body == null)
+                {
+                    continue;
+                }
+
+                // Issue #1910: a merged-in static constructor from another
+                // partial part/file lives in a different `SyntaxTree`.
+                using IDisposable modelScope = this.context.UseSemanticModelFor(ctor.SyntaxTree);
+
+                if (!this.IsFoldableStaticConstructor(ctor, typeSymbol))
                 {
                     continue;
                 }

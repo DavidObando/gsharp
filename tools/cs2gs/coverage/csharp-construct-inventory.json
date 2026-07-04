@@ -397,7 +397,7 @@
     "rule": "ADR-0115 \u00A7B.4",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/ClassDeclaration.cs",
-    "notes": "C#12 primary ctors dropped (issue #1909); partial parts not merged (issue #1910)."
+    "notes": "C#12 primary ctors dropped (issue #1909); partial parts across multiple declarations/files now merge into one G# type declaration (issue #1910, resolved)."
   },
   {
     "kind": "CoalesceAssignmentExpression",
