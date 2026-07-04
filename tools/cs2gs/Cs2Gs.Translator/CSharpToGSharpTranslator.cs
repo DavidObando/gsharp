@@ -1602,6 +1602,34 @@ public sealed class CSharpToGSharpTranslator
             // fields directly, which is now valid G#.
             ConstructorLift lift = this.AnalyzeConstructorLift(node, mergedMembers, symbol, kind.Value);
 
+            // Issue #1990: a G# `struct`/`data struct` can NEVER carry an
+            // explicit `init(...)` constructor — the parser only accepts it on a
+            // `class` header (ADR-0065 §5's "both primary + explicit init"
+            // coexistence is class-only; `DeclarationBinder.BindConstructors`
+            // early-returns for a non-class type, so a struct's explicit ctors
+            // are simply never bound). The lift above only drops the explicit
+            // constructor for the single-ctor, fully-liftable shape; a struct
+            // with MULTIPLE instance constructors — or one unliftable
+            // constructor (e.g. it reads an instance member, or reassigns a
+            // field) — leaves `lift.DropConstructor` false, which would
+            // otherwise fall through to emitting an invalid `init(...)` on the
+            // struct. Downgrade such a type to a class/data class instead: the
+            // same "no direct G# form" downgrade already used for records above
+            // (ADR-0115 §B.4), trading value semantics for a compilable
+            // translation that preserves every constructor faithfully.
+            if (!lift.DropConstructor &&
+                (kind == TypeDeclarationKind.Struct || kind == TypeDeclarationKind.DataStruct) &&
+                mergedMembers.OfType<ConstructorDeclarationSyntax>().Any(c => !c.Modifiers.Any(SyntaxKind.StaticKeyword)))
+            {
+                bool wasDataStruct = kind == TypeDeclarationKind.DataStruct;
+                kind = wasDataStruct ? TypeDeclarationKind.DataClass : TypeDeclarationKind.Class;
+                this.context.Report(new TranslationDiagnostic(
+                    nameof(SyntaxKind.StructDeclaration),
+                    $"'{node.Identifier.Text}' maps to a '{(wasDataStruct ? "data class" : "class")}' because a G# struct cannot carry an explicit constructor that wasn't lifted to a primary constructor ('init(...)' is valid only on a class; ADR-0115 §B.3/§B.4, issue #1990).",
+                    node.GetLocation(),
+                    TranslationSeverity.Info));
+            }
+
             // Issue #2003: a primary-constructor parameter (native C#12 shape or
             // T2-lifted from an explicit ctor) becomes a same-named G# field
             // (ADR-0065 §5) that is a cs2gs-SYNTHESIZED sibling — it has no
