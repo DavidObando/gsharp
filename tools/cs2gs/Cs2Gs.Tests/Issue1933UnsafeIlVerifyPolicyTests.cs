@@ -92,6 +92,64 @@ public class Issue1933UnsafeIlVerifyPolicyTests
     }
 
     /// <summary>
+    /// Issue #1985: G05's marker scopes the allowance to just the
+    /// stackalloc-emitting fixture — a future genuine unsafe-IL error
+    /// elsewhere in G05 must not be swallowed by the app-wide marker.
+    /// </summary>
+    [Fact]
+    public void CorpusDiscovery_G05CollectionsConsole_ScopesAllowUnsafeIlToStackAllocFixture()
+    {
+        string corpus = ResolveCorpusDir();
+        CorpusApp g05 = CorpusDiscovery.FindById(corpus, "corpus/G05-Collections-Console");
+
+        Assert.NotNull(g05);
+        Assert.True(g05.AllowUnsafeIl);
+        Assert.Equal(
+            new[] { "Corpus.Grid05.StackAllocArrayCreationExpressionFixture" },
+            g05.AllowUnsafeIlTypes);
+    }
+
+    /// <summary>
+    /// Issue #1985: an ilverify error whose failing method is NOT in the
+    /// marker's allow-listed fixture types still gates the stage, even though
+    /// the app carries the marker — the whole app is no longer a blanket
+    /// allowance once the marker is scoped.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_UnsafeIlError_OutsideAllowedFixtureType_StillFailsStage()
+    {
+        var error = new IlVerifyError(
+            "ExpectedNumericType",
+            "Corpus.Grid05.SomeOtherFixture::Run()",
+            "[IL]: Error [ExpectedNumericType]: [/abs/App.dll : Corpus.Grid05.SomeOtherFixture::Run()] boom");
+        IlVerifyResult fakeResult = IlVerifyResult.FromRun(1, error.RawLine, new[] { error });
+
+        StageOutcome outcome = await RunWithFakeResultAsync(
+            allowUnsafeIl: true,
+            fakeResult,
+            allowUnsafeIlTypes: new[] { "Corpus.Grid05.StackAllocArrayCreationExpressionFixture" });
+
+        Assert.Equal(StageStatus.Failed, outcome.Status);
+        Assert.Single(outcome.Artifacts);
+    }
+
+    /// <summary>
+    /// Issue #1985: an ilverify error whose failing method IS in the marker's
+    /// allow-listed fixture types passes, same as the whole-app allowance.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_UnsafeIlError_InsideAllowedFixtureType_PassesStage()
+    {
+        StageOutcome outcome = await RunWithFakeResultAsync(
+            allowUnsafeIl: true,
+            FakeUnverifiablePointerResult(),
+            allowUnsafeIlTypes: new[] { "Corpus.Grid12.Constructs.PointerTypeFixture" });
+
+        Assert.Equal(StageStatus.Passed, outcome.Status);
+        Assert.Empty(outcome.Artifacts);
+    }
+
+    /// <summary>
     /// An app with no <c>ilverify.allow-unsafe</c> marker file (the common
     /// case) discovers <see cref="CorpusApp.AllowUnsafeIl"/> as
     /// <see langword="false"/>.
@@ -155,7 +213,8 @@ public class Issue1933UnsafeIlVerifyPolicyTests
         return IlVerifyResult.FromRun(1, error.RawLine, new[] { error });
     }
 
-    private static async Task<StageOutcome> RunWithFakeResultAsync(bool allowUnsafeIl, IlVerifyResult fakeResult)
+    private static async Task<StageOutcome> RunWithFakeResultAsync(
+        bool allowUnsafeIl, IlVerifyResult fakeResult, IReadOnlyList<string> allowUnsafeIlTypes = null)
     {
         string outRoot = NewOutputRoot("issue-1933-unsafe-il");
         var runner = new FakeResultIlVerifyRunner(fakeResult);
@@ -168,7 +227,8 @@ public class Issue1933UnsafeIlVerifyPolicyTests
             "corpus/Fake",
             "/fake/Fake.csproj",
             TargetKind.Exe,
-            allowUnsafeIl: allowUnsafeIl);
+            allowUnsafeIl: allowUnsafeIl,
+            allowUnsafeIlTypes: allowUnsafeIlTypes);
         var options = new PipelineOptions { GscPath = "/fake/gsc.dll", OutputRoot = outRoot };
         var context = new StageExecutionContext(
             app,
