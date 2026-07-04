@@ -1537,8 +1537,7 @@
     "rule": "ADR-0115 \u00A7B.7",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/OmittedTypeArgument.cs",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1915",
-    "notes": "nameof(List\u003C\u003E) forms green (C#14); typeof(List\u003C\u003E) emits typeof(List) (issue #1915)."
+    "notes": "nameof(List\u003C\u003E)/typeof(List\u003C\u003E) forms green (C#14); typeof of an unbound generic emits the bare generic-definition name (typeof(List)), which gsc\u0027s binder now resolves via arity-suffixed CLR lookup (issue #1915, fixed)."
   },
   {
     "kind": "OperatorDeclaration",
@@ -2056,7 +2055,7 @@
     "rule": "ADR-0115 \u00A7B.4",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/StructDeclaration.cs",
-    "notes": "Generic-struct ctor zip declined (issue #1915). Cross-assembly G# metadata now preserves imported data-struct / primary-constructor semantics (issue #1929)."
+    "notes": "Generic-struct ctor zip now matches non-generic structs (issue #1915, fixed: comparisons keyed by parameter ordinal \u002B OriginalDefinition instead of constructed-type identity). Cross-assembly G# metadata now preserves imported data-struct / primary-constructor semantics (issue #1929)."
   },
   {
     "kind": "Subpattern",
