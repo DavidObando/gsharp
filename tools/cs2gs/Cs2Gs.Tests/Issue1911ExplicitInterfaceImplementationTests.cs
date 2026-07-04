@@ -75,7 +75,7 @@ namespace Corpus.Issue1911
         Assert.DoesNotContain("private func Greet", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(
             context.Diagnostics,
-            d => d.Severity == TranslationSeverity.Warning && d.Message.Contains("explicit interface", StringComparison.OrdinalIgnoreCase));
+            d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("explicit interface", StringComparison.OrdinalIgnoreCase));
         AssertRoundTripParses(printed);
     }
 
@@ -118,7 +118,7 @@ namespace Corpus.Issue1911
 
         Assert.Contains(
             context.Diagnostics,
-            d => d.Severity == TranslationSeverity.Warning
+            d => d.Severity == TranslationSeverity.Unsupported
                 && d.Message.Contains("explicit interface implementation", StringComparison.OrdinalIgnoreCase)
                 && d.Message.Contains("LoudHost.IGreeter.Greet", StringComparison.Ordinal));
         AssertRoundTripParses(printed);
@@ -129,11 +129,13 @@ namespace Corpus.Issue1911
     /// happen to share a name and signature (a same-name diamond, no public
     /// method of that name at all) are de-duplicated to a single surviving
     /// public method (the earliest-declared one) rather than both translating
-    /// and colliding with each other. This is not a semantic-loss case: a
-    /// single G# method satisfies every implemented interface whose abstract
-    /// member matches its name and signature, so the one survivor still fills
-    /// both interfaces' slots — the diagnostic exists purely to explain the
-    /// de-duplication, not to flag lost behavior.
+    /// and colliding with each other. The survivor still fills both
+    /// interfaces' slots by name+signature, but the two source bodies here are
+    /// distinct ("hi" vs. "welcome"): calling through <c>IWelcomer</c> after
+    /// translation now silently observes the <c>IGreeter</c> body instead.
+    /// This IS a semantic-loss case (same failure class as the
+    /// public-plus-explicit shape), so it is diagnosed at
+    /// <see cref="TranslationSeverity.Unsupported"/>.
     /// </summary>
     [Fact]
     public void TwoExplicitImplementationsWithNoPublicSibling_DeduplicateToOneSurvivor()
@@ -170,9 +172,95 @@ namespace Corpus.Issue1911
 
         Assert.Contains(
             context.Diagnostics,
-            d => d.Severity == TranslationSeverity.Warning
+            d => d.Severity == TranslationSeverity.Unsupported
                 && d.Message.Contains("Multi.IWelcomer.Greet", StringComparison.Ordinal)
                 && d.Message.Contains("Multi.IGreeter.Greet", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Review follow-up (PR #1994 rubber-duck): the collision-drop diagnostic
+    /// must be raised at <see cref="TranslationSeverity.Unsupported"/>, not
+    /// <see cref="TranslationSeverity.Warning"/> — <see cref="TranslateStage"/>
+    /// only forwards <c>Unsupported</c> diagnostics into the triage artifact
+    /// stream (see <c>TranslateStage.ExecuteAsync</c>'s
+    /// <c>Where(d =&gt; d.Severity == TranslationSeverity.Unsupported)</c>
+    /// filter), so a <c>Warning</c>-severity drop sat only in the in-memory
+    /// <see cref="TranslationContext.Diagnostics"/> list and never reached a
+    /// real <c>cs2gs</c> run's triage output or failed the stage. Running the
+    /// collision case through the real <see cref="TranslateStage"/> (not just
+    /// <see cref="CSharpToGSharpTranslator"/> directly) confirms the stage now
+    /// fails and the drop is disclosed in a triage artifact.
+    /// </summary>
+    [Fact]
+    public async Task CoexistingExplicitImplementationAndPublicMethod_SurfacesInRealTranslateStage()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            return;
+        }
+
+        string projectDir = NewScratchDir("translate-collision-drop");
+        File.WriteAllText(Path.Combine(projectDir, "Directory.Build.props"), "<Project></Project>");
+        string projectPath = Path.Combine(projectDir, "Collision.csproj");
+        File.WriteAllText(projectPath, @"<Project Sdk=""Microsoft.NET.Sdk"">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+</Project>
+");
+        File.WriteAllText(
+            Path.Combine(projectDir, "Program.cs"),
+            @"namespace Corpus.Issue1911
+{
+    public interface IGreeter
+    {
+        string Greet();
+    }
+
+    public class LoudHost : IGreeter
+    {
+        public string Greet()
+        {
+            return ""hello-public"";
+        }
+
+        string IGreeter.Greet()
+        {
+            return ""hello-explicit"";
+        }
+    }
+
+    public class Program
+    {
+        public static void Main()
+        {
+        }
+    }
+}
+");
+
+        string outRoot = NewOutputRoot("translate-collision-drop");
+        var options = new PipelineOptions { GscPath = compiler, OutputRoot = outRoot };
+        var pipeline = new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() });
+
+        var app = new CorpusApp("test/CollisionDrop", projectPath, TargetKind.Exe);
+
+        RunResult result = await pipeline.RunAsync(new[] { app });
+        AppResult appResult = Assert.Single(result.Apps);
+
+        Assert.False(
+            appResult.Succeeded,
+            "An Unsupported-severity collision drop must fail the translate stage, not pass silently.");
+        Assert.NotEmpty(appResult.Artifacts);
+
+        string[] triageFiles = Directory.GetFiles(outRoot, "*.json", SearchOption.AllDirectories)
+            .Where(f => !Path.GetFileName(f).Equals("summary.json", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        string match = triageFiles.FirstOrDefault(
+            f => File.ReadAllText(f).Contains("LoudHost.IGreeter.Greet", StringComparison.Ordinal));
+        Assert.NotNull(match);
     }
 
     /// <summary>
@@ -296,6 +384,13 @@ namespace Corpus.Issue1911
     private static string NewOutputRoot(string label)
     {
         string root = Path.Combine(AppContext.BaseDirectory, "pipeline-tests", label, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        return root;
+    }
+
+    private static string NewScratchDir(string label)
+    {
+        string root = Path.Combine(AppContext.BaseDirectory, "loader-tests", label, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         return root;
     }

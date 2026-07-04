@@ -2325,13 +2325,14 @@ public sealed class CSharpToGSharpTranslator
             // abstract explicit impls) — keeping both would be an exact-signature
             // duplicate (GS0264). Only one survives (the public method if there is
             // one, else whichever explicit impl appears first in source); the rest
-            // are dropped. A single surviving public method still satisfies every
-            // implemented interface whose abstract member matches its name+signature
-            // (that is exactly why C# allowed the duplicate signature to begin with),
-            // so the diamond-of-explicit-impls shape is NOT a semantic loss — only
-            // the "coexists with a differently-bodied public method" shape is (the
-            // two C# bodies necessarily diverge there, so G# call sites, direct and
-            // interface-typed alike, all observe the surviving method's body).
+            // are dropped. The survivor still fills every implemented interface's
+            // abstract slot by name+signature (that is exactly why C# allowed the
+            // duplicate signature to begin with), but slot-occupancy is not the
+            // same as behavioral fidelity: any dropped explicit implementation may
+            // have its own body distinct from the survivor's (this is true both for
+            // the "coexists with a differently-bodied public method" shape AND for
+            // a diamond of two-or-more explicit impls with distinct bodies), so
+            // every drop here is a potential semantic loss and is reported as such.
             if (symbol != null && symbol.ExplicitInterfaceImplementations.Length > 0)
             {
                 IMethodSymbol survivor = FindPriorCollidingSibling(symbol, node);
@@ -2342,12 +2343,14 @@ public sealed class CSharpToGSharpTranslator
                         $"shares its name and signature with '{symbol.ContainingType.Name}.{FormatSiblingName(survivor)}'; " +
                         "G# has no explicit-interface-implementation surface (ADR-0091), so the two C# methods cannot both " +
                         "be emitted (would be an exact-signature duplicate, GS0264). This declaration is dropped in favor " +
-                        "of the surviving sibling, which already satisfies the interface by name; when the surviving sibling " +
-                        "is a differently-bodied public method (not another explicit implementation of a different interface), " +
-                        "any C# call through the interface-typed reference that previously reached this body now observes the " +
-                        "surviving method's body instead (semantic loss, known gap, issue #1911).";
+                        "of the surviving sibling, which already satisfies the interface by name; if the surviving " +
+                        "sibling's body differs from this dropped declaration's body (possible whenever the survivor is a " +
+                        "differently-bodied public method, or another explicit implementation of a different interface with " +
+                        "its own distinct body), any C# call through the interface-typed reference that previously reached " +
+                        "this body now silently observes the surviving method's body instead (semantic loss, known gap, " +
+                        "issue #1911).";
                     this.context.Report(new TranslationDiagnostic(
-                        nameof(SyntaxKind.MethodDeclaration), message, node.GetLocation(), TranslationSeverity.Warning));
+                        nameof(SyntaxKind.MethodDeclaration), message, node.GetLocation(), TranslationSeverity.Unsupported));
 
                     return (null, false);
                 }
