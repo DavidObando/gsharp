@@ -138,16 +138,30 @@ internal sealed partial class MethodBodyEmitter
     }
 
     /// <summary>
-    /// Issue #2066: emits the shared <c>dup / ldvirtftn / newobj</c>
-    /// delegate-to-delegate adaptation sequence, guarded so a <c>null</c>
-    /// source (e.g. an unsubscribed field-like event snapshotted into a
-    /// function/delegate-typed local) flows through as <c>null</c> instead of
-    /// unconditionally rebuilding a delegate. Without the guard, `ldvirtftn`
-    /// resolves the (non-null) Invoke method pointer even over a `null`
-    /// instance reference, and the subsequent `newobj` then throws
-    /// <see cref="ArgumentException"/> at runtime ("Delegate to an instance
-    /// method cannot have null 'this'") because the CLR delegate ctor
-    /// requires a non-null target for an instance-method pointer.
+    /// Issue #2066 / #2083: emits the shared <c>dup / ldvirtftn / newobj</c>
+    /// delegate-to-delegate adaptation sequence. When <paramref name="source"/>
+    /// is actually nullable (its bound type is a <see cref="NullableTypeSymbol"/>,
+    /// e.g. an unsubscribed field-like event snapshotted into a nullable
+    /// function/delegate-typed local), the sequence is guarded so a <c>null</c>
+    /// source flows through as <c>null</c> instead of unconditionally rebuilding
+    /// a delegate — without the guard, `ldvirtftn` resolves the (non-null)
+    /// Invoke method pointer even over a `null` instance reference, and the
+    /// subsequent `newobj` then throws <see cref="ArgumentException"/> at
+    /// runtime ("Delegate to an instance method cannot have null 'this'")
+    /// because the CLR delegate ctor requires a non-null target for an
+    /// instance-method pointer.
+    ///
+    /// The null path must not leave the un-adapted source value (statically
+    /// typed as the *source* delegate type, e.g. <c>Func&lt;string&gt;</c>) on
+    /// the stack: when the target is a covariant-adapted delegate type (e.g.
+    /// <c>Func&lt;object&gt;</c>), merging that source-typed value with the
+    /// non-null path's newly-constructed *target*-typed value at the shared
+    /// label widens the verifier-computed stack type down to their common
+    /// ancestor (<see cref="MulticastDelegate"/>), which then fails to verify
+    /// against the target's expected type. Instead, the null path pops the
+    /// leftover copy and pushes an explicit <c>ldnull</c>, whose null-reference
+    /// type merges cleanly with any reference type, including the adapted
+    /// target delegate type.
     /// </summary>
     private void EmitNullGuardedDelegateToDelegateAdaptation(BoundExpression source, EntityHandle invokeRef, EntityHandle ctorRef)
     {
@@ -157,9 +171,11 @@ internal sealed partial class MethodBodyEmitter
         var doneLabel = this.il.DefineLabel();
         this.il.Branch(ILOpCode.Brtrue, notNullLabel);
 
-        // Null path: the single remaining copy on the stack (consumed by the
-        // `brtrue` check above) is already `null`, which is a valid value of
-        // the target delegate type — nothing further to emit.
+        // Null path: discard the leftover source-typed null and push an
+        // explicit `ldnull` so its stack type merges with the target
+        // delegate type produced by the non-null path below.
+        this.il.OpCode(ILOpCode.Pop);
+        this.il.OpCode(ILOpCode.Ldnull);
         this.il.Branch(ILOpCode.Br, doneLabel);
 
         this.il.MarkLabel(notNullLabel);
