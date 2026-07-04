@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Linq;
 using Cs2Gs.CodeModel.Ast;
@@ -1218,24 +1219,27 @@ public sealed class CSharpToGSharpTranslator
                     (c.Initializer == null || c.Initializer.ThisOrBaseKeyword.IsKind(SyntaxKind.BaseKeyword)));
         }
 
-        private GExpression MapConstantDefault(IParameterSymbol symbol, SyntaxNode fallbackNode)
-        {
-            object value = symbol.ExplicitDefaultValue;
+        private GExpression MapConstantDefault(IParameterSymbol symbol, SyntaxNode fallbackNode) =>
+            this.MapConstantValue(symbol.ExplicitDefaultValue, symbol.Type, symbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() ?? fallbackNode, $"parameter '{symbol.Name}''s default value");
 
+        /// <summary>
+        /// Maps a compile-time constant <paramref name="value"/> of type
+        /// <paramref name="type"/> to its G# literal expression. Shared between an
+        /// optional parameter's own default (<see cref="MapConstantDefault"/>) and
+        /// a call site's <c>ArgumentKind.DefaultValue</c> argument (issue #1901:
+        /// <see cref="TranslateCallArguments"/> materializes a skipped default
+        /// argument explicitly when the callee is invoked indirectly through a
+        /// function-typed value — gsc's structural function type, unlike a named
+        /// function/method symbol, carries no default to fill in on its own).
+        /// </summary>
+        private GExpression MapConstantValue(object value, ITypeSymbol type, SyntaxNode fallbackNode, string diagnosticSubject)
+        {
             // Issue #1733: an enum-typed default (`Color c = Color.Blue`) must
-            // resolve to the member reference, not `symbol.ExplicitDefaultValue`'s
-            // boxed underlying integer — see the remarks on
-            // <see cref="MapEnumConstant"/>.
-            if (value != null && symbol.Type?.TypeKind == TypeKind.Enum && IsIntegral(value))
+            // resolve to the member reference, not the boxed underlying integer —
+            // see the remarks on <see cref="MapEnumConstant"/>.
+            if (value != null && type?.TypeKind == TypeKind.Enum && IsIntegral(value))
             {
-                // A parameter symbol declared in a REFERENCED assembly (e.g. a
-                // base-class/interface method whose parameters are enumerated via
-                // `IMethodSymbol.Parameters` rather than parsed from local syntax)
-                // has no `DeclaringSyntaxReferences` — fall back to the call-site
-                // node already in hand so the Unsupported diagnostic still fires
-                // instead of the default being dropped silently.
-                SyntaxNode node = symbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() ?? fallbackNode;
-                return this.MapEnumConstant(symbol.Type, value, node, $"parameter '{symbol.Name}''s default value");
+                return this.MapEnumConstant(type, value, fallbackNode, diagnosticSubject);
             }
 
             switch (value)
@@ -3504,7 +3508,15 @@ public sealed class CSharpToGSharpTranslator
                 _ => null,
             };
 
-            bool variadic = symbol.IsParams;
+            // gsc's own variadic parameter (`...T`, DeclarationBinder.cs) is always
+            // an array/slice — it has no params-COLLECTION concept (C#13). A C#
+            // `params List<int>`/`params IEnumerable<T>` parameter therefore maps
+            // to an ordinary (non-variadic) G# parameter of the FULL collection
+            // type; `variadic` here is only ever true for the genuine `params T[]`
+            // shape, which gsc's variadic slice already models 1:1. The
+            // corresponding expanded call site (`Total(1, 2, 3)`) is lowered at the
+            // CALL, not the declaration — see <see cref="TranslateParamsCollectionArguments"/>.
+            bool variadic = symbol.IsParams && symbol.Type is IArrayTypeSymbol;
             ITypeSymbol parameterType = symbol.Type;
             if (variadic && parameterType is IArrayTypeSymbol arrayType)
             {
@@ -10781,7 +10793,7 @@ public sealed class CSharpToGSharpTranslator
                 target = this.TranslateExpression(invocation.Expression);
             }
 
-            var arguments = this.TranslateArguments(invocation.ArgumentList.Arguments);
+            var arguments = this.TranslateCallArguments(invocation, invocation.ArgumentList.Arguments);
 
             // Directly invoking a nullable-reference delegate field/property
             // (`handler(args)` where `handler` is `((T) -> R)?`) needs a `!!`
@@ -10966,6 +10978,147 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return this.TranslateNamedArguments(arguments);
+        }
+
+        /// <summary>
+        /// Translates an argument list at a call site that may need lowering
+        /// gsc's structural call model cannot express on its own (issue #1901):
+        /// <list type="bullet">
+        /// <item>a C#13 "params collection" parameter (<c>params List&lt;T&gt;</c>,
+        /// <c>params IEnumerable&lt;T&gt;</c>, …) — gsc's own variadic parameter is
+        /// always an array/slice (<see cref="MapParameter"/>), so such a C#
+        /// parameter is declared in G# as an ordinary parameter of the full
+        /// collection type. An EXPANDED call (<c>Total(1, 2, 3)</c>, including the
+        /// zero-argument <c>Total()</c> form) has no matching G# argument shape,
+        /// so it is lowered here into an explicit collection construction
+        /// (<c>Total(List[int32]{1, 2, 3})</c>) that becomes that single ordinary
+        /// argument; the non-expanded, direct-collection form (<c>Total(someList)</c>)
+        /// already binds a single ordinary argument as-is and needs no lowering.</item>
+        /// <item>a C#12 lambda default parameter value omitted at an INDIRECT call
+        /// (<c>f()</c> where <c>f</c> is a local/field holding a lambda declared
+        /// <c>(int x = 10) =&gt; …</c>). gsc's lambda parameters DO carry a default
+        /// (<c>LambdaBinder.BindAndAttachParameterDefaultValue</c>), but it lives
+        /// only on the lambda's own <c>ParameterSymbol</c> — the structural
+        /// <c>FunctionTypeSymbol</c> that types the variable holding it (and that
+        /// every indirect call through that variable binds against,
+        /// <c>OverloadResolver.TryBindFunctionTypeArguments</c>) carries only
+        /// parameter TYPES, never defaults, so gsc always requires the full arity
+        /// at an indirect call. Roslyn already resolves the omitted argument to
+        /// its constant default (<c>ArgumentKind.DefaultValue</c>) regardless of
+        /// how the callee is invoked, so the missing argument is materialized
+        /// explicitly here instead of being dropped.</item>
+        /// </list>
+        /// </summary>
+        private List<GExpression> TranslateCallArguments(SyntaxNode callSyntax, SeparatedSyntaxList<ArgumentSyntax> arguments)
+        {
+            IMethodSymbol targetMethod = this.context.SemanticModel.GetOperation(callSyntax) switch
+            {
+                IInvocationOperation invocationOp => invocationOp.TargetMethod,
+                IObjectCreationOperation creationOp => creationOp.Constructor,
+                _ => null,
+            };
+            ImmutableArray<IArgumentOperation> operationArguments = this.context.SemanticModel.GetOperation(callSyntax) switch
+            {
+                IInvocationOperation invocationOp => invocationOp.Arguments,
+                IObjectCreationOperation creationOp => creationOp.Arguments,
+                _ => default,
+            };
+
+            if (operationArguments.IsDefaultOrEmpty)
+            {
+                return this.TranslateArguments(arguments);
+            }
+
+            if (targetMethod?.MethodKind == MethodKind.DelegateInvoke
+                && operationArguments.Any(a => a.ArgumentKind == ArgumentKind.DefaultValue))
+            {
+                return this.TranslateDelegateInvokeArgumentsWithDefaults(callSyntax, arguments, operationArguments);
+            }
+
+            IArgumentOperation paramsCollectionArg =
+                operationArguments.FirstOrDefault(a => a.ArgumentKind == ArgumentKind.ParamCollection);
+
+            if (paramsCollectionArg == null)
+            {
+                return this.TranslateArguments(arguments);
+            }
+
+            if (arguments.Any(a => a.NameColon != null))
+            {
+                // A named argument feeding into (or skipping ahead of) a params
+                // collection is rare enough, and interacts with enough of the
+                // existing named-argument reordering machinery, that guessing a
+                // lowering here risks silently mis-binding. Gap loudly instead
+                // (falls through to the ordinary named-argument path, which at
+                // least keeps every OTHER argument correct).
+                this.context.ReportUnsupported(
+                    callSyntax,
+                    "a named argument alongside an expanded 'params' collection call has no canonical G# lowering yet.");
+                return this.TranslateNamedArguments(arguments);
+            }
+
+            int paramsOrdinal = paramsCollectionArg.Parameter.Ordinal;
+            var translatedArguments = arguments.Take(paramsOrdinal).Select(a => this.TranslateArgument(a)).ToList();
+
+            GTypeReference elementType = paramsCollectionArg.Parameter.Type is INamedTypeSymbol { TypeArguments: [ITypeSymbol single] }
+                ? this.typeMapper.Map(single, this.context, callSyntax.GetLocation())
+                : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+
+            var collectionElements = arguments.Skip(paramsOrdinal)
+                .Select(a => new CollectionInitializerElement(this.TranslateArgument(a)))
+                .ToList();
+            var listType = new NamedTypeReference("List", new List<GTypeReference> { elementType });
+            GExpression construction = BuildConstruction(listType, new List<GExpression>());
+
+            // A zero-element params-collection call (`Total()`) has no elements to
+            // brace — gsc's collection-initializer form requires at least one
+            // element (an empty `{ }` fails to bind, GS0157); the bare
+            // construction call (`List[int32]()`) is the canonical empty form
+            // (mirrors the C# `[]`-collection-expression lowering above).
+            translatedArguments.Add(collectionElements.Count == 0
+                ? construction
+                : new CollectionInitializerExpression(construction, collectionElements));
+            return translatedArguments;
+        }
+
+        /// <summary>
+        /// Rebuilds a delegate-invoke call's full argument list — issue #1901 —
+        /// walking Roslyn's already-resolved <paramref name="operationArguments"/>
+        /// in parameter order: an <c>Explicit</c> slot consumes the next syntax
+        /// argument (translated exactly as any ordinary argument would be, so
+        /// numeric coercion/spill behavior is unchanged), and a <c>DefaultValue</c>
+        /// slot materializes that parameter's constant default directly — the
+        /// explicit value gsc's structural function-type call has no other way to
+        /// supply. Named arguments are excluded up front: C# forbids a named
+        /// argument through a delegate/lambda invocation entirely (no parameter
+        /// names survive the natural delegate type), so <paramref name="arguments"/>
+        /// is always in positional/Explicit order already.
+        /// </summary>
+        private List<GExpression> TranslateDelegateInvokeArgumentsWithDefaults(
+            SyntaxNode callSyntax,
+            SeparatedSyntaxList<ArgumentSyntax> arguments,
+            ImmutableArray<IArgumentOperation> operationArguments)
+        {
+            var result = new List<GExpression>(operationArguments.Length);
+            int nextSyntaxArgument = 0;
+            foreach (IArgumentOperation argumentOperation in operationArguments)
+            {
+                if (argumentOperation.ArgumentKind == ArgumentKind.DefaultValue)
+                {
+                    GExpression defaultValue = this.MapConstantValue(
+                        argumentOperation.Value.ConstantValue.HasValue ? argumentOperation.Value.ConstantValue.Value : null,
+                        argumentOperation.Parameter.Type,
+                        callSyntax,
+                        $"parameter '{argumentOperation.Parameter.Name}''s default value");
+                    result.Add(defaultValue ?? new IdentifierExpression("nil"));
+                    continue;
+                }
+
+                result.Add(this.TranslateArgument(arguments[nextSyntaxArgument]));
+                nextSyntaxArgument++;
+            }
+
+            return result;
         }
 
         // Reorders a named/mixed argument list into parameter DECLARATION order
@@ -11359,7 +11512,7 @@ public sealed class CSharpToGSharpTranslator
 
             var arguments = creation.ArgumentList == null
                 ? new List<GExpression>()
-                : this.TranslateArguments(creation.ArgumentList.Arguments);
+                : this.TranslateCallArguments(creation, creation.ArgumentList.Arguments);
 
             // A C# delegate creation `new SomeDelegate(target)` wraps a method
             // group, lambda, or another delegate in a named delegate type. G# has
@@ -12327,7 +12480,7 @@ public sealed class CSharpToGSharpTranslator
 
             var arguments = creation.ArgumentList == null
                 ? new List<GExpression>()
-                : this.TranslateArguments(creation.ArgumentList.Arguments);
+                : this.TranslateCallArguments(creation, creation.ArgumentList.Arguments);
 
             return this.BuildObjectCreationCore(creation, typeSymbol, type, arguments, creation.Initializer);
         }

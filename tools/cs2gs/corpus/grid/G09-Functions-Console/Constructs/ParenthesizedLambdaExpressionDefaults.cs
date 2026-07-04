@@ -1,7 +1,8 @@
-// inventory: ParenthesizedLambdaExpression — QUARANTINED at compile (gsc):
-// C#12 lambda default parameters are dropped in the emitted G# lambda, so the
-// zero-argument call fails: GS0144 "Function 'f' requires 1 arguments but was
-// given 0."
+// inventory: ParenthesizedLambdaExpression — C#12 lambda default parameters.
+// Issue #1901: a call through the lambda's variable that omits a defaulted
+// trailing argument (`f()`) is lowered to materialize that default explicitly
+// (`f(10)`) — gsc's own structural function type has no default to fall back
+// on for an indirect call, only the lambda's own ParameterSymbol does.
 using System;
 
 namespace Corpus.Grid09

@@ -32,6 +32,9 @@ OptionalAndParamsArray: namedSkip=Hello Cid x2
 OptionalAndParamsArray: sumNone=0
 OptionalAndParamsArray: sumThree=6
 OptionalAndParamsArray: sumArray=9
+ParamsCollectionsProbe: totalNone=0
+ParamsCollectionsProbe: totalThree=6
+ParamsCollectionsProbe: joined=a+b+c
 ParenthesizedLambdaExpression: add=5
 ParenthesizedLambdaExpression: mul=20
 ParenthesizedLambdaExpression: hello=hello
@@ -39,6 +42,8 @@ ParenthesizedLambdaExpression: stmt=16
 ParenthesizedLambdaExpression: report=6/7
 ParenthesizedLambdaExpressionAsync: result=42
 ParenthesizedLambdaExpressionAttributed: result=42
+ParenthesizedLambdaExpressionDefaults: fDefault=20 fGiven=6
+ParenthesizedLambdaExpressionDefaults: gDefault=6 gGiven=3
 SimpleLambdaExpression: twice=16
 SimpleLambdaExpression: scale=40
 SimpleLambdaExpression: bang=go!
