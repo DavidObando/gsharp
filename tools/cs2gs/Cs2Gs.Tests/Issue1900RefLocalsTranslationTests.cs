@@ -147,6 +147,81 @@ namespace Corpus.Issue1900
     }
 
     [Fact]
+    public void ReturnRefOverCallResult_StaysLoudGap()
+    {
+        // Issue #1987: `return ref F(x)` where the ref-return operand is
+        // itself a call result hits the same TranslateRefExpression fallback
+        // as RefAliasingCallResult_StaysLoudGap above, just at a `return ref`
+        // site instead of a `ref` local's initializer — this shape was
+        // previously untested.
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Source.cs", @"
+namespace Corpus.Issue1987
+{
+    public class Holder
+    {
+        public ref int Outer(int[] data)
+        {
+            return ref Middle(data);
+        }
+
+        private static ref int Middle(int[] values)
+        {
+            return ref values[1];
+        }
+    }
+}
+") });
+
+        Assert.True(project.BoundWithoutErrors);
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.Contains(
+            context.Diagnostics,
+            d => d.Message.Contains("not a call result", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ElementAccess_OnRefReturningIndexer_StaysLoudGap()
+    {
+        // Issue #1987: `list[i]` where the indexer is a user-defined
+        // ref-returning indexer (`ref T this[int i]`) has no canonical G#
+        // form — G# has no ref-returning indexer, so lowering to a plain
+        // index expression would drop the ref-aliasing semantics entirely.
+        // This must gap precisely here rather than emit a call-under-index
+        // that gsc later rejects with a generic compile error.
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Source.cs", @"
+namespace Corpus.Issue1987
+{
+    public class RefIndexable
+    {
+        private int[] data = new int[4];
+
+        public ref int this[int i] => ref this.data[i];
+    }
+
+    public class Holder
+    {
+        public int Read(RefIndexable list, int i)
+        {
+            return list[i];
+        }
+    }
+}
+") });
+
+        Assert.True(project.BoundWithoutErrors);
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.Contains(
+            context.Diagnostics,
+            d => d.Message.Contains("ref-returning indexer", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void RefAliasingCallResult_StaysLoudGap()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(

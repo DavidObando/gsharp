@@ -9865,6 +9865,28 @@ public sealed class CSharpToGSharpTranslator
                         return this.TranslateMultiDimElementAccess(elementAccess, multiDimArray.Rank);
                     }
 
+                    // Issue #1987: `list[i]` against a ref-returning indexer
+                    // (`ref T this[int i]`) DECLARED IN THE TRANSLATED SOURCE
+                    // (as opposed to a BCL type like `Span<T>`, whose
+                    // ref-returning indexer gsc's binder already auto-
+                    // dereferences via `BoundClrIndexExpression` +
+                    // `AutoDereferenceRefReturn` — that shape is genuinely
+                    // gap-free and must keep translating as-is). A ref-
+                    // returning indexer declared in the C# project being
+                    // translated has no gsc counterpart at all: G#'s own
+                    // `prop this[i T] U` indexer syntax has no ref-return
+                    // modifier, so the element access below would lower to a
+                    // plain call-under-index that gsc rejects with a generic
+                    // compile error instead of a precise gap. Detect it here.
+                    if (this.context.GetSymbolInfo(elementAccess).Symbol is IPropertySymbol { RefKind: not RefKind.None } refIndexer &&
+                        refIndexer.Locations.Any(l => l.IsInSource))
+                    {
+                        this.context.ReportUnsupported(
+                            elementAccess,
+                            $"element access '{elementAccess}' targets ref-returning indexer '{refIndexer.ContainingType?.Name}.this[]' which has no canonical G# form yet: G#'s user-defined indexer syntax has no ref-return modifier, so aliasing its element via a plain index expression would drop the ref semantics (issue #1987).");
+                        return new IdentifierExpression("nil");
+                    }
+
                     GExpression index = elementAccess.ArgumentList.Arguments.Count > 0
                         ? this.CoerceIndexToInt32(
                             elementAccess,
