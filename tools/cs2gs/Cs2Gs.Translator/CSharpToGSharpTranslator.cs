@@ -6616,7 +6616,7 @@ public sealed class CSharpToGSharpTranslator
             // `Dispose` — dropping it silently would compile a sync `using`
             // against an `IAsyncDisposable`-only type and gsc would reject it
             // (GS0119), so it must be threaded through, never elided.
-            bool isAwait = node.AwaitKeyword != default;
+            bool isAwait = !node.AwaitKeyword.IsKind(SyntaxKind.None);
             var statements = new List<GStatement>();
             if (node.Declaration != null)
             {
