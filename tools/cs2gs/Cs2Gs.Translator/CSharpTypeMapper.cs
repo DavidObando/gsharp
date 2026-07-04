@@ -3,8 +3,12 @@
 // </copyright>
 
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
+using System.Reflection.Metadata;
+using System.Runtime.InteropServices;
 using Cs2Gs.CodeModel.Ast;
+using Cs2Gs.Translator.Coverage;
 using Microsoft.CodeAnalysis;
 
 namespace Cs2Gs.Translator;
@@ -105,16 +109,11 @@ public sealed class CSharpTypeMapper
             return new PointerTypeReference(element);
         }
 
-        // G# has no managed form for a C# function pointer; record a structured
-        // Unsupported diagnostic rather than emit a malformed type.
-        if (type is IFunctionPointerTypeSymbol)
+        // Issue #1906: a C# function pointer (`delegate*<...>`) maps to one of
+        // G#'s two function-pointer forms — see MapFunctionPointer.
+        if (type is IFunctionPointerTypeSymbol functionPointer)
         {
-            context.Report(new TranslationDiagnostic(
-                "PointerType",
-                $"unsafe function-pointer type '{type.ToDisplayString()}' has no canonical G# form; G# does not support function-pointer types.",
-                location,
-                TranslationSeverity.Unsupported));
-            return new NamedTypeReference(UnsupportedPlaceholderType);
+            return this.MapFunctionPointer(functionPointer, context, location);
         }
 
         // A nullable value type (Nullable<T>) carries its payload as the single
@@ -150,6 +149,95 @@ public sealed class CSharpTypeMapper
     internal static bool IsSystemIndexOrRange(ITypeSymbol type) =>
         type is INamedTypeSymbol { ContainingNamespace.Name: "System", ContainingNamespace.ContainingNamespace.IsGlobalNamespace: true } named
             && (named.Name == "Index" || named.Name == "Range");
+
+    /// <summary>
+    /// Issue #1906: maps a C# function-pointer type (<c>delegate*&lt;...&gt;</c>)
+    /// to a G# function-pointer type. A plain <c>delegate*&lt;T, R&gt;</c> or an
+    /// explicit <c>delegate* managed&lt;T, R&gt;</c> is the <b>default</b>
+    /// (managed) calling convention (<see cref="SignatureCallingConvention.Default"/>)
+    /// and maps to G#'s managed form <c>*func(T) R</c> (ADR-0122 §9). A
+    /// <c>delegate* unmanaged[Cdecl]&lt;T, R&gt;</c> (and the three other named
+    /// single conventions) maps to G#'s raw form <c>unmanaged[CC] (T) -&gt; R</c>
+    /// (ADR-0095), whose <c>[CC]</c> slot only accepts one of the four fixed
+    /// P/Invoke-style conventions. A bare <c>delegate* unmanaged&lt;T, R&gt;</c>
+    /// (the platform-default ABI, which is Winapi/StdCall on Windows x86 and
+    /// Cdecl elsewhere — genuinely platform-dependent, unlike the other four
+    /// fixed conventions) and a combined/custom convention (e.g.
+    /// <c>unmanaged[Cdecl, SuppressGCTransition]</c>) have no single fixed G#
+    /// <see cref="CallingConvention"/> to spell, so those two sub-cases stay a
+    /// deliberate by-design gap.
+    /// </summary>
+    /// <param name="type">The C# function-pointer type symbol.</param>
+    /// <param name="context">The translation context that accumulates diagnostics.</param>
+    /// <param name="location">The originating C# source location for diagnostics.</param>
+    /// <returns>The mapped G# function-pointer type, or the placeholder for the two unrepresentable calling-convention sub-cases.</returns>
+    private GTypeReference MapFunctionPointer(IFunctionPointerTypeSymbol type, TranslationContext context, Location location)
+    {
+        IMethodSymbol signature = type.Signature;
+        var parameterTypes = signature.Parameters.Select(p => this.Map(p.Type, context, location)).ToList();
+        GTypeReference returnType = signature.ReturnsVoid ? null : this.Map(signature.ReturnType, context, location);
+
+        if (signature.CallingConvention == SignatureCallingConvention.Default)
+        {
+            return new FunctionPointerTypeReference(isManaged: true, default, parameterTypes, returnType);
+        }
+
+        CallingConvention? callingConvention = signature.CallingConvention switch
+        {
+            SignatureCallingConvention.CDecl => CallingConvention.Cdecl,
+            SignatureCallingConvention.StdCall => CallingConvention.StdCall,
+            SignatureCallingConvention.ThisCall => CallingConvention.ThisCall,
+            SignatureCallingConvention.FastCall => CallingConvention.FastCall,
+            SignatureCallingConvention.Unmanaged => MapSingleUnmanagedConvention(signature.UnmanagedCallingConventionTypes),
+            _ => null,
+        };
+
+        if (callingConvention is { } resolved)
+        {
+            return new FunctionPointerTypeReference(isManaged: false, resolved, parameterTypes, returnType);
+        }
+
+        string reason = signature.CallingConvention == SignatureCallingConvention.Unmanaged
+            && signature.UnmanagedCallingConventionTypes.Length == 0
+            ? "the platform-default unmanaged convention ('delegate* unmanaged<...>' with no explicit '[CC]') is genuinely platform-dependent (Stdcall on Windows x86, Cdecl elsewhere) and has no single fixed G# CallingConvention to spell"
+            : "a combined or custom unmanaged calling convention has no single fixed G# CallingConvention equivalent — G#'s '[CC]' slot only accepts one of Cdecl/Stdcall/Thiscall/Fastcall";
+        context.Report(new TranslationDiagnostic(
+            "FunctionPointerType",
+            $"unsafe function-pointer type '{type.ToDisplayString()}' has no canonical G# form: {reason} (issue #1906).",
+            location,
+            TranslationSeverity.Unsupported)
+        {
+            Classification = UnsupportedClassification.ByDesign,
+            Rationale = UnsupportedRationale.NoGsharpConstruct,
+        });
+        return new NamedTypeReference(UnsupportedPlaceholderType);
+    }
+
+    /// <summary>
+    /// Resolves the single well-known unmanaged calling convention named in a
+    /// generic <c>delegate* unmanaged[Name]&lt;...&gt;</c> modopt list (issue
+    /// #1906), or <see langword="null"/> when the list is empty (bare
+    /// <c>unmanaged</c>) or names anything other than exactly one of
+    /// Cdecl/Stdcall/Thiscall/Fastcall.
+    /// </summary>
+    /// <param name="unmanagedCallingConventionTypes">The modopt types Roslyn resolved from the <c>[...]</c> list.</param>
+    /// <returns>The matching <see cref="CallingConvention"/>, or <see langword="null"/> when none applies.</returns>
+    private static CallingConvention? MapSingleUnmanagedConvention(ImmutableArray<INamedTypeSymbol> unmanagedCallingConventionTypes)
+    {
+        if (unmanagedCallingConventionTypes.Length != 1)
+        {
+            return null;
+        }
+
+        return unmanagedCallingConventionTypes[0].Name switch
+        {
+            "CallConvCdecl" => CallingConvention.Cdecl,
+            "CallConvStdcall" => CallingConvention.StdCall,
+            "CallConvThiscall" => CallingConvention.ThisCall,
+            "CallConvFastcall" => CallingConvention.FastCall,
+            _ => null,
+        };
+    }
 
     private static GTypeReference WithNullable(GTypeReference reference, bool isNullable)
     {

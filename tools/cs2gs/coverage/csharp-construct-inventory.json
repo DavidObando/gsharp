@@ -941,43 +941,57 @@
   {
     "kind": "FunctionPointerCallingConvention",
     "nodeType": "FunctionPointerCallingConventionSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0122 \u00A79 / ADR-0095",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1906"
+    "fixture": "tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FunctionPointerType.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1906",
+    "notes": "managed/\u0060managed\u0060/\u0060unmanaged[Cdecl|Stdcall|Thiscall|Fastcall]\u0060 translate; bare \u0060unmanaged\u0060 (platform-default ABI) and combined/custom conventions stay an Unsupported/ByDesign sub-case (no fixed G# CallingConvention equivalent)."
   },
   {
     "kind": "FunctionPointerParameter",
     "nodeType": "FunctionPointerParameterSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0122 \u00A79 / ADR-0095",
     "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FunctionPointerType.cs",
     "issue": "https://github.com/DavidObando/gsharp/issues/1906"
   },
   {
     "kind": "FunctionPointerParameterList",
     "nodeType": "FunctionPointerParameterListSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0122 \u00A79 / ADR-0095",
     "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FunctionPointerType.cs",
     "issue": "https://github.com/DavidObando/gsharp/issues/1906"
   },
   {
     "kind": "FunctionPointerType",
     "nodeType": "FunctionPointerTypeSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0122 \u00A79 / ADR-0095",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1906"
+    "fixture": "tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FunctionPointerType.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1906",
+    "notes": "delegate*\u003C...\u003E/delegate* managed\u003C...\u003E map to G#\u0027s managed \u0060*func(T) R\u0060; delegate* unmanaged[Cdecl|Stdcall|Thiscall|Fastcall]\u003C...\u003E maps to G#\u0027s raw \u0060unmanaged[CC] (T) -\u003E R\u0060. Bare \u0060delegate* unmanaged\u003C...\u003E\u0060 and a combined/custom \u0060[CC]\u0060 list are an Unsupported/ByDesign sub-case (issue #1906)."
   },
   {
     "kind": "FunctionPointerUnmanagedCallingConvention",
     "nodeType": "FunctionPointerUnmanagedCallingConventionSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0095",
     "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FunctionPointerType.cs",
     "issue": "https://github.com/DavidObando/gsharp/issues/1906"
   },
   {
     "kind": "FunctionPointerUnmanagedCallingConventionList",
     "nodeType": "FunctionPointerUnmanagedCallingConventionListSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0095",
     "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FunctionPointerType.cs",
     "issue": "https://github.com/DavidObando/gsharp/issues/1906"
   },
   {

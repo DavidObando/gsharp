@@ -950,6 +950,7 @@ internal sealed class TypeDefEmitter
                 });
 
         var invokeFirstParamHandle = this.nextParameterHandle();
+        var invokeParamHandles = ImmutableArray.CreateBuilder<ParameterHandle>(delegateSym.Parameters.Length);
         for (var i = 0; i < delegateSym.Parameters.Length; i++)
         {
             var p = delegateSym.Parameters[i];
@@ -970,6 +971,7 @@ internal sealed class TypeDefEmitter
                 attributes: paramAttributes,
                 name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? $"arg{i + 1}"),
                 sequenceNumber: (ushort)(i + 1));
+            invokeParamHandles.Add(paramHandle);
 
             if (p.RefKind == RefKind.In)
             {
@@ -1000,6 +1002,11 @@ internal sealed class TypeDefEmitter
             bodyOffset: -1,
             parameterList: invokeParamList);
         this.cache.DelegateInvokeHandles[delegateSym] = invokeHandle;
+
+        // Issue #2006: delegate Invoke parameters must keep their user
+        // annotations same as the other Parameter-row-minting emit sites, or
+        // @Note-style attributes silently vanish for delegate params.
+        this.EmitUserAttributesOnParameters(invokeParamHandles.MoveToImmutable(), delegateSym.Parameters);
 
         // ADR-0047 §3: user annotations targeting the delegate type land on
         // the TypeDef row (same as struct/interface/enum).
@@ -1397,9 +1404,9 @@ internal sealed class TypeDefEmitter
         // consumers see `params` at the construction site. Adding Parameter
         // rows here also gives every primary-ctor parameter a metadata name
         // (parallel to the explicit `init(...)` emit path).
-        var firstParamHandle = this.AddPrimaryCtorParameterRows(parameters);
+        var firstParamHandle = this.AddPrimaryCtorParameterRows(parameters, out var paramHandles);
 
-        return this.emitCtx.Metadata.AddMethodDefinition(
+        var ctorHandle = this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
                 | MethodAttributes.RTSpecialName,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
@@ -1407,6 +1414,13 @@ internal sealed class TypeDefEmitter
             signature: this.emitCtx.Metadata.GetOrAddBlob(ctorSig),
             bodyOffset: bodyOffset,
             parameterList: firstParamHandle);
+
+        // Issue #2006: primary-ctor parameters must keep their user
+        // annotations same as explicit ctors / interface methods, or
+        // @Note-style attributes silently vanish for primary-ctor params.
+        this.EmitUserAttributesOnParameters(paramHandles, parameters);
+
+        return ctorHandle;
     }
 
     /// <summary>
@@ -1449,9 +1463,9 @@ internal sealed class TypeDefEmitter
         // consumers see `params` at the construction site. Adding Parameter
         // rows here also gives every primary-ctor parameter a metadata name
         // (parallel to the explicit `init(...)` emit path).
-        var firstParamHandle = this.AddPrimaryCtorParameterRows(parameters);
+        var firstParamHandle = this.AddPrimaryCtorParameterRows(parameters, out var paramHandles);
 
-        return this.emitCtx.Metadata.AddMethodDefinition(
+        var ctorHandle = this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
                 | MethodAttributes.RTSpecialName,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
@@ -1459,6 +1473,13 @@ internal sealed class TypeDefEmitter
             signature: this.emitCtx.Metadata.GetOrAddBlob(ctorSig),
             bodyOffset: bodyOffset,
             parameterList: firstParamHandle);
+
+        // Issue #2006: primary-ctor parameters must keep their user
+        // annotations same as explicit ctors / interface methods, or
+        // @Note-style attributes silently vanish for primary-ctor params.
+        this.EmitUserAttributesOnParameters(paramHandles, parameters);
+
+        return ctorHandle;
     }
 
     /// <summary>
@@ -1474,14 +1495,18 @@ internal sealed class TypeDefEmitter
     /// <see cref="ParameterAttributes.Out"/> or the
     /// <c>IsReadOnlyAttribute</c> modreq.
     /// </summary>
-    private ParameterHandle AddPrimaryCtorParameterRows(ImmutableArray<ParameterSymbol> parameters)
+    /// <param name="parameters">The primary constructor's source parameters.</param>
+    /// <param name="paramHandles">Every emitted Parameter row handle, in source-parameter order — feed into <see cref="EmitUserAttributesOnParameters"/> so per-parameter annotations are never dropped (issue #2006).</param>
+    private ParameterHandle AddPrimaryCtorParameterRows(ImmutableArray<ParameterSymbol> parameters, out ImmutableArray<ParameterHandle> paramHandles)
     {
         if (parameters.IsDefaultOrEmpty)
         {
+            paramHandles = ImmutableArray<ParameterHandle>.Empty;
             return this.nextParameterHandle();
         }
 
         var first = this.nextParameterHandle();
+        var handles = ImmutableArray.CreateBuilder<ParameterHandle>(parameters.Length);
         for (var i = 0; i < parameters.Length; i++)
         {
             var p = parameters[i];
@@ -1489,6 +1514,7 @@ internal sealed class TypeDefEmitter
                 attributes: ParameterAttributes.None,
                 name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? string.Empty),
                 sequenceNumber: i + 1);
+            handles.Add(paramHandle);
 
             if (p.IsVariadic)
             {
@@ -1496,6 +1522,7 @@ internal sealed class TypeDefEmitter
             }
         }
 
+        paramHandles = handles.MoveToImmutable();
         return first;
     }
 

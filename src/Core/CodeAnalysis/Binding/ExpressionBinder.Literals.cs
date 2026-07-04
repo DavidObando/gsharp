@@ -81,9 +81,21 @@ internal sealed partial class ExpressionBinder
             }
             else if (TryGetUnboundGenericArity(typeClause, out var arity))
             {
-                if (!TryResolveOpenGenericImportedTypeWithArity(typeClause.Identifier.Text, arity, out typeSymbol))
+                if (!TryResolveOpenGenericImportedTypeWithArity(typeClause.Identifier.Text, arity, out typeSymbol, out var isAmbiguous))
                 {
-                    Diagnostics.ReportUndefinedType(typeClause.Location, typeClause.Identifier.Text + "`" + arity);
+                    // Issue #2012 (N3): "ambiguous across imports" and "no
+                    // match at all" are different failure modes and deserve
+                    // different diagnostics — ambiguous means too MANY
+                    // candidates matched, not that the type is undefined.
+                    if (isAmbiguous)
+                    {
+                        Diagnostics.ReportAmbiguousImportedType(typeClause.Location, typeClause.Identifier.Text + "`" + arity);
+                    }
+                    else
+                    {
+                        Diagnostics.ReportUndefinedType(typeClause.Location, typeClause.Identifier.Text + "`" + arity);
+                    }
+
                     return new BoundErrorExpression(null);
                 }
             }
@@ -123,6 +135,17 @@ internal sealed partial class ExpressionBinder
         // really exist, so we walk arities upward and stop once a small
         // streak of consecutive misses (BCL generic families are always
         // contiguous, e.g. Func`1..Func`16) confirms there's nothing higher.
+        //
+        // Issue #2012 (N2): this walk assumes CONTIGUOUS arity families —
+        // a family with real members only at, say, arity 1 and arity 4,
+        // with gaps at 2 and 3, would stop after the 2-miss streak and never
+        // reach arity 4. No BCL family is shaped like this today (every
+        // multi-arity BCL generic — Func, Action, Tuple, ValueTuple, etc. —
+        // fills every arity in its range), so this is a documented
+        // limitation rather than a bug fix: a gapped family simply falls
+        // back to the ordinary "type doesn't exist" diagnostic (GS0113),
+        // never a silent wrong resolution. If a real gapped family ever
+        // needs support, bump <see cref="MaxConsecutiveArityMisses"/>.
         Type match = null;
         var missStreak = 0;
         for (var arity = 1; missStreak < MaxConsecutiveArityMisses; arity++)
@@ -157,7 +180,12 @@ internal sealed partial class ExpressionBinder
         return true;
     }
 
-    /// <summary>Issue #1989: consecutive-arity-miss streak that stops the upward arity walk in <see cref="TryResolveOpenGenericImportedType"/>.</summary>
+    /// <summary>
+    /// Issue #1989: consecutive-arity-miss streak that stops the upward
+    /// arity walk in <see cref="TryResolveOpenGenericImportedType"/>. Issue
+    /// #2012 (N2): this assumes CONTIGUOUS arity families (no gaps) — see
+    /// the walk's comment for details on why that's safe today.
+    /// </summary>
     private const int MaxConsecutiveArityMisses = 2;
 
     /// <summary>
@@ -171,13 +199,36 @@ internal sealed partial class ExpressionBinder
     /// qualifier, nested type arguments, array shape, or nullable suffix) —
     /// any real type argument is an ordinary bound generic and is left to
     /// <see cref="bindTypeClause"/>.
+    /// <para>
+    /// Issue #2012 (N1): <c>_</c> is an ordinary identifier in G#'s grammar
+    /// (it is only special-cased in pattern/discard positions, never
+    /// reserved as a type-name token), so user code CAN legally declare a
+    /// real type literally named <c>_</c> (<c>class _ {}</c>, <c>type _ =
+    /// ...</c>, or a type parameter named <c>_</c>). If such a type is in
+    /// scope, treating every <c>_</c> type argument as the unbound-generic
+    /// placeholder would silently ignore it and flip <c>Func[_]</c> from
+    /// "bound to the real type <c>_</c>" to "unbound <c>Func`1</c>" — a
+    /// genuine (if contrived) silent semantic change. So a real type named
+    /// <c>_</c> in scope always wins: this method only claims the
+    /// placeholder reading when no such type is resolvable, deferring to
+    /// <see cref="bindTypeClause"/> otherwise.
+    /// </para>
     /// </summary>
-    private static bool TryGetUnboundGenericArity(TypeClauseSyntax typeClause, out int arity)
+    private bool TryGetUnboundGenericArity(TypeClauseSyntax typeClause, out int arity)
     {
         arity = 0;
         var args = typeClause.TypeArguments;
         if (args.Count == 0)
         {
+            return false;
+        }
+
+        if (lookupType("_") != null)
+        {
+            // A real type named `_` is in scope (respecting normal
+            // shadowing/scoping rules via `lookupType`) — every `_` type
+            // argument binds to it as an ordinary type, never the
+            // open-generic placeholder.
             return false;
         }
 
@@ -203,9 +254,19 @@ internal sealed partial class ExpressionBinder
     /// never silently return the wrong (non-generic) type for names like
     /// <c>Action</c> that have both a non-generic and generic overload set.
     /// </summary>
-    private bool TryResolveOpenGenericImportedTypeWithArity(string name, int arity, out TypeSymbol type)
+    /// <param name="name">The bare generic base name (e.g. <c>Func</c>).</param>
+    /// <param name="arity">The exact requested arity.</param>
+    /// <param name="type">The resolved open-generic type on success.</param>
+    /// <param name="isAmbiguous">
+    /// Issue #2012 (N3): set to <see langword="true"/> when two or more
+    /// imports contribute DIFFERENT candidates at this arity — distinct from
+    /// the "no match at all" case — so the caller can raise the correct
+    /// ambiguity diagnostic instead of the misleading "type doesn't exist".
+    /// </param>
+    private bool TryResolveOpenGenericImportedTypeWithArity(string name, int arity, out TypeSymbol type, out bool isAmbiguous)
     {
         type = null;
+        isAmbiguous = false;
         if (string.IsNullOrEmpty(name) || arity <= 0)
         {
             return false;
@@ -219,7 +280,9 @@ internal sealed partial class ExpressionBinder
             {
                 if (match != null && match != candidate)
                 {
-                    // Ambiguous across imports — defer to the caller's diagnostic.
+                    // Ambiguous across imports — let the caller raise the
+                    // ambiguity diagnostic rather than "type doesn't exist".
+                    isAmbiguous = true;
                     return false;
                 }
 
@@ -839,8 +902,8 @@ internal sealed partial class ExpressionBinder
             // substitute both levels and the emitter encodes the reified nested
             // type (`Outer`1+Middle`2<int32, string>`).
             structSymbol = enclosingTypeArguments.IsDefaultOrEmpty
-                ? StructSymbol.Construct(structSymbol, typeArgs.MoveToImmutable())
-                : StructSymbol.ConstructNestedGeneric(structSymbol, enclosingTypeArguments, typeArgs.MoveToImmutable());
+                ? StructSymbol.Construct(structSymbol, typeArgs.MoveToImmutable(), scope.References.MapClrTypeToReferences)
+                : StructSymbol.ConstructNestedGeneric(structSymbol, enclosingTypeArguments, typeArgs.MoveToImmutable(), scope.References.MapClrTypeToReferences);
         }
         else if (syntax.TypeArgumentList != null)
         {
@@ -853,7 +916,7 @@ internal sealed partial class ExpressionBinder
             // enclosing type (`Box[int32].Tag{…}`) threads only the enclosing
             // arguments so member types typed as an enclosing parameter surface
             // closed and the emitter encodes `Box`1+Tag`1<int32>`.
-            structSymbol = StructSymbol.ConstructNested(structSymbol, enclosingTypeArguments);
+            structSymbol = StructSymbol.ConstructNested(structSymbol, enclosingTypeArguments, scope.References.MapClrTypeToReferences);
         }
 
         var seenFieldNames = new HashSet<string>();

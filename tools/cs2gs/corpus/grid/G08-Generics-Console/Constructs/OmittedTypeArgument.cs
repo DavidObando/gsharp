@@ -1,9 +1,9 @@
 // inventory: OmittedTypeArgument — nameof/typeof of an unbound generic (C#14 probe)
 // issue #1915 (fixed): typeof of an unbound generic (`typeof(List<>)`,
-// `typeof(Dictionary<,>)`) translates to the bare generic-definition name
-// (`typeof(List)`, `typeof(Dictionary)` — G# has no open-generic `typeof`
-// spelling); gsc's binder now resolves that bare imported-generic name to the
-// CLR open generic type definition via an arity-suffixed reflection lookup.
+// `typeof(Dictionary<,>)`) translates to G#'s explicit-arity `_` placeholder
+// form (`typeof(List[_])`, `typeof(Dictionary[_, _])` — G# has no
+// `Name<>`/`Name<,>` comma-count spelling; issue #2012 (S1) wires cs2gs to
+// emit the canonical arity-suffixed form established by #1989/#2011).
 using System;
 using System.Collections.Generic;
 

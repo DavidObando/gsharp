@@ -230,6 +230,11 @@ public static class GNodeSamples
             [typeof(ArrowTypeReference)] = () => Field(new ArrowTypeReference(
                 List<GTypeReference>(Type("int32")),
                 List<GTypeReference>(Type("int32")))),
+            [typeof(FunctionPointerTypeReference)] = () => Field(new FunctionPointerTypeReference(
+                isManaged: true,
+                default,
+                List<GTypeReference>(Type("int32")),
+                Type("int32"))),
         };
 
     private static CompilationUnit AttributeSample() => Unit(new TypeDeclaration(

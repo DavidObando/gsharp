@@ -903,8 +903,13 @@ internal sealed partial class MethodBodyEmitter
     {
         // ADR-0122 §9 / issue #1035: `&StaticMethod` -> CIL `ldftn <method>`,
         // pushing the method's entry-point address as a managed function
-        // pointer value.
-        if (!this.outer.cache.FunctionHandles.TryGetValue(node.Method, out var methodHandle))
+        // pointer value. `node.Method` is a top-level package function
+        // (registered in FunctionHandles) OR a class/struct shared method
+        // (registered in MethodHandles, e.g. issue #1906's `shared { func
+        // Square(...) }`) — check both caches, mirroring GetMethodReference's
+        // own FunctionHandles/MethodHandles fallback below.
+        if (!this.outer.cache.FunctionHandles.TryGetValue(node.Method, out var methodHandle)
+            && !this.outer.cache.MethodHandles.TryGetValue(node.Method, out methodHandle))
         {
             throw new InvalidOperationException(
                 $"Function '{node.Method.Name}' has no emitted MethodDef for '&{node.Method.Name}' (ldftn).");
@@ -1522,7 +1527,12 @@ internal sealed partial class MethodBodyEmitter
         switch (node.Operand)
         {
             case BoundVariableExpression bve:
-                if (!this.TryLoadVariableAddress(bve.Variable))
+                // Issue #1988 (follow-up to #1917/#1982): route through the
+                // narrowing-aware helper so `&narrowedStructLocal` (a
+                // smart-cast-narrowed struct read of a reference-typed slot,
+                // ADR-0069) unboxes instead of taking the address of the
+                // underlying `object` slot — see TryLoadStructVariableAddress.
+                if (!this.TryLoadStructVariableAddress(bve))
                 {
                     throw new InvalidOperationException($"Cannot take address of variable '{bve.Variable.Name}'.");
                 }

@@ -2386,6 +2386,29 @@ public sealed class CSharpToGSharpTranslator
                 ? node.ParameterList.Parameters[0]
                 : null;
 
+            // Issue #2009: the C# 14 receiver parameter may carry `ref`/`in`/
+            // `scoped`/`ref readonly` modifiers (`extension(ref T x)`,
+            // `extension(in T x)`, `extension(scoped T x)`). G#'s own receiver
+            // CLAUSE (`func (x T) M()`, ADR-0019) reuses the general `Parameter`
+            // grammar, which syntactically accepts the same modifier tokens —
+            // but gsc's declaration binder (`DeclarationBinder.BindFunctionDeclaration`)
+            // never reads `syntax.Receiver`'s ref-kind/scoped modifier tokens when
+            // constructing the receiver's bound `ParameterSymbol`: it always binds
+            // a plain by-value receiver. Printing the modifier would therefore
+            // parse silently while gsc silently discards its by-ref/scoped
+            // semantics — a genuine silent miscompile (a `ref` receiver mutating
+            // the caller's struct in C# would instead operate on a throwaway
+            // copy in G#, with no diagnostic). No canonical G# mapping exists
+            // yet, so gap loudly instead of emitting a modifier gsc will ignore.
+            if (receiverParameter?.Modifiers.Count > 0)
+            {
+                string modifierText = string.Join(" ", receiverParameter.Modifiers.Select(m => m.Text));
+                this.context.ReportUnsupported(
+                    node,
+                    $"an extension block receiver parameter modifier ('{modifierText}') has no canonical G# mapping yet; G#'s receiver-clause grammar accepts the same modifier tokens syntactically, but gsc's binder does not honor by-ref/scoped semantics on a receiver-clause parameter, so mapping the modifier through would silently change behavior rather than gap (ADR-0115 §B.19, ADR-0019).");
+                yield break;
+            }
+
             // A receiverless block (`extension(string) { ... }`) names only the
             // extended type, with no identifier to bind — it may declare static
             // members only. A named block (`extension(string s) { ... }`) binds
@@ -11048,7 +11071,20 @@ public sealed class CSharpToGSharpTranslator
                 return new TypeExpression(this.typeMapper.Map(owner, this.context, location));
             }
 
-            return new IdentifierExpression(owner.Name);
+            // Issue #2009: route the non-generic case through the same
+            // `CSharpTypeMapper.QualifiedTypeName` logic the generic branch above
+            // already uses (via `Map`), rather than the owner's bare simple name.
+            // A top-level owner still prints as its bare (sanitized) name, but a
+            // NESTED owner — e.g. the containing class of a C# 14 `extension`
+            // block declared inside another type, or nested arbitrarily deep — is
+            // qualified through its containing-type chain (`Outer.Inner`) whenever
+            // its simple name collides with another source type, matching the
+            // qualification the generic path already gets. Without this, a bare
+            // nested owner name can bind the wrong homonymous type (or fail to
+            // resolve at all) at the call site.
+            GTypeReference mapped = this.typeMapper.Map(owner, this.context, location);
+            string qualifiedName = mapped is NamedTypeReference named ? named.Name : owner.Name;
+            return new IdentifierExpression(qualifiedName);
         }
 
         private GExpression TranslateLiteral(LiteralExpressionSyntax literal)
@@ -11230,9 +11266,15 @@ public sealed class CSharpToGSharpTranslator
                     // receiver-clause form exists for statics, ADR-0115 §B.19).
                     // Rewrite the qualifier to the real owner; the (predefined- or
                     // named-type) qualifier syntax on the C# side carries no value
-                    // to translate.
+                    // to translate. Issue #2009: use the same fully-qualified
+                    // (nested-type-aware, generic-aware) owner receiver as a bare
+                    // sibling static call/member (`StaticQualifierReceiver`),
+                    // rather than the owner's bare simple name — a bare name is
+                    // wrong when the extension block's containing class is nested
+                    // inside another type or shares its simple name with another
+                    // source type elsewhere in the compilation.
                     return new MemberAccessExpression(
-                        new IdentifierExpression(SanitizeIdentifier(extOwner.Name)),
+                        this.StaticQualifierReceiver(extOwner, member.GetLocation()),
                         SanitizeIdentifier(member.Name.Identifier.Text));
                 }
 
@@ -13438,19 +13480,37 @@ public sealed class CSharpToGSharpTranslator
         // to the open type (issue #1915: gsc's binder now resolves a bare
         // imported generic name inside `typeof(...)` to the CLR open generic
         // definition via an arity-suffixed reflection lookup).
+        // `typeof(IEnumerable<>)` over an unbound generic has no bound symbol for
+        // the omitted type argument, so the general type mapper cannot resolve it.
+        // Issue #2012 (S1): G# has no `Name<>`/`Name<,>` comma-count unbound-generic
+        // spelling; the canonical form carries the requested arity explicitly via
+        // `_` placeholder bracket type arguments (issue #1989/#2011) —
+        // `typeof(IEnumerable<>)` maps to `typeof(IEnumerable[_])`,
+        // `typeof(Dictionary<,>)` maps to `typeof(Dictionary[_, _])`, etc. This
+        // form always resolves the arity-suffixed generic and never falls back
+        // to a same-named non-generic type (unlike the older bare-name form,
+        // which stayed ambiguous for same-base-name multi-arity families such
+        // as `Func`/`Action`).
         private GTypeReference MapTypeOfOperand(TypeSyntax type)
         {
-            if (IsUnboundGeneric(type, out string unboundName))
+            if (IsUnboundGeneric(type, out string unboundName, out int arity))
             {
-                return new NamedTypeReference(unboundName);
+                var placeholders = new GTypeReference[arity];
+                for (int i = 0; i < arity; i++)
+                {
+                    placeholders[i] = new NamedTypeReference("_");
+                }
+
+                return new NamedTypeReference(unboundName, placeholders);
             }
 
             return this.MapTypeSyntax(type);
         }
 
-        private static bool IsUnboundGeneric(TypeSyntax type, out string name)
+        private static bool IsUnboundGeneric(TypeSyntax type, out string name, out int arity)
         {
             name = null;
+            arity = 0;
             GenericNameSyntax generic = type switch
             {
                 GenericNameSyntax g => g,
@@ -13465,6 +13525,7 @@ public sealed class CSharpToGSharpTranslator
             }
 
             name = generic.Identifier.Text;
+            arity = generic.TypeArgumentList.Arguments.Count;
             return true;
         }
 

@@ -99,6 +99,131 @@ public class Issue1989MultiArityOpenGenericTypeOfEmitTests
         Assert.Equal("Action\n", output);
     }
 
+    /// <summary>
+    /// Issue #2012 (S3): hardens the existing emit coverage — which only
+    /// asserted on <c>.Name</c> (a string that collapses closed and open
+    /// generics to the same value, e.g. both <c>Func&lt;int&gt;</c> and open
+    /// <c>Func`1</c> print "Func`1") — with an actual reflection <see
+    /// cref="Type"/> equality check against <c>typeof(System.Func&lt;&gt;)</c>,
+    /// proving <c>typeof(Func[_])</c> really is the same CLR open-generic
+    /// type definition, not merely a type whose name happens to match.
+    /// </summary>
+    [Fact]
+    public void EndToEnd_FuncArity1_TypeOf_ReflectionEquals_ClrOpenGenericFuncDefinition()
+    {
+        const string source = """
+            package i2012s3func1
+            import System
+
+            func Main() { System.Console.WriteLine(typeof(Func[_]).AssemblyQualifiedName) }
+            """;
+
+        var output = CompileAndRun(source);
+        var resolvedType = Type.GetType(output.Trim());
+        Assert.Equal(typeof(Func<>), resolvedType);
+    }
+
+    /// <summary>
+    /// Issue #2012 (N3): when the requested arity resolves to two or more
+    /// DIFFERENT CLR types across the imports in scope, the previous
+    /// behavior misreported "type doesn't exist" (GS0113). This is a genuine
+    /// ambiguity, not an absence, and now reports GS0471 instead.
+    /// </summary>
+    [Fact]
+    public void ExplicitArity_AmbiguousAcrossTwoImportedAssemblies_ReportsGS0471()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_2012_amb_").FullName;
+        try
+        {
+            var aDll = Path.Combine(tempDir, "a.dll");
+            var bDll = Path.Combine(tempDir, "b.dll");
+            CompileLibrary("package pkg.a\nclass Foo[T any] {\n}\n", aDll, tempDir);
+            CompileLibrary("package pkg.b\nclass Foo[T any] {\n}\n", bDll, tempDir);
+
+            const string source = """
+                package pkg.c
+                import pkg.a
+                import pkg.b
+
+                func Main() {
+                    let t = typeof(Foo[_])
+                }
+                """;
+            var srcPath = Path.Combine(tempDir, "c.gs");
+            File.WriteAllText(srcPath, source);
+            var dllPath = Path.Combine(tempDir, "c.dll");
+
+            var args = new[]
+            {
+                "/out:" + dllPath,
+                "/target:exe",
+                "/targetframework:net10.0",
+                "/r:" + aDll,
+                "/r:" + bDll,
+                "/nowarn:GS9100",
+                srcPath,
+            };
+
+            using var stdoutWriter = new StringWriter();
+            using var stderrWriter = new StringWriter();
+            var prevOut = Console.Out;
+            var prevErr = Console.Error;
+            Console.SetOut(stdoutWriter);
+            Console.SetError(stderrWriter);
+            int compileExit;
+            try
+            {
+                compileExit = Program.Main(args);
+            }
+            finally
+            {
+                Console.SetOut(prevOut);
+                Console.SetError(prevErr);
+            }
+
+            Assert.NotEqual(0, compileExit);
+            Assert.Contains("GS0471", stdoutWriter.ToString() + stderrWriter.ToString());
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    private static void CompileLibrary(string source, string dllPath, string tempDir)
+    {
+        var srcPath = Path.Combine(tempDir, Path.GetFileNameWithoutExtension(dllPath) + ".gs");
+        File.WriteAllText(srcPath, source);
+        var args = new[]
+        {
+            "/out:" + dllPath,
+            "/target:library",
+            "/targetframework:net10.0",
+            srcPath,
+        };
+
+        using var stdoutWriter = new StringWriter();
+        using var stderrWriter = new StringWriter();
+        var prevOut = Console.Out;
+        var prevErr = Console.Error;
+        Console.SetOut(stdoutWriter);
+        Console.SetError(stderrWriter);
+        int compileExit;
+        try
+        {
+            compileExit = Program.Main(args);
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+            Console.SetError(prevErr);
+        }
+
+        Assert.True(
+            compileExit == 0,
+            $"gsc failed compiling library {dllPath}:\nstdout:\n{stdoutWriter}\nstderr:\n{stderrWriter}");
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_1989_exe_").FullName;

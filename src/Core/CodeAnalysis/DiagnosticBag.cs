@@ -4452,6 +4452,29 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Issue #2012 (N3): an explicit-arity open-generic <c>typeof(Name[_,
+    /// ...])</c> whose base name + requested arity (e.g. <c>Func`1</c>)
+    /// resolves to two or more DIFFERENT CLR types across the imports in
+    /// scope. Distinct from <see cref="ReportUndefinedType"/> (which means no
+    /// type matched at all): here at least two imports each contribute a
+    /// candidate and they disagree, so the previous behavior of reporting
+    /// "type doesn't exist" was a misleading diagnostic for a genuinely
+    /// different failure mode (nothing was undefined — too many things were
+    /// defined). Mirrors the wording of <see cref="ReportAmbiguousImportedStaticMember"/>
+    /// (#1201) for the analogous ambiguous-import-member case.
+    /// </summary>
+    /// <param name="location">The source location of the ambiguous type reference.</param>
+    /// <param name="name">The ambiguous arity-suffixed type name (e.g. <c>Func`1</c>).</param>
+    public void ReportAmbiguousImportedType(TextLocation location, string name)
+    {
+        Report(
+            location,
+            "GS0471",
+            $"Type '{name}' is ambiguous between two or more imported namespaces; qualify the reference to disambiguate (issue #2012).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
     /// Issue #1336: GS0415 — a <c>sizeof(T)</c> expression names a type that is
     /// not an unmanaged type. <c>sizeof</c> measures the unmanaged byte size of
     /// its operand, so the operand must be a blittable primitive, an enum, a
