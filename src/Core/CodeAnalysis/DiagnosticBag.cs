@@ -260,6 +260,19 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports that an enum member's explicit value (issue #1912) isn't a
+    /// constant-foldable int32 expression.
+    /// </summary>
+    /// <param name="location">The text location of the value expression.</param>
+    /// <param name="memberName">The enum member name.</param>
+    /// <param name="enumName">The enum name.</param>
+    public void ReportEnumMemberValueNotConstant(TextLocation location, string memberName, string enumName)
+    {
+        var message = $"Enum member '{enumName}.{memberName}' explicit value must be a constant int32 expression (literals, +, -, |, &, ^, <<, >>, unary +/-/~, or a reference to an already-declared sibling member).";
+        Report(location, "GS0467", message);
+    }
+
+    /// <summary>
     /// Reports that an enum member access references an unknown member.
     /// </summary>
     /// <param name="location">The text location of the unknown member.</param>

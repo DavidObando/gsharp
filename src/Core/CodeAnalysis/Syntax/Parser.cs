@@ -1609,6 +1609,17 @@ public class Parser
                 member.PayloadCloseParenthesis = MatchToken(SyntaxKind.CloseParenthesisToken);
             }
 
+            // Issue #1912: an enum member may carry an explicit constant value,
+            // e.g. `Banana = 2` or `DefaultError = ServerError`. The binder
+            // restricts this to a constant-foldable int32 expression (literals,
+            // unary +/-/~, +, -, |, &, ^, <<, >>, and references to already-declared
+            // sibling members); anything else is a binder-level diagnostic.
+            if (Current.Kind == SyntaxKind.EqualsToken)
+            {
+                member.EqualsToken = MatchToken(SyntaxKind.EqualsToken);
+                member.Value = ParseBinaryExpression();
+            }
+
             nodesAndSeparators.Add(member);
 
             if (Current.Kind == SyntaxKind.CommaToken)

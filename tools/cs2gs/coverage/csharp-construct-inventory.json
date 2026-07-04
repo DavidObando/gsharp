@@ -727,15 +727,16 @@
     "rule": "ADR-0115 \u00A7B.11",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/EnumDeclaration.cs",
-    "notes": "Implicit member values only; explicit values/[Flags] silently erased (issue #1912)."
+    "notes": "Member values (explicit or implicit) and [Flags] are preserved (issue #1912, fixed)."
   },
   {
     "kind": "EnumMemberDeclaration",
     "nodeType": "EnumMemberDeclarationSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.11",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1912",
-    "notes": "Explicit values, [Flags], negative and alias members erased to sequential ordinals \u2014 parity-verified divergence."
+    "fixture": "tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/EnumMemberDeclaration.cs",
+    "notes": "Explicit/negative/[Flags] bit-shift-or/alias values resolve via the semantic model\u0027s IFieldSymbol.ConstantValue and are emitted as an explicit G# \u0060= value\u0060 (new language feature, issue #1912, fixed)."
   },
   {
     "kind": "EqualsExpression",

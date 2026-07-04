@@ -119,10 +119,15 @@ public sealed class EnumCase : GNode
     /// </summary>
     /// <param name="name">The case name.</param>
     /// <param name="payloadParameters">The optional payload parameters.</param>
-    public EnumCase(string name, IReadOnlyList<Parameter> payloadParameters = null)
+    /// <param name="explicitValue">
+    /// The explicit int32 constant value (issue #1912), when the source C#
+    /// case has one and it differs from the default sequential ordinal.
+    /// </param>
+    public EnumCase(string name, IReadOnlyList<Parameter> payloadParameters = null, int? explicitValue = null)
     {
         Name = name;
         PayloadParameters = payloadParameters ?? new List<Parameter>();
+        ExplicitValue = explicitValue;
     }
 
     /// <summary>Gets the case name.</summary>
@@ -130,6 +135,13 @@ public sealed class EnumCase : GNode
 
     /// <summary>Gets the optional payload parameters.</summary>
     public IReadOnlyList<Parameter> PayloadParameters { get; }
+
+    /// <summary>
+    /// Gets the explicit int32 constant value (issue #1912), e.g. <c>Banana = 2</c>,
+    /// <c>Unknown = -1</c>, or a resolved <c>[Flags]</c>/alias value. Null when
+    /// the case uses the default auto-numbered ordinal.
+    /// </summary>
+    public int? ExplicitValue { get; }
 }
 
 /// <summary>
