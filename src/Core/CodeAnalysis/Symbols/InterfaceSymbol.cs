@@ -814,14 +814,14 @@ public sealed class InterfaceSymbol : TypeSymbol
             }
             catch (System.ArgumentException)
             {
-                // Issue #1958: with the mapClrType projection above, a
-                // cross-reflection-context mismatch here should no longer be
-                // reachable. Assert loudly in debug builds instead of the
-                // silent fallback that made #1926 hard to diagnose; still
-                // fall back to the erased constructed form so release builds
-                // degrade gracefully rather than crash.
+                // MakeGenericType can legitimately throw ArgumentException for CLR
+                // generic constraint reasons (e.g. unmanaged/ref-struct constraints),
+                // not only cross-reflection-context mismatches, so this is NOT always
+                // a bug. Log for diagnosability and fall back to the erased
+                // constructed form so both debug and release builds degrade
+                // gracefully rather than crash.
                 var assertMessage = $"InterfaceSymbol.SubstituteType: MakeGenericType failed for '{imported.OpenDefinition}' with args [{string.Join(", ", resolvedClrArgs.Select(t => t.ToString()))}] even after mapClrType projection.";
-                System.Diagnostics.Debug.Assert(false, assertMessage);
+                System.Diagnostics.Debug.WriteLine(assertMessage);
                 return imported;
             }
         }

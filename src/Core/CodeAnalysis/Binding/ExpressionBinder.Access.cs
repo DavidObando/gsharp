@@ -1223,15 +1223,15 @@ internal sealed partial class ExpressionBinder
                 var def = nestedStruct.Definition ?? nestedStruct;
                 if (!enclosingArgs.IsDefaultOrEmpty && !ownArgs.IsDefaultOrEmpty)
                 {
-                    nestedType = StructSymbol.ConstructNestedGeneric(def, enclosingArgs, ownArgs);
+                    nestedType = StructSymbol.ConstructNestedGeneric(def, enclosingArgs, ownArgs, scope.References.MapClrTypeToReferences);
                 }
                 else if (!enclosingArgs.IsDefaultOrEmpty)
                 {
-                    nestedType = StructSymbol.ConstructNested(def, enclosingArgs);
+                    nestedType = StructSymbol.ConstructNested(def, enclosingArgs, scope.References.MapClrTypeToReferences);
                 }
                 else if (!ownArgs.IsDefaultOrEmpty)
                 {
-                    nestedType = StructSymbol.Construct(def, ownArgs);
+                    nestedType = StructSymbol.Construct(def, ownArgs, scope.References.MapClrTypeToReferences);
                 }
                 else
                 {
@@ -2065,15 +2065,15 @@ internal sealed partial class ExpressionBinder
             var ownArgs = segments[i].Args;
             if (!enclosingArgs.IsDefaultOrEmpty && !ownArgs.IsDefaultOrEmpty)
             {
-                constructed = StructSymbol.ConstructNestedGeneric(def, enclosingArgs, ownArgs);
+                constructed = StructSymbol.ConstructNestedGeneric(def, enclosingArgs, ownArgs, scope.References.MapClrTypeToReferences);
             }
             else if (!enclosingArgs.IsDefaultOrEmpty)
             {
-                constructed = StructSymbol.ConstructNested(def, enclosingArgs);
+                constructed = StructSymbol.ConstructNested(def, enclosingArgs, scope.References.MapClrTypeToReferences);
             }
             else if (!ownArgs.IsDefaultOrEmpty)
             {
-                constructed = StructSymbol.Construct(def, ownArgs);
+                constructed = StructSymbol.Construct(def, ownArgs, scope.References.MapClrTypeToReferences);
             }
             else
             {
@@ -2341,7 +2341,7 @@ internal sealed partial class ExpressionBinder
             switch (alias)
             {
                 case StructSymbol structDef:
-                    constructedStruct = StructSymbol.Construct(structDef, typeArgs);
+                    constructedStruct = StructSymbol.Construct(structDef, typeArgs, scope.References.MapClrTypeToReferences);
                     return true;
                 case InterfaceSymbol ifaceDef:
                     constructedInterface = InterfaceSymbol.Construct(ifaceDef, typeArgs, scope.References.MapClrTypeToReferences);
@@ -2429,7 +2429,7 @@ internal sealed partial class ExpressionBinder
             switch (alias)
             {
                 case StructSymbol structDef:
-                    constructedStruct = StructSymbol.Construct(structDef, typeArgs);
+                    constructedStruct = StructSymbol.Construct(structDef, typeArgs, scope.References.MapClrTypeToReferences);
                     return true;
                 case InterfaceSymbol ifaceDef:
                     constructedInterface = InterfaceSymbol.Construct(ifaceDef, typeArgs, scope.References.MapClrTypeToReferences);
