@@ -9,9 +9,10 @@
 // file, see CorpusDiscovery.AllowUnsafeIlMarkerFileName and
 // IlVerifyStage.ExecuteAsync), which treats an ilverify failure as expected
 // rather than gating, so FixedStatement/PointerType/StackAlloc now run
-// end-to-end. FunctionPointerType, PointerMemberAccess, and RefType stay
-// quarantined — those fail earlier (stage 1 translate / gsc compile),
-// unrelated to the unsafe-IL policy.
+// end-to-end. FunctionPointerType and RefType stay quarantined — those fail
+// earlier (stage 1 translate / gsc compile), unrelated to the unsafe-IL
+// policy. PointerMemberAccessExpression (`p->X`) is no longer quarantined
+// (issue #1905).
 using System;
 using Corpus.Grid12.Constructs;
 
@@ -29,13 +30,13 @@ namespace Corpus.Grid12
             // types." See Constructs/FunctionPointerType.cs.quarantined.
             // FunctionPointerTypeFixture.Run();
 
-            // QUARANTINED: PointerMemberAccessExpression (p->Field). The
-            // translator emits `p->X` as `p.X`, and gsc fails with GS0158
-            // "Cannot find member X." on a struct-pointer receiver (the
-            // explicit `(*p).X` form does compile). Would also gate on
-            // stage 3 like all pointer IL.
-            // See PointerMemberAccessExpression.cs.quarantined.
-            // PointerMemberAccessExpressionFixture.Run();
+            // Issue #1905: `p->X` now lowers to gsc's own native `->`
+            // pointer-member operator (was silently emitted as bare `p.X`,
+            // GS0158 on a pointer receiver). Covers field read/write
+            // (assignment target too), a method call (`p->Sum()`), and a
+            // chained deref-then-arrow read through a pointer-to-pointer
+            // (`(*pp)->X`).
+            PointerMemberAccessExpressionFixture.Run();
 
             PointerTypeFixture.Run();
 
