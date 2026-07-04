@@ -195,17 +195,23 @@ public class ReplLayoutTests
     [Fact]
     public void Screen_MouseScroll_RevealsOlderCells()
     {
-        var engine = new SessionEngine { CaptureConsole = true };
-        for (var i = 0; i < 30; i++)
+        // A dozen cells already overflows an 18-row viewport, which is all this test needs to
+        // exercise scrolling. Evaluating many more submissions would be dominated by the
+        // incremental compiler's (unrelated) per-submission cost rather than the scroll logic
+        // under test, so keep the count modest.
+        const int count = 12;
+        var engine = new SessionEngine();
+        for (var i = 0; i < count; i++)
         {
             engine.Evaluate($"var x{i} = {i}");
         }
 
         var screen = new ReplScreen(engine);
+        var newest = $"x{count - 1}";
 
         // Pinned to the bottom: newest cell visible, oldest scrolled off.
         var bottom = Plain(RenderToAnsi(screen.Render(70, 18), 70));
-        Assert.Contains("x29", bottom);
+        Assert.Contains(newest, bottom);
         Assert.DoesNotContain("x0 ", bottom);
 
         // Scroll the wheel up repeatedly; older cells come into view.
@@ -223,7 +229,7 @@ public class ReplLayoutTests
             screen.HandleScroll(ScrollDirection.Down, 3);
         }
 
-        Assert.Contains("x29", Plain(RenderToAnsi(screen.Render(70, 18), 70)));
+        Assert.Contains(newest, Plain(RenderToAnsi(screen.Render(70, 18), 70)));
     }
 
     private static string Plain(string ansi)
