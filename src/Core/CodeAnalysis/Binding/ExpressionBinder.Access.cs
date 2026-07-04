@@ -2789,6 +2789,17 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
+            // Issue #2071: enforce `protected`/`private` accessibility on static
+            // (`shared`) method calls, mirroring the instance-call check in
+            // OverloadResolver.BindUserInstanceCall (#950/#2044/#2058). Static
+            // methods carry their declaring type via StaticOwnerType (they have
+            // no receiver), unlike instance methods which use ReceiverType.
+            if (method.StaticOwnerType is StructSymbol methodDeclaringType
+                && !AccessibilityChecker.IsAccessible(method.Accessibility, methodDeclaringType, function))
+            {
+                Diagnostics.ReportMemberInaccessible(ce.Identifier.Location, method.Name, methodDeclaringType.Name, method.Accessibility);
+            }
+
             // Issue #951: bind any deferred un-typed arrow lambda against the
             // selected static method's delegate-typed parameter so its omitted
             // parameter type(s) and inferred return type are filled in from the
