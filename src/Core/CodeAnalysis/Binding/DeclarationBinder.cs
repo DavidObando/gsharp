@@ -1571,7 +1571,8 @@ internal sealed class DeclarationBinder
                         foreach (var candidate in baseOverloads)
                         {
                             baseMethod ??= candidate;
-                            if (SignaturesMatch(candidate, methodParameters, returnType, methodReturnRefKind, baseTypeArgSubst, methodIsAsync))
+                            var candidateTypeArgSubst = WithMethodTypeParameterSubstitution(baseTypeArgSubst, candidate, methodTypeParameters);
+                            if (SignaturesMatch(candidate, methodParameters, returnType, methodReturnRefKind, candidateTypeArgSubst, methodIsAsync))
                             {
                                 baseSignatureMatch = candidate;
                                 break;
@@ -1645,7 +1646,8 @@ internal sealed class DeclarationBinder
                                 continue;
                             }
 
-                            if (SignaturesMatch(shadowed, methodParameters, returnType, methodReturnRefKind, baseTypeArgSubst, methodIsAsync))
+                            var shadowedTypeArgSubst = WithMethodTypeParameterSubstitution(baseTypeArgSubst, shadowed, methodTypeParameters);
+                            if (SignaturesMatch(shadowed, methodParameters, returnType, methodReturnRefKind, shadowedTypeArgSubst, methodIsAsync))
                             {
                                 Diagnostics.ReportMissingOverride(methodSyntax.Identifier.Location, shadowed.ReceiverType.Name, methodName);
                                 break;
@@ -6322,6 +6324,44 @@ internal sealed class DeclarationBinder
         // Resolved to something that is not a legal constraint (a struct, enum,
         // or other value type).
         Diagnostics.ReportConstraintNotInterface(p.Constraint.Location, resolved.Name);
+    }
+
+    /// <summary>
+    /// Issue #1931: extends <paramref name="baseTypeArgSubst"/> (the enclosing
+    /// class's base-type-argument substitution) with a positional mapping from
+    /// a generic base/candidate method's OWN type parameters onto the new
+    /// override's own type parameters, when both declare the same arity. A
+    /// generic method's <c>T</c> is a distinct <see cref="TypeParameterSymbol"/>
+    /// instance per declaration, so without this mapping <see cref="SignaturesMatch(FunctionSymbol, ImmutableArray{ParameterSymbol}, TypeSymbol, RefKind, IReadOnlyDictionary{TypeParameterSymbol, TypeSymbol})"/>
+    /// never sees the base and override <c>T</c>s as equal — cascading into
+    /// GS0185 (override mismatch), then GS0387/GS0386 (abstract member treated
+    /// as unimplemented). Returns <paramref name="baseTypeArgSubst"/> unchanged
+    /// when the arities do not match (mirrors <see cref="TryBuildMethodTypeParameterMap"/>,
+    /// which instead returns <c>null</c>/no-match there because that caller is
+    /// selecting the correct overload rather than only enriching an existing map).
+    /// </summary>
+    private static IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> WithMethodTypeParameterSubstitution(
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> baseTypeArgSubst,
+        FunctionSymbol candidate,
+        ImmutableArray<TypeParameterSymbol> overrideTypeParameters)
+    {
+        var baseTps = candidate.TypeParameters;
+        var baseArity = baseTps.IsDefaultOrEmpty ? 0 : baseTps.Length;
+        var overrideArity = overrideTypeParameters.IsDefaultOrEmpty ? 0 : overrideTypeParameters.Length;
+        if (baseArity == 0 || baseArity != overrideArity)
+        {
+            return baseTypeArgSubst;
+        }
+
+        var map = baseTypeArgSubst == null
+            ? new Dictionary<TypeParameterSymbol, TypeSymbol>()
+            : new Dictionary<TypeParameterSymbol, TypeSymbol>(baseTypeArgSubst);
+        for (var i = 0; i < baseArity; i++)
+        {
+            map[baseTps[i]] = overrideTypeParameters[i];
+        }
+
+        return map;
     }
 
     /// <summary>
