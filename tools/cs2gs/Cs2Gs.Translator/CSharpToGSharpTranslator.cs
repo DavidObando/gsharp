@@ -8165,7 +8165,11 @@ public sealed class CSharpToGSharpTranslator
             };
 
         private GExpression TranslatePatternTest(
-            GExpression receiver, PatternSyntax pattern, ITypeSymbol receiverType = null, ExpressionSyntax receiverSyntax = null)
+            GExpression receiver,
+            PatternSyntax pattern,
+            ITypeSymbol receiverType = null,
+            ExpressionSyntax receiverSyntax = null,
+            bool isNestedPatternMember = false)
         {
             switch (pattern)
             {
@@ -8233,7 +8237,7 @@ public sealed class CSharpToGSharpTranslator
                         new TypeExpression(this.MapTypeSyntax(typePattern.Type)));
 
                 case RecursivePatternSyntax recursive:
-                    return this.TranslateRecursivePatternTest(receiver, recursive, receiverSyntax, receiverType);
+                    return this.TranslateRecursivePatternTest(receiver, recursive, receiverSyntax, receiverType, isNestedPatternMember);
 
                 case VarPatternSyntax varPattern:
                     // `x is var v` ALWAYS matches (it also matches `null`, unlike a
@@ -8267,13 +8271,13 @@ public sealed class CSharpToGSharpTranslator
                     // `x is A and B` → `(x is A) && (x is B)`.
                     bool isOr = binaryPattern.OperatorToken.IsKind(SyntaxKind.OrKeyword);
                     return new BinaryExpression(
-                        this.TranslatePatternTest(receiver, binaryPattern.Left, receiverType, receiverSyntax),
+                        this.TranslatePatternTest(receiver, binaryPattern.Left, receiverType, receiverSyntax, isNestedPatternMember),
                         isOr ? "||" : "&&",
-                        this.TranslatePatternTest(receiver, binaryPattern.Right, receiverType, receiverSyntax));
+                        this.TranslatePatternTest(receiver, binaryPattern.Right, receiverType, receiverSyntax, isNestedPatternMember));
 
                 case ParenthesizedPatternSyntax parenthesized:
                     return new ParenthesizedExpression(
-                        this.TranslatePatternTest(receiver, parenthesized.Pattern, receiverType, receiverSyntax));
+                        this.TranslatePatternTest(receiver, parenthesized.Pattern, receiverType, receiverSyntax, isNestedPatternMember));
 
                 case ListPatternSyntax listPattern:
                     return this.TranslateListPatternTest(receiver, listPattern, receiverType);
@@ -8509,7 +8513,11 @@ public sealed class CSharpToGSharpTranslator
         }
 
         private GExpression TranslateRecursivePatternTest(
-            GExpression receiver, RecursivePatternSyntax recursive, ExpressionSyntax receiverSyntax = null, ITypeSymbol receiverType = null)
+            GExpression receiver,
+            RecursivePatternSyntax recursive,
+            ExpressionSyntax receiverSyntax = null,
+            ITypeSymbol receiverType = null,
+            bool isNestedPatternMember = false)
         {
             // Bind the designator (`is { } x`, `is Circle c`) to the narrowed
             // receiver so later references read the matched value (ADR-0069 smart
@@ -8559,8 +8567,16 @@ public sealed class CSharpToGSharpTranslator
             // property-pattern loop below, whose `receiverType` already comes
             // from a declared property/field symbol via
             // <see cref="TryGetSubpatternMemberType"/>).
+            // The non-nullable-reference skip below applies ONLY to a NESTED
+            // subpattern member (`isNestedPatternMember`), never to the
+            // OUTER/top-level subject of the whole `is`/pattern expression
+            // (e.g. `person` in `person is { ... }`). C# always defensively
+            // null-checks the top-level subject regardless of its declared
+            // nullability, and that guard pre-dates issue #1923 (issue
+            // #1888), so it must stay unconditional there.
             ITypeSymbol declaredReceiverType = this.ResolveDeclaredReceiverType(receiverType, receiverSyntax);
-            bool receiverIsNonNullableReference = recursive.Type == null
+            bool receiverIsNonNullableReference = isNestedPatternMember
+                && recursive.Type == null
                 && declaredReceiverType is { IsReferenceType: true }
                 && declaredReceiverType.NullableAnnotation != NullableAnnotation.Annotated;
 
@@ -8582,7 +8598,7 @@ public sealed class CSharpToGSharpTranslator
                         ?? sub.ExpressionColon?.Expression.ToString();
                     GExpression memberAccess = new MemberAccessExpression(receiver, SanitizeIdentifier(memberName));
                     ITypeSymbol memberType = this.TryGetSubpatternMemberType(sub);
-                    GExpression memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern, memberType);
+                    GExpression memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern, memberType, isNestedPatternMember: true);
                     test = test == null ? memberTest : new BinaryExpression(test, "&&", memberTest);
                 }
             }
@@ -8617,7 +8633,7 @@ public sealed class CSharpToGSharpTranslator
                     }
 
                     GExpression memberAccess = new MemberAccessExpression(receiver, SanitizeIdentifier(memberName));
-                    GExpression memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern);
+                    GExpression memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern, isNestedPatternMember: true);
                     test = test == null ? memberTest : new BinaryExpression(test, "&&", memberTest);
                 }
             }
