@@ -97,6 +97,30 @@ namespace Corpus.Issue1901
     }
 
     [Fact]
+    public void LambdaDefaultParameter_EnumAndNullConstants_MaterializedAtOmittedCallSite()
+    {
+        string rendered = Render(@"
+using System;
+namespace Corpus.Issue1901
+{
+    public enum Color { Red, Green, Blue }
+
+    public class LambdaDefaults
+    {
+        public static void Run()
+        {
+            var f = (Color c = Color.Blue, string s = null) => c;
+            Console.WriteLine(f());
+        }
+    }
+}
+");
+
+        Assert.Contains("Console.WriteLine(f(Color.Blue, nil))", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
     public void ParamsCollection_ExpandedCall_LowersToCollectionConstruction()
     {
         string rendered = Render(@"
@@ -194,6 +218,118 @@ namespace Corpus.Issue1901
             rendered,
             StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
+    }
+
+    /// <summary>
+    /// A <c>params ReadOnlySpan&lt;T&gt;</c> callee (C#13's PREFERRED params-collection
+    /// overload) has no gsc construction form at an expanded call site — gsc can
+    /// only build a <c>List[T]{...}</c> literal, and a <c>List&lt;T&gt;</c> does not
+    /// convert to <c>ReadOnlySpan&lt;T&gt;</c>. Must gap loudly, not silently emit a
+    /// type-mismatched call.
+    /// </summary>
+    [Fact]
+    public void ParamsCollection_ReadOnlySpan_ExpandedCall_ReportsUnsupported()
+    {
+        (_, TranslationContext context) = Translate(@"
+using System;
+namespace Corpus.Issue1901
+{
+    public class ParamsCollections
+    {
+        public static int Total(params ReadOnlySpan<int> values)
+        {
+            int total = 0;
+            foreach (int v in values)
+            {
+                total += v;
+            }
+
+            return total;
+        }
+
+        public static void Run()
+        {
+            var three = Total(1, 2, 3);
+        }
+    }
+}
+");
+
+        Assert.Contains(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported
+            && d.Message.Contains("ReadOnlySpan", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ParamsCollection_Span_ExpandedCall_ReportsUnsupported()
+    {
+        (_, TranslationContext context) = Translate(@"
+using System;
+namespace Corpus.Issue1901
+{
+    public class ParamsCollections
+    {
+        public static int Total(params Span<int> values)
+        {
+            int total = 0;
+            foreach (int v in values)
+            {
+                total += v;
+            }
+
+            return total;
+        }
+
+        public static void Run()
+        {
+            var three = Total(1, 2, 3);
+        }
+    }
+}
+");
+
+        Assert.Contains(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported
+            && d.Message.Contains("Span", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A lambda default that is not a primitive/enum/null constant (here
+    /// <c>decimal</c>) has no gsc literal form; the translator must gap loudly
+    /// rather than substitute the wrong value AND type via <c>nil</c>.
+    /// </summary>
+    [Fact]
+    public void LambdaDefaultParameter_DecimalConstant_ReportsUnsupported()
+    {
+        (_, TranslationContext context) = Translate(@"
+using System;
+namespace Corpus.Issue1901
+{
+    public class LambdaDefaults
+    {
+        public static void Run()
+        {
+            var f = (decimal x = 1.5m) => x;
+            Console.WriteLine(f());
+        }
+    }
+}
+");
+
+        Assert.Contains(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported
+            && d.Message.Contains("default value", StringComparison.Ordinal));
+    }
+
+    private static (Cs2Gs.CodeModel.Ast.CompilationUnit Unit, TranslationContext Context) Translate(string source)
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
+        Assert.True(
+            project.BoundWithoutErrors,
+            "Snippet should bind with no C# errors: " +
+                string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        Cs2Gs.CodeModel.Ast.CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        return (unit, context);
     }
 
     private static void AssertRoundTripParses(string rendered)

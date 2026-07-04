@@ -3523,6 +3523,20 @@ public sealed class CSharpToGSharpTranslator
                 parameterType = arrayType.ElementType;
             }
 
+            if (symbol.IsParams && !variadic && !IsSupportedParamsCollectionType(parameterType))
+            {
+                // The call-site expansion (TranslateCallArguments) only knows how
+                // to lower an expanded 'params' call into a List[T]{...} literal
+                // for the allowlisted collection shapes below. A callee declared
+                // with e.g. `params ReadOnlySpan<T>`/`params HashSet<T>` would
+                // otherwise translate "successfully" here while every call site
+                // gaps — a half-translated callee with no working caller. Gap the
+                // declaration too, so the two sides stay consistent.
+                this.context.ReportUnsupported(
+                    fallbackNode,
+                    $"params collection of type '{parameterType}' has no gsc construction form.");
+            }
+
             GTypeReference type = this.typeMapper.Map(parameterType, this.context, symbol.Locations.FirstOrDefault());
 
             // Issue #1072: a non-nullable reference/array parameter that is
@@ -11009,6 +11023,37 @@ public sealed class CSharpToGSharpTranslator
         /// explicitly here instead of being dropped.</item>
         /// </list>
         /// </summary>
+        /// <summary>
+        /// The params-collection shapes gsc can build FROM a call-site
+        /// <c>List[T]{...}</c> literal (BuildConstruction has no other collection
+        /// constructor to reach for): the concrete <c>List&lt;T&gt;</c> class itself,
+        /// plus the interfaces it already implements. Matched structurally (single
+        /// type argument) rather than by shape, per issue #1901 follow-up — a
+        /// <c>ReadOnlySpan&lt;T&gt;</c>/<c>Span&lt;T&gt;</c> (C#13's PREFERRED params-collection
+        /// overload), a <c>HashSet&lt;T&gt;</c>, or any user <c>[CollectionBuilder]</c> type
+        /// has no gsc construction form and must gap instead of silently mismatching
+        /// the declared parameter type.
+        /// </summary>
+        private static bool IsSupportedParamsCollectionType(ITypeSymbol type)
+        {
+            if (type is not INamedTypeSymbol { TypeArguments: [ITypeSymbol] } named)
+            {
+                return false;
+            }
+
+            if (named.Name == "List" && named.ContainingNamespace?.ToDisplayString() == "System.Collections.Generic")
+            {
+                return true;
+            }
+
+            return named.OriginalDefinition.SpecialType is
+                SpecialType.System_Collections_Generic_IEnumerable_T or
+                SpecialType.System_Collections_Generic_ICollection_T or
+                SpecialType.System_Collections_Generic_IList_T or
+                SpecialType.System_Collections_Generic_IReadOnlyList_T or
+                SpecialType.System_Collections_Generic_IReadOnlyCollection_T;
+        }
+
         private List<GExpression> TranslateCallArguments(SyntaxNode callSyntax, SeparatedSyntaxList<ArgumentSyntax> arguments)
         {
             IMethodSymbol targetMethod = this.context.SemanticModel.GetOperation(callSyntax) switch
@@ -11058,11 +11103,26 @@ public sealed class CSharpToGSharpTranslator
             }
 
             int paramsOrdinal = paramsCollectionArg.Parameter.Ordinal;
+
+            if (!IsSupportedParamsCollectionType(paramsCollectionArg.Parameter.Type))
+            {
+                // gsc can only construct a List[T]{...} literal at the call site
+                // (BuildConstruction below has no other collection constructor to
+                // reach for). Anything else — params Span<T>/ReadOnlySpan<T> (the
+                // PREFERRED C#13 overload), HashSet<T>, a [CollectionBuilder] type,
+                // or a collection type with other than one type argument — has no
+                // gsc construction form. Gap loudly instead of emitting a
+                // List[T]{...} that silently mismatches the declared parameter type.
+                this.context.ReportUnsupported(
+                    callSyntax,
+                    $"params collection of type '{paramsCollectionArg.Parameter.Type}' has no gsc construction form.");
+                return this.TranslateArguments(arguments);
+            }
+
             var translatedArguments = arguments.Take(paramsOrdinal).Select(a => this.TranslateArgument(a)).ToList();
 
-            GTypeReference elementType = paramsCollectionArg.Parameter.Type is INamedTypeSymbol { TypeArguments: [ITypeSymbol single] }
-                ? this.typeMapper.Map(single, this.context, callSyntax.GetLocation())
-                : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+            ITypeSymbol paramsElementType = ((INamedTypeSymbol)paramsCollectionArg.Parameter.Type).TypeArguments[0];
+            GTypeReference elementType = this.typeMapper.Map(paramsElementType, this.context, callSyntax.GetLocation());
 
             var collectionElements = arguments.Skip(paramsOrdinal)
                 .Select(a => new CollectionInitializerElement(this.TranslateArgument(a)))
@@ -11105,12 +11165,33 @@ public sealed class CSharpToGSharpTranslator
             {
                 if (argumentOperation.ArgumentKind == ArgumentKind.DefaultValue)
                 {
-                    GExpression defaultValue = this.MapConstantValue(
-                        argumentOperation.Value.ConstantValue.HasValue ? argumentOperation.Value.ConstantValue.Value : null,
-                        argumentOperation.Parameter.Type,
-                        callSyntax,
-                        $"parameter '{argumentOperation.Parameter.Name}''s default value");
-                    result.Add(defaultValue ?? new IdentifierExpression("nil"));
+                    Optional<object> constant = argumentOperation.Value.ConstantValue;
+                    GExpression defaultValue = constant.HasValue
+                        ? this.MapConstantValue(
+                            constant.Value,
+                            argumentOperation.Parameter.Type,
+                            callSyntax,
+                            $"parameter '{argumentOperation.Parameter.Name}''s default value")
+                        : null;
+                    if (defaultValue == null)
+                    {
+                        // `nil` is the CORRECT mapping for a legitimate null/default
+                        // constant (constant.Value == null); anything else that
+                        // failed to map (decimal, default(struct), or no constant
+                        // at all) has no gsc literal form — `nil` there would
+                        // silently substitute the wrong value AND type. Gap loudly.
+                        bool legitimateNull = constant.HasValue && constant.Value == null;
+                        if (!legitimateNull)
+                        {
+                            this.context.ReportUnsupported(
+                                callSyntax,
+                                $"lambda default value of type '{argumentOperation.Parameter.Type}' has no gsc constant form.");
+                        }
+
+                        defaultValue = new IdentifierExpression("nil");
+                    }
+
+                    result.Add(defaultValue);
                     continue;
                 }
 
