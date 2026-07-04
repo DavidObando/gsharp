@@ -924,8 +924,18 @@ internal sealed class LambdaBinder
             // previously fell through unwrapped, leaving the async function's
             // observable return type as the bare element instead of
             // `Task<T?>` (e.g. "Cannot find member Result" at the call site).
+            //
+            // Issue #2026: a still-OPEN generic type parameter (e.g. the
+            // caller's own `U` substituted in for a generic async callee's
+            // declared return type) likewise reports a null ClrType — it is
+            // not yet closed over a concrete CLR type. Route it (and any
+            // type that structurally references a type parameter, e.g. a
+            // constructed generic like `Box[U]`) through the same symbolic
+            // Task<T> construction so the call-site observable return type
+            // stays `Task[U]` instead of silently dropping the Task wrapper.
             if ((element is StructSymbol or InterfaceSymbol or EnumSymbol
-                || (element is NullableTypeSymbol nullableUserVt && nullableUserVt.UnderlyingType is StructSymbol or InterfaceSymbol or EnumSymbol))
+                || (element is NullableTypeSymbol nullableUserVt && nullableUserVt.UnderlyingType is StructSymbol or InterfaceSymbol or EnumSymbol)
+                || TypeSymbol.ContainsTypeParameter(element))
                 && Scope.References.TryResolveType(wrapperOpenName, out var symbolicTaskOpen))
             {
                 // Issue #502 / #320: a user-defined async result type has no CLR
