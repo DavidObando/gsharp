@@ -7885,6 +7885,81 @@ public class Parser
             return false;
         }
 
+        // ADR-0122 §4 / issue #2002: `(<receiver>)->member = value` is
+        // ambiguous with a lambda whenever the receiver's leading token looks
+        // like a parameter name — grammatically, some receivers (e.g. a bare
+        // identifier `(p)`, or even a call `(getPtr())` — a call's argument
+        // list is *also* a valid lambda-parameter type-clause shape, see
+        // `getPtr ()` parsed as "parameter getPtr of tuple type ()" — both
+        // commit cleanly as a lambda parameter list, so grammar-only
+        // trial-parsing (below) cannot disambiguate them from a genuine
+        // pointer-arrow receiver. Break the tie using the tokens immediately
+        // following the arrow: a lambda whose entire body is a bare
+        // `member = value` (or compound-assignment) is vanishingly rare,
+        // while this exact shape is the whole point of a parenthesized
+        // arrow-assignment target — and mirrors the unparenthesized form,
+        // where `unsafeDepth > 0` already commits `IDENT -> member` to
+        // pointer-arrow access unconditionally (see the bare-identifier
+        // dispatch case above in ParsePrimaryExpression). Bias towards
+        // arrow-member ASSIGNMENT whenever the arrow is immediately followed
+        // by `IDENT =` / `IDENT <compound-op>=`, for ANY receiver shape.
+        // ponytail: this narrowly misclassifies the rare unsafe-context
+        // multi-param lambda whose body happens to start with exactly that
+        // shape (e.g. `(a, b) -> total = a + b`); upgrade to a fuller
+        // parameter-count-aware check if that pattern is ever needed.
+        if (this.unsafeDepth > 0
+            && Peek(offset + 2).Kind == SyntaxKind.IdentifierToken
+            && (Peek(offset + 3).Kind == SyntaxKind.EqualsToken
+                || SyntaxFacts.TryGetCompoundAssignmentBaseOperator(Peek(offset + 3).Kind, out _)))
+        {
+            return false;
+        }
+
+        // ADR-0122 §4 / issue #2002: inside an unsafe context, `->` after a
+        // PARENTHESIZED receiver is ambiguous with a parenthesized lambda —
+        // both `(p) -> body` (lambda) and `(p)->member` (pointer-arrow member
+        // access on receiver `p`, desugared to `(*p).member` by
+        // ParsePostfixChainCore) share the exact same leading shape (an
+        // identifier-first interior followed by a matching `)` then `->`).
+        // The cheap heuristic above (first interior token looks like a
+        // parameter name) is exact for a genuine parameter list but
+        // over-commits for a parenthesized arrow-receiver whose interior
+        // continues with anything a parameter list can never contain — e.g.
+        // `(a.b)->X`, or the double-indirection assignment target
+        // `(*pp)->X = v` (already excluded above since `*` isn't an
+        // identifier).
+        //
+        // Disambiguate precisely, but only where the ambiguity exists
+        // (unsafeDepth > 0): speculatively trial-parse the interior as a
+        // lambda parameter list. Only commit to the lambda if the trial
+        // parse both consumes the interior without reporting any diagnostic
+        // AND lands exactly on the closing `)` already located above —
+        // otherwise the interior is not a valid parameter list, so this is a
+        // parenthesized arrow-receiver instead and we fall through to the
+        // normal expression/postfix-chain path (which handles arrow-member
+        // access — and, transitively via TryLiftTrailingMemberAccess, arrow
+        // assignment targets — for any receiver shape, including double
+        // indirection). The trial parse never mutates externally-visible
+        // parser state: position and diagnostics are unconditionally rolled
+        // back.
+        if (this.unsafeDepth > 0)
+        {
+            var savedPosition = this.position;
+            var savedDiagnosticCount = Diagnostics.Count;
+            try
+            {
+                this.position = savedPosition + startOffset + 1;
+                ParseLambdaParameterList();
+                return Current.Kind == SyntaxKind.CloseParenthesisToken
+                    && Diagnostics.Count == savedDiagnosticCount;
+            }
+            finally
+            {
+                this.position = savedPosition;
+                Diagnostics.TruncateTo(savedDiagnosticCount);
+            }
+        }
+
         return true;
     }
 
