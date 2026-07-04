@@ -19,10 +19,8 @@ namespace Corpus.Grid06
             ExplicitInterfaceSpecifierFixture.Run();
             InterfaceDeclarationFixture.Run();
 
-            // QUARANTINED (see Quarantined/): PrimaryConstructorBaseTypeFixture —
-            // primary-constructor parameters are dropped (GS0125 Variable 'name'
-            // doesn't exist; GS0144 arity 0).
             PartialClassFixture.Run();
+            PrimaryConstructorBaseTypeFixture.Run();
             RecordDeclarationFixture.Run();
             RecordStructDeclarationFixture.Run();
             RequiredMemberFixture.Run();
