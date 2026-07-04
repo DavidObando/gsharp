@@ -44,7 +44,7 @@ public enum UnsupportedRationale
     /// <summary>No rationale (only valid for statuses other than unsupported-by-design).</summary>
     None,
 
-    /// <summary>G# deliberately omits the construct and no mapping is planned (e.g. goto, __makeref).</summary>
+    /// <summary>G# deliberately omits the construct and no mapping is planned (e.g. __makeref).</summary>
     NoGsharpConstruct,
 
     /// <summary>Resolved before/outside translation by Roslyn parse options (#if, #pragma, #region, ...).</summary>

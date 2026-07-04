@@ -185,6 +185,8 @@ internal sealed class StatementBinder
                 return BindDoWhileStatement((DoWhileStatementSyntax)syntax);
             case SyntaxKind.LabeledStatement:
                 return BindLabeledStatement((LabeledStatementSyntax)syntax);
+            case SyntaxKind.GotoStatement:
+                return BindGotoStatement((GotoStatementSyntax)syntax);
             case SyntaxKind.BreakStatement:
                 return BindBreakStatement((BreakStatementSyntax)syntax);
             case SyntaxKind.ContinueStatement:
@@ -4100,14 +4102,20 @@ internal sealed class StatementBinder
         var labelName = syntax.LabelIdentifier.Text;
         var inner = syntax.Statement;
 
-        // ADR-0070: only loops may carry a label.
+        // Issue #1884: a label on any non-loop statement is a `goto` target
+        // rather than an ADR-0070 loop label. Emit a BoundLabelStatement
+        // immediately ahead of the bound inner statement, grouped in a
+        // BoundBlockStatement purely for return-shape convenience — Lowerer
+        // flattens it into the enclosing statement list, so it introduces no
+        // new binder scope (a `label: var x = …` still declares `x` into the
+        // enclosing block, matching C#'s `goto`/label semantics).
         if (!IsLabelableLoop(inner))
         {
-            Diagnostics.ReportLabelOnNonLoopStatement(syntax.LabelIdentifier.Location, labelName);
-
-            // Drop the label and bind the inner statement on its own so
-            // downstream diagnostics surface naturally.
-            return BindStatement(inner);
+            var userLabel = DefineUserLabel(labelName, syntax.LabelIdentifier.Location);
+            var boundInner = BindStatement(inner);
+            return new BoundBlockStatement(
+                syntax,
+                ImmutableArray.Create(new BoundLabelStatement(syntax, userLabel), boundInner));
         }
 
         // ADR-0070: a label that shadows an enclosing live loop's label is a
@@ -4165,6 +4173,76 @@ internal sealed class StatementBinder
     private BoundStatement BindLabeledForRange(LabeledStatementSyntax labelSyntax, ForRangeStatementSyntax inner, string labelName)
     {
         return BindForRangeStatementCore(inner, labelName, labelSyntax);
+    }
+
+    private BoundStatement BindGotoStatement(GotoStatementSyntax syntax)
+    {
+        var label = GetOrCreateUserLabelForGoto(syntax.LabelIdentifier.Text, syntax.LabelIdentifier.Location);
+        return new BoundGotoStatement(syntax, label);
+    }
+
+    /// <summary>
+    /// Issue #1884: resolves the <see cref="BoundLabel"/> a <c>goto</c>
+    /// targets, creating a placeholder up front when the label has not been
+    /// declared yet (a forward reference — the label may appear later in the
+    /// same function). The placeholder is recorded in
+    /// <see cref="BinderContext.UnresolvedGotoLabels"/> until
+    /// <see cref="DefineUserLabel"/> declares it; <see cref="FinalizeUserLabels"/>
+    /// reports GS0469 for any name still unresolved once the function finishes
+    /// binding.
+    /// </summary>
+    private BoundLabel GetOrCreateUserLabelForGoto(string labelName, TextLocation location)
+    {
+        if (binderCtx.UserLabels.TryGetValue(labelName, out var label))
+        {
+            return label;
+        }
+
+        label = new BoundLabel(labelName);
+        binderCtx.UserLabels[labelName] = label;
+        binderCtx.UnresolvedGotoLabels[labelName] = location;
+        return label;
+    }
+
+    /// <summary>
+    /// Issue #1884: declares a <c>goto</c> label at a <c>label: statement</c>
+    /// site, reusing any placeholder created by an earlier forward-referencing
+    /// <c>goto</c> (<see cref="GetOrCreateUserLabelForGoto"/>). A second
+    /// declaration of the same name in the same function is GS0470.
+    /// </summary>
+    private BoundLabel DefineUserLabel(string labelName, TextLocation location)
+    {
+        if (!binderCtx.DefinedUserLabels.Add(labelName))
+        {
+            Diagnostics.ReportDuplicateGotoLabel(location, labelName);
+            return binderCtx.UserLabels[labelName];
+        }
+
+        binderCtx.UnresolvedGotoLabels.Remove(labelName);
+        if (!binderCtx.UserLabels.TryGetValue(labelName, out var label))
+        {
+            label = new BoundLabel(labelName);
+            binderCtx.UserLabels[labelName] = label;
+        }
+
+        return label;
+    }
+
+    /// <summary>
+    /// Issue #1884: reports GS0469 for every <c>goto</c> target that is still
+    /// unresolved once the enclosing function has finished binding. Called
+    /// once per function-equivalent binding session (a plain function/method/
+    /// constructor/accessor body, or — for top-level statements — once after
+    /// all global statements share the synthesized entry point's body).
+    /// </summary>
+    internal void FinalizeUserLabels()
+    {
+        foreach (var entry in binderCtx.UnresolvedGotoLabels)
+        {
+            Diagnostics.ReportUndefinedGotoLabel(entry.Value, entry.Key);
+        }
+
+        binderCtx.UnresolvedGotoLabels.Clear();
     }
 
     /// <summary>

@@ -110,6 +110,7 @@ GlobalStatement
 GoKeyword
 GoStatement
 GotoKeyword
+GotoStatement
 GreaterOrEqualsToken
 GreaterToken
 GuardKeyword

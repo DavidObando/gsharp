@@ -5,6 +5,8 @@
 - **Phase**: Phase 9 — language depth / control-flow ergonomics
 - **Related**: ADR-0010 (aspirational samples), issues [#707](https://github.com/DavidObando/gsharp/issues/707) (this ADR), parent [#706](https://github.com/DavidObando/gsharp/issues/706) (control-flow polish)
 
+> **Amendment (issue [#1884](https://github.com/DavidObando/gsharp/issues/1884), see ADR-0139)**: `label:` is no longer restricted to loop statements. A label on a non-loop statement now declares a `goto` target instead of reporting GS0294 (retired); GS0293/GS0295 and loop labels for `break`/`continue` are unchanged.
+
 ## Context
 
 G# inherited Go's "every loop is `for`" surface: `for { … }` is infinite, `for cond { … }` is the while-shape, `for init; cond; post { … }` is the C-style clause form, `for x := range coll { … }` (and `for x in coll { … }`) iterate, and `for i := a … b { … }` is the integer-range shape. There is no `while` keyword, no `do`/`repeat`-while, and `break` / `continue` always target the innermost enclosing loop.

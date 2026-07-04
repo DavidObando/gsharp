@@ -15,7 +15,9 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// <summary>
 /// Issue #707 / ADR-0070: binding-level tests for `while`, `do`-`while`,
 /// labeled `break` / `continue`, and the associated diagnostics
-/// (GS0120, GS0293, GS0294, GS0295).
+/// (GS0120, GS0293, GS0295). Issue #1884 generalized `label:` onto non-loop
+/// statements into `goto` targets (GS0469, GS0470) — see
+/// Issue1884GotoLabelBindingTests.
 /// </summary>
 public class Issue707WhileDoLabeledBindingTests
 {
@@ -140,14 +142,16 @@ public class Issue707WhileDoLabeledBindingTests
     }
 
     [Fact]
-    public void LabelOnNonLoop_Emits_GS0294()
+    public void LabelOnNonLoop_IsValidGotoTarget()
     {
+        // Issue #1884: a label on a non-loop statement no longer errors —
+        // it declares a `goto` target instead of a loop label.
         var source = """
             package P
             bogus: if true { var x = 1 }
             """;
         var diags = Bind(source);
-        Assert.Contains(diags, d => d.Id == "GS0294");
+        Assert.Empty(diags);
     }
 
     [Fact]

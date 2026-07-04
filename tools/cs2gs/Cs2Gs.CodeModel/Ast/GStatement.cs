@@ -649,6 +649,54 @@ public sealed class ContinueStatement : GStatement
 }
 
 /// <summary>
+/// A <c>goto label</c> statement (ADR-0139; issue #1884). Maps the C#
+/// <c>goto label;</c> directly, and is also the synthesized form used to
+/// lower C# <c>goto case K;</c> / <c>goto default;</c> to a jump into a
+/// <see cref="LabeledStatement"/> placed at the top of the targeted
+/// <c>switch</c> arm's body.
+/// </summary>
+public sealed class GotoStatement : GStatement
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="GotoStatement"/> class.
+    /// </summary>
+    /// <param name="label">The target label name.</param>
+    public GotoStatement(string label)
+    {
+        Label = label;
+    }
+
+    /// <summary>Gets the target label name.</summary>
+    public string Label { get; }
+}
+
+/// <summary>
+/// A <c>label: statement</c> labeled statement (ADR-0070, generalized by
+/// ADR-0139; issue #1884). Maps the C# <c>label: statement;</c> directly, and
+/// is also the synthesized label a <c>goto case</c>/<c>goto default</c>
+/// lowering places at the top of a <c>switch</c> arm's body.
+/// </summary>
+public sealed class LabeledStatement : GStatement
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="LabeledStatement"/> class.
+    /// </summary>
+    /// <param name="label">The label name.</param>
+    /// <param name="statement">The labeled statement.</param>
+    public LabeledStatement(string label, GStatement statement)
+    {
+        Label = label;
+        Statement = statement;
+    }
+
+    /// <summary>Gets the label name.</summary>
+    public string Label { get; }
+
+    /// <summary>Gets the labeled statement.</summary>
+    public GStatement Statement { get; }
+}
+
+/// <summary>
 /// A post-test <c>do { body } while cond</c> loop (spec §Statements; ADR-0070).
 /// Maps the C# <c>do … while (cond);</c> directly.
 /// </summary>

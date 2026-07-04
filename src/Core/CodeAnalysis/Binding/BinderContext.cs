@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Text;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -178,6 +179,35 @@ internal sealed class BinderContext
     /// </summary>
     public Stack<(string LabelName, BoundLabel BreakLabel, BoundLabel ContinueLabel)> LoopStack { get; }
         = new Stack<(string LabelName, BoundLabel BreakLabel, BoundLabel ContinueLabel)>();
+
+    /// <summary>
+    /// Gets the enclosing function's user-defined <c>goto</c> labels
+    /// (issue #1884): a label placed on any non-loop statement, keyed by
+    /// name. Populated by a pre-pass over the function body before any
+    /// statement is bound, so a <c>goto</c> may target a label declared
+    /// later in the same function (forward reference). Fresh per function/
+    /// lambda/local-function — matches ADR-0070's "label namespace is local
+    /// to the enclosing function" rule.
+    /// </summary>
+    public Dictionary<string, BoundLabel> UserLabels { get; }
+        = new Dictionary<string, BoundLabel>();
+
+    /// <summary>
+    /// Gets the set of user-defined <c>goto</c> label names (issue #1884)
+    /// that have already been declared via a <c>label: statement</c> in this
+    /// function. Used to detect a duplicate label declaration (GS0470).
+    /// </summary>
+    public HashSet<string> DefinedUserLabels { get; } = new HashSet<string>();
+
+    /// <summary>
+    /// Gets the user-defined <c>goto</c> label names (issue #1884) that have
+    /// been referenced by a <c>goto</c> but not yet declared, keyed to the
+    /// location of the first such reference. Checked once the enclosing
+    /// function finishes binding (<c>StatementBinder.FinalizeUserLabels</c>);
+    /// any name still present is an undefined label (GS0469).
+    /// </summary>
+    public Dictionary<string, TextLocation> UnresolvedGotoLabels { get; }
+        = new Dictionary<string, TextLocation>();
 
     /// <summary>
     /// Gets the stack of per-scope variable-narrowing tables used by pattern

@@ -922,6 +922,12 @@ public static class GSharpPrinter
             case ContinueStatement:
                 return $"{pad}continue";
 
+            case GotoStatement gotoStatement:
+                return $"{pad}goto {gotoStatement.Label}";
+
+            case LabeledStatement labeledStatement:
+                return $"{pad}{labeledStatement.Label}:\n{RenderStatement(labeledStatement.Statement, indent)}";
+
             case DoWhileStatement doWhile:
                 return $"{pad}do {RenderBlock(doWhile.Body, indent)} while {RenderExpression(doWhile.Condition, indent)}";
 

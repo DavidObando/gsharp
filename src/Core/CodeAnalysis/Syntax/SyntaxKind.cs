@@ -203,6 +203,7 @@ public enum SyntaxKind
     WhileStatement,
     DoWhileStatement,
     LabeledStatement,
+    GotoStatement,
     BreakStatement,
     ContinueStatement,
     ReturnStatement,

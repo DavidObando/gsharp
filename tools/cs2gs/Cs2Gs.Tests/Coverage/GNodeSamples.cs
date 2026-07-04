@@ -154,6 +154,8 @@ public static class GNodeSamples
                 body: Block(new YieldStatement(Int("1"))))),
             [typeof(BreakStatement)] = () => Stmts(new WhileStatement(Id("c"), Block(new BreakStatement()))),
             [typeof(ContinueStatement)] = () => Stmts(new WhileStatement(Id("c"), Block(new ContinueStatement()))),
+            [typeof(GotoStatement)] = () => Stmts(new GotoStatement("retry")),
+            [typeof(LabeledStatement)] = () => Stmts(new LabeledStatement("retry", new GotoStatement("retry"))),
             [typeof(DoWhileStatement)] = () => Stmts(new DoWhileStatement(Block(), Id("c"))),
             [typeof(TupleDeconstructionStatement)] = () => Stmts(new TupleDeconstructionStatement(
                 BindingKind.Let,

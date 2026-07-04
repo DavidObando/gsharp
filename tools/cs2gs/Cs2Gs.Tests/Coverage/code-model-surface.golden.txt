@@ -51,8 +51,10 @@ FixedStatement
 ForInStatement
 ForStatement
 ForTupleInStatement
+GotoStatement
 IfStatement
 IncrementDecrementStatement
+LabeledStatement
 LocalDeclarationStatement
 LocalFunctionStatement
 LockStatement

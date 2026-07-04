@@ -2984,15 +2984,27 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
-    /// ADR-0070 / issue #707: GS0294 — a label prefix (<c>name:</c>) was
-    /// applied to a statement that is not a loop. Only loops may carry a
-    /// loop label.
+    /// ADR-0070 / issue #1884: GS0469 — a <c>goto</c> targets a label name
+    /// that is never defined anywhere in the enclosing function.
     /// </summary>
     /// <param name="location">The source location of the offending label identifier.</param>
-    /// <param name="labelName">The label name.</param>
-    public void ReportLabelOnNonLoopStatement(TextLocation location, string labelName)
+    /// <param name="labelName">The unresolved label name.</param>
+    public void ReportUndefinedGotoLabel(TextLocation location, string labelName)
     {
-        Report(location, "GS0294", $"Label '{labelName}' can only be applied to a loop statement (for / while / do-while).");
+        Report(location, "GS0469", $"The label '{labelName}' does not exist in the current context.");
+    }
+
+    /// <summary>
+    /// ADR-0070 / issue #1884: GS0470 — two <c>goto</c> labels with the same
+    /// name are declared in the same enclosing function. The label namespace
+    /// is local to the enclosing function (ADR-0070), so this is an error
+    /// even when the two labels are in disjoint nested blocks.
+    /// </summary>
+    /// <param name="location">The source location of the second (duplicate) label declaration.</param>
+    /// <param name="labelName">The duplicated label name.</param>
+    public void ReportDuplicateGotoLabel(TextLocation location, string labelName)
+    {
+        Report(location, "GS0470", $"The label '{labelName}' is already defined in this function.");
     }
 
     /// <summary>
