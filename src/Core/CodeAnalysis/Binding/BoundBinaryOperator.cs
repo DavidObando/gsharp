@@ -91,6 +91,24 @@ public sealed record BoundBinaryOperator
             }
         }
 
+        // Issue #1927: string concatenation (`+`) must accept `string?` mixed
+        // with `string` on either or both sides — matching C#'s well-known
+        // `string.Concat` behaviour where a null operand is treated as an
+        // empty string and the result is always non-nullable `string`. The
+        // table above only registers the homogeneous `string + string ->
+        // string` arm, so a nullable operand (e.g. from `T.ToString()` under
+        // a `class` constraint, which yields `string?`) previously fell
+        // through to GS0129 "operator not defined for 'string' and
+        // 'string?'". Any combination of string/string? is accepted here;
+        // the result type is always the non-nullable `string`.
+        if (syntaxKind == SyntaxKind.PlusToken
+            && IsStringOrNullableString(leftType)
+            && IsStringOrNullableString(rightType)
+            && (leftType is NullableTypeSymbol || rightType is NullableTypeSymbol))
+        {
+            return new BoundBinaryOperator(syntaxKind, BoundBinaryOperatorKind.Sum, leftType, rightType, TypeSymbol.String);
+        }
+
         // Phase 4.2 / ADR-0020: `==` / `!=` on a `comparable`-constrained type parameter.
         // Allowed only when both operands are the SAME type-parameter symbol whose
         // constraint is `Comparable`. (`any` falls through to "operator undefined".)
@@ -384,6 +402,13 @@ public sealed record BoundBinaryOperator
             default:
                 return false;
         }
+    }
+
+    /// <summary>Issue #1927: true when <paramref name="type"/> is <c>string</c> or <c>string?</c>.</summary>
+    private static bool IsStringOrNullableString(TypeSymbol type)
+    {
+        return type == TypeSymbol.String
+            || (type is NullableTypeSymbol nullable && nullable.UnderlyingType == TypeSymbol.String);
     }
 
     private static bool IsNullCompare(TypeSymbol nullableOrUnderlying, TypeSymbol nullCandidate)

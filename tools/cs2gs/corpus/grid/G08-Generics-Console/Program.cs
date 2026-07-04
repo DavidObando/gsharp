@@ -24,11 +24,7 @@ namespace Corpus.Grid08
             StructConstraintFixture.Run();
             TypeArgumentListFixture.Run();
             TypeConstraintFixture.Run();
-
-            // QUARANTINED (see Quarantined/): TypeParameterFixture — declaration-site
-            // variance is not honored: assigning ISource<string> to ISource<object>
-            // fails compile (GS0155 Cannot convert 'ISource[string]' to
-            // 'ISource[object]'); also GS0129 'string' + 'string?' on T.ToString().
+            TypeParameterFixture.Run();
             TypeParameterListFixture.Run();
         }
     }

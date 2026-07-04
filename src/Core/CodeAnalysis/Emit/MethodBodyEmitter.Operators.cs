@@ -470,8 +470,14 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        // String concatenation / equality go through BCL helpers.
-        if (b.Left.Type == TypeSymbol.String && b.Right.Type == TypeSymbol.String)
+        // String concatenation / equality go through BCL helpers. Issue #1927:
+        // `+` also accepts `string?` mixed with `string` on either/both sides
+        // (the operator table binds that combination too); at runtime a
+        // `string?` operand is simply a possibly-null `string` reference, and
+        // `String.Concat(string, string)` already treats a null argument as
+        // an empty string (ECMA-335 / BCL contract), so no extra null-check
+        // IL is needed — the existing Concat call handles it.
+        if (IsStringOrNullableStringEmit(b.Left.Type) && IsStringOrNullableStringEmit(b.Right.Type))
         {
             switch (b.Op.Kind)
             {
@@ -798,6 +804,11 @@ internal sealed partial class MethodBodyEmitter
         => type is NullableTypeSymbol nullable
             && (nullable.UnderlyingType is EnumSymbol
                 || (nullable.UnderlyingType is StructSymbol s && !s.IsClass));
+
+    /// <summary>Issue #1927: true when <paramref name="type"/> is <c>string</c> or <c>string?</c>. A <c>string?</c> operand is a possibly-null <c>string</c> reference at runtime, so the existing <c>String.Concat</c>/<c>String.Equals</c> IL handles it without extra null-checks.</summary>
+    private static bool IsStringOrNullableStringEmit(TypeSymbol type)
+        => type == TypeSymbol.String
+            || (type is NullableTypeSymbol nullable && nullable.UnderlyingType == TypeSymbol.String);
 
     /// <summary>
     /// Issue #831: matches `T? == nil` / `T? != nil` (and the symmetric
