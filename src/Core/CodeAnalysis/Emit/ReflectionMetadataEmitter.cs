@@ -10616,6 +10616,22 @@ internal sealed class ReflectionMetadataEmitter
             return ArgIsSymbolicUserDefined(nullable.UnderlyingType);
         }
 
+        // Issue #1902: a positional tuple element may itself carry a
+        // same-compilation user type (e.g. the `(Owner, Pet)` transparent
+        // identifier a query's Join/GroupJoin result-selector returns).
+        // Without recursing here, `FunctionTypeNeedsSymbolicDelegate` misses
+        // the tuple-typed return and picks the reflection-resolved
+        // `overrideDelegateType` (whose ClrType was closed with the erased
+        // `object` placeholders from `TryBuildErasedClosedGeneric` — see
+        // MemberLookup.cs), so the lambda gets emitted as
+        // `Func<Owner,Pet,ValueTuple<object,object>>` while the body it
+        // targets is really typed `ValueTuple<Owner,Pet>` — a stack-shape
+        // mismatch ilverify rejects (StackUnexpected).
+        if (arg is TupleTypeSymbol tuple)
+        {
+            return tuple.ElementTypes.Any(ArgIsSymbolicUserDefined);
+        }
+
         return false;
     }
 

@@ -1,6 +1,4 @@
-// inventory: FromClause — QUARANTINED at translate: CS2GS-GAP "query clause
-// 'FromClause' has no canonical G# lowering yet (ADR-0115 §B)." A second
-// from clause (SelectMany) is unsupported; only the initial from is lowered.
+// inventory: FromClause (second from, lowers to SelectMany, issue #1902)
 using System;
 using System.Linq;
 

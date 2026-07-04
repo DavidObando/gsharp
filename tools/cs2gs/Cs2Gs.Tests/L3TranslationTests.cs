@@ -197,16 +197,20 @@ namespace Demo
     }
 
     /// <summary>
-    /// Issue #1738: a query clause with no canonical G# lowering yet (a
-    /// <c>group ... by ...</c> select-or-group, here feeding an <c>into</c>
-    /// continuation) must surface a visible <see
+    /// Issue #1738 originally required a <c>group ... by ...</c> feeding an
+    /// <c>into</c> continuation to surface a visible <see
     /// cref="TranslationSeverity.Unsupported"/> diagnostic rather than being
-    /// silently miscompiled or dropped.
+    /// silently miscompiled or dropped, since no lowering existed yet. Issue
+    /// #1902 generalizes the query-clause lowering to cover exactly this
+    /// case: <c>group ... by ...</c> lowers to <c>.GroupBy(...)</c> and the
+    /// <c>into</c> continuation re-scopes the chain to the group variable
+    /// (here a passthrough <c>select g</c>), so this must now translate
+    /// cleanly with no diagnostics.
     /// </summary>
     [Fact]
-    public void GroupByContinuation_ReportsUnsupportedRatherThanDropping()
+    public void GroupByContinuation_LowersToGroupByWithSelectContinuation()
     {
-        TranslationContext context = TranslateForDiagnostics(@"
+        string printed = TranslateUnit(@"
 namespace Demo
 {
     using System.Collections.Generic;
@@ -218,9 +222,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains(
-            context.Diagnostics,
-            d => d.IsUnsupported && d.ConstructKind == "GroupClause");
+        Assert.Contains("numbers.GroupBy((n int32) -> n % 2)", printed);
     }
 
     /// <summary>

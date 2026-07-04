@@ -1,6 +1,4 @@
-// inventory: JoinClause — QUARANTINED at translate: CS2GS-GAP "query clause
-// 'JoinClause' has no canonical G# lowering yet (ADR-0115 §B)." for
-// 'join p in pets on o.Id equals p.OwnerId'.
+// inventory: JoinClause (inner join, lowers to Join, issue #1902)
 using System;
 using System.Linq;
 

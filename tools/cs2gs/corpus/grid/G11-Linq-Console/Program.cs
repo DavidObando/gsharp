@@ -10,6 +10,11 @@ namespace Corpus.Grid11
     {
         private static void Main()
         {
+            FromClauseSelectManyFixture.Run();
+            GroupClauseFixture.Run();
+            JoinClauseFixture.Run();
+            JoinIntoClauseFixture.Run();
+            LetClauseFixture.Run();
             MethodChainParityFixture.Run();
             OrderByClauseFixture.Run();
             QueryContinuationFixture.Run();

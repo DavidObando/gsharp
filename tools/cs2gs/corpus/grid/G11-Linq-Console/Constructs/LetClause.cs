@@ -1,6 +1,4 @@
-// inventory: LetClause — QUARANTINED at translate: CS2GS-GAP "query clause
-// 'LetClause' has no canonical G# lowering yet (ADR-0115 §B)." for
-// 'let sq = n * n', 'let len = w.Length', and 'let head = w[0]'.
+// inventory: LetClause (lowers to Select over a widened tuple scope, issue #1902)
 using System;
 using System.Linq;
 
