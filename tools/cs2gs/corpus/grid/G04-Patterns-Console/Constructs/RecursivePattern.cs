@@ -1,7 +1,5 @@
 // inventory: RecursivePattern
 // NOTE: quarantined sub-cases (all fail after a clean stage-1 translation):
-//   * `var` sub-patterns inside property patterns — CS2GS-GAP at stage 1
-//     ("pattern 'VarPattern' has no canonical G# form yet").
 //   * NESTED property patterns over a reference member, e.g.
 //     `person is { Address: { City: "Lima" } }`: the lowering emits
 //     `person.Address != nil && person.Address.City == ...`. With a
@@ -15,8 +13,9 @@
 //     lowered without a cast: GS0155 ("Cannot convert type 'RpPerson?' to
 //     'object'") then GS0158 ("Cannot find member Name") on the spill local.
 // Kept: top-level property patterns on a nullable subject (constant,
-// relational, and extended `A.B:` sub-patterns) and shallow property-pattern
-// arms in a switch expression over a non-nullable subject.
+// relational, and extended `A.B:` sub-patterns), a `{ Prop: var v }` binder
+// sub-pattern (issue #1888, resolved), and shallow property-pattern arms in a
+// switch expression over a non-nullable subject.
 using System;
 
 namespace Corpus.Grid04.Constructs
@@ -42,14 +41,20 @@ namespace Corpus.Grid04.Constructs
             bool shortName = person is { Name.Length: 3 };
             Console.WriteLine($"RecursivePattern: name length 3 = {shortName}");
 
+            if (person is { Address: var addr })
+            {
+                Console.WriteLine($"RecursivePattern: nested var binds address city = {addr.City}");
+            }
+
             RpPerson router = new RpPerson("Bea", new RpAddress("Cusco", 8000));
             string route = router switch
             {
                 { Name: "Ada" } => "ada route",
-                { Name: "Bea" } => "bea route",
+                { Address: var routedAddr } => $"routed via {routedAddr.City}",
                 _ => "other route",
             };
             Console.WriteLine($"RecursivePattern: routed to {route}");
         }
     }
 }
+

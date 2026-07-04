@@ -8094,6 +8094,20 @@ public sealed class CSharpToGSharpTranslator
                 case RecursivePatternSyntax recursive:
                     return this.TranslateRecursivePatternTest(receiver, recursive, receiverSyntax);
 
+                case VarPatternSyntax varPattern:
+                    // `x is var v` ALWAYS matches (it also matches `null`, unlike a
+                    // type/declaration pattern), so it lowers to the literal `true`
+                    // test; `v` binds directly to the receiver — no non-null
+                    // narrowing, since (unlike `x is T t`) a `var` pattern never
+                    // requires non-null (issue #1888).
+                    if (varPattern.Designation is SingleVariableDesignationSyntax varSingle &&
+                        this.context.GetDeclaredSymbol(varSingle) is { } varBound)
+                    {
+                        this.patternBindings[varBound] = receiver;
+                    }
+
+                    return LiteralExpression.Bool(true);
+
                 case UnaryPatternSyntax unary when unary.IsKind(SyntaxKind.NotPattern):
                     return this.TranslateNotPatternTest(receiver, unary.Pattern, receiverType);
 
@@ -10810,7 +10824,7 @@ public sealed class CSharpToGSharpTranslator
                 // out of scope.
                 var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
                 var usedDesignators = new HashSet<string>(StringComparer.Ordinal);
-                GPattern pattern = this.TranslatePattern(arm.Pattern, bindings, usedDesignators);
+                GPattern pattern = this.TranslatePattern(arm.Pattern, subject, bindings, usedDesignators);
 
                 foreach ((ISymbol symbol, GExpression replacement) in bindings)
                 {
@@ -10863,7 +10877,7 @@ public sealed class CSharpToGSharpTranslator
                         case CasePatternSwitchLabelSyntax patternLabel:
                             var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
                             var usedDesignators = new HashSet<string>(StringComparer.Ordinal);
-                            GPattern pattern = this.TranslatePattern(patternLabel.Pattern, bindings, usedDesignators);
+                            GPattern pattern = this.TranslatePattern(patternLabel.Pattern, subject, bindings, usedDesignators);
 
                             // Issue #1730: install the pattern's bindings before
                             // translating the `when` guard and the case body, so
@@ -11034,6 +11048,7 @@ public sealed class CSharpToGSharpTranslator
 
         private GPattern TranslatePattern(
             PatternSyntax pattern,
+            GExpression receiver,
             List<(ISymbol Symbol, GExpression Replacement)> bindings,
             HashSet<string> usedDesignators)
         {
@@ -11057,8 +11072,26 @@ public sealed class CSharpToGSharpTranslator
                         SanitizeIdentifier(variable.Identifier.Text),
                         this.MapTypeSyntax(declaration.Type));
 
+                // `var v` (a top-level switch arm, or a nested `{ Prop: var v }`
+                // subpattern — this method recurses for both) ALWAYS matches, so
+                // there is no real test to lower: it maps to the G# discard token
+                // `_` (which gsc's own exhaustiveness/binder treats as a total
+                // arm — the same as an explicit `default:` — see
+                // BindSwitchExpression's `pattern is BoundDiscardPattern` check),
+                // and `v` binds via a translator-side substitution of every
+                // reference to `receiver` (no runtime pattern is needed since
+                // `var` never narrows and also matches `null`) (issue #1888).
+                case VarPatternSyntax varPattern:
+                    if (varPattern.Designation is SingleVariableDesignationSyntax varVariable &&
+                        this.context.GetDeclaredSymbol(varVariable) is { } varBound)
+                    {
+                        bindings.Add((varBound, receiver));
+                    }
+
+                    return new DiscardPattern();
+
                 case RecursivePatternSyntax recursive:
-                    return this.TranslateRecursivePattern(recursive, bindings, usedDesignators);
+                    return this.TranslateRecursivePattern(recursive, receiver, bindings, usedDesignators);
 
                 // Issue #992: C# `and` / `or` pattern combinators map to G#
                 // `and` / `or`. C# `BinaryPatternSyntax` carries an `and`/`or`
@@ -11067,16 +11100,16 @@ public sealed class CSharpToGSharpTranslator
                     when binary.OperatorToken.IsKind(SyntaxKind.AndKeyword) || binary.OperatorToken.IsKind(SyntaxKind.OrKeyword):
                     return new BinaryPattern(
                         binary.OperatorToken.IsKind(SyntaxKind.AndKeyword),
-                        this.TranslatePattern(binary.Left, bindings, usedDesignators),
-                        this.TranslatePattern(binary.Right, bindings, usedDesignators));
+                        this.TranslatePattern(binary.Left, receiver, bindings, usedDesignators),
+                        this.TranslatePattern(binary.Right, receiver, bindings, usedDesignators));
 
                 // Issue #992: C# `not <pattern>` maps to G# `not <pattern>`.
                 case UnaryPatternSyntax unary
                     when unary.OperatorToken.IsKind(SyntaxKind.NotKeyword):
-                    return new NotPattern(this.TranslatePattern(unary.Pattern, bindings, usedDesignators));
+                    return new NotPattern(this.TranslatePattern(unary.Pattern, receiver, bindings, usedDesignators));
 
                 case ParenthesizedPatternSyntax parenthesized:
-                    return new ParenthesizedPattern(this.TranslatePattern(parenthesized.Pattern, bindings, usedDesignators));
+                    return new ParenthesizedPattern(this.TranslatePattern(parenthesized.Pattern, receiver, bindings, usedDesignators));
 
                 default:
                     this.context.ReportUnsupported(
@@ -11088,6 +11121,7 @@ public sealed class CSharpToGSharpTranslator
 
         private GPattern TranslateRecursivePattern(
             RecursivePatternSyntax recursive,
+            GExpression receiver,
             List<(ISymbol Symbol, GExpression Replacement)> bindings,
             HashSet<string> usedDesignators)
         {
@@ -11107,9 +11141,14 @@ public sealed class CSharpToGSharpTranslator
                             continue;
                         }
 
+                        string fieldName = SanitizeIdentifier(sub.NameColon.Name.Identifier.Text);
                         fields.Add(new PropertyPatternField(
-                            SanitizeIdentifier(sub.NameColon.Name.Identifier.Text),
-                            this.TranslatePattern(sub.Pattern, bindings, usedDesignators)));
+                            fieldName,
+                            this.TranslatePattern(
+                                sub.Pattern,
+                                new MemberAccessExpression(receiver, fieldName),
+                                bindings,
+                                usedDesignators)));
                     }
                 }
 

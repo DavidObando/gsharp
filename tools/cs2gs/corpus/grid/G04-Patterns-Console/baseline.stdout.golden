@@ -59,7 +59,8 @@ PositionalPatternClause: (3, 4) tuple-> ne
 RecursivePattern: person is in Lima = True
 RecursivePattern: person has a Lima-range zip
 RecursivePattern: name length 3 = True
-RecursivePattern: routed to bea route
+RecursivePattern: nested var binds address city = Lima
+RecursivePattern: routed to routed via Cusco
 RelationalPattern: -10 degrees is freezing
 RelationalPattern: 0 degrees is cold
 RelationalPattern: 15 degrees is cold
@@ -69,6 +70,6 @@ RelationalPattern: 41 degrees is hot
 RelationalPattern: 8 is > 0 = True, 8 is <= 8 = True
 SwitchExpression: -2 -> negative
 SwitchExpression: 0 -> zero
-SwitchExpression: 2 -> plain positive
+SwitchExpression: 2 -> plain positive (2)
 SwitchExpression: 4 -> multiple of four (4)
 SwitchExpression: quarter 3 -> summer

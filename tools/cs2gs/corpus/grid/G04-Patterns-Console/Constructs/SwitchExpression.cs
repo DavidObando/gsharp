@@ -1,7 +1,4 @@
 // inventory: SwitchExpression
-// NOTE: quarantined sub-case: a `var` binder arm (`var v => ...`) fails stage 1
-// with CS2GS-GAP "pattern 'VarPattern' has no canonical G# form yet
-// (ADR-0115 §B)". A discard arm stands in for the catch-all below.
 using System;
 
 namespace Corpus.Grid04.Constructs
@@ -17,7 +14,7 @@ namespace Corpus.Grid04.Constructs
                     < 0 => "negative",
                     0 => "zero",
                     int v when v % 4 == 0 => $"multiple of four ({v})",
-                    _ => "plain positive",
+                    var v => $"plain positive ({v})",
                 };
                 Console.WriteLine($"SwitchExpression: {n} -> {label}");
             }
