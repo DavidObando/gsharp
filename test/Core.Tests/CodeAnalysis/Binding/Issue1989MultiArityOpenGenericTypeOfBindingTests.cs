@@ -121,6 +121,33 @@ class C {
         Assert.Contains(result.Diagnostics, d => d.Id == "GS0113");
     }
 
+    /// <summary>
+    /// Issue #2012 (N1): <c>_</c> is an ordinary identifier in G#'s grammar
+    /// (not a reserved type-name token), so user code can legally declare a
+    /// real type literally named <c>_</c>. When it does, <c>typeof(Func[_])</c>
+    /// must bind the type argument to that REAL type (an ordinary closed
+    /// generic <c>Func&lt;_&gt;</c>) rather than silently reading <c>_</c> as
+    /// the open-generic placeholder and flipping to unbound <c>Func`1</c>.
+    /// </summary>
+    [Fact]
+    public void RealTypeNamedUnderscore_TypeOf_BindsToClosedGeneric_NotOpenGeneric()
+    {
+        var source = @"
+import System
+
+class _ {
+}
+
+class C {
+    func run() {
+        let t = typeof(Func[_])
+    }
+}
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

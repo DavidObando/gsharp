@@ -210,7 +210,7 @@ namespace Demo
     /// `typeof(IEnumerable)` (the only parseable G# form).
     /// </summary>
     [Fact]
-    public void UnboundGenericTypeof_MapsToBareName()
+    public void UnboundGenericTypeof_MapsToUnderscorePlaceholder()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -221,7 +221,9 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("typeof(IEnumerable)", printed);
+        // Issue #2012 (S1): cs2gs now emits the explicit-arity `_` placeholder
+        // form (#1989/#2011) rather than the bare generic-definition name.
+        Assert.Contains("typeof(IEnumerable[_])", printed);
     }
 
     /// <summary>

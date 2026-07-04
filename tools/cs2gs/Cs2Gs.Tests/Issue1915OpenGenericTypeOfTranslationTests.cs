@@ -14,22 +14,32 @@ namespace Cs2Gs.Tests;
 
 /// <summary>
 /// Issue #1915 (sub-bug b): <c>typeof(List&lt;&gt;)</c> (an unbound generic
-/// operand, <c>GenericNameSyntax.IsUnboundGenericName == true</c>) already
+/// operand, <c>GenericNameSyntax.IsUnboundGenericName == true</c>) originally
 /// translated to the bare generic-definition name <c>typeof(List)</c> — that
-/// half was correct (G# has no bracket syntax for an open generic, so the
-/// bare name is the only spelling available), but gsc's OWN binder could not
-/// resolve a bare imported-CLR-generic name at all (it only tried the exact,
-/// non-generic reflection name), so the printed G# failed to compile with
-/// GS0113 "Type 'List' doesn't exist." Fixed on the gsc side: a bare simple
-/// name inside <c>typeof(...)</c> now falls back to an arity-suffixed
-/// (<c>`1</c>, <c>`2</c>, …) reflection lookup across the file's imports and
-/// binds to the CLR open generic type definition when exactly one match
-/// exists.
+/// half was correct at the time (G# had no bracket syntax for an open
+/// generic, so the bare name was the only spelling available), but gsc's OWN
+/// binder could not resolve a bare imported-CLR-generic name at all (it only
+/// tried the exact, non-generic reflection name), so the printed G# failed
+/// to compile with GS0113 "Type 'List' doesn't exist." Fixed on the gsc side:
+/// a bare simple name inside <c>typeof(...)</c> now falls back to an
+/// arity-suffixed (<c>`1</c>, <c>`2</c>, …) reflection lookup across the
+/// file's imports and binds to the CLR open generic type definition when
+/// exactly one match exists.
+/// <para>
+/// Issue #2012 (S1): the bare-name fallback stays ambiguous (GS0113) for
+/// same-base-name multi-arity BCL families (<c>Func</c>, <c>Action</c>, …),
+/// so #1989/#2011 added an explicit-arity spelling via <c>_</c> placeholder
+/// bracket type arguments (<c>typeof(Name[_, ...])</c>). cs2gs now emits
+/// THAT canonical form for every unbound generic — carrying the arity C#
+/// derives from comma count the same way — rather than the bare name, so the
+/// translated output round-trips correctly for every family, not just
+/// single-arity ones.
+/// </para>
 /// </summary>
 public class Issue1915OpenGenericTypeOfTranslationTests
 {
     [Fact]
-    public void UnboundGenericType_TypeOf_TranslatesToBareNameAndRoundTrips()
+    public void UnboundGenericType_TypeOf_TranslatesToUnderscorePlaceholderAndRoundTrips()
     {
         string printed = TranslateUnit(@"
 using System;
@@ -43,11 +53,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("typeof(List)", printed);
+        Assert.Contains("typeof(List[_])", printed);
     }
 
     [Fact]
-    public void UnboundGenericType_TwoArity_TranslatesToBareNameAndRoundTrips()
+    public void UnboundGenericType_TwoArity_TranslatesToUnderscorePlaceholderAndRoundTrips()
     {
         string printed = TranslateUnit(@"
 using System;
@@ -61,7 +71,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("typeof(Dictionary)", printed);
+        Assert.Contains("typeof(Dictionary[_, _])", printed);
     }
 
     private static string TranslateUnit(string source)
