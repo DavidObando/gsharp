@@ -1,4 +1,4 @@
-// inventory: ClassDeclaration — partial class, part 2 of 2 (SemanticsErased probe)
+// inventory: ClassDeclaration — partial class, part 2 of 2 (issue #1910).
 using System;
 
 namespace Corpus.Grid06

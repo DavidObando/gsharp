@@ -1,7 +1,4 @@
-// inventory: GroupClause — QUARANTINED at translate: CS2GS-GAP "query
-// 'GroupClause' has no canonical G# lowering yet (ADR-0115 §B)." Both
-// 'group n by n % 3' and 'group w by w.Length' fail; this also blocks the
-// group-based QueryContinuation and the GroupBy parity pair.
+// inventory: GroupClause (lowers to GroupBy, issue #1902)
 using System;
 using System.Linq;
 

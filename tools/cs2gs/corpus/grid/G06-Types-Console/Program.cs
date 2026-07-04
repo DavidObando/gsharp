@@ -21,10 +21,10 @@ namespace Corpus.Grid06
             ExplicitInterfaceSpecifierFixture.Run();
             InterfaceDeclarationFixture.Run();
 
-            // QUARANTINED (see Quarantined/): PartialClassFixture — partial class parts
-            // emit two `class Ledger` declarations (GS0102 'Ledger' is already declared);
-            // PrimaryConstructorBaseTypeFixture — primary-constructor parameters are
-            // dropped (GS0125 Variable 'name' doesn't exist; GS0144 arity 0).
+            // QUARANTINED (see Quarantined/): PrimaryConstructorBaseTypeFixture —
+            // primary-constructor parameters are dropped (GS0125 Variable 'name'
+            // doesn't exist; GS0144 arity 0).
+            PartialClassFixture.Run();
             RecordDeclarationFixture.Run();
             RecordStructDeclarationFixture.Run();
             RequiredMemberFixture.Run();

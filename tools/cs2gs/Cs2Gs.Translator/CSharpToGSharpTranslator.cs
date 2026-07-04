@@ -51,6 +51,15 @@ public sealed class CSharpToGSharpTranslator
     // pass per compilation.
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, HashSet<INamedTypeSymbol>> SubclassedBaseTypesCache = new();
 
+    // Issue #1910: a `partial` class/struct/interface/record has ONE symbol but
+    // MULTIPLE `TypeDeclarationSyntax` parts (one per file/declaration). Each
+    // part used to be translated independently, emitting a complete, duplicate
+    // G# type declaration per part (GS0102) instead of one merged declaration.
+    // Cached per `Compilation` for the same reason as `SubclassedBaseTypesCache`
+    // above: it is a pure function of the source symbol tree, invariant across
+    // every document translated from the same compilation.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>>> PartialTypePartsCache = new();
+
     /// <summary>
     /// Translates a loaded C# document into a G# <see cref="CompilationUnit"/>,
     /// recording any unsupported constructs on a fresh context. Use
@@ -79,8 +88,22 @@ public sealed class CSharpToGSharpTranslator
     {
         CompilationUnitSyntax root = document.GetRoot();
 
+        Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts =
+            GetOrCollectPartialTypeParts(context.Compilation);
+
         string package = this.ResolvePackage(root, context);
-        IReadOnlyList<ImportDirective> imports = this.TranslateImports(root, context);
+
+        // Issue #1910 (gap 3): a merged-in member from a non-primary partial
+        // part (see `VisitAggregateCore`) is translated using ITS OWN file's
+        // semantic model (`TranslationContext.UseSemanticModelFor`), so a short
+        // type/member name it emits may only resolve under a `using` that
+        // lives in that OTHER file, not this (primary) one. Union in the
+        // `using` directives of every non-primary part whose primary part is
+        // declared in THIS tree, so the merged output's import block covers
+        // every name the merged-in bodies rely on.
+        IEnumerable<Microsoft.CodeAnalysis.SyntaxTree> extraUsingTrees =
+            CollectExtraUsingTrees(root, partialTypeParts);
+        IReadOnlyList<ImportDirective> imports = this.TranslateImports(root, extraUsingTrees, context);
 
         HashSet<INamedTypeSymbol> openBases = GetOrCollectSubclassedBaseTypes(context.Compilation);
         HashSet<INamedTypeSymbol> staticUsingTargets = CollectStaticUsingTargets(root, context);
@@ -96,7 +119,7 @@ public sealed class CSharpToGSharpTranslator
         IMethodSymbol entryPoint = context.Compilation.GetEntryPoint(default);
         INamedTypeSymbol entryType = entryPoint?.ContainingType;
 
-        var visitor = new DeclarationVisitor(context, new CSharpTypeMapper(), openBases, staticUsingTargets, entryPoint);
+        var visitor = new DeclarationVisitor(context, new CSharpTypeMapper(), openBases, staticUsingTargets, entryPoint, partialTypeParts);
 
         var members = new List<GNode>();
         var trailingStatements = new List<GNode>();
@@ -177,6 +200,78 @@ public sealed class CSharpToGSharpTranslator
         return SubclassedBaseTypesCache.GetValue(compilation, CollectSubclassedBaseTypes);
     }
 
+    /// <summary>
+    /// Issue #1910: maps every <c>partial</c> type symbol declared with more
+    /// than one <see cref="TypeDeclarationSyntax"/> part to its parts, ordered
+    /// deterministically (file path, then position) so every document
+    /// translated from this compilation agrees on which part is the "primary"
+    /// one (parts[0]) — the one declaration point that actually emits the
+    /// merged G# type. A partial record's part carrying the positional
+    /// parameter list is preferred first: only that part can supply the G#
+    /// primary-constructor parameters (<see cref="DeclarationVisitor.MapPrimaryConstructor"/>).
+    /// </summary>
+    private static Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> GetOrCollectPartialTypeParts(Compilation compilation)
+    {
+        return PartialTypePartsCache.GetValue(compilation, CollectPartialTypeParts);
+    }
+
+    private static Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> CollectPartialTypeParts(Compilation compilation)
+    {
+        var result = new Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>>(SymbolEqualityComparer.Default);
+        foreach (INamedTypeSymbol type in EnumerateNamedTypes(compilation.Assembly.GlobalNamespace))
+        {
+            if (type.DeclaringSyntaxReferences.Length <= 1)
+            {
+                continue;
+            }
+
+            List<TypeDeclarationSyntax> parts = type.DeclaringSyntaxReferences
+                .Select(r => r.GetSyntax())
+                .OfType<TypeDeclarationSyntax>()
+                .OrderByDescending(p => p is RecordDeclarationSyntax record && record.ParameterList != null)
+                .ThenBy(p => p.SyntaxTree.FilePath, StringComparer.Ordinal)
+                .ThenBy(p => p.SpanStart)
+                .ToList();
+
+            if (parts.Count > 1)
+            {
+                result[type] = parts;
+            }
+        }
+
+        return result;
+    }
+
+    // Issue #1910 (gap 3): for every partial type whose PRIMARY part lives in
+    // `root`, collect the distinct `SyntaxTree`s of its OTHER (non-primary)
+    // parts. Those trees' `using` directives are unioned into `root`'s import
+    // block by `TranslateImports`, because merged-in member bodies from those
+    // parts are translated under their own file's semantic model and may rely
+    // on a `using` that only exists there.
+    private static HashSet<Microsoft.CodeAnalysis.SyntaxTree> CollectExtraUsingTrees(
+        CompilationUnitSyntax root,
+        Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts)
+    {
+        var trees = new HashSet<Microsoft.CodeAnalysis.SyntaxTree>();
+        foreach (List<TypeDeclarationSyntax> parts in partialTypeParts.Values)
+        {
+            if (parts[0].SyntaxTree != root.SyntaxTree)
+            {
+                continue;
+            }
+
+            foreach (TypeDeclarationSyntax part in parts.Skip(1))
+            {
+                if (part.SyntaxTree != root.SyntaxTree)
+                {
+                    trees.Add(part.SyntaxTree);
+                }
+            }
+        }
+
+        return trees;
+    }
+
     private static HashSet<INamedTypeSymbol> CollectSubclassedBaseTypes(Compilation compilation)
     {
         var bases = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
@@ -251,11 +346,22 @@ public sealed class CSharpToGSharpTranslator
         return dominant;
     }
 
-    private IReadOnlyList<ImportDirective> TranslateImports(CompilationUnitSyntax root, TranslationContext context)
+    private IReadOnlyList<ImportDirective> TranslateImports(
+        CompilationUnitSyntax root,
+        IEnumerable<Microsoft.CodeAnalysis.SyntaxTree> extraUsingTrees,
+        TranslationContext context)
     {
         var imports = new List<ImportDirective>();
+        var seen = new HashSet<(string Name, string Alias)>();
         IEnumerable<UsingDirectiveSyntax> usings = root.Usings
             .Concat(root.DescendantNodes().OfType<BaseNamespaceDeclarationSyntax>().SelectMany(n => n.Usings));
+
+        foreach (Microsoft.CodeAnalysis.SyntaxTree extraTree in extraUsingTrees)
+        {
+            CompilationUnitSyntax extraRoot = (CompilationUnitSyntax)extraTree.GetRoot();
+            usings = usings.Concat(extraRoot.Usings)
+                .Concat(extraRoot.DescendantNodes().OfType<BaseNamespaceDeclarationSyntax>().SelectMany(n => n.Usings));
+        }
 
         foreach (UsingDirectiveSyntax directive in usings)
         {
@@ -318,7 +424,13 @@ public sealed class CSharpToGSharpTranslator
                 }
             }
 
-            imports.Add(new ImportDirective(name, alias));
+            // Issue #1910 (gap 3): dedup by (name, alias) once non-primary
+            // parts' `using` directives are unioned in — the same directive
+            // commonly appears in both files.
+            if (seen.Add((name, alias)))
+            {
+                imports.Add(new ImportDirective(name, alias));
+            }
         }
 
         return imports;
@@ -372,6 +484,13 @@ public sealed class CSharpToGSharpTranslator
         private readonly TranslationContext context;
         private readonly CSharpTypeMapper typeMapper;
         private readonly HashSet<INamedTypeSymbol> subclassedBases;
+
+        // Issue #1910: every `partial` type symbol with more than one
+        // declaration part, mapped to its parts in canonical (deterministic)
+        // order — see `CSharpToGSharpTranslator.CollectPartialTypeParts`. Only
+        // `parts[0]` (the "primary" part) is translated into a G# type
+        // declaration; every other part's members are merged into it.
+        private readonly Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts;
 
         // Issue #1201 / ADR-0134: the types targeted by `using static X` in this
         // document. A bare reference to one of their static members is left
@@ -540,6 +659,18 @@ public sealed class CSharpToGSharpTranslator
         // Monotonic counter for synthesizing spill temporaries (issue #1731).
         private int spillCounter;
 
+        // Issue #1902: numbers the `__qN` tuple parameter synthesized to carry a
+        // query's transparent identifier (multiple in-scope range variables)
+        // through a lambda that C#'s query-translation spec (§12.19.3) would bind
+        // via an anonymous type; G# has no anonymous types, so a positional tuple
+        // stands in (see <see cref="BuildScopeParameter"/>).
+        private int queryScopeCounter;
+
+        // Issue #1897: numbers the `__spreadN` temporary built to lower a
+        // collection-expression spread element (see
+        // <see cref="TranslateSpreadCollectionExpression"/>).
+        private int spreadCounter;
+
         // Issue #1849: when non-null, `SpillOperand` is inside a "null-seam"
         // expression context — a field/property initializer or a
         // base(...)/this(...) constructor argument (issue #1731 N1) — that has
@@ -585,12 +716,14 @@ public sealed class CSharpToGSharpTranslator
             CSharpTypeMapper typeMapper,
             HashSet<INamedTypeSymbol> subclassedBases,
             HashSet<INamedTypeSymbol> staticUsingTargets,
-            IMethodSymbol entryPoint)
+            IMethodSymbol entryPoint,
+            Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts)
         {
             this.context = context;
             this.typeMapper = typeMapper;
             this.subclassedBases = subclassedBases;
             this.staticUsingTargets = staticUsingTargets ?? new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+            this.partialTypeParts = partialTypeParts ?? new Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>>(SymbolEqualityComparer.Default);
 
             // `entryPoint` is threaded in by the caller (`TranslateDocument`)
             // instead of being recomputed here: `Compilation.GetEntryPoint`
@@ -687,8 +820,29 @@ public sealed class CSharpToGSharpTranslator
                     case MethodDeclarationSyntax method
                         when SymbolEqualityComparer.Default.Equals(
                             this.context.GetDeclaredSymbol(method), entryPoint):
+                        // Issue #1904: `Main`'s own `string[]` parameter may be
+                        // named anything (`args`, `arguments`, …), but the
+                        // top-level statements it is hoisted into only ever
+                        // declare the fixed, implicit `args` slot (ADR-0066
+                        // D1). Bind every reference to Main's parameter to that
+                        // identifier — the same patternBindings substitution
+                        // used for pattern-bound locals — for the duration of
+                        // the entry body's translation only.
+                        bool renamedArgs = entryPoint.Parameters.Length == 1
+                            && entryPoint.Parameters[0].Name != "args";
+                        if (renamedArgs)
+                        {
+                            this.patternBindings[entryPoint.Parameters[0]] = new IdentifierExpression("args");
+                        }
+
                         BlockStatement body = this.TranslateBody(method, $"entry point '{entryPoint.Name}'");
                         statements.AddRange(body.Statements);
+
+                        if (renamedArgs)
+                        {
+                            this.patternBindings.Remove(entryPoint.Parameters[0]);
+                        }
+
                         break;
 
                     case MethodDeclarationSyntax method:
@@ -972,10 +1126,10 @@ public sealed class CSharpToGSharpTranslator
         /// constructor, not a record).
         /// </summary>
         private List<(string Name, GExpression Value)> CollectGetOnlyAutoPropertyInitializers(
-            TypeDeclarationSyntax node)
+            IReadOnlyList<MemberDeclarationSyntax> members)
         {
             var result = new List<(string Name, GExpression Value)>();
-            foreach (PropertyDeclarationSyntax prop in node.Members.OfType<PropertyDeclarationSyntax>())
+            foreach (PropertyDeclarationSyntax prop in members.OfType<PropertyDeclarationSyntax>())
             {
                 if (prop.Modifiers.Any(SyntaxKind.StaticKeyword) ||
                     prop.Initializer == null ||
@@ -983,6 +1137,10 @@ public sealed class CSharpToGSharpTranslator
                 {
                     continue;
                 }
+
+                // Issue #1910: a merged-in property from another partial part
+                // lives in a different `SyntaxTree`.
+                using IDisposable modelScope = this.context.UseSemanticModelFor(prop.SyntaxTree);
 
                 var symbol = this.context.GetDeclaredSymbol(prop) as IPropertySymbol;
                 if (symbol != null &&
@@ -1005,9 +1163,9 @@ public sealed class CSharpToGSharpTranslator
         /// the same type via <c>: this(...)</c>. Such a constructor is the place
         /// into which get-only auto-property initializers are injected (OD-T1).
         /// </summary>
-        private static bool HasDesignatedInstanceConstructor(TypeDeclarationSyntax node)
+        private static bool HasDesignatedInstanceConstructor(IReadOnlyList<MemberDeclarationSyntax> members)
         {
-            return node.Members
+            return members
                 .OfType<ConstructorDeclarationSyntax>()
                 .Any(c => !c.Modifiers.Any(SyntaxKind.StaticKeyword) &&
                     (c.Initializer == null || c.Initializer.ThisOrBaseKeyword.IsKind(SyntaxKind.BaseKeyword)));
@@ -1225,6 +1383,25 @@ public sealed class CSharpToGSharpTranslator
 
             var symbol = this.context.GetDeclaredSymbol(node) as INamedTypeSymbol;
 
+            // Issue #1910: a `partial` type is declared once per file/part but
+            // has a single symbol. Only the "primary" part (parts[0], see
+            // `CSharpToGSharpTranslator.CollectPartialTypeParts`) emits a G#
+            // type declaration; its member loop below merges in every other
+            // part's members so the type is declared exactly once (GS0102 was
+            // the two-full-declarations symptom). A non-primary part therefore
+            // contributes nothing of its own here.
+            List<TypeDeclarationSyntax> otherParts = null;
+            if (symbol != null && this.partialTypeParts.TryGetValue(symbol, out List<TypeDeclarationSyntax> parts))
+            {
+                bool isPrimaryPart = parts[0].SyntaxTree == node.SyntaxTree && parts[0].Span == node.Span;
+                if (!isPrimaryPart)
+                {
+                    return null;
+                }
+
+                otherParts = parts.Skip(1).ToList();
+            }
+
             // Issue #1849: this aggregate gets its own null-seam synthetic-helper
             // collection/counter, saved/restored around the whole method so a
             // nested type declaration's recursive `VisitAggregate` call (below,
@@ -1236,7 +1413,7 @@ public sealed class CSharpToGSharpTranslator
             this.synthHelperCounter = 0;
             try
             {
-                return this.VisitAggregateCore(node, kind.Value, symbol);
+                return this.VisitAggregateCore(node, kind.Value, symbol, otherParts);
             }
             finally
             {
@@ -1245,7 +1422,11 @@ public sealed class CSharpToGSharpTranslator
             }
         }
 
-        private GMember VisitAggregateCore(TypeDeclarationSyntax node, TypeDeclarationKind kindValue, INamedTypeSymbol symbol)
+        private GMember VisitAggregateCore(
+            TypeDeclarationSyntax node,
+            TypeDeclarationKind kindValue,
+            INamedTypeSymbol symbol,
+            IReadOnlyList<TypeDeclarationSyntax> otherParts)
         {
             TypeDeclarationKind? kind = kindValue;
 
@@ -1298,6 +1479,19 @@ public sealed class CSharpToGSharpTranslator
                     TranslationSeverity.Info));
             }
 
+            // Issue #1910: merge in every other partial part's members (from any
+            // file) so the constructor-lift/static-initializer/property-inits
+            // passes below and the main member loop see the FULL member set,
+            // not just this (primary) part's own `node.Members`.
+            List<MemberDeclarationSyntax> mergedMembers = node.Members.ToList();
+            if (otherParts != null)
+            {
+                foreach (TypeDeclarationSyntax part in otherParts)
+                {
+                    mergedMembers.AddRange(part.Members);
+                }
+            }
+
             // T2 (ADR-0115 §B.3): canonicalize immutable-field initialization.
             // A `let` field is read-only after construction but — like a C#
             // `readonly` field (issue #947) — is assignable inside the declaring
@@ -1306,7 +1500,7 @@ public sealed class CSharpToGSharpTranslator
             // constructor is a simple parameter-to-member copy; non-liftable
             // constructors keep their explicit `init` and assign the `let`
             // fields directly, which is now valid G#.
-            ConstructorLift lift = this.AnalyzeConstructorLift(node, symbol, kind.Value);
+            ConstructorLift lift = this.AnalyzeConstructorLift(node, mergedMembers, symbol, kind.Value);
 
             // OD-T1: when the explicit constructor is kept (not lifted to a primary
             // constructor) and the type is a plain class/struct, get-only
@@ -1315,7 +1509,7 @@ public sealed class CSharpToGSharpTranslator
             List<(string Name, GExpression Value)> propertyCtorInits =
                 !lift.DropConstructor &&
                     (kind == TypeDeclarationKind.Class || kind == TypeDeclarationKind.Struct)
-                    ? this.CollectGetOnlyAutoPropertyInitializers(node)
+                    ? this.CollectGetOnlyAutoPropertyInitializers(mergedMembers)
                     : new List<(string Name, GExpression Value)>();
 
             // Issue #1729 (mode 4): staticFieldInitializers is one shared dictionary
@@ -1328,12 +1522,16 @@ public sealed class CSharpToGSharpTranslator
             // exit would wipe the outer type's not-yet-consumed folded fields.
             var staticFieldInitializersSnapshot = new HashSet<ISymbol>(
                 this.staticFieldInitializers.Keys, SymbolEqualityComparer.Default);
-            this.CollectStaticFieldInitializers(node, symbol);
+            this.CollectStaticFieldInitializers(mergedMembers, symbol);
 
             var instanceMembers = new List<GMember>();
             var sharedMembers = new List<GMember>();
-            foreach (MemberDeclarationSyntax member in node.Members)
+            foreach (MemberDeclarationSyntax member in mergedMembers)
             {
+                // Issue #1910: a merged-in member from another partial part lives
+                // in a different `SyntaxTree`; resolve it (and everything nested
+                // inside it) through that tree's own semantic model.
+                using IDisposable modelScope = this.context.UseSemanticModelFor(member.SyntaxTree);
                 foreach ((GMember translated, bool isStatic) in this.TranslateMember(member, kind.Value, lift, propertyCtorInits))
                 {
                     // A C# operator overload translates to a receiver-clause
@@ -1407,7 +1605,7 @@ public sealed class CSharpToGSharpTranslator
             // arises in practice.
             if (propertyCtorInits.Count > 0 &&
                 kind == TypeDeclarationKind.Class &&
-                !HasDesignatedInstanceConstructor(node))
+                !HasDesignatedInstanceConstructor(mergedMembers))
             {
                 var initStatements = propertyCtorInits
                     .Select(p => (GStatement)new AssignmentStatement(new IdentifierExpression(p.Name), p.Value))
@@ -1481,6 +1679,17 @@ public sealed class CSharpToGSharpTranslator
                     TranslationSeverity.Info));
             }
 
+            // Issue #1910 (gap 1 & 2): a `partial` type's attributes/`unsafe`
+            // modifier can legally sit on ANY part, not just the primary one
+            // (Roslyn's `symbol.GetAttributes()` already merges them). Union in
+            // every other part's `AttributeLists`/`Modifiers` so nothing
+            // declared on a non-primary part is silently dropped.
+            IEnumerable<AttributeListSyntax> mergedAttributeLists = otherParts == null
+                ? node.AttributeLists
+                : node.AttributeLists.Concat(otherParts.SelectMany(p => p.AttributeLists));
+            bool isUnsafe = node.Modifiers.Any(SyntaxKind.UnsafeKeyword) ||
+                (otherParts != null && otherParts.Any(p => p.Modifiers.Any(SyntaxKind.UnsafeKeyword)));
+
             return new TypeDeclaration(
                 kind.Value,
                 SanitizeIdentifier(node.Identifier.Text),
@@ -1492,8 +1701,8 @@ public sealed class CSharpToGSharpTranslator
                 visibility: MapVisibility(symbol, this.context, node),
                 isOpen: isOpen || wasAbstract,
                 isAbstract: false,
-                attributes: this.MapAttributes(node.AttributeLists),
-                isUnsafe: node.Modifiers.Any(SyntaxKind.UnsafeKeyword));
+                attributes: this.MapAttributes(mergedAttributeLists),
+                isUnsafe: isUnsafe);
         }
 
         /// <summary>
@@ -1508,6 +1717,7 @@ public sealed class CSharpToGSharpTranslator
         /// </summary>
         private ConstructorLift AnalyzeConstructorLift(
             TypeDeclarationSyntax node,
+            IReadOnlyList<MemberDeclarationSyntax> members,
             INamedTypeSymbol symbol,
             TypeDeclarationKind kind)
         {
@@ -1527,7 +1737,7 @@ public sealed class CSharpToGSharpTranslator
                 return ConstructorLift.None;
             }
 
-            List<ConstructorDeclarationSyntax> instanceCtors = node.Members
+            List<ConstructorDeclarationSyntax> instanceCtors = members
                 .OfType<ConstructorDeclarationSyntax>()
                 .Where(c => !c.Modifiers.Any(SyntaxKind.StaticKeyword))
                 .ToList();
@@ -1546,6 +1756,11 @@ public sealed class CSharpToGSharpTranslator
             {
                 return ConstructorLift.None;
             }
+
+            // Issue #1910: the constructor may be a merged-in member from a
+            // different partial part/file; resolve it (and everything it
+            // references) through that tree's own semantic model.
+            using IDisposable modelScope = this.context.UseSemanticModelFor(ctor.SyntaxTree);
 
             var ctorSymbol = this.context.GetDeclaredSymbol(ctor) as IMethodSymbol;
             if (ctorSymbol == null)
@@ -2500,7 +2715,8 @@ public sealed class CSharpToGSharpTranslator
                 isOverride: isOverride,
                 isAsync: symbol != null && symbol.IsAsync,
                 attributes: this.MapAttributes(node.AttributeLists),
-                expressionBody: arrowBody);
+                expressionBody: arrowBody,
+                isRefReturn: symbol != null && symbol.ReturnsByRef);
 
             return (method, isStatic);
         }
@@ -3164,14 +3380,22 @@ public sealed class CSharpToGSharpTranslator
         /// constructor so they can be re-attached to the corresponding fields
         /// (G# has no static-constructor form; ADR-0115 §B.11).
         /// </summary>
-        private void CollectStaticFieldInitializers(TypeDeclarationSyntax node, INamedTypeSymbol typeSymbol)
+        private void CollectStaticFieldInitializers(IReadOnlyList<MemberDeclarationSyntax> members, INamedTypeSymbol typeSymbol)
         {
-            foreach (MemberDeclarationSyntax member in node.Members)
+            foreach (MemberDeclarationSyntax member in members)
             {
                 if (member is not ConstructorDeclarationSyntax ctor ||
                     !ctor.Modifiers.Any(SyntaxKind.StaticKeyword) ||
-                    !this.IsFoldableStaticConstructor(ctor, typeSymbol) ||
                     ctor.Body == null)
+                {
+                    continue;
+                }
+
+                // Issue #1910: a merged-in static constructor from another
+                // partial part/file lives in a different `SyntaxTree`.
+                using IDisposable modelScope = this.context.UseSemanticModelFor(ctor.SyntaxTree);
+
+                if (!this.IsFoldableStaticConstructor(ctor, typeSymbol))
                 {
                     continue;
                 }
@@ -3462,7 +3686,22 @@ public sealed class CSharpToGSharpTranslator
 
             GExpression defaultValue = this.BuildOptionalParameterDefault(symbol, type, fallbackNode);
 
-            return new Parameter(SanitizeIdentifier(symbol.Name), type, variadic, refKind, defaultValue);
+            // Issue #1913: a parameter's own attributes (e.g. `[Note] int x`) live on
+            // its `ParameterSyntax`, not on `fallbackNode` (which can be the whole
+            // parameter LIST when `symbol` came from `MapParameters`). Resolve the
+            // parameter's declaring syntax directly from the symbol so both call
+            // paths route through the same `MapAttributes` helper every other
+            // declaration kind already uses — otherwise the attribute is silently
+            // dropped with no diagnostic.
+            ParameterSyntax parameterSyntax = symbol.DeclaringSyntaxReferences
+                .Select(syntaxReference => syntaxReference.GetSyntax())
+                .OfType<ParameterSyntax>()
+                .FirstOrDefault();
+            List<AttributeUse> attributes = parameterSyntax != null
+                ? this.MapAttributes(parameterSyntax.AttributeLists)
+                : null;
+
+            return new Parameter(SanitizeIdentifier(symbol.Name), type, variadic, refKind, defaultValue, attributes);
         }
 
         /// <summary>
@@ -3567,6 +3806,11 @@ public sealed class CSharpToGSharpTranslator
                         : null;
                 }
 
+                // Issue #1900: `symbol.ReturnType` is already the pointee type T
+                // for a `ref`-returning method (Roslyn strips the `ref`); the
+                // `ref` modifier itself is reinstated at the MethodDeclaration
+                // (IsRefReturn) by the caller, mapping to G#'s native
+                // ref-return (`func F(...) ref T`, issue #490/ADR-0060).
                 return this.typeMapper.Map(returnType, this.context, node.ReturnType.GetLocation());
             }
 
@@ -3592,7 +3836,7 @@ public sealed class CSharpToGSharpTranslator
                 .Any();
         }
 
-        private List<AttributeUse> MapAttributes(SyntaxList<AttributeListSyntax> attributeLists)
+        private List<AttributeUse> MapAttributes(IEnumerable<AttributeListSyntax> attributeLists)
         {
             var attributes = new List<AttributeUse>();
             foreach (AttributeListSyntax list in attributeLists)
@@ -3612,20 +3856,52 @@ public sealed class CSharpToGSharpTranslator
                         }
                     }
 
-                    string attributeName = attribute.Name.ToString();
-                    int aliasSeparator = attributeName.IndexOf("::", System.StringComparison.Ordinal);
-                    if (aliasSeparator >= 0)
-                    {
-                        // Strip a `global::` (or extern-alias) qualifier; G# has no
-                        // alias-qualified name syntax.
-                        attributeName = attributeName.Substring(aliasSeparator + 2);
-                    }
+                    string attributeName = this.TranslateAttributeName(attribute.Name);
 
                     attributes.Add(new AttributeUse(attributeName, arguments, target));
                 }
             }
 
             return attributes;
+        }
+
+        // Issue #1913: a C# 11 generic attribute (`[Tag<int>]`) parses its type
+        // arguments in ANGLE brackets, so `nameSyntax.ToString()` carries them as
+        // `Tag<int>` verbatim. G# has no angle-bracket syntax at all (ADR-0020) —
+        // every generic construct, including a generic attribute, spells its
+        // type-argument list in SQUARE brackets. Reuse the same
+        // <see cref="MapTypeArguments"/>/<see cref="GSharpPrinter.RenderTypeReference"/>
+        // path a generic type reference or generic call already routes through,
+        // rather than hand-rolling the bracket text, so an unsupported/unresolvable
+        // type argument still gets the placeholder the type mapper already emits.
+        private string TranslateAttributeName(NameSyntax nameSyntax)
+        {
+            string attributeName = nameSyntax.ToString();
+            int aliasSeparator = attributeName.IndexOf("::", System.StringComparison.Ordinal);
+            if (aliasSeparator >= 0)
+            {
+                // Strip a `global::` (or extern-alias) qualifier; G# has no
+                // alias-qualified name syntax.
+                attributeName = attributeName.Substring(aliasSeparator + 2);
+            }
+
+            GenericNameSyntax generic = nameSyntax switch
+            {
+                GenericNameSyntax g => g,
+                QualifiedNameSyntax { Right: GenericNameSyntax g } => g,
+                AliasQualifiedNameSyntax { Name: GenericNameSyntax g } => g,
+                _ => null,
+            };
+
+            if (generic == null)
+            {
+                return attributeName;
+            }
+
+            IReadOnlyList<GTypeReference> typeArguments = this.MapTypeArguments(generic);
+            string baseName = attributeName.Substring(0, attributeName.IndexOf('<'));
+            string typeArgumentList = string.Join(", ", typeArguments.Select(GSharpPrinter.RenderTypeReference));
+            return $"{baseName}[{typeArgumentList}]";
         }
 
         // Issue #1731 N1: attribute-argument expressions here can never be an
@@ -4204,7 +4480,7 @@ public sealed class CSharpToGSharpTranslator
                         }
                     }
 
-                    returnPrologue.Add(new ReturnStatement(returnValue));
+                    returnPrologue.Add(new ReturnStatement(returnValue, isRef: ret.Expression is RefExpressionSyntax));
                     return returnPrologue;
                 }
 
@@ -4287,6 +4563,15 @@ public sealed class CSharpToGSharpTranslator
 
         private IEnumerable<GStatement> TranslateLocalDeclaration(VariableDeclarationSyntax declaration, bool isConst, bool isUsing = false, bool isAwait = false)
         {
+            // Issue #1900: `ref int r = ref xs[1];` — a ref local. `declaration.Type`
+            // is a `RefTypeSyntax`; every declarator in this statement is a ref
+            // local aliasing storage, which maps to G#'s native ref-aliasing local
+            // (see TranslateRefExpression / TranslateRefLocalDeclaration).
+            if (declaration.Type is RefTypeSyntax)
+            {
+                return this.TranslateRefLocalDeclaration(declaration);
+            }
+
             var results = new List<GStatement>();
             bool hasExplicitType = !declaration.Type.IsVar;
 
@@ -4483,6 +4768,60 @@ public sealed class CSharpToGSharpTranslator
                     initializer,
                     isUsing: isUsing,
                     isAwait: isAwait));
+            }
+
+            return results;
+        }
+
+        /// <summary>
+        /// Translates every declarator of a ref-local declaration (<c>ref int r =
+        /// ref xs[1];</c>, issue #1900) into G#'s native ref-aliasing local
+        /// (<c>let ref name T = lvalue</c> / <c>var ref name T = lvalue</c>,
+        /// issue #491/ADR-0060 §follow-up). Unlike C#, the RHS carries no second
+        /// `ref` keyword — the `ref` modifier on the binding itself is what marks
+        /// the local as an alias. Reads and writes of the local afterward are
+        /// ordinary identifier references; gsc routes them through the alias
+        /// transparently, so — unlike a hand-rolled pointer lowering — no
+        /// rewriting of later usages is needed here.
+        /// </summary>
+        private IEnumerable<GStatement> TranslateRefLocalDeclaration(VariableDeclarationSyntax declaration)
+        {
+            var results = new List<GStatement>();
+
+            foreach (VariableDeclaratorSyntax declarator in declaration.Variables)
+            {
+                if (this.context.GetDeclaredSymbol(declarator) is not ILocalSymbol localSymbol)
+                {
+                    continue;
+                }
+
+                string name = SanitizeIdentifier(declarator.Identifier.Text);
+
+                GExpression initializer = declarator.Initializer?.Value is RefExpressionSyntax refInit
+                    ? this.TranslateRefExpression(refInit)
+                    : null;
+
+                if (initializer == null)
+                {
+                    string message = $"ref local '{declarator.Identifier.Text}' has no `ref` initializer expression; a ref local must be aliased at declaration (issue #1900).";
+                    this.context.ReportUnsupported(declarator, message);
+                    continue;
+                }
+
+                GTypeReference pointeeType = this.typeMapper.Map(localSymbol.Type, this.context, declaration.Type.GetLocation());
+
+                // The alias is written through by a plain `name = value` in the
+                // original C# (e.g. `r = 20;`) exactly like a normal local, so the
+                // existing reassignment heuristic decides `let ref` vs `var ref`
+                // the same way it decides `let` vs `var` for any other local.
+                BindingKind binding = this.IsLocalReassigned(localSymbol) ? BindingKind.Var : BindingKind.Let;
+
+                results.Add(new LocalDeclarationStatement(
+                    binding,
+                    name,
+                    pointeeType,
+                    initializer,
+                    isRefAlias: true));
             }
 
             return results;
@@ -6491,6 +6830,25 @@ public sealed class CSharpToGSharpTranslator
 
         private GStatement TranslateLocalFunction(LocalFunctionStatementSyntax localFunction)
         {
+            // Issue #1900: a ref-returning local function (`static ref int
+            // Pick(...)`) has no G# canonical form. A C# local function lowers to
+            // a G# `func` LITERAL bound via `let` (ParseFunctionLiteralExpression
+            // has no `ref`-return-modifier slot at all — only a genuine top-level
+            // `func`/method declaration does, ADR-0060 §follow-up/issue #490), and
+            // gsc separately forbids a managed pointer as a function-literal
+            // return type outright (GS9004 "a managed pointer (*T) cannot be the
+            // return type of a function literal"). There is no lowering that
+            // preserves ref-aliasing through a func literal, so this gaps loudly
+            // rather than emitting a form that either drops the aliasing (a
+            // silent semantic change) or fails to compile.
+            if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol { ReturnsByRef: true })
+            {
+                this.context.ReportUnsupported(
+                    localFunction,
+                    $"ref-returning local function '{localFunction.Identifier.Text}' has no canonical G# form: a local function lowers to a `func` literal, and G#'s `ref` return modifier only exists on a genuine top-level/method function declaration (issue #1900).");
+                return new RawStatement($"// unsupported: ref-returning local function '{localFunction.Identifier.Text}'");
+            }
+
             // A C# local function maps to a G# local `let` bound to a function
             // literal `func (params) RetType { … }` (NOT an arrow lambda — a local
             // function may be recursive and needs an explicit return type).
@@ -7935,6 +8293,19 @@ public sealed class CSharpToGSharpTranslator
                         when addressOf.IsKind(SyntaxKind.AddressOfExpression)
                             && this.BindsTo(addressOf.Operand, symbol):
                         return true;
+
+                    // Issue #1900: `ref int alias = ref v;` aliases `v`'s storage
+                    // through G#'s native ref-local (`let/var ref alias T = v`,
+                    // no address-of operator on the RHS — see
+                    // TranslateRefExpression). gsc's ref-alias binder rejects
+                    // aliasing a `let`-bound (read-only) variable
+                    // (GS9005-equivalent "cannot take address of constant"), so
+                    // `v` must be forced to `var` here exactly like a variable
+                    // whose address is taken with the unsafe `&` operator above.
+                    case RefExpressionSyntax refOf
+                        when refOf.Expression is IdentifierNameSyntax
+                            && this.BindsTo(refOf.Expression, symbol):
+                        return true;
                 }
             }
 
@@ -8238,6 +8609,9 @@ public sealed class CSharpToGSharpTranslator
                 case IdentifierNameSyntax identifier:
                     return this.TranslateIdentifierName(identifier);
 
+                case RefExpressionSyntax refExpression:
+                    return this.TranslateRefExpression(refExpression);
+
                 case GenericNameSyntax generic:
                     // A generic name used as an expression is most often a generic
                     // *method* group (`Method<T>(...)`), whose bracket type arguments
@@ -8536,6 +8910,9 @@ public sealed class CSharpToGSharpTranslator
 
                 case StackAllocArrayCreationExpressionSyntax stackAlloc:
                     return this.TranslateStackAlloc(stackAlloc);
+
+                case ImplicitStackAllocArrayCreationExpressionSyntax implicitStackAlloc:
+                    return this.TranslateImplicitStackAlloc(implicitStackAlloc);
 
                 case CollectionExpressionSyntax collectionExpression:
                     return this.TranslateCollectionExpression(collectionExpression);
@@ -9561,6 +9938,23 @@ public sealed class CSharpToGSharpTranslator
             return new StackAllocExpression(elementType, count ?? LiteralExpression.Int("0"), elements);
         }
 
+        // Issue #1897: the implicit-typed form `stackalloc[] { 5, 6, 7 }` (no
+        // element-type spelled at all — C# infers it from the initializer/
+        // target). Maps to the same G# count-inferred initializer shape
+        // (`stackalloc []T{a, b, …}`) as the explicit omitted-size form
+        // (`stackalloc int[] { … }`, handled by <see cref="TranslateStackAlloc"/>);
+        // the element type is recovered from the expression's converted type
+        // (`Span<T>`/`T*`) since there is no type syntax on this node to read.
+        private GExpression TranslateImplicitStackAlloc(ImplicitStackAllocArrayCreationExpressionSyntax node)
+        {
+            GTypeReference elementType = this.GetArrayElementType(node, null);
+            List<GExpression> elements = node.Initializer.Expressions.Select(this.TranslateExpression).ToList();
+            GExpression count = LiteralExpression.Int(
+                node.Initializer.Expressions.Count.ToString(CultureInfo.InvariantCulture));
+
+            return new StackAllocExpression(elementType, count, elements);
+        }
+
         private GExpression TranslateImplicitArrayCreation(ImplicitArrayCreationExpressionSyntax creation)
         {
             GTypeReference elementType = this.GetArrayElementType(creation, null);
@@ -9640,9 +10034,14 @@ public sealed class CSharpToGSharpTranslator
             // emitted into a malformed `[]KeyValuePair[…]{}` literal (ADR-0115 §B).
             ITypeSymbol target = this.context.GetTypeInfo(collection).ConvertedType
                 ?? this.context.GetTypeInfo(collection).Type;
-            if (collection.Elements.Count == 0 &&
+            bool isConstructibleClassTarget =
                 target is INamedTypeSymbol { TypeKind: TypeKind.Class } namedTarget &&
-                this.typeMapper.Map(namedTarget, this.context, collection.GetLocation()) is NamedTypeReference targetRef)
+                this.typeMapper.Map(namedTarget, this.context, collection.GetLocation()) is NamedTypeReference;
+            NamedTypeReference targetRef = isConstructibleClassTarget
+                ? (NamedTypeReference)this.typeMapper.Map((INamedTypeSymbol)target, this.context, collection.GetLocation())
+                : null;
+
+            if (collection.Elements.Count == 0 && isConstructibleClassTarget)
             {
                 return new InvocationExpression(
                     new IdentifierExpression(targetRef.Name),
@@ -9650,27 +10049,101 @@ public sealed class CSharpToGSharpTranslator
                     targetRef.TypeArguments.Count > 0 ? targetRef.TypeArguments : null);
             }
 
-            // C# 12 collection expression `[a, b, c]`. The target type (array,
-            // span, or any IEnumerable<T>) supplies the element type, so it maps to
-            // the canonical G# slice literal `[]T{ … }` (ADR-0115 §B). Spread
-            // elements `[..xs]` have no G# composite-literal form yet.
             GTypeReference elementType = this.GetCollectionElementType(collection);
+
+            // A spread element (`[a, ..rest, b]`) has no G# composite-literal
+            // form (gsc's own collection-initializer grammar only has bare,
+            // keyed, and indexed elements — no spread). It lowers to a
+            // build-and-append temporary: a `List[T]` populated via `Add`/
+            // `AddRange` calls hoisted into the enclosing statement's prologue
+            // (issue #1897), then — for an array/span target — converted back
+            // via `.ToArray()`.
+            if (collection.Elements.Any(e => e is SpreadElementSyntax))
+            {
+                return this.TranslateSpreadCollectionExpression(collection, elementType, isConstructibleClassTarget);
+            }
+
+            // A `List<T>`/`HashSet<T>`/... collection-expression target maps to
+            // the canonical G# collection-initializer form (`List[int32]{...}`,
+            // ADR-0117) — NOT the array/slice literal `[]T{...}`, which does not
+            // convert to a constructed collection class (issue #1897).
+            if (isConstructibleClassTarget)
+            {
+                var initElements = new List<CollectionInitializerElement>();
+                foreach (CollectionElementSyntax element in collection.Elements)
+                {
+                    var expressionElement = (ExpressionElementSyntax)element;
+                    initElements.Add(new CollectionInitializerElement(
+                        this.CoerceCollectionElement(expressionElement.Expression, elementType)));
+                }
+
+                return new CollectionInitializerExpression(
+                    BuildConstruction(targetRef, new List<GExpression>()), initElements);
+            }
+
+            // C# 12 collection expression `[a, b, c]` targeting an array/span.
+            // The target type supplies the element type, so it maps to the
+            // canonical G# slice literal `[]T{ … }` (ADR-0115 §B).
             var elements = new List<GExpression>();
             foreach (CollectionElementSyntax element in collection.Elements)
             {
-                if (element is ExpressionElementSyntax expressionElement)
-                {
-                    elements.Add(this.CoerceCollectionElement(expressionElement.Expression, elementType));
-                }
-                else
-                {
-                    this.context.ReportUnsupported(
-                        element,
-                        $"collection-expression element '{element.Kind()}' (spread) has no canonical G# composite-literal form yet (ADR-0115 §B).");
-                }
+                var expressionElement = (ExpressionElementSyntax)element;
+                elements.Add(this.CoerceCollectionElement(expressionElement.Expression, elementType));
             }
 
             return new ArrayLiteralExpression(elementType, elements);
+        }
+
+        private GExpression TranslateSpreadCollectionExpression(
+            CollectionExpressionSyntax collection, GTypeReference elementType, bool isConstructibleClassTarget)
+        {
+            if (this.pendingSpillPrologue == null)
+            {
+                string message =
+                    "a collection-expression spread element here has no enclosing statement to host the " +
+                    "build-and-append lowering it needs (e.g. a field/property initializer); emitted an " +
+                    "identifier placeholder (ADR-0115 §B).";
+                this.context.ReportUnsupported(collection, message);
+                return new IdentifierExpression("nil");
+            }
+
+            string temp = $"__spread{this.spreadCounter++}";
+            this.pendingSpillPrologue.Add(new LocalDeclarationStatement(
+                BindingKind.Let,
+                temp,
+                type: null,
+                initializer: new InvocationExpression(
+                    new IdentifierExpression("List"),
+                    new List<GExpression>(),
+                    new List<GTypeReference> { elementType })));
+
+            foreach (CollectionElementSyntax element in collection.Elements)
+            {
+                if (element is SpreadElementSyntax spread)
+                {
+                    this.pendingSpillPrologue.Add(new ExpressionStatement(new InvocationExpression(
+                        new MemberAccessExpression(new IdentifierExpression(temp), "AddRange"),
+                        new List<GExpression> { this.TranslateExpression(spread.Expression) })));
+                }
+                else
+                {
+                    var expressionElement = (ExpressionElementSyntax)element;
+                    this.pendingSpillPrologue.Add(new ExpressionStatement(new InvocationExpression(
+                        new MemberAccessExpression(new IdentifierExpression(temp), "Add"),
+                        new List<GExpression> { this.CoerceCollectionElement(expressionElement.Expression, elementType) })));
+                }
+            }
+
+            if (isConstructibleClassTarget)
+            {
+                return new IdentifierExpression(temp);
+            }
+
+            // `List[T].ToArray()` is the real (non-generic) BCL instance
+            // method — no bracket type argument (unlike the LINQ
+            // `Enumerable.ToArray[T]()` extension method).
+            return new InvocationExpression(
+                new MemberAccessExpression(new IdentifierExpression(temp), "ToArray"));
         }
 
         private GExpression CoerceCollectionElement(ExpressionSyntax element, GTypeReference elementType)
@@ -11944,6 +12417,38 @@ public sealed class CSharpToGSharpTranslator
                 : new NamedTypeReference(type.ToString());
         }
 
+        /// <summary>
+        /// Translates the `ref expr` operand of a ref local's initializer
+        /// (<c>ref int r = ref xs[1]</c>) or a ref return (<c>return ref
+        /// values[1]</c>) — issue #1900. G# has a native ref-aliasing local
+        /// (<c>let/var ref name T = lvalue</c>, issue #491/ADR-0060) and a native
+        /// ref-returning function (<c>func F(...) ref T { return ref lvalue }</c>,
+        /// issue #490); both alias the RHS lvalue directly with no explicit
+        /// address-of syntax, so the operand is translated as-is.
+        ///
+        /// gsc's own lvalue check for both features (<c>IsLvalue</c> /
+        /// <c>IsLvalueForRefReturn</c> in StatementBinder.cs) accepts only a
+        /// variable, field access, array-element access, or dereference — never a
+        /// call result, even one returned by ref. So `ref Pick(xs, 2)` (aliasing a
+        /// ref-returning call's result at ANOTHER call/return site) has no gsc
+        /// construct to bind to; that shape gaps loudly rather than emitting G#
+        /// that fails to compile or, worse, silently drops the aliasing.
+        /// </summary>
+        private GExpression TranslateRefExpression(RefExpressionSyntax refExpression)
+        {
+            ExpressionSyntax operand = refExpression.Expression;
+
+            if (operand is IdentifierNameSyntax or ElementAccessExpressionSyntax or MemberAccessExpressionSyntax)
+            {
+                return this.TranslateExpression(operand);
+            }
+
+            this.context.ReportUnsupported(
+                refExpression,
+                $"ref expression over '{operand.Kind()}' has no canonical G# form yet: G#'s ref-aliasing local/return only aliases a variable, array element, or field — not a call result, even a ref-returning one (issue #1900).");
+            return new IdentifierExpression("nil");
+        }
+
         private GExpression TranslatePredefinedTypeExpression(PredefinedTypeSyntax predefined)
         {
             // A C# predefined type used as an expression receiver (`string.Concat`,
@@ -12661,11 +13166,18 @@ public sealed class CSharpToGSharpTranslator
             // equivalent System.Linq method chain (`from … where … orderby …
             // select …` → `.Where(…).OrderBy(…).Select(…)`, ADR-0115 §B LINQ).
             FromClauseSyntax from = query.FromClause;
-            string rangeVar = from.Identifier.Text;
             GExpression current = this.TranslateExpression(from.Expression);
             GTypeReference rangeType = this.ResolveRangeVariableType(from.Type, from.Expression, from);
 
-            current = this.LowerQueryBody(query.Body, rangeVar, rangeType, current);
+            // The query's "scope" is the set of range variables in play, in
+            // declaration order — the C# spec's transparent identifier (§12.19.3).
+            // A lone `from` starts with one; a second `from`, a `let`, or a `join`
+            // grows it. G# has no anonymous types to carry more than one variable
+            // through a lambda, so scope.Count > 1 is threaded as a positional
+            // tuple (see <see cref="BuildScopeParameter"/>).
+            var scope = new List<(string Name, GTypeReference Type)> { (from.Identifier.Text, rangeType) };
+
+            current = this.LowerQueryBody(query.Body, scope, current);
             return current;
         }
 
@@ -12701,8 +13213,7 @@ public sealed class CSharpToGSharpTranslator
 
         private GExpression LowerQueryBody(
             QueryBodySyntax body,
-            string rangeVar,
-            GTypeReference rangeType,
+            List<(string Name, GTypeReference Type)> scope,
             GExpression current)
         {
             foreach (QueryClauseSyntax clause in body.Clauses)
@@ -12710,7 +13221,7 @@ public sealed class CSharpToGSharpTranslator
                 switch (clause)
                 {
                     case WhereClauseSyntax where:
-                        current = this.QueryCall(current, "Where", rangeVar, rangeType, where.Condition);
+                        current = this.QueryCall(current, "Where", scope, where.Condition);
                         break;
 
                     case OrderByClauseSyntax orderBy:
@@ -12719,10 +13230,22 @@ public sealed class CSharpToGSharpTranslator
                         {
                             bool descending = ordering.AscendingOrDescendingKeyword.IsKind(SyntaxKind.DescendingKeyword);
                             string method = (first ? "OrderBy" : "ThenBy") + (descending ? "Descending" : string.Empty);
-                            current = this.QueryCall(current, method, rangeVar, rangeType, ordering.Expression);
+                            current = this.QueryCall(current, method, scope, ordering.Expression);
                             first = false;
                         }
 
+                        break;
+
+                    case LetClauseSyntax let:
+                        current = this.LowerLetClause(let, scope, current);
+                        break;
+
+                    case FromClauseSyntax additionalFrom:
+                        current = this.LowerAdditionalFromClause(additionalFrom, scope, current);
+                        break;
+
+                    case JoinClauseSyntax join:
+                        current = this.LowerJoinClause(join, scope, current);
                         break;
 
                     default:
@@ -12735,24 +13258,32 @@ public sealed class CSharpToGSharpTranslator
 
             // The result element type after this body's select/group runs, used to
             // type the range variable of an `into` continuation (below). Defaults
-            // to the unchanged range type for an elided identity `select n`.
-            GTypeReference resultType = rangeType;
+            // to the unchanged scope for an elided identity `select n` — a single
+            // variable stays itself, a transparent identifier (scope.Count > 1)
+            // surfaces as the positional tuple it was already threaded as.
+            GTypeReference resultType = scope.Count == 1
+                ? scope[0].Type
+                : new TupleTypeReference(scope.Select(v => v.Type).ToList());
 
             switch (body.SelectOrGroup)
             {
                 case SelectClauseSyntax select:
                     // An identity projection (`select n`) after another clause is a
                     // no-op the C# compiler elides; keep it only when it transforms.
-                    if (select.Expression is IdentifierNameSyntax id && id.Identifier.Text == rangeVar
-                        && body.Clauses.Count > 0)
+                    if (scope.Count == 1 && select.Expression is IdentifierNameSyntax id
+                        && id.Identifier.Text == scope[0].Name && body.Clauses.Count > 0)
                     {
                         break;
                     }
 
-                    current = this.QueryCall(current, "Select", rangeVar, rangeType, select.Expression);
+                    current = this.QueryCall(current, "Select", scope, select.Expression);
                     resultType = this.context.GetTypeInfo(select.Expression).Type is { } projected
                         ? this.typeMapper.Map(projected, this.context, select.GetLocation())
                         : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+                    break;
+
+                case GroupClauseSyntax group:
+                    current = this.LowerGroupClause(group, scope, current, out resultType);
                     break;
 
                 default:
@@ -12765,32 +13296,235 @@ public sealed class CSharpToGSharpTranslator
             // `... into y ...` (a query continuation) is the C# spec's own sugar
             // for `from y in (...) ...` — lower it as a nested query body over the
             // projected sequence rather than silently dropping the continuation's
-            // clauses (issue #1738).
+            // clauses (issue #1738). This covers both a `select … into y` and a
+            // `group … by … into y` continuation (issue #1902) — either way `y`
+            // re-starts the scope as a single range variable over the projection.
             if (body.Continuation != null)
             {
-                current = this.LowerQueryBody(
-                    body.Continuation.Body,
-                    SanitizeIdentifier(body.Continuation.Identifier.Text),
-                    resultType,
-                    current);
+                var continuationScope = new List<(string Name, GTypeReference Type)>
+                {
+                    (SanitizeIdentifier(body.Continuation.Identifier.Text), resultType),
+                };
+                current = this.LowerQueryBody(body.Continuation.Body, continuationScope, current);
             }
 
+            return current;
+        }
+
+        // Lowers `let x = e` (spec §12.19.3.4): a Select projecting the current
+        // scope's transparent identifier widened by one member, `x`. Mirrors the
+        // spec's `(...).Select(x1 => new{x1, x2 = e})` — sans anonymous types, a
+        // positional tuple carries the widened scope forward.
+        private GExpression LowerLetClause(
+            LetClauseSyntax let,
+            List<(string Name, GTypeReference Type)> scope,
+            GExpression current)
+        {
+            var prologue = new List<GStatement>();
+            Parameter param = this.BuildScopeParameter(scope, prologue);
+            GExpression letValue = this.TranslateExpression(let.Expression);
+            GTypeReference letType = this.context.GetTypeInfo(let.Expression).Type is { } t
+                ? this.typeMapper.Map(t, this.context, let.GetLocation())
+                : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+
+            List<GExpression> elements = scope
+                .Select(v => (GExpression)new IdentifierExpression(SanitizeIdentifier(v.Name)))
+                .ToList();
+            elements.Add(letValue);
+            prologue.Add(new ReturnStatement(new TupleLiteralExpression(elements)));
+
+            var lambda = new LambdaExpression(new List<Parameter> { param }, blockBody: new BlockStatement(prologue));
+            current = new InvocationExpression(
+                new MemberAccessExpression(current, "Select"),
+                new List<GExpression> { lambda });
+
+            scope.Add((let.Identifier.Text, letType));
+            return current;
+        }
+
+        // Lowers a second (or later) `from` clause (spec §12.19.3.3, SelectMany):
+        // `(...).SelectMany(x1 => e2, (x1, x2) => new{x1, x2})`. The
+        // collection-selector runs over the CURRENT scope; the result-selector
+        // widens it by the new range variable, same transparent-identifier tuple
+        // as `let` above.
+        private GExpression LowerAdditionalFromClause(
+            FromClauseSyntax from,
+            List<(string Name, GTypeReference Type)> scope,
+            GExpression current)
+        {
+            LambdaExpression collectionSelector = this.BuildScopeLambda(scope, from.Expression);
+            GTypeReference newVarType = this.ResolveRangeVariableType(from.Type, from.Expression, from);
+            (string Name, GTypeReference Type) newVar = (from.Identifier.Text, newVarType);
+            LambdaExpression resultSelector = this.BuildTransparentResultSelector(scope, newVar);
+
+            current = new InvocationExpression(
+                new MemberAccessExpression(current, "SelectMany"),
+                new List<GExpression> { collectionSelector, resultSelector });
+
+            scope.Add(newVar);
+            return current;
+        }
+
+        // Lowers `join x2 in e2 on k1 equals k2 [into g]` (spec §12.19.3.7/.8):
+        // an inner join is `Join(e2, x1 => k1, x2 => k2, (x1, x2) => new{x1, x2})`;
+        // a group join (`into g`) is the same shape over `GroupJoin`, widening the
+        // scope by `g : IEnumerable<TInner>` instead of the bare inner variable.
+        private GExpression LowerJoinClause(
+            JoinClauseSyntax join,
+            List<(string Name, GTypeReference Type)> scope,
+            GExpression current)
+        {
+            GExpression inner = this.TranslateExpression(join.InExpression);
+            GTypeReference innerVarType = this.ResolveRangeVariableType(join.Type, join.InExpression, join);
+            var innerVar = (Name: join.Identifier.Text, Type: innerVarType);
+
+            LambdaExpression outerKeySelector = this.BuildScopeLambda(scope, join.LeftExpression);
+            LambdaExpression innerKeySelector = this.BuildScopeLambda(
+                new List<(string Name, GTypeReference Type)> { innerVar }, join.RightExpression);
+
+            if (join.Into == null)
+            {
+                LambdaExpression resultSelector = this.BuildTransparentResultSelector(scope, innerVar);
+                current = new InvocationExpression(
+                    new MemberAccessExpression(current, "Join"),
+                    new List<GExpression> { inner, outerKeySelector, innerKeySelector, resultSelector });
+                scope.Add(innerVar);
+                return current;
+            }
+
+            // Group join: the `into g` variable is always `IEnumerable<TInner>`
+            // (spec §12.19.3.8) — no C# expression to infer it from, so it is
+            // built directly from the already-resolved inner element type.
+            // `sequence[T]` is G#'s spelling for `IEnumerable<T>` (see the
+            // `GetEnumerableElementType`/array-iteration lowering above).
+            var groupVar = (
+                Name: join.Into.Identifier.Text,
+                Type: (GTypeReference)new NamedTypeReference("sequence", new List<GTypeReference> { innerVarType }));
+            LambdaExpression groupResultSelector = this.BuildTransparentResultSelector(scope, groupVar);
+            current = new InvocationExpression(
+                new MemberAccessExpression(current, "GroupJoin"),
+                new List<GExpression> { inner, outerKeySelector, innerKeySelector, groupResultSelector });
+            scope.Add(groupVar);
+            return current;
+        }
+
+        // Lowers `group e by k` (spec §12.19.3.9): the two-argument
+        // `GroupBy(x1 => k, x1 => e)`, eliding the element-selector to the
+        // single-argument `GroupBy(x1 => k)` for the identity case (`group n by
+        // …`) the same way an identity `select n` is elided above. The query's
+        // element type becomes `IGrouping<TKey, TElement>`.
+        private GExpression LowerGroupClause(
+            GroupClauseSyntax group,
+            List<(string Name, GTypeReference Type)> scope,
+            GExpression current,
+            out GTypeReference resultType)
+        {
+            LambdaExpression keySelector = this.BuildScopeLambda(scope, group.ByExpression);
+            GTypeReference keyType = this.context.GetTypeInfo(group.ByExpression).Type is { } k
+                ? this.typeMapper.Map(k, this.context, group.GetLocation())
+                : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+
+            bool isIdentity = scope.Count == 1
+                && group.GroupExpression is IdentifierNameSyntax id
+                && id.Identifier.Text == scope[0].Name;
+
+            var args = new List<GExpression> { keySelector };
+            GTypeReference elementType;
+            if (isIdentity)
+            {
+                elementType = scope[0].Type;
+            }
+            else
+            {
+                args.Add(this.BuildScopeLambda(scope, group.GroupExpression));
+                elementType = this.context.GetTypeInfo(group.GroupExpression).Type is { } e
+                    ? this.typeMapper.Map(e, this.context, group.GetLocation())
+                    : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+            }
+
+            current = new InvocationExpression(new MemberAccessExpression(current, "GroupBy"), args);
+            resultType = new NamedTypeReference("IGrouping", new List<GTypeReference> { keyType, elementType });
             return current;
         }
 
         private GExpression QueryCall(
             GExpression receiver,
             string method,
-            string rangeVar,
-            GTypeReference rangeType,
+            List<(string Name, GTypeReference Type)> scope,
             ExpressionSyntax lambdaBody)
         {
-            var lambda = new LambdaExpression(
-                new List<Parameter> { new Parameter(SanitizeIdentifier(rangeVar), rangeType) },
-                expressionBody: this.TranslateExpression(lambdaBody));
+            LambdaExpression lambda = this.BuildScopeLambda(scope, lambdaBody);
             return new InvocationExpression(
                 new MemberAccessExpression(receiver, method),
                 new List<GExpression> { lambda });
+        }
+
+        // Builds a lambda over the current query scope: a single scope variable
+        // becomes a plain `(x) -> body`; a transparent identifier (scope.Count >
+        // 1) becomes a tuple-parameter lambda that first deconstructs the tuple
+        // back into the individual range-variable names `body` refers to (see
+        // <see cref="BuildScopeParameter"/>).
+        private LambdaExpression BuildScopeLambda(
+            List<(string Name, GTypeReference Type)> scope,
+            ExpressionSyntax lambdaBody)
+        {
+            var prologue = new List<GStatement>();
+            Parameter param = this.BuildScopeParameter(scope, prologue);
+            if (prologue.Count == 0)
+            {
+                return new LambdaExpression(
+                    new List<Parameter> { param },
+                    expressionBody: this.TranslateExpression(lambdaBody));
+            }
+
+            prologue.Add(new ReturnStatement(this.TranslateExpression(lambdaBody)));
+            return new LambdaExpression(new List<Parameter> { param }, blockBody: new BlockStatement(prologue));
+        }
+
+        // Builds the `(x1, x2) => new{x1, x2}` result-selector shape shared by
+        // SelectMany/Join/GroupJoin (spec §12.19.3.3/.7/.8): one parameter for
+        // the left-hand (current) scope, one for the newly introduced variable,
+        // returning the widened scope as a positional tuple.
+        private LambdaExpression BuildTransparentResultSelector(
+            List<(string Name, GTypeReference Type)> leftScope,
+            (string Name, GTypeReference Type) rightVar)
+        {
+            var prologue = new List<GStatement>();
+            Parameter leftParam = this.BuildScopeParameter(leftScope, prologue);
+            var rightParam = new Parameter(SanitizeIdentifier(rightVar.Name), rightVar.Type);
+
+            List<GExpression> elements = leftScope
+                .Select(v => (GExpression)new IdentifierExpression(SanitizeIdentifier(v.Name)))
+                .ToList();
+            elements.Add(new IdentifierExpression(SanitizeIdentifier(rightVar.Name)));
+            prologue.Add(new ReturnStatement(new TupleLiteralExpression(elements)));
+
+            return new LambdaExpression(
+                new List<Parameter> { leftParam, rightParam },
+                blockBody: new BlockStatement(prologue));
+        }
+
+        // Builds the formal parameter a query-scope lambda binds to: a single
+        // variable binds directly by name; a transparent identifier
+        // (scope.Count > 1) binds a synthetic tuple parameter and appends a `let
+        // (x1, x2, …) = __qN` deconstruction to `prologue` so the lambda body can
+        // still refer to each range variable by its own name (issue #1902 — G#
+        // has no anonymous types to bind the C# spec's transparent identifier to).
+        private Parameter BuildScopeParameter(
+            List<(string Name, GTypeReference Type)> scope,
+            List<GStatement> prologue)
+        {
+            if (scope.Count == 1)
+            {
+                return new Parameter(SanitizeIdentifier(scope[0].Name), scope[0].Type);
+            }
+
+            string tupleParamName = $"__q{this.queryScopeCounter++}";
+            prologue.Add(new TupleDeconstructionStatement(
+                BindingKind.Let,
+                scope.Select(v => SanitizeIdentifier(v.Name)).ToList(),
+                new IdentifierExpression(tupleParamName)));
+            return new Parameter(tupleParamName, new TupleTypeReference(scope.Select(v => v.Type).ToList()));
         }
 
         /// <summary>

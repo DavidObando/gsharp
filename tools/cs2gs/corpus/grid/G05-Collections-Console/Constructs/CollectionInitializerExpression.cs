@@ -20,14 +20,15 @@ namespace Corpus.Grid05
             };
             PrintOrdered("pairs", pairs);
 
-            // QUARANTINED (CS2GS-GAP): ImplicitElementAccess — the
-            // ["key"] = value dictionary-initializer form has no canonical G#
-            // form yet (and its placeholder fails round-trip parse).
+            // ImplicitElementAccess: the ["key"] = value dictionary-initializer
+            // form (issue #1897 — was CS2GS-GAP; already had a canonical G#
+            // form via the existing indexed CollectionInitializerElement path,
+            // this fixture just re-enables the corpus coverage for it).
             var indexed = new Dictionary<string, int>
             {
-                { "blue", 2 },
-                { "red", 5 },
-                { "green", 4 },
+                ["blue"] = 2,
+                ["red"] = 5,
+                ["green"] = 4,
             };
             PrintOrdered("indexed", indexed);
         }

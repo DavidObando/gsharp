@@ -1046,7 +1046,7 @@ internal sealed class TypeDefEmitter
         // ParameterAttributes.In/Out and the IsReadOnlyAttribute for `in`),
         // mirroring EmitFunction, so interface parameters keep their names in
         // metadata (named arguments / IDE signature help from consumers).
-        var firstParamHandle = this.AddRefKindAwareParameterRows(method.Parameters);
+        var firstParamHandle = this.AddRefKindAwareParameterRows(method.Parameters, out var paramHandles);
 
         var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
             | MethodAttributes.Virtual | MethodAttributes.Abstract
@@ -1063,6 +1063,11 @@ internal sealed class TypeDefEmitter
         {
             EmitGenericParamRows(this.emitCtx, handle, method.TypeParameters);
         }
+
+        // Issue #1913: interface abstract-slot parameters must carry their
+        // user annotations same as the class-method path, or @Note-style
+        // attributes silently vanish for interface members.
+        this.EmitUserAttributesOnParameters(paramHandles, method.Parameters);
     }
 
     /// <summary>
@@ -1097,7 +1102,7 @@ internal sealed class TypeDefEmitter
 
         // Issue #1610: Parameter rows with names and In/Out flags, mirroring
         // EmitFunction.
-        var firstParamHandle = this.AddRefKindAwareParameterRows(method.Parameters);
+        var firstParamHandle = this.AddRefKindAwareParameterRows(method.Parameters, out var paramHandles);
 
         var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
             | MethodAttributes.Static | MethodAttributes.Virtual
@@ -1114,6 +1119,10 @@ internal sealed class TypeDefEmitter
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: hasBody ? bodyOffset : -1,
             parameterList: firstParamHandle);
+
+        // Issue #1913: same as EmitAbstractMethod — static-virtual interface
+        // slots must keep their parameter annotations.
+        this.EmitUserAttributesOnParameters(paramHandles, method.Parameters);
     }
 
     /// <summary>
@@ -1165,10 +1174,12 @@ internal sealed class TypeDefEmitter
     /// <c>AddMethodDefinition.parameterList</c>.
     /// </summary>
     /// <param name="parameters">The method's source parameters.</param>
+    /// <param name="paramHandles">Every emitted Parameter row handle, in source-parameter order — feed into <see cref="EmitUserAttributesOnParameters"/> so per-parameter annotations are never dropped.</param>
     /// <returns>The MethodDef's <c>parameterList</c> anchor handle.</returns>
-    private ParameterHandle AddRefKindAwareParameterRows(ImmutableArray<ParameterSymbol> parameters)
+    private ParameterHandle AddRefKindAwareParameterRows(ImmutableArray<ParameterSymbol> parameters, out ImmutableArray<ParameterHandle> paramHandles)
     {
         var first = this.nextParameterHandle();
+        var handles = ImmutableArray.CreateBuilder<ParameterHandle>(parameters.Length);
         for (var i = 0; i < parameters.Length; i++)
         {
             var p = parameters[i];
@@ -1186,6 +1197,7 @@ internal sealed class TypeDefEmitter
                 attributes: paramAttributes,
                 name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? string.Empty),
                 sequenceNumber: i + 1);
+            handles.Add(paramHandle);
 
             if (p.RefKind == RefKind.In)
             {
@@ -1198,7 +1210,27 @@ internal sealed class TypeDefEmitter
             }
         }
 
+        paramHandles = handles.MoveToImmutable();
         return first;
+    }
+
+    /// <summary>
+    /// Issue #1913 (B1/B2 follow-up): the shared tail-end of every
+    /// <c>AddRefKindAwareParameterRows</c> call site — stamps user
+    /// annotations (e.g. <c>@Note("…")</c>) onto each Parameter row. Every
+    /// emit path that mints Parameter rows via <c>AddRefKindAwareParameterRows</c>
+    /// (ctor, abstract interface method, static-virtual interface method)
+    /// must also call this, or parameter attributes silently vanish from the
+    /// emitted metadata even though the binder attached them correctly.
+    /// </summary>
+    /// <param name="paramHandles">Handles returned alongside <c>AddRefKindAwareParameterRows</c>, in source-parameter order.</param>
+    /// <param name="parameters">The same source parameters passed to <c>AddRefKindAwareParameterRows</c>.</param>
+    private void EmitUserAttributesOnParameters(ImmutableArray<ParameterHandle> paramHandles, ImmutableArray<ParameterSymbol> parameters)
+    {
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            this.emitUserAttributes(paramHandles[i], parameters[i], AttributeTargetKind.Param);
+        }
     }
 
     // Constructor emission
@@ -1514,9 +1546,9 @@ internal sealed class TypeDefEmitter
         // ADR-0102 / issue #812: the row helper also stamps
         // [ParamArrayAttribute] on a trailing variadic parameter so C#/F#
         // consumers see `params`.
-        var firstCtorParamHandle = this.AddRefKindAwareParameterRows(function.Parameters);
+        var firstCtorParamHandle = this.AddRefKindAwareParameterRows(function.Parameters, out var ctorParamHandles);
 
-        return this.emitCtx.Metadata.AddMethodDefinition(
+        var ctorHandle = this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
                 | MethodAttributes.RTSpecialName,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
@@ -1524,6 +1556,13 @@ internal sealed class TypeDefEmitter
             signature: this.emitCtx.Metadata.GetOrAddBlob(ctorSig),
             bodyOffset: bodyOffset,
             parameterList: firstCtorParamHandle);
+
+        // Issue #1913: constructor parameters must carry their user
+        // annotations same as the class-method path (bug B1 — this was
+        // dropped even after the binder-level #1913 fix).
+        this.EmitUserAttributesOnParameters(ctorParamHandles, function.Parameters);
+
+        return ctorHandle;
     }
 
     /// <summary>

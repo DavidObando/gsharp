@@ -1,10 +1,12 @@
-// inventory: StackAllocArrayCreationExpression — QUARANTINED at ilverify:
-// [IL]: Error [Unverifiable] in StackAllocArrayCreationExpressionFixture::Run()
-// (offset 0x0000000D, localloc). Translate and gsc compile both PASSED for the
-// explicit 'stackalloc int[4]' form, but the emitted IL is unverifiable.
-// The implicit form 'stackalloc[] { 5, 6, 7 }' additionally fails translate:
-// CS2GS-GAP "expression 'ImplicitStackAllocArrayCreationExpression' has no
-// canonical G# form yet".
+// inventory: StackAllocArrayCreationExpression. Covers both the explicit
+// sized form ('stackalloc int[4]') and the implicit form
+// ('stackalloc[] { 5, 6, 7 }', issue #1897 — was CS2GS-GAP
+// "ImplicitStackAllocArrayCreationExpression has no canonical G# form yet";
+// now maps to the same G# count-inferred stackalloc initializer as the
+// explicit omitted-size form). `stackalloc` lowers to CIL 'localloc', which
+// gsc's emitter marks unverifiable by design (a real, tracked gsc emitter
+// gap, issue #1933) — G05 opts into the 'ilverify.allow-unsafe' marker so
+// this app's stage 3 (ilverify) treats that as expected rather than gating.
 using System;
 
 namespace Corpus.Grid05

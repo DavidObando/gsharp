@@ -579,6 +579,15 @@ public class Parser
             }
         }
 
+        // Issue #1913: a C# 11 generic attribute (`[Tag<int>]`) translates to
+        // `@Tag[int32]` — G# spells every generic type-argument list in
+        // SQUARE brackets, the same as an ordinary generic type reference
+        // (`List[int32]`), never angle brackets. Reuse the exact same
+        // bracket-list parser an ordinary type clause's last segment uses
+        // (`ParseOptionalSegmentTypeArguments`) rather than hand-rolling a
+        // second implementation.
+        ParseOptionalSegmentTypeArguments(out var typeArgumentOpen, out var typeArguments, out var typeArgumentClose);
+
         // Optional argument list. The opening `(` must appear with no
         // intervening tokens (we use it to disambiguate "annotation with no
         // args" from "annotation followed by something that opens a `(`").
@@ -600,7 +609,10 @@ public class Parser
             dotTokens.ToImmutable(),
             openParen,
             arguments,
-            closeParen);
+            closeParen,
+            typeArgumentOpen,
+            typeArguments,
+            typeArgumentClose);
     }
 
     private static bool IsValidAnnotationTargetKind(string text)

@@ -60,13 +60,19 @@ public sealed class LocalDeclarationStatement : GStatement
     /// of <c>IDisposable.Dispose</c> (issue #1903; ADR-0030). Only meaningful
     /// when <paramref name="isUsing"/> is <see langword="true"/>.
     /// </param>
+    /// <param name="isRefAlias">
+    /// Whether this is a ref-aliasing local (<c>let ref name [T] = lvalue</c> /
+    /// <c>var ref name [T] = lvalue</c>, issue #491/ADR-0060) — G#'s native
+    /// managed by-ref local, mapped from a C# ref local (issue #1900).
+    /// </param>
     public LocalDeclarationStatement(
         BindingKind binding,
         string name,
         GTypeReference type = null,
         GExpression initializer = null,
         bool isUsing = false,
-        bool isAwait = false)
+        bool isAwait = false,
+        bool isRefAlias = false)
     {
         Binding = binding;
         Name = name;
@@ -74,6 +80,7 @@ public sealed class LocalDeclarationStatement : GStatement
         Initializer = initializer;
         IsUsing = isUsing;
         IsAwait = isAwait;
+        IsRefAlias = isRefAlias;
     }
 
     /// <summary>Gets the binding keyword.</summary>
@@ -100,6 +107,12 @@ public sealed class LocalDeclarationStatement : GStatement
 
     /// <summary>Gets the optional initializer expression.</summary>
     public GExpression Initializer { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether this is a ref-aliasing local
+    /// (issue #1900).
+    /// </summary>
+    public bool IsRefAlias { get; }
 }
 
 /// <summary>
@@ -157,13 +170,21 @@ public sealed class ReturnStatement : GStatement
     /// Initializes a new instance of the <see cref="ReturnStatement"/> class.
     /// </summary>
     /// <param name="expression">The optional return value.</param>
-    public ReturnStatement(GExpression expression = null)
+    /// <param name="isRef">
+    /// Whether this is a <c>return ref expr</c> (G#'s native ref-return,
+    /// issue #490/ADR-0060) — mapped from a C# ref return (issue #1900).
+    /// </param>
+    public ReturnStatement(GExpression expression = null, bool isRef = false)
     {
         Expression = expression;
+        IsRef = isRef;
     }
 
     /// <summary>Gets the optional return value.</summary>
     public GExpression Expression { get; }
+
+    /// <summary>Gets a value indicating whether this is a ref return (issue #1900).</summary>
+    public bool IsRef { get; }
 }
 
 /// <summary>

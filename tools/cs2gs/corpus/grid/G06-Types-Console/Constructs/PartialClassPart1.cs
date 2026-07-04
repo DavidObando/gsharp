@@ -1,4 +1,6 @@
-// inventory: ClassDeclaration — partial class, part 1 of 2 (SemanticsErased probe: `partial` erases, members merge)
+// inventory: ClassDeclaration — partial class, part 1 of 2 (issue #1910: cs2gs
+// merges every partial declaration into one G# type; verified by baseline
+// stdout parity below).
 using System;
 
 namespace Corpus.Grid06

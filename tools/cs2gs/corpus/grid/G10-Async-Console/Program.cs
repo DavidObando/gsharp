@@ -10,19 +10,7 @@ namespace Corpus.Grid10
 {
     internal static class Program
     {
-        // QUARANTINED (app-level): `async Task Main()`. The translator lowers
-        // it to G# top-level `await` statements, and gsc then emits an entry
-        // point that returns Task — the CLR aborts at startup with
-        // System.MethodAccessException: "Entry point must have a return type
-        // of void, integer, or unsigned integer." (stage 4: expected line 1
-        // 'AwaitExpression: direct=21', got ''). A synchronous Main that
-        // blocks on one async helper keeps every fixture's awaits intact.
-        private static void Main()
-        {
-            RunAllAsync().GetAwaiter().GetResult();
-        }
-
-        private static async Task RunAllAsync()
+        private static async Task Main()
         {
             await AwaitExpressionFixture.RunAsync();
             await AwaitExpressionConfigureAwaitFixture.RunAsync();
