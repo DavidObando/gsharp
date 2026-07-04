@@ -21,6 +21,7 @@ EnumMemberDeclaration: read=4
 EnumMemberDeclaration: write=8
 EnumMemberDeclaration: readwrite=12
 EnumMemberDeclaration: readwrite-is-flags-combo=true
+ExplicitInterfaceSpecifier: interface=hello-explicit
 InterfaceDeclaration: length=12
 InterfaceDeclaration: describe=rope of 12
 InterfaceDeclaration: default-method=42

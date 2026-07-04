@@ -16,10 +16,7 @@ namespace Corpus.Grid06
             EnumDeclarationFixture.Run();
             EnumMemberDeclarationFixture.Run();
 
-            // QUARANTINED (see Quarantined/): ExplicitInterfaceSpecifierFixture —
-            // explicit interface impl is lowered to a plain method: with a same-name
-            // public method it fails compile (GS0264 duplicate overload); alone it
-            // compiles but fails ilverify ("Class implements interface but not method").
+            ExplicitInterfaceSpecifierFixture.Run();
             InterfaceDeclarationFixture.Run();
 
             // QUARANTINED (see Quarantined/): PrimaryConstructorBaseTypeFixture —

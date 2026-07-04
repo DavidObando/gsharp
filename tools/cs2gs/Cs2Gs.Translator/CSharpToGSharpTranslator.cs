@@ -898,7 +898,11 @@ public sealed class CSharpToGSharpTranslator
 
                     case MethodDeclarationSyntax method:
                         (GMember func, _) = this.TranslateMethod(method, TypeDeclarationKind.Class);
-                        funcs.Add(func);
+                        if (func != null)
+                        {
+                            funcs.Add(func);
+                        }
+
                         break;
 
                     default:
@@ -2167,7 +2171,12 @@ public sealed class CSharpToGSharpTranslator
                     break;
 
                 case MethodDeclarationSyntax method:
-                    yield return this.TranslateMethod(method, ownerKind);
+                    (GMember methodMember, bool methodIsStatic) = this.TranslateMethod(method, ownerKind);
+                    if (methodMember != null)
+                    {
+                        yield return (methodMember, methodIsStatic);
+                    }
+
                     break;
 
                 case OperatorDeclarationSyntax op:
@@ -2564,6 +2573,55 @@ public sealed class CSharpToGSharpTranslator
             var symbol = this.context.GetDeclaredSymbol(node) as IMethodSymbol;
             bool isStatic = symbol != null && symbol.IsStatic;
 
+            // Issue #1911: C# `string IGreeter.Greet() { ... }` (explicit interface
+            // implementation) has no G# equivalent — G# has no name-hiding surface
+            // for interface members (ADR-0091 rejected an `IFoo.M(this)` spelling
+            // for exactly this reason: it conflates "explicit interface dispatch"
+            // with G#'s existing extension-function sugar). The only disambiguation
+            // tool G# offers (`base[IFoo].M()`, samples/InterfaceDiamondDisambiguation.gs)
+            // resolves *default*-body diamonds inside an `override`, not distinct
+            // per-interface slots for an abstract member — so an explicit impl must
+            // collapse onto the ordinary public method slot that already satisfies
+            // the interface contract by name.
+            //
+            // If a same-signature sibling with the same name already exists on the
+            // type — a plain public method (the common "public API + hidden explicit
+            // impl" C# pattern), or another explicit implementation of a *different*
+            // interface with an identical name+signature (a same-name diamond of
+            // abstract explicit impls) — keeping both would be an exact-signature
+            // duplicate (GS0264). Only one survives (the public method if there is
+            // one, else whichever explicit impl appears first in source); the rest
+            // are dropped. The survivor still fills every implemented interface's
+            // abstract slot by name+signature (that is exactly why C# allowed the
+            // duplicate signature to begin with), but slot-occupancy is not the
+            // same as behavioral fidelity: any dropped explicit implementation may
+            // have its own body distinct from the survivor's (this is true both for
+            // the "coexists with a differently-bodied public method" shape AND for
+            // a diamond of two-or-more explicit impls with distinct bodies), so
+            // every drop here is a potential semantic loss and is reported as such.
+            if (symbol != null && symbol.ExplicitInterfaceImplementations.Length > 0)
+            {
+                IMethodSymbol survivor = FindPriorCollidingSibling(symbol, node);
+                if (survivor != null)
+                {
+                    string message =
+                        $"explicit interface implementation '{symbol.ContainingType.Name}.{FormatExplicitInterfaceName(symbol)}' " +
+                        $"shares its name and signature with '{symbol.ContainingType.Name}.{FormatSiblingName(survivor)}'; " +
+                        "G# has no explicit-interface-implementation surface (ADR-0091), so the two C# methods cannot both " +
+                        "be emitted (would be an exact-signature duplicate, GS0264). This declaration is dropped in favor " +
+                        "of the surviving sibling, which already satisfies the interface by name; if the surviving " +
+                        "sibling's body differs from this dropped declaration's body (possible whenever the survivor is a " +
+                        "differently-bodied public method, or another explicit implementation of a different interface with " +
+                        "its own distinct body), any C# call through the interface-typed reference that previously reached " +
+                        "this body now silently observes the surviving method's body instead (semantic loss, known gap, " +
+                        "issue #1911).";
+                    this.context.Report(new TranslationDiagnostic(
+                        nameof(SyntaxKind.MethodDeclaration), message, node.GetLocation(), TranslationSeverity.Unsupported));
+
+                    return (null, false);
+                }
+            }
+
             Receiver receiver = null;
             bool skipFirstParameter = false;
             bool selfQualifyBody = false;
@@ -2683,6 +2741,19 @@ public sealed class CSharpToGSharpTranslator
                 body = null;
             }
 
+            // Issue #1911: Roslyn reports an explicit interface implementation's
+            // `DeclaredAccessibility` as `Private` (it has no accessibility keyword
+            // and is unreachable through the class type), but the CLR interface
+            // slot it fills is a public contract. Mapping that `Private` straight
+            // through emitted `private func Greet()`, which gsc does not wire into
+            // the type's `InterfaceImpl` v-table slot — the class type-checks
+            // (name match is enough for the binder) but fails `ilverify` with
+            // "Class implements interface but not method". The method must be
+            // public in G# for the interface slot to be filled.
+            Visibility explicitInterfaceVisibility = symbol != null && symbol.ExplicitInterfaceImplementations.Length > 0
+                ? Visibility.Default
+                : MapVisibility(symbol, this.context, node);
+
             var method = new MethodDeclaration(
                 SanitizeIdentifier(node.Identifier.Text),
                 parameters: parameters,
@@ -2690,7 +2761,7 @@ public sealed class CSharpToGSharpTranslator
                 body: body,
                 typeParameters: typeParameters,
                 receiver: receiver,
-                visibility: MapVisibility(symbol, this.context, node),
+                visibility: explicitInterfaceVisibility,
                 isOpen: isOpen,
                 isOverride: isOverride,
                 isAsync: symbol != null && symbol.IsAsync,
@@ -2699,6 +2770,148 @@ public sealed class CSharpToGSharpTranslator
                 isRefReturn: symbol != null && symbol.ReturnsByRef);
 
             return (method, isStatic);
+        }
+
+        /// <summary>
+        /// Issue #1911: finds the sibling method on the same containing type that
+        /// would win the (name, signature) slot over <paramref name="explicitImplementation"/>
+        /// once both are translated to G# — i.e. the sibling that this declaration
+        /// must yield to so the pair does not become an exact GS0264
+        /// duplicate-overload. Returns <see langword="null"/> when
+        /// <paramref name="explicitImplementation"/> is itself the survivor (no
+        /// same-signature sibling, or it is the earliest-declared one among a set
+        /// of same-signature explicit implementations).
+        /// </summary>
+        /// <remarks>
+        /// A plain public method always wins over any explicit implementation
+        /// (it is the pre-existing, name-visible API). Among two or more explicit
+        /// implementations with no public sibling (e.g. two interfaces whose
+        /// abstract member happens to share a name and signature — a same-name
+        /// diamond), the earliest-declared one (by source position) wins; the
+        /// rest are dropped. Because a single G# method satisfies every
+        /// implemented interface whose abstract member matches its name and
+        /// signature, the survivor alone still fills every interface slot the
+        /// dropped siblings would have filled — but if the dropped siblings had
+        /// DISTINCT bodies (as valid C# allows for genuinely separate explicit
+        /// implementations), this collapses divergent runtime behavior into a
+        /// single body, which IS a semantic loss. Every such drop is reported
+        /// via an Unsupported diagnostic (see the reporting call site).
+        /// </remarks>
+        private static IMethodSymbol FindPriorCollidingSibling(IMethodSymbol explicitImplementation, MethodDeclarationSyntax node)
+        {
+            INamedTypeSymbol containingType = explicitImplementation.ContainingType;
+            if (containingType == null)
+            {
+                return null;
+            }
+
+            // Issue #1911: an explicit interface implementation's own `.Name` is
+            // the fully-qualified C# emit name (e.g. "IGreeter.Greet", or
+            // "Corpus.Grid06.IGreeter.Greet" for a generic/qualified interface),
+            // so `INamedTypeSymbol.GetMembers(name)` — an exact `.Name` lookup —
+            // finds neither a same-named public method nor another explicit
+            // implementation by the interface member's simple name ("Greet").
+            // Every member is walked instead, comparing each candidate's
+            // *effective* simple name (its own `.Name` for a plain method, or its
+            // interface member's simple name for an explicit implementation).
+            string simpleName = explicitImplementation.ExplicitInterfaceImplementations[0].Name;
+            int selfPosition = node.Identifier.SpanStart;
+
+            IMethodSymbol bestPublicCandidate = null;
+            IMethodSymbol bestExplicitCandidate = null;
+            int bestExplicitPosition = int.MaxValue;
+
+            foreach (ISymbol member in containingType.GetMembers())
+            {
+                if (member is not IMethodSymbol candidate ||
+                    SymbolEqualityComparer.Default.Equals(candidate, explicitImplementation) ||
+                    EffectiveSimpleName(candidate) != simpleName ||
+                    candidate.Parameters.Length != explicitImplementation.Parameters.Length ||
+                    candidate.TypeParameters.Length != explicitImplementation.TypeParameters.Length ||
+
+                    // Issue #1911: gsc's GS0264 overload check keys on parameter
+                    // types AND return type — e.g. a `GetEnumerator() IEnumerator`
+                    // bridge coexists fine with `GetEnumerator() IEnumerator[T]`
+                    // (issue #985's dual-GetEnumerator pattern), so a return-type
+                    // mismatch means these two do NOT collide and both survive.
+                    !SymbolEqualityComparer.Default.Equals(candidate.ReturnType, explicitImplementation.ReturnType) ||
+                    !HasSameParameterTypes(candidate, explicitImplementation))
+                {
+                    continue;
+                }
+
+                if (candidate.ExplicitInterfaceImplementations.Length == 0)
+                {
+                    bestPublicCandidate = candidate;
+                    continue;
+                }
+
+                int candidatePosition = candidate.DeclaringSyntaxReferences.FirstOrDefault()?.Span.Start ?? int.MaxValue;
+                if (candidatePosition < bestExplicitPosition)
+                {
+                    bestExplicitCandidate = candidate;
+                    bestExplicitPosition = candidatePosition;
+                }
+            }
+
+            // A plain public method always wins over an explicit implementation.
+            if (bestPublicCandidate != null)
+            {
+                return bestPublicCandidate;
+            }
+
+            // Among explicit implementations only, the earliest-declared one
+            // wins; this declaration yields only if some other explicit impl is
+            // strictly earlier.
+            if (bestExplicitCandidate != null && bestExplicitPosition < selfPosition)
+            {
+                return bestExplicitCandidate;
+            }
+
+            return null;
+        }
+
+        private static string EffectiveSimpleName(IMethodSymbol method)
+        {
+            return method.ExplicitInterfaceImplementations.Length > 0
+                ? method.ExplicitInterfaceImplementations[0].Name
+                : method.Name;
+        }
+
+        private static bool HasSameParameterTypes(IMethodSymbol left, IMethodSymbol right)
+        {
+            for (int i = 0; i < left.Parameters.Length; i++)
+            {
+                if (!SymbolEqualityComparer.Default.Equals(left.Parameters[i].Type, right.Parameters[i].Type))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Issue #1911: formats a surviving sibling method's name for use in
+        /// translation diagnostics — the interface-qualified
+        /// <c>IInterface.Member</c> form for another explicit implementation, or
+        /// the plain member name for an ordinary public method.
+        /// </summary>
+        private static string FormatSiblingName(IMethodSymbol sibling)
+        {
+            return sibling.ExplicitInterfaceImplementations.Length > 0
+                ? FormatExplicitInterfaceName(sibling)
+                : sibling.Name;
+        }
+
+        /// <summary>
+        /// Issue #1911: formats an explicit interface implementation's C#-style
+        /// <c>IInterface.Member</c> name for use in translation diagnostics.
+        /// </summary>
+        private static string FormatExplicitInterfaceName(IMethodSymbol symbol)
+        {
+            ISymbol explicitInterfaceMember = symbol.ExplicitInterfaceImplementations[0];
+            return $"{explicitInterfaceMember.ContainingType.Name}.{explicitInterfaceMember.Name}";
         }
 
         /// <summary>
