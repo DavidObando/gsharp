@@ -5175,15 +5175,32 @@ public sealed class CSharpToGSharpTranslator
 
                 // `(a, b) = (x, y)` deconstruction *assignment* to existing
                 // variables. G# has no tuple-assignment form, so lower to
-                // element-wise assignments. RHS elements are captured into temps
-                // first to preserve C#'s evaluate-all-then-assign semantics
-                // (handles aliasing such as `(a, b) = (b, a)`); ADR-0115 §B.
-                if (assignment.Left is TupleExpressionSyntax leftTuple &&
-                    assignment.Right is TupleExpressionSyntax rightTuple &&
-                    leftTuple.Arguments.Count == rightTuple.Arguments.Count &&
-                    leftTuple.Arguments.All(a => a.Expression is not DeclarationExpressionSyntax))
+                // element-wise assignments (or, for a MIXED target such as
+                // `(x, var y) = ...`, a mix of assignments and new bindings).
+                // The whole RHS is captured ONCE via G#'s native
+                // `let (t0, t1, ...) = rhs` deconstruction-declaration form —
+                // this already handles every RHS shape the declaration path
+                // does (a tuple literal, a tuple-returning call, a
+                // Deconstruct-method type) and, being a single statement,
+                // preserves C#'s evaluate-then-assign-all semantics (handles
+                // aliasing such as the swap `(a, b) = (b, a)`); issue #1895,
+                // ADR-0115 §B. A NESTED target (`((a, b), c) = ...`) has no
+                // flat `t0, t1, ...` shape to spill into — gap loudly rather
+                // than risk a silent miscompile.
+                if (assignment.Left is TupleExpressionSyntax leftTuple)
                 {
-                    return this.LowerTupleAssignment(leftTuple, rightTuple);
+                    if (leftTuple.Arguments.Any(a => a.Expression is TupleExpressionSyntax))
+                    {
+                        string message = "a nested tuple target in a deconstruction-assignment " +
+                            "('((a, b), c) = ...') has no canonical G# form yet " +
+                            "(issue #1895); G#'s tuple-deconstruction binding only " +
+                            "supports a flat target list.";
+                        this.context.ReportUnsupported(assignment, message);
+                    }
+                    else
+                    {
+                        return this.LowerTupleAssignment(leftTuple, assignment.Right);
+                    }
                 }
             }
 
@@ -5614,27 +5631,82 @@ public sealed class CSharpToGSharpTranslator
 
         private IEnumerable<GStatement> LowerTupleAssignment(
             TupleExpressionSyntax leftTuple,
-            TupleExpressionSyntax rightTuple)
+            ExpressionSyntax right)
         {
             int count = leftTuple.Arguments.Count;
             var temps = new List<string>(count);
-            var statements = new List<GStatement>();
 
             for (int i = 0; i < count; i++)
             {
-                string temp = $"__decon{this.deconCounter++}";
-                temps.Add(temp);
-                statements.Add(new LocalDeclarationStatement(
-                    BindingKind.Var,
-                    temp,
-                    type: null,
-                    initializer: this.TranslateExpression(rightTuple.Arguments[i].Expression)));
+                ExpressionSyntax targetExpr = leftTuple.Arguments[i].Expression;
+
+                // A true discard element (`(x, _) = ...`) needs no temp at all —
+                // G#'s native deconstruction binding already treats a literal
+                // `_` name as a discard.
+                temps.Add(
+                    targetExpr is IdentifierNameSyntax discardCandidate &&
+                        discardCandidate.Identifier.ValueText == "_" &&
+                        this.IsTrueDiscard(discardCandidate)
+                        ? "_"
+                        : $"__decon{this.deconCounter++}");
             }
 
+            // Spill the WHOLE right-hand side in one native decon-binding.
+            // G#'s tuple-deconstruction grammar only accepts `let (...)`
+            // (docs/adr/0032-data-struct-ergonomics.md), never `var (...)`,
+            // but that is no loss here — these temps are single-use compiler
+            // internals, never reassigned. This is exactly the mechanism the
+            // declaration form (`var (a, b) = e`) already uses, so it inherits
+            // the same RHS-shape support for free.
+            var statements = new List<GStatement>
+            {
+                new TupleDeconstructionStatement(BindingKind.Let, temps, this.TranslateExpression(right)),
+            };
+
             for (int i = 0; i < count; i++)
             {
+                if (temps[i] == "_")
+                {
+                    continue;
+                }
+
+                ExpressionSyntax targetExpr = leftTuple.Arguments[i].Expression;
+
+                if (targetExpr is DeclarationExpressionSyntax declaration)
+                {
+                    // Mixed form, e.g. `(x, var y) = ...`: `y` is a NEW local,
+                    // not a write to an existing one — bind it directly from
+                    // the temp, `var`/`let` per whether it is reassigned later
+                    // (mirrors the plain-declaration path's mutability rule).
+                    string name = declaration.Designation switch
+                    {
+                        SingleVariableDesignationSyntax single => single.Identifier.Text,
+                        _ => "_",
+                    };
+
+                    if (name == "_")
+                    {
+                        continue;
+                    }
+
+                    ILocalSymbol localSymbol = declaration.Designation is SingleVariableDesignationSyntax singleDesignation
+                        ? this.context.GetDeclaredSymbol(singleDesignation) as ILocalSymbol
+                        : null;
+                    BindingKind binding = localSymbol != null && this.IsLocalReassigned(localSymbol)
+                        ? BindingKind.Var
+                        : BindingKind.Let;
+                    statements.Add(new LocalDeclarationStatement(
+                        binding,
+                        name,
+                        type: null,
+                        initializer: new IdentifierExpression(temps[i])));
+                    continue;
+                }
+
+                // An existing local (or member/element access) target: write
+                // the spilled value back.
                 statements.Add(new AssignmentStatement(
-                    this.TranslateExpression(leftTuple.Arguments[i].Expression),
+                    this.TranslateExpression(targetExpr),
                     new IdentifierExpression(temps[i])));
             }
 
@@ -7487,6 +7559,38 @@ public sealed class CSharpToGSharpTranslator
             return symbol != null && SymbolEqualityComparer.Default.Equals(symbol, target);
         }
 
+        // True when a deconstruction-assignment LHS tuple writes `symbol` as one
+        // of its (possibly nested, e.g. `((a, b), c) = ...`) elements. Elements
+        // that are themselves a `DeclarationExpressionSyntax` (`var y`, `int y`)
+        // introduce a brand-new local rather than writing an existing one, so
+        // they never match here — only plain-identifier elements (existing
+        // locals) and nested tuples are walked. A discard (`_`) element has no
+        // symbol and never matches either.
+        private bool TupleAssignmentTargetsInclude(TupleExpressionSyntax tuple, ISymbol symbol)
+        {
+            foreach (ArgumentSyntax argument in tuple.Arguments)
+            {
+                switch (argument.Expression)
+                {
+                    case TupleExpressionSyntax nested when this.TupleAssignmentTargetsInclude(nested, symbol):
+                        return true;
+
+                    case DeclarationExpressionSyntax:
+                        break;
+
+                    default:
+                        if (this.BindsTo(argument.Expression, symbol))
+                        {
+                            return true;
+                        }
+
+                        break;
+                }
+            }
+
+            return false;
+        }
+
         // Returns true when <paramref name="symbol"/> is assigned, incremented,
         // decremented, or passed by ref/out anywhere in <paramref name="scope"/>.
         // Generalises <see cref="IsLocalReassigned"/> to any symbol (used for
@@ -7517,6 +7621,22 @@ public sealed class CSharpToGSharpTranslator
                 {
                     case AssignmentExpressionSyntax assignment
                         when this.BindsTo(assignment.Left, symbol):
+                        return true;
+
+                    // `(x, y) = (y, x)` deconstruction-ASSIGNMENT: `assignment.Left`
+                    // is the whole tuple, not `symbol` itself, so the plain
+                    // `BindsTo` case above never matches — without this, an
+                    // existing local written only via deconstruction-assignment
+                    // was (mis-)classified as never-reassigned and bound `let`,
+                    // then the element-wise write-back lowering (see
+                    // `LowerTupleAssignment`) failed gsc GS0127 "read-only"
+                    // (issue #1895). A tuple element that is itself a
+                    // declaration (`var y` in the mixed `(x, var y) = ...` form)
+                    // introduces a NEW binding, not a write to `symbol`, so it is
+                    // deliberately excluded by `TupleAssignmentTargetsInclude`.
+                    case AssignmentExpressionSyntax tupleAssignment
+                        when tupleAssignment.Left is TupleExpressionSyntax leftTuple
+                            && this.TupleAssignmentTargetsInclude(leftTuple, symbol):
                         return true;
 
                     case PostfixUnaryExpressionSyntax postfix
