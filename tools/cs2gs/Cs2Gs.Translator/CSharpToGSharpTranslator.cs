@@ -4485,11 +4485,10 @@ public sealed class CSharpToGSharpTranslator
         // where gsc's own parser recognises a leading `^` as a from-end marker
         // rather than one's-complement (Parser.ParseIndexBound). A `^n` nested
         // any deeper (e.g. as a `RangeExpressionSyntax` bound, `recv[a..^n]`) is
-        // NOT a direct argument — the translator pre-lowers ranges to
-        // `Slice(start, length)` arithmetic outside any bracket, so a `^` bound
-        // there is folded into `Length`-relative arithmetic by
-        // `TranslateRangeBound` before it ever reaches this generic prefix-
-        // unary path (an inline `recv[a..^n]` slice never gaps).
+        // NOT a direct argument — `TranslateRangeBound` emits it as its own
+        // native `FromEndIndexExpression` (gsc's `^n`) before it ever reaches
+        // this generic prefix-unary path (an inline `recv[a..^n]` slice never
+        // gaps).
         private static bool IsDirectIndexBracketArgument(ExpressionSyntax expression) =>
             expression.Parent is ArgumentSyntax
             {
@@ -8096,10 +8095,10 @@ public sealed class CSharpToGSharpTranslator
                     if (elementAccess.ArgumentList.Arguments.Count == 1 &&
                         elementAccess.ArgumentList.Arguments[0].Expression is RangeExpressionSyntax sliceRange)
                     {
-                        // `span[a..b]` / `span[..n]` / `span[i..]`: G# has no range
-                        // operator, so lower the System.Range indexer to the
-                        // faithful `Slice(start, length)` / `Slice(start)` call the
-                        // C# range indexer itself lowers to (ADR-0115 §B).
+                        // `span[a..b]` / `span[..n]` / `span[i..]`: gsc has its own
+                        // native range-index operator (Issue #1896), so lower
+                        // directly to that same `recv[start..end]` form instead
+                        // of desugaring to `Slice`.
                         return this.TranslateRangeSlice(
                             this.TranslateReceiverWithNullForgiveness(elementAccess.Expression),
                             elementAccess.Expression,
@@ -9530,8 +9529,9 @@ public sealed class CSharpToGSharpTranslator
             // `Data[Next()..2]`) is implicitly converted by the C# compiler to
             // `System.Index` purely because it sits inside a `Range`-indexer
             // argument list — the value itself is, and always was, an `int`.
-            // `TranslateRangeSlice` already re-lowers the whole range to a plain
-            // `Slice(start, length)` call before this operand is ever typed, so
+            // `TranslateRangeSlice` already re-lowers the whole range to its
+            // own native `RangeIndexExpression` (with `^n` bounds emitted as
+            // `FromEndIndexExpression`) before this operand is ever typed, so
             // that Index/Range conversion is a compiler-internal artifact, never
             // an actual value the translation carries forward. Falling back to
             // the operand's own natural type here avoids gapping perfectly valid

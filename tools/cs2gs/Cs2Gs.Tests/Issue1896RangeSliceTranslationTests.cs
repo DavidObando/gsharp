@@ -111,12 +111,15 @@ namespace Corpus.Issue1896
         public int[] TailFromEnd(int[] a) => a[^2..];
 
         public int[] MiddleFromEnd(int[] a) => a[1..^1];
+
+        public int[] HeadTrimFromEnd(int[] a) => a[..^1];
     }
 }
 ");
 
         Assert.Contains("a[^2..]", rendered, StringComparison.Ordinal);
         Assert.Contains("a[1..^1]", rendered, StringComparison.Ordinal);
+        Assert.Contains("a[..^1]", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain(".Slice(", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }

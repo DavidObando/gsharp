@@ -20,6 +20,12 @@ namespace Corpus.Grid05
             int[] tail = a[^2..];
             Console.WriteLine($"RangeExpression: tail={string.Join(",", tail)}");
 
+            int[] endTrim = a[1..^1];
+            Console.WriteLine($"RangeExpression: endTrim={string.Join(",", endTrim)}");
+
+            int[] allButLast = a[..^1];
+            Console.WriteLine($"RangeExpression: allButLast={string.Join(",", allButLast)}");
+
             int[] all = a[..];
             Console.WriteLine($"RangeExpression: allLen={all.Length}");
 

@@ -28,6 +28,8 @@ OmittedArraySizeExpression: ys=solo len=1
 RangeExpression: mid=2,3
 RangeExpression: head=1,2
 RangeExpression: tail=5,6
+RangeExpression: endTrim=2,3,4,5
+RangeExpression: allButLast=1,2,3,4,5
 RangeExpression: allLen=6
 RangeExpression: sliced=sha
 TupleExpression: items=2,two
