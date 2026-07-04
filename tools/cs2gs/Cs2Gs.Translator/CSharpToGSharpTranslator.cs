@@ -540,6 +540,13 @@ public sealed class CSharpToGSharpTranslator
         // Monotonic counter for synthesizing spill temporaries (issue #1731).
         private int spillCounter;
 
+        // Issue #1902: numbers the `__qN` tuple parameter synthesized to carry a
+        // query's transparent identifier (multiple in-scope range variables)
+        // through a lambda that C#'s query-translation spec (§12.19.3) would bind
+        // via an anonymous type; G# has no anonymous types, so a positional tuple
+        // stands in (see <see cref="BuildScopeParameter"/>).
+        private int queryScopeCounter;
+
         // Issue #1897: numbers the `__spreadN` temporary built to lower a
         // collection-expression spread element (see
         // <see cref="TranslateSpreadCollectionExpression"/>).
@@ -12552,11 +12559,18 @@ public sealed class CSharpToGSharpTranslator
             // equivalent System.Linq method chain (`from … where … orderby …
             // select …` → `.Where(…).OrderBy(…).Select(…)`, ADR-0115 §B LINQ).
             FromClauseSyntax from = query.FromClause;
-            string rangeVar = from.Identifier.Text;
             GExpression current = this.TranslateExpression(from.Expression);
             GTypeReference rangeType = this.ResolveRangeVariableType(from.Type, from.Expression, from);
 
-            current = this.LowerQueryBody(query.Body, rangeVar, rangeType, current);
+            // The query's "scope" is the set of range variables in play, in
+            // declaration order — the C# spec's transparent identifier (§12.19.3).
+            // A lone `from` starts with one; a second `from`, a `let`, or a `join`
+            // grows it. G# has no anonymous types to carry more than one variable
+            // through a lambda, so scope.Count > 1 is threaded as a positional
+            // tuple (see <see cref="BuildScopeParameter"/>).
+            var scope = new List<(string Name, GTypeReference Type)> { (from.Identifier.Text, rangeType) };
+
+            current = this.LowerQueryBody(query.Body, scope, current);
             return current;
         }
 
@@ -12592,8 +12606,7 @@ public sealed class CSharpToGSharpTranslator
 
         private GExpression LowerQueryBody(
             QueryBodySyntax body,
-            string rangeVar,
-            GTypeReference rangeType,
+            List<(string Name, GTypeReference Type)> scope,
             GExpression current)
         {
             foreach (QueryClauseSyntax clause in body.Clauses)
@@ -12601,7 +12614,7 @@ public sealed class CSharpToGSharpTranslator
                 switch (clause)
                 {
                     case WhereClauseSyntax where:
-                        current = this.QueryCall(current, "Where", rangeVar, rangeType, where.Condition);
+                        current = this.QueryCall(current, "Where", scope, where.Condition);
                         break;
 
                     case OrderByClauseSyntax orderBy:
@@ -12610,10 +12623,22 @@ public sealed class CSharpToGSharpTranslator
                         {
                             bool descending = ordering.AscendingOrDescendingKeyword.IsKind(SyntaxKind.DescendingKeyword);
                             string method = (first ? "OrderBy" : "ThenBy") + (descending ? "Descending" : string.Empty);
-                            current = this.QueryCall(current, method, rangeVar, rangeType, ordering.Expression);
+                            current = this.QueryCall(current, method, scope, ordering.Expression);
                             first = false;
                         }
 
+                        break;
+
+                    case LetClauseSyntax let:
+                        current = this.LowerLetClause(let, scope, current);
+                        break;
+
+                    case FromClauseSyntax additionalFrom:
+                        current = this.LowerAdditionalFromClause(additionalFrom, scope, current);
+                        break;
+
+                    case JoinClauseSyntax join:
+                        current = this.LowerJoinClause(join, scope, current);
                         break;
 
                     default:
@@ -12626,24 +12651,32 @@ public sealed class CSharpToGSharpTranslator
 
             // The result element type after this body's select/group runs, used to
             // type the range variable of an `into` continuation (below). Defaults
-            // to the unchanged range type for an elided identity `select n`.
-            GTypeReference resultType = rangeType;
+            // to the unchanged scope for an elided identity `select n` — a single
+            // variable stays itself, a transparent identifier (scope.Count > 1)
+            // surfaces as the positional tuple it was already threaded as.
+            GTypeReference resultType = scope.Count == 1
+                ? scope[0].Type
+                : new TupleTypeReference(scope.Select(v => v.Type).ToList());
 
             switch (body.SelectOrGroup)
             {
                 case SelectClauseSyntax select:
                     // An identity projection (`select n`) after another clause is a
                     // no-op the C# compiler elides; keep it only when it transforms.
-                    if (select.Expression is IdentifierNameSyntax id && id.Identifier.Text == rangeVar
-                        && body.Clauses.Count > 0)
+                    if (scope.Count == 1 && select.Expression is IdentifierNameSyntax id
+                        && id.Identifier.Text == scope[0].Name && body.Clauses.Count > 0)
                     {
                         break;
                     }
 
-                    current = this.QueryCall(current, "Select", rangeVar, rangeType, select.Expression);
+                    current = this.QueryCall(current, "Select", scope, select.Expression);
                     resultType = this.context.GetTypeInfo(select.Expression).Type is { } projected
                         ? this.typeMapper.Map(projected, this.context, select.GetLocation())
                         : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+                    break;
+
+                case GroupClauseSyntax group:
+                    current = this.LowerGroupClause(group, scope, current, out resultType);
                     break;
 
                 default:
@@ -12656,32 +12689,235 @@ public sealed class CSharpToGSharpTranslator
             // `... into y ...` (a query continuation) is the C# spec's own sugar
             // for `from y in (...) ...` — lower it as a nested query body over the
             // projected sequence rather than silently dropping the continuation's
-            // clauses (issue #1738).
+            // clauses (issue #1738). This covers both a `select … into y` and a
+            // `group … by … into y` continuation (issue #1902) — either way `y`
+            // re-starts the scope as a single range variable over the projection.
             if (body.Continuation != null)
             {
-                current = this.LowerQueryBody(
-                    body.Continuation.Body,
-                    SanitizeIdentifier(body.Continuation.Identifier.Text),
-                    resultType,
-                    current);
+                var continuationScope = new List<(string Name, GTypeReference Type)>
+                {
+                    (SanitizeIdentifier(body.Continuation.Identifier.Text), resultType),
+                };
+                current = this.LowerQueryBody(body.Continuation.Body, continuationScope, current);
             }
 
+            return current;
+        }
+
+        // Lowers `let x = e` (spec §12.19.3.4): a Select projecting the current
+        // scope's transparent identifier widened by one member, `x`. Mirrors the
+        // spec's `(...).Select(x1 => new{x1, x2 = e})` — sans anonymous types, a
+        // positional tuple carries the widened scope forward.
+        private GExpression LowerLetClause(
+            LetClauseSyntax let,
+            List<(string Name, GTypeReference Type)> scope,
+            GExpression current)
+        {
+            var prologue = new List<GStatement>();
+            Parameter param = this.BuildScopeParameter(scope, prologue);
+            GExpression letValue = this.TranslateExpression(let.Expression);
+            GTypeReference letType = this.context.GetTypeInfo(let.Expression).Type is { } t
+                ? this.typeMapper.Map(t, this.context, let.GetLocation())
+                : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+
+            List<GExpression> elements = scope
+                .Select(v => (GExpression)new IdentifierExpression(SanitizeIdentifier(v.Name)))
+                .ToList();
+            elements.Add(letValue);
+            prologue.Add(new ReturnStatement(new TupleLiteralExpression(elements)));
+
+            var lambda = new LambdaExpression(new List<Parameter> { param }, blockBody: new BlockStatement(prologue));
+            current = new InvocationExpression(
+                new MemberAccessExpression(current, "Select"),
+                new List<GExpression> { lambda });
+
+            scope.Add((let.Identifier.Text, letType));
+            return current;
+        }
+
+        // Lowers a second (or later) `from` clause (spec §12.19.3.3, SelectMany):
+        // `(...).SelectMany(x1 => e2, (x1, x2) => new{x1, x2})`. The
+        // collection-selector runs over the CURRENT scope; the result-selector
+        // widens it by the new range variable, same transparent-identifier tuple
+        // as `let` above.
+        private GExpression LowerAdditionalFromClause(
+            FromClauseSyntax from,
+            List<(string Name, GTypeReference Type)> scope,
+            GExpression current)
+        {
+            LambdaExpression collectionSelector = this.BuildScopeLambda(scope, from.Expression);
+            GTypeReference newVarType = this.ResolveRangeVariableType(from.Type, from.Expression, from);
+            (string Name, GTypeReference Type) newVar = (from.Identifier.Text, newVarType);
+            LambdaExpression resultSelector = this.BuildTransparentResultSelector(scope, newVar);
+
+            current = new InvocationExpression(
+                new MemberAccessExpression(current, "SelectMany"),
+                new List<GExpression> { collectionSelector, resultSelector });
+
+            scope.Add(newVar);
+            return current;
+        }
+
+        // Lowers `join x2 in e2 on k1 equals k2 [into g]` (spec §12.19.3.7/.8):
+        // an inner join is `Join(e2, x1 => k1, x2 => k2, (x1, x2) => new{x1, x2})`;
+        // a group join (`into g`) is the same shape over `GroupJoin`, widening the
+        // scope by `g : IEnumerable<TInner>` instead of the bare inner variable.
+        private GExpression LowerJoinClause(
+            JoinClauseSyntax join,
+            List<(string Name, GTypeReference Type)> scope,
+            GExpression current)
+        {
+            GExpression inner = this.TranslateExpression(join.InExpression);
+            GTypeReference innerVarType = this.ResolveRangeVariableType(join.Type, join.InExpression, join);
+            var innerVar = (Name: join.Identifier.Text, Type: innerVarType);
+
+            LambdaExpression outerKeySelector = this.BuildScopeLambda(scope, join.LeftExpression);
+            LambdaExpression innerKeySelector = this.BuildScopeLambda(
+                new List<(string Name, GTypeReference Type)> { innerVar }, join.RightExpression);
+
+            if (join.Into == null)
+            {
+                LambdaExpression resultSelector = this.BuildTransparentResultSelector(scope, innerVar);
+                current = new InvocationExpression(
+                    new MemberAccessExpression(current, "Join"),
+                    new List<GExpression> { inner, outerKeySelector, innerKeySelector, resultSelector });
+                scope.Add(innerVar);
+                return current;
+            }
+
+            // Group join: the `into g` variable is always `IEnumerable<TInner>`
+            // (spec §12.19.3.8) — no C# expression to infer it from, so it is
+            // built directly from the already-resolved inner element type.
+            // `sequence[T]` is G#'s spelling for `IEnumerable<T>` (see the
+            // `GetEnumerableElementType`/array-iteration lowering above).
+            var groupVar = (
+                Name: join.Into.Identifier.Text,
+                Type: (GTypeReference)new NamedTypeReference("sequence", new List<GTypeReference> { innerVarType }));
+            LambdaExpression groupResultSelector = this.BuildTransparentResultSelector(scope, groupVar);
+            current = new InvocationExpression(
+                new MemberAccessExpression(current, "GroupJoin"),
+                new List<GExpression> { inner, outerKeySelector, innerKeySelector, groupResultSelector });
+            scope.Add(groupVar);
+            return current;
+        }
+
+        // Lowers `group e by k` (spec §12.19.3.9): the two-argument
+        // `GroupBy(x1 => k, x1 => e)`, eliding the element-selector to the
+        // single-argument `GroupBy(x1 => k)` for the identity case (`group n by
+        // …`) the same way an identity `select n` is elided above. The query's
+        // element type becomes `IGrouping<TKey, TElement>`.
+        private GExpression LowerGroupClause(
+            GroupClauseSyntax group,
+            List<(string Name, GTypeReference Type)> scope,
+            GExpression current,
+            out GTypeReference resultType)
+        {
+            LambdaExpression keySelector = this.BuildScopeLambda(scope, group.ByExpression);
+            GTypeReference keyType = this.context.GetTypeInfo(group.ByExpression).Type is { } k
+                ? this.typeMapper.Map(k, this.context, group.GetLocation())
+                : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+
+            bool isIdentity = scope.Count == 1
+                && group.GroupExpression is IdentifierNameSyntax id
+                && id.Identifier.Text == scope[0].Name;
+
+            var args = new List<GExpression> { keySelector };
+            GTypeReference elementType;
+            if (isIdentity)
+            {
+                elementType = scope[0].Type;
+            }
+            else
+            {
+                args.Add(this.BuildScopeLambda(scope, group.GroupExpression));
+                elementType = this.context.GetTypeInfo(group.GroupExpression).Type is { } e
+                    ? this.typeMapper.Map(e, this.context, group.GetLocation())
+                    : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+            }
+
+            current = new InvocationExpression(new MemberAccessExpression(current, "GroupBy"), args);
+            resultType = new NamedTypeReference("IGrouping", new List<GTypeReference> { keyType, elementType });
             return current;
         }
 
         private GExpression QueryCall(
             GExpression receiver,
             string method,
-            string rangeVar,
-            GTypeReference rangeType,
+            List<(string Name, GTypeReference Type)> scope,
             ExpressionSyntax lambdaBody)
         {
-            var lambda = new LambdaExpression(
-                new List<Parameter> { new Parameter(SanitizeIdentifier(rangeVar), rangeType) },
-                expressionBody: this.TranslateExpression(lambdaBody));
+            LambdaExpression lambda = this.BuildScopeLambda(scope, lambdaBody);
             return new InvocationExpression(
                 new MemberAccessExpression(receiver, method),
                 new List<GExpression> { lambda });
+        }
+
+        // Builds a lambda over the current query scope: a single scope variable
+        // becomes a plain `(x) -> body`; a transparent identifier (scope.Count >
+        // 1) becomes a tuple-parameter lambda that first deconstructs the tuple
+        // back into the individual range-variable names `body` refers to (see
+        // <see cref="BuildScopeParameter"/>).
+        private LambdaExpression BuildScopeLambda(
+            List<(string Name, GTypeReference Type)> scope,
+            ExpressionSyntax lambdaBody)
+        {
+            var prologue = new List<GStatement>();
+            Parameter param = this.BuildScopeParameter(scope, prologue);
+            if (prologue.Count == 0)
+            {
+                return new LambdaExpression(
+                    new List<Parameter> { param },
+                    expressionBody: this.TranslateExpression(lambdaBody));
+            }
+
+            prologue.Add(new ReturnStatement(this.TranslateExpression(lambdaBody)));
+            return new LambdaExpression(new List<Parameter> { param }, blockBody: new BlockStatement(prologue));
+        }
+
+        // Builds the `(x1, x2) => new{x1, x2}` result-selector shape shared by
+        // SelectMany/Join/GroupJoin (spec §12.19.3.3/.7/.8): one parameter for
+        // the left-hand (current) scope, one for the newly introduced variable,
+        // returning the widened scope as a positional tuple.
+        private LambdaExpression BuildTransparentResultSelector(
+            List<(string Name, GTypeReference Type)> leftScope,
+            (string Name, GTypeReference Type) rightVar)
+        {
+            var prologue = new List<GStatement>();
+            Parameter leftParam = this.BuildScopeParameter(leftScope, prologue);
+            var rightParam = new Parameter(SanitizeIdentifier(rightVar.Name), rightVar.Type);
+
+            List<GExpression> elements = leftScope
+                .Select(v => (GExpression)new IdentifierExpression(SanitizeIdentifier(v.Name)))
+                .ToList();
+            elements.Add(new IdentifierExpression(SanitizeIdentifier(rightVar.Name)));
+            prologue.Add(new ReturnStatement(new TupleLiteralExpression(elements)));
+
+            return new LambdaExpression(
+                new List<Parameter> { leftParam, rightParam },
+                blockBody: new BlockStatement(prologue));
+        }
+
+        // Builds the formal parameter a query-scope lambda binds to: a single
+        // variable binds directly by name; a transparent identifier
+        // (scope.Count > 1) binds a synthetic tuple parameter and appends a `let
+        // (x1, x2, …) = __qN` deconstruction to `prologue` so the lambda body can
+        // still refer to each range variable by its own name (issue #1902 — G#
+        // has no anonymous types to bind the C# spec's transparent identifier to).
+        private Parameter BuildScopeParameter(
+            List<(string Name, GTypeReference Type)> scope,
+            List<GStatement> prologue)
+        {
+            if (scope.Count == 1)
+            {
+                return new Parameter(SanitizeIdentifier(scope[0].Name), scope[0].Type);
+            }
+
+            string tupleParamName = $"__q{this.queryScopeCounter++}";
+            prologue.Add(new TupleDeconstructionStatement(
+                BindingKind.Let,
+                scope.Select(v => SanitizeIdentifier(v.Name)).ToList(),
+                new IdentifierExpression(tupleParamName)));
+            return new Parameter(tupleParamName, new TupleTypeReference(scope.Select(v => v.Type).ToList()));
         }
 
         /// <summary>

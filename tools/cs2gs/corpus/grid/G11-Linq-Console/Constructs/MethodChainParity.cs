@@ -19,15 +19,21 @@ namespace Corpus.Grid11
             Console.WriteLine($"MethodChainParity: query={string.Join(",", query)}");
             Console.WriteLine($"MethodChainParity: chain={string.Join(",", chain)}");
 
-            // QUARANTINED (CS2GS-GAP): the group-by parity pair was dropped —
-            // GroupClause has no canonical G# lowering yet.
+            // Group-by parity pair (issue #1902 unblocked this — GroupClause now
+            // has a canonical G# lowering).
             string[] words = { "bb", "a", "ccc", "dd" };
-            var queryUpper = from w in words
-                             where w.Length >= 2
-                             select w.ToUpperInvariant();
-            var chainUpper = words.Where(w => w.Length >= 2).Select(w => w.ToUpperInvariant());
-            Console.WriteLine($"MethodChainParity: queryUpper={string.Join(",", queryUpper)}");
-            Console.WriteLine($"MethodChainParity: chainUpper={string.Join(",", chainUpper)}");
+            var queryGrouped = from w in words
+                                group w by w.Length;
+            var chainGrouped = words.GroupBy(w => w.Length);
+            foreach (var g in queryGrouped)
+            {
+                Console.WriteLine($"MethodChainParity: queryGrouped len{g.Key}={string.Join(",", g)}");
+            }
+
+            foreach (var g in chainGrouped)
+            {
+                Console.WriteLine($"MethodChainParity: chainGrouped len{g.Key}={string.Join(",", g)}");
+            }
         }
     }
 }
