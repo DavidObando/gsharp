@@ -6,12 +6,12 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | Status | Count |
 | --- | --- |
 | Unclassified | 0 |
-| Translated | 226 |
-| Lowered | 16 |
+| Translated | 227 |
+| Lowered | 17 |
 | UnsupportedByDesign | 56 |
-| Gap | 23 |
+| Gap | 21 |
 
-## Translated (226)
+## Translated (227)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -100,6 +100,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | ExpressionColon | ExpressionColonSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/ExpressionColon.cs | https://github.com/DavidObando/gsharp/issues/1891 | is-form green; switch-expression arm form unsupported (issue #1891). |
 | ExpressionElement | ExpressionElementSyntax | ADR-0115 §B.36 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/CollectionExpression.cs |  |  |
 | ExpressionStatement | ExpressionStatementSyntax | ADR-0115 §B |  |  |  |  |
+| ExtensionBlockDeclaration | ExtensionBlockDeclarationSyntax | ADR-0115 §B.19 |  | tools/cs2gs/corpus/grid/G13-Extensions-Console/Constructs/ExtensionBlockDeclaration.cs | https://github.com/DavidObando/gsharp/issues/1879 | C# 14 `extension(T x)`/`extension(T)` block members map onto the same target as a classic this-param extension method (ADR-0115 §B.19): an instance method/property lowers to a receiver-clause func (a property becomes a get-only func, since G#'s prop grammar has no receiver clause, with call sites rewritten to a zero-arg call); a static member becomes a plain shared member of the declaring class, with call sites rewritten from the extended type's name to the real owner. An enum receiver and a settable instance extension property are each reported as an explicit gap (grid G13). |
 | FalseLiteralExpression | LiteralExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/FalseLiteralExpression.cs |  |  |
 | FieldDeclaration | FieldDeclarationSyntax | ADR-0115 §B.3 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/FieldDeclaration.cs |  |  |
 | FileScopedNamespaceDeclaration | FileScopedNamespaceDeclarationSyntax | ADR-0115 §B.1 |  |  |  |  |
@@ -242,7 +243,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | YieldBreakStatement | YieldStatementSyntax | ADR-0115 §B.34 |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/YieldBreakStatement.cs |  | Issue #994 (resolved). |
 | YieldReturnStatement | YieldStatementSyntax | ADR-0115 §B.34 |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/YieldReturnStatement.cs |  |  |
 
-## Lowered (16)
+## Lowered (17)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -250,6 +251,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | AnonymousObjectMemberDeclarator | AnonymousObjectMemberDeclaratorSyntax | ADR-0115 §B.4 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/AnonymousObjectCreationExpression.cs |  | Each declarator becomes one positional tuple-literal element (issue #1934); exercised by the AnonymousObjectCreationExpression fixture. |
 | AscendingOrdering | OrderingSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/OrderByClause.cs |  | Query syntax lowered to the method-call chain, mirroring Roslyn. |
 | DescendingOrdering | OrderingSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/OrderByClause.cs |  | Query syntax lowered to the method-call chain, mirroring Roslyn. |
+| ExplicitInterfaceSpecifier | ExplicitInterfaceSpecifierSyntax | ADR-0091 / ADR-0115 §B |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/ExplicitInterfaceSpecifier.cs |  | G# has no explicit-interface-implementation surface (ADR-0091 rejected an 'IFoo.M(this)' spelling); a lone explicit impl lowers to a plain public method (fixes the prior ilverify miss, issue #1911). An explicit impl coexisting with a same-signature public method is dropped in favor of the public method (disclosed semantic-loss diagnostic, not covered by this fixture's stdout parity); two explicit impls of different interfaces with no public sibling de-duplicate to one surviving public method with no semantic loss. |
 | ForStatement | ForStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/ForStatement.cs |  | Lowered to a while loop when clauses demand it (issue #1732 incrementor-on-continue fix). |
 | FromClause | FromClauseSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/FromClauseSelectMany.cs |  | First from lowers to the source receiver; a second/subsequent from lowers to SelectMany with a transparent-identifier tuple result selector (issue #1902). |
 | GroupClause | GroupClauseSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/GroupClause.cs |  | Query syntax lowered to the method-call chain, mirroring Roslyn (GroupBy, with identity-projection elision matching `select n`). |
@@ -324,13 +326,11 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | XmlText | XmlTextSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | XmlTextAttribute | XmlTextAttributeSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 
-## Gap (23)
+## Gap (21)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | CheckedExpression | CheckedExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1881 |  |
-| ExplicitInterfaceSpecifier | ExplicitInterfaceSpecifierSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1911 |  |
-| ExtensionBlockDeclaration | ExtensionBlockDeclarationSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1879 | C# 14 headline; classic this-param extensions map to receiver funcs and are green (grid G13). |
 | FieldExpression | FieldExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1907 | C# 14 field keyword. |
 | FunctionPointerCallingConvention | FunctionPointerCallingConventionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |
 | FunctionPointerParameter | FunctionPointerParameterSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |
