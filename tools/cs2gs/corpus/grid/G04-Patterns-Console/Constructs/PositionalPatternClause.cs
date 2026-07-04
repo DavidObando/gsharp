@@ -1,14 +1,9 @@
 // inventory: PositionalPatternClause
-// NOTE: quarantined sub-case: a `switch` EXPRESSION arm's bare positional
-// pattern (`(0, 0) => ...`) lowers to a G# property pattern (`case { Item1: 0,
-// Item2: 0 }`), and gsc's property-pattern matcher only accepts a struct or
-// class value there — not a tuple (GS0172: "Property pattern requires a
-// struct or class value, not '(int32, int32)'"). Same gsc-side limitation as
-// the RecursivePattern.cs fixture's already-quarantined nullable-subject
-// case; kept below is the switch-expression positional-pattern arm form over
-// a record (a class value, so gsc's matcher accepts it) instead of a tuple.
-// The `is`-expression positional-pattern form (a boolean lowering, not a gsc
-// property pattern) is unaffected and IS exercised below over a bare tuple.
+// Issue #1887: a `switch` EXPRESSION arm's bare positional pattern over a raw
+// TUPLE (`(0, 0) => ...`) lowers to a G# property pattern (`case { Item1: 0,
+// Item2: 0 }`); gsc's property-pattern matcher now accepts a ValueTuple
+// subject (previously GS0172). Both the record and raw-tuple switch-expression
+// forms — plus the `is`-expression boolean form — are exercised below.
 using System;
 
 namespace Corpus.Grid04.Constructs
@@ -48,6 +43,20 @@ namespace Corpus.Grid04.Constructs
                     _ => "other",
                 };
                 Console.WriteLine($"PositionalPatternClause: ({p.X}, {p.Y}) -> {quadrant}");
+            }
+
+            (int, int)[] tuplePoints = { (0, 0), (0, 4), (3, 0), (3, 4) };
+            foreach ((int, int) tp in tuplePoints)
+            {
+                string tupleQuadrant = tp switch
+                {
+                    (0, 0) => "origin",
+                    (0, _) => "y-axis",
+                    (_, 0) => "x-axis",
+                    ( > 0, > 0) => "ne",
+                    _ => "other",
+                };
+                Console.WriteLine($"PositionalPatternClause: ({tp.Item1}, {tp.Item2}) tuple-> {tupleQuadrant}");
             }
         }
     }
