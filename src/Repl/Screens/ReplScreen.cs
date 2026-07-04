@@ -28,7 +28,12 @@ public sealed class ReplScreen : ITabScreen
     private int completionTop;
     private string? hover;
 
-    public ReplScreen(SessionEngine engine) => this.engine = engine;
+    public ReplScreen(SessionEngine engine)
+    {
+        this.engine = engine;
+        engine.CaptureConsole = true;
+        engine.InputProvider = InlinePrompt.ReadLine;
+    }
 
     public string Title => "REPL";
 
@@ -147,6 +152,17 @@ public sealed class ReplScreen : ITabScreen
                 rows.Add(new Markup($"    [{c}]● {Markup.Escape(d.Id)} {Markup.Escape(d.Message)}[/]"));
             }
 
+            foreach (var line in SplitOutput(cell.Output))
+            {
+                rows.Add(new Markup($"    [{secondary}]{Markup.Escape(line)}[/]"));
+            }
+
+            foreach (var line in SplitOutput(cell.StandardError))
+            {
+                var c = Tokens.Tokens.StatusError.Value.ToMarkup();
+                rows.Add(new Markup($"    [{c}]{Markup.Escape(line)}[/]"));
+            }
+
             if (!cell.HasError && cell.Value is not null)
             {
                 rows.Add(new Markup($"    [{primary}]{Markup.Escape(cell.Value.ToString() ?? string.Empty)}[/]"));
@@ -217,6 +233,25 @@ public sealed class ReplScreen : ITabScreen
             BorderStyle = new Style(Tokens.Tokens.BorderNeutral),
             Expand = true,
         };
+    }
+
+    private static IEnumerable<string> SplitOutput(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            yield break;
+        }
+
+        var normalized = text.Replace("\r\n", "\n").Replace('\r', '\n').TrimEnd('\n');
+        if (normalized.Length == 0)
+        {
+            yield break;
+        }
+
+        foreach (var line in normalized.Split('\n'))
+        {
+            yield return line;
+        }
     }
 
     private void Move(int delta)
