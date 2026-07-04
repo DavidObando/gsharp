@@ -26,6 +26,14 @@ public sealed class CorpusApp
     /// <param name="referencedAssemblies">The optional sibling assemblies passed via <c>/reference:</c>.</param>
     /// <param name="testsProjectPath">The optional sibling C# <c>.Tests</c> project (library xUnit parity).</param>
     /// <param name="testsBaselinePath">The optional sibling <c>baseline.tests.json</c> oracle path.</param>
+    /// <param name="allowUnsafeIl">
+    /// Whether stage 3 (ilverify) should treat this app's known-unverifiable
+    /// unsafe IL (pointer writes, <c>fixed</c>, <c>stackalloc</c>) as an
+    /// expected, non-gating result rather than an <c>ilverify-failure</c>
+    /// (issue #1933). Mirrors <see cref="IlVerifyRunner.KnownIlVerifyFalsePositives"/>
+    /// but is opt-in per app since unverifiable-by-design unsafe IL, unlike a
+    /// verifier false positive, is not universally true of every corpus app.
+    /// </param>
     public CorpusApp(
         string id,
         string projectPath,
@@ -33,7 +41,8 @@ public sealed class CorpusApp
         string stdoutGolden = null,
         IReadOnlyList<string> referencedAssemblies = null,
         string testsProjectPath = null,
-        string testsBaselinePath = null)
+        string testsBaselinePath = null,
+        bool allowUnsafeIl = false)
     {
         this.Id = id ?? throw new ArgumentNullException(nameof(id));
         this.ProjectPath = projectPath ?? throw new ArgumentNullException(nameof(projectPath));
@@ -42,6 +51,7 @@ public sealed class CorpusApp
         this.ReferencedAssemblies = referencedAssemblies ?? ImmutableArray<string>.Empty;
         this.TestsProjectPath = testsProjectPath;
         this.TestsBaselinePath = testsBaselinePath;
+        this.AllowUnsafeIl = allowUnsafeIl;
     }
 
     /// <summary>Gets the stable corpus app id.</summary>
@@ -71,4 +81,12 @@ public sealed class CorpusApp
     /// library xUnit parity, or <see langword="null"/> when absent.
     /// </summary>
     public string TestsBaselinePath { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether stage 3 (ilverify) should treat this
+    /// app's known-unverifiable unsafe IL as expected rather than gating
+    /// (issue #1933). Set from a sibling <c>ilverify.allow-unsafe</c> marker
+    /// file (see <see cref="CorpusDiscovery"/>).
+    /// </summary>
+    public bool AllowUnsafeIl { get; }
 }

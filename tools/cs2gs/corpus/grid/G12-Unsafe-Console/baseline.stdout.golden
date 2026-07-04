@@ -1,3 +1,9 @@
+FixedStatement: sum=26
+FixedStatement: third=7
+FixedStatement: first=42
+FixedStatement: firstChar=a
+PointerType: x=5 read=5
+PointerType: doubleIndirect x=9
 ScopedType: data=1,7,3
 ScopedType: bumped=6
 SizeOfExpression: sizeof(byte)=1
@@ -7,5 +13,8 @@ SizeOfExpression: sizeof(long)=8
 SizeOfExpression: sizeof(char)=2
 SizeOfExpression: sizeof(double)=8
 SizeOfExpression: sizeof(SizePair)=8 sum=7
+StackAllocArrayCreationExpression: total=30
+StackAllocArrayCreationExpression: init1=4
+StackAllocArrayCreationExpression: span2=3
 UnsafeStatement: block markerSize=16 tag=42
 UnsafeStatement: method result=42

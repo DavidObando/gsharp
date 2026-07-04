@@ -2,12 +2,16 @@
 // One construct per Constructs/<Kind>.cs file; fixtures run sequentially in
 // file-name order and print deterministic, prefix-tagged lines.
 //
-// NOTE: the migration pipeline's stage 3 (ILVerify) has no unsafe exemption,
-// and pointer / stackalloc IL is unverifiable BY DESIGN — the csc-compiled
-// baseline of the quarantined fixtures fails ILVerify with the same error
-// codes (ExpectedNumericType / Unverifiable / UnmanagedPointer / StackByRef).
-// Only unsafe constructs with verifiable IL (sizeof, unsafe contexts with
-// pointer-free bodies, scoped spans over arrays) can be green end-to-end.
+// NOTE (issue #1933): pointer / stackalloc IL is unverifiable BY DESIGN — the
+// csc-compiled baseline of these fixtures fails ILVerify with the same error
+// codes (ExpectedNumericType / Unverifiable / StackUnexpected). This app opts
+// into stage 3's per-app `ilverify.allow-unsafe` policy (a sibling marker
+// file, see CorpusDiscovery.AllowUnsafeIlMarkerFileName and
+// IlVerifyStage.ExecuteAsync), which treats an ilverify failure as expected
+// rather than gating, so FixedStatement/PointerType/StackAlloc now run
+// end-to-end. FunctionPointerType, PointerMemberAccess, and RefType stay
+// quarantined — those fail earlier (stage 1 translate / gsc compile),
+// unrelated to the unsafe-IL policy.
 using System;
 using Corpus.Grid12.Constructs;
 
@@ -17,13 +21,7 @@ namespace Corpus.Grid12
     {
         private static void Main()
         {
-            // QUARANTINED: FixedStatement. Stage 3 (ILVerify) — pointer IL is
-            // unverifiable (ExpectedNumericType "found address of Int32"),
-            // including on the csc-compiled baseline. Additionally gsc rejects
-            // the emitted `*(p + i)` with GS0129 ('+=' not defined for 'int32'
-            // and '**int32'); `p[i]` and hoisted `int* q = p + i` compile.
-            // See Constructs/FixedStatement.cs.quarantined.
-            // FixedStatementFixture.Run();
+            FixedStatementFixture.Run();
 
             // QUARANTINED: FunctionPointerType. Stage 1 (translate) fails with
             // CS2GS-GAP: "unsafe function-pointer type 'delegate*<int, int>'
@@ -39,13 +37,7 @@ namespace Corpus.Grid12
             // See PointerMemberAccessExpression.cs.quarantined.
             // PointerMemberAccessExpressionFixture.Run();
 
-            // QUARANTINED: PointerType / AddressOfExpression /
-            // PointerIndirectionExpression. Translates and compiles (gsc
-            // handles `int* p = &x; *p = 5; **pp = 9`), but stage 3 (ILVerify)
-            // rejects pointer IL — also on the csc baseline
-            // (ExpectedNumericType / UnmanagedPointer / StackByRef).
-            // See Constructs/PointerType.cs.quarantined.
-            // PointerTypeFixture.Run();
+            PointerTypeFixture.Run();
 
             // QUARANTINED: RefType (ref locals / ref returns). Stage 1 fails
             // with CS2GS-GAP: "expression 'RefExpression' has no canonical G#
@@ -56,14 +48,7 @@ namespace Corpus.Grid12
 
             ScopedTypeFixture.Run();
             SizeOfExpressionFixture.Run();
-
-            // QUARANTINED: StackAllocArrayCreationExpression. stackalloc emits
-            // localloc, which ILVerify reports as Unverifiable — also on the
-            // csc-compiled baseline (both the `int*` and the safe `Span<int>`
-            // forms). gsc itself compiles the emitted `stackalloc [4]int32`.
-            // See StackAllocArrayCreationExpression.cs.quarantined.
-            // StackAllocArrayCreationExpressionFixture.Run();
-
+            StackAllocArrayCreationExpressionFixture.Run();
             UnsafeStatementFixture.Run();
         }
     }
