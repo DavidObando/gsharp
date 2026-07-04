@@ -1105,6 +1105,21 @@ internal sealed partial class ExpressionBinder
         switch (scope.TryLookupSymbol(name))
         {
             case VariableSymbol variable:
+                // Issue #2060 (follow-up to #2044): a bare identifier resolving
+                // to an inherited field's ImplicitFieldVariableSymbol bypassed
+                // AccessibilityChecker entirely (unlike the qualified
+                // `receiver.field` paths already fixed for #2044). Run the
+                // same check here so both read and write of an inherited
+                // `private` field via bare name report GS0472. Own-type
+                // private fields (declaringType == enclosing type) and
+                // inherited `protected` fields remain accessible.
+                if (variable is ImplicitFieldVariableSymbol implicitField
+                    && !AccessibilityChecker.IsAccessible(implicitField.Field.Accessibility, implicitField.StructType, this.function))
+                {
+                    Diagnostics.ReportMemberInaccessible(location, implicitField.Field.Name, implicitField.StructType.Name, implicitField.Field.Accessibility);
+                    return null;
+                }
+
                 reportObsoleteUseIfApplicable(location, variable, variable.Name);
                 return variable;
 

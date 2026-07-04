@@ -360,17 +360,15 @@ public sealed class Binder
                                     continue;
                                 }
 
-                                // Issue #2044: `private` is not inherited (unlike
-                                // `protected`) — a base class's private field must
-                                // not be exposed as a bare name inside a derived
-                                // type's methods. Only the declaring type itself
-                                // (t == receiverStruct) sees its own private fields
-                                // this way.
-                                if (fld.Accessibility == Accessibility.Private && !ReferenceEquals(t, receiverStruct))
-                                {
-                                    continue;
-                                }
-
+                                // Issue #2060 (follow-up to #2044): `private` is
+                                // not inherited (unlike `protected`), but the
+                                // pseudo-variable is still declared here for an
+                                // inherited private field so bare-name access
+                                // resolves to it — BindVariableReference then
+                                // runs it through AccessibilityChecker.IsAccessible
+                                // and reports GS0472, instead of silently
+                                // dropping the name (which used to surface as a
+                                // misleading "undefined variable").
                                 if (seenMembers.Add(fld.Name))
                                 {
                                     scope.TryDeclareVariable(new ImplicitFieldVariableSymbol(function.ThisParameter, t, fld));
