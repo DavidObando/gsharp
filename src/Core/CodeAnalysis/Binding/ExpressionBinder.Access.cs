@@ -3101,28 +3101,56 @@ internal sealed partial class ExpressionBinder
             var staticGenericOwner = structSym?.Definition != null ? structSym : null;
             var staticGenericInterfaceOwner = ifaceSym?.Definition != null ? ifaceSym : null;
 
+            // Issue #1931: stash the method's own (explicit or inferred) type
+            // arguments on the bound node so the emitter's MethodSpec
+            // construction can use this authoritative bind-time result
+            // instead of re-deriving it via structural unification (which
+            // can fail for uninformative argument shapes like a bare `nil`).
+            var methodTypeArguments = default(ImmutableArray<TypeSymbol>);
+            if (method.IsGeneric && substitution != null)
+            {
+                var methodTypeArgsBuilder = ImmutableArray.CreateBuilder<TypeSymbol>(method.TypeParameters.Length);
+                foreach (var tp in method.TypeParameters)
+                {
+                    methodTypeArgsBuilder.Add(substitution[tp]);
+                }
+
+                methodTypeArguments = methodTypeArgsBuilder.MoveToImmutable();
+            }
+
+            BoundCallExpression MakeStaticGenericCall(TypeSymbol substitutedReturnOverride)
+            {
+                var result = new BoundCallExpression(null, method, convertedArgs.ToImmutable(), substitutedReturnOverride)
+                {
+                    StaticGenericOwnerType = staticGenericOwner,
+                    StaticGenericInterfaceOwnerType = staticGenericInterfaceOwner,
+                    MethodTypeArguments = methodTypeArguments,
+                };
+                return result;
+            }
+
             if (substitution != null)
             {
                 var substitutedReturn = Binder.SubstituteType(method.Type, substitution);
                 if (method.IsAsync && !isAsyncIteratorReturnType(method.Type))
                 {
                     substitutedReturn = lambdas.WrapAsTask(substitutedReturn);
-                    return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), substitutedReturn) { StaticGenericOwnerType = staticGenericOwner, StaticGenericInterfaceOwnerType = staticGenericInterfaceOwner };
+                    return MakeStaticGenericCall(substitutedReturn);
                 }
 
                 if (!ReferenceEquals(substitutedReturn, method.Type))
                 {
-                    return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), substitutedReturn) { StaticGenericOwnerType = staticGenericOwner, StaticGenericInterfaceOwnerType = staticGenericInterfaceOwner };
+                    return MakeStaticGenericCall(substitutedReturn);
                 }
             }
 
             if (method.IsAsync && !isAsyncIteratorReturnType(method.Type))
             {
                 var asyncReturn = lambdas.WrapAsTask(method.Type);
-                return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), asyncReturn) { StaticGenericOwnerType = staticGenericOwner, StaticGenericInterfaceOwnerType = staticGenericInterfaceOwner };
+                return MakeStaticGenericCall(asyncReturn);
             }
 
-            return new BoundCallExpression(null, method, convertedArgs.ToImmutable()) { StaticGenericOwnerType = staticGenericOwner, StaticGenericInterfaceOwnerType = staticGenericInterfaceOwner };
+            return MakeStaticGenericCall(null);
         }
 
         Diagnostics.ReportUnableToFindMember(ce.Location, methodName);

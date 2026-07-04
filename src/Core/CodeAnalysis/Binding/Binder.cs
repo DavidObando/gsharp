@@ -3729,9 +3729,15 @@ public sealed class Binder
             return;
         }
 
-        if (parameterType is NullableTypeSymbol pn && argumentType is NullableTypeSymbol an)
+        if (parameterType is NullableTypeSymbol pn)
         {
-            InferTypeArguments(pn.UnderlyingType, an.UnderlyingType, substitution);
+            // Issue #1931: a `T?` parameter also accepts a non-nullable argument
+            // (every value is trivially convertible to its own nullable form,
+            // same as a plain `T`-typed parameter would). Without this, a
+            // generic method's only `T?` parameter never contributes to `T`
+            // inference and every call site needs an explicit `[T]` (GS0151),
+            // even though the equivalent non-nullable `T` parameter infers fine.
+            InferTypeArguments(pn.UnderlyingType, argumentType is NullableTypeSymbol an ? an.UnderlyingType : argumentType, substitution);
         }
         else if (parameterType is SliceTypeSymbol ps && argumentType is SliceTypeSymbol asym)
         {

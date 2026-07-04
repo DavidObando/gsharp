@@ -559,8 +559,8 @@
     "status": "Translated",
     "rule": "ADR-0115 \u00A7B.7",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1931",
-    "notes": "Translates; gsc rejects default-constrained overrides (issue #1931)."
+    "fixture": "tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/DefaultConstraint.cs",
+    "notes": "Translates to an unconstrained G# [T]; gsc override/inference bug fixed (issue #1931)."
   },
   {
     "kind": "DefaultExpression",

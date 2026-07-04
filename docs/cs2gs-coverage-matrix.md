@@ -72,7 +72,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | ConversionOperatorDeclaration | ConversionOperatorDeclarationSyntax | ADR-0115 §B.31 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/ConversionOperatorDeclaration.cs |  |  |
 | DeclarationExpression | DeclarationExpressionSyntax | ADR-0115 §B.30 |  | tools/cs2gs/corpus/grid/G09-Functions-Console/Constructs/DeclarationExpression.cs |  |  |
 | DeclarationPattern | DeclarationPatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/DeclarationPattern.cs |  | x is T t binder (issue #993, resolved). |
-| DefaultConstraint | DefaultConstraintSyntax | ADR-0115 §B.7 |  |  | https://github.com/DavidObando/gsharp/issues/1931 | Translates; gsc rejects default-constrained overrides (issue #1931). |
+| DefaultConstraint | DefaultConstraintSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/DefaultConstraint.cs |  | Translates to an unconstrained G# [T]; gsc override/inference bug fixed (issue #1931). |
 | DefaultExpression | DefaultExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/DefaultExpression.cs |  |  |
 | DefaultLiteralExpression | LiteralExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/DefaultLiteralExpression.cs |  |  |
 | DefaultSwitchLabel | DefaultSwitchLabelSyntax | ADR-0115 §B.33 |  |  |  |  |
