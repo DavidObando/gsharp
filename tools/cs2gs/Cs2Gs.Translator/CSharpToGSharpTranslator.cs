@@ -2524,8 +2524,11 @@ public sealed class CSharpToGSharpTranslator
         /// rest are dropped. Because a single G# method satisfies every
         /// implemented interface whose abstract member matches its name and
         /// signature, the survivor alone still fills every interface slot the
-        /// dropped siblings would have filled — this is not a semantic loss,
-        /// unlike the "public method wins over explicit impl" case.
+        /// dropped siblings would have filled — but if the dropped siblings had
+        /// DISTINCT bodies (as valid C# allows for genuinely separate explicit
+        /// implementations), this collapses divergent runtime behavior into a
+        /// single body, which IS a semantic loss. Every such drop is reported
+        /// via an Unsupported diagnostic (see the reporting call site).
         /// </remarks>
         private static IMethodSymbol FindPriorCollidingSibling(IMethodSymbol explicitImplementation, MethodDeclarationSyntax node)
         {
