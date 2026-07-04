@@ -799,6 +799,32 @@ public sealed class Conversion
                     {
                         return Conversion.Implicit;
                     }
+
+                    // Issue #1927 / ECMA-334 §13.1.3.2: declaration-site
+                    // variance. A constructed generic interface
+                    // `IFoo[A1, .., An]` converts to `IFoo[B1, .., Bn]`
+                    // (same generic definition, same arity) when EVERY
+                    // type-argument slot is variance-compatible:
+                    //   * a type parameter with no `out`/`in` modifier
+                    //     requires the argument to be identical on both
+                    //     sides (invariant);
+                    //   * an `out` (covariant) parameter requires the
+                    //     source argument to implicitly convert to the
+                    //     target argument (e.g. `ISource[string]` ->
+                    //     `ISource[object]`);
+                    //   * an `in` (contravariant) parameter requires the
+                    //     TARGET argument to implicitly convert to the
+                    //     SOURCE argument (e.g. `ISink[object]` ->
+                    //     `ISink[string]`).
+                    // This generalizes to any arity/definition/argument
+                    // combination, and applies transitively through
+                    // `SelfAndAllBaseInterfaces()` so a variance-annotated
+                    // base interface of a non-generic (or differently
+                    // generic) derived interface still participates.
+                    if (IsVarianceCompatibleInterfaceConversion(baseInterface, toBaseInterface))
+                    {
+                        return Conversion.Implicit;
+                    }
                 }
             }
 
@@ -921,6 +947,126 @@ public sealed class Conversion
         }
 
         return Conversion.None;
+    }
+
+    /// <summary>
+    /// Issue #1927 / ECMA-334 §13.1.3.2: true when <paramref name="from"/>
+    /// (a constructed generic interface, e.g. <c>ISource[string]</c>)
+    /// implicitly converts to <paramref name="to"/> (e.g.
+    /// <c>ISource[object]</c>) purely via declaration-site variance —
+    /// same generic <see cref="InterfaceSymbol.Definition"/>, same arity,
+    /// and every type-argument slot honoring its declared
+    /// <see cref="TypeParameterVariance"/>. Works for any interface
+    /// definition/arity/argument combination, not just a single hardcoded
+    /// pair.
+    /// </summary>
+    /// <param name="from">The source constructed interface.</param>
+    /// <param name="to">The target constructed interface.</param>
+    /// <returns><see langword="true"/> when the conversion is variance-compatible.</returns>
+    internal static bool IsVarianceCompatibleInterfaceConversion(InterfaceSymbol from, InterfaceSymbol to)
+    {
+        if (from == null || to == null || from.Definition != to.Definition)
+        {
+            return false;
+        }
+
+        var typeParameters = from.Definition.TypeParameters;
+        var fromArgs = from.TypeArguments;
+        var toArgs = to.TypeArguments;
+        if (typeParameters.IsDefaultOrEmpty
+            || fromArgs.IsDefaultOrEmpty
+            || toArgs.IsDefaultOrEmpty
+            || typeParameters.Length != fromArgs.Length
+            || typeParameters.Length != toArgs.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < typeParameters.Length; i++)
+        {
+            var fromArg = fromArgs[i];
+            var toArg = toArgs[i];
+            if (fromArg == toArg)
+            {
+                continue;
+            }
+
+            switch (typeParameters[i].Variance)
+            {
+                case TypeParameterVariance.Out:
+                    // CLR generic-interface variance (ECMA-335 II.9.7) is
+                    // defined only for REFERENCE-typed type arguments; the
+                    // emitter (MethodBodyEmitter.IsReferenceCompatible, which
+                    // calls back into this same method) emits no cast/box for
+                    // a variance conversion, so a value-type argument (a
+                    // primitive, enum, or user struct) would produce
+                    // unverifiable/unsound IL even though it boxes implicitly
+                    // to `object` (ADR-0045). Reject before considering
+                    // `Classify` at all — a value-type argument on either
+                    // side means the two constructed interfaces are genuinely
+                    // different CLR types, not variance-compatible ones.
+                    if (!IsReferenceTypeArgument(fromArg) || !IsReferenceTypeArgument(toArg))
+                    {
+                        return false;
+                    }
+
+                    // Covariant: the source argument must implicitly
+                    // convert to the target argument (string -> object).
+                    var covariant = Classify(fromArg, toArg);
+                    if (!covariant.Exists || !covariant.IsImplicit)
+                    {
+                        return false;
+                    }
+
+                    break;
+
+                case TypeParameterVariance.In:
+                    // Same reference-type-only restriction as the `Out` case
+                    // above, applied symmetrically to the contravariant slot.
+                    if (!IsReferenceTypeArgument(fromArg) || !IsReferenceTypeArgument(toArg))
+                    {
+                        return false;
+                    }
+
+                    // Contravariant: the TARGET argument must implicitly
+                    // convert to the SOURCE argument (object -> string),
+                    // so the narrower interface accepts the wider one.
+                    var contravariant = Classify(toArg, fromArg);
+                    if (!contravariant.Exists || !contravariant.IsImplicit)
+                    {
+                        return false;
+                    }
+
+                    break;
+
+                default:
+                    // Invariant: the arguments must be identical (already
+                    // ruled out above by the `fromArg == toArg` fast path).
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Review follow-up (#1927/PR #1955): reports whether a variance type
+    /// argument is a CLR reference type. CLR generic-interface variance
+    /// (ECMA-335 II.9.7) only applies to reference-typed arguments; a value
+    /// type (primitive, enum, or user struct) boxes to satisfy `Classify`'s
+    /// implicit-conversion check but the emitter's variance path emits no
+    /// box/cast, so it must never be treated as variance-eligible.
+    /// </summary>
+    private static bool IsReferenceTypeArgument(TypeSymbol type)
+    {
+        return type switch
+        {
+            null => false,
+            EnumSymbol => false,
+            StructSymbol s => s.IsClass,
+            TypeParameterSymbol tp => tp.HasReferenceTypeConstraint,
+            _ => type.ClrType is not { IsValueType: true },
+        };
     }
 
     /// <summary>

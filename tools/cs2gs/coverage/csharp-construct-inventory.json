@@ -2216,7 +2216,8 @@
     "status": "Translated",
     "rule": "ADR-0115 \u00A7B.7",
     "rationale": "None",
-    "fixture": "tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/TypeParameterList.cs"
+    "fixture": "tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/TypeParameter.cs",
+    "notes": "Declaration-site variance (out/in) conversions: gsc issue #1927 (fixed)."
   },
   {
     "kind": "TypeParameterConstraintClause",
@@ -2232,7 +2233,7 @@
     "rule": "ADR-0115 \u00A7B.7",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/TypeParameterList.cs",
-    "notes": "Generic class \u002B primary ctor ICEs gsc (issue #1920); declaration-site variance missing in gsc (issue #1927)."
+    "notes": "Generic class \u002B primary ctor ICEs gsc (issue #1920)."
   },
   {
     "kind": "TypePattern",

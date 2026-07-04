@@ -212,9 +212,9 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | TypeArgumentList | TypeArgumentListSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/TypeArgumentList.cs |  |  |
 | TypeConstraint | TypeConstraintSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/TypeConstraint.cs |  |  |
 | TypeOfExpression | TypeOfExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/TypeOfExpression.cs |  |  |
-| TypeParameter | TypeParameterSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/TypeParameterList.cs |  |  |
+| TypeParameter | TypeParameterSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/TypeParameter.cs |  | Declaration-site variance (out/in) conversions: gsc issue #1927 (fixed). |
 | TypeParameterConstraintClause | TypeParameterConstraintClauseSyntax | ADR-0115 §B.7 |  |  |  |  |
-| TypeParameterList | TypeParameterListSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/TypeParameterList.cs |  | Generic class + primary ctor ICEs gsc (issue #1920); declaration-site variance missing in gsc (issue #1927). |
+| TypeParameterList | TypeParameterListSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/TypeParameterList.cs |  | Generic class + primary ctor ICEs gsc (issue #1920). |
 | UnaryMinusExpression | PrefixUnaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/UnaryMinusExpression.cs |  |  |
 | UnaryPlusExpression | PrefixUnaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/UnaryPlusExpression.cs |  |  |
 | UncheckedStatement | CheckedStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/UncheckedStatement.cs |  | Wrap-around parity verified (grid G03). |

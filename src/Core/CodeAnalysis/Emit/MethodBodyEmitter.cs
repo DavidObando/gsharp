@@ -555,6 +555,21 @@ internal sealed partial class MethodBodyEmitter
                     {
                         return true;
                     }
+
+                    // Issue #1927: declaration-site variance. Mirrors the
+                    // binder-side `Conversion.IsVarianceCompatibleInterfaceConversion`
+                    // rule so the emitter recognizes the SAME conversions the
+                    // binder already accepted. At the IL level this is still a
+                    // plain reference load with no cast: the constructed
+                    // interface types are erased to the SAME open generic CLR
+                    // interface definition (differing only by type argument),
+                    // and CLR generic-interface variance (`Ijw<out T>` /
+                    // `Ijw<in T>`) makes the runtime reference directly
+                    // assignment-compatible.
+                    if (Conversion.IsVarianceCompatibleInterfaceConversion(baseInterface, targetBaseInterface))
+                    {
+                        return true;
+                    }
                 }
             }
 
