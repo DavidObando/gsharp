@@ -2232,6 +2232,27 @@ internal sealed class ReflectionMetadataEmitter
                 continue;
             }
 
+            // Issue #2004: a static (shared-block) property/event accessor's
+            // FunctionSymbol (get_X/set_X/add_X/remove_X/raise_X) is NOT added
+            // to aggregateMethodHandles above — only StaticMethods are. Only
+            // static plain methods are registered there; static property and
+            // event accessors are instead tracked solely via
+            // cache.PropertyAccessorHandles / cache.EventAccessorHandles,
+            // keyed by the property/event symbol, not the FunctionSymbol. Left
+            // unchecked, such an accessor's FunctionSymbol falls through to
+            // the package-function bucket below and gets a SECOND MethodDef
+            // row emitted on the package's <Program> TypeDef, with a body that
+            // still reads/writes the struct/class's (possibly private) static
+            // backing field — a field access the unrelated <Program> type has
+            // no visibility into, which ilverify rejects as "Field is not
+            // visible". PlanClassMethods/PlanStructMethods set StaticOwnerType
+            // to the declaring struct/class for these accessors, so skip them
+            // here exactly like the interface case above.
+            if (kvp.Key.IsStatic && kvp.Key.StaticOwnerType is StructSymbol)
+            {
+                continue;
+            }
+
             var owningPackage = kvp.Key.Package ?? this.emitCtx.Program.EntryPointPackage ?? packages[0];
             if (!functionsByPackage.TryGetValue(owningPackage, out var bucket))
             {
