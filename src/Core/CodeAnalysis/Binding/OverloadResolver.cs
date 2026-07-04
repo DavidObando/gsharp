@@ -2959,6 +2959,27 @@ internal sealed class OverloadResolver
                 continue;
             }
 
+            // Issue #2069: a func/arrow literal argument flowing into a NAMED
+            // delegate parameter classifies as an implicit conversion (see
+            // Conversion.Classify's FunctionTypeSymbol -> DelegateTypeSymbol
+            // structural-assignability branch) but is otherwise never routed
+            // through BindConversion by the general implicit-conversion
+            // fast path below, which leaves matching-shape arguments
+            // unwrapped. Without an explicit BoundConversionExpression node,
+            // the emitter materialises the literal against its natural
+            // structural shape (System.Action/Func) instead of the named
+            // delegate's own emitted TypeDef, producing unverifiable IL
+            // ("Delegate has no emitted TypeDef" upstream, or a stack-type
+            // mismatch downstream). Force the wrap here, mirroring the tuple/
+            // nullable special cases below.
+            if (parameter.Type is DelegateTypeSymbol namedDelegateCtorTarget
+                && argument.Type is FunctionTypeSymbol
+                && !ReferenceEquals(argument.Type, namedDelegateCtorTarget))
+            {
+                boundArguments[i] = conversions.BindConversion(parameterSyntax[i].Location, argument, parameter.Type);
+                continue;
+            }
+
             if (argument.Type != parameter.Type
                 && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
             {
@@ -3342,6 +3363,22 @@ internal sealed class OverloadResolver
             var argLocation = i < parameterSyntax.Length && parameterSyntax[i] != null
                 ? parameterSyntax[i].Location
                 : syntax.Identifier.Location;
+
+            // Issue #2069: force the wrap for a func/arrow literal argument
+            // flowing into a NAMED delegate parameter — see the matching
+            // comment above (constructor-argument path) for the full
+            // rationale. Without it, the general implicit-conversion fast
+            // path below leaves the literal unwrapped and it materialises
+            // against its natural Action/Func shape instead of the named
+            // delegate's own TypeDef.
+            if (paramType is DelegateTypeSymbol namedDelegateParamTarget
+                && argument.Type is FunctionTypeSymbol
+                && !ReferenceEquals(argument.Type, namedDelegateParamTarget))
+            {
+                convertedArguments.Add(conversions.BindConversion(argLocation, argument, paramType));
+                continue;
+            }
+
             if (argument.Type != paramType
                 && !Conversion.Classify(argument.Type, paramType).IsImplicit)
             {
@@ -3749,6 +3786,18 @@ internal sealed class OverloadResolver
                     convertedArgs.Add(argument);
                     continue;
                 }
+            }
+
+            // Issue #2069: force the wrap for a func/arrow literal argument
+            // flowing into a NAMED delegate parameter — see the matching
+            // comment at the constructor-argument path (above in this file)
+            // for the full rationale.
+            if (parameter.Type is DelegateTypeSymbol namedDelegateInitTarget
+                && argument.Type is FunctionTypeSymbol
+                && !ReferenceEquals(argument.Type, namedDelegateInitTarget))
+            {
+                convertedArgs.Add(conversions.BindConversion(argLocation, argument, parameter.Type));
+                continue;
             }
 
             if (argument.Type != parameter.Type
@@ -5296,6 +5345,23 @@ internal sealed class OverloadResolver
             {
                 var tupleLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
                 boundArguments[i] = conversions.BindConversion(tupleLoc, argument, expectedType);
+                continue;
+            }
+
+            // Issue #2069: force the wrap for a func/arrow literal argument
+            // flowing into a NAMED delegate parameter — see the matching
+            // comment at the constructor-argument path (above in this file)
+            // for the full rationale. This is the general free-function /
+            // method call-argument path, the one that reproduces the issue's
+            // exact repro (`Apply((n int32) -> ...)` against a `func
+            // Apply(h TickHandler)` parameter).
+            if (expectedType is DelegateTypeSymbol namedDelegateCallTarget
+                && argument.Type is FunctionTypeSymbol
+                && !(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type))
+                && !ReferenceEquals(argument.Type, namedDelegateCallTarget))
+            {
+                var namedDelegateLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
+                boundArguments[i] = conversions.BindConversion(namedDelegateLoc, argument, expectedType);
                 continue;
             }
 
