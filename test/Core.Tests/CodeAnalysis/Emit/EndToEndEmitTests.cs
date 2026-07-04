@@ -10,6 +10,7 @@ using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
 using System.Runtime.Loader;
+using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -537,6 +538,133 @@ func main() {
             Assert.False(doc.Hash.IsNil, "Document.Hash blob must be present");
             Assert.False(doc.HashAlgorithm.IsNil, "Document.HashAlgorithm guid must be present");
             Assert.False(doc.Language.IsNil, "Document.Language guid must be present");
+        }
+    }
+
+    // Issue #1996: a class-scoped static `Main` (sync or async, any class)
+    // must get a real PE entry-point token, exactly like package-scope Main.
+    [Fact]
+    public void Emits_Valid_Entry_Point_Token_For_ClassScoped_Static_Main()
+    {
+        const string Source = @"package ClassMainSync
+import System
+class Launcher1996
+{
+    shared
+    {
+        func Main()
+        {
+            Console.WriteLine(""hello class main"")
+        }
+    }
+}
+";
+        using var peStream = new MemoryStream();
+        var result = Compile(Source, peStream);
+        Assert.True(
+            result.Success,
+            "compilation should succeed: " + string.Join("; ", result.Diagnostics.Select(d => d.Message)));
+
+        peStream.Position = 0;
+        using var peReader = new PEReader(peStream, PEStreamOptions.LeaveOpen);
+        var corHeader = peReader.PEHeaders.CorHeader;
+        Assert.NotNull(corHeader);
+        Assert.NotEqual(0, corHeader!.EntryPointTokenOrRelativeVirtualAddress);
+    }
+
+    [Fact]
+    public void ClassScoped_Static_Main_Loads_And_Invokes_Via_Assembly_EntryPoint()
+    {
+        const string Source = @"package ClassMainSyncRun
+import System
+class Launcher1996Run
+{
+    shared
+    {
+        func Main()
+        {
+            Console.WriteLine(""hello class main run"")
+        }
+    }
+}
+";
+        var output = CompileLoadInvokeAssemblyEntryPoint(Source, "EndToEndEmitTests-ClassMainSync");
+        Assert.Contains("hello class main run", output);
+    }
+
+    [Fact]
+    public void Async_ClassScoped_Static_Main_Loads_And_Invokes_Via_Assembly_EntryPoint()
+    {
+        const string Source = @"package ClassMainAsyncRun
+import System
+import System.Threading.Tasks
+class Launcher1996AsyncRun
+{
+    shared
+    {
+        async func Main()
+        {
+            await Task.Delay(1)
+            Console.WriteLine(""hello async class main run"")
+        }
+    }
+}
+";
+        var output = CompileLoadInvokeAssemblyEntryPoint(Source, "EndToEndEmitTests-ClassMainAsync");
+        Assert.Contains("hello async class main run", output);
+    }
+
+    /// <summary>
+    /// Compiles, loads, and invokes the emitted assembly's PE entry-point
+    /// method directly via <see cref="Assembly.EntryPoint"/> — unlike
+    /// <see cref="CompileLoadInvokeCaptureStdout"/> (which looks up the
+    /// synthesized-TLS `&lt;Program&gt;.&lt;Main&gt;$` by name), this works
+    /// for ANY entry-point shape, including a class-scoped static `Main`
+    /// hosted on an arbitrarily-named user class.
+    /// </summary>
+    private static string CompileLoadInvokeAssemblyEntryPoint(string source, string contextName)
+    {
+        using var peStream = new MemoryStream();
+        var result = Compile(source, peStream);
+        Assert.True(
+            result.Success,
+            "compilation should succeed: " + string.Join("; ", result.Diagnostics.Select(d => d.Message)));
+
+        peStream.Position = 0;
+        var loadContext = new AssemblyLoadContext(contextName, isCollectible: true);
+        try
+        {
+            var asm = loadContext.LoadFromStream(peStream);
+            var entry = asm.EntryPoint;
+            Assert.NotNull(entry);
+
+            var stdout = Console.Out;
+            var captured = new StringWriter();
+            Console.SetOut(captured);
+            try
+            {
+                var invokeResult = entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
+
+                // Issue #1996: an async entry point is emitted with a
+                // synchronous-driving wrapper (Issue #1904), so the raw CLR
+                // signature is void/int32 — never Task/Task<T>. Await
+                // defensively anyway so a regression back to a Task-returning
+                // signature doesn't leave the assertion racing the async body.
+                if (invokeResult is Task task)
+                {
+                    task.GetAwaiter().GetResult();
+                }
+            }
+            finally
+            {
+                Console.SetOut(stdout);
+            }
+
+            return captured.ToString();
+        }
+        finally
+        {
+            loadContext.Unload();
         }
     }
 }

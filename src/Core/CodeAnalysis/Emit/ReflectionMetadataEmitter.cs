@@ -1607,6 +1607,15 @@ internal sealed class ReflectionMetadataEmitter
             PlanClassMethods(c);
         }
 
+        // Issue #1996: a class-scoped static `Main` is emitted as an ordinary
+        // TypeDef-owned static method (its MethodDef row was already reserved
+        // above by PlanClassMethods' StaticMethods loop). It must NOT also get
+        // a package-level <Program> row/emission — the per-package entry-point
+        // reservation/emission below is skipped for it, and the emitted
+        // TypeDef-owned MethodDef row is reused directly as the PE entry point.
+        var entryPointIsClassOwned = this.emitCtx.Program.EntryPoint is not null
+            && aggregateMethodHandles.ContainsKey(this.emitCtx.Program.EntryPoint);
+
         // Plan method rows for non-SM structs.
         var structFirstMethodRows = new Dictionary<StructSymbol, int>();
         void PlanStructMethods(StructSymbol s)
@@ -2309,7 +2318,7 @@ internal sealed class ReflectionMetadataEmitter
                 }
             }
 
-            if (this.emitCtx.Program.EntryPoint is not null && pkg == entryPointPackage)
+            if (this.emitCtx.Program.EntryPoint is not null && pkg == entryPointPackage && !entryPointIsClassOwned)
             {
                 this.cache.FunctionHandles[this.emitCtx.Program.EntryPoint] = MetadataTokens.MethodDefinitionHandle(nextRow++);
             }
@@ -2346,7 +2355,9 @@ internal sealed class ReflectionMetadataEmitter
         MethodDefinitionHandle entryHandle = default;
         if (this.emitCtx.Program.EntryPoint is not null)
         {
-            entryHandle = this.cache.FunctionHandles[this.emitCtx.Program.EntryPoint];
+            entryHandle = entryPointIsClassOwned
+                ? aggregateMethodHandles[this.emitCtx.Program.EntryPoint]
+                : this.cache.FunctionHandles[this.emitCtx.Program.EntryPoint];
         }
 
         // Pre-register SM class ctor handles so iterator kickoff bodies
@@ -2701,7 +2712,12 @@ internal sealed class ReflectionMetadataEmitter
                 {
                     if (this.emitCtx.Program.Functions.TryGetValue(m, out var staticBody))
                     {
-                        var emittedHandle = this.EmitFunction(m, staticBody, isEntryPoint: false);
+                        // Issue #1996: a class-scoped static `Main` is the PE
+                        // entry point when picked by ResolveEntryPoint — wire
+                        // isEntryPoint through so EmitFunction applies the same
+                        // async-Main sync-wrapper lowering (GetAwaiter().GetResult())
+                        // used for package-scope entry points.
+                        var emittedHandle = this.EmitFunction(m, staticBody, isEntryPoint: m == this.emitCtx.Program.EntryPoint);
                         this.cache.MethodHandles[m] = emittedHandle;
                     }
                 }
@@ -2891,7 +2907,7 @@ internal sealed class ReflectionMetadataEmitter
                 this.EmitFunction(fn, body, isEntryPoint: false);
             }
 
-            if (this.emitCtx.Program.EntryPoint is not null && pkg == entryPointPackage)
+            if (this.emitCtx.Program.EntryPoint is not null && pkg == entryPointPackage && !entryPointIsClassOwned)
             {
                 var entryBody = this.emitCtx.Program.Functions[this.emitCtx.Program.EntryPoint];
                 this.EmitFunction(this.emitCtx.Program.EntryPoint, entryBody, isEntryPoint: true);

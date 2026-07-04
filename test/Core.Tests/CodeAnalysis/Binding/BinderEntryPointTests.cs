@@ -87,6 +87,66 @@ public class BinderEntryPointTests
         Assert.Null(globalScope.EntryPoint);
     }
 
+    // Issue #1996: class-scoped static `Main` (sync or async, any class) is
+    // also a valid entry-point candidate — ResolveEntryPoint must not limit
+    // its search to package-scope funcs.
+    [Fact]
+    public void Picks_ClassScoped_Static_Main_When_No_TopLevel_Statements()
+    {
+        var globalScope = BindSource(
+            "class Program\n{\n    shared\n    {\n        func Main()\n        {\n        }\n    }\n}\n");
+
+        Assert.NotNull(globalScope.EntryPoint);
+        Assert.Equal("Main", globalScope.EntryPoint.Name);
+        Assert.True(globalScope.EntryPoint.IsStatic);
+        Assert.False(globalScope.EntryPoint.IsAsync);
+    }
+
+    [Fact]
+    public void Picks_ClassScoped_Static_Async_Main_When_No_TopLevel_Statements()
+    {
+        var globalScope = BindSource(
+            "import System.Threading.Tasks\nclass Program\n{\n    shared\n    {\n        async func Main()\n        {\n            await Task.Delay(1)\n        }\n    }\n}\n");
+
+        Assert.NotNull(globalScope.EntryPoint);
+        Assert.Equal("Main", globalScope.EntryPoint.Name);
+        Assert.True(globalScope.EntryPoint.IsStatic);
+        Assert.True(globalScope.EntryPoint.IsAsync);
+    }
+
+    [Fact]
+    public void ClassScoped_Static_Main_Works_For_Any_Class_Name()
+    {
+        // Generalization: the entry-point candidate is not tied to the name
+        // `Program` — any class with a static `Main` qualifies.
+        var globalScope = BindSource(
+            "class Launcher\n{\n    shared\n    {\n        func Main()\n        {\n        }\n    }\n}\n");
+
+        Assert.NotNull(globalScope.EntryPoint);
+        Assert.Equal("Main", globalScope.EntryPoint.Name);
+    }
+
+    [Fact]
+    public void ClassScoped_Instance_Main_Does_Not_Qualify_As_EntryPoint()
+    {
+        // An instance `Main` has no receiver to construct at process
+        // start, so it must not be picked as the entry point.
+        var globalScope = BindSource("class Program\n{\n    func Main()\n    {\n    }\n}\n");
+
+        Assert.Null(globalScope.EntryPoint);
+    }
+
+    [Fact]
+    public void PackageScope_Main_Takes_Precedence_Over_ClassScoped_Main()
+    {
+        var globalScope = BindSource(
+            "func Main()\n{\n}\nclass Program\n{\n    shared\n    {\n        func Main()\n        {\n        }\n    }\n}\n");
+
+        Assert.NotNull(globalScope.EntryPoint);
+        Assert.Null(globalScope.EntryPoint.ReceiverType);
+        Assert.False(globalScope.EntryPoint.IsStatic);
+    }
+
     [Fact]
     public void Reports_Conflict_When_TopLevel_And_Explicit_Main_Coexist()
     {

@@ -969,7 +969,7 @@ public sealed class Binder
         // synthesized <Main>$ in emit.
         var entryPointPackage = synthesizedEntryPointPackage
             ?? ResolveEntryPointPackage(packageByTree, globalStatements, functions, packagesInOrder);
-        var entryPoint = ResolveEntryPoint(binder, functions, globalStatements, syntaxTrees, entryPointPackage, synthesizedEntryPoint);
+        var entryPoint = ResolveEntryPoint(binder, functions, structs, globalStatements, syntaxTrees, entryPointPackage, synthesizedEntryPoint);
 
         var diagnostics = binder.Diagnostics.ToImmutableArray();
 
@@ -5357,12 +5357,31 @@ public sealed class Binder
     private static FunctionSymbol ResolveEntryPoint(
         Binder binder,
         ImmutableArray<FunctionSymbol> functions,
+        ImmutableArray<StructSymbol> structs,
         GlobalStatementSyntax[] globalStatements,
         ImmutableArray<SyntaxTree> syntaxTrees,
         PackageSymbol entryPointPackage,
         FunctionSymbol synthesizedEntryPoint)
     {
         var explicitMain = functions.FirstOrDefault(f => f.Name == "Main");
+
+        // Issue #1996: a class-scoped static `Main` (sync or async, any
+        // class — not just `Program`) is also a valid entry-point
+        // candidate. Instance `Main` methods don't qualify (no receiver
+        // exists to construct at startup), so only StaticMethods are
+        // scanned. Package-scope `Main` takes precedence when both exist,
+        // mirroring the pre-existing (silent, first-found) precedence for
+        // multiple package-scope `Main` declarations — this codebase does
+        // not diagnose ambiguous entry points today, so we don't introduce
+        // that check here either.
+        var classMain = explicitMain == null && !structs.IsDefaultOrEmpty
+            ? structs
+                .Where(s => s.IsClass && !s.StaticMethods.IsDefaultOrEmpty)
+                .SelectMany(s => s.StaticMethods)
+                .FirstOrDefault(m => m.Name == "Main")
+            : null;
+        explicitMain ??= classMain;
+
         var hasTopLevel = globalStatements.Length > 0;
 
         if (hasTopLevel)
