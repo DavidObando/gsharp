@@ -11387,14 +11387,23 @@ internal sealed class ReflectionMetadataEmitter
     // PR-E-2: MethodSpecSymbolKey moved into MetadataTokenCache.
 
     /// <summary>
-    /// Issue #985: emit MethodImpl rows for covariant-return interface bridges.
-    /// A method whose <see cref="FunctionSymbol.ExplicitInterfaceSlot"/> is set
+    /// Issue #985 / #2010: emit MethodImpl rows for covariant-return interface
+    /// bridges AND for mangled-name explicit interface implementations. A
+    /// method whose <see cref="FunctionSymbol.ExplicitInterfaceSlot"/> is set
     /// explicitly implements a specific (typically inherited, non-generic) CLR
     /// interface slot — e.g. the private non-generic
     /// <c>IEnumerable.GetEnumerator()</c> alongside the public generic
     /// <c>IEnumerable&lt;T&gt;.GetEnumerator()</c>. A private bridge method
     /// cannot implicitly implement an interface slot, so the explicit row is
     /// required for the resulting type to load.
+    ///
+    /// A method whose <see cref="FunctionSymbol.ExplicitInterfaceMember"/> is
+    /// set explicitly implements one specific in-compilation (G#) interface
+    /// member — its mangled name never matches the interface member's own
+    /// name, so ordinary name-based virtual dispatch never wires it into that
+    /// interface's slot; an explicit <c>MethodImpl</c> row is required here
+    /// too (mirrors <see cref="EmitStaticVirtualMethodImpls"/>'s generic-aware
+    /// token resolution for a constructed interface).
     /// </summary>
     /// <param name="structSymbol">The implementing class or struct.</param>
     private void EmitExplicitInterfaceMethodImpls(StructSymbol structSymbol)
@@ -11411,19 +11420,45 @@ internal sealed class ReflectionMetadataEmitter
 
         foreach (var method in structSymbol.Methods)
         {
-            var slot = method.ExplicitInterfaceSlot;
-            if (slot == null)
-            {
-                continue;
-            }
-
             if (!this.cache.MethodHandles.TryGetValue(method, out var implHandle))
             {
                 continue;
             }
 
-            var slotRef = this.GetMethodReference(slot);
-            this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implHandle, slotRef);
+            var slot = method.ExplicitInterfaceSlot;
+            if (slot != null)
+            {
+                var slotRef = this.GetMethodReference(slot);
+                this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implHandle, slotRef);
+            }
+
+            var ifaceMember = method.ExplicitInterfaceMember;
+            if (ifaceMember == null || structSymbol.Interfaces.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            EntityHandle? slotHandle = null;
+            foreach (var iface in structSymbol.Interfaces)
+            {
+                var defIface = iface.Definition ?? iface;
+                if (defIface.Methods.IsDefaultOrEmpty || !defIface.Methods.Contains(ifaceMember))
+                {
+                    continue;
+                }
+
+                slotHandle = IsUserGenericInterfaceReference(iface)
+                    ? this.ResolveUserInterfaceInstanceMethodToken(iface, ifaceMember)
+                    : this.cache.MethodHandles.TryGetValue(ifaceMember, out var slotDefHandle)
+                        ? slotDefHandle
+                        : (EntityHandle?)null;
+                break;
+            }
+
+            if (slotHandle.HasValue)
+            {
+                this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implHandle, slotHandle.Value);
+            }
         }
     }
 

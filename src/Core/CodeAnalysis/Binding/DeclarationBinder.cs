@@ -1860,7 +1860,17 @@ internal sealed class DeclarationBinder
                         ValidateInlineDataNilArguments(methodAttributes, methodSymbol.Parameters);
                     }
 
-                    // ADR-0063 §11: detect duplicate-signature within the class.
+                    // Issue #2010: a method named per the reserved
+                    // `__explicit_<Interface>__<Member>` mangled convention (the
+                    // form cs2gs synthesizes for a C# explicit interface
+                    // implementation, see CSharpToGSharpTranslator) explicitly
+                    // implements one interface member's own distinct body.
+                    // Resolution against the actual interface member is
+                    // deferred to VerifyInterfaceImplementations — interfaces
+                    // declared later in the same compilation unit have not had
+                    // their own members bound yet when this class's members
+                    // are bound, so `implementedInterfaces[i].Methods` may
+                    // still be empty here.
                     var hasDuplicateSig = false;
                     foreach (var existingMethod in methodsBuilder)
                     {
@@ -3559,6 +3569,18 @@ internal sealed class DeclarationBinder
             {
                 foreach (var imethod in iface.Methods)
                 {
+                    // Issue #2010: a mangled-name explicit implementation
+                    // (`__explicit_<Interface>__<Member>`) satisfies this slot
+                    // even though its own name never matches `imethod.Name` —
+                    // it was already resolved and linked to `imethod` at
+                    // declaration-binding time. Skip the name-based lookup
+                    // entirely once found; no diagnostic, and the emitter
+                    // binds the slot via `FunctionSymbol.ExplicitInterfaceMember`.
+                    if (TryResolveExplicitInterfaceImplementation(structSymbol, iface, imethod) != null)
+                    {
+                        continue;
+                    }
+
                     // ADR-0063 §8: implementing class may have multiple methods
                     // with the same name; pick the one whose signature matches
                     // this specific interface overload exactly.
@@ -6841,8 +6863,98 @@ internal sealed class DeclarationBinder
         return -1;
     }
 
+    /// <summary>
+    /// Issue #2010: resolves and links a mangled-name explicit interface
+    /// implementation (see <see cref="TryParseExplicitInterfaceImplName"/>)
+    /// on <paramref name="structSymbol"/> against <paramref name="imethod"/>,
+    /// an abstract member of <paramref name="iface"/>. Returns the linked
+    /// method (setting its <see cref="FunctionSymbol.ExplicitInterfaceMember"/>
+    /// the first time it is resolved) or <see langword="null"/> if no such
+    /// method exists. Resolution happens here — during the deferred
+    /// <see cref="VerifyInterfaceImplementations"/> pass — rather than at
+    /// initial member-binding time, because a class's interfaces may be
+    /// declared later in the same file and their own members are not yet
+    /// bound when the class's own members are first processed.
+    /// </summary>
+    private static FunctionSymbol TryResolveExplicitInterfaceImplementation(StructSymbol structSymbol, InterfaceSymbol iface, FunctionSymbol imethod)
+    {
+        if (structSymbol.Methods.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        foreach (var candidate in structSymbol.Methods)
+        {
+            if (ReferenceEquals(candidate.ExplicitInterfaceMember, imethod))
+            {
+                return candidate;
+            }
+
+            if (candidate.ExplicitInterfaceMember != null)
+            {
+                // Already linked to a different interface member.
+                continue;
+            }
+
+            if (!TryParseExplicitInterfaceImplName(candidate.Name, out var explicitIfaceName, out var explicitMemberName) ||
+                explicitIfaceName != iface.Name ||
+                explicitMemberName != imethod.Name)
+            {
+                continue;
+            }
+
+            var typeParamMap = TryBuildMethodTypeParameterMap(imethod, candidate);
+            if (typeParamMap == null)
+            {
+                continue;
+            }
+
+            if (SignaturesMatch(imethod, GetCallableParameters(candidate), candidate.Type, candidate.ReturnRefKind, typeParamMap, candidate.IsAsync))
+            {
+                candidate.ExplicitInterfaceMember = imethod;
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
     private static ImmutableArray<ParameterSymbol> GetCallableParameters(FunctionSymbol method)
         => method.ExplicitReceiverParameter == null ? method.Parameters : method.Parameters.RemoveAt(0);
+
+    /// <summary>
+    /// Issue #2010: the reserved mangled-name convention a G# method uses to
+    /// mark itself as a specific interface member's explicit implementation:
+    /// <c>__explicit_&lt;InterfaceSimpleName&gt;__&lt;MemberSimpleName&gt;</c>.
+    /// This is a plain identifier — no new grammar — reserved for
+    /// compiler/cs2gs-synthesized use (ADR-0091 rejected a dedicated
+    /// `IFoo.M(this)` syntax for user-facing explicit-impl spelling; this
+    /// convention sidesteps that without adding surface syntax). Both name
+    /// components must be non-empty; the double-underscore separator is
+    /// required so a single-underscore interface/member name doesn't get
+    /// mis-split.
+    /// </summary>
+    internal static bool TryParseExplicitInterfaceImplName(string name, out string interfaceName, out string memberName)
+    {
+        const string Prefix = "__explicit_";
+        interfaceName = null;
+        memberName = null;
+        if (string.IsNullOrEmpty(name) || !name.StartsWith(Prefix, System.StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var rest = name.Substring(Prefix.Length);
+        var separatorIndex = rest.IndexOf("__", System.StringComparison.Ordinal);
+        if (separatorIndex <= 0 || separatorIndex + 2 >= rest.Length)
+        {
+            return false;
+        }
+
+        interfaceName = rest.Substring(0, separatorIndex);
+        memberName = rest.Substring(separatorIndex + 2);
+        return true;
+    }
 
     /// <summary>
     /// Issue #974: structural equivalence used by override / interface-

@@ -2806,33 +2806,42 @@ public sealed class CSharpToGSharpTranslator
             var symbol = this.context.GetDeclaredSymbol(node) as IMethodSymbol;
             bool isStatic = symbol != null && symbol.IsStatic;
 
-            // Issue #1911: C# `string IGreeter.Greet() { ... }` (explicit interface
-            // implementation) has no G# equivalent — G# has no name-hiding surface
-            // for interface members (ADR-0091 rejected an `IFoo.M(this)` spelling
-            // for exactly this reason: it conflates "explicit interface dispatch"
-            // with G#'s existing extension-function sugar). The only disambiguation
-            // tool G# offers (`base[IFoo].M()`, samples/InterfaceDiamondDisambiguation.gs)
-            // resolves *default*-body diamonds inside an `override`, not distinct
-            // per-interface slots for an abstract member — so an explicit impl must
-            // collapse onto the ordinary public method slot that already satisfies
-            // the interface contract by name.
+            // Issue #1911 / #2010: C# `string IGreeter.Greet() { ... }` (explicit
+            // interface implementation) has no direct G# surface syntax (ADR-0091
+            // rejected an `IFoo.M(this)` spelling for conflating with G#'s
+            // existing extension-function sugar).
             //
-            // If a same-signature sibling with the same name already exists on the
-            // type — a plain public method (the common "public API + hidden explicit
-            // impl" C# pattern), or another explicit implementation of a *different*
-            // interface with an identical name+signature (a same-name diamond of
-            // abstract explicit impls) — keeping both would be an exact-signature
-            // duplicate (GS0264). Only one survives (the public method if there is
-            // one, else whichever explicit impl appears first in source); the rest
-            // are dropped. The survivor still fills every implemented interface's
-            // abstract slot by name+signature (that is exactly why C# allowed the
-            // duplicate signature to begin with), but slot-occupancy is not the
-            // same as behavioral fidelity: any dropped explicit implementation may
-            // have its own body distinct from the survivor's (this is true both for
-            // the "coexists with a differently-bodied public method" shape AND for
-            // a diamond of two-or-more explicit impls with distinct bodies), so
-            // every drop here is a potential semantic loss and is reported as such.
-            if (symbol != null && symbol.ExplicitInterfaceImplementations.Length > 0)
+            // When the implemented interface is a G# USER interface (declared in
+            // this same C# source, so it translates to a G# `interface`), the
+            // explicit implementation is emitted as its own distinct G# method
+            // under a reserved mangled name (`__explicit_<Interface>__<Member>`,
+            // see MangleExplicitInterfaceImplName below) instead of collapsing
+            // same-name/same-signature explicit implementations of different
+            // interfaces onto a single surviving body (the #1911 fix, which
+            // silently dropped the rest). gsc's binder recognizes this
+            // convention and links the method to the specific interface member
+            // it implements; the emitter binds a CLR `MethodImpl` row so each
+            // interface's dispatch slot routes to its own body (reusing the
+            // ADR-0089 static-virtual / issue #985 bridge machinery). Since the
+            // mangled name embeds the interface's own name, two explicit
+            // implementations of the same member from different user interfaces
+            // never collide — no drop, no diagnostic, full fidelity.
+            //
+            // When the implemented interface is an EXTERNAL (BCL/imported) CLR
+            // interface, this new mechanism does not apply — the existing #985
+            // covariant-return-bridge machinery in gsc's binder already handles
+            // that shape (e.g. `IEnumerator IEnumerable.GetEnumerator()`
+            // alongside `IEnumerator<T> GetEnumerator()`), and it keys on the
+            // method keeping its ORIGINAL (un-mangled) simple name plus a
+            // return-type-only signature difference from its public sibling.
+            // Mangling would break that pre-existing, narrower bridge, so the
+            // #1911 "force public, drop on exact-signature collision" handling
+            // is preserved unchanged for external interfaces.
+            bool isExplicitInterfaceImpl = symbol != null && symbol.ExplicitInterfaceImplementations.Length > 0;
+            bool isUserInterfaceExplicitImpl = isExplicitInterfaceImpl &&
+                symbol.ExplicitInterfaceImplementations[0].ContainingType.Locations.Any(l => l.IsInSource);
+
+            if (isExplicitInterfaceImpl && !isUserInterfaceExplicitImpl)
             {
                 IMethodSymbol survivor = FindPriorCollidingSibling(symbol, node);
                 if (survivor != null)
@@ -2843,17 +2852,21 @@ public sealed class CSharpToGSharpTranslator
                         "G# has no explicit-interface-implementation surface (ADR-0091), so the two C# methods cannot both " +
                         "be emitted (would be an exact-signature duplicate, GS0264). This declaration is dropped in favor " +
                         "of the surviving sibling, which already satisfies the interface by name; if the surviving " +
-                        "sibling's body differs from this dropped declaration's body (possible whenever the survivor is a " +
-                        "differently-bodied public method, or another explicit implementation of a different interface with " +
-                        "its own distinct body), any C# call through the interface-typed reference that previously reached " +
-                        "this body now silently observes the surviving method's body instead (semantic loss, known gap, " +
-                        "issue #1911).";
+                        "sibling's body differs from this dropped declaration's body, any C# call through the " +
+                        "interface-typed reference that previously reached this body now silently observes the surviving " +
+                        "method's body instead (semantic loss, known gap, issue #1911). This diagnostic covers only " +
+                        "EXTERNAL/BCL interfaces — a same-signature collision between two G# user-interface explicit " +
+                        "implementations is fully supported (issue #2010, mangled-name + CLR MethodImpl).";
                     this.context.Report(new TranslationDiagnostic(
                         nameof(SyntaxKind.MethodDeclaration), message, node.GetLocation(), TranslationSeverity.Unsupported));
 
                     return (null, false);
                 }
             }
+
+            string mangledExplicitName = isUserInterfaceExplicitImpl
+                ? MangleExplicitInterfaceImplName(symbol)
+                : null;
 
             Receiver receiver = null;
             bool skipFirstParameter = false;
@@ -2988,21 +3001,28 @@ public sealed class CSharpToGSharpTranslator
                 body = null;
             }
 
-            // Issue #1911: Roslyn reports an explicit interface implementation's
-            // `DeclaredAccessibility` as `Private` (it has no accessibility keyword
-            // and is unreachable through the class type), but the CLR interface
-            // slot it fills is a public contract. Mapping that `Private` straight
-            // through emitted `private func Greet()`, which gsc does not wire into
-            // the type's `InterfaceImpl` v-table slot — the class type-checks
-            // (name match is enough for the binder) but fails `ilverify` with
-            // "Class implements interface but not method". The method must be
-            // public in G# for the interface slot to be filled.
-            Visibility explicitInterfaceVisibility = symbol != null && symbol.ExplicitInterfaceImplementations.Length > 0
+            // Issue #2010: a G# user-interface explicit implementation now
+            // emits under its mangled name (`__explicit_<Interface>__<Member>`)
+            // and is bound to its own CLR interface slot via an explicit
+            // MethodImpl row at emit time — it no longer relies on name-based
+            // virtual dispatch, so it can keep C#'s own `private`-equivalent
+            // visibility (Roslyn reports `DeclaredAccessibility` as `Private`:
+            // no accessibility keyword, unreachable through the class type).
+            // This matches C# semantics, where an explicit impl is not
+            // publicly callable by the type name.
+            //
+            // Issue #1911: an EXTERNAL (BCL/imported) interface explicit
+            // implementation still relies on the pre-existing name-based
+            // #985 covariant-return-bridge slot-filling, which requires the
+            // method to be public — mapping Roslyn's `Private` straight
+            // through would fail `ilverify` ("Class implements interface but
+            // not method"), so it is still forced public here.
+            Visibility explicitInterfaceVisibility = isExplicitInterfaceImpl && !isUserInterfaceExplicitImpl
                 ? Visibility.Default
                 : MapVisibility(symbol, this.context, node);
 
             var method = new MethodDeclaration(
-                SanitizeIdentifier(node.Identifier.Text),
+                mangledExplicitName ?? SanitizeIdentifier(node.Identifier.Text),
                 parameters: parameters,
                 returnType: returnType,
                 body: body,
@@ -3020,6 +3040,24 @@ public sealed class CSharpToGSharpTranslator
         }
 
         /// <summary>
+        /// Issue #2010: mangles an explicit interface implementation's name
+        /// into the reserved <c>__explicit_&lt;Interface&gt;__&lt;Member&gt;</c>
+        /// convention gsc's binder recognizes (see
+        /// <c>DeclarationBinder.TryParseExplicitInterfaceImplName</c>). Using
+        /// the interface's own simple name keeps two explicit implementations
+        /// of the same member from two different interfaces from colliding —
+        /// each gets its own name, its own MethodDef, and (via the binder/
+        /// emitter) its own MethodImpl row into its own interface's slot.
+        /// </summary>
+        private static string MangleExplicitInterfaceImplName(IMethodSymbol symbol)
+        {
+            ISymbol explicitMember = symbol.ExplicitInterfaceImplementations[0];
+            string interfaceName = SanitizeIdentifier(explicitMember.ContainingType.Name);
+            string memberName = SanitizeIdentifier(explicitMember.Name);
+            return $"__explicit_{interfaceName}__{memberName}";
+        }
+
+        /// <summary>
         /// Issue #1911: finds the sibling method on the same containing type that
         /// would win the (name, signature) slot over <paramref name="explicitImplementation"/>
         /// once both are translated to G# — i.e. the sibling that this declaration
@@ -3027,7 +3065,10 @@ public sealed class CSharpToGSharpTranslator
         /// duplicate-overload. Returns <see langword="null"/> when
         /// <paramref name="explicitImplementation"/> is itself the survivor (no
         /// same-signature sibling, or it is the earliest-declared one among a set
-        /// of same-signature explicit implementations).
+        /// of same-signature explicit implementations). Only invoked for an
+        /// EXTERNAL (BCL/imported) interface explicit implementation — a G#
+        /// user-interface explicit implementation (issue #2010) is mangled to a
+        /// unique name and never collides in the first place.
         /// </summary>
         /// <remarks>
         /// A plain public method always wins over any explicit implementation
