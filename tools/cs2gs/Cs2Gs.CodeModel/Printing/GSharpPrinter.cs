@@ -847,7 +847,8 @@ public static class GSharpPrinter
                     ? string.Empty
                     : $" = {RenderExpression(local.Initializer, indent)}";
                 var usingPrefix = local.IsUsing ? (local.IsAwait ? "await using " : "using ") : string.Empty;
-                return $"{pad}{usingPrefix}{RenderBinding(local.Binding)} {local.Name}{typeClause}{initClause}";
+                var refPrefix = local.IsRefAlias ? "ref " : string.Empty;
+                return $"{pad}{usingPrefix}{RenderBinding(local.Binding)} {refPrefix}{local.Name}{typeClause}{initClause}";
 
             case ExpressionStatement expression:
                 return $"{pad}{RenderExpression(expression.Expression, indent)}";
@@ -858,7 +859,9 @@ public static class GSharpPrinter
             case ReturnStatement ret:
                 return ret.Expression == null
                     ? $"{pad}return"
-                    : $"{pad}return {RenderExpression(ret.Expression, indent)}";
+                    : ret.IsRef
+                        ? $"{pad}return ref {RenderExpression(ret.Expression, indent)}"
+                        : $"{pad}return {RenderExpression(ret.Expression, indent)}";
 
             case ThrowStatement thrown:
                 return $"{pad}throw {RenderExpression(thrown.Expression, indent)}";
@@ -1489,6 +1492,13 @@ public static class GSharpPrinter
         if (method.ReturnType != null)
         {
             sb.Append(' ');
+            if (method.IsRefReturn)
+            {
+                // Issue #1900: G#'s native ref-return modifier (`func F(...) ref T`,
+                // ADR-0060 §follow-up, issue #490) — mapped from a C# ref-returning method.
+                sb.Append("ref ");
+            }
+
             sb.Append(RenderType(method.ReturnType));
         }
 

@@ -1083,6 +1083,55 @@ internal sealed class MemberLookup
                 // re-derives the real element type for inference.
                 erased = userClass.ImportedBaseType?.ClrType ?? typeof(object);
                 return true;
+            case TupleTypeSymbol tuple:
+                // Issue #1902: a query's transparent-identifier tuple
+                // (`(x1, x2)`) carrying a same-compilation user element (e.g. a
+                // `data class` range variable) has a null ClrType — same root
+                // cause as the slice/array case above, `TupleTypeSymbol.
+                // BuildClrType` refuses to build `ValueTuple<...>` when any
+                // element's ClrType is null. Left unhandled, a LINQ method
+                // taking or returning such a tuple (`Select`, `Join`,
+                // `GroupJoin`, …) had no ClrType to gate on and fell through to
+                // GS0159 "Cannot find function" even though the same tuple
+                // shape with only built-in element types (e.g. `(int32,
+                // int32)`) resolved fine. Erase each element (recursively, so a
+                // nested tuple/array/user-type element still projects) and
+                // rebuild the closed `ValueTuple<...>` shape from the erased
+                // elements; symbolic-argument recovery downstream re-derives
+                // the real element types for inference same as the other
+                // erasure cases.
+                {
+                    ImmutableArray<TypeSymbol> elementTypes = tuple.ElementTypes;
+                    var erasedElements = new Type[elementTypes.Length];
+                    for (int i = 0; i < elementTypes.Length; i++)
+                    {
+                        if (!TryProjectErasedClrType(elementTypes[i], out Type erasedElement))
+                        {
+                            return false;
+                        }
+
+                        erasedElements[i] = erasedElement;
+                    }
+
+                    Type tupleOpenDefinition = erasedElements.Length switch
+                    {
+                        2 => typeof(ValueTuple<,>),
+                        3 => typeof(ValueTuple<,,>),
+                        4 => typeof(ValueTuple<,,,>),
+                        5 => typeof(ValueTuple<,,,,>),
+                        6 => typeof(ValueTuple<,,,,,>),
+                        7 => typeof(ValueTuple<,,,,,,>),
+                        _ => null,
+                    };
+                    if (tupleOpenDefinition == null)
+                    {
+                        return false;
+                    }
+
+                    erased = tupleOpenDefinition.MakeGenericType(erasedElements);
+                    return true;
+                }
+
             case StructSymbol:
                 erased = typeof(object);
                 return true;
@@ -2178,12 +2227,110 @@ internal sealed class MemberLookup
                     imp.OpenDefinition.GetGenericArguments(),
                     imp.TypeArguments,
                     contextObject);
+            case TupleTypeSymbol tuple:
+                // Issue #1902: a positional tuple carrying a same-compilation
+                // user element (e.g. the `(Owner, Pet)` transparent identifier
+                // a Join's result-selector returns) has a null ClrType —
+                // `TupleTypeSymbol.BuildClrType` refuses to build
+                // `ValueTuple<...>` when any element's own ClrType is null.
+                // Flattening it to the bare `contextObject` placeholder (the
+                // `default` arm below) would still satisfy *this* call's own
+                // generic constraints, but the erased closed generic loses the
+                // tuple shape entirely (`IEnumerable<object>` instead of
+                // `IEnumerable<ValueTuple<object, object>>`), so the *next*
+                // chained call (`.Select(t => …)`) can no longer structurally
+                // match its own tuple-typed delegate parameter and dead-ends
+                // at GS0159. Build the erased `ValueTuple<...>` shape in
+                // `contextObject`'s own load context (see
+                // <see cref="BuildErasedTupleInContext"/>) — a host-context
+                // `typeof(ValueTuple<,>)` (what `TryProjectErasedClrType` would
+                // build) cannot close over an MLC-loaded `contextObject`
+                // (cross-context `MakeGenericType` throws), the same reason
+                // `ResolveErasedObjectInContext` exists for the plain-object
+                // case above.
+                return BuildErasedTupleInContext(tuple, contextObject);
             default:
                 // Concrete leaf (e.g. a fully-closed imported type): erase to the
                 // context placeholder so the shape stays in a single load context
                 // and mirrors how the same leaf is erased on the selector side.
                 return contextObject;
         }
+    }
+
+    /// <summary>
+    /// Issue #1902: builds the erased <c>ValueTuple&lt;...&gt;</c> shape for a
+    /// <see cref="TupleTypeSymbol"/> element-by-element, staying in
+    /// <paramref name="contextObject"/>'s load context throughout (both the
+    /// <c>ValueTuple`N</c> open definition and every element are resolved from
+    /// that context, recursing via <see cref="ProjectSymbolicArgToErasedClr"/>
+    /// so a nested generic/tuple element keeps its own structure too).
+    /// </summary>
+    /// <param name="tuple">The symbolic tuple type.</param>
+    /// <param name="contextObject">The <c>object</c> placeholder resolved in the target context.</param>
+    /// <returns>The erased closed tuple CLR type, or <see langword="null"/> when none could be built.</returns>
+    private static Type BuildErasedTupleInContext(TupleTypeSymbol tuple, Type contextObject)
+    {
+        Type tupleOpenDefinition = ResolveErasedValueTupleOpenDefinition(contextObject, tuple.ElementTypes.Length);
+        if (tupleOpenDefinition == null)
+        {
+            return null;
+        }
+
+        var erasedElements = new Type[tuple.ElementTypes.Length];
+        for (int i = 0; i < tuple.ElementTypes.Length; i++)
+        {
+            erasedElements[i] = ProjectSymbolicArgToErasedClr(tuple.ElementTypes[i], contextObject) ?? contextObject;
+        }
+
+        try
+        {
+            return tupleOpenDefinition.MakeGenericType(erasedElements);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Issue #1902: resolves the open <c>System.ValueTuple`N</c> generic type
+    /// definition for the given arity, in the same load context as
+    /// <paramref name="contextObject"/>. <c>System.ValueTuple</c> lives in the
+    /// same core assembly as <c>System.Object</c>, so when
+    /// <paramref name="contextObject"/> is not the host <c>typeof(object)</c>
+    /// (i.e. it was resolved in an isolated <c>MetadataLoadContext</c> per
+    /// <see cref="ResolveErasedObjectInContext"/>), the matching
+    /// <c>ValueTuple`N</c> is looked up from that same assembly rather than
+    /// using the host BCL's <c>typeof(ValueTuple&lt;,&gt;)</c> (which
+    /// <c>MakeGenericType</c> would reject with a cross-context
+    /// <see cref="ArgumentException"/>).
+    /// </summary>
+    /// <param name="contextObject">The <c>object</c> placeholder resolved in the target context.</param>
+    /// <param name="arity">The tuple arity (2–7; the BCL <c>ValueTuple</c> family's generic range).</param>
+    /// <returns>The open <c>ValueTuple`N</c> definition, or <see langword="null"/> when unsupported/unresolvable.</returns>
+    private static Type ResolveErasedValueTupleOpenDefinition(Type contextObject, int arity)
+    {
+        Type hostOpenDefinition = arity switch
+        {
+            2 => typeof(ValueTuple<,>),
+            3 => typeof(ValueTuple<,,>),
+            4 => typeof(ValueTuple<,,,>),
+            5 => typeof(ValueTuple<,,,,>),
+            6 => typeof(ValueTuple<,,,,,>),
+            7 => typeof(ValueTuple<,,,,,,>),
+            _ => null,
+        };
+        if (hostOpenDefinition == null)
+        {
+            return null;
+        }
+
+        if (contextObject == null || contextObject.Assembly == typeof(object).Assembly)
+        {
+            return hostOpenDefinition;
+        }
+
+        return contextObject.Assembly.GetType(hostOpenDefinition.FullName, throwOnError: false);
     }
 
     private static bool ReturnTypeMatchesSubstituted(TypeSymbol candidateReturn, Type openReturn, ImmutableArray<TypeSymbol> symbolicArgs)

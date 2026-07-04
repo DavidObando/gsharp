@@ -397,7 +397,7 @@
     "rule": "ADR-0115 \u00A7B.4",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/ClassDeclaration.cs",
-    "notes": "C#12 primary ctors dropped (issue #1909); partial parts not merged (issue #1910)."
+    "notes": "C#12 primary ctors dropped (issue #1909); partial parts across multiple declarations/files now merge into one G# type declaration (issue #1910, resolved)."
   },
   {
     "kind": "CoalesceAssignmentExpression",
@@ -929,9 +929,8 @@
     "status": "Lowered",
     "rule": "ADR-0115 \u00A7B.21",
     "rationale": "None",
-    "fixture": "tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/QueryExpression.cs",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1902",
-    "notes": "First from lowers; a second from (SelectMany) has no lowering (issue #1902)."
+    "fixture": "tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/FromClauseSelectMany.cs",
+    "notes": "First from lowers to the source receiver; a second/subsequent from lowers to SelectMany with a transparent-identifier tuple result selector (issue #1902)."
   },
   {
     "kind": "FunctionPointerCallingConvention",
@@ -1038,10 +1037,11 @@
   {
     "kind": "GroupClause",
     "nodeType": "GroupClauseSyntax",
-    "status": "Gap",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1902",
-    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+    "fixture": "tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/GroupClause.cs",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn (GroupBy, with identity-projection elision matching \u0060select n\u0060)."
   },
   {
     "kind": "IdentifierName",
@@ -1219,18 +1219,20 @@
   {
     "kind": "JoinClause",
     "nodeType": "JoinClauseSyntax",
-    "status": "Gap",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1902",
-    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+    "fixture": "tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/JoinClause.cs",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn (Join with a transparent-identifier tuple result selector)."
   },
   {
     "kind": "JoinIntoClause",
     "nodeType": "JoinIntoClauseSyntax",
-    "status": "Gap",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1902",
-    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+    "fixture": "tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/JoinIntoClause.cs",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn (GroupJoin, with the \u0060into\u0060 group variable typed \u0060sequence[T]\u0060)."
   },
   {
     "kind": "LabeledStatement",
@@ -1274,10 +1276,11 @@
   {
     "kind": "LetClause",
     "nodeType": "LetClauseSyntax",
-    "status": "Gap",
+    "status": "Lowered",
+    "rule": "ADR-0115 \u00A7B.21",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1902",
-    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn."
+    "fixture": "tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/LetClause.cs",
+    "notes": "Query syntax lowered to the method-call chain, mirroring Roslyn (Select widening the scope tuple with the let-bound value)."
   },
   {
     "kind": "LineDirectivePosition",
@@ -1771,7 +1774,7 @@
     "rule": "ADR-0115 \u00A7B.21",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/QueryContinuation.cs",
-    "notes": "Non-group into green; group-based continuation blocked by GroupClause (issue #1902)."
+    "notes": "Both select-into and group-into continuations re-scope the chain to the continuation variable (issue #1902)."
   },
   {
     "kind": "QueryExpression",

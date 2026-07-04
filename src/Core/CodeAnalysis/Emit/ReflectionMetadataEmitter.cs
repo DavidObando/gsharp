@@ -4574,7 +4574,14 @@ internal sealed class ReflectionMetadataEmitter
         {
             if (asyncPlan != null)
             {
-                bodyOffset = this.stateMachines.EmitAsyncKickoffBody(function, asyncPlan);
+                // Issue #1904: an async entry point (`async func Main()` /
+                // top-level `await`) must expose a CLR-valid void/int32
+                // signature — never Task/Task<T> (the runtime throws
+                // MethodAccessException at process start otherwise). Drive
+                // the task to completion synchronously right inside the
+                // kickoff body instead of returning it.
+                var driveSynchronously = isEntryPoint && asyncPlan.StateMachine.BuilderInfo.TaskProperty != null;
+                bodyOffset = this.stateMachines.EmitAsyncKickoffBody(function, asyncPlan, driveSynchronously);
             }
             else
             {
@@ -4673,7 +4680,11 @@ internal sealed class ReflectionMetadataEmitter
                 signatureParameterCount,
                 r =>
                 {
-                    if (asyncPlan != null)
+                    // Issue #1904: an async entry point signature must be
+                    // void/int32/uint32 (function.Type), not the async
+                    // builder's Task/Task<T> — the kickoff body above already
+                    // blocks on the task and unwraps the result to match.
+                    if (asyncPlan != null && !(isEntryPoint && asyncPlan.StateMachine.BuilderInfo.TaskProperty != null))
                     {
                         this.EncodeAsyncReturnType(r, asyncPlan);
                     }
@@ -10603,6 +10614,22 @@ internal sealed class ReflectionMetadataEmitter
         if (arg is NullableTypeSymbol nullable && nullable.UnderlyingType != null)
         {
             return ArgIsSymbolicUserDefined(nullable.UnderlyingType);
+        }
+
+        // Issue #1902: a positional tuple element may itself carry a
+        // same-compilation user type (e.g. the `(Owner, Pet)` transparent
+        // identifier a query's Join/GroupJoin result-selector returns).
+        // Without recursing here, `FunctionTypeNeedsSymbolicDelegate` misses
+        // the tuple-typed return and picks the reflection-resolved
+        // `overrideDelegateType` (whose ClrType was closed with the erased
+        // `object` placeholders from `TryBuildErasedClosedGeneric` — see
+        // MemberLookup.cs), so the lambda gets emitted as
+        // `Func<Owner,Pet,ValueTuple<object,object>>` while the body it
+        // targets is really typed `ValueTuple<Owner,Pet>` — a stack-shape
+        // mismatch ilverify rejects (StackUnexpected).
+        if (arg is TupleTypeSymbol tuple)
+        {
+            return tuple.ElementTypes.Any(ArgIsSymbolicUserDefined);
         }
 
         return false;

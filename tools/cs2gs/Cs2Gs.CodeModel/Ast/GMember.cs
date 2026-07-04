@@ -202,6 +202,11 @@ public sealed class MethodDeclaration : GMember
     /// <param name="isAsync">Whether the method is asynchronous.</param>
     /// <param name="attributes">The method attributes.</param>
     /// <param name="expressionBody">The optional single-statement arrow body for an expression-bodied method/function (issue #1278 / ADR-0131); when set the member renders as <c>func F(...) T -&gt; expr</c>.</param>
+    /// <param name="isRefReturn">
+    /// Whether the declared return type carries G#'s <c>ref</c> return
+    /// modifier (<c>func F(...) ref T { return ref lvalue }</c>, issue #490 /
+    /// ADR-0060) — mapped from a C# ref-returning method (issue #1900).
+    /// </param>
     public MethodDeclaration(
         string name,
         IReadOnlyList<Parameter> parameters = null,
@@ -214,7 +219,8 @@ public sealed class MethodDeclaration : GMember
         bool isOverride = false,
         bool isAsync = false,
         IReadOnlyList<AttributeUse> attributes = null,
-        GStatement expressionBody = null)
+        GStatement expressionBody = null,
+        bool isRefReturn = false)
     {
         Name = name;
         Parameters = parameters ?? new List<Parameter>();
@@ -228,6 +234,7 @@ public sealed class MethodDeclaration : GMember
         IsAsync = isAsync;
         Attributes = attributes ?? new List<AttributeUse>();
         ExpressionBody = expressionBody;
+        IsRefReturn = isRefReturn;
     }
 
     /// <summary>Gets the method name.</summary>
@@ -269,6 +276,12 @@ public sealed class MethodDeclaration : GMember
     /// <c>func F(...) T -&gt; expr</c> rather than a block body.
     /// </summary>
     public GStatement ExpressionBody { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether this method's return type carries
+    /// G#'s <c>ref</c> return modifier (issue #1900).
+    /// </summary>
+    public bool IsRefReturn { get; }
 }
 
 /// <summary>
