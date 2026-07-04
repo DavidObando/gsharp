@@ -47,6 +47,10 @@ public sealed class Theme
 
     public required SemanticColor BorderNeutral { get; init; }
 
+    public required SemanticColor CellBackground { get; init; }
+
+    public required SemanticColor InputBackground { get; init; }
+
     public required SemanticColor Keyword { get; init; }
 
     public required SemanticColor Number { get; init; }
@@ -113,6 +117,8 @@ public static class Themes
         Brand = new(Color.MediumPurple2),
         Selected = new(Color.MediumPurple2),
         BorderNeutral = new(Color.Grey50),
+        CellBackground = new(Color.Grey11),
+        InputBackground = new(Color.Grey19),
         Keyword = new(Color.MediumPurple2),
         Number = new(Color.SpringGreen2),
         StringLit = new(Color.Orange1),
@@ -133,6 +139,8 @@ public static class Themes
         Brand = new(Color.DeepSkyBlue1),
         Selected = new(Color.DeepSkyBlue1),
         BorderNeutral = new(Color.Grey42),
+        CellBackground = new(Color.Grey11),
+        InputBackground = new(Color.Grey19),
         Keyword = new(Color.DeepSkyBlue1),
         Number = new(Color.Cyan1),
         StringLit = new(Color.Orange1),
@@ -153,6 +161,8 @@ public static class Themes
         Brand = new(Color.Blue),
         Selected = new(Color.Blue),
         BorderNeutral = new(Color.Grey35),
+        CellBackground = new(Color.Grey93),
+        InputBackground = new(Color.Grey85),
         Keyword = new(Color.Blue),
         Number = new(Color.DarkGreen),
         StringLit = new(Color.Orange1),
@@ -173,6 +183,8 @@ public static class Themes
         Brand = new(Color.Orange1),
         Selected = new(Color.Orange1),
         BorderNeutral = new(Color.Grey50),
+        CellBackground = new(Color.Grey11),
+        InputBackground = new(Color.Grey19),
         Keyword = new(Color.Orange1),
         Number = new(Color.Gold1),
         StringLit = new(Color.Gold1),

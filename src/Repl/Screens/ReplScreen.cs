@@ -22,6 +22,7 @@ public sealed class ReplScreen : ITabScreen
     private const int MaxPopup = 7;
     private readonly SessionEngine engine;
     private readonly MultilineEditor editor = new();
+    private readonly ScrollState scroll = new();
     private IAppShellNavigator? navigator;
     private List<CompletionItem> completions = new();
     private int completionIndex;
@@ -49,6 +50,20 @@ public sealed class ReplScreen : ITabScreen
 
     public void OnActivated(IAppShellNavigator nav) => navigator = nav;
 
+    public bool HandleScroll(ScrollDirection direction, int lines)
+    {
+        if (direction == ScrollDirection.Up)
+        {
+            scroll.ScrollUp(lines);
+        }
+        else
+        {
+            scroll.ScrollDown(lines);
+        }
+
+        return true;
+    }
+
     public bool HandleKey(ConsoleKeyInfo key)
     {
         if (completions.Count > 0)
@@ -67,6 +82,17 @@ public sealed class ReplScreen : ITabScreen
         {
             hover = null;
             return true;
+        }
+
+        // Scroll the transcript viewport without disturbing the editor cursor or the pinned
+        // input box. Page-sized on PageUp/PageDown, line-sized on Ctrl+Up/Ctrl+Down.
+        var ctrl = (key.Modifiers & ConsoleModifiers.Control) != 0;
+        switch (key.Key)
+        {
+            case ConsoleKey.PageUp: scroll.ScrollUp(Math.Max(1, scroll.LastViewportHeight - 1)); return true;
+            case ConsoleKey.PageDown: scroll.ScrollDown(Math.Max(1, scroll.LastViewportHeight - 1)); return true;
+            case ConsoleKey.UpArrow when ctrl: scroll.ScrollUp(1); return true;
+            case ConsoleKey.DownArrow when ctrl: scroll.ScrollDown(1); return true;
         }
 
         if (key.Key == ConsoleKey.Spacebar && (key.Modifiers & ConsoleModifiers.Control) != 0)
@@ -99,6 +125,7 @@ public sealed class ReplScreen : ITabScreen
                     engine.Evaluate(editor.Text);
                     editor.Clear();
                     hover = null;
+                    scroll.ToBottom();
                 }
                 else if (!editor.IsEmpty)
                 {
@@ -134,51 +161,71 @@ public sealed class ReplScreen : ITabScreen
         var secondary = Tokens.Tokens.TextSecondary.Value.ToMarkup();
         var tertiary = Tokens.Tokens.TextTertiary.Value.ToMarkup();
 
-        var inputLines = editor.Lines.Count;
-        var transcriptHeight = Math.Max(3, height - inputLines - 4);
-        var rows = new List<IRenderable>();
+        // Reserve a right-hand column for the state sidebar on wide enough terminals.
+        var sidebarWidth = width >= 76 ? Math.Clamp(width / 4, 26, 42) : 0;
+        var leftWidth = sidebarWidth > 0 ? width - sidebarWidth - 2 : width - 1;
+
+        var cellBg = Tokens.Tokens.CellBackground.Value;
+        var transcript = new List<IRenderable>();
 
         if (engine.Cells.Count == 0)
         {
-            rows.Add(new Markup($"[{tertiary}]Type a G# expression and press Enter. [{brand}]/[/] commands · [{brand}]Ctrl+Space[/] complete · [{brand}]Ctrl+K[/] hover.[/]"));
+            transcript.Add(new Markup($"[{tertiary}]Type a G# expression and press Enter. [{brand}]/[/] commands · [{brand}]Ctrl+Space[/] complete · [{brand}]Ctrl+K[/] hover.[/]"));
         }
 
-        foreach (var cell in engine.Cells.TakeLast(transcriptHeight))
+        // The full history is handed to the Dock, which windows it into the scrollable
+        // region; older cells scroll off the top rather than being dropped up front.
+        for (var ci = 0; ci < engine.Cells.Count; ci++)
         {
-            rows.Add(new Markup($"[{tertiary}]{cell.Index}[/] [{brand}]›[/] {Highlight.Markup(cell.Input.Replace("\n", " "))}"));
+            var cell = engine.Cells[ci];
+            var cellRows = new List<IRenderable>
+            {
+                new Markup($"[{tertiary}]{cell.Index}[/] [{brand}]›[/] {Highlight.Markup(cell.Input.Replace("\n", " "))}"),
+            };
+
             foreach (var d in cell.Diagnostics)
             {
                 var c = (d.IsError ? Tokens.Tokens.StatusError : Tokens.Tokens.StatusWarning).Value.ToMarkup();
-                rows.Add(new Markup($"    [{c}]● {Markup.Escape(d.Id)} {Markup.Escape(d.Message)}[/]"));
+                cellRows.Add(new Markup($"    [{c}]● {Markup.Escape(d.Id)} {Markup.Escape(d.Message)}[/]"));
             }
 
             foreach (var line in SplitOutput(cell.Output))
             {
-                rows.Add(new Markup($"    [{secondary}]{Markup.Escape(line)}[/]"));
+                cellRows.Add(new Markup($"    [{secondary}]{Markup.Escape(line)}[/]"));
             }
 
             foreach (var line in SplitOutput(cell.StandardError))
             {
                 var c = Tokens.Tokens.StatusError.Value.ToMarkup();
-                rows.Add(new Markup($"    [{c}]{Markup.Escape(line)}[/]"));
+                cellRows.Add(new Markup($"    [{c}]{Markup.Escape(line)}[/]"));
             }
 
             if (!cell.HasError && cell.Value is not null)
             {
-                rows.Add(new Markup($"    [{primary}]{Markup.Escape(cell.Value.ToString() ?? string.Empty)}[/]"));
+                cellRows.Add(new Markup($"    [{primary}]{Markup.Escape(cell.Value.ToString() ?? string.Empty)}[/]"));
+            }
+
+            transcript.Add(new Backdrop(new Rows(cellRows), cellBg));
+            if (ci < engine.Cells.Count - 1)
+            {
+                transcript.Add(new Text(string.Empty));
             }
         }
 
-        var body = new List<IRenderable> { new Padder(new Rows(rows)).Padding(1, 0, 1, 0) };
+        var scrollable = new Padder(new Rows(transcript)).Padding(1, 0, 1, 0);
 
+        // Everything below the scrollable transcript stays pinned to the bottom, just above
+        // the footer chrome, and grows upward as the input box gains lines. The Dock measures
+        // this footer at render time and shrinks the transcript viewport to match.
+        var footerRows = new List<IRenderable>();
         if (completions.Count > 0)
         {
-            body.Add(CompletionPanel());
+            footerRows.Add(CompletionPanel());
         }
 
         if (hover is not null)
         {
-            body.Add(new Panel(new Markup($"[{secondary}]{Markup.Escape(hover)}[/]"))
+            footerRows.Add(new Panel(new Markup($"[{secondary}]{Markup.Escape(hover)}[/]"))
             {
                 Header = new PanelHeader($"[{tertiary}] hover · Esc [/]"),
                 Border = BoxBorder.Rounded,
@@ -187,28 +234,107 @@ public sealed class ReplScreen : ITabScreen
             });
         }
 
-        body.Add(InputBox(brand, tertiary, width));
+        footerRows.Add(new Padder(InputBox(brand, tertiary)).Padding(1, 0, 1, 0));
         var diag = engine.Cells.SelectMany(c => c.Diagnostics).Count(d => d.IsError);
         var status = diag == 0 ? $"[{Tokens.Tokens.StatusSuccess.Value.ToMarkup()}]●[/] gsharp [{tertiary}]· ready[/]"
             : $"[{Tokens.Tokens.StatusError.Value.ToMarkup()}]●[/] gsharp [{tertiary}]· {diag} error(s)[/]";
-        body.Add(new Padder(new Markup(status)).Padding(1, 0, 0, 0));
-        return new Rows(body);
+        footerRows.Add(new Padder(new Markup(status)).Padding(1, 0, 0, 0));
+
+        var main = (IRenderable)new Dock(scrollable, new Rows(footerRows), height, scroll);
+        if (sidebarWidth == 0)
+        {
+            return main;
+        }
+
+        return new SideBySide(main, leftWidth, 2, new FixedHeight(StateSidebar(height), height), sidebarWidth);
     }
 
-    private IRenderable InputBox(string brand, string tertiary, int width)
+    private IRenderable InputBox(string brand, string tertiary)
     {
         var cursor = $"{Tokens.Tokens.TextPrimary.Value.ToMarkup()} invert";
-        var lines = editor.RenderLines(cursor);
-        var rendered = lines.Select((l, i) =>
-            (IRenderable)new Markup($"[{(i == 0 ? brand : tertiary)}]{(i == 0 ? "›" : "·")}[/] {l}")).ToList();
-        return new Panel(new Rows(rendered))
+        List<IRenderable> rendered;
+        if (editor.IsEmpty)
         {
-            Border = BoxBorder.Rounded,
-            BorderStyle = new Style(Tokens.Tokens.Brand),
-            Padding = new Padding(1, 0, 1, 0),
-            Expand = false,
-            Width = width - 1,
+            rendered = new List<IRenderable>
+            {
+                new Markup($"[{brand}]›[/] [{cursor}] [/] [{tertiary}]Type a G# expression — Enter to run · Shift+Enter for newline[/]"),
+            };
+        }
+        else
+        {
+            var lines = editor.RenderLines(cursor);
+            rendered = lines.Select((l, i) =>
+                (IRenderable)new Markup($"[{(i == 0 ? brand : tertiary)}]{(i == 0 ? "›" : "·")}[/] {l}")).ToList();
+        }
+
+        // OpenCode/Copilot-CLI style: a filled input surface with a themed accent bar
+        // down the left edge (the colour previously used for the wrap-around border).
+        return new Backdrop(
+            new Rows(rendered),
+            Tokens.Tokens.InputBackground.Value,
+            accent: Tokens.Tokens.Brand.Value,
+            padLeft: 1,
+            padRight: 1,
+            padTop: 1,
+            padBottom: 1);
+    }
+
+    private IRenderable StateSidebar(int minHeight)
+    {
+        var brand = Tokens.Tokens.Brand.Value.ToMarkup();
+        var primary = Tokens.Tokens.TextPrimary.Value.ToMarkup();
+        var secondary = Tokens.Tokens.TextSecondary.Value.ToMarkup();
+        var tertiary = Tokens.Tokens.TextTertiary.Value.ToMarkup();
+        var state = engine.Snapshot();
+
+        var rows = new List<IRenderable>
+        {
+            new Markup($"[{brand}]STATE[/]"),
+            new Markup($"[{tertiary}]cells[/] [{primary}]{engine.Cells.Count}[/]  [{tertiary}]theme[/] [{primary}]{Markup.Escape(Theme.Current.Name)}[/]"),
         };
+
+        AddSection(rows, "imports", state.Imports, brand, secondary, tertiary);
+        AddSection(rows, "functions", state.Functions, brand, primary, tertiary);
+        AddSection(rows, "variables", state.Variables, brand, primary, tertiary);
+        AddSection(rows, "types", state.Types, brand, primary, tertiary);
+
+        if (state.IsEmpty)
+        {
+            rows.Add(new Text(string.Empty));
+            rows.Add(new Markup($"[{tertiary}]No symbols defined yet.[/]"));
+        }
+
+        // Same treatment as the input box: a filled surface with a themed left accent
+        // bar, rather than an enclosed box.
+        return new Backdrop(
+            new Rows(rows),
+            Tokens.Tokens.InputBackground.Value,
+            accent: Tokens.Tokens.Brand.Value,
+            padLeft: 1,
+            padRight: 1,
+            padTop: 1,
+            padBottom: 1,
+            minHeight: minHeight);
+    }
+
+    private static void AddSection(List<IRenderable> rows, string title, IReadOnlyList<ReplSymbol> items, string headColor, string nameColor, string detailColor)
+    {
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        rows.Add(new Text(string.Empty));
+        rows.Add(new Markup($"[{headColor}]{title.ToUpperInvariant()}[/] [{detailColor}]{items.Count}[/]"));
+        foreach (var item in items.Take(12))
+        {
+            rows.Add(new Markup($"[{nameColor}]{Markup.Escape(item.Display)}[/]"));
+        }
+
+        if (items.Count > 12)
+        {
+            rows.Add(new Markup($"[{detailColor}]… +{items.Count - 12} more[/]"));
+        }
     }
 
     private IRenderable CompletionPanel()

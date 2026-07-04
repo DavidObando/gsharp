@@ -80,17 +80,53 @@ public sealed class CommandPalette : IModal
     {
         var brand = Tokens.Tokens.Brand.Value.ToMarkup();
         var primary = Tokens.Tokens.TextPrimary.Value.ToMarkup();
+        var secondary = Tokens.Tokens.TextSecondary.Value.ToMarkup();
         var tertiary = Tokens.Tokens.TextTertiary.Value.ToMarkup();
-        var rows = new List<IRenderable> { new Markup($"[{brand}]:[/] [{primary}]{Markup.Escape(query)}[/]"), new Markup(string.Empty) };
+        var selectedBg = Tokens.Tokens.CellBackground.Value.ToMarkup();
+
+        var innerWidth = Math.Max(10, width - 4);
+        var rows = new List<IRenderable>
+        {
+            // Title row: "Commands" on the left, an "esc" affordance on the right.
+            new Markup(Pad($"[{brand}]Commands[/]", $"[{tertiary}]esc[/]", innerWidth)),
+            new Markup($"[{brand}]:[/] [{primary}]{Markup.Escape(query)}[/][{tertiary}]▏[/]"),
+            new Markup(string.Empty),
+        };
+
         var matches = Filtered;
+        if (matches.Count == 0)
+        {
+            rows.Add(new Markup($"  [{tertiary}]No matching commands[/]"));
+        }
+
         for (var i = 0; i < matches.Count; i++)
         {
-            var prefix = i == cursor ? $"[{brand}]❯[/] " : "  ";
-            rows.Add(new Markup($"{prefix}[{primary}]{Markup.Escape(matches[i].Verb)}[/]  [{tertiary}]{Markup.Escape(matches[i].Help)}[/]"));
+            var selected = i == cursor;
+            var caret = selected ? $"[{brand}]❯[/] " : "  ";
+            var name = selected ? $"[{primary} on {selectedBg}]" : $"[{primary}]";
+            var help = selected ? $"[{secondary} on {selectedBg}]" : $"[{tertiary}]";
+            rows.Add(new Markup($"{caret}{name}{Markup.Escape(matches[i].Verb)}[/]  {help}{Markup.Escape(matches[i].Help)}[/]"));
         }
 
         rows.Add(new Markup(string.Empty));
         rows.Add(new Markup($"[{tertiary}]↑↓ navigate · Tab complete · Enter run · Esc cancel[/]"));
-        return new Padder(new Panel(new Rows(rows)) { Border = BoxBorder.Rounded, BorderStyle = new Style(Tokens.Tokens.BorderNeutral) }).Padding(2, 1, 2, 1);
+
+        // OpenCode-style floating surface: a filled background with a themed left accent
+        // bar, matching the input box, rather than an enclosed rounded box.
+        return new Backdrop(
+            new Rows(rows),
+            Tokens.Tokens.InputBackground.Value,
+            accent: Tokens.Tokens.Brand.Value,
+            padLeft: 1,
+            padRight: 1,
+            padTop: 1,
+            padBottom: 1);
+    }
+
+    private static string Pad(string left, string right, int width)
+    {
+        var used = Markup.Remove(left).Length + Markup.Remove(right).Length;
+        var gap = Math.Max(1, width - used);
+        return $"{left}{new string(' ', gap)}{right}";
     }
 }
