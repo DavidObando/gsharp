@@ -126,6 +126,7 @@ IndexAssignmentExpression
 IndexExpression
 IndexedCollectionElement
 IndirectAssignmentExpression
+IndirectCompoundAssignmentExpression
 InterfaceDeclaration
 InterfaceKeyword
 InternalKeyword

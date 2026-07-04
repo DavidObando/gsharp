@@ -320,6 +320,7 @@ public enum SyntaxKind
     // stind.*`. Necessary for §5's body-side lowering of `ref`/`out`
     // parameter writes and for direct `*T`-local stores.
     IndirectAssignmentExpression,
+    IndirectCompoundAssignmentExpression,
 
     // Issue #522: a C#-style object initializer applied to a constructor
     // call, e.g. `T(args) { Prop1 = v1, Prop2 = v2 }`. Each initializer is
