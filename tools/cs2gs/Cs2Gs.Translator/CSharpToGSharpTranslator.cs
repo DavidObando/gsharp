@@ -575,6 +575,9 @@ public sealed class CSharpToGSharpTranslator
 
         public override GMember VisitInterfaceDeclaration(InterfaceDeclarationSyntax node) => this.VisitAggregate(node);
 
+        public override GMember VisitDelegateDeclaration(DelegateDeclarationSyntax node) =>
+            this.TranslateDelegateDeclaration(node);
+
         /// <summary>
         /// Removes and returns the top-level declarations (lifted owned-struct
         /// receiver methods, issue #938) collected while translating the most
@@ -1881,6 +1884,19 @@ public sealed class CSharpToGSharpTranslator
 
                     break;
 
+                case EventDeclarationSyntax explicitEvent:
+                    yield return this.TranslateExplicitEvent(explicitEvent);
+                    break;
+
+                case DelegateDeclarationSyntax nestedDelegate:
+                    GMember translatedDelegate = this.TranslateDelegateDeclaration(nestedDelegate);
+                    if (translatedDelegate != null)
+                    {
+                        yield return (translatedDelegate, true);
+                    }
+
+                    break;
+
                 case PropertyDeclarationSyntax property:
                     if (lift.PropertiesAsPrimaryParameters.Contains(property.Identifier.Text))
                     {
@@ -1995,6 +2011,76 @@ public sealed class CSharpToGSharpTranslator
 
                 yield return (declaration, symbol != null && symbol.IsStatic);
             }
+        }
+
+        private (GMember Member, bool IsStatic) TranslateExplicitEvent(EventDeclarationSyntax node)
+        {
+            // `public event Handler X { add { ... } remove { ... } }` — the explicit
+            // accessor form of ADR-0052 §2. No backing field is synthesized; the
+            // `add`/`remove` bodies translate like any other accessor body, with
+            // `value` bound as the implicit handler parameter (already an ordinary
+            // identifier in the C# source, so it round-trips unchanged).
+            var symbol = this.context.GetDeclaredSymbol(node) as IEventSymbol;
+
+            GTypeReference type = symbol != null
+                ? this.typeMapper.Map(
+                    symbol.Type.WithNullableAnnotation(NullableAnnotation.NotAnnotated),
+                    this.context,
+                    node.GetLocation())
+                : this.MapTypeSyntax(node.Type);
+
+            AccessorDeclarationSyntax addAccessor = node.AccessorList?.Accessors
+                .FirstOrDefault(a => a.IsKind(SyntaxKind.AddAccessorDeclaration));
+            AccessorDeclarationSyntax removeAccessor = node.AccessorList?.Accessors
+                .FirstOrDefault(a => a.IsKind(SyntaxKind.RemoveAccessorDeclaration));
+
+            BlockStatement addBody = addAccessor != null
+                ? this.TranslateBody(addAccessor, $"'add' accessor of event '{node.Identifier.Text}'")
+                : new BlockStatement(new List<GStatement>());
+            BlockStatement removeBody = removeAccessor != null
+                ? this.TranslateBody(removeAccessor, $"'remove' accessor of event '{node.Identifier.Text}'")
+                : new BlockStatement(new List<GStatement>());
+
+            var declaration = new EventDeclaration(
+                SanitizeIdentifier(node.Identifier.Text),
+                type,
+                MapVisibility(symbol, this.context, node),
+                this.MapAttributes(node.AttributeLists),
+                addBody,
+                removeBody);
+
+            return (declaration, symbol != null && symbol.IsStatic);
+        }
+
+        private GMember TranslateDelegateDeclaration(DelegateDeclarationSyntax node)
+        {
+            // `public delegate R Name(params);` → G# named delegate type alias
+            // `type Name = delegate func(params) R` (ADR-0059). Generic delegates
+            // are gapped explicitly: `NamedDelegateDeclaration` has no type-parameter
+            // slot yet (ADR-0059 "Follow-up work" only covers the binder/emitter
+            // side of generics, not this translator).
+            if (node.TypeParameterList != null)
+            {
+                this.context.ReportUnsupported(
+                    node,
+                    $"generic delegate '{node.Identifier.Text}' has no canonical G# declaration mapping yet; named delegate type aliases (ADR-0059) do not support type parameters in cs2gs.");
+                return null;
+            }
+
+            var symbol = this.context.GetDeclaredSymbol(node) as INamedTypeSymbol;
+            IMethodSymbol invoke = symbol?.DelegateInvokeMethod;
+
+            List<Parameter> parameters = this.MapParameterList(node.ParameterList);
+            GTypeReference returnType = invoke != null && invoke.ReturnsVoid
+                ? null
+                : this.MapTypeSyntax(node.ReturnType);
+
+            return new NamedDelegateDeclaration(
+                SanitizeIdentifier(node.Identifier.Text),
+                parameters,
+                returnType,
+                MapVisibility(symbol, this.context, node),
+                this.MapAttributes(node.AttributeLists));
         }
 
         /// <summary>

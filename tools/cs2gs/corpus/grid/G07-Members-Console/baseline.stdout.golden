@@ -8,6 +8,10 @@ ConstructorDeclaration: blank=unassigned@0
 ConstructorDeclaration: assigned=kim@12
 ConversionOperatorDeclaration: implicit-then-explicit=42
 ConversionOperatorDeclaration: roundtrip=7
+EventDeclaration: got=first
+EventDeclaration: done
+EventFieldDeclaration: tick=3
+EventFieldDeclaration: done
 FieldDeclaration: const=64
 FieldDeclaration: static=5
 FieldDeclaration: static-bumped=7

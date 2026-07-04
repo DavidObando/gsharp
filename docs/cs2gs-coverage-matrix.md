@@ -6,16 +6,17 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | Status | Count |
 | --- | --- |
 | Unclassified | 0 |
-| Translated | 216 |
+| Translated | 221 |
 | Lowered | 12 |
 | UnsupportedByDesign | 56 |
-| Gap | 37 |
+| Gap | 32 |
 
-## Translated (216)
+## Translated (221)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | AccessorList | AccessorListSyntax | ADR-0115 §B.11 |  |  |  |  |
+| AddAccessorDeclaration | AccessorDeclarationSyntax | ADR-0052 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/EventDeclaration.cs |  | The explicit add/remove accessor body of an event declaration (ADR-0052 §2); translates like any other accessor body. |
 | AddAssignmentExpression | AssignmentExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/AddAssignmentExpression.cs |  |  |
 | AddExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/AddExpression.cs |  |  |
 | AddressOfExpression | PrefixUnaryExpressionSyntax | ADR-0115 §B.30 |  |  |  |  |
@@ -76,6 +77,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | DefaultExpression | DefaultExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/DefaultExpression.cs |  |  |
 | DefaultLiteralExpression | LiteralExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/DefaultLiteralExpression.cs |  |  |
 | DefaultSwitchLabel | DefaultSwitchLabelSyntax | ADR-0115 §B.33 |  |  |  |  |
+| DelegateDeclaration | DelegateDeclarationSyntax | ADR-0059 |  | tools/cs2gs/corpus/grid/G09-Functions-Console/Constructs/DelegateDeclaration.cs |  | Maps to the G# named delegate type alias `type Name = delegate func(params) R` (ADR-0059). A generic delegate (a type-parameter list) still gaps loudly; NamedDelegateDeclaration has no type-parameter slot. |
 | DestructorDeclaration | DestructorDeclarationSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/DestructorDeclaration.cs |  |  |
 | DiscardDesignation | DiscardDesignationSyntax | ADR-0115 §B.30 |  | tools/cs2gs/corpus/grid/G09-Functions-Console/Constructs/DeclarationExpression.cs |  |  |
 | DiscardPattern | DiscardPatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/DiscardPattern.cs |  |  |
@@ -89,6 +91,8 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | EnumDeclaration | EnumDeclarationSyntax | ADR-0115 §B.11 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/EnumDeclaration.cs |  | Implicit member values only; explicit values/[Flags] silently erased (issue #1912). |
 | EqualsExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/EqualsExpression.cs |  |  |
 | EqualsValueClause | EqualsValueClauseSyntax | ADR-0115 §B.3 |  |  |  |  |
+| EventDeclaration | EventDeclarationSyntax | ADR-0052 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/EventDeclaration.cs |  | Explicit add/remove accessor event maps to the G# event declaration's explicit-accessor form (ADR-0052 §2). |
+| EventFieldDeclaration | EventFieldDeclarationSyntax | ADR-0052 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/EventFieldDeclaration.cs |  | Field-like event maps to the G# field-like event declaration (ADR-0052 §2). |
 | ExclusiveOrAssignmentExpression | AssignmentExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/ExclusiveOrAssignmentExpression.cs |  |  |
 | ExclusiveOrExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/ExclusiveOrExpression.cs |  |  |
 | ExpressionColon | ExpressionColonSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/ExpressionColon.cs | https://github.com/DavidObando/gsharp/issues/1891 | is-form green; switch-expression arm form unsupported (issue #1891). |
@@ -176,6 +180,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | RecursivePattern | RecursivePatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/RecursivePattern.cs | https://github.com/DavidObando/gsharp/issues/1923 | Shallow property patterns green; nested reference-member and boxed/nullable subjects blocked by gsc (issue #1923). |
 | RefStructConstraint | RefStructConstraintSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/AllowsConstraintClause.cs |  |  |
 | RelationalPattern | RelationalPatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/RelationalPattern.cs |  |  |
+| RemoveAccessorDeclaration | AccessorDeclarationSyntax | ADR-0052 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/EventDeclaration.cs |  | The explicit add/remove accessor body of an event declaration (ADR-0052 §2); translates like any other accessor body. |
 | ReturnStatement | ReturnStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/ReturnStatement.cs |  |  |
 | RightShiftAssignmentExpression | AssignmentExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/RightShiftAssignmentExpression.cs |  |  |
 | RightShiftExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/RightShiftExpression.cs |  |  |
@@ -310,17 +315,13 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | XmlText | XmlTextSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | XmlTextAttribute | XmlTextAttributeSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 
-## Gap (37)
+## Gap (32)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| AddAccessorDeclaration | AccessorDeclarationSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1899 |  |
 | AnonymousMethodExpression | AnonymousMethodExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1898 |  |
 | CheckedExpression | CheckedExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1881 |  |
-| DelegateDeclaration | DelegateDeclarationSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1899 |  |
 | EnumMemberDeclaration | EnumMemberDeclarationSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1912 | Explicit values, [Flags], negative and alias members erased to sequential ordinals — parity-verified divergence. |
-| EventDeclaration | EventDeclarationSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1899 |  |
-| EventFieldDeclaration | EventFieldDeclarationSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1899 |  |
 | ExplicitInterfaceSpecifier | ExplicitInterfaceSpecifierSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1911 |  |
 | ExtensionBlockDeclaration | ExtensionBlockDeclarationSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1879 | C# 14 headline; classic this-param extensions map to receiver funcs and are green (grid G13). |
 | FieldExpression | FieldExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1907 | C# 14 field keyword. |
@@ -345,7 +346,6 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | RangeExpression | RangeExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1896 | Lowers to .Slice(...) which gsc cannot resolve on arrays/strings. |
 | RefExpression | RefExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1900 | ref argument/return seam (&x pass-by-address). |
 | RefType | RefTypeSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1900 |  |
-| RemoveAccessorDeclaration | AccessorDeclarationSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1899 |  |
 | SpreadElement | SpreadElementSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1897 |  |
 | TypePattern | TypePatternSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1890 | Bare-type switch-expression arms; is/case binder forms work (DeclarationPattern). |
 | UncheckedExpression | CheckedExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1881 |  |

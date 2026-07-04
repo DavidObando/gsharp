@@ -1185,7 +1185,7 @@ public static class GSharpPrinter
             case DestructorDeclaration destructor:
                 return $"{RenderAttributeBlock(destructor.Attributes, indent)}{Indent(indent)}deinit {RenderBlock(destructor.Body, indent)}";
             case EventDeclaration eventDeclaration:
-                return $"{RenderAttributeBlock(eventDeclaration.Attributes, indent)}{Indent(indent)}{RenderVisibility(eventDeclaration.Visibility)}event {eventDeclaration.Name} {RenderType(eventDeclaration.Type)}";
+                return RenderEvent(eventDeclaration, indent);
             case SharedBlock sharedBlock:
                 return RenderSharedBlock(sharedBlock, indent);
             default:
@@ -1297,6 +1297,33 @@ public static class GSharpPrinter
         sb.Append(pad);
         sb.Append(RenderVisibility(declaration.Visibility));
         sb.Append($"enum {declaration.Name} {{ {string.Join(", ", cases)} }}");
+        return sb.ToString();
+    }
+
+    private static string RenderEvent(EventDeclaration declaration, int indent)
+    {
+        var pad = Indent(indent);
+        var header = $"{RenderAttributeBlock(declaration.Attributes, indent)}{pad}{RenderVisibility(declaration.Visibility)}event {declaration.Name} {RenderType(declaration.Type)}";
+        if (!declaration.HasExplicitAccessors)
+        {
+            return header;
+        }
+
+        // ADR-0052 §2 "Event with explicit accessors": both `add` and `remove`
+        // must be present; the binder rejects a lone accessor.
+        var sb = new StringBuilder();
+        sb.Append(header);
+        sb.Append(" {\n");
+        sb.Append(Indent(indent + 1));
+        sb.Append("add ");
+        sb.Append(RenderBlock(declaration.AddBody, indent + 1));
+        sb.Append('\n');
+        sb.Append(Indent(indent + 1));
+        sb.Append("remove ");
+        sb.Append(RenderBlock(declaration.RemoveBody, indent + 1));
+        sb.Append('\n');
+        sb.Append(pad);
+        sb.Append('}');
         return sb.ToString();
     }
 
