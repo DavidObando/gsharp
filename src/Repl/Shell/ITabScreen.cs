@@ -19,6 +19,9 @@ public interface ITabScreen
 
     bool HandleKey(ConsoleKeyInfo key);
 
+    /// <summary>Handles a mouse-wheel scroll. Returns <c>true</c> if the event was consumed.</summary>
+    bool HandleScroll(ScrollDirection direction, int lines) => false;
+
     IEnumerable<KeyValuePair<string, string?>> Hints => Array.Empty<KeyValuePair<string, string?>>();
 
     void OnActivated(IAppShellNavigator navigator)

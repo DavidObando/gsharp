@@ -32,6 +32,10 @@ public static class Tokens
 
     public static SemanticColor BorderNeutral => Theme.Current.BorderNeutral;
 
+    public static SemanticColor CellBackground => Theme.Current.CellBackground;
+
+    public static SemanticColor InputBackground => Theme.Current.InputBackground;
+
     public static SemanticColor Keyword => Theme.Current.Keyword;
 
     public static SemanticColor Number => Theme.Current.Number;

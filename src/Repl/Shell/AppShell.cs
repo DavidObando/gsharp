@@ -18,11 +18,6 @@ namespace GSharp.Repl.Shell;
 /// </summary>
 public sealed class AppShell : IAppShellNavigator
 {
-    public interface IKeyReader
-    {
-        ConsoleKeyInfo? ReadKey();
-    }
-
     private readonly IAnsiConsole console;
     private readonly IReadOnlyList<ITabScreen> tabs;
     private readonly CtrlCState ctrlC = new();
@@ -63,15 +58,15 @@ public sealed class AppShell : IAppShellNavigator
 
     public void RequestExit() => exitRequested = true;
 
-    public int Run(IKeyReader keyReader)
+    public int Run(IInputReader inputReader)
     {
-        ArgumentNullException.ThrowIfNull(keyReader);
+        ArgumentNullException.ThrowIfNull(inputReader);
         tabs[activeTab].OnActivated(this);
         Render();
         while (true)
         {
-            var key = keyReader.ReadKey();
-            if (key is null)
+            var input = inputReader.Read();
+            if (input is null)
             {
                 return 0;
             }
@@ -79,7 +74,14 @@ public sealed class AppShell : IAppShellNavigator
             var action = ShellAction.Continue;
             try
             {
-                action = Dispatch(key.Value);
+                if (input.Value.Key is { } key)
+                {
+                    action = Dispatch(key);
+                }
+                else if (input.Value.Scroll is { } scroll)
+                {
+                    DispatchScroll(scroll);
+                }
             }
             catch (Exception ex)
             {
@@ -100,6 +102,17 @@ public sealed class AppShell : IAppShellNavigator
                 toast = $"Render error: {ex.Message}";
             }
         }
+    }
+
+    /// <summary>Routes a mouse-wheel scroll to the active tab (three lines per notch).</summary>
+    public void DispatchScroll(ScrollDirection direction)
+    {
+        if (activeModal is not null)
+        {
+            return;
+        }
+
+        tabs[activeTab].HandleScroll(direction, 3);
     }
 
     public ShellAction Dispatch(ConsoleKeyInfo key)
@@ -183,7 +196,11 @@ public sealed class AppShell : IAppShellNavigator
     {
         var width = console.Profile.Width;
         var height = Math.Max(10, console.Profile.Height);
-        var bodyHeight = Math.Max(5, height - 6);
+
+        // Chrome is exactly four lines: header, a rule, a rule, and the footer. The body
+        // fills the rest so the whole frame is exactly the terminal height (no scrolling,
+        // so the header/sidebar/footer never scroll off).
+        var bodyHeight = Math.Max(3, height - 4);
         var screen = tabs[activeTab];
 
         var useBuffer = !Console.IsOutputRedirected;
@@ -206,27 +223,37 @@ public sealed class AppShell : IAppShellNavigator
             target = console;
         }
 
-        target.Write(new Markup(BuildHeader()));
-        target.WriteLine();
-        target.Write(new Rule { Style = new Style(Tokens.Tokens.BorderNeutral) });
+        var ruleColor = Tokens.Tokens.BorderNeutral.Value.ToMarkup();
+        var rule = $"[{ruleColor}]{new string('─', Math.Max(1, width))}[/]";
+        IRenderable footer = toast is not null
+            ? new Markup($"[{Tokens.Tokens.StatusWarning.Value.ToMarkup()}] ! {Markup.Escape(toast)}[/]")
+            : BuildHintBar(screen).Render();
 
-        target.Write(activeModal is not null ? activeModal.Render(width, bodyHeight) : screen.Render(width, bodyHeight + 2));
+        // A single frame renderable whose line breaks fall only BETWEEN rows, so the total
+        // line count is deterministic: 1 + 1 + bodyHeight + 1 + 1 == height.
+        IRenderable frame = new Rows(
+            new Markup(BuildHeader()),
+            new Markup(rule),
+            screen.Render(width, bodyHeight),
+            new Markup(rule),
+            footer);
 
-        target.WriteLine();
-        target.Write(new Rule { Style = new Style(Tokens.Tokens.BorderNeutral) });
-        if (toast is not null)
+        // The command palette floats as a centered modal over the frame; the surrounding
+        // chrome stays visible behind it rather than being replaced.
+        if (activeModal is not null)
         {
-            target.Write(new Markup($"[{Tokens.Tokens.StatusWarning.Value.ToMarkup()}] ! {Markup.Escape(toast)}[/]"));
+            var modalWidth = Math.Clamp(width - 8, 24, 72);
+            frame = new Overlay(frame, activeModal.Render(modalWidth, bodyHeight), modalWidth);
         }
-        else
-        {
-            target.Write(BuildHintBar(screen).Render());
-        }
+
+        // Clamp to exactly the terminal height and strip any trailing line break so the
+        // whole frame fits without scrolling (which would push the header off-screen).
+        target.Write(new FixedHeight(frame, height));
 
         if (useBuffer && sw is not null)
         {
-            var frame = AltScreen.InjectEraseBeforeNewlines(sw.ToString());
-            Console.Out.Write($"{AltScreen.SyncStartSequence}\u001b[H{frame}\u001b[K\u001b[J{AltScreen.SyncEndSequence}");
+            var frameText = AltScreen.InjectEraseBeforeNewlines(sw.ToString());
+            Console.Out.Write($"{AltScreen.SyncStartSequence}\u001b[H{frameText}\u001b[K\u001b[J{AltScreen.SyncEndSequence}");
             Console.Out.Flush();
         }
     }
@@ -247,21 +274,6 @@ public sealed class AppShell : IAppShellNavigator
             .Add("Ctrl+Space", "complete")
             .Add("Ctrl+K", "hover")
             .Add("Ctrl+C", "quit");
-    }
-
-    public sealed class ConsoleKeyReader : IKeyReader
-    {
-        public ConsoleKeyInfo? ReadKey()
-        {
-            try
-            {
-                return Console.ReadKey(intercept: true);
-            }
-            catch (InvalidOperationException)
-            {
-                return null;
-            }
-        }
     }
 }
 

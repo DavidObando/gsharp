@@ -39,7 +39,8 @@ public static class ReplHost
             }
 
             AltScreen.Enter();
-            return shell.Run(new AppShell.ConsoleKeyReader());
+            using var input = new ConsoleInputReader();
+            return shell.Run(input);
         }
         finally
         {
