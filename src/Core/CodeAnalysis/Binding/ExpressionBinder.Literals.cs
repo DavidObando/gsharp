@@ -50,7 +50,25 @@ internal sealed partial class ExpressionBinder
     internal BoundExpression BindTypeOfExpression(TypeOfExpressionSyntax syntax)
     {
         // Issue #143: `typeof(T)` returns System.Type for the referenced type.
-        var typeSymbol = bindTypeClause(syntax.TypeClause);
+        //
+        // Issue #1915: G# has no bracket syntax for an UNBOUND generic (there is
+        // no `List[]`/`List<>` spelling), so a bare generic name with no
+        // type-argument list, qualifier, array shape, or nullable suffix is read
+        // as the OPEN generic type definition specifically in this `typeof(...)`
+        // position — the only place an open generic is ever a meaningful,
+        // usable value (elsewhere, e.g. a variable's declared type or a
+        // static-member receiver, an unbound generic has no accessible members
+        // and a bare name legitimately stays a GS0113). Attempted BEFORE the
+        // ordinary type-clause bind so a hit here never also trips the
+        // `ReportUndefinedType` diagnostic that path raises on failure.
+        var typeClause = syntax.TypeClause;
+        TypeSymbol typeSymbol = null;
+        if (!typeClause.HasQualifier && !typeClause.HasTypeArguments && !typeClause.IsArray && !typeClause.IsNullable)
+        {
+            TryResolveOpenGenericImportedType(typeClause.Identifier.Text, out typeSymbol);
+        }
+
+        typeSymbol ??= bindTypeClause(syntax.TypeClause);
         if (typeSymbol == null || typeSymbol == TypeSymbol.Error)
         {
             return new BoundErrorExpression(null);
@@ -58,6 +76,55 @@ internal sealed partial class ExpressionBinder
 
         var systemType = ImportedTypeSymbol.Get(typeof(Type));
         return new BoundTypeOfExpression(null, typeSymbol, systemType);
+    }
+
+    /// <summary>
+    /// Issue #1915: resolves a bare simple name to an imported CLR generic
+    /// type's OPEN (unbound) definition — e.g. <c>List</c> with <c>import
+    /// System.Collections.Generic</c> resolves to <c>List&lt;&gt;</c> — by
+    /// trying each in-scope import's target namespace with an arity-suffixed
+    /// (<c>`1</c>, <c>`2</c>, …) reflection name. Returns <see langword="false"/>
+    /// when the plain (non-generic) name already resolves to something else
+    /// (the ordinary path must always win), or when no unique generic match is
+    /// found across every import and arity (an ambiguous or absent match falls
+    /// back to the ordinary "type doesn't exist" diagnostic rather than
+    /// guessing).
+    /// </summary>
+    private bool TryResolveOpenGenericImportedType(string name, out TypeSymbol type)
+    {
+        type = null;
+        if (string.IsNullOrEmpty(name) || lookupType(name) != null)
+        {
+            return false;
+        }
+
+        Type match = null;
+        foreach (var import in scope.GetDeclaredImports())
+        {
+            for (var arity = 1; arity <= 8; arity++)
+            {
+                var candidateName = import.Target + "." + name + "`" + arity;
+                if (scope.References.TryResolveType(candidateName, out var candidate))
+                {
+                    if (match != null && match != candidate)
+                    {
+                        // Ambiguous across imports/arities — defer to the
+                        // ordinary diagnostic rather than guessing.
+                        return false;
+                    }
+
+                    match = candidate;
+                }
+            }
+        }
+
+        if (match == null)
+        {
+            return false;
+        }
+
+        type = TypeSymbol.FromClrType(match);
+        return true;
     }
 
     internal BoundExpression BindSizeOfExpression(SizeOfExpressionSyntax syntax)

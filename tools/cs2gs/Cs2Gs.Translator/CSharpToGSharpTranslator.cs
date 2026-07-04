@@ -11169,7 +11169,15 @@ public sealed class CSharpToGSharpTranslator
                 ctorModel = owningCompilation.GetSemanticModel(ctorSyntax.SyntaxTree);
             }
 
-            var paramToMember = new Dictionary<IParameterSymbol, string>(SymbolEqualityComparer.Default);
+            // Keyed by parameter ORDINAL rather than by `IParameterSymbol` itself:
+            // for a GENERIC struct (`Slot<T>`), `ctorModel` resolves the ctor body
+            // against the type's ORIGINAL (unbound) definition, so the parameter
+            // symbols seen here are `Slot<T>`'s, while `ctorSymbol` (passed in from
+            // the `new Slot<int>(...)` call site) is the CONSTRUCTED method whose
+            // parameters belong to `Slot<int>` — two distinct, non-equal symbols
+            // for the same declaration. Ordinal position is substitution-invariant
+            // and is exactly what the final zip below needs anyway.
+            var paramToMember = new Dictionary<int, string>();
             foreach (StatementSyntax statement in ctorSyntax.Body.Statements)
             {
                 if (statement is not ExpressionStatementSyntax exprStatement ||
@@ -11192,22 +11200,31 @@ public sealed class CSharpToGSharpTranslator
                 // admit a get-only COMPUTED property (no backing storage) as a
                 // zip target; that class of member can never appear here because
                 // the ctor could not legally assign it in the first place.
+                // Compared against the type's ORIGINAL DEFINITION rather than
+                // `valueType` directly: for a generic struct, `f`/`p` are resolved
+                // against the ctor's OWN (unbound) declaring tree, so their
+                // `ContainingType` is `Slot<T>` even when `valueType` is the
+                // constructed `Slot<int>` — `OriginalDefinition` makes both sides
+                // the same unbound symbol regardless of type-argument substitution.
                 string memberName = leftSymbol switch
                 {
-                    IFieldSymbol f when !f.IsStatic && SymbolEqualityComparer.Default.Equals(f.ContainingType, valueType) => f.Name,
-                    IPropertySymbol p when !p.IsStatic && SymbolEqualityComparer.Default.Equals(p.ContainingType, valueType) => p.Name,
+                    IFieldSymbol f when !f.IsStatic && SymbolEqualityComparer.Default.Equals(f.ContainingType, valueType.OriginalDefinition) => f.Name,
+                    IPropertySymbol p when !p.IsStatic && SymbolEqualityComparer.Default.Equals(p.ContainingType, valueType.OriginalDefinition) => p.Name,
                     _ => null,
                 };
 
                 // The right-hand side must be exactly a reference to one of the
                 // constructor's OWN parameters — anything else (a literal, a
                 // computed expression, a call) is a transformation the struct
-                // literal cannot replay.
+                // literal cannot replay. Compared via `OriginalDefinition` for the
+                // same reason as above: `rightParameter` belongs to the ctor's
+                // unbound declaration, while `ctorSymbol` may be a constructed
+                // generic method resolved at the `new Slot<int>(...)` call site.
                 ISymbol rightSymbol = ctorModel.GetSymbolInfo(assignment.Right).Symbol;
                 bool isPlainParameterAssign = memberName != null &&
                     rightSymbol is IParameterSymbol rightParameter &&
-                    SymbolEqualityComparer.Default.Equals(rightParameter.ContainingSymbol, ctorSymbol) &&
-                    !paramToMember.ContainsKey(rightParameter);
+                    SymbolEqualityComparer.Default.Equals(rightParameter.ContainingSymbol.OriginalDefinition, ctorSymbol.OriginalDefinition) &&
+                    !paramToMember.ContainsKey(rightParameter.Ordinal);
 
                 if (!isPlainParameterAssign)
                 {
@@ -11217,7 +11234,7 @@ public sealed class CSharpToGSharpTranslator
                     return false;
                 }
 
-                paramToMember[(IParameterSymbol)rightSymbol] = memberName;
+                paramToMember[((IParameterSymbol)rightSymbol).Ordinal] = memberName;
             }
 
             if (paramToMember.Count != ctorSymbol.Parameters.Length)
@@ -11228,7 +11245,7 @@ public sealed class CSharpToGSharpTranslator
                 return false;
             }
 
-            targetNames = ctorSymbol.Parameters.Select(p => paramToMember[p]).ToList();
+            targetNames = ctorSymbol.Parameters.Select(p => paramToMember[p.Ordinal]).ToList();
             unsupportedReason = null;
             return true;
         }
@@ -11496,7 +11513,9 @@ public sealed class CSharpToGSharpTranslator
         // the omitted type argument, so the general type mapper cannot resolve it.
         // G# has no open-generic `typeof` spelling; the canonical form is the bare
         // generic definition name (`typeof(IEnumerable)`), which parses and binds
-        // to the open type.
+        // to the open type (issue #1915: gsc's binder now resolves a bare
+        // imported generic name inside `typeof(...)` to the CLR open generic
+        // definition via an arity-suffixed reflection lookup).
         private GTypeReference MapTypeOfOperand(TypeSyntax type)
         {
             if (IsUnboundGeneric(type, out string unboundName))
