@@ -3906,11 +3906,28 @@ internal sealed class OverloadResolver
     /// </description></item>
     /// </list>
     /// </summary>
+    /// <param name="syntax">The call-expression syntax.</param>
+    /// <param name="variable">The callee variable.</param>
+    /// <param name="fnType">The delegate's equivalent function-type shape.</param>
+    /// <param name="args">The already-bound, already-converted call arguments.</param>
+    /// <param name="targetNarrowedType">
+    /// Issue #2066: when the callee variable's declared type is nullable and
+    /// an active smart-cast frame has narrowed it (the direct-call binders
+    /// only reach this helper once a narrowed non-nullable delegate/function
+    /// shape has been matched), the concrete narrowed type to report from the
+    /// synthesized target read's <see cref="BoundExpression.Type"/> — for
+    /// example the actual <see cref="DelegateTypeSymbol"/> for a named
+    /// delegate, so downstream emit's delegate-shape dispatch (<see
+    /// cref="Emit.MethodBodyEmitter.EmitIndirectCall"/>) sees the narrowed
+    /// shape rather than the raw nullable declared type. <c>null</c> when the
+    /// variable's declared type is already non-nullable.
+    /// </param>
     private BoundExpression BuildIndirectDelegateCall(
         CallExpressionSyntax syntax,
         VariableSymbol variable,
         FunctionTypeSymbol fnType,
-        ImmutableArray<BoundExpression> args)
+        ImmutableArray<BoundExpression> args,
+        TypeSymbol targetNarrowedType = null)
     {
         if (variable is ImplicitFieldVariableSymbol implicitField)
         {
@@ -3938,7 +3955,7 @@ internal sealed class OverloadResolver
             return new BoundIndirectCallExpression(null, memberLoad, fnType, args);
         }
 
-        return new BoundIndirectCallExpression(null, new BoundVariableExpression(null, variable), fnType, args);
+        return new BoundIndirectCallExpression(null, new BoundVariableExpression(null, variable, targetNarrowedType), fnType, args);
     }
 
     /// <summary>
@@ -3954,6 +3971,41 @@ internal sealed class OverloadResolver
             new BoundVariableExpression(null, implicitField.Receiver),
             implicitField.StructType,
             implicitField.Field);
+
+    /// <summary>
+    /// Issue #2066: resolves the effective (smart-cast-narrowed) type to use
+    /// when binding direct call syntax <c>f(args)</c> on a variable. A
+    /// nil-guarded nullable-local delegate (<c>let f T? = ...; if f != nil {
+    /// f(args) }</c>) narrows to its non-nullable underlying delegate/function
+    /// type inside the guarded scope (Phase 3.C.4 smart-cast), but the
+    /// direct-call binders below dispatch by matching <see
+    /// cref="VariableSymbol.Type"/> against the concrete (non-nullable)
+    /// delegate shape (<see cref="FunctionTypeSymbol"/>, <see
+    /// cref="DelegateTypeSymbol"/>, or an imported CLR delegate <c>Type</c>).
+    /// Without consulting the active narrowing frame, the raw nullable
+    /// declared type never matches any of those shapes and the call falls
+    /// through to <see cref="DiagnosticBag.ReportNotAFunction"/> — this walks
+    /// the same <see cref="BinderContext.NarrowedVariables"/> stack <see
+    /// cref="ExpressionBinder"/> uses for ordinary reads, so a guarded
+    /// snapshot invokes exactly like the unwrapped field/variable would.
+    /// </summary>
+    private TypeSymbol GetNarrowedCallableType(VariableSymbol variable)
+    {
+        if (variable.Type is not NullableTypeSymbol)
+        {
+            return variable.Type;
+        }
+
+        for (var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i--)
+        {
+            if (binderCtx.NarrowedVariables[i].TryGetValue(variable, out var narrowed))
+            {
+                return narrowed;
+            }
+        }
+
+        return variable.Type;
+    }
 
     private bool TryBindNullableDelegateInvocation(
         VariableSymbol variable,
@@ -4628,7 +4680,7 @@ internal sealed class OverloadResolver
         // Phase 4.7: invoking a function-typed variable goes through the
         // indirect-call path. Sites like `add(1, 2)` where `add` is `let
         // add func(int, int) int = ...` reduce to BoundIndirectCallExpression.
-        if (symbol is VariableSymbol variable && variable.Type is FunctionTypeSymbol fnType)
+        if (symbol is VariableSymbol variable && GetNarrowedCallableType(variable) is FunctionTypeSymbol fnType)
         {
             // Issue #343: indirect calls through a function-typed variable have
             // no preserved parameter names; named arguments are not allowed.
@@ -4691,13 +4743,14 @@ internal sealed class OverloadResolver
                 convertedArgs.Add(conversions.BindConversion(argLoc, fnPermutedArgs[i], fnType.ParameterTypes[i]));
             }
 
-            return BuildIndirectDelegateCall(syntax, variable, fnType, convertedArgs.MoveToImmutable());
+            var fnTargetNarrowedType = variable.Type is NullableTypeSymbol ? (TypeSymbol)fnType : null;
+            return BuildIndirectDelegateCall(syntax, variable, fnType, convertedArgs.MoveToImmutable(), fnTargetNarrowedType);
         }
 
         // ADR-0059 / issue #255: direct call syntax `h(args)` on a variable
         // of a user-declared named delegate type. Mirrors the CLR-delegate
         // branch below — both end up dispatching through Invoke.
-        if (symbol is VariableSymbol namedDelegateVar && namedDelegateVar.Type is DelegateTypeSymbol namedDelegateSym)
+        if (symbol is VariableSymbol namedDelegateVar && GetNarrowedCallableType(namedDelegateVar) is DelegateTypeSymbol namedDelegateSym)
         {
             // Issue #343: named-delegate Invoke parameter names live on the
             // delegate-type symbol; they are not surfaced to the call site.
@@ -4764,7 +4817,8 @@ internal sealed class OverloadResolver
                 convertedNamedArgs.Add(conversions.BindConversion(argLoc, ndPermutedArgs[i], namedDelegateSym.Parameters[i].Type));
             }
 
-            return BuildIndirectDelegateCall(syntax, namedDelegateVar, namedDelegateSym.EquivalentFunctionType, convertedNamedArgs.MoveToImmutable());
+            var ndTargetNarrowedType = namedDelegateVar.Type is NullableTypeSymbol ? (TypeSymbol)namedDelegateSym : null;
+            return BuildIndirectDelegateCall(syntax, namedDelegateVar, namedDelegateSym.EquivalentFunctionType, convertedNamedArgs.MoveToImmutable(), ndTargetNarrowedType);
         }
 
         // #325: a variable whose type is a CLR delegate (e.g. `Func[int32,
