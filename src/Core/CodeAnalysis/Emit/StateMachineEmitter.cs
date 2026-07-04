@@ -1449,7 +1449,18 @@ internal sealed class StateMachineEmitter
     /// local, initializes fields, calls <c>builder.Start(ref sm)</c>, and
     /// returns <c>builder.Task</c> (or returns void for async void).
     /// </summary>
-    public int EmitAsyncKickoffBody(FunctionSymbol function, AsyncStateMachinePlan plan)
+    /// <param name="function">The kickoff function symbol.</param>
+    /// <param name="plan">The async state-machine plan.</param>
+    /// <param name="driveSynchronously">
+    /// Issue #1904: when <see langword="true"/> (the async function is the
+    /// CLR entry point), the CLR requires a <c>void</c>/<c>int32</c>/<c>uint32</c>
+    /// return — never <c>Task</c>/<c>Task&lt;T&gt;</c> (the runtime rejects such
+    /// an entry point with <c>MethodAccessException</c> at process start).
+    /// Instead of returning <c>builder.Task</c>, block on it right here with
+    /// the same <c>GetAwaiter().GetResult()</c> drive C# generates for
+    /// <c>async Task Main()</c>, then return void/the unwrapped result.
+    /// </param>
+    public int EmitAsyncKickoffBody(FunctionSymbol function, AsyncStateMachinePlan plan, bool driveSynchronously = false)
     {
         var smStruct = plan.StateMachine.MaterializeAsStructSymbol();
         var smTypeDef = this.getStructTypeToken(smStruct);
@@ -1519,6 +1530,8 @@ internal sealed class StateMachineEmitter
         il.Token(startMethodSpec);
 
         // Return builder.Task or void
+        Type awaiterClrType = null;
+        MethodInfo getResultMethod = null;
         if (builderInfo.TaskProperty != null)
         {
             // ldloca 0, ldflda builder, call get_Task
@@ -1529,16 +1542,44 @@ internal sealed class StateMachineEmitter
             var getTaskRef = this.getMethodEntityHandleForContainingType(getTaskMethod, plan.FieldMap.BuilderField.Type);
             il.OpCode(ILOpCode.Call);
             il.Token(getTaskRef);
+
+            // Issue #1904: the CLR entry point must return void/int32/uint32,
+            // never Task/Task<T> — the runtime throws MethodAccessException
+            // at process start otherwise. Block on the task here (the same
+            // GetAwaiter().GetResult() drive C# generates for `async Task
+            // Main()`) instead of returning it.
+            if (driveSynchronously)
+            {
+                var taskClrType = builderInfo.TaskProperty.PropertyType;
+                var getAwaiterMethod = taskClrType.GetMethod("GetAwaiter", Type.EmptyTypes);
+                awaiterClrType = getAwaiterMethod.ReturnType;
+                getResultMethod = awaiterClrType.GetMethod("GetResult", Type.EmptyTypes);
+
+                il.OpCode(ILOpCode.Callvirt);
+                il.Token(this.getMethodEntityHandle(getAwaiterMethod));
+                il.StoreLocal(1);
+                il.LoadLocalAddress(1);
+                il.OpCode(ILOpCode.Call);
+                il.Token(this.getMethodEntityHandle(getResultMethod));
+            }
         }
 
         il.OpCode(ILOpCode.Ret);
 
-        // Locals: one local of the state-machine struct type. Issue #1465:
-        // encode through EncodeTypeSymbol so a generic SM is written as the
-        // self-instantiated GENERICINST rather than a bare VALUETYPE token.
+        // Locals: one local of the state-machine struct type, plus (for a
+        // synchronously-driven async entry point) a second local holding the
+        // task awaiter struct so GetResult() can be called on its address.
+        // Issue #1465: encode through EncodeTypeSymbol so a generic SM is
+        // written as the self-instantiated GENERICINST rather than a bare
+        // VALUETYPE token.
         var localsSigBlob = new BlobBuilder();
-        var localsEncoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(1);
+        var localsEncoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(awaiterClrType != null ? 2 : 1);
         this.encodeTypeSymbol(localsEncoder.AddVariable().Type(), smStruct);
+        if (awaiterClrType != null)
+        {
+            this.encodeClrType(localsEncoder.AddVariable().Type(), awaiterClrType);
+        }
+
         var localsSignature = this.emitCtx.Metadata.AddStandaloneSignature(this.emitCtx.Metadata.GetOrAddBlob(localsSigBlob));
 
         return this.emitCtx.MethodBodyStream.AddMethodBody(
