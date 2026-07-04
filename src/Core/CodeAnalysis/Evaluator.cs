@@ -2648,7 +2648,13 @@ public sealed class Evaluator
                 result = rawOperand;
                 break;
             case BoundUnaryOperatorKind.Negation:
-                result = Negate(rawOperand);
+                // Issue #2023: mirror #1881's checked binary Add/Sub/Mul —
+                // Negate/NegateChecked both promote sub-int32 operands to int
+                // (matching NumericAdd/Sub/Mul), and NarrowToResultType narrows
+                // back to the operator's declared result type, itself
+                // overflow-checked when u.IsChecked (e.g. `checked(-sbyte.MinValue)`
+                // promotes to 128, which then traps narrowing back to sbyte).
+                result = NarrowToResultType(u.IsChecked ? NegateChecked(rawOperand) : Negate(rawOperand), u.Type, u.IsChecked);
                 break;
             case BoundUnaryOperatorKind.LogicalNegation:
                 return !(bool)operand;
@@ -2681,9 +2687,31 @@ public sealed class Evaluator
     {
         int i => -i,
         long l => -l,
-        sbyte sb => (sbyte)-sb,
-        short sh => (short)-sh,
+
+        // sbyte/short negation promotes to int (matching NumericAdd/Sub/Mul);
+        // NarrowToResultType narrows back to the declared sbyte/short result.
+        sbyte sb => -sb,
+        short sh => -sh,
         nint ni => -ni,
+        float f => -f,
+        double d => -d,
+        decimal dec => -dec,
+        _ => throw new InvalidOperationException($"Unsupported negation operand type {v?.GetType()}"),
+    };
+
+    // Issue #2023: `checked(-x)` — identical shape to <see cref="Negate"/> but
+    // every integral arm runs in a checked context (the `checked(...)` keyword
+    // traps int/long/nint MinValue negation directly; sbyte/short still widen
+    // to int here with no possible overflow, same as unchecked, but the
+    // widened value is later narrowed back by <see cref="NarrowToResultType"/>
+    // with isChecked: true, which is where their MinValue case actually traps).
+    private static object NegateChecked(object v) => v switch
+    {
+        int i => (object)checked(-i),
+        long l => (object)checked(-l),
+        sbyte sb => (object)checked(-sb),
+        short sh => (object)checked(-sh),
+        nint ni => (object)checked(-ni),
         float f => -f,
         double d => -d,
         decimal dec => -dec,
