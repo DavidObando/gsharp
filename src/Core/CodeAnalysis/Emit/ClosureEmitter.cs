@@ -226,8 +226,22 @@ internal sealed class ClosureEmitter
                 // encloser's type parameters, which this synthesis does not model.
                 // All other non-capturing lambdas keep the existing top-level
                 // `<Program>` static placement.
+                //
+                // Issue #1886: a GENERIC local function (`let Name[T] = func
+                // (...) ... {...}`) is declared as a real (non-capturing, by
+                // binder rule GS0463) FunctionSymbol resolved through direct
+                // `BoundCallExpression` calls, not through the delegate-value
+                // indirect-call path that consults ClosureInfos to redirect to
+                // `closure.InvokeMethod`. Nesting it here would also require
+                // this display class's fieldless Invoke method to itself be
+                // generic, which SynthesizeDisplayClass does not model. Since
+                // generic local functions can never capture (and therefore
+                // never need the accessibility-domain trick this nesting
+                // exists for), always keep them on the top-level `<Program>`
+                // static placement.
                 if (literal.Function == null
                     || literal.Function.IsAsync
+                    || literal.Function.IsGeneric
                     || literal.Function.LexicalEnclosingType is not StructSymbol zeroCaptureEnclosing
                     || !zeroCaptureEnclosing.TypeParameters.IsDefaultOrEmpty)
                 {

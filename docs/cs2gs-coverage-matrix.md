@@ -127,7 +127,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | LessThanExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LessThanExpression.cs |  |  |
 | LessThanOrEqualExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LessThanOrEqualExpression.cs |  |  |
 | LocalDeclarationStatement | LocalDeclarationStatementSyntax | ADR-0115 §B.3 |  |  |  |  |
-| LocalFunctionStatement | LocalFunctionStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/LocalFunctionStatement.cs | https://github.com/DavidObando/gsharp/issues/1886 | static local functions mislower at call sites; generic local functions unrepresentable (issue #1886). |
+| LocalFunctionStatement | LocalFunctionStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/LocalFunctionStatement.cs |  | Static local functions call through their `let` binding directly; generic local functions translate to G#'s `let Name[T, ...] = func (...) ... { ... }` (issue #1886, fixed). |
 | LockStatement | LockStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/LockStatement.cs |  |  |
 | LogicalAndExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LogicalAndExpression.cs |  |  |
 | LogicalNotExpression | PrefixUnaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LogicalNotExpression.cs |  |  |

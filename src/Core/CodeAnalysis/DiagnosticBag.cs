@@ -653,6 +653,34 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Reports that a generic local-function declaration (<c>let Name[T, ...] = func (...) ... { ... }</c>,
+    /// issue #1886) is not a <c>let</c>-bound function-literal initializer. A generic function value cannot
+    /// be represented as a delegate stored in a variable (a CLR delegate cannot close over an unbound
+    /// generic method), so this form only makes sense as a direct <c>let</c> binding of a function literal.
+    /// </summary>
+    /// <param name="location">The text location of the declaration's identifier.</param>
+    /// <param name="name">The name of the declared local function.</param>
+    public void ReportGenericLocalFunctionMustBeLetBoundLiteral(TextLocation location, string name)
+    {
+        var message = $"Generic local function '{name}' must be declared with 'let {name}[...] = func (...) ... {{ ... }}'.";
+        Report(location, "GS0462", message);
+    }
+
+    /// <summary>
+    /// Reports that a generic local function (issue #1886) captures one or more outer variables. Generic
+    /// local functions are emitted as genuine (non-delegate) generic methods, not closures; supporting
+    /// captures would require a generic closure display-class with its own reified type parameters, which
+    /// is out of scope for this feature.
+    /// </summary>
+    /// <param name="location">The text location of the declaration's identifier.</param>
+    /// <param name="name">The name of the declared local function.</param>
+    public void ReportGenericLocalFunctionCannotCapture(TextLocation location, string name)
+    {
+        var message = $"Generic local function '{name}' cannot capture variables from the enclosing scope.";
+        Report(location, "GS0463", message);
+    }
+
+    /// <summary>
     /// Reports that the operand of a channel-receive expression (<c>&lt;-ch</c>) is not a channel (Phase 5.5 / ADR-0022).
     /// </summary>
     /// <param name="location">The text location of the operand.</param>

@@ -25,6 +25,8 @@ public abstract class BoundTreeRewriter
                 return RewriteBlockStatement((BoundBlockStatement)node);
             case BoundNodeKind.VariableDeclaration:
                 return RewriteVariableDeclaration((BoundVariableDeclaration)node);
+            case BoundNodeKind.LocalFunctionDeclaration:
+                return RewriteLocalFunctionDeclaration((BoundLocalFunctionDeclaration)node);
             case BoundNodeKind.IfStatement:
                 return RewriteIfStatement((BoundIfStatement)node);
             case BoundNodeKind.ForInfiniteStatement:
@@ -125,6 +127,14 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundVariableDeclaration(null, node.Variable, initializer, node.ConstantValue);
+    }
+
+    /// <summary>Rewrites a generic local-function declaration (issue #1886). The literal's body is intentionally not rewritten here — it forms a separate lexical scope, exactly like <see cref="RewriteFunctionLiteralExpression"/>, and is lowered independently at the point it is hosted for emission.</summary>
+    /// <param name="node">The node to rewrite.</param>
+    /// <returns>The rewritten node.</returns>
+    protected virtual BoundStatement RewriteLocalFunctionDeclaration(BoundLocalFunctionDeclaration node)
+    {
+        return node;
     }
 
     /// <summary>

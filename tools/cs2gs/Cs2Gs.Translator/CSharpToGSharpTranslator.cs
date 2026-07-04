@@ -6036,7 +6036,15 @@ public sealed class CSharpToGSharpTranslator
                 this.pendingSpillPrologue = outerSpillPrologue;
             }
 
-            return new LocalFunctionStatement(SanitizeIdentifier(localFunction.Identifier.Text), lambda);
+            // Issue #1886: a generic local function (`T First<T>(a, b) { ... }`)
+            // carries its type parameters on the `let` binding, not the anonymous
+            // function literal (which has no name to hang `[T]` off) — see
+            // `let Name[T, U] = func (...) ... { ... }` in G#.
+            var typeParameters = localFunction.TypeParameterList?.Parameters
+                .Select(tp => SanitizeIdentifier(tp.Identifier.Text))
+                .ToList();
+
+            return new LocalFunctionStatement(SanitizeIdentifier(localFunction.Identifier.Text), lambda, typeParameters);
         }
 
         /// <summary>
@@ -9199,7 +9207,7 @@ public sealed class CSharpToGSharpTranslator
                 typeArguments = this.MapTypeArguments(memberBindingGeneric);
             }
             else if (invocation.Expression is IdentifierNameSyntax bareName &&
-                this.context.GetSymbolInfo(bareName).Symbol is IMethodSymbol { IsStatic: true } staticMethod &&
+                this.context.GetSymbolInfo(bareName).Symbol is IMethodSymbol { IsStatic: true, MethodKind: not MethodKind.LocalFunction } staticMethod &&
                 staticMethod.ContainingType is { TypeKind: TypeKind.Class or TypeKind.Struct } owner &&
                 !owner.IsImplicitlyDeclared &&
                 !this.IsStaticUsingTarget(owner) &&
@@ -9212,6 +9220,12 @@ public sealed class CSharpToGSharpTranslator
                 // A bare call to a `using static` member is the exception
                 // (ADR-0134): gsc brings it into scope through `import Owner`,
                 // so it is left unqualified above.
+                // Issue #1886: a `static` LOCAL function is NOT a sibling type
+                // member — Roslyn still reports its enclosing TYPE as
+                // `ContainingType`, but cs2gs already lowers it to a local `let`
+                // binding (see TranslateLocalFunction), so its call must stay a
+                // bare identifier call, never `Owner.Name(...)`. Excluded above
+                // via `MethodKind: not MethodKind.LocalFunction`.
                 target = new MemberAccessExpression(
                     this.StaticQualifierReceiver(owner, bareName.GetLocation()),
                     staticMethod.Name);

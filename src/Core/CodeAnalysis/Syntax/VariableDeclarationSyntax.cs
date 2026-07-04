@@ -15,6 +15,7 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     // invalidate the node's cached span (issue #1675).
     private SyntaxToken scopedModifier;
     private SyntaxToken refKindModifier;
+    private TypeParameterListSyntax typeParameterList;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="VariableDeclarationSyntax"/> class.
@@ -127,6 +128,25 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     /// Gets the variable identifier.
     /// </summary>
     public SyntaxToken Identifier { get; }
+
+    /// <summary>
+    /// Gets or sets the optional generic type-parameter list (e.g. <c>[T]</c>, <c>[T, U]</c>) on a
+    /// <c>let</c>-bound generic function literal (issue #1886):
+    /// <c>let First[T] = func (a T, b T) T { ... }</c>. <c>null</c> for non-generic declarations.
+    /// Assigned by the parser.
+    /// </summary>
+    public TypeParameterListSyntax TypeParameterList
+    {
+        get => typeParameterList;
+        set
+        {
+            typeParameterList = value;
+            InvalidateCachedSpan();
+        }
+    }
+
+    /// <summary>Gets a value indicating whether this declaration carries a generic type-parameter list (issue #1886).</summary>
+    public bool IsGeneric => TypeParameterList != null;
 
     /// <summary>
     /// GEts the optional type clause.
