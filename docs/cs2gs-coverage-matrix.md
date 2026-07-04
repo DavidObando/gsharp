@@ -6,12 +6,12 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | Status | Count |
 | --- | --- |
 | Unclassified | 0 |
-| Translated | 211 |
+| Translated | 214 |
 | Lowered | 12 |
 | UnsupportedByDesign | 56 |
-| Gap | 42 |
+| Gap | 39 |
 
-## Translated (211)
+## Translated (214)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -112,7 +112,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | ImplicitObjectCreationExpression | ImplicitObjectCreationExpressionSyntax | ADR-0115 §B.25 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/ObjectCreationExpression.cs |  |  |
 | IndexExpression | PrefixUnaryExpressionSyntax | ADR-0115 §B.36 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/IndexExpression.cs | https://github.com/DavidObando/gsharp/issues/1894 | Inline ^i green; Index-typed locals mis-lower (issue #1894, runtime crash). |
 | IndexerDeclaration | IndexerDeclarationSyntax | ADR-0115 §B.11 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/IndexerDeclaration.cs |  | User indexers (issue #944). |
-| InitAccessorDeclaration | AccessorDeclarationSyntax | ADR-0115 §B.11 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/PropertyDeclaration.cs | https://github.com/DavidObando/gsharp/issues/1892 | Blocked when targeted by object initializers (issue #1892). |
+| InitAccessorDeclaration | AccessorDeclarationSyntax | ADR-0115 §B.11 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/InitAccessorDeclaration.cs |  |  |
 | InterfaceDeclaration | InterfaceDeclarationSyntax | ADR-0115 §B.4 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/InterfaceDeclaration.cs |  |  |
 | InterpolatedStringExpression | InterpolatedStringExpressionSyntax | ADR-0115 §B.9 |  | tools/cs2gs/corpus/grid/G14-Strings-Console/Constructs/InterpolatedStringExpression.cs |  |  |
 | InterpolatedStringText | InterpolatedStringTextSyntax | ADR-0115 §B.9 |  | tools/cs2gs/corpus/grid/G14-Strings-Console/Constructs/InterpolatedStringText.cs | https://github.com/DavidObando/gsharp/issues/1882 | Brace escapes {{ }} copied verbatim — parity-verified divergence (issue #1882). |
@@ -147,6 +147,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | NullableType | NullableTypeSyntax | ADR-0115 §B.12 |  |  |  | T? maps to G# nullable spelling. |
 | NumericLiteralExpression | LiteralExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/NumericLiteralExpression.cs |  |  |
 | ObjectCreationExpression | ObjectCreationExpressionSyntax | ADR-0115 §B.16 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/ObjectCreationExpression.cs |  |  |
+| ObjectInitializerExpression | InitializerExpressionSyntax | ADR-0115 §B.11 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/ObjectCreationExpression.cs |  |  |
 | OmittedArraySizeExpression | OmittedArraySizeExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/OmittedArraySizeExpression.cs |  |  |
 | OmittedTypeArgument | OmittedTypeArgumentSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/OmittedTypeArgument.cs | https://github.com/DavidObando/gsharp/issues/1915 | nameof(List<>) forms green (C#14); typeof(List<>) emits typeof(List) (issue #1915). |
 | OperatorDeclaration | OperatorDeclarationSyntax | ADR-0115 §B.31 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/OperatorDeclaration.cs |  | C#14 instance compound-assignment operators fail round-trip (issue #1908); Equals(object) is-pattern override fails ilverify (issue #1917). |
@@ -224,6 +225,8 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | VariableDeclarator | VariableDeclaratorSyntax | ADR-0115 §B.3 |  |  |  |  |
 | WhenClause | WhenClauseSyntax | ADR-0115 §B.22 |  |  |  | Pattern guards (issue #991, resolved). |
 | WhileStatement | WhileStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/WhileStatement.cs |  |  |
+| WithExpression | WithExpressionSyntax | ADR-0115 §B.4 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/RecordDeclaration.cs |  |  |
+| WithInitializerExpression | InitializerExpressionSyntax | ADR-0115 §B.4 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/RecordDeclaration.cs |  |  |
 | YieldBreakStatement | YieldStatementSyntax | ADR-0115 §B.34 |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/YieldBreakStatement.cs |  | Issue #994 (resolved). |
 | YieldReturnStatement | YieldStatementSyntax | ADR-0115 §B.34 |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/YieldReturnStatement.cs |  |  |
 
@@ -305,7 +308,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | XmlText | XmlTextSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | XmlTextAttribute | XmlTextAttributeSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 
-## Gap (42)
+## Gap (39)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -336,7 +339,6 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | LabeledStatement | LabeledStatementSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1884 |  |
 | LetClause | LetClauseSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1902 | Query syntax lowered to the method-call chain, mirroring Roslyn. |
 | ListPattern | ListPatternSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1889 |  |
-| ObjectInitializerExpression | InitializerExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1892 | Initializer assignments emitted as stray statements. |
 | PointerMemberAccessExpression | MemberAccessExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1905 | p->X lowered to p.X; (*p).X compiles. |
 | PrimaryConstructorBaseType | PrimaryConstructorBaseTypeSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1909 |  |
 | RangeExpression | RangeExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1896 | Lowers to .Slice(...) which gsc cannot resolve on arrays/strings. |
@@ -349,5 +351,3 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | UncheckedExpression | CheckedExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1881 |  |
 | UnsignedRightShiftAssignmentExpression | AssignmentExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1880 | Emits >>>= verbatim; never parses. |
 | UnsignedRightShiftExpression | BinaryExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1880 | Translator crash: Unknown binary operator >>>. |
-| WithExpression | WithExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1892 | Stray bare assignment emitted before the with-expression. |
-| WithInitializerExpression | InitializerExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1892 |  |

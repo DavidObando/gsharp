@@ -18,7 +18,8 @@ ImplicitArrayCreationExpression: wideSum=6
 IndexExpression: last=5 secondLast=4
 IndexExpression: lastChar=p
 ObjectCreationExpression: byCtor=(3,4)
-ObjectCreationExpression: byProps=(1,2)
+ObjectCreationExpression: byInit=(1,2)
+ObjectCreationExpression: byCtorAndInit=(9,8)
 ObjectCreationExpression: implicitNew=(7,7)
 OmittedArraySizeExpression: xs=1,2,3
 OmittedArraySizeExpression: ys=solo len=1

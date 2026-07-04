@@ -25,11 +25,7 @@ namespace Corpus.Grid07
             ConversionOperatorDeclarationFixture.Run();
             FieldDeclarationFixture.Run();
             IndexerDeclarationFixture.Run();
-
-            // QUARANTINED (see Quarantined/): InitAccessorDeclarationFixture — the
-            // object initializer required to exercise `init` emits a stray bare
-            // `Text = "sealed"` statement (GS0125), same lowering bug as G06's
-            // RequiredMember fixture.
+            InitAccessorDeclarationFixture.Run();
             MethodDeclarationFixture.Run();
             OperatorDeclarationFixture.Run();
             PropertyDeclarationFixture.Run();

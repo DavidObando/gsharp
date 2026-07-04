@@ -30,10 +30,7 @@ namespace Corpus.Grid06
             // dropped (GS0125 Variable 'name' doesn't exist; GS0144 arity 0).
             RecordDeclarationFixture.Run();
             RecordStructDeclarationFixture.Run();
-
-            // QUARANTINED (see Quarantined/): RequiredMemberFixture — any object
-            // initializer (with or without `required`) emits stray bare assignment
-            // statements before the literal (GS0125 Variable 'Name' doesn't exist).
+            RequiredMemberFixture.Run();
             SimpleBaseTypeFixture.Run();
             StructDeclarationFixture.Run();
             TypeAliasDeclarationFixture.Run();

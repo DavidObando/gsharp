@@ -27,16 +27,13 @@ namespace Corpus.Grid05
             var byCtor = new GridPoint(3, 4);
             Console.WriteLine($"ObjectCreationExpression: byCtor=({byCtor.X},{byCtor.Y})");
 
-            // QUARANTINED (GS0125/parse): ObjectInitializerExpression —
-            // 'new GridPoint { X = 1, Y = 2 }' makes the translator emit the
-            // initializer assignments as stray statements ahead of the G#
-            // composite literal, and 'new GridPoint(9, 0) { Y = 8 }' emits
-            // 'GridPoint(9, 0){Y = 8}' which G# does not accept. Plain
-            // property assignment statements are used instead.
-            var byProps = new GridPoint();
-            byProps.X = 1;
-            byProps.Y = 2;
-            Console.WriteLine($"ObjectCreationExpression: byProps=({byProps.X},{byProps.Y})");
+            // Issue #1892: a plain object initializer with no constructor args.
+            var byInit = new GridPoint { X = 1, Y = 2 };
+            Console.WriteLine($"ObjectCreationExpression: byInit=({byInit.X},{byInit.Y})");
+
+            // Issue #1892: constructor args PLUS an object initializer.
+            var byCtorAndInit = new GridPoint(9, 0) { Y = 8 };
+            Console.WriteLine($"ObjectCreationExpression: byCtorAndInit=({byCtorAndInit.X},{byCtorAndInit.Y})");
 
             // ImplicitObjectCreationExpression (target-typed new, no initializer).
             GridPoint implicitNew = new(7, 7);
