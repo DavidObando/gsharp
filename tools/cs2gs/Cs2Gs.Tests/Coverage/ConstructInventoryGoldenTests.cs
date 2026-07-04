@@ -89,6 +89,80 @@ public class ConstructInventoryGoldenTests
         }
     }
 
+    /// <summary>
+    /// Guards against #2020: the generated matrix's "| Status | Count |" header
+    /// table and each "## Status (N)" section heading must always equal the
+    /// number of rows actually printed under that status — computed from the
+    /// SAME markdown text BuildMatrixMarkdown produced, not from the inventory
+    /// a second time. A regression here (e.g. a duplicate-counting bug, or a
+    /// header computed from a different collection than the rows) would
+    /// otherwise only surface as an opaque "drifted, run coverage --write"
+    /// failure in MatrixDocument_IsInSync.
+    /// </summary>
+    [Fact]
+    public void MatrixDocument_HeaderCountsMatchRowCounts()
+    {
+        ConstructInventory inventory = LoadInventory();
+        string[] lines = inventory.BuildMatrixMarkdown().Split('\n');
+
+        var summaryCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var sectionHeadingCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var actualRowCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        string currentSection = null;
+
+        foreach (string line in lines)
+        {
+            if (line.StartsWith("## ", StringComparison.Ordinal))
+            {
+                // "## Translated (229)"
+                int open = line.LastIndexOf('(');
+                int close = line.LastIndexOf(')');
+                currentSection = line.Substring(3, open - 3).Trim();
+                sectionHeadingCounts[currentSection] = int.Parse(line.Substring(open + 1, close - open - 1));
+                continue;
+            }
+
+            bool isDataRow = line.StartsWith("| ", StringComparison.Ordinal)
+                && !line.StartsWith("| Kind ", StringComparison.Ordinal)
+                && !line.StartsWith("| --- ", StringComparison.Ordinal)
+                && !line.StartsWith("| Status ", StringComparison.Ordinal);
+            if (!isDataRow)
+            {
+                continue;
+            }
+
+            string[] cells = line.Trim('|').Split('|').Select(c => c.Trim()).ToArray();
+            if (currentSection is null && cells.Length == 2 && int.TryParse(cells[1], out int summaryCount))
+            {
+                // The "| Status | Count |" summary table, before any "## " section.
+                summaryCounts[cells[0]] = summaryCount;
+            }
+            else if (currentSection is not null)
+            {
+                actualRowCounts[currentSection] = actualRowCounts.GetValueOrDefault(currentSection) + 1;
+            }
+        }
+
+        foreach (ConstructStatus status in Enum.GetValues<ConstructStatus>())
+        {
+            string name = status.ToString();
+            int actual = actualRowCounts.GetValueOrDefault(name);
+
+            Assert.True(summaryCounts.TryGetValue(name, out int summary), $"summary table is missing a row for status '{name}'.");
+            Assert.True(
+                summary == actual,
+                $"'{name}' summary count ({summary}) does not match the actual printed row count ({actual}).");
+
+            if (actual > 0)
+            {
+                Assert.True(sectionHeadingCounts.TryGetValue(name, out int heading), $"'## {name}' section heading is missing.");
+                Assert.True(
+                    heading == actual,
+                    $"'## {name} ({heading})' heading does not match its own printed row count ({actual}).");
+            }
+        }
+    }
+
     [Fact]
     public void UnclassifiedRatchet_DoesNotRegress()
     {
