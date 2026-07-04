@@ -4826,7 +4826,14 @@ internal sealed class StatementBinder
                     }
                 }
 
-                var receiver = CaptureReceiver(syntax, fieldAccess.Receiver, preStatements);
+                // Issue #2043: a static field's bound read has a null
+                // Receiver (there is no instance to dereference); only
+                // capture a receiver local when one actually exists. Calling
+                // CaptureReceiver unconditionally NREs on receiver.Type for
+                // the static case.
+                var receiver = fieldAccess.Receiver == null
+                    ? null
+                    : CaptureReceiver(syntax, fieldAccess.Receiver, preStatements);
                 var read = new BoundFieldAccessExpression(syntax, receiver, fieldAccess.StructType, fieldAccess.Field);
 
                 // Use the VariableSymbol-based constructor: every receiver
@@ -4836,7 +4843,7 @@ internal sealed class StatementBinder
                 // existing rewriters all assume this shape for the simple
                 // receiver path; routing through ReceiverExpression bypasses
                 // the interpreter's class-field write logic (issue #709).
-                var write = new BoundFieldAssignmentExpression(syntax, receiver.Variable, fieldAccess.StructType, fieldAccess.Field, boundRhs);
+                var write = new BoundFieldAssignmentExpression(syntax, receiver?.Variable, fieldAccess.StructType, fieldAccess.Field, boundRhs);
                 return (read, write);
             }
 
