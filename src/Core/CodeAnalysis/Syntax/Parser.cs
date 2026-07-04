@@ -6012,8 +6012,8 @@ public class Parser
     {
         // Issue #1884: `goto label` — an unconditional jump to a `label:`
         // statement elsewhere in the enclosing function. The target
-        // identifier must appear on the same source line as the keyword,
-        // mirroring the labeled `break`/`continue` target (ADR-0070).
+        // identifier is mandatory (unlike the optional labeled
+        // `break`/`continue` target), so no same-line restriction is needed.
         var keyword = MatchToken(SyntaxKind.GotoKeyword);
         var label = MatchToken(SyntaxKind.IdentifierToken);
         return new GotoStatementSyntax(syntaxTree, keyword, label);

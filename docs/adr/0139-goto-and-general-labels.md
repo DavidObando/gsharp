@@ -92,8 +92,9 @@ directly:
 - `GotoStatement` → G# `goto label`.
 - `GotoCaseStatement` / `GotoDefaultStatement` → C#'s `goto case K;` /
   `goto default;` jump straight into a `switch` arm's statement list without
-  re-evaluating the switch expression, and (per C# semantics) fall through
-  into any following arm exactly as `case K:` would. `cs2gs` keeps the
+  re-evaluating the switch expression. Execution then continues through that
+  arm's own body (C# switch sections do not fall through to the next arm).
+  `cs2gs` keeps the
   `switch` a native G# `switch` and, for each arm actually targeted by a
   `goto case`/`goto default` elsewhere in the same `switch`, prefixes that
   arm's translated body with a synthesized label (`__gotoCase<pos>` /
