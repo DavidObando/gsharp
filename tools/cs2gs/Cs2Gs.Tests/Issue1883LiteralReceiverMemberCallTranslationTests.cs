@@ -53,6 +53,26 @@ namespace Corpus.Issue1883
     }
 
     [Fact]
+    public void NegativeLiteral_ConcatenatedWithString_ParenthesizesToStringReceiver()
+    {
+        string rendered = Render(@"
+namespace Corpus.Issue1883
+{
+    public class C
+    {
+        public string M()
+        {
+            return ""n="" + -5;
+        }
+    }
+}
+");
+
+        Assert.Contains("(-5).ToString()", rendered);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
     public void IntLiteral_DirectExtensionMethodCall_ParenthesizesReceiver()
     {
         string rendered = Render(@"

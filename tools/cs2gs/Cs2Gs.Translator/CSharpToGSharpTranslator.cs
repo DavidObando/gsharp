@@ -11205,9 +11205,12 @@ public sealed class CSharpToGSharpTranslator
         // binary, or suffixed (`L`/`UL`/`F`/`D`/`M`) — therefore needs parentheses
         // wherever it is used as a member-access/call receiver; a non-literal
         // receiver (identifier, call, existing parenthesized expression, etc.) is
-        // left untouched.
+        // left untouched. A prefix unary on a numeric literal (`-5`, `+5`, `~5`)
+        // still renders with a trailing numeric token, so it is treated the same
+        // (e.g. `"x=" + -5` -> `(-5).ToString()`).
         private static bool IsBareNumericLiteral(GExpression expr) =>
-            expr is LiteralExpression { Kind: LiteralKind.Int or LiteralKind.Float };
+            expr is LiteralExpression { Kind: LiteralKind.Int or LiteralKind.Float }
+            || (expr is UnaryExpression u && IsBareNumericLiteral(u.Operand));
 
         private static GExpression ParenthesizeIfBareNumericLiteral(GExpression expr) =>
             IsBareNumericLiteral(expr) ? new ParenthesizedExpression(expr) : expr;
