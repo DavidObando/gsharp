@@ -1602,6 +1602,21 @@ public sealed class CSharpToGSharpTranslator
             // fields directly, which is now valid G#.
             ConstructorLift lift = this.AnalyzeConstructorLift(node, mergedMembers, symbol, kind.Value);
 
+            // Issue #2003: a primary-constructor parameter (native C#12 shape or
+            // T2-lifted from an explicit ctor) becomes a same-named G# field
+            // (ADR-0065 §5) that is a cs2gs-SYNTHESIZED sibling — it has no
+            // corresponding Roslyn source symbol for a captured-but-never-assigned
+            // parameter, so `symbol.ContainingType.GetMembers()` (used by the
+            // `field`-keyword backing-field collision check below) cannot see it.
+            // Computed here — before the member loop that translates properties —
+            // so it can be threaded into that collision check as an extra reserved
+            // name set.
+            IReadOnlyList<Parameter> primaryCtor = lift.DropConstructor
+                ? lift.PrimaryParameters
+                : this.MapPrimaryConstructor(node);
+            var primaryCtorParamNames = new HashSet<string>(
+                primaryCtor?.Select(p => p.Name) ?? Enumerable.Empty<string>(), StringComparer.Ordinal);
+
             // OD-T1: when the explicit constructor is kept (not lifted to a primary
             // constructor) and the type is a plain class/struct, get-only
             // auto-property inline initializers (`{ get; } = new();`) must move into
@@ -1632,7 +1647,7 @@ public sealed class CSharpToGSharpTranslator
                 // in a different `SyntaxTree`; resolve it (and everything nested
                 // inside it) through that tree's own semantic model.
                 using IDisposable modelScope = this.context.UseSemanticModelFor(member.SyntaxTree);
-                foreach ((GMember translated, bool isStatic) in this.TranslateMember(member, kind.Value, lift, propertyCtorInits))
+                foreach ((GMember translated, bool isStatic) in this.TranslateMember(member, kind.Value, lift, propertyCtorInits, primaryCtorParamNames))
                 {
                     // A C# operator overload translates to a receiver-clause
                     // `func (a T) operator <op>(...)`; like every receiver-clause
@@ -1742,9 +1757,6 @@ public sealed class CSharpToGSharpTranslator
             (GTypeReference baseType, List<GTypeReference> interfaces) = this.MapBaseClause(symbol, node, kind.Value);
             List<GExpression> baseConstructorArguments = this.MapPrimaryConstructorBaseArguments(node, baseType);
             List<TypeParameter> typeParameters = this.MapTypeParameters(symbol);
-            IReadOnlyList<Parameter> primaryCtor = lift.DropConstructor
-                ? lift.PrimaryParameters
-                : this.MapPrimaryConstructor(node);
 
             // A class with `protected` members must be an `open class` in G#
             // (GS0380) — `protected` is meaningless on a non-inheritable type. A C#
@@ -2209,7 +2221,8 @@ public sealed class CSharpToGSharpTranslator
             MemberDeclarationSyntax member,
             TypeDeclarationKind ownerKind,
             ConstructorLift lift,
-            IReadOnlyList<(string Name, GExpression Value)> propertyCtorInits)
+            IReadOnlyList<(string Name, GExpression Value)> propertyCtorInits,
+            IReadOnlyCollection<string> primaryCtorParamNames = null)
         {
             switch (member)
             {
@@ -2285,7 +2298,7 @@ public sealed class CSharpToGSharpTranslator
                     }
 
                     (GMember propMember, bool propIsStatic, GMember fieldKeywordBackingField) =
-                        this.TranslateProperty(property);
+                        this.TranslateProperty(property, primaryCtorParamNames);
                     if (fieldKeywordBackingField != null)
                     {
                         // Issue #1907: the synthesized backing field for a `field`-
@@ -3528,7 +3541,8 @@ public sealed class CSharpToGSharpTranslator
             return true;
         }
 
-        private (GMember Member, bool IsStatic, GMember BackingField) TranslateProperty(PropertyDeclarationSyntax node)
+        private (GMember Member, bool IsStatic, GMember BackingField) TranslateProperty(
+            PropertyDeclarationSyntax node, IReadOnlyCollection<string> primaryCtorParamNames = null)
         {
             var symbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
             bool isStatic = symbol != null && symbol.IsStatic;
@@ -3550,7 +3564,7 @@ public sealed class CSharpToGSharpTranslator
             // accessor bodies below, so a `field` reference inside them (bound via
             // TranslateExpression's FieldExpressionSyntax case) resolves to it.
             string fieldKeywordBackingName = this.TryRegisterFieldKeywordBackingField(
-                node, symbol, out IFieldSymbol fieldKeywordBackingSymbol);
+                node, symbol, primaryCtorParamNames, out IFieldSymbol fieldKeywordBackingSymbol);
 
             // Issue #1907 / #1072: the backing field can be used as nullable
             // independently of the property's own declared nullability (e.g.
@@ -3607,13 +3621,19 @@ public sealed class CSharpToGSharpTranslator
         // Issue #1907: a property using the C#14 `field` keyword in any accessor
         // shares ONE compiler-synthesized backing field across all its accessors.
         // Detects that usage and synthesizes+registers a real G# field name for it
-        // (collision-checked against the containing type's other members and any
-        // backing field already synthesized for a sibling property), returning
-        // null when the property does not use `field` at all. Also returns the
-        // synthesized field's own Roslyn IFieldSymbol (needed for its independent
-        // nullable-usage promotion) via <paramref name="fieldSymbol"/>.
+        // (collision-checked against the containing type's other members, any
+        // backing field already synthesized for a sibling property, and any
+        // cs2gs-synthesized primary-constructor-parameter field — issue #2003;
+        // none of the latter are Roslyn source symbols, so `GetMembers()` alone
+        // cannot see them), returning null when the property does not use `field`
+        // at all. Also returns the synthesized field's own Roslyn IFieldSymbol
+        // (needed for its independent nullable-usage promotion) via
+        // <paramref name="fieldSymbol"/>.
         private string TryRegisterFieldKeywordBackingField(
-            PropertyDeclarationSyntax node, IPropertySymbol symbol, out IFieldSymbol fieldSymbol)
+            PropertyDeclarationSyntax node,
+            IPropertySymbol symbol,
+            IReadOnlyCollection<string> primaryCtorParamNames,
+            out IFieldSymbol fieldSymbol)
         {
             fieldSymbol = null;
             if (symbol == null)
@@ -3641,6 +3661,11 @@ public sealed class CSharpToGSharpTranslator
             foreach (ISymbol member in symbol.ContainingType.GetMembers())
             {
                 taken.Add(member.Name);
+            }
+
+            if (primaryCtorParamNames != null)
+            {
+                taken.UnionWith(primaryCtorParamNames);
             }
 
             taken.UnionWith(this.fieldKeywordBackingFieldNames.Values);
