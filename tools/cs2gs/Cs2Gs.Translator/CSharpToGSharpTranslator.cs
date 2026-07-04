@@ -2440,7 +2440,14 @@ public sealed class CSharpToGSharpTranslator
                             bool isStatic = propertySymbol != null && propertySymbol.IsStatic;
                             if (isStatic)
                             {
-                                yield return this.TranslateProperty(property);
+                                (GMember staticPropMember, bool staticPropIsStatic, GMember staticFieldKeywordBacking) =
+                                    this.TranslateProperty(property);
+                                if (staticFieldKeywordBacking != null)
+                                {
+                                    yield return (staticFieldKeywordBacking, staticPropIsStatic);
+                                }
+
+                                yield return (staticPropMember, staticPropIsStatic);
                                 break;
                             }
 
