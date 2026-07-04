@@ -839,8 +839,8 @@ internal sealed partial class ExpressionBinder
             // substitute both levels and the emitter encodes the reified nested
             // type (`Outer`1+Middle`2<int32, string>`).
             structSymbol = enclosingTypeArguments.IsDefaultOrEmpty
-                ? StructSymbol.Construct(structSymbol, typeArgs.MoveToImmutable())
-                : StructSymbol.ConstructNestedGeneric(structSymbol, enclosingTypeArguments, typeArgs.MoveToImmutable());
+                ? StructSymbol.Construct(structSymbol, typeArgs.MoveToImmutable(), scope.References.MapClrTypeToReferences)
+                : StructSymbol.ConstructNestedGeneric(structSymbol, enclosingTypeArguments, typeArgs.MoveToImmutable(), scope.References.MapClrTypeToReferences);
         }
         else if (syntax.TypeArgumentList != null)
         {
@@ -853,7 +853,7 @@ internal sealed partial class ExpressionBinder
             // enclosing type (`Box[int32].Tag{…}`) threads only the enclosing
             // arguments so member types typed as an enclosing parameter surface
             // closed and the emitter encodes `Box`1+Tag`1<int32>`.
-            structSymbol = StructSymbol.ConstructNested(structSymbol, enclosingTypeArguments);
+            structSymbol = StructSymbol.ConstructNested(structSymbol, enclosingTypeArguments, scope.References.MapClrTypeToReferences);
         }
 
         var seenFieldNames = new HashSet<string>();
