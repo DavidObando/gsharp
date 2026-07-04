@@ -90,6 +90,42 @@ namespace Corpus.Issue1894
     }
 
     [Fact]
+    public void InlineRangeSlice_FromEndBound_SpillsSideEffectingReceiverOnce()
+    {
+        // Regression: `TranslateRangeBound` re-embeds the receiver inside
+        // `receiver.Length` alongside the `.Slice(...)` call built in
+        // `TranslateRangeSlice` — a side-effecting receiver (`Src()`) must be
+        // evaluated exactly once, not twice, when a from-end bound is
+        // present. A trivial identifier receiver (`a`) must stay unchanged,
+        // no spill temp introduced.
+        string rendered = Render(@"
+namespace Corpus.Issue1894
+{
+    public class Holder
+    {
+        private static int[] Src() => new[] { 1, 2, 3, 4 };
+
+        public int[] SideEffecting() => Src()[1..^2];
+
+        public int[] Trivial(int[] a) => a[1..^2];
+    }
+}
+");
+
+        int sideEffectingStart = rendered.IndexOf("SideEffecting", StringComparison.Ordinal);
+        int sideEffectingEnd = rendered.IndexOf("Trivial", StringComparison.Ordinal);
+        string sideEffectingBody = rendered.Substring(sideEffectingStart, sideEffectingEnd - sideEffectingStart);
+        int srcCallCount = System.Text.RegularExpressions.Regex.Matches(sideEffectingBody, @"Src\(\)").Count;
+        Assert.Equal(1, srcCallCount);
+        Assert.Contains("let __spill", sideEffectingBody, StringComparison.Ordinal);
+
+        string trivialBody = rendered.Substring(sideEffectingEnd);
+        Assert.DoesNotContain("let __", trivialBody, StringComparison.Ordinal);
+        Assert.Contains("a.Slice(", trivialBody, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
     public void IndexTypedLocal_FromFromEndLiteral_StaysLoudGap()
     {
         // The exact issue #1894 repro: `Index third = ^3; ... a[third];`.

@@ -7960,6 +7960,7 @@ public sealed class CSharpToGSharpTranslator
                         // C# range indexer itself lowers to (ADR-0115 §B).
                         return this.TranslateRangeSlice(
                             this.TranslateReceiverWithNullForgiveness(elementAccess.Expression),
+                            elementAccess.Expression,
                             sliceRange);
                     }
 
@@ -9250,8 +9251,21 @@ public sealed class CSharpToGSharpTranslator
             }
         }
 
-        private GExpression TranslateRangeSlice(GExpression receiver, RangeExpressionSyntax range)
+        private GExpression TranslateRangeSlice(GExpression receiver, ExpressionSyntax receiverSyntax, RangeExpressionSyntax range)
         {
+            // Issue #1894 follow-up: a from-end bound (`^n`) folds into
+            // `receiver.Length - n` below (see `TranslateRangeBound`), which
+            // embeds `receiver` a SECOND time alongside the `.Slice(...)` call
+            // built here — a side-effecting receiver (e.g. `GetArray()[1..^2]`)
+            // would otherwise run twice. Spill it first so both embeds read the
+            // same evaluation; `SpillOperand` already no-ops for a trivial
+            // receiver (bare identifier/`this`/literal), so `a[1..^2]` is
+            // unchanged.
+            if (IsFromEndBound(range.LeftOperand) || IsFromEndBound(range.RightOperand))
+            {
+                receiver = this.SpillOperand(receiver, receiverSyntax);
+            }
+
             // `recv[start..end]` → `recv.Slice(start, end - start)`;
             // `recv[start..]`    → `recv.Slice(start)`;
             // `recv[..end]`      → `recv.Slice(0, end)`.
@@ -9292,16 +9306,19 @@ public sealed class CSharpToGSharpTranslator
         // gap it as an ambiguous bitwise-complement. Rather than lose an
         // otherwise-valid inline slice to that gap, fold the from-end bound
         // directly into arithmetic against the sliced receiver's own `Length`:
-        // "n back from the end" is exactly `receiver.Length - n`.
-        // ponytail: `receiver` is re-embedded here (once for `.Slice`, again for
-        // `.Length`); a side-effecting receiver would be evaluated twice. Spill
-        // it too if a real-world case ever hits that (none of today's callers do).
+        // "n back from the end" is exactly `receiver.Length - n`. `receiver` is
+        // already spilled by `TranslateRangeSlice` above when a from-end bound
+        // is present, so re-embedding it here (and again in `.Slice(...)`)
+        // reads the same single evaluation rather than re-running it.
+        private static bool IsFromEndBound(ExpressionSyntax bound) =>
+            bound is PrefixUnaryExpressionSyntax fromEnd && fromEnd.IsKind(SyntaxKind.IndexExpression);
+
         private GExpression TranslateRangeBound(GExpression receiver, ExpressionSyntax bound) =>
-            bound is PrefixUnaryExpressionSyntax fromEnd && fromEnd.IsKind(SyntaxKind.IndexExpression)
+            IsFromEndBound(bound)
                 ? new BinaryExpression(
                     new MemberAccessExpression(receiver, "Length"),
                     "-",
-                    this.TranslateExpression(fromEnd.Operand))
+                    this.TranslateExpression(((PrefixUnaryExpressionSyntax)bound).Operand))
                 : this.TranslateExpression(bound);
 
         private GTypeReference ResolveExpressionType(ExpressionSyntax expression)
