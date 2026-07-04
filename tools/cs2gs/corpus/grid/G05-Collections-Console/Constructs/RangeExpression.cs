@@ -1,7 +1,6 @@
-// inventory: RangeExpression — QUARANTINED at compile (gsc): GS0159 "Cannot
-// find function Slice." Every range form (a[1..3], a[..2], a[^2..], a[..],
-// "gsharp"[1..4]) is lowered to <receiver>.Slice(...), which resolves for
-// neither arrays nor strings in G#; String.Join/Length then cascade-fail.
+// Issue #1896: range-index forms (a[1..3], a[..2], a[^2..], a[..],
+// "gsharp"[1..4]) now lower to gsc's own native range-index syntax instead of
+// the unresolvable <receiver>.Slice(...) desugaring.
 using System;
 
 namespace Corpus.Grid05

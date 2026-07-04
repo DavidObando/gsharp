@@ -19,6 +19,7 @@ namespace Corpus.Grid05
             IndexExpressionFixture.Run();
             ObjectCreationExpressionFixture.Run();
             OmittedArraySizeExpressionFixture.Run();
+            RangeExpressionFixture.Run();
             TupleExpressionFixture.Run();
         }
     }

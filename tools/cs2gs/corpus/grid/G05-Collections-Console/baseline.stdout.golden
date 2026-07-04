@@ -25,6 +25,11 @@ ObjectCreationExpression: byCtorAndInit=(9,8)
 ObjectCreationExpression: implicitNew=(7,7)
 OmittedArraySizeExpression: xs=1,2,3
 OmittedArraySizeExpression: ys=solo len=1
+RangeExpression: mid=2,3
+RangeExpression: head=1,2
+RangeExpression: tail=5,6
+RangeExpression: allLen=6
+RangeExpression: sliced=sha
 TupleExpression: items=2,two
 TupleExpression: named=3,three
 TupleExpression: deconstructed=2,two
