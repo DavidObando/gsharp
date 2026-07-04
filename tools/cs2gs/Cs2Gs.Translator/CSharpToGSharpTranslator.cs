@@ -2183,6 +2183,14 @@ public sealed class CSharpToGSharpTranslator
 
                     break;
 
+                case ExtensionBlockDeclarationSyntax extensionBlock:
+                    foreach ((GMember m, bool s) in this.TranslateExtensionBlock(extensionBlock, ownerKind))
+                    {
+                        yield return (m, s);
+                    }
+
+                    break;
+
                 case OperatorDeclarationSyntax op:
                     yield return this.TranslateOperator(op);
                     break;
@@ -2295,6 +2303,187 @@ public sealed class CSharpToGSharpTranslator
                         $"member '{member.Kind()}' has no canonical G# mapping yet (ADR-0115 §B.11).");
                     break;
             }
+        }
+
+        /// <summary>
+        /// Issue #1879: translates a C# 14 <c>extension(T x) { ... }</c> /
+        /// <c>extension(T) { ... }</c> block, mapping its members onto the same
+        /// canonical target as a classic <c>this T x</c> extension method
+        /// (ADR-0115 §B.19). The block itself carries no G# declaration of its
+        /// own — it is a pure grouping construct — so every yielded member is one
+        /// of its declared instance/static methods or properties:
+        /// <list type="bullet">
+        /// <item>a <b>static</b> member (method or property) has no receiver and
+        /// becomes a plain <c>shared</c> member of the enclosing (necessarily
+        /// <c>static</c>) class; its call sites — always qualified through the
+        /// *extended type's name* (`string.Repeat(...)`), never the declaring
+        /// class — are rewritten in <see cref="TranslateMemberAccess"/>;</item>
+        /// <item>an <b>instance</b> method becomes a receiver-clause <c>func</c>
+        /// exactly like a classic extension method, reusing
+        /// <see cref="TranslateMethod"/> with the block's own parameter supplied
+        /// as the forced receiver;</item>
+        /// <item>an <b>instance</b> property has no receiver-clause form in the
+        /// G# grammar (<c>prop</c> carries no receiver clause) and is instead
+        /// lowered to a receiver-clause <c>func</c> named after the property; a
+        /// property with a setter has no call-site lowering (an assignment
+        /// target), so it is reported as an explicit, loud gap rather than
+        /// silently mistranslated.</item>
+        /// </list>
+        /// </summary>
+        private IEnumerable<(GMember Member, bool IsStatic)> TranslateExtensionBlock(
+            ExtensionBlockDeclarationSyntax node,
+            TypeDeclarationKind ownerKind)
+        {
+            // Issue #1879: a generic extension block (`extension<T>(IEnumerable<T> src)
+            // where T : notnull { ... }`) is a real C# 14 form, but G#'s
+            // receiver-clause `func`/`prop` grammar carries no block-level type
+            // parameter or constraint clause. Silently dropping `T` would emit a
+            // dangling, wrong-generic G# member with no gap raised — a silent
+            // miscompile. Full generic-extension lowering (synthesizing a generic
+            // owner, threading `T` through every member and call site) is a larger
+            // follow-up; gap loudly instead (ADR-0115 §B.19).
+            if (node.TypeParameterList != null || node.ConstraintClauses.Count > 0)
+            {
+                this.context.ReportUnsupported(
+                    node,
+                    "a generic extension block (`extension<T>(...)`) has no canonical G# mapping yet; G#'s receiver-clause `func`/`prop` grammar carries no block-level type parameter or constraint clause (ADR-0115 §B.19).");
+                yield break;
+            }
+
+            ParameterSyntax receiverParameter = node.ParameterList.Parameters.Count > 0
+                ? node.ParameterList.Parameters[0]
+                : null;
+
+            // A receiverless block (`extension(string) { ... }`) names only the
+            // extended type, with no identifier to bind — it may declare static
+            // members only. A named block (`extension(string s) { ... }`) binds
+            // `s` as the receiver for its instance members (and may still declare
+            // static members that simply ignore it).
+            bool hasNamedReceiver = receiverParameter != null && !receiverParameter.Identifier.IsMissing
+                && receiverParameter.Identifier.Text.Length > 0;
+
+            Receiver receiver = null;
+            if (hasNamedReceiver)
+            {
+                var receiverSymbol = this.context.GetDeclaredSymbol(receiverParameter) as IParameterSymbol;
+                GTypeReference receiverType = receiverSymbol != null
+                    ? this.typeMapper.Map(receiverSymbol.Type, this.context, receiverParameter.GetLocation())
+                    : this.MapTypeSyntax(receiverParameter.Type);
+
+                // Issue #1879 (parity with the classic extension-method path,
+                // ADR-0079/ADR-0115 §B.5): an enum receiver cannot carry a G#
+                // receiver clause (GS0103). Rather than silently emit a
+                // receiver-clause `func` that gsc would reject, gap it loudly —
+                // reworking every instance member and call site to the positional
+                // `Owner.Method(receiver, …)` form used for classic enum
+                // extensions is a larger, separate follow-up.
+                if (receiverSymbol != null && receiverSymbol.Type.TypeKind == TypeKind.Enum)
+                {
+                    this.context.ReportUnsupported(
+                        node,
+                        "an extension block with an enum receiver has no canonical G# mapping yet; a receiver clause is rejected on enum types (GS0103) and the positional call-site rewrite classic enum extension methods use (ADR-0115 §B.5) is not yet implemented for extension blocks (ADR-0115 §B.19).");
+                    yield break;
+                }
+
+                receiver = new Receiver(SanitizeIdentifier(receiverParameter.Identifier.Text), receiverType);
+            }
+
+            foreach (MemberDeclarationSyntax member in node.Members)
+            {
+                switch (member)
+                {
+                    case MethodDeclarationSyntax method:
+                        {
+                            var methodSymbol = this.context.GetDeclaredSymbol(method) as IMethodSymbol;
+                            bool isStatic = methodSymbol != null && methodSymbol.IsStatic;
+                            if (!isStatic && receiver == null)
+                            {
+                                this.context.ReportUnsupported(
+                                    method,
+                                    $"instance extension member '{method.Identifier.Text}' has no receiver to bind (its enclosing extension block names no receiver); no canonical G# mapping (ADR-0115 §B.19).");
+                                break;
+                            }
+
+                            yield return this.TranslateMethod(method, ownerKind, isStatic ? null : receiver);
+                        }
+
+                        break;
+
+                    case PropertyDeclarationSyntax property:
+                        {
+                            var propertySymbol = this.context.GetDeclaredSymbol(property) as IPropertySymbol;
+                            bool isStatic = propertySymbol != null && propertySymbol.IsStatic;
+                            if (isStatic)
+                            {
+                                yield return this.TranslateProperty(property);
+                                break;
+                            }
+
+                            if (receiver == null)
+                            {
+                                this.context.ReportUnsupported(
+                                    property,
+                                    $"instance extension property '{property.Identifier.Text}' has no receiver to bind (its enclosing extension block names no receiver); no canonical G# mapping (ADR-0115 §B.19).");
+                                break;
+                            }
+
+                            if (propertySymbol?.SetMethod != null)
+                            {
+                                this.context.ReportUnsupported(
+                                    property,
+                                    $"instance extension property '{property.Identifier.Text}' has a setter; G#'s `prop` grammar has no receiver clause (only `func` does, ADR-0115 §B.19), so it is lowered to a get-only receiver-clause func — a setter has no call-site lowering (it is an assignment target, not a call) and is reported rather than silently dropped.");
+                                break;
+                            }
+
+                            yield return this.TranslateExtensionProperty(property, receiver);
+                        }
+
+                        break;
+
+                    default:
+                        this.context.ReportUnsupported(
+                            member,
+                            $"extension-block member '{member.Kind()}' has no canonical G# mapping yet (ADR-0115 §B.19).");
+                        break;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Issue #1879: lowers a C# 14 instance extension property (declared
+        /// inside an <c>extension(T x) { ... }</c> block) to a receiver-clause
+        /// <c>func</c> named after the property — G#'s <c>prop</c> grammar has no
+        /// receiver clause, so this is the only canonical target (ADR-0115
+        /// §B.19). Every read call site (<c>word.DoubledLength</c>) is rewritten
+        /// to a zero-argument call (<c>word.DoubledLength()</c>) in
+        /// <see cref="TranslateMemberAccess"/>. Callers only reach this method for
+        /// a get-only property (a setter is reported as an explicit gap first).
+        /// </summary>
+        private (GMember Member, bool IsStatic) TranslateExtensionProperty(
+            PropertyDeclarationSyntax node, Receiver receiver)
+        {
+            var symbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
+            GTypeReference returnType = symbol != null
+                ? this.typeMapper.Map(symbol.Type, this.context, node.GetLocation())
+                : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+
+            List<PropertyAccessor> accessors = this.MapAccessors(node);
+            GStatement arrowBody = TryFoldComputedPropertyArrow(node.ExpressionBody, accessors);
+            BlockStatement body = arrowBody == null
+                ? accessors.FirstOrDefault(a => a.Kind == AccessorKind.Get)?.Body
+                : null;
+
+            var method = new MethodDeclaration(
+                SanitizeIdentifier(node.Identifier.Text),
+                new List<Parameter>(),
+                returnType,
+                body,
+                receiver: receiver,
+                visibility: MapVisibility(symbol, this.context, node),
+                attributes: this.MapAttributes(node.AttributeLists),
+                expressionBody: arrowBody);
+
+            return (method, false);
         }
 
         private IEnumerable<(GMember Member, bool IsStatic)> TranslateEventField(
@@ -2572,7 +2761,8 @@ public sealed class CSharpToGSharpTranslator
 
         private (GMember Member, bool IsStatic) TranslateMethod(
             MethodDeclarationSyntax node,
-            TypeDeclarationKind ownerKind)
+            TypeDeclarationKind ownerKind,
+            Receiver forcedReceiver = null)
         {
             var symbol = this.context.GetDeclaredSymbol(node) as IMethodSymbol;
             bool isStatic = symbol != null && symbol.IsStatic;
@@ -2630,7 +2820,21 @@ public sealed class CSharpToGSharpTranslator
             bool skipFirstParameter = false;
             bool selfQualifyBody = false;
 
-            if (symbol != null && symbol.IsExtensionMethod)
+            if (forcedReceiver != null)
+            {
+                // Issue #1879: a C# 14 `extension(T x) { ... }` block instance
+                // member has no `this` parameter of its own — the receiver lives
+                // on the enclosing extension-block declaration — so the caller
+                // (TranslateExtensionBlock) resolves it there and threads it
+                // through directly, bypassing the `IsExtensionMethod`-based
+                // detection below (the block member's own declared symbol is a
+                // synthetic marker with `IsExtensionMethod == false`). Maps to the
+                // same receiver-clause `func` as a classic `this T x` extension
+                // method (ADR-0115 §B.19).
+                receiver = forcedReceiver;
+                isStatic = false;
+            }
+            else if (symbol != null && symbol.IsExtensionMethod)
             {
                 // C# extension methods translate to the receiver-clause form on a
                 // non-owned type (ADR-0115 §B.5). A receiver clause is only valid
@@ -8873,6 +9077,25 @@ public sealed class CSharpToGSharpTranslator
                         this.TranslateExpression(conditionalAccess.WhenNotNull));
 
                 case MemberBindingExpressionSyntax memberBinding:
+                    // Issue #1879: `word?.DoubledLength` binds to the same
+                    // instance extension property as `word.DoubledLength`
+                    // (lowered to a get-only receiver-clause `func`,
+                    // ADR-0115 §B.19); the call-site rewrite `TranslateMemberAccess`
+                    // applies to the plain form must also apply here, or the
+                    // print emits a bare property-style access on a func member
+                    // — a silent-wrong `?.` read.
+                    if (this.context.GetSymbolInfo(memberBinding).Symbol is IPropertySymbol extBindingProperty
+                        && !extBindingProperty.IsStatic
+                        && TryGetExtensionBlockOwner(extBindingProperty, out _))
+                    {
+                        return new InvocationExpression(
+                            new MemberAccessExpression(
+                                new ConditionalReceiverExpression(),
+                                SanitizeIdentifier(memberBinding.Name.Identifier.Text)),
+                            new List<GExpression>(),
+                            null);
+                    }
+
                     // The `.b` continuation of a null-conditional chain. Its
                     // receiver is the empty conditional-receiver placeholder, so it
                     // renders as the bare `.b` that follows the `?`.
@@ -10592,6 +10815,63 @@ public sealed class CSharpToGSharpTranslator
 
         private GExpression TranslateMemberAccess(MemberAccessExpressionSyntax member)
         {
+            // Issue #1879: a C# 14 extension-block member is declared on a
+            // synthetic marker type (`INamedTypeSymbol.IsExtension`); rewrite its
+            // call sites to the real emitted G# shape before falling into the
+            // generic member-access translation below.
+            if (this.context.GetSymbolInfo(member).Symbol is { } extSymbol
+                && TryGetExtensionBlockOwner(extSymbol, out INamedTypeSymbol extOwner))
+            {
+                if (extSymbol.IsStatic)
+                {
+                    // A static extension member is accessed through the EXTENDED
+                    // type's name (`string.Repeat(...)`, `string.Meaning`), but is
+                    // emitted as a plain static member of the declaring class (no
+                    // receiver-clause form exists for statics, ADR-0115 §B.19).
+                    // Rewrite the qualifier to the real owner; the (predefined- or
+                    // named-type) qualifier syntax on the C# side carries no value
+                    // to translate.
+                    return new MemberAccessExpression(
+                        new IdentifierExpression(SanitizeIdentifier(extOwner.Name)),
+                        SanitizeIdentifier(member.Name.Identifier.Text));
+                }
+
+                if (extSymbol is IPropertySymbol)
+                {
+                    // `nameof(word.DoubledLength)` binds to the very same property
+                    // symbol as an ordinary read, but `nameof` takes a name
+                    // reference, not a value (G#'s NameOfExpression parses its
+                    // argument as a plain expression and the binder rejects
+                    // anything but a name/member-access/generic-name). Wrapping
+                    // in a zero-arg call here would print `nameof(word.DoubledLength())`,
+                    // which re-parses as a call and is rejected — leave the bare
+                    // member access; its printed name is exactly the lowered
+                    // func's name, so `nameof` still resolves correctly.
+                    if (member.Parent is ArgumentSyntax nameOfArgument && IsNameOfArgument(nameOfArgument))
+                    {
+                        return new MemberAccessExpression(
+                            this.TranslateExpression(member.Expression),
+                            SanitizeIdentifier(member.Name.Identifier.Text));
+                    }
+
+                    // An instance extension property has no receiver-clause form
+                    // in G#'s `prop` grammar and is lowered to a get-only
+                    // receiver-clause `func` of the same name (ADR-0115 §B.19);
+                    // a bare property read becomes a zero-argument call.
+                    GExpression extReceiver = this.TranslateReceiverWithNullForgiveness(member.Expression);
+                    return new InvocationExpression(
+                        new MemberAccessExpression(extReceiver, SanitizeIdentifier(member.Name.Identifier.Text)),
+                        new List<GExpression>(),
+                        null);
+                }
+
+                // An instance extension METHOD needs no rewrite: it is emitted as
+                // a receiver-clause `func`, which is invoked with the same
+                // `receiver.Method(args)` call syntax as the C# source (exactly
+                // like a classic `this T x` extension method), so it falls
+                // through to the generic member-access translation below.
+            }
+
             // Member access on a bare-identifier element access (`values[i].M`)
             // previously hit a G# parser ambiguity (#942); that gap is now fixed,
             // so the construct translates through the normal member-access path.
@@ -11147,6 +11427,22 @@ public sealed class CSharpToGSharpTranslator
             result = new ParenthesizedExpression(
                 new IfExpression(guard, call, new IdentifierExpression("nil")));
             return true;
+        }
+
+        /// <summary>
+        /// Issue #1879: resolves the real declaring static class for a C# 14
+        /// extension-block member. Roslyn declares such a member on a synthetic
+        /// marker type (<c>INamedTypeSymbol.IsExtension</c>, named
+        /// <c>"extension(T)"</c>) nested inside the class that physically owns the
+        /// emitted G# member; this returns that enclosing class.
+        /// </summary>
+        /// <param name="symbol">The bound call-site symbol (method or property).</param>
+        /// <param name="owner">The real declaring class when matched.</param>
+        /// <returns><see langword="true"/> when <paramref name="symbol"/> is a C# 14 extension-block member.</returns>
+        private static bool TryGetExtensionBlockOwner(ISymbol symbol, out INamedTypeSymbol owner)
+        {
+            owner = symbol?.ContainingType is { IsExtension: true } marker ? marker.ContainingType : null;
+            return owner != null;
         }
 
         /// <summary>

@@ -6,12 +6,12 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | Status | Count |
 | --- | --- |
 | Unclassified | 0 |
-| Translated | 224 |
+| Translated | 225 |
 | Lowered | 17 |
 | UnsupportedByDesign | 56 |
-| Gap | 24 |
+| Gap | 23 |
 
-## Translated (224)
+## Translated (225)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -100,6 +100,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | ExpressionColon | ExpressionColonSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/ExpressionColon.cs | https://github.com/DavidObando/gsharp/issues/1891 | is-form green; switch-expression arm form unsupported (issue #1891). |
 | ExpressionElement | ExpressionElementSyntax | ADR-0115 §B.36 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/CollectionExpression.cs |  |  |
 | ExpressionStatement | ExpressionStatementSyntax | ADR-0115 §B |  |  |  |  |
+| ExtensionBlockDeclaration | ExtensionBlockDeclarationSyntax | ADR-0115 §B.19 |  | tools/cs2gs/corpus/grid/G13-Extensions-Console/Constructs/ExtensionBlockDeclaration.cs | https://github.com/DavidObando/gsharp/issues/1879 | C# 14 `extension(T x)`/`extension(T)` block members map onto the same target as a classic this-param extension method (ADR-0115 §B.19): an instance method/property lowers to a receiver-clause func (a property becomes a get-only func, since G#'s prop grammar has no receiver clause, with call sites rewritten to a zero-arg call); a static member becomes a plain shared member of the declaring class, with call sites rewritten from the extended type's name to the real owner. An enum receiver and a settable instance extension property are each reported as an explicit gap (grid G13). |
 | FalseLiteralExpression | LiteralExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/FalseLiteralExpression.cs |  |  |
 | FieldDeclaration | FieldDeclarationSyntax | ADR-0115 §B.3 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/FieldDeclaration.cs |  |  |
 | FileScopedNamespaceDeclaration | FileScopedNamespaceDeclarationSyntax | ADR-0115 §B.1 |  |  |  |  |
@@ -323,12 +324,11 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | XmlText | XmlTextSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | XmlTextAttribute | XmlTextAttributeSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 
-## Gap (24)
+## Gap (23)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | CheckedExpression | CheckedExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1881 |  |
-| ExtensionBlockDeclaration | ExtensionBlockDeclarationSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1879 | C# 14 headline; classic this-param extensions map to receiver funcs and are green (grid G13). |
 | FieldExpression | FieldExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1907 | C# 14 field keyword. |
 | FunctionPointerCallingConvention | FunctionPointerCallingConventionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |
 | FunctionPointerParameter | FunctionPointerParameterSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |
