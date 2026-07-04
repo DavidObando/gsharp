@@ -806,8 +806,24 @@ public sealed class CSharpToGSharpTranslator
                 int? explicitValue = null;
                 if (this.context.GetDeclaredSymbol(member) is IFieldSymbol { HasConstantValue: true } fieldSymbol)
                 {
-                    long signedBits = unchecked((long)ToEnumBitPattern(fieldSymbol.ConstantValue, underlyingType));
-                    if (signedBits < int.MinValue || signedBits > int.MaxValue)
+                    // Issue #2005: a signed `long`-range check on the raw bit
+                    // pattern (`signedBits < int.MinValue || > int.MaxValue`)
+                    // incorrectly drops legitimate top-bit-set values of 32-bit
+                    // (and narrower) unsigned underlying types — e.g. `enum X :
+                    // uint { High = 1u << 31 }` produces `signedBits ==
+                    // 2147483648L`, which is a positive `long` above
+                    // `int.MaxValue` even though its low 32 bits are a perfectly
+                    // valid (negative) int32 bit pattern. `byte`/`sbyte`/`short`/
+                    // `ushort`/`int`/`uint` (width <= 32) always fit in int32 once
+                    // reinterpreted this way, since only their low 32 bits are
+                    // ever meaningful; only a genuine 64-bit (`long`/`ulong`)
+                    // value whose high 32 bits aren't the sign-extension of its
+                    // low 32 bits truly has no int32 spelling.
+                    ulong bits = ToEnumBitPattern(fieldSymbol.ConstantValue, underlyingType);
+                    int candidate = unchecked((int)(uint)bits);
+                    bool is64BitWidth = underlyingType == SpecialType.System_Int64 || underlyingType == SpecialType.System_UInt64;
+                    bool fitsInt32 = !is64BitWidth || unchecked((ulong)(long)candidate) == bits;
+                    if (!fitsInt32)
                     {
                         // G# enums are always int32-backed (issue #1912 doesn't
                         // extend to non-default underlying types); a value outside
@@ -824,7 +840,7 @@ public sealed class CSharpToGSharpTranslator
                         continue;
                     }
 
-                    var constantValue = (int)signedBits;
+                    var constantValue = candidate;
                     if (constantValue != nextOrdinal)
                     {
                         explicitValue = constantValue;
