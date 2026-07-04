@@ -304,6 +304,22 @@ internal sealed class OverloadResolver
     private BoundScope Scope => binderCtx.RootScope;
 
     /// <summary>
+    /// Gets the same CLR-arg cross-reflection-context (MLC) projector
+    /// threaded through the emit-time <c>Construct</c> call sites
+    /// (<see cref="Symbols.StructSymbol.Construct(Symbols.StructSymbol, ImmutableArray{Symbols.TypeSymbol}, Func{Type, Type})"/>).
+    /// Both <c>Construct</c> call sites in this file build a same-compilation
+    /// user type (<c>classType</c> is always a source-declared
+    /// <see cref="Symbols.StructSymbol"/> resolved by name in this scope, never
+    /// an imported CLR generic), so under normal binding the raw
+    /// <c>ClrType</c> args are already in this compilation's reflection
+    /// context and no projection is needed. Threaded anyway for
+    /// defense-in-depth / consistency with the other <c>Construct</c> sites
+    /// touched by #2037, and to cover a future imported-generic-arg path
+    /// without another audit.
+    /// </summary>
+    private Func<Type, Type> MapClrType => binderCtx.References == null ? null : binderCtx.References.MapClrTypeToReferences;
+
+    /// <summary>
     /// Issue #1159: returns the implicit-<c>this</c> parameter that an
     /// unqualified instance-member reference should bind against. For a direct
     /// instance method (or interface default method) body this is the enclosing
@@ -2674,7 +2690,7 @@ internal sealed class OverloadResolver
                 typeArgs.Add(substitution[tp]);
             }
 
-            classType = StructSymbol.Construct(classType, typeArgs.MoveToImmutable());
+            classType = StructSymbol.Construct(classType, typeArgs.MoveToImmutable(), MapClrType);
         }
         else if (syntax.TypeArgumentList != null)
         {
@@ -3479,7 +3495,7 @@ internal sealed class OverloadResolver
             typeArgs.Add(substitution[tp]);
         }
 
-        constructed = StructSymbol.Construct(classType, typeArgs.MoveToImmutable());
+        constructed = StructSymbol.Construct(classType, typeArgs.MoveToImmutable(), MapClrType);
         return true;
     }
 

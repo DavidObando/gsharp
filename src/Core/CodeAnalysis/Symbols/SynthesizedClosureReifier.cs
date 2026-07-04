@@ -155,8 +155,18 @@ internal static class SynthesizedClosureReifier
     /// </summary>
     /// <param name="definition">The synthesized closure / box class definition.</param>
     /// <param name="origTPs">The ordered referenced enclosing type parameters.</param>
+    /// <param name="mapClrType">
+    /// Issue #2037: optional projector applied to the constructed instance's
+    /// CLR type arguments before <c>MakeGenericType</c> (mirrors #1958's
+    /// <see cref="StructSymbol.Construct(StructSymbol, ImmutableArray{TypeSymbol}, System.Func{System.Type, System.Type})"/>
+    /// fix). Needed when a hoisted capture/state field is typed as an
+    /// imported constructed generic over one of <paramref name="origTPs"/>
+    /// and the compilation runs under a cross-reflection-context (MLC)
+    /// reference set (cs2gs); <see langword="null"/> preserves the
+    /// erase-on-mismatch fallback for same-compilation-only callers.
+    /// </param>
     /// <returns>The constructed instance over the original parameters.</returns>
-    public static StructSymbol Reify(StructSymbol definition, ImmutableArray<TypeParameterSymbol> origTPs)
+    public static StructSymbol Reify(StructSymbol definition, ImmutableArray<TypeParameterSymbol> origTPs, System.Func<System.Type, System.Type> mapClrType = null)
     {
         var clones = CloneWithRemappedConstraints(origTPs);
 
@@ -169,6 +179,6 @@ internal static class SynthesizedClosureReifier
             args.Add(tp);
         }
 
-        return StructSymbol.Construct(definition, args.MoveToImmutable());
+        return StructSymbol.Construct(definition, args.MoveToImmutable(), mapClrType);
     }
 }
