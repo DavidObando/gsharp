@@ -4487,7 +4487,9 @@ public sealed class CSharpToGSharpTranslator
         // any deeper (e.g. as a `RangeExpressionSyntax` bound, `recv[a..^n]`) is
         // NOT a direct argument — the translator pre-lowers ranges to
         // `Slice(start, length)` arithmetic outside any bracket, so a `^` bound
-        // there is handled by the gap path above, not this one.
+        // there is folded into `Length`-relative arithmetic by
+        // `TranslateRangeBound` before it ever reaches this generic prefix-
+        // unary path (an inline `recv[a..^n]` slice never gaps).
         private static bool IsDirectIndexBracketArgument(ExpressionSyntax expression) =>
             expression.Parent is ArgumentSyntax
             {
@@ -9254,7 +9256,7 @@ public sealed class CSharpToGSharpTranslator
             // `recv[start..]`    → `recv.Slice(start)`;
             // `recv[..end]`      → `recv.Slice(0, end)`.
             GExpression start = range.LeftOperand != null
-                ? this.TranslateExpression(range.LeftOperand)
+                ? this.TranslateRangeBound(receiver, range.LeftOperand)
                 : LiteralExpression.Int("0");
 
             var slice = new MemberAccessExpression(receiver, "Slice");
@@ -9273,7 +9275,7 @@ public sealed class CSharpToGSharpTranslator
                 start = this.SpillOperand(start, range.LeftOperand);
             }
 
-            GExpression end = this.TranslateExpression(range.RightOperand);
+            GExpression end = this.TranslateRangeBound(receiver, range.RightOperand);
             GExpression length = range.LeftOperand == null
                 ? end
                 : new BinaryExpression(end, "-", start);
@@ -9281,10 +9283,47 @@ public sealed class CSharpToGSharpTranslator
             return new InvocationExpression(slice, new List<GExpression> { start, length });
         }
 
+        // Issue #1894 regression: a from-end range bound (`a[start..^n]`,
+        // `a[^n..]`) has its `^n` printed OUTSIDE any bracket once the range is
+        // desugared to a plain `.Slice(start, length)` call above — the ONE
+        // bracket-argument position gsc's own parser (Parser.ParseIndexBound)
+        // accepts a bare `^n` in is gone by then, so letting it fall through to
+        // the generic `TranslateExpression` would (correctly, per issue #1894)
+        // gap it as an ambiguous bitwise-complement. Rather than lose an
+        // otherwise-valid inline slice to that gap, fold the from-end bound
+        // directly into arithmetic against the sliced receiver's own `Length`:
+        // "n back from the end" is exactly `receiver.Length - n`.
+        // ponytail: `receiver` is re-embedded here (once for `.Slice`, again for
+        // `.Length`); a side-effecting receiver would be evaluated twice. Spill
+        // it too if a real-world case ever hits that (none of today's callers do).
+        private GExpression TranslateRangeBound(GExpression receiver, ExpressionSyntax bound) =>
+            bound is PrefixUnaryExpressionSyntax fromEnd && fromEnd.IsKind(SyntaxKind.IndexExpression)
+                ? new BinaryExpression(
+                    new MemberAccessExpression(receiver, "Length"),
+                    "-",
+                    this.TranslateExpression(fromEnd.Operand))
+                : this.TranslateExpression(bound);
+
         private GTypeReference ResolveExpressionType(ExpressionSyntax expression)
         {
             TypeInfo info = this.context.GetTypeInfo(expression);
             ITypeSymbol type = info.ConvertedType ?? info.Type;
+
+            // Issue #1894 regression: a range-slice bound (e.g. the `Next()` in
+            // `Data[Next()..2]`) is implicitly converted by the C# compiler to
+            // `System.Index` purely because it sits inside a `Range`-indexer
+            // argument list — the value itself is, and always was, an `int`.
+            // `TranslateRangeSlice` already re-lowers the whole range to a plain
+            // `Slice(start, length)` call before this operand is ever typed, so
+            // that Index/Range conversion is a compiler-internal artifact, never
+            // an actual value the translation carries forward. Falling back to
+            // the operand's own natural type here avoids gapping perfectly valid
+            // int-typed range bounds as "Index has no canonical G# type".
+            if (CSharpTypeMapper.IsSystemIndexOrRange(type) && info.Type != null && !CSharpTypeMapper.IsSystemIndexOrRange(info.Type))
+            {
+                type = info.Type;
+            }
+
             if (type == null || type.SpecialType == SpecialType.System_Void || type.TypeKind == TypeKind.Error)
             {
                 return null;

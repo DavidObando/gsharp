@@ -33,12 +33,14 @@ namespace Cs2Gs.Tests;
 /// cref="CSharpTypeMapper.IsSystemIndexOrRange"/>.</item>
 /// <item>a bare from-end marker <c>^n</c> printed anywhere other than the
 /// direct bracket-argument position it is safe in (a local initializer,
-/// method argument, return statement, or range bound) — the
+/// method argument, or return statement) — the
 /// <c>PrefixUnaryExpressionSyntax</c> case in
 /// <c>CSharpToGSharpTranslator.TranslateExpression</c>.</item>
 /// </list>
 /// The direct inline case, <c>a[^3]</c>, is unaffected: it still lowers to
-/// the bare native G# <c>a[^3]</c>.
+/// the bare native G# <c>a[^3]</c>. An inline range bound, <c>a[1..^2]</c>,
+/// is also unaffected: <c>CSharpToGSharpTranslator.TranslateRangeBound</c>
+/// folds it into <c>Length</c>-relative arithmetic instead of gapping.
 /// </summary>
 public class Issue1894IndexLocalTranslationTests
 {
@@ -58,6 +60,32 @@ namespace Corpus.Issue1894
 ");
 
         Assert.Contains("a[^3]", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
+    public void InlineRangeSlice_FromEndBound_StaysCanonicalNoGap()
+    {
+        // `a[1..^2]`, `a[^2..]`, `a[..^1]`: the `^n` bound is nested inside a
+        // `RangeExpressionSyntax` that is itself a direct bracket argument —
+        // a valid, working inline slice (folded to `Length`-relative
+        // arithmetic by `TranslateRangeBound`), not the #1894 silent-
+        // miscompile shape (a bare `^n` stored/reused outside any bracket).
+        string rendered = Render(@"
+namespace Corpus.Issue1894
+{
+    public class Holder
+    {
+        public int[] Middle(int[] a) => a[1..^2];
+
+        public int[] Tail(int[] a) => a[^2..];
+
+        public int[] Head(int[] a) => a[..^1];
+    }
+}
+");
+
+        Assert.Contains(".Slice(", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -170,12 +198,13 @@ namespace Corpus.Issue1894
     }
 
     [Fact]
-    public void FromEndBoundInRangeSlice_StaysLoudGap()
+    public void FromEndBoundInRangeSlice_StaysCanonicalNoGap()
     {
-        // `span[start..^n]`: the translator pre-lowers ranges to
-        // `Slice(start, length)` arithmetic OUTSIDE any bracket, so a `^n`
-        // upper bound here is the same "bare `^n` outside a bracket" hazard
-        // as the local-declaration case, not the safe inline form.
+        // `span[start..^n]`: the `^n` bound is nested inside a
+        // `RangeExpressionSyntax` that is itself a direct bracket argument — a
+        // valid, working inline slice, folded to `Length`-relative arithmetic
+        // by `TranslateRangeBound` — NOT the same hazard as a bare `^n` stored
+        // in a local or otherwise reused outside any bracket-scoped range.
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[] { ("Source.cs", @"
 using System;
@@ -193,7 +222,7 @@ namespace Corpus.Issue1894
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         new CSharpToGSharpTranslator().TranslateDocument(document, context);
 
-        Assert.Contains(context.Diagnostics, d => d.Message.Contains("from-end index", StringComparison.Ordinal));
+        Assert.DoesNotContain(context.Diagnostics, d => d.Message.Contains("from-end index", StringComparison.Ordinal));
     }
 
     private static void AssertRoundTripParses(string rendered)
