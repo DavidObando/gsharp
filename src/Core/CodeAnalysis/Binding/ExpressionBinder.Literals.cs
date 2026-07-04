@@ -931,15 +931,29 @@ internal sealed partial class ExpressionBinder
             // accessor). Resolve fields first, then fall back to properties so
             // both `class C { var X int32 }` and `class C { prop X int32 { get;
             // init; } }` accept `C{X: ...}`.
-            var hasField = TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, fieldName, MemberQuery.Instance(MemberKinds.Field), out var field, out _);
+            var hasField = TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, fieldName, MemberQuery.Instance(MemberKinds.Field), out var field, out var fieldDeclaringType);
             PropertySymbol property = null;
+            StructSymbol propertyDeclaringType = null;
             if (!hasField)
             {
-                if (!TypeMemberModel.TryGetProperty(structSymbol, fieldName, out property))
+                if (!TypeMemberModel.TryGetProperty(structSymbol, fieldName, out property, out propertyDeclaringType))
                 {
                     Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, fieldName);
                     continue;
                 }
+            }
+
+            // Issue #2059: a composite/struct literal member initializer is a
+            // write to the named member — enforce the same `protected`/`private`
+            // accessibility rule as a plain assignment (issue #950 / #2044),
+            // reusing the same checker + diagnostic so `Foo{ secret: 1 }` from
+            // outside the declaring type is diagnosed instead of silently
+            // compiling.
+            var literalMemberAccessibility = hasField ? field.Accessibility : property.Accessibility;
+            var literalMemberDeclaringType = hasField ? fieldDeclaringType : propertyDeclaringType;
+            if (!AccessibilityChecker.IsAccessible(literalMemberAccessibility, literalMemberDeclaringType, this.function))
+            {
+                Diagnostics.ReportMemberInaccessible(initSyntax.FieldIdentifier.Location, fieldName, literalMemberDeclaringType.Name, literalMemberAccessibility);
             }
 
             // Issue #1567: a braced member value `Member: { a, b }` populates the

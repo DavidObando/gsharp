@@ -419,20 +419,35 @@ internal sealed partial class ExpressionBinder
 
         if (receiverType is StructSymbol structSymbol)
         {
-            if (TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, propertyName, MemberQuery.Instance(MemberKinds.Field), out var field, out _))
+            if (TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, propertyName, MemberQuery.Instance(MemberKinds.Field), out var field, out var fieldDeclaringType))
             {
+                // Issue #2059: an object-initializer-suffix (`T(){ Field = v }`)
+                // member write is subject to the same `protected`/`private`
+                // accessibility rule as a plain assignment (issue #950 / #2044).
+                if (!AccessibilityChecker.IsAccessible(field.Accessibility, fieldDeclaringType, this.function))
+                {
+                    Diagnostics.ReportMemberInaccessible(initSyntax.PropertyIdentifier.Location, field.Name, fieldDeclaringType.Name, field.Accessibility);
+                }
+
                 var value = BindExpression(initSyntax.Value);
                 var converted = conversions.BindConversion(initSyntax.Value.Location, value, field.Type);
                 return new BoundFieldAssignmentExpression(initSyntax, receiverLocal, structSymbol, field, converted);
             }
 
-            if (TypeMemberModel.TryGetProperty(structSymbol, propertyName, out var prop))
+            if (TypeMemberModel.TryGetProperty(structSymbol, propertyName, out var prop, out var propDeclaringType))
             {
                 if (!prop.HasSetter)
                 {
                     Diagnostics.ReportCannotAssign(initSyntax.EqualsToken.Location, propertyName);
                     _ = BindExpression(initSyntax.Value);
                     return null;
+                }
+
+                // Issue #2059: object-initializer-suffix property write —
+                // mirrors the field check above.
+                if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propDeclaringType, this.function))
+                {
+                    Diagnostics.ReportMemberInaccessible(initSyntax.PropertyIdentifier.Location, prop.Name, propDeclaringType.Name, prop.Accessibility);
                 }
 
                 var value = BindExpression(initSyntax.Value);
