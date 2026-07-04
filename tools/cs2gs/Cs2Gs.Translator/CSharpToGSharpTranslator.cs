@@ -5902,6 +5902,38 @@ public sealed class CSharpToGSharpTranslator
             return new OutArgumentExpression("out var", SanitizeIdentifier(single.Identifier.Text));
         }
 
+        // Issue #1967: an Index/Range-typed LINQ query range variable
+        // (`from Index i in xs`, `let i = <Index expr>`, `join`, or a query
+        // continuation's `into y`) binds via a query clause, not a designation —
+        // it never goes through `ReportIfIndexOrRangeTypedDesignation`. `type` is
+        // the range variable's resolved element type (explicit `TypeSyntax` wins,
+        // else inferred from the source collection/`let` expression — same
+        // resolution `ResolveRangeVariableType`/`ResolveRangeVariableElementTypeSymbol`
+        // use, so the loud gap and the actual G# type stay in sync).
+        private void ReportIfIndexOrRangeTypedRangeVariable(SyntaxNode anchor, SyntaxToken identifier, ITypeSymbol type)
+        {
+            if (type != null && CSharpTypeMapper.IsSystemIndexOrRange(type))
+            {
+                this.context.Report(new TranslationDiagnostic(
+                    type.Name,
+                    $"query range variable '{identifier.Text}' has type 'System.{type.Name}', which has no canonical G# type — see CSharpTypeMapper.Map (issue #1894).",
+                    anchor.GetLocation(),
+                    TranslationSeverity.Unsupported));
+            }
+        }
+
+        // Resolves an Index/Range check for a `from`/`join` range variable: an
+        // explicit `TypeSyntax` wins, else the source collection's element type
+        // (mirrors `ResolveRangeVariableType`'s own precedence).
+        private void ReportIfIndexOrRangeTypedRangeVariable(
+            SyntaxNode anchor, SyntaxToken identifier, TypeSyntax explicitType, ExpressionSyntax source)
+        {
+            ITypeSymbol type = explicitType != null
+                ? this.context.GetTypeInfo(explicitType).Type
+                : this.ResolveRangeVariableElementTypeSymbol(source);
+            this.ReportIfIndexOrRangeTypedRangeVariable(anchor, identifier, type);
+        }
+
         // Reports whether the element-access target indexes by `int32`: a C# array,
         // or a type whose bound indexer takes a single `int32` parameter (such as
         // `List<T>`, `Span<T>`, `IReadOnlyList<T>`). A `Dictionary<TKey, T>` or any
@@ -14844,6 +14876,7 @@ public sealed class CSharpToGSharpTranslator
             // equivalent System.Linq method chain (`from … where … orderby …
             // select …` → `.Where(…).OrderBy(…).Select(…)`, ADR-0115 §B LINQ).
             FromClauseSyntax from = query.FromClause;
+            this.ReportIfIndexOrRangeTypedRangeVariable(from, from.Identifier, from.Type, from.Expression);
             GExpression current = this.TranslateExpression(from.Expression);
             GTypeReference rangeType = this.ResolveRangeVariableType(from.Type, from.Expression, from);
 
@@ -14875,9 +14908,7 @@ public sealed class CSharpToGSharpTranslator
                 return this.MapTypeSyntax(explicitType);
             }
 
-            ITypeSymbol sourceType = this.context.GetTypeInfo(source).Type
-                ?? this.context.GetTypeInfo(source).ConvertedType;
-            ITypeSymbol elementType = GetEnumerableElementType(sourceType);
+            ITypeSymbol elementType = this.ResolveRangeVariableElementTypeSymbol(source);
             if (elementType != null)
             {
                 return this.typeMapper.Map(elementType, this.context, anchor.GetLocation());
@@ -14887,6 +14918,18 @@ public sealed class CSharpToGSharpTranslator
                 anchor,
                 "query range variable's element type could not be determined from its source collection (ADR-0115 §B).");
             return new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+        }
+
+        // Shared by `ResolveRangeVariableType` (above) and the issue #1967
+        // Index/Range loud-gap check below: the source collection's element
+        // type, the same way C#'s foreach/query-from infers an implicit range
+        // variable's type (array element type, `IEnumerable<T>`'s `T`, or a
+        // dictionary's `KeyValuePair<K,V>`) via `GetEnumerableElementType`.
+        private ITypeSymbol ResolveRangeVariableElementTypeSymbol(ExpressionSyntax source)
+        {
+            ITypeSymbol sourceType = this.context.GetTypeInfo(source).Type
+                ?? this.context.GetTypeInfo(source).ConvertedType;
+            return GetEnumerableElementType(sourceType);
         }
 
         private GExpression LowerQueryBody(
@@ -14943,6 +14986,16 @@ public sealed class CSharpToGSharpTranslator
                 ? scope[0].Type
                 : new TupleTypeReference(scope.Select(v => v.Type).ToList());
 
+            // Tracks the projected `select` expression's resolved `ITypeSymbol`
+            // (issue #1967) so a continuation's `into y` can be checked for an
+            // Index/Range projection below — `resultType` alone is a `GTypeReference`
+            // and has already lost that information by the time the continuation
+            // runs. Left null for an elided identity `select`/`group` continuation:
+            // either case re-uses an already-declared range variable's type, whose
+            // Index/Range loud gap (if any) was already reported at its own `from`/
+            // `let`/`join` site.
+            ITypeSymbol resultTypeSymbol = null;
+
             switch (body.SelectOrGroup)
             {
                 case SelectClauseSyntax select:
@@ -14955,7 +15008,8 @@ public sealed class CSharpToGSharpTranslator
                     }
 
                     current = this.QueryCall(current, "Select", scope, select.Expression);
-                    resultType = this.context.GetTypeInfo(select.Expression).Type is { } projected
+                    resultTypeSymbol = this.context.GetTypeInfo(select.Expression).Type;
+                    resultType = resultTypeSymbol is { } projected
                         ? this.typeMapper.Map(projected, this.context, select.GetLocation())
                         : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
                     break;
@@ -14979,6 +15033,7 @@ public sealed class CSharpToGSharpTranslator
             // re-starts the scope as a single range variable over the projection.
             if (body.Continuation != null)
             {
+                this.ReportIfIndexOrRangeTypedRangeVariable(body.Continuation, body.Continuation.Identifier, resultTypeSymbol);
                 var continuationScope = new List<(string Name, GTypeReference Type)>
                 {
                     (SanitizeIdentifier(body.Continuation.Identifier.Text), resultType),
@@ -15000,6 +15055,7 @@ public sealed class CSharpToGSharpTranslator
         {
             var prologue = new List<GStatement>();
             Parameter param = this.BuildScopeParameter(scope, prologue);
+            this.ReportIfIndexOrRangeTypedRangeVariable(let, let.Identifier, this.context.GetTypeInfo(let.Expression).Type);
             GExpression letValue = this.TranslateExpression(let.Expression);
             GTypeReference letType = this.context.GetTypeInfo(let.Expression).Type is { } t
                 ? this.typeMapper.Map(t, this.context, let.GetLocation())
@@ -15031,6 +15087,7 @@ public sealed class CSharpToGSharpTranslator
             GExpression current)
         {
             LambdaExpression collectionSelector = this.BuildScopeLambda(scope, from.Expression);
+            this.ReportIfIndexOrRangeTypedRangeVariable(from, from.Identifier, from.Type, from.Expression);
             GTypeReference newVarType = this.ResolveRangeVariableType(from.Type, from.Expression, from);
             (string Name, GTypeReference Type) newVar = (from.Identifier.Text, newVarType);
             LambdaExpression resultSelector = this.BuildTransparentResultSelector(scope, newVar);
@@ -15053,6 +15110,7 @@ public sealed class CSharpToGSharpTranslator
             GExpression current)
         {
             GExpression inner = this.TranslateExpression(join.InExpression);
+            this.ReportIfIndexOrRangeTypedRangeVariable(join, join.Identifier, join.Type, join.InExpression);
             GTypeReference innerVarType = this.ResolveRangeVariableType(join.Type, join.InExpression, join);
             var innerVar = (Name: join.Identifier.Text, Type: innerVarType);
 
@@ -15075,6 +15133,8 @@ public sealed class CSharpToGSharpTranslator
             // built directly from the already-resolved inner element type.
             // `sequence[T]` is G#'s spelling for `IEnumerable<T>` (see the
             // `GetEnumerableElementType`/array-iteration lowering above).
+            // `into g` is always `IEnumerable<TInner>` (spec §12.19.3.8) — never
+            // Index/Range itself — so no loud-gap check applies here.
             var groupVar = (
                 Name: join.Into.Identifier.Text,
                 Type: (GTypeReference)new NamedTypeReference("sequence", new List<GTypeReference> { innerVarType }));
