@@ -29,7 +29,7 @@ namespace Cs2Gs.Translator.Loading;
 /// <see cref="MSBuildLocator"/>). This is the production ingestion path.
 /// </description></item>
 /// <item><description>
-/// <see cref="LoadInMemory(IReadOnlyList{ValueTuple{string, string}}, IReadOnlyList{MetadataReference}, string)"/>
+/// <see cref="LoadInMemory(IReadOnlyList{ValueTuple{string, string}}, IReadOnlyList{MetadataReference}, string, OutputKind)"/>
 /// — a lightweight secondary loader that compiles in-memory C# source strings
 /// against the running runtime's reference assemblies, for fast unit tests of
 /// the visitor without spinning up MSBuild.
@@ -153,11 +153,19 @@ public static class CSharpProjectLoader
     /// reference assemblies (from <c>TRUSTED_PLATFORM_ASSEMBLIES</c>) are used.
     /// </param>
     /// <param name="assemblyName">The output assembly name.</param>
+    /// <param name="outputKind">
+    /// The compilation's output kind. Defaults to a library, so
+    /// <c>Compilation.GetEntryPoint</c> is <see langword="null"/> and entry-point
+    /// flattening (<c>TranslateEntryType</c>) is not exercised. Pass
+    /// <see cref="OutputKind.ConsoleApplication"/> to test entry-point
+    /// translation (issue #1904) with this fast in-memory harness.
+    /// </param>
     /// <returns>The loaded project with its compilation, documents, and diagnostics.</returns>
     public static LoadedCSharpProject LoadInMemory(
         IReadOnlyList<(string FileName, string Source)> sources,
         IReadOnlyList<MetadataReference> references = null,
-        string assemblyName = "Cs2Gs.InMemory")
+        string assemblyName = "Cs2Gs.InMemory",
+        OutputKind outputKind = OutputKind.DynamicallyLinkedLibrary)
     {
         if (sources is null)
         {
@@ -175,7 +183,7 @@ public static class CSharpProjectLoader
             assemblyName,
             trees,
             resolvedReferences,
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithAllowUnsafe(true));
+            new CSharpCompilationOptions(outputKind).WithAllowUnsafe(true));
 
         var loadDiagnostics = new List<Diagnostic>();
         IReadOnlyList<LoadedDocument> documents = BuildDocuments(compilation, projectDirectory: null, loadDiagnostics);

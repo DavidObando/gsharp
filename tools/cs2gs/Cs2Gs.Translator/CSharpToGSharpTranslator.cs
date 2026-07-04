@@ -692,8 +692,29 @@ public sealed class CSharpToGSharpTranslator
                     case MethodDeclarationSyntax method
                         when SymbolEqualityComparer.Default.Equals(
                             this.context.GetDeclaredSymbol(method), entryPoint):
+                        // Issue #1904: `Main`'s own `string[]` parameter may be
+                        // named anything (`args`, `arguments`, …), but the
+                        // top-level statements it is hoisted into only ever
+                        // declare the fixed, implicit `args` slot (ADR-0066
+                        // D1). Bind every reference to Main's parameter to that
+                        // identifier — the same patternBindings substitution
+                        // used for pattern-bound locals — for the duration of
+                        // the entry body's translation only.
+                        bool renamedArgs = entryPoint.Parameters.Length == 1
+                            && entryPoint.Parameters[0].Name != "args";
+                        if (renamedArgs)
+                        {
+                            this.patternBindings[entryPoint.Parameters[0]] = new IdentifierExpression("args");
+                        }
+
                         BlockStatement body = this.TranslateBody(method, $"entry point '{entryPoint.Name}'");
                         statements.AddRange(body.Statements);
+
+                        if (renamedArgs)
+                        {
+                            this.patternBindings.Remove(entryPoint.Parameters[0]);
+                        }
+
                         break;
 
                     case MethodDeclarationSyntax method:
