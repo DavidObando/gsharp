@@ -80,3 +80,7 @@ SwitchExpression: 0 -> zero
 SwitchExpression: 2 -> plain positive (2)
 SwitchExpression: 4 -> multiple of four (4)
 SwitchExpression: quarter 3 -> summer
+TypePattern: switch(int) = int expected
+TypePattern: is-test string match
+TypePattern: switch-statement int match
+TypePattern: or-combinator switch(whole number) = whole number expected

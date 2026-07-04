@@ -6,12 +6,12 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | Status | Count |
 | --- | --- |
 | Unclassified | 0 |
-| Translated | 221 |
+| Translated | 222 |
 | Lowered | 12 |
 | UnsupportedByDesign | 56 |
-| Gap | 32 |
+| Gap | 31 |
 
-## Translated (221)
+## Translated (222)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -220,6 +220,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | TypeParameter | TypeParameterSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/TypeParameter.cs |  | Declaration-site variance (out/in) conversions: gsc issue #1927 (fixed). |
 | TypeParameterConstraintClause | TypeParameterConstraintClauseSyntax | ADR-0115 §B.7 |  |  |  |  |
 | TypeParameterList | TypeParameterListSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/TypeParameterList.cs |  | Generic class + primary ctor ICEs gsc (issue #1920). |
+| TypePattern | TypePatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/TypePattern.cs |  | Bare-type switch-arm (`int =>`, no binder — issue #1890, resolved): lowers to G#'s own discard-designator type pattern `_ is T` (`PatternBinder.BindTypePattern`'s `isDiscard` check), since gsc's own `TypePattern` grammar always requires a designator token before `is` but treats `_` as a non-binding discard there. Roslyn parses a bare user-type name (e.g. `Widget =>`) as a `ConstantPatternSyntax` over an identifier rather than `TypePatternSyntax`; the switch-arm path now shares the boolean-test path's `IsTypeReferencePattern` type-vs-constant disambiguation to still route it to `_ is T`. |
 | UnaryMinusExpression | PrefixUnaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/UnaryMinusExpression.cs |  |  |
 | UnaryPlusExpression | PrefixUnaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/UnaryPlusExpression.cs |  |  |
 | UncheckedStatement | CheckedStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/UncheckedStatement.cs |  | Wrap-around parity verified (grid G03). |
@@ -315,7 +316,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | XmlText | XmlTextSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | XmlTextAttribute | XmlTextAttributeSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 
-## Gap (32)
+## Gap (31)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -347,7 +348,6 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | RefExpression | RefExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1900 | ref argument/return seam (&x pass-by-address). |
 | RefType | RefTypeSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1900 |  |
 | SpreadElement | SpreadElementSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1897 |  |
-| TypePattern | TypePatternSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1890 | Bare-type switch-expression arms; is/case binder forms work (DeclarationPattern). |
 | UncheckedExpression | CheckedExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1881 |  |
 | UnsignedRightShiftAssignmentExpression | AssignmentExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1880 | Emits >>>= verbatim; never parses. |
 | UnsignedRightShiftExpression | BinaryExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1880 | Translator crash: Unknown binary operator >>>. |
