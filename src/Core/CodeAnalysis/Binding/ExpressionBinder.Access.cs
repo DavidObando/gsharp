@@ -4940,7 +4940,11 @@ internal sealed partial class ExpressionBinder
 
     // Element type for the array/slice slicing path, or null if the target is
     // not an array/slice. Result of slicing is always a `[]T` slice.
-    private static TypeSymbol GetArraySliceElementType(TypeSymbol type)
+    // Issue #1951: internal (not private) so PatternBinder.BindListPattern can
+    // reuse the same array/slice-or-metadata-array recognition for list
+    // patterns instead of only accepting the in-compilation
+    // ArrayTypeSymbol/SliceTypeSymbol.
+    internal static TypeSymbol GetArraySliceElementType(TypeSymbol type)
     {
         return type switch
         {
