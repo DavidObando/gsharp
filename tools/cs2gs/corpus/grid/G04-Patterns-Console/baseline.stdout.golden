@@ -43,6 +43,15 @@ ParenthesizedPattern: 5 is (> 0 and < 10) or 42 = True
 ParenthesizedPattern: 42 is (> 0 and < 10) or 42 = True
 ParenthesizedPattern: 77 is (> 0 and < 10) or 42 = False
 ParenthesizedPattern: 9 is not (< 0 or > 10) = True
+PositionalPatternClause: origin is (0, 0) = True
+PositionalPatternClause: onYAxis is (0, 0) = False
+PositionalPatternClause: recordOrigin is (0, 0) = True
+PositionalPatternClause: recordOrigin is PpPoint(0, 0) = True
+PositionalPatternClause: recordPoint is (0, 0) = False
+PositionalPatternClause: (0, 0, 5) is (0, 0, 5) = True
+PositionalPatternClause: (0, 0) -> origin
+PositionalPatternClause: (0, 4) -> y-axis
+PositionalPatternClause: (3, 4) -> ne
 RecursivePattern: person is in Lima = True
 RecursivePattern: person has a Lima-range zip
 RecursivePattern: name length 3 = True

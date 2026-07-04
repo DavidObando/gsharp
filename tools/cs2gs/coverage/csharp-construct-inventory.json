@@ -1644,10 +1644,12 @@
   {
     "kind": "PositionalPatternClause",
     "nodeType": "PositionalPatternClauseSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
     "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/PositionalPatternClause.cs",
     "issue": "https://github.com/DavidObando/gsharp/issues/1887",
-    "notes": "SILENT MISTRANSLATION: sub-patterns dropped to match-anything case { }."
+    "notes": "Fixed (was SILENT MISTRANSLATION, issue #1887): a positional subpattern lowers to the same member-access form a property subpattern uses (tuple Item1/Item2, or a record's property via its Deconstruct). Quarantined sub-case: a switch-expression arm's bare positional pattern over a TUPLE hits gsc GS0172 (property-pattern matcher needs a struct/class, not a tuple); the is-expression boolean form is unaffected."
   },
   {
     "kind": "PostDecrementExpression",
