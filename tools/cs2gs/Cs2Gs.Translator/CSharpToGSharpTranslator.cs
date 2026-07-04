@@ -6036,7 +6036,15 @@ public sealed class CSharpToGSharpTranslator
                 this.pendingSpillPrologue = outerSpillPrologue;
             }
 
-            return new LocalFunctionStatement(SanitizeIdentifier(localFunction.Identifier.Text), lambda);
+            // Issue #1886: a generic local function (`T First<T>(a, b) { ... }`)
+            // carries its type parameters on the `let` binding, not the anonymous
+            // function literal (which has no name to hang `[T]` off) — see
+            // `let Name[T, U] = func (...) ... { ... }` in G#.
+            var typeParameters = localFunction.TypeParameterList?.Parameters
+                .Select(tp => SanitizeIdentifier(tp.Identifier.Text))
+                .ToList();
+
+            return new LocalFunctionStatement(SanitizeIdentifier(localFunction.Identifier.Text), lambda, typeParameters);
         }
 
         /// <summary>
@@ -8220,9 +8228,21 @@ public sealed class CSharpToGSharpTranslator
                     this.BuildPatternNarrowingReplacement(receiver, receiverSyntax, recursive.Type);
             }
 
+            // A bare recursive pattern with no type prefix (`{ A: 0 }`, `(0, 0)`)
+            // starts the test with a null check on `receiver` — correct when
+            // `receiver` is a reference type (the common case, e.g. a nullable
+            // record), but a tuple or struct positional pattern (issue #1887,
+            // `(int, int)`) is a VALUE type: it can never be null, and gsc
+            // rejects `!= nil` against one. Skip the null check for a value-type
+            // receiver; the member-access sub-tests below are the whole test
+            // (and if there happen to be none, e.g. every position is a discard,
+            // `true` is the correct always-matches result).
+            bool receiverIsValueType = recursive.Type == null &&
+                this.context.SemanticModel.GetOperation(recursive) is IRecursivePatternOperation { MatchedType.IsValueType: true };
+
             GExpression test = recursive.Type != null
                 ? new BinaryExpression(receiver, "is", new TypeExpression(this.MapTypeSyntax(recursive.Type)))
-                : new BinaryExpression(receiver, "!=", LiteralExpression.Null());
+                : receiverIsValueType ? null : new BinaryExpression(receiver, "!=", LiteralExpression.Null());
 
             if (recursive.PropertyPatternClause != null)
             {
@@ -8237,11 +8257,114 @@ public sealed class CSharpToGSharpTranslator
                     string memberName = sub.NameColon?.Name.Identifier.Text
                         ?? sub.ExpressionColon?.Expression.ToString();
                     GExpression memberAccess = new MemberAccessExpression(receiver, SanitizeIdentifier(memberName));
-                    test = new BinaryExpression(test, "&&", this.TranslatePatternTest(memberAccess, sub.Pattern));
+                    GExpression memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern);
+                    test = test == null ? memberTest : new BinaryExpression(test, "&&", memberTest);
                 }
             }
 
-            return test;
+            if (recursive.PositionalPatternClause != null)
+            {
+                // Issue #1887: `x is (0, 0)` / `x is Point(0, 0)` deconstructs `x`
+                // positionally. G# has no positional-pattern syntax, but a
+                // positional subpattern against a tuple or a record's
+                // (compiler-synthesized) `Deconstruct` reads exactly the same
+                // members a property pattern would — `Item1`/`Item2` for a tuple,
+                // the matching property for a record — so it lowers to the same
+                // nested member-access test a property subpattern uses.
+                SeparatedSyntaxList<SubpatternSyntax> subs = recursive.PositionalPatternClause.Subpatterns;
+                string[] memberNames = this.TryGetPositionalMemberNames(recursive, subs.Count);
+                for (int i = 0; i < subs.Count; i++)
+                {
+                    SubpatternSyntax sub = subs[i];
+                    if (sub.Pattern is DiscardPatternSyntax)
+                    {
+                        // A discard position (`(0, _)`) imposes no constraint —
+                        // same as an omitted field in a property pattern — so it
+                        // contributes no test at all.
+                        continue;
+                    }
+
+                    string memberName = sub.NameColon?.Name.Identifier.Text ?? memberNames?[i];
+                    if (memberName == null)
+                    {
+                        this.context.ReportUnsupported(sub, "positional subpattern has no canonical G# form yet (ADR-0115 §B).");
+                        continue;
+                    }
+
+                    GExpression memberAccess = new MemberAccessExpression(receiver, SanitizeIdentifier(memberName));
+                    GExpression memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern);
+                    test = test == null ? memberTest : new BinaryExpression(test, "&&", memberTest);
+                }
+            }
+
+            // Every position was a discard (`(_, _)`) against a value-type
+            // receiver: no null check applies and no member test was emitted, so
+            // the pattern always matches.
+            return test ?? LiteralExpression.Bool(true);
+        }
+
+        // Resolves the property name each positional subpattern of `recursive`
+        // deconstructs to (issue #1887), so a positional pattern can lower to the
+        // same nested member-access form a property pattern uses. Returns null
+        // when no canonical mapping exists (an explicit `Deconstruct` whose
+        // out-parameters don't share a name with a same-named property), so
+        // callers fall back to the loud "no canonical G# form" diagnostic instead
+        // of silently dropping the subpattern.
+        private string[] TryGetPositionalMemberNames(RecursivePatternSyntax recursive, int arity)
+        {
+            if (this.context.SemanticModel.GetOperation(recursive) is not IRecursivePatternOperation operation)
+            {
+                return null;
+            }
+
+            if (operation.MatchedType is INamedTypeSymbol { IsTupleType: true })
+            {
+                // `(0, 0)` against a `(int, int)` tuple: positions bind to the
+                // always-present `Item1`/`Item2` fields regardless of any
+                // user-declared tuple element names.
+                var tupleNames = new string[arity];
+                for (int i = 0; i < arity; i++)
+                {
+                    tupleNames[i] = "Item" + (i + 1).ToString(CultureInfo.InvariantCulture);
+                }
+
+                return tupleNames;
+            }
+
+            if (operation.DeconstructSymbol is not IMethodSymbol deconstruct || deconstruct.Parameters.Length != arity)
+            {
+                return null;
+            }
+
+            var names = new string[arity];
+            for (int i = 0; i < arity; i++)
+            {
+                string name = deconstruct.Parameters[i].Name;
+                if (!HasMatchingProperty(operation.MatchedType, name))
+                {
+                    return null;
+                }
+
+                names[i] = name;
+            }
+
+            return names;
+        }
+
+        // Walks the base-type chain looking for a property named `name` (a
+        // record's positional properties are declared directly on the record,
+        // but this also covers a Deconstruct that mirrors an inherited property).
+        private static bool HasMatchingProperty(ITypeSymbol type, string name)
+        {
+            for (ITypeSymbol current = type; current != null; current = current.BaseType)
+            {
+                if (current.GetMembers(name).OfType<IPropertySymbol>().Any())
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private void BindPatternDesignation(VariableDesignationSyntax designation, GExpression receiver)
@@ -9199,7 +9322,7 @@ public sealed class CSharpToGSharpTranslator
                 typeArguments = this.MapTypeArguments(memberBindingGeneric);
             }
             else if (invocation.Expression is IdentifierNameSyntax bareName &&
-                this.context.GetSymbolInfo(bareName).Symbol is IMethodSymbol { IsStatic: true } staticMethod &&
+                this.context.GetSymbolInfo(bareName).Symbol is IMethodSymbol { IsStatic: true, MethodKind: not MethodKind.LocalFunction } staticMethod &&
                 staticMethod.ContainingType is { TypeKind: TypeKind.Class or TypeKind.Struct } owner &&
                 !owner.IsImplicitlyDeclared &&
                 !this.IsStaticUsingTarget(owner) &&
@@ -9212,6 +9335,12 @@ public sealed class CSharpToGSharpTranslator
                 // A bare call to a `using static` member is the exception
                 // (ADR-0134): gsc brings it into scope through `import Owner`,
                 // so it is left unqualified above.
+                // Issue #1886: a `static` LOCAL function is NOT a sibling type
+                // member — Roslyn still reports its enclosing TYPE as
+                // `ContainingType`, but cs2gs already lowers it to a local `let`
+                // binding (see TranslateLocalFunction), so its call must stay a
+                // bare identifier call, never `Owner.Name(...)`. Excluded above
+                // via `MethodKind: not MethodKind.LocalFunction`.
                 target = new MemberAccessExpression(
                     this.StaticQualifierReceiver(owner, bareName.GetLocation()),
                     staticMethod.Name);
@@ -10984,6 +11113,39 @@ public sealed class CSharpToGSharpTranslator
                     }
                 }
 
+                if (recursive.PositionalPatternClause != null)
+                {
+                    // Issue #1887: a bare positional pattern arm (`(0, 0) =>`,
+                    // `(0, _) or (>0, >0) =>`) has no type prefix, so — same as
+                    // the untyped property-pattern branch above — it lowers to a
+                    // G# property pattern whose fields are the tuple/record
+                    // members each position deconstructs to.
+                    SeparatedSyntaxList<SubpatternSyntax> subs = recursive.PositionalPatternClause.Subpatterns;
+                    string[] memberNames = this.TryGetPositionalMemberNames(recursive, subs.Count);
+                    for (int i = 0; i < subs.Count; i++)
+                    {
+                        SubpatternSyntax sub = subs[i];
+                        if (sub.Pattern is DiscardPatternSyntax)
+                        {
+                            // A discard position (`(0, _)`) imposes no constraint —
+                            // same as an omitted field in a property pattern — so
+                            // it contributes no field at all.
+                            continue;
+                        }
+
+                        string memberName = sub.NameColon?.Name.Identifier.Text ?? memberNames?[i];
+                        if (memberName == null)
+                        {
+                            this.context.ReportUnsupported(sub, "positional subpattern has no canonical G# form yet (ADR-0115 §B).");
+                            continue;
+                        }
+
+                        fields.Add(new PropertyPatternField(
+                            SanitizeIdentifier(memberName),
+                            this.TranslatePattern(sub.Pattern, bindings, usedDesignators)));
+                    }
+                }
+
                 return new PropertyPattern(fields);
             }
 
@@ -11028,6 +11190,50 @@ public sealed class CSharpToGSharpTranslator
                         this.context.ReportUnsupported(
                             sub,
                             "typed property subpattern other than a 'var' binding has no canonical G# form yet (ADR-0115 §B).");
+                    }
+                }
+            }
+
+            if (recursive.PositionalPatternClause != null)
+            {
+                // Issue #1887: a TYPED recursive pattern (`Point(0, 0)`, `Point(var
+                // x, var y)`) lowers to a `TypePattern` GPattern node, which — same
+                // as the typed property-pattern branch above — carries only a
+                // designator and a type, no room for an extra equality/relational
+                // test. A `var` positional subpattern still binds cleanly (a member
+                // access on the designator); anything else has no canonical G#
+                // form in this position (ADR-0115 §B) and is reported loudly rather
+                // than silently dropped. The untyped bare-tuple arm form above
+                // (`(0, 0) =>`) is unaffected and fully supports constant/
+                // relational positional subpatterns.
+                SeparatedSyntaxList<SubpatternSyntax> subs = recursive.PositionalPatternClause.Subpatterns;
+                string[] memberNames = this.TryGetPositionalMemberNames(recursive, subs.Count);
+                for (int i = 0; i < subs.Count; i++)
+                {
+                    SubpatternSyntax sub = subs[i];
+                    if (sub.Pattern is DiscardPatternSyntax)
+                    {
+                        // A discard position (`Point(0, _)`) imposes no
+                        // constraint and binds nothing, so no field is needed.
+                        continue;
+                    }
+
+                    string memberName = sub.NameColon?.Name.Identifier.Text ?? memberNames?[i];
+                    if (memberName != null &&
+                        sub.Pattern is VarPatternSyntax { Designation: SingleVariableDesignationSyntax posBound } &&
+                        this.context.GetDeclaredSymbol(posBound) is { } posBoundSymbol)
+                    {
+                        bindings.Add((
+                            posBoundSymbol,
+                            new MemberAccessExpression(
+                                new IdentifierExpression(designator),
+                                SanitizeIdentifier(memberName))));
+                    }
+                    else
+                    {
+                        this.context.ReportUnsupported(
+                            sub,
+                            "typed positional subpattern other than a 'var' binding has no canonical G# form yet (ADR-0115 §B).");
                     }
                 }
             }

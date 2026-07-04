@@ -1,10 +1,8 @@
 // inventory: LocalFunctionStatement
-// NOTE: quarantined sub-cases (fail gsc compile after translation):
-//   * static local function — call site is emitted as a class-member access
-//     (`LocalFunctionStatementFixture.Square(6)`) that does not exist (GS0158).
-//   * generic local function — lowered to `func (a T, b T) T` where 'T' is not
-//     a known type (GS0113), cascading GS0124/GS0122.
-// Plain and capturing local functions are kept below.
+// Plain, captured, static, and generic local functions are all exercised below
+// (issue #1886: static local functions now call through their `let` binding
+// directly instead of a nonexistent class-member access, and generic local
+// functions translate to G#'s `let Name[T, ...] = func (...) ... { ... }`).
 using System;
 
 namespace Corpus.Grid03.Constructs
@@ -27,6 +25,21 @@ namespace Corpus.Grid03.Constructs
             }
 
             Console.WriteLine($"LocalFunctionStatement: AddSeed(7) with captured seed = {AddSeed(7)}");
+
+            static int Square(int x)
+            {
+                return x * x;
+            }
+
+            Console.WriteLine($"LocalFunctionStatement: Square(6) = {Square(6)}");
+
+            T First<T>(T a, T b)
+            {
+                return a;
+            }
+
+            Console.WriteLine($"LocalFunctionStatement: First(1, 2) = {First(1, 2)}");
+            Console.WriteLine($"LocalFunctionStatement: First(\"x\", \"y\") = {First("x", "y")}");
         }
     }
 }

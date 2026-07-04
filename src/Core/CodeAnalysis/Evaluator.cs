@@ -1632,6 +1632,19 @@ public sealed class Evaluator
         return field.GetValue(receiver);
     }
 
+    // Issue #1887: reads a tuple's Item1..ItemN element by field name for
+    // property-pattern matching over a positional pattern lowering.
+    private static object GetTupleFieldValue(object tuple, string fieldName)
+    {
+        if (tuple is object[] arr)
+        {
+            var index = int.Parse(fieldName.AsSpan(4), System.Globalization.CultureInfo.InvariantCulture) - 1;
+            return arr[index];
+        }
+
+        return tuple.GetType().GetField(fieldName)?.GetValue(tuple);
+    }
+
     private object EvaluateFunctionLiteralExpression(BoundFunctionLiteralExpression node)
     {
         var captured = new Dictionary<VariableSymbol, object>();
@@ -3386,12 +3399,29 @@ public sealed class Evaluator
                 outBindings[typePattern.Variable] = value;
                 return true;
             case BoundNodeKind.PropertyPattern:
+                var property = (BoundPropertyPattern)pattern;
                 if (value is not StructValue sv)
                 {
+                    // Issue #1887: a positional pattern over a raw tuple lowers
+                    // to a property pattern keyed on Item1..ItemN. Tuple values
+                    // are CLR ValueTuple instances (arity 2-7) or object[].
+                    if (value != null && property.Type is TupleTypeSymbol)
+                    {
+                        foreach (var tupleField in property.Fields)
+                        {
+                            var tupleFieldValue = GetTupleFieldValue(value, tupleField.Field.Name);
+                            if (!TryMatchPattern(tupleField.Pattern, tupleFieldValue, outBindings))
+                            {
+                                return false;
+                            }
+                        }
+
+                        return true;
+                    }
+
                     return false;
                 }
 
-                var property = (BoundPropertyPattern)pattern;
                 foreach (var field in property.Fields)
                 {
                     sv.Fields.TryGetValue(field.Field.Name, out var fieldValue);

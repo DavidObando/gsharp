@@ -310,6 +310,29 @@ internal sealed class PatternBinder
     private BoundPattern BindPropertyPattern(PropertyPatternSyntax syntax, TypeSymbol discriminantType)
     {
         var fields = ImmutableArray.CreateBuilder<BoundPropertyPatternField>();
+
+        // Issue #1887: cs2gs lowers a C# positional pattern over a raw tuple
+        // subject (`(0, 0) => ...`) to a G# property pattern keyed on the
+        // tuple's always-present Item1..ItemN fields (`{ Item1: 0, Item2: 0 }`).
+        // A ValueTuple is neither a StructSymbol nor a class, so it needs its
+        // own lookup path alongside the struct/class one below.
+        if (discriminantType is TupleTypeSymbol tupleType)
+        {
+            foreach (var tupleFieldSyntax in syntax.Fields)
+            {
+                if (!TryGetTupleField(tupleType, tupleFieldSyntax.Identifier.Text, out var tupleField))
+                {
+                    Diagnostics.ReportUndefinedFieldOnType(tupleFieldSyntax.Identifier.Location, tupleFieldSyntax.Identifier.Text, discriminantType);
+                    fields.Add(new BoundPropertyPatternField(syntax, new FieldSymbol(tupleFieldSyntax.Identifier.Text, TypeSymbol.Error, Accessibility.Public), BindPattern(tupleFieldSyntax.Pattern, TypeSymbol.Error)));
+                    continue;
+                }
+
+                fields.Add(new BoundPropertyPatternField(syntax, tupleField, BindPattern(tupleFieldSyntax.Pattern, tupleField.Type)));
+            }
+
+            return new BoundPropertyPattern(syntax, discriminantType, fields.ToImmutable());
+        }
+
         if (discriminantType is not StructSymbol structType)
         {
             Diagnostics.ReportPropertyPatternRequiresStructOrClass(syntax.OpenBraceToken.Location, discriminantType);
@@ -329,6 +352,26 @@ internal sealed class PatternBinder
         }
 
         return new BoundPropertyPattern(syntax, discriminantType, fields.ToImmutable());
+    }
+
+    // Issue #1887: resolve a tuple's synthetic Item1..ItemN field by name so a
+    // property/positional pattern (`{ Item1: 0, Item2: 0 }`) binds against a
+    // ValueTuple subject the same way it does against a struct's real fields.
+    private static bool TryGetTupleField(TupleTypeSymbol tupleType, string name, out FieldSymbol field)
+    {
+        field = null;
+        if (name.Length <= 4 || !name.StartsWith("Item", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!int.TryParse(name.AsSpan(4), out var index) || index < 1 || index > tupleType.Arity)
+        {
+            return false;
+        }
+
+        field = new FieldSymbol(name, tupleType.ElementTypes[index - 1], Accessibility.Public);
+        return true;
     }
 
     private BoundPattern BindRelationalPattern(RelationalPatternSyntax syntax, TypeSymbol discriminantType)

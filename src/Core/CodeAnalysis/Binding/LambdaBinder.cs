@@ -75,6 +75,7 @@ internal sealed class LambdaBinder
     private readonly Func<FunctionSymbol> getCurrentFunction;
     private readonly Action<FunctionSymbol> setCurrentFunction;
     private readonly Func<ExpressionSyntax, BoundExpression> bindLambdaBodyExpression;
+    private readonly Func<TypeParameterListSyntax, ImmutableArray<TypeParameterSymbol>> bindTypeParameterList;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="LambdaBinder"/>
@@ -125,6 +126,12 @@ internal sealed class LambdaBinder
     /// optional callback that binds an arrow-lambda body expression.
     /// Required only when <see cref="BindLambdaExpression"/> is
     /// invoked; the function-literal pipeline does not need it.</param>
+    /// <param name="bindTypeParameterList">Issue #1886: callback that
+    /// binds a <c>[T, U, ...]</c> type-parameter list to
+    /// <see cref="TypeParameterSymbol"/>s, reusing
+    /// <see cref="DeclarationBinder.BindTypeParameterList(TypeParameterListSyntax)"/>.
+    /// Required only when <see cref="BindGenericLocalFunctionDeclaration"/>
+    /// is invoked.</param>
     public LambdaBinder(
         BinderContext binderCtx,
         ConversionClassifier conversions,
@@ -135,7 +142,8 @@ internal sealed class LambdaBinder
         Func<TypeSymbol, Type> resolveClrTypeForGenericArg,
         Func<FunctionSymbol> getCurrentFunction,
         Action<FunctionSymbol> setCurrentFunction,
-        Func<ExpressionSyntax, BoundExpression> bindLambdaBodyExpression = null)
+        Func<ExpressionSyntax, BoundExpression> bindLambdaBodyExpression = null,
+        Func<TypeParameterListSyntax, ImmutableArray<TypeParameterSymbol>> bindTypeParameterList = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
         this.conversions = conversions ?? throw new ArgumentNullException(nameof(conversions));
@@ -147,6 +155,7 @@ internal sealed class LambdaBinder
         this.getCurrentFunction = getCurrentFunction ?? throw new ArgumentNullException(nameof(getCurrentFunction));
         this.setCurrentFunction = setCurrentFunction ?? throw new ArgumentNullException(nameof(setCurrentFunction));
         this.bindLambdaBodyExpression = bindLambdaBodyExpression;
+        this.bindTypeParameterList = bindTypeParameterList;
     }
 
     private DiagnosticBag Diagnostics => binderCtx.Diagnostics;
@@ -201,8 +210,14 @@ internal sealed class LambdaBinder
     /// the captured outer variables by inspecting the bound body.
     /// </summary>
     /// <param name="syntax">The function-literal syntax node.</param>
+    /// <param name="explicitName">Issue #1886: when non-null, names the
+    /// synthetic <see cref="FunctionSymbol"/> after this value (e.g. the
+    /// identifier of a <c>let Name[T] = func (...) ... { ... }</c> generic
+    /// local-function declaration) instead of the default
+    /// <c>&lt;lambdaN&gt;</c> synthetic name, so scope-based name lookup
+    /// (<see cref="BoundScope.TryDeclareFunction"/>) can find it.</param>
     /// <returns>The bound function-literal expression.</returns>
-    public BoundExpression BindFunctionLiteralExpression(FunctionLiteralExpressionSyntax syntax)
+    public BoundExpression BindFunctionLiteralExpression(FunctionLiteralExpressionSyntax syntax, string explicitName = null)
     {
         // Phase 4.7: function literal `[async] func(p1 T1, p2 T2) R { body }`.
         // Bind parameters, push a new scope chained to the current scope so
@@ -276,7 +291,7 @@ internal sealed class LambdaBinder
 
         var fnType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), BuildVariadicFlagsIfAny(parameterSymbols), observableReturnType);
         var synthetic = new FunctionSymbol(
-            $"<lambda{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
+            explicitName ?? $"<lambda{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
             parameterSymbols.ToImmutable(),
             returnType);
         synthetic.IsAsync = syntax.IsAsync;
@@ -357,6 +372,70 @@ internal sealed class LambdaBinder
         }
 
         return new BoundFunctionLiteralExpression(null, synthetic, fnType, (BoundBlockStatement)body, captured);
+    }
+
+    /// <summary>
+    /// Issue #1886: binds a generic local-function declaration
+    /// <c>let Name[T, U, ...] = func (a T, b U) ... { ... }</c>. A CLR
+    /// delegate cannot close over an unbound generic method, so this does
+    /// NOT produce a runtime variable/closure value — it binds the
+    /// <c>[T, U, ...]</c> list, binds the function literal against those
+    /// type parameters (so <c>T</c>/<c>U</c> resolve in the parameter,
+    /// return-type, and body clauses), marks the resulting
+    /// <see cref="FunctionSymbol"/> as generic, and declares it directly
+    /// into the enclosing scope so calls resolve through the ordinary
+    /// generic overload-resolution / type-inference call path — the exact
+    /// mechanism already used for top-level generic functions — instead of
+    /// through an indirect delegate call.
+    /// </summary>
+    /// <param name="syntax">The <c>let Name[T, ...] = ...</c> variable declaration syntax.</param>
+    /// <returns>The bound statement (a no-op declaration; the underlying method is emitted independently).</returns>
+    public BoundStatement BindGenericLocalFunctionDeclaration(VariableDeclarationSyntax syntax)
+    {
+        var name = syntax.Identifier.Text;
+        if (syntax.Keyword.Kind != SyntaxKind.LetKeyword || syntax.Initializer is not FunctionLiteralExpressionSyntax literalSyntax)
+        {
+            Diagnostics.ReportGenericLocalFunctionMustBeLetBoundLiteral(syntax.Identifier.Location, name);
+            return new BoundBlockStatement(syntax, ImmutableArray<BoundStatement>.Empty);
+        }
+
+        var previousTypeParameters = binderCtx.CurrentTypeParameters;
+        binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
+        ImmutableArray<TypeParameterSymbol> typeParameters;
+        try
+        {
+            typeParameters = bindTypeParameterList(syntax.TypeParameterList);
+
+            // Re-establish the type-parameter scope merged with any enclosing
+            // ones (mirrors DeclarationBinder.BindDelegateDeclaration) so the
+            // literal's parameter/return/body clauses resolve T, U, ….
+            binderCtx.CurrentTypeParameters = previousTypeParameters == null
+                ? new Dictionary<string, TypeParameterSymbol>()
+                : new Dictionary<string, TypeParameterSymbol>(previousTypeParameters);
+            foreach (var tp in typeParameters)
+            {
+                binderCtx.CurrentTypeParameters[tp.Name] = tp;
+            }
+
+            var literal = (BoundFunctionLiteralExpression)BindFunctionLiteralExpression(literalSyntax, explicitName: name);
+            literal.Function.TypeParameters = typeParameters;
+
+            if (literal.CapturedVariables.Length > 0)
+            {
+                Diagnostics.ReportGenericLocalFunctionCannotCapture(syntax.Identifier.Location, name);
+            }
+
+            if (!Scope.TryDeclareFunction(literal.Function))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+            }
+
+            return new BoundLocalFunctionDeclaration(syntax, literal);
+        }
+        finally
+        {
+            binderCtx.CurrentTypeParameters = previousTypeParameters;
+        }
     }
 
     /// <summary>

@@ -21,5 +21,6 @@ TypeConstraint: base=ribbit
 TypeConstraint: interface=kermit
 TypeParameterList: first=left
 TypeParameterList: swapped-first=right
+TypeParameterList: inferred-swapped-first=right
 TypeParameterList: interface-first=left
 TypeParameterList: size=2

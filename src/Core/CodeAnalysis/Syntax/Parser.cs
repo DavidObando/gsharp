@@ -5280,6 +5280,12 @@ public class Parser
         }
 
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
+
+        // Issue #1886: `let Name[T] = func (...) ... { ... }` attaches a generic
+        // type-parameter list to a let-bound function literal, since the literal
+        // itself (being anonymous) has nowhere to carry one. Only meaningful on
+        // `let` bindings; `var`/`const` simply never see a `[` here in practice.
+        var typeParameterList = ParseOptionalTypeParameterList();
         var typeClause = ParseOptionalTypeClause();
 
         // A `var` declaration may omit its initializer when an explicit type
@@ -5303,6 +5309,7 @@ public class Parser
                 equalsToken: null,
                 initializer: null);
             decl.ScopedModifier = scopedModifier;
+            decl.TypeParameterList = typeParameterList;
             return decl;
         }
 
@@ -5311,6 +5318,7 @@ public class Parser
         var result = new VariableDeclarationSyntax(syntaxTree, accessibilityModifier, keyword, identifier, typeClause, equals, initializer);
         result.ScopedModifier = scopedModifier;
         result.RefKindModifier = refKindModifier;
+        result.TypeParameterList = typeParameterList;
         return result;
     }
 

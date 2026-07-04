@@ -1319,8 +1319,7 @@
     "rule": "ADR-0115 \u00A7B",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/LocalFunctionStatement.cs",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1886",
-    "notes": "static local functions mislower at call sites; generic local functions unrepresentable (issue #1886)."
+    "notes": "Static local functions call through their \u0060let\u0060 binding directly; generic local functions translate to G#\u0027s \u0060let Name[T, ...] = func (...) ... { ... }\u0060 (issue #1886, fixed)."
   },
   {
     "kind": "LockStatement",
@@ -1645,10 +1644,12 @@
   {
     "kind": "PositionalPatternClause",
     "nodeType": "PositionalPatternClauseSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
     "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/PositionalPatternClause.cs",
     "issue": "https://github.com/DavidObando/gsharp/issues/1887",
-    "notes": "SILENT MISTRANSLATION: sub-patterns dropped to match-anything case { }."
+    "notes": "Fixed (was SILENT MISTRANSLATION, issue #1887): a positional subpattern lowers to the same member-access form a property subpattern uses (tuple Item1/Item2, or a record\u0027s property via its Deconstruct). Switch-expression bare positional patterns over a raw TUPLE are also supported: gsc\u0027s property-pattern binder/emitter/evaluator now accept a ValueTuple subject (previously GS0172)."
   },
   {
     "kind": "PostDecrementExpression",

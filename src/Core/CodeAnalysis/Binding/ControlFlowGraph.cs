@@ -347,6 +347,7 @@ public sealed class ControlFlowGraph
                         StartBlock();
                         break;
                     case BoundNodeKind.VariableDeclaration:
+                    case BoundNodeKind.LocalFunctionDeclaration:
                     case BoundNodeKind.ExpressionStatement:
                         statements.Add(statement);
                         break;
@@ -486,6 +487,7 @@ public sealed class ControlFlowGraph
 
                             break;
                         case BoundNodeKind.VariableDeclaration:
+                        case BoundNodeKind.LocalFunctionDeclaration:
                         case BoundNodeKind.LabelStatement:
                         case BoundNodeKind.ExpressionStatement:
                         case BoundNodeKind.TryStatement:

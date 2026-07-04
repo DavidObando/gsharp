@@ -901,7 +901,10 @@ public static class GSharpPrinter
                 return $"{pad}{RenderBinding(deconstruction.Binding)} ({targets}) = {RenderExpression(deconstruction.Initializer, indent)}";
 
             case LocalFunctionStatement localFunction:
-                return $"{pad}{RenderBinding(BindingKind.Let)} {localFunction.Name} = {RenderExpression(localFunction.Lambda, indent)}";
+                var typeParamSuffix = localFunction.TypeParameters.Count > 0
+                    ? $"[{string.Join(", ", localFunction.TypeParameters)}]"
+                    : string.Empty;
+                return $"{pad}{RenderBinding(BindingKind.Let)} {localFunction.Name}{typeParamSuffix} = {RenderExpression(localFunction.Lambda, indent)}";
 
             default:
                 throw new ArgumentException($"Unsupported statement: {statement?.GetType().Name}");

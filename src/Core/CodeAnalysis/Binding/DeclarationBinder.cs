@@ -6068,7 +6068,16 @@ internal sealed class DeclarationBinder
             && receiverType is not StructSymbol;
     }
 
-    private ImmutableArray<TypeParameterSymbol> BindTypeParameterList(TypeParameterListSyntax syntax)
+    /// <summary>
+    /// Binds a type-parameter list without constraint pre-publication. Made
+    /// <c>internal</c> (issue #1886) so <see cref="LambdaBinder"/> can bind the
+    /// <c>[T, U, ...]</c> list on a generic <c>let</c>-bound local function
+    /// declaration (<c>let Name[T] = func (...) ... { ... }</c>) using the exact
+    /// same routine as generic delegate/type declarations.
+    /// </summary>
+    /// <param name="syntax">The type-parameter list syntax.</param>
+    /// <returns>The bound type-parameter symbols.</returns>
+    internal ImmutableArray<TypeParameterSymbol> BindTypeParameterList(TypeParameterListSyntax syntax)
         => BindTypeParameterList(syntax, onBareSymbolsPublished: null);
 
     /// <summary>

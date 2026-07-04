@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using System.Collections.Generic;
 
 namespace Cs2Gs.CodeModel.Ast;
@@ -632,10 +633,12 @@ public sealed class LocalFunctionStatement : GStatement
     /// </summary>
     /// <param name="name">The local function name.</param>
     /// <param name="lambda">The function literal holding the parameters / body.</param>
-    public LocalFunctionStatement(string name, LambdaExpression lambda)
+    /// <param name="typeParameters">Issue #1886: the local function's type-parameter names (e.g. <c>["T"]</c> for <c>T First&lt;T&gt;(...)</c>), or <c>null</c>/empty when non-generic.</param>
+    public LocalFunctionStatement(string name, LambdaExpression lambda, IReadOnlyList<string> typeParameters = null)
     {
         Name = name;
         Lambda = lambda;
+        TypeParameters = typeParameters ?? Array.Empty<string>();
     }
 
     /// <summary>Gets the local function name.</summary>
@@ -643,6 +646,9 @@ public sealed class LocalFunctionStatement : GStatement
 
     /// <summary>Gets the function literal.</summary>
     public LambdaExpression Lambda { get; }
+
+    /// <summary>Gets the type-parameter names (issue #1886), empty when non-generic.</summary>
+    public IReadOnlyList<string> TypeParameters { get; }
 }
 
 /// <summary>
