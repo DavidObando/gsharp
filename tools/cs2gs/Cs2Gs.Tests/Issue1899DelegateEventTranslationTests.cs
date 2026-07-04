@@ -17,9 +17,9 @@ namespace Cs2Gs.Tests;
 /// type alias (ADR-0059, <c>type Name = delegate func(params) R</c>) and an
 /// event declaration (ADR-0052), field-like or with explicit add/remove
 /// accessors. Covers: a delegate with parameters and a return type, a void
-/// delegate, a field-like event, an explicit add/remove event, and the one
-/// sub-form that must still gap loudly — a generic delegate declaration,
-/// since <c>NamedDelegateDeclaration</c> has no type-parameter slot.
+/// delegate, a field-like event, an explicit add/remove event, and a generic
+/// delegate declaration (issue #1960 item 1: generic delegate aliases are now
+/// supported end to end).
 /// </summary>
 public class Issue1899DelegateEventTranslationTests
 {
@@ -104,7 +104,7 @@ namespace Corpus.Issue1899
 }
 ");
 
-        Assert.Contains("event Message (string) -> void", rendered, StringComparison.Ordinal);
+        Assert.Contains("event Message MessageHandler", rendered, StringComparison.Ordinal);
         Assert.Contains("add {", rendered, StringComparison.Ordinal);
         Assert.Contains("remove {", rendered, StringComparison.Ordinal);
         Assert.Contains("_handlers.Add(value)", rendered, StringComparison.Ordinal);
@@ -113,24 +113,21 @@ namespace Corpus.Issue1899
     }
 
     [Fact]
-    public void DelegateDeclaration_Generic_StaysLoudGap()
+    public void DelegateDeclaration_Generic_MapsToGenericNamedDelegateAlias()
     {
-        // Named delegate type aliases (ADR-0059) do not carry a type-parameter
-        // list in cs2gs's CodeModel yet — a generic delegate must still gap
-        // loudly rather than silently drop its type parameters.
-        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
-            new[] { ("Source.cs", @"
+        // Issue #1960 item 1: generic delegate declarations now carry their
+        // type parameters into the G# named delegate alias's bracket section
+        // (ADR-0059 "Follow-up work", issue #1503; GS0234 retired) instead of
+        // gapping loudly.
+        string rendered = Render(@"
 namespace Corpus.Issue1899
 {
     public delegate T Selector<T>(T value);
 }
-") });
+");
 
-        Assert.True(project.BoundWithoutErrors);
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-        Assert.Contains(context.Diagnostics, d => d.Message.Contains("generic delegate", StringComparison.Ordinal));
+        Assert.Contains("type Selector[T] = delegate func(value T) T", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
     }
 
     private static void AssertRoundTripParses(string rendered)

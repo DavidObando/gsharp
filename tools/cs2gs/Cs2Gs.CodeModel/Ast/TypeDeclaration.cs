@@ -210,18 +210,25 @@ public sealed class NamedDelegateDeclaration : GMember
     /// <param name="returnType">The return type, or <see langword="null"/> for void.</param>
     /// <param name="visibility">The accessibility.</param>
     /// <param name="attributes">The delegate attributes.</param>
+    /// <param name="typeParameters">
+    /// The generic type parameters (issue #1960, ADR-0059 "Follow-up work" —
+    /// generic delegate aliases <c>type Predicate[T any] = delegate func(value T) bool</c>
+    /// are supported by gsc; a null/empty list is a non-generic delegate.
+    /// </param>
     public NamedDelegateDeclaration(
         string name,
         IReadOnlyList<Parameter> parameters = null,
         GTypeReference returnType = null,
         Visibility visibility = Visibility.Default,
-        IReadOnlyList<AttributeUse> attributes = null)
+        IReadOnlyList<AttributeUse> attributes = null,
+        IReadOnlyList<TypeParameter> typeParameters = null)
     {
         Name = name;
         Parameters = parameters ?? new List<Parameter>();
         ReturnType = returnType;
         Visibility = visibility;
         Attributes = attributes ?? new List<AttributeUse>();
+        TypeParameters = typeParameters ?? new List<TypeParameter>();
     }
 
     /// <summary>Gets the delegate type name.</summary>
@@ -238,4 +245,7 @@ public sealed class NamedDelegateDeclaration : GMember
 
     /// <summary>Gets the delegate attributes.</summary>
     public IReadOnlyList<AttributeUse> Attributes { get; }
+
+    /// <summary>Gets the generic type parameters.</summary>
+    public IReadOnlyList<TypeParameter> TypeParameters { get; }
 }

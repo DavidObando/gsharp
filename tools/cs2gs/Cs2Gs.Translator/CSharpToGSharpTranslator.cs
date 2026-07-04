@@ -2575,7 +2575,7 @@ public sealed class CSharpToGSharpTranslator
                 var symbol = this.context.GetDeclaredSymbol(declarator) as IEventSymbol;
 
                 GTypeReference type = symbol != null
-                    ? this.typeMapper.Map(
+                    ? this.typeMapper.MapEventType(
                         symbol.Type.WithNullableAnnotation(NullableAnnotation.NotAnnotated),
                         this.context,
                         declarator.GetLocation())
@@ -2601,7 +2601,7 @@ public sealed class CSharpToGSharpTranslator
             var symbol = this.context.GetDeclaredSymbol(node) as IEventSymbol;
 
             GTypeReference type = symbol != null
-                ? this.typeMapper.Map(
+                ? this.typeMapper.MapEventType(
                     symbol.Type.WithNullableAnnotation(NullableAnnotation.NotAnnotated),
                     this.context,
                     node.GetLocation())
@@ -2634,17 +2634,9 @@ public sealed class CSharpToGSharpTranslator
         {
             // `public delegate R Name(params);` → G# named delegate type alias
             // `type Name = delegate func(params) R` (ADR-0059). Generic delegates
-            // are gapped explicitly: `NamedDelegateDeclaration` has no type-parameter
-            // slot yet (ADR-0059 "Follow-up work" only covers the binder/emitter
-            // side of generics, not this translator).
-            if (node.TypeParameterList != null)
-            {
-                this.context.ReportUnsupported(
-                    node,
-                    $"generic delegate '{node.Identifier.Text}' has no canonical G# declaration mapping yet; named delegate type aliases (ADR-0059) do not support type parameters in cs2gs.");
-                return null;
-            }
-
+            // (issue #1960) carry their type parameters into the bracket section,
+            // `type Name[T] = delegate func(params) R` — gsc's binder/emitter
+            // support this (ADR-0059 "Follow-up work", issue #1503; GS0234 retired).
             var symbol = this.context.GetDeclaredSymbol(node) as INamedTypeSymbol;
             IMethodSymbol invoke = symbol?.DelegateInvokeMethod;
 
@@ -2652,13 +2644,15 @@ public sealed class CSharpToGSharpTranslator
             GTypeReference returnType = invoke != null && invoke.ReturnsVoid
                 ? null
                 : this.MapTypeSyntax(node.ReturnType);
+            List<TypeParameter> typeParameters = this.MapTypeParameters(symbol);
 
             return new NamedDelegateDeclaration(
                 SanitizeIdentifier(node.Identifier.Text),
                 parameters,
                 returnType,
                 MapVisibility(symbol, this.context, node),
-                this.MapAttributes(node.AttributeLists));
+                this.MapAttributes(node.AttributeLists),
+                typeParameters);
         }
 
         /// <summary>
@@ -5514,6 +5508,30 @@ public sealed class CSharpToGSharpTranslator
             return new InvocationExpression(new MemberAccessExpression(receiver, "ToString"));
         }
 
+        // Issue #1960 item 2: true when `assignment` is a `+=`/`-=` whose LEFT
+        // side is delegate-typed (TypeKind.Delegate covers both a named delegate
+        // and Action/Func-shaped BCL delegates) but is NOT a declared C# event —
+        // i.e. a raw delegate multicast combine/remove, which has no G# form.
+        // A real event access (`obj.Ticked += handler`) resolves to an
+        // IEventSymbol and is excluded so it keeps flowing through the normal
+        // compound-assignment path (G#'s event-subscription `+=`/`-=`).
+        private bool IsDelegateMulticastCombine(AssignmentExpressionSyntax assignment, out string op)
+        {
+            op = assignment.OperatorToken.Text;
+            if (!assignment.IsKind(SyntaxKind.AddAssignmentExpression) &&
+                !assignment.IsKind(SyntaxKind.SubtractAssignmentExpression))
+            {
+                return false;
+            }
+
+            if (this.context.GetSymbolInfo(assignment.Left).Symbol is IEventSymbol)
+            {
+                return false;
+            }
+
+            return this.context.GetTypeInfo(assignment.Left).Type?.TypeKind == TypeKind.Delegate;
+        }
+
         // For a compound numeric assignment `x OP= y` (`+= -= *= /= %= &= |= ^=`),
         // G# requires the RHS to share the LHS's numeric type; a mismatched RHS is
         // coerced to the LHS type via the conversion-call form (e.g. `x += int64(y)`).
@@ -6282,6 +6300,26 @@ public sealed class CSharpToGSharpTranslator
         {
             switch (expression)
             {
+                case AssignmentExpressionSyntax assignment when this.IsDelegateMulticastCombine(assignment, out string combineOp):
+                    // Issue #1960 item 2: `handler += Second;` / `handler -= Second;`
+                    // on a plain delegate-typed target (NOT a declared `event` —
+                    // those already lower to G#'s dedicated event-subscription
+                    // `+=`/`-=` form, ADR-0052/ADR-0036) has no G# equivalent.
+                    // G#'s `+=`/`-=` syntax binds ONLY to an actual CLR event
+                    // (Parser.cs's `EventSubscriptionExpressionSyntax`; the binder's
+                    // general compound-assignment fallback has no `+`/`-` operator
+                    // for delegate/function types, and `Delegate.Combine`/`Remove`
+                    // are reachable only from the compiler's own synthesized event
+                    // accessors, not from ordinary call-expression binding). Rather
+                    // than emit `+=`/`-=` that fails to bind in gsc, gap loudly.
+                    string combineMessage =
+                        $"delegate multicast '{combineOp}' on a non-event delegate-typed target has no G# equivalent: " +
+                        "G#'s '+='/'-=' syntax binds only to a declared CLR event, and 'Delegate.Combine'/'Delegate.Remove' " +
+                        "are reachable only from the compiler's own synthesized event accessors, not from ordinary call " +
+                        "binding (issue #1960).";
+                    this.context.ReportUnsupported(assignment, combineMessage);
+                    return new RawStatement($"// unsupported: delegate multicast '{combineOp}'");
+
                 case AssignmentExpressionSyntax assignment:
                     string op = assignment.OperatorToken.Text;
                     GExpression assignRhs = this.CoerceConstantToUnsigned(
