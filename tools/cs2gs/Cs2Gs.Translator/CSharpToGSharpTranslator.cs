@@ -12778,7 +12778,16 @@ public sealed class CSharpToGSharpTranslator
                 switch (content)
                 {
                     case InterpolatedStringTextSyntax text:
-                        parts.Add(InterpolationPart.Literal(text.TextToken.ValueText));
+                        // Issue #1882: Roslyn's ValueText does NOT unescape `{{`/`}}`
+                        // (those are interpolation-hole delimiters, not string escapes).
+                        // G# has no bare `{expr}` hole syntax (only `${expr}`/`$ident`,
+                        // see Lexer.cs), so `{`/`}` are always plain literal chars in G#
+                        // and need no escaping at all. Unescape here or the doubled
+                        // braces get copied verbatim into the G# output.
+                        string unescapedBraces = text.TextToken.ValueText
+                            .Replace("{{", "{")
+                            .Replace("}}", "}");
+                        parts.Add(InterpolationPart.Literal(unescapedBraces));
                         break;
 
                     case InterpolationSyntax hole:
