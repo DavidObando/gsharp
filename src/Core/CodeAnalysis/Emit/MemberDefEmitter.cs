@@ -863,6 +863,21 @@ internal sealed class MemberDefEmitter
             return this.GetEventTypeSpecHandle(type);
         }
 
+        // Issue #2066: a user-declared named delegate (`type X = delegate
+        // func(...) ...`) has no runtime CLR Type — its TypeDef only exists
+        // in the assembly being emitted — so the `type.ClrType != null`
+        // branch below can't reach it and this previously fell through to
+        // the "encode as System.Delegate" fallback. That token mismatched
+        // the CAS-loop locals (typed as the named delegate itself), failing
+        // IL verification on the generated add_/remove_ accessor bodies.
+        // Route it through the same TypeSpec machinery the FunctionTypeSymbol
+        // branch above uses (valid for both non-generic and constructed
+        // generic named delegates).
+        if (type is DelegateTypeSymbol)
+        {
+            return this.GetEventTypeSpecHandle(type);
+        }
+
         if (type.ClrType != null)
         {
             return this.getTypeHandleForMember(type.ClrType);

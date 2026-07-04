@@ -320,6 +320,20 @@ internal sealed partial class ExpressionBinder
             return conversions.BindConversion(handlerSyntax.Location, userGroup, targetDelegateType);
         }
 
+        // Issue #2066: a lambda/function literal handler (`Ticked += (count
+        // int32) -> ...`) reaches here still typed as its own inferred
+        // anonymous function type rather than the event's declared delegate
+        // type. Without converting it, the emitted `add_`/`remove_` call
+        // passes a value shaped like the erased native delegate (e.g.
+        // `System.Action<int32>`) where a named delegate (e.g.
+        // `TickHandler`) is expected, producing invalid IL. Route it (and any
+        // other not-yet-matching handler shape) through the same conversion
+        // the method-group branches above already apply.
+        if (bound.Type != targetDelegateType && bound is not BoundErrorExpression)
+        {
+            return conversions.BindConversion(handlerSyntax.Location, bound, targetDelegateType);
+        }
+
         return bound;
     }
 
