@@ -14,7 +14,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Issue #2044: a <c>private</c> member read or written from outside its
-/// declaring type is now diagnosed (GS0471), mirroring the existing
+/// declaring type is now diagnosed (GS0472), mirroring the existing
 /// <c>protected</c> enforcement (issue #950 / GS0379). Covers plain field
 /// reads/writes, compound assignment (<c>+=</c>), null-coalescing assignment
 /// (<c>??=</c>), and <c>private</c> properties — from outside the declaring
@@ -24,7 +24,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 public class Issue2044PrivateAccessibilityTests
 {
     [Fact]
-    public void ExternalCode_WritesPrivateField_ReportsGS0471()
+    public void ExternalCode_WritesPrivateField_ReportsGS0472()
     {
         var source = @"
 class Foo {
@@ -40,11 +40,11 @@ class Other {
 0
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0471");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0472");
     }
 
     [Fact]
-    public void ExternalCode_ReadsPrivateField_ReportsGS0471()
+    public void ExternalCode_ReadsPrivateField_ReportsGS0472()
     {
         var source = @"
 class Foo {
@@ -59,11 +59,11 @@ class Other {
 0
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0471");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0472");
     }
 
     [Fact]
-    public void ExternalCode_CompoundAssignsPrivateField_ReportsGS0471()
+    public void ExternalCode_CompoundAssignsPrivateField_ReportsGS0472()
     {
         var source = @"
 class Foo {
@@ -79,11 +79,11 @@ class Other {
 0
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0471");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0472");
     }
 
     [Fact]
-    public void ExternalCode_NullCoalescingAssignsPrivateField_ReportsGS0471()
+    public void ExternalCode_NullCoalescingAssignsPrivateField_ReportsGS0472()
     {
         var source = @"
 class Foo {
@@ -99,11 +99,11 @@ class Other {
 0
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0471");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0472");
     }
 
     [Fact]
-    public void ExternalCode_WritesPrivateProperty_ReportsGS0471()
+    public void ExternalCode_WritesPrivateProperty_ReportsGS0472()
     {
         var source = @"
 class Foo {
@@ -119,7 +119,7 @@ class Other {
 0
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0471");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0472");
     }
 
     [Fact]
@@ -143,7 +143,7 @@ class Other {
 0
 ";
         var result = Evaluate(source);
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0471");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0472");
     }
 
     [Fact]
@@ -167,7 +167,7 @@ class Outer {
 0
 ";
         var result = Evaluate(source);
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0471");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0472");
     }
 
     [Fact]

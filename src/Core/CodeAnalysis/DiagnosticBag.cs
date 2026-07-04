@@ -1433,7 +1433,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
-    /// Issue #2044: GS0471 — a <c>private</c> member of
+    /// Issue #2044: GS0472 — a <c>private</c> member of
     /// <paramref name="declaringTypeName"/> was accessed (read or written)
     /// from code outside that type's body. A <c>private</c> member is only
     /// reachable from within its declaring top-level type (including any
@@ -1446,13 +1446,13 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     {
         Report(
             location,
-            "GS0471",
+            "GS0472",
             $"'{declaringTypeName}.{memberName}' is inaccessible due to its protection level: a 'private' member is only accessible within '{declaringTypeName}'.");
     }
 
     /// <summary>
     /// Issue #2044: reports the inaccessible-member diagnostic matching
-    /// <paramref name="accessibility"/> (GS0379 for <c>protected</c>, GS0471
+    /// <paramref name="accessibility"/> (GS0379 for <c>protected</c>, GS0472
     /// for <c>private</c>). Callers gate this behind
     /// <see cref="Symbols.AccessibilityChecker.IsAccessible"/> returning
     /// <see langword="false"/>, so <paramref name="accessibility"/> is always

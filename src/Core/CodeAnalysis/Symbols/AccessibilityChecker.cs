@@ -17,7 +17,7 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// Unlike <c>internal</c> — which G# leaves to the CLR to enforce at runtime
 /// via the emitted IL accessibility — <c>protected</c>/<c>private</c> add a
 /// compile-time check so that external access is reported as a clean
-/// diagnostic (GS0379 / GS0471) rather than surfacing only as a runtime
+/// diagnostic (GS0379 / GS0472) rather than surfacing only as a runtime
 /// <see cref="System.MethodAccessException"/>/<see cref="System.FieldAccessException"/>.
 /// The emitted IL still carries the matching CIL accessibility, so the CLR
 /// independently enforces the same rule.
