@@ -64,6 +64,101 @@ namespace Corpus.Issue1897
     }
 
     [Fact]
+    public void SpreadElement_CoercesMismatchedElementTypeBeforeAddRange()
+    {
+        // Issue #1985: spreading `int[]` into a `long[]` target must project
+        // through the implicit `int -> long` conversion before `AddRange`,
+        // since `List[int64].AddRange(IEnumerable[int32])` does not bind in gsc.
+        string rendered = Render(@"
+namespace Corpus.Issue1985
+{
+    public class Holder
+    {
+        public long[] Combine(int[] rest)
+        {
+            long[] s = [.. rest];
+            return s;
+        }
+    }
+}
+");
+
+        Assert.Contains(".AddRange(rest.Select((__x int32) -> int64(__x)))", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
+    public void SpreadElement_SpanTarget_LowersViaToArray()
+    {
+        string rendered = Render(@"
+using System;
+
+namespace Corpus.Issue1985
+{
+    public class Holder
+    {
+        public int Combine(int[] rest)
+        {
+            Span<int> s = [0, .. rest, 9];
+            return s[0];
+        }
+    }
+}
+");
+
+        Assert.Contains("List[int32]()", rendered, StringComparison.Ordinal);
+        Assert.Contains(".AddRange(rest)", rendered, StringComparison.Ordinal);
+        Assert.Contains(".ToArray()", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
+    public void SpreadElement_EmptySpread_LowersToEmptyListThenToArray()
+    {
+        string rendered = Render(@"
+namespace Corpus.Issue1985
+{
+    public class Holder
+    {
+        public int[] Combine(int[] empty)
+        {
+            int[] s = [.. empty];
+            return s;
+        }
+    }
+}
+");
+
+        Assert.Contains("List[int32]()", rendered, StringComparison.Ordinal);
+        Assert.Contains(".AddRange(empty)", rendered, StringComparison.Ordinal);
+        Assert.Contains(".ToArray()", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
+    public void SpreadElement_NestedSpreads_LowerToSequentialAddRangeCalls()
+    {
+        string rendered = Render(@"
+namespace Corpus.Issue1985
+{
+    public class Holder
+    {
+        public int[] Combine(int[] a, int[] b)
+        {
+            int[] s = [.. a, .. b];
+            return s;
+        }
+    }
+}
+");
+
+        Assert.Contains(".AddRange(a)", rendered, StringComparison.Ordinal);
+        Assert.Contains(".AddRange(b)", rendered, StringComparison.Ordinal);
+        Assert.Contains(".ToArray()", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
     public void ListTarget_LowersToCollectionInitializerNotArrayLiteral()
     {
         string rendered = Render(@"

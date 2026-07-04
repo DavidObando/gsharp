@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -79,16 +80,31 @@ public sealed class IlVerifyStage : IMigrationStage
         // Unsafe-IL allowance (#1933): the app opted into
         // CorpusApp.AllowUnsafeIl and ilverify actually parsed error(s) (as
         // opposed to a bare tool crash) — expected-unverifiable, not a gate.
+        // When the marker scopes to specific fixture types (#1985), only
+        // errors whose failing method belongs to one of those types are
+        // swallowed; an error elsewhere in the app still gates, so a genuine
+        // unsafe-IL regression outside the allow-listed fixture(s) is not
+        // masked by the app-wide marker.
+        IReadOnlyList<IlVerifyError> gatingErrors = result.Errors;
         if (context.App.AllowUnsafeIl && result.Errors.Count > 0)
         {
-            return Task.FromResult(StageOutcome.Passed());
+            if (context.App.AllowUnsafeIlTypes.Count == 0)
+            {
+                return Task.FromResult(StageOutcome.Passed());
+            }
+
+            gatingErrors = result.Errors.Where(e => !IsAllowedUnsafeType(e, context.App.AllowUnsafeIlTypes)).ToList();
+            if (gatingErrors.Count == 0)
+            {
+                return Task.FromResult(StageOutcome.Passed());
+            }
         }
 
         string gsFile = context.EmittedFiles.Count > 0 ? context.EmittedFiles[0].RelativeGsPath : null;
 
         var artifacts = new List<TriageArtifact>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (IlVerifyError error in result.Errors)
+        foreach (IlVerifyError error in gatingErrors)
         {
             // One artifact per distinct error-code + failing-method skeleton.
             string key = (error.Code ?? string.Empty) + "|" + (error.Method ?? string.Empty);
@@ -122,5 +138,26 @@ public sealed class IlVerifyStage : IMigrationStage
 
         string oneLine = value.Replace("\r", " ").Replace("\n", " ").Trim();
         return oneLine.Length <= 200 ? oneLine : oneLine.Substring(0, 200);
+    }
+
+    // `error.Method` is the `Type::Method(sig)` skeleton (IlVerifyRunner); the
+    // allow-listed marker lines are bare type names, so match on the
+    // `Type::` prefix.
+    private static bool IsAllowedUnsafeType(IlVerifyError error, IReadOnlyList<string> allowedTypes)
+    {
+        if (string.IsNullOrEmpty(error.Method))
+        {
+            return false;
+        }
+
+        foreach (string allowedType in allowedTypes)
+        {
+            if (error.Method.StartsWith(allowedType + "::", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

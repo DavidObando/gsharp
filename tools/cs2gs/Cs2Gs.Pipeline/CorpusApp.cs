@@ -34,6 +34,13 @@ public sealed class CorpusApp
     /// but is opt-in per app since unverifiable-by-design unsafe IL, unlike a
     /// verifier false positive, is not universally true of every corpus app.
     /// </param>
+    /// <param name="allowUnsafeIlTypes">
+    /// The fixture type names (from the marker file's non-blank lines) whose
+    /// unverifiable IL is expected (issue #1985). Empty means "whole app" —
+    /// back-compat with the original per-app marker for apps (e.g. G12,
+    /// wholly unsafe by design) where every fixture may legitimately produce
+    /// unverifiable IL.
+    /// </param>
     public CorpusApp(
         string id,
         string projectPath,
@@ -42,7 +49,8 @@ public sealed class CorpusApp
         IReadOnlyList<string> referencedAssemblies = null,
         string testsProjectPath = null,
         string testsBaselinePath = null,
-        bool allowUnsafeIl = false)
+        bool allowUnsafeIl = false,
+        IReadOnlyList<string> allowUnsafeIlTypes = null)
     {
         this.Id = id ?? throw new ArgumentNullException(nameof(id));
         this.ProjectPath = projectPath ?? throw new ArgumentNullException(nameof(projectPath));
@@ -52,6 +60,7 @@ public sealed class CorpusApp
         this.TestsProjectPath = testsProjectPath;
         this.TestsBaselinePath = testsBaselinePath;
         this.AllowUnsafeIl = allowUnsafeIl;
+        this.AllowUnsafeIlTypes = allowUnsafeIlTypes ?? ImmutableArray<string>.Empty;
     }
 
     /// <summary>Gets the stable corpus app id.</summary>
@@ -89,4 +98,11 @@ public sealed class CorpusApp
     /// file (see <see cref="CorpusDiscovery"/>).
     /// </summary>
     public bool AllowUnsafeIl { get; }
+
+    /// <summary>
+    /// Gets the fixture type names the <c>ilverify.allow-unsafe</c> marker
+    /// scopes <see cref="AllowUnsafeIl"/> to (one per non-blank marker-file
+    /// line), or empty for the whole-app allowance (issue #1985).
+    /// </summary>
+    public IReadOnlyList<string> AllowUnsafeIlTypes { get; }
 }

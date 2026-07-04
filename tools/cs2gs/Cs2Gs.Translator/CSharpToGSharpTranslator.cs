@@ -11378,13 +11378,18 @@ public sealed class CSharpToGSharpTranslator
                     new List<GExpression>(),
                     new List<GTypeReference> { elementType })));
 
+            ITypeSymbol targetElementSymbol = GetEnumerableElementType(
+                this.context.GetTypeInfo(collection).ConvertedType ?? this.context.GetTypeInfo(collection).Type);
+
             foreach (CollectionElementSyntax element in collection.Elements)
             {
                 if (element is SpreadElementSyntax spread)
                 {
+                    GExpression source = this.CoerceSpreadSource(
+                        spread.Expression, this.TranslateExpression(spread.Expression), targetElementSymbol, elementType);
                     this.pendingSpillPrologue.Add(new ExpressionStatement(new InvocationExpression(
                         new MemberAccessExpression(new IdentifierExpression(temp), "AddRange"),
-                        new List<GExpression> { this.TranslateExpression(spread.Expression) })));
+                        new List<GExpression> { source })));
                 }
                 else
                 {
@@ -11405,6 +11410,41 @@ public sealed class CSharpToGSharpTranslator
             // `Enumerable.ToArray[T]()` extension method).
             return new InvocationExpression(
                 new MemberAccessExpression(new IdentifierExpression(temp), "ToArray"));
+        }
+
+        // A spread source (`..src` in `[..src]`) whose element type `U` differs
+        // from the target collection's element type `T` (an implicit conversion
+        // exists, e.g. `int[]` spread into a `long[]` target) needs a projection
+        // before `AddRange`, since `List[T].AddRange(IEnumerable[U])` does not
+        // bind in gsc (issue #1985). Wraps the source in `.Select(x => (T)x)`.
+        private GExpression CoerceSpreadSource(
+            ExpressionSyntax sourceExpression, GExpression translatedSource, ITypeSymbol targetElementSymbol, GTypeReference targetElementType)
+        {
+            if (targetElementSymbol == null)
+            {
+                return translatedSource;
+            }
+
+            ITypeSymbol sourceType = this.context.GetTypeInfo(sourceExpression).Type;
+            ITypeSymbol sourceElementSymbol = GetEnumerableElementType(sourceType);
+            if (sourceElementSymbol == null ||
+                SymbolEqualityComparer.Default.Equals(sourceElementSymbol, targetElementSymbol))
+            {
+                return translatedSource;
+            }
+
+            Conversion conversion = this.context.Compilation.ClassifyConversion(sourceElementSymbol, targetElementSymbol);
+            if (!conversion.Exists || conversion.IsIdentity)
+            {
+                return translatedSource;
+            }
+
+            GTypeReference sourceElementType = this.typeMapper.Map(sourceElementSymbol, this.context, sourceExpression.GetLocation());
+            var lambda = new LambdaExpression(
+                new List<Parameter> { new Parameter("__x", sourceElementType) },
+                expressionBody: new ConversionExpression(targetElementType, new IdentifierExpression("__x")));
+            return new InvocationExpression(
+                new MemberAccessExpression(translatedSource, "Select"), new List<GExpression> { lambda });
         }
 
         private GExpression CoerceCollectionElement(ExpressionSyntax element, GTypeReference elementType)

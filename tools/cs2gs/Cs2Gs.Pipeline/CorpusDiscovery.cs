@@ -21,12 +21,15 @@ namespace Cs2Gs.Pipeline;
 public static class CorpusDiscovery
 {
     /// <summary>
-    /// The marker file (empty, sibling to the <c>.csproj</c>) that opts an app
-    /// into <see cref="CorpusApp.AllowUnsafeIl"/> (issue #1933): stage 3
-    /// treats the app's known-unverifiable unsafe IL (pointer writes,
-    /// <c>fixed</c>, <c>stackalloc</c>) as expected rather than gating,
-    /// mirroring the always-on <see cref="IlVerifyRunner.KnownIlVerifyFalsePositives"/>
-    /// ignore bundle but opt-in per app.
+    /// The marker file (sibling to the <c>.csproj</c>) that opts an app into
+    /// <see cref="CorpusApp.AllowUnsafeIl"/> (issue #1933): stage 3 treats the
+    /// app's known-unverifiable unsafe IL (pointer writes, <c>fixed</c>,
+    /// <c>stackalloc</c>) as expected rather than gating, mirroring the
+    /// always-on <see cref="IlVerifyRunner.KnownIlVerifyFalsePositives"/>
+    /// ignore bundle but opt-in per app. When the file lists fixture type
+    /// names (one per line), the allowance is scoped to just those types
+    /// (issue #1985) — a blank/empty marker keeps the original whole-app
+    /// allowance for apps that are unsafe-by-design throughout (e.g. G12).
     /// </summary>
     public const string AllowUnsafeIlMarkerFileName = "ilverify.allow-unsafe";
 
@@ -72,6 +75,9 @@ public static class CorpusDiscovery
             (string testsProject, string testsBaseline) = FindSiblingTestOracle(fullCorpus, folderName);
 
             bool allowUnsafeIl = File.Exists(Path.Combine(projectDir, AllowUnsafeIlMarkerFileName));
+            IReadOnlyList<string> allowUnsafeIlTypes = allowUnsafeIl
+                ? ReadAllowUnsafeIlTypes(Path.Combine(projectDir, AllowUnsafeIlMarkerFileName))
+                : Array.Empty<string>();
 
             apps.Add(new CorpusApp(
                 id,
@@ -81,7 +87,8 @@ public static class CorpusDiscovery
                 referencedAssemblies: null,
                 testsProjectPath: testsProject,
                 testsBaselinePath: testsBaseline,
-                allowUnsafeIl: allowUnsafeIl));
+                allowUnsafeIl: allowUnsafeIl,
+                allowUnsafeIlTypes: allowUnsafeIlTypes));
         }
 
         return apps;
@@ -112,6 +119,19 @@ public static class CorpusDiscovery
         string normalized = path.Replace('\\', '/');
         return normalized.Contains("/bin/", StringComparison.Ordinal) ||
             normalized.Contains("/obj/", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Reads the marker file's non-blank, non-comment (<c>#</c>-prefixed)
+    /// lines as fixture type names (issue #1985 per-fixture scoping). An
+    /// empty/blank-only marker keeps the original whole-app allowance.
+    /// </summary>
+    private static IReadOnlyList<string> ReadAllowUnsafeIlTypes(string markerPath)
+    {
+        return File.ReadAllLines(markerPath)
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0 && !line.StartsWith("#", StringComparison.Ordinal))
+            .ToList();
     }
 
     private static (string TestsProject, string TestsBaseline) FindSiblingTestOracle(
