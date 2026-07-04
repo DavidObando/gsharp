@@ -711,7 +711,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="location">The text location of the declaration's identifier.</param>
     /// <param name="name">The name of the declared local function.</param>
     /// <param name="enclosingTypeParameterName">The name of the referenced enclosing type parameter.</param>
-    public void ReportGenericLocalFunctionCannotReferenceEnclosingTypeParameter(TextLocation location, string name, string enclosingTypeParameterName)
+    public void ReportLocalFunctionCannotReferenceEnclosingTypeParameter(TextLocation location, string name, string enclosingTypeParameterName)
     {
         var message = $"Local function '{name}' cannot reference '{enclosingTypeParameterName}', a type parameter of an enclosing method or class. " +
             "A generic local function is emitted as its own generic method, and a local function that captures no outer variables is emitted as a " +

@@ -391,6 +391,28 @@ internal sealed class LambdaBinder
     /// with <see cref="System.BadImageFormatException"/> instead of failing to compile —
     /// the same invalid-IL family as the generic-local-function case, but without that fix's
     /// own-type-parameter list to hide behind.
+    ///
+    /// Follow-up review of #2024: an earlier revision of this method
+    /// short-circuited on <c>literal.Function.IsAsync</c>, on the assumption
+    /// that async local functions are owned by the async state-machine
+    /// synthesis (<c>StateMachineEmitter.SynthesizeAsyncLambdaStateMachines</c>)
+    /// rather than the plain zero-capture static-method hoisting path, and
+    /// might therefore reify the enclosing type parameter safely. That
+    /// assumption was verified FALSE: a zero-capture async local function's
+    /// kickoff method is still <c>literal.Function</c> itself — the exact
+    /// same un-parameterized top-level static method used by the sync path
+    /// — and the synthesized state-machine struct
+    /// (<see cref="GSharp.Core.CodeAnalysis.Lowering.Async.SynthesizedStateMachineType.MaterializeAsStructSymbol"/>)
+    /// never re-declares the kickoff's enclosing type parameters either. A
+    /// hoisted field of the enclosing type parameter's type therefore has the
+    /// identical dangling-MVAR shape as the sync case, confirmed by direct
+    /// repro: an UNCALLED `let Local = async func (x U) U { return x }` inside
+    /// `func Outer[U](seed U) U` compiled clean before this fix and crashed at
+    /// run time with <see cref="System.BadImageFormatException"/> the moment
+    /// `Outer` executed (the state machine's field layout is invalid
+    /// regardless of whether the local function is ever called). The
+    /// short-circuit is removed so this check also covers async local
+    /// functions.
     /// </summary>
     /// <param name="location">The text location of the declaring <c>let</c> identifier.</param>
     /// <param name="name">The local function's declared name (the <c>let</c> variable name).</param>
@@ -399,7 +421,6 @@ internal sealed class LambdaBinder
     {
         if (literal?.Function == null
             || literal.CapturedVariables.Length > 0
-            || literal.Function.IsAsync
             || binderCtx.CurrentTypeParameters is not { Count: > 0 } enclosingTypeParametersInScope
             || (literal.Function.LexicalEnclosingType is StructSymbol enclosingStruct
                 && enclosingStruct.TypeParameters.IsDefaultOrEmpty))
@@ -410,7 +431,7 @@ internal sealed class LambdaBinder
         var offender = FindEnclosingTypeParameterReference(literal.Function, literal.Body, enclosingTypeParametersInScope.Values.ToImmutableArray());
         if (offender != null)
         {
-            Diagnostics.ReportGenericLocalFunctionCannotReferenceEnclosingTypeParameter(location, name, offender.Name);
+            Diagnostics.ReportLocalFunctionCannotReferenceEnclosingTypeParameter(location, name, offender.Name);
         }
     }
 
@@ -483,7 +504,7 @@ internal sealed class LambdaBinder
                 var offender = FindEnclosingTypeParameterReference(literal.Function, literal.Body, enclosingTypeParameters);
                 if (offender != null)
                 {
-                    Diagnostics.ReportGenericLocalFunctionCannotReferenceEnclosingTypeParameter(syntax.Identifier.Location, name, offender.Name);
+                    Diagnostics.ReportLocalFunctionCannotReferenceEnclosingTypeParameter(syntax.Identifier.Location, name, offender.Name);
                 }
             }
 

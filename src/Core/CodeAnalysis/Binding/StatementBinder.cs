@@ -973,14 +973,22 @@ internal sealed class StatementBinder
                 variableType = type ?? initializer.Type;
                 convertedInitializer = conversions.BindConversion(syntax.Initializer.Location, initializer, variableType);
 
-                // Issue #2016: a NON-generic named local function (`let Name = func
-                // (...) ... {...}`, no `[T, ...]` of its own — the sibling case of
-                // #1940's generic local function) that directly references an
+                // Issue #2016: a NON-generic named local function (`let`/`var`/`const
+                // Name = func (...) ... {...}`, no `[T, ...]` of its own — the sibling
+                // case of #1940's generic local function) that directly references an
                 // enclosing type parameter in its own parameter/return type or body
                 // can silently emit invalid IL. Check the just-bound literal now,
                 // while it's still available with its identifier's name/location.
-                if (syntax.Keyword?.Kind == SyntaxKind.LetKeyword
-                    && initializer is BoundFunctionLiteralExpression functionLiteral
+                //
+                // Follow-up review of #2024: the original gate here required
+                // `syntax.Keyword?.Kind == SyntaxKind.LetKeyword`, which let a `var`-
+                // declared local function of the exact same zero-capture shape sail
+                // through uncaught (the emitter's hoisting path doesn't distinguish
+                // let/var/const — only "is this a function-literal initializer").
+                // The check now keys off the bound initializer's kind
+                // (BoundFunctionLiteralExpression) rather than the declaring keyword,
+                // so it fires uniformly for `let`, `var`, and `const` forms.
+                if (initializer is BoundFunctionLiteralExpression functionLiteral
                     && checkNonGenericLocalFunctionEnclosingTypeParameterReference != null)
                 {
                     checkNonGenericLocalFunctionEnclosingTypeParameterReference(syntax.Identifier.Location, syntax.Identifier.Text, functionLiteral);

@@ -49,6 +49,89 @@ public class Issue2016NonGenericLocalFunctionEnclosingTypeParameterTests
     }
 
     [Fact]
+    public void NonGenericLocalFunction_VarDeclared_ParameterReferencesEnclosingMethodTypeParameter_ReportsGS0468()
+    {
+        // Follow-up review of #2024: the original fix's gate only fired for
+        // `let`-bound locals (`syntax.Keyword?.Kind == SyntaxKind.LetKeyword`).
+        // A `var`-declared local function of the exact same zero-capture shape
+        // bypassed the diagnostic entirely and reproduced the ORIGINAL #2016
+        // crash (compiles clean, then BadImageFormatException at run time) —
+        // the emitter's zero-capture hoisting path doesn't distinguish let/var.
+        var source = """
+            package P
+
+            func Outer[U](seed U) U {
+                var Local = func (x U) U {
+                    return x
+                }
+                Console.WriteLine(Local(seed))
+                return seed
+            }
+            Outer("hi")
+            """;
+
+        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS0468", stdout + stderr);
+    }
+
+    [Fact]
+    public void NonGenericLocalFunction_ConstDeclared_ParameterReferencesEnclosingMethodTypeParameter_ReportsGS0468()
+    {
+        // Same zero-capture shape via `const` — the third variable-declaration
+        // keyword. The check keys off the bound initializer being a
+        // BoundFunctionLiteralExpression, not the declaring keyword, so all
+        // three (`let`/`var`/`const`) must be covered.
+        var source = """
+            package P
+
+            func Outer[U](seed U) U {
+                const Local = func (x U) U {
+                    return x
+                }
+                Console.WriteLine(Local(seed))
+                return seed
+            }
+            Outer("hi")
+            """;
+
+        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS0468", stdout + stderr);
+    }
+
+    [Fact]
+    public void NonGenericAsyncLocalFunction_ParameterReferencesEnclosingMethodTypeParameter_ReportsGS0468()
+    {
+        // Follow-up review of #2024: an earlier revision short-circuited this
+        // check for `literal.Function.IsAsync`, assuming an async local
+        // function's state-machine hoisting reifies the enclosing type
+        // parameter safely. Verified false: the zero-capture async local
+        // function's kickoff method is still the un-parameterized top-level
+        // static method, and its synthesized state-machine struct never
+        // re-declares the enclosing type parameter either — so it hits the
+        // identical dangling-MVAR shape. Before removing the short-circuit,
+        // this exact source compiled clean (exit 0) and then crashed at run
+        // time with BadImageFormatException the moment `Outer` executed, even
+        // though `Local` is never called.
+        var source = """
+            package P
+
+            func Outer[U](seed U) U {
+                let Local = async func (x U) U {
+                    return x
+                }
+                return seed
+            }
+            Outer("hi")
+            """;
+
+        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS0468", stdout + stderr);
+    }
+
+    [Fact]
     public void NonGenericLocalFunction_ReturnTypeReferencesEnclosingMethodTypeParameter_ReportsGS0468()
     {
         var source = """
