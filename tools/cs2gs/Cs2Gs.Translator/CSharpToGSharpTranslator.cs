@@ -592,6 +592,19 @@ public sealed class CSharpToGSharpTranslator
         private readonly Dictionary<ISymbol, GExpression> staticFieldInitializers =
             new Dictionary<ISymbol, GExpression>(SymbolEqualityComparer.Default);
 
+        // Issue #1907: a property using the C#14 `field` contextual keyword
+        // (`get => field; set => field = ...;`) binds every `field` reference to
+        // the compiler-synthesized backing field of THAT property, and any sibling
+        // bodyless (auto) accessor on the same property shares the identical
+        // field. G# has no synthesized-field surface (ADR-0051 computed
+        // properties always name their own backing field explicitly), so one
+        // real `var` field is synthesized per property that uses `field` and
+        // every `field` reference/auto-accessor is rewritten to read/write it.
+        // Keyed by property symbol so all accessors of the same property (get
+        // AND set) resolve to the one synthesized name.
+        private readonly Dictionary<IPropertySymbol, string> fieldKeywordBackingFieldNames =
+            new Dictionary<IPropertySymbol, string>(SymbolEqualityComparer.Default);
+
         // Issue #1743: both <see cref="IsSymbolReassigned"/> and
         // <see cref="IsUsedAsNullable"/> answer a question that depends only on
         // (symbol, scope) — never on WHEN it's asked — yet each call re-walks
@@ -2232,7 +2245,19 @@ public sealed class CSharpToGSharpTranslator
                         break;
                     }
 
-                    yield return this.TranslateProperty(property);
+                    (GMember propMember, bool propIsStatic, GMember fieldKeywordBackingField) =
+                        this.TranslateProperty(property);
+                    if (fieldKeywordBackingField != null)
+                    {
+                        // Issue #1907: the synthesized backing field for a `field`-
+                        // keyword property is emitted alongside (before) the
+                        // property itself, mirroring a hand-written computed
+                        // property with an explicit backing field (ADR-0051 §2).
+                        // Static/instance-ness must match the property's own.
+                        yield return (fieldKeywordBackingField, propIsStatic);
+                    }
+
+                    yield return (propMember, propIsStatic);
                     break;
 
                 case IndexerDeclarationSyntax indexer:
@@ -2415,7 +2440,14 @@ public sealed class CSharpToGSharpTranslator
                             bool isStatic = propertySymbol != null && propertySymbol.IsStatic;
                             if (isStatic)
                             {
-                                yield return this.TranslateProperty(property);
+                                (GMember staticPropMember, bool staticPropIsStatic, GMember staticFieldKeywordBacking) =
+                                    this.TranslateProperty(property);
+                                if (staticFieldKeywordBacking != null)
+                                {
+                                    yield return (staticFieldKeywordBacking, staticPropIsStatic);
+                                }
+
+                                yield return (staticPropMember, staticPropIsStatic);
                                 break;
                             }
 
@@ -3308,7 +3340,7 @@ public sealed class CSharpToGSharpTranslator
             return true;
         }
 
-        private (GMember Member, bool IsStatic) TranslateProperty(PropertyDeclarationSyntax node)
+        private (GMember Member, bool IsStatic, GMember BackingField) TranslateProperty(PropertyDeclarationSyntax node)
         {
             var symbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
             bool isStatic = symbol != null && symbol.IsStatic;
@@ -3326,7 +3358,34 @@ public sealed class CSharpToGSharpTranslator
                 type = this.PromoteIfUsedAsNullable(type, symbol);
             }
 
-            List<PropertyAccessor> accessors = this.MapAccessors(node);
+            // Issue #1907: register a synthesized backing field BEFORE mapping the
+            // accessor bodies below, so a `field` reference inside them (bound via
+            // TranslateExpression's FieldExpressionSyntax case) resolves to it.
+            string fieldKeywordBackingName = this.TryRegisterFieldKeywordBackingField(
+                node, symbol, out IFieldSymbol fieldKeywordBackingSymbol);
+
+            // Issue #1907 / #1072: the backing field can be used as nullable
+            // independently of the property's own declared nullability (e.g.
+            // `get => field ??= "default";` lazy-inits a non-null-looking `string`
+            // property from a field that starts out null) — promote off the
+            // FIELD symbol's own usage, not the property's.
+            GTypeReference backingType = fieldKeywordBackingSymbol != null
+                ? this.PromoteIfUsedAsNullable(type, fieldKeywordBackingSymbol)
+                : type;
+
+            // Issue #1907: a property initializer (`{ get; set => ...; } = 5;`)
+            // seeds the compiler-synthesized backing field, not the property
+            // itself — carry it over or the field silently starts at default(T).
+            GExpression backingInitializer = fieldKeywordBackingName != null && node.Initializer != null
+                ? this.CoerceConstantToUnsigned(
+                    node.Initializer.Value,
+                    this.TranslateNullSeamExpression(node.Initializer.Value, symbol?.ContainingType))
+                : null;
+            GMember backingField = fieldKeywordBackingName != null
+                ? new FieldDeclaration(BindingKind.Var, fieldKeywordBackingName, backingType, initializer: backingInitializer, visibility: Visibility.Private)
+                : null;
+
+            List<PropertyAccessor> accessors = this.MapAccessors(node, fieldKeywordBackingName);
 
             // Issue #1278 / ADR-0131: a C# expression-bodied read-only property
             // (`string Name => expr;`) renders as the idiomatic G# property-level
@@ -3354,12 +3413,63 @@ public sealed class CSharpToGSharpTranslator
                 attributes: this.MapAttributes(node.AttributeLists),
                 expressionBody: arrowBody);
 
-            return (property, isStatic);
+            return (property, isStatic, backingField);
         }
 
-        private List<PropertyAccessor> MapAccessors(PropertyDeclarationSyntax node)
+        // Issue #1907: a property using the C#14 `field` keyword in any accessor
+        // shares ONE compiler-synthesized backing field across all its accessors.
+        // Detects that usage and synthesizes+registers a real G# field name for it
+        // (collision-checked against the containing type's other members and any
+        // backing field already synthesized for a sibling property), returning
+        // null when the property does not use `field` at all. Also returns the
+        // synthesized field's own Roslyn IFieldSymbol (needed for its independent
+        // nullable-usage promotion) via <paramref name="fieldSymbol"/>.
+        private string TryRegisterFieldKeywordBackingField(
+            PropertyDeclarationSyntax node, IPropertySymbol symbol, out IFieldSymbol fieldSymbol)
         {
-            return this.MapAccessors(node, $"property '{node.Identifier.Text}'");
+            fieldSymbol = null;
+            if (symbol == null)
+            {
+                return null;
+            }
+
+            fieldSymbol = node.DescendantNodes()
+                .OfType<FieldExpressionSyntax>()
+                .Select(fieldExpr => this.context.GetSymbolInfo(fieldExpr).Symbol as IFieldSymbol)
+                .FirstOrDefault(backingSymbol =>
+                    backingSymbol != null &&
+                    SymbolEqualityComparer.Default.Equals(backingSymbol.AssociatedSymbol, symbol));
+            if (fieldSymbol == null)
+            {
+                return null;
+            }
+
+            string propName = symbol.Name;
+            string baseName = "_" + (propName.Length > 0
+                ? char.ToLowerInvariant(propName[0]) + propName.Substring(1)
+                : propName);
+
+            var taken = new HashSet<string>(StringComparer.Ordinal);
+            foreach (ISymbol member in symbol.ContainingType.GetMembers())
+            {
+                taken.Add(member.Name);
+            }
+
+            taken.UnionWith(this.fieldKeywordBackingFieldNames.Values);
+
+            string candidate = baseName;
+            for (int suffix = 2; taken.Contains(candidate); suffix++)
+            {
+                candidate = baseName + suffix;
+            }
+
+            this.fieldKeywordBackingFieldNames[symbol] = candidate;
+            return candidate;
+        }
+
+        private List<PropertyAccessor> MapAccessors(PropertyDeclarationSyntax node, string fieldKeywordBackingName = null)
+        {
+            return this.MapAccessors(node, $"property '{node.Identifier.Text}'", fieldKeywordBackingName);
         }
 
         // Issue #1278 / ADR-0131: fold a C# expression-bodied property/indexer
@@ -3425,7 +3535,7 @@ public sealed class CSharpToGSharpTranslator
             return (property, isStatic);
         }
 
-        private List<PropertyAccessor> MapAccessors(BasePropertyDeclarationSyntax node, string displayName)
+        private List<PropertyAccessor> MapAccessors(BasePropertyDeclarationSyntax node, string displayName, string fieldKeywordBackingName = null)
         {
             // An expression-bodied property (=> expr) is a get-only computed
             // property; its body is deferred to step 7 (ADR-0115 §B.11).
@@ -3535,6 +3645,27 @@ public sealed class CSharpToGSharpTranslator
                         accessor,
                         $"{displayName} {kind.ToString().ToLowerInvariant()}ter")
                     : null;
+
+                // Issue #1907: a bodyless (auto) accessor sibling to a `field`-
+                // keyword accessor on the same property (e.g. `set;` beside
+                // `get => field ??= ...;`) implicitly reads/writes that SAME
+                // compiler-synthesized backing field — synthesize the equivalent
+                // explicit body against the field just registered for this
+                // property (ADR-0051 §2 computed-property shape).
+                if (!bodied && fieldKeywordBackingName != null)
+                {
+                    body = kind == AccessorKind.Get
+                        ? new BlockStatement(new List<GStatement>
+                        {
+                            new ReturnStatement(new IdentifierExpression(fieldKeywordBackingName)),
+                        })
+                        : new BlockStatement(new List<GStatement>
+                        {
+                            new AssignmentStatement(
+                                new IdentifierExpression(fieldKeywordBackingName),
+                                new IdentifierExpression("value")),
+                        });
+                }
 
                 // Issue #1278 / ADR-0131: a C# expression-bodied accessor
                 // (`get => e` / `set => e`) renders as the idiomatic G# arrow
@@ -4474,7 +4605,10 @@ public sealed class CSharpToGSharpTranslator
 
             return new BlockStatement(this.WithSpillSeam(() => this.WithHoistedPostfix(
                 expression,
-                () => new GStatement[] { new ReturnStatement(this.TranslateExpression(expression)) }).ToList()).ToList());
+                () => this.WithHoistedAssignments(
+                    expression,
+                    includeSelf: true,
+                    () => new List<GStatement> { new ReturnStatement(this.TranslateExpression(expression)) })).ToList()).ToList());
         }
 
         private BlockStatement TranslateBlock(BlockSyntax block)
@@ -8653,6 +8787,15 @@ public sealed class CSharpToGSharpTranslator
                             && IsNullOrSuppressedNull(assignment.Right):
                         return true;
 
+                    // Issue #1907: `x ??= y` only assigns when `x` is currently
+                    // null — `x` being a legal `??=` target proves it is used as
+                    // nullable regardless of what `y` is (unlike plain `x = y`,
+                    // where only a literal `null`/`null!` RHS proves it).
+                    case AssignmentExpressionSyntax coalesceAssignment
+                        when coalesceAssignment.IsKind(SyntaxKind.CoalesceAssignmentExpression)
+                            && this.BindsTo(coalesceAssignment.Left, symbol):
+                        return true;
+
                     case IsPatternExpressionSyntax isPattern
                         when this.BindsTo(isPattern.Expression, symbol)
                             && IsNullConstantPattern(isPattern.Pattern):
@@ -9147,7 +9290,21 @@ public sealed class CSharpToGSharpTranslator
                     // (now up-to-date) target (issue #1723).
                     if (this.suppressedAssignments.Contains(nestedAssignment))
                     {
-                        return this.TranslateExpression(nestedAssignment.Left);
+                        GExpression hoistedTarget = this.TranslateExpression(nestedAssignment.Left);
+
+                        // Issue #1907: `x ??= y` only runs its assignment when `x`
+                        // was null, so reading `x` back afterward is exactly the
+                        // non-null narrowing C# itself performs post-`??=` — needed
+                        // when `x`'s own declared/promoted type is nullable but the
+                        // read occurs where a non-null value is expected (e.g. a
+                        // `field`-keyword getter returning a non-nullable property
+                        // type from a nullable-promoted backing field).
+                        if (nestedAssignment.IsKind(SyntaxKind.CoalesceAssignmentExpression))
+                        {
+                            hoistedTarget = new NonNullAssertionExpression(hoistedTarget);
+                        }
+
+                        return hoistedTarget;
                     }
 
                     // No enclosing seam claimed this node (e.g. it lives inside a
@@ -9217,6 +9374,9 @@ public sealed class CSharpToGSharpTranslator
 
                 case CollectionExpressionSyntax collectionExpression:
                     return this.TranslateCollectionExpression(collectionExpression);
+
+                case FieldExpressionSyntax fieldExpression:
+                    return this.TranslateFieldExpression(fieldExpression);
 
                 default:
                     this.context.ReportUnsupported(
@@ -10582,6 +10742,27 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return this.typeMapper.Map(type, this.context, expression.GetLocation());
+        }
+
+        // Issue #1907: C#14's `field` contextual keyword inside a property
+        // accessor is a distinct Roslyn node (FieldExpressionSyntax, NOT an
+        // IdentifierNameSyntax) that binds to the compiler-synthesized backing
+        // field of the enclosing property. TranslateProperty registers a real G#
+        // field name for it before translating any accessor body, so by the time
+        // this runs the lookup always succeeds for a property that legitimately
+        // uses `field`.
+        private GExpression TranslateFieldExpression(FieldExpressionSyntax fieldExpression)
+        {
+            if (this.context.GetSymbolInfo(fieldExpression).Symbol is IFieldSymbol { AssociatedSymbol: IPropertySymbol owner } &&
+                this.fieldKeywordBackingFieldNames.TryGetValue(owner, out string backingName))
+            {
+                return new IdentifierExpression(backingName);
+            }
+
+            this.context.ReportUnsupported(
+                fieldExpression,
+                "the C#14 `field` keyword could not be resolved to its property's synthesized backing field (ADR-0115 §B).");
+            return new IdentifierExpression("nil");
         }
 
         private GExpression TranslateIdentifierName(IdentifierNameSyntax identifier)

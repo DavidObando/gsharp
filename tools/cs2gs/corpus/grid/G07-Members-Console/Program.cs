@@ -17,13 +17,12 @@ namespace Corpus.Grid07
             // QUARANTINED (see Quarantined/):
             //  * CompoundAssignmentOperatorDeclarationFixture — C#14 instance
             //    `operator +=` fails round-trip (GS0005 Unexpected token <PlusEqualsToken>).
-            //  * FieldExpressionFixture — C#14 `field` keyword: CS2GS-GAP placeholder +
-            //    CS2GS-ROUNDTRIP (GS0288).
             ConstructorDeclarationFixture.Run();
             ConversionOperatorDeclarationFixture.Run();
             EventDeclarationFixture.Run();
             EventFieldDeclarationFixture.Run();
             FieldDeclarationFixture.Run();
+            FieldExpressionFixture.Run();
             IndexerDeclarationFixture.Run();
             InitAccessorDeclarationFixture.Run();
             MethodDeclarationFixture.Run();
