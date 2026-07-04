@@ -140,6 +140,45 @@ public sealed class CSharpTypeMapper
     }
 
     /// <summary>
+    /// Issue #1960 item 3: maps an event's handler type, preferring a
+    /// SOURCE-DECLARED named delegate's own name over the structural
+    /// <c>func(...)</c> arrow form that <see cref="Map"/> always uses for
+    /// delegate types. An event declared as <c>event Ticked TickHandler;</c>
+    /// round-trips higher-fidelity than the anonymous <c>event Ticked (int32)
+    /// -&gt; void</c> shape, and it matches C#'s own event-type story (named
+    /// delegates document the handler shape for consumers). Scoped to events
+    /// only (not <see cref="Map"/> generally) — a plain local/field/parameter
+    /// of a same-package named-delegate type still lowers through the arrow
+    /// form, since referencing a named delegate type from outside its own
+    /// declaration currently trips a gsc emitter bug ("Delegate 'X' has no
+    /// emitted TypeDef") for those positions; only the event accessor shape
+    /// has been verified to compile with the named form (see corpus
+    /// G07-Members-Console).
+    /// </summary>
+    /// <param name="type">The event's declared handler type.</param>
+    /// <param name="context">The translation context that accumulates diagnostics.</param>
+    /// <param name="location">The originating C# source location for diagnostics.</param>
+    /// <returns>The canonical G# type reference for the event's handler type.</returns>
+    public GTypeReference MapEventType(ITypeSymbol type, TranslationContext context, Location location)
+    {
+        if (type is INamedTypeSymbol { TypeKind: TypeKind.Delegate, DelegateInvokeMethod: not null } named &&
+            named.DeclaringSyntaxReferences.Length > 0)
+        {
+            if (named.IsGenericType)
+            {
+                List<GTypeReference> delegateArgs = named.TypeArguments
+                    .Select(a => this.Map(a, context, location))
+                    .ToList();
+                return new NamedTypeReference(this.QualifiedTypeName(named, context), delegateArgs);
+            }
+
+            return new NamedTypeReference(this.QualifiedTypeName(named, context));
+        }
+
+        return this.Map(type, context, location);
+    }
+
+    /// <summary>
     /// Issue #1894: whether <paramref name="type"/> is the BCL <c>System.Index</c>
     /// or <c>System.Range</c> struct — the two from-end-indexing value types that
     /// have no canonical G# representation (see <see cref="MapCore"/>).

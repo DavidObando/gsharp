@@ -1414,7 +1414,7 @@ public static class GSharpPrinter
         sb.Append(RenderAttributeBlock(declaration.Attributes, indent));
         sb.Append(pad);
         sb.Append(RenderVisibility(declaration.Visibility));
-        sb.Append($"type {declaration.Name} = delegate func({RenderParameterList(declaration.Parameters)}){returnClause}");
+        sb.Append($"type {declaration.Name}{RenderTypeParameterList(declaration.TypeParameters)} = delegate func({RenderParameterList(declaration.Parameters)}){returnClause}");
         return sb.ToString();
     }
 
