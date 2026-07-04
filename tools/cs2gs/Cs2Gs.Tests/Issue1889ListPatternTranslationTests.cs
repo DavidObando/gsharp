@@ -84,6 +84,36 @@ namespace Corpus.Issue1889
     }
 
     [Fact]
+    public void IsPattern_ElementsAfterSlice_IndexFromEnd()
+    {
+        // The elements AFTER a slice must be indexed end-relative, not from the
+        // front: `[1, .., 4, 5]` → last two are `^2`/`^1`, i.e. Length-2/Length-1.
+        string rendered = Render(@"
+namespace Corpus.Issue1889
+{
+    public class Holder
+    {
+        public bool Describe(int[] values)
+        {
+            if (values is [1, .., 4, 5])
+            {
+                return true;
+            }
+
+            return false;
+        }
+    }
+}
+");
+
+        Assert.Contains("values.Length >= 3", rendered, StringComparison.Ordinal);
+        Assert.Contains("values[0] == 1", rendered, StringComparison.Ordinal);
+        Assert.Contains("values[values.Length - 2] == 4", rendered, StringComparison.Ordinal);
+        Assert.Contains("values[values.Length - 1] == 5", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
     public void IsPattern_Empty_LowersToLengthZeroTest()
     {
         string rendered = Render(@"
