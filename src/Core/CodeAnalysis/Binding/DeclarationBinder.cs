@@ -2803,6 +2803,7 @@ internal sealed class DeclarationBinder
                     eventAccessibility,
                     receiverType: null) { IsSpecialName = true };
                 eventSymbol.AddMethodSymbol.IsStatic = true;
+                eventSymbol.AddMethodSymbol.StaticOwnerType = structSymbol;
                 eventSymbol.RemoveMethodSymbol = new FunctionSymbol(
                     $"remove_{eventName}",
                     ImmutableArray.Create(handlerParam),
@@ -2812,6 +2813,7 @@ internal sealed class DeclarationBinder
                     eventAccessibility,
                     receiverType: null) { IsSpecialName = true };
                 eventSymbol.RemoveMethodSymbol.IsStatic = true;
+                eventSymbol.RemoveMethodSymbol.StaticOwnerType = structSymbol;
 
                 // Issue #257: create raise method symbol if raise accessor is present.
                 if (eventSyntax.Accessors.Any(a => a.IsRaise))
@@ -2837,6 +2839,7 @@ internal sealed class DeclarationBinder
                         eventAccessibility,
                         receiverType: null) { IsSpecialName = true };
                     eventSymbol.RaiseMethodSymbol.IsStatic = true;
+                    eventSymbol.RaiseMethodSymbol.StaticOwnerType = structSymbol;
                 }
 
                 if (!eventSyntax.Annotations.IsDefaultOrEmpty)

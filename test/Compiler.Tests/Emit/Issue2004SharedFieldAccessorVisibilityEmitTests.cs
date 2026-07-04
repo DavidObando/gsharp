@@ -132,6 +132,41 @@ public class Issue2004SharedFieldAccessorVisibilityEmitTests
         Assert.Equal("static-value\ninstance-value\n", CompileAndRun(source));
     }
 
+    [Fact]
+    public void StaticEvent_ExplicitAccessors_ReadWritePrivateSharedBlockField_VerifiesAndRuns()
+    {
+        // Generalization of #2004 to events (found in review of PR #2042):
+        // static event add/remove/raise accessors created in DeclarationBinder
+        // never set StaticOwnerType, so their FunctionSymbols fell through to
+        // the package-function loop and were duplicated onto <Program>, whose
+        // duplicate body still read/wrote the struct's private shared-block
+        // backing field — the same "Field is not visible" ilverify failure
+        // as the property case.
+        var source = """
+            package P
+            import System
+
+            class Issue2004Event {
+                shared {
+                    private var _handler () -> void
+                    event Changed () -> void {
+                        add { _handler = value }
+                        remove { _handler = _handler }
+                        raise { _handler() }
+                    }
+                }
+            }
+
+            func Main() {
+                Issue2004Event.Changed += func() { Console.WriteLine("added") }
+                Issue2004Event.Changed -= func() { }
+                Console.WriteLine("done")
+            }
+            """;
+
+        Assert.Equal("done\n", CompileAndRun(source));
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue2004_").FullName;
