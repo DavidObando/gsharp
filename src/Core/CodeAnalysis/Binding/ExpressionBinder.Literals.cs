@@ -61,11 +61,32 @@ internal sealed partial class ExpressionBinder
         // and a bare name legitimately stays a GS0113). Attempted BEFORE the
         // ordinary type-clause bind so a hit here never also trips the
         // `ReportUndefinedType` diagnostic that path raises on failure.
+        // Issue #1989: a bare name only ever disambiguates a UNIQUE arity
+        // (`List` → `List`1`). Same-base-name BCL families across several
+        // arities (`Func`, `Action`, `Tuple`, `ValueTuple`, …) need an
+        // explicit arity. G# has no `Name<>`/`Name<,>` spelling, so the
+        // arity is carried the same way C# derives it — by comma count — but
+        // over G#'s own bracket generics via `_` placeholder arguments:
+        // `typeof(Func[_])` is arity 1, `typeof(Func[_, _])` is arity 2, etc.
+        // This form always resolves the arity-suffixed generic and never
+        // falls back to a same-named non-generic type (`typeof(Action[_])`
+        // can never silently become non-generic `Action`).
         var typeClause = syntax.TypeClause;
         TypeSymbol typeSymbol = null;
-        if (!typeClause.HasQualifier && !typeClause.HasTypeArguments && !typeClause.IsArray && !typeClause.IsNullable)
+        if (!typeClause.HasQualifier && !typeClause.IsArray && !typeClause.IsNullable)
         {
-            TryResolveOpenGenericImportedType(typeClause.Identifier.Text, out typeSymbol);
+            if (!typeClause.HasTypeArguments)
+            {
+                TryResolveOpenGenericImportedType(typeClause.Identifier.Text, out typeSymbol);
+            }
+            else if (TryGetUnboundGenericArity(typeClause, out var arity))
+            {
+                if (!TryResolveOpenGenericImportedTypeWithArity(typeClause.Identifier.Text, arity, out typeSymbol))
+                {
+                    Diagnostics.ReportUndefinedType(typeClause.Location, typeClause.Identifier.Text + "`" + arity);
+                    return new BoundErrorExpression(null);
+                }
+            }
         }
 
         typeSymbol ??= bindTypeClause(syntax.TypeClause);
@@ -98,14 +119,21 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
+        // Issue #1989: no fixed arity cap — a metadata arity limit doesn't
+        // really exist, so we walk arities upward and stop once a small
+        // streak of consecutive misses (BCL generic families are always
+        // contiguous, e.g. Func`1..Func`16) confirms there's nothing higher.
         Type match = null;
-        foreach (var import in scope.GetDeclaredImports())
+        var missStreak = 0;
+        for (var arity = 1; missStreak < MaxConsecutiveArityMisses; arity++)
         {
-            for (var arity = 1; arity <= 8; arity++)
+            var foundAtThisArity = false;
+            foreach (var import in scope.GetDeclaredImports())
             {
                 var candidateName = import.Target + "." + name + "`" + arity;
                 if (scope.References.TryResolveType(candidateName, out var candidate))
                 {
+                    foundAtThisArity = true;
                     if (match != null && match != candidate)
                     {
                         // Ambiguous across imports/arities — defer to the
@@ -115,6 +143,87 @@ internal sealed partial class ExpressionBinder
 
                     match = candidate;
                 }
+            }
+
+            missStreak = foundAtThisArity ? 0 : missStreak + 1;
+        }
+
+        if (match == null)
+        {
+            return false;
+        }
+
+        type = TypeSymbol.FromClrType(match);
+        return true;
+    }
+
+    /// <summary>Issue #1989: consecutive-arity-miss streak that stops the upward arity walk in <see cref="TryResolveOpenGenericImportedType"/>.</summary>
+    private const int MaxConsecutiveArityMisses = 2;
+
+    /// <summary>
+    /// Issue #1989: an unbound-generic <c>typeof(...)</c> target with an
+    /// EXPLICIT requested arity, spelled with <c>_</c> placeholder type
+    /// arguments (G#'s analogue of C#'s comma-count <c>Name&lt;&gt;</c> /
+    /// <c>Name&lt;,&gt;</c> unbound-generic syntax, since G# generics use
+    /// <c>Name[T1, T2]</c> brackets rather than angle brackets). Returns
+    /// <see langword="true"/> with <paramref name="arity"/> set to the
+    /// argument count only when every type argument is a bare <c>_</c> (no
+    /// qualifier, nested type arguments, array shape, or nullable suffix) —
+    /// any real type argument is an ordinary bound generic and is left to
+    /// <see cref="bindTypeClause"/>.
+    /// </summary>
+    private static bool TryGetUnboundGenericArity(TypeClauseSyntax typeClause, out int arity)
+    {
+        arity = 0;
+        var args = typeClause.TypeArguments;
+        if (args.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var arg in args)
+        {
+            if (arg.Identifier.Text != "_" || arg.HasQualifier || arg.HasTypeArguments || arg.IsArray || arg.IsNullable)
+            {
+                return false;
+            }
+        }
+
+        arity = args.Count;
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #1989: resolves <paramref name="name"/> to an imported CLR
+    /// generic type's OPEN definition at the EXACT requested
+    /// <paramref name="arity"/> (e.g. <c>Func</c> + arity 2 → <c>Func`2</c>).
+    /// Unlike <see cref="TryResolveOpenGenericImportedType"/>, this never
+    /// considers the plain non-generic name a match — the caller already
+    /// determined the target is an explicit unbound generic — so it can
+    /// never silently return the wrong (non-generic) type for names like
+    /// <c>Action</c> that have both a non-generic and generic overload set.
+    /// </summary>
+    private bool TryResolveOpenGenericImportedTypeWithArity(string name, int arity, out TypeSymbol type)
+    {
+        type = null;
+        if (string.IsNullOrEmpty(name) || arity <= 0)
+        {
+            return false;
+        }
+
+        Type match = null;
+        foreach (var import in scope.GetDeclaredImports())
+        {
+            var candidateName = import.Target + "." + name + "`" + arity;
+            if (scope.References.TryResolveType(candidateName, out var candidate))
+            {
+                if (match != null && match != candidate)
+                {
+                    // Ambiguous across imports — defer to the caller's diagnostic.
+                    return false;
+                }
+
+                match = candidate;
             }
         }
 
