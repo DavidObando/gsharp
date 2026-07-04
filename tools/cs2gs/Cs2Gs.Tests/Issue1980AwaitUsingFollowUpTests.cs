@@ -21,6 +21,10 @@ namespace Cs2Gs.Tests;
 ///    method, with no <c>await</c> prefix, still emits the sync
 ///    <c>using let</c> form — async context alone must not set
 ///    <c>isAwait</c>.
+/// 3. Issue #2103: same negative case as #2, but for the
+///    <c>using (expr) { }</c> BLOCK form, which exercises
+///    <c>TranslateUsingStatement</c>'s own <c>UsingStatementSyntax</c>
+///    branch directly (as opposed to <c>TranslateLocalDeclaration</c>).
 /// </summary>
 public class Issue1980AwaitUsingFollowUpTests
 {
@@ -100,6 +104,49 @@ namespace Corpus.Issue1980
 ");
 
         Assert.Contains("using let resource = SyncResource()", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("await using", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
+    public void PlainUsingBlock_ExpressionForm_InAsyncMethodWithoutAwait_StillLowersToSyncUsingLet()
+    {
+        // Issue #2103: regression for TranslateUsingStatement's own
+        // UsingStatementSyntax (statement-block) branch — as opposed to the
+        // TranslateLocalDeclaration path already covered above. Being inside
+        // an `async` method must not, by itself, cause a non-await
+        // `using (expr) { }` block to be lowered to `await using let`.
+        string rendered = Render(@"
+using System;
+
+namespace Corpus.Issue1980
+{
+    public sealed class SyncResource : IDisposable
+    {
+        public void Dispose()
+        {
+            Console.WriteLine(""disposed"");
+        }
+    }
+
+    public class Holder
+    {
+        private static SyncResource Create() => new SyncResource();
+
+        public async System.Threading.Tasks.Task RunAsync()
+        {
+            using (Create())
+            {
+                System.Console.WriteLine(""inside"");
+            }
+
+            await System.Threading.Tasks.Task.Yield();
+        }
+    }
+}
+");
+
+        Assert.Contains("using let __using", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("await using", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
