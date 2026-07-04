@@ -850,6 +850,45 @@ public sealed class StructSymbol : TypeSymbol
     }
 
     /// <summary>
+    /// Issue #1921: returns true when this class is — or transitively
+    /// derives from — <see cref="System.Attribute"/>, whether reached via
+    /// the <c>@Attribute</c> declaration sugar (<see cref="IsAttributeClass"/>)
+    /// or an explicit <c>: Attribute</c> / <c>: System.Attribute</c> base
+    /// clause naming the imported CLR type. Same-compilation user classes
+    /// have no <see cref="TypeSymbol.ClrType"/> until emitted, so a naive
+    /// CLR base-chain walk on this type alone can't see it; this walks the
+    /// symbol-level <see cref="BaseClass"/> chain instead, falling back to
+    /// the CLR chain only once an <see cref="ImportedBaseType"/> is reached.
+    /// </summary>
+    /// <returns><c>true</c> when this class is or derives from <see cref="System.Attribute"/>.</returns>
+    public bool DerivesFromSystemAttribute()
+    {
+        for (var current = this; current != null; current = current.BaseClass)
+        {
+            if (current.IsAttributeClass)
+            {
+                return true;
+            }
+
+            if (current.ImportedBaseType != null)
+            {
+                var clr = current.ImportedBaseType.ClrType;
+                for (var t = clr; t != null; t = t.BaseType)
+                {
+                    if (t.FullName == typeof(System.Attribute).FullName)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Sets the resolved <see cref="LayoutMetadata"/>. Intended to be
     /// called once by the binder after attributes have been bound; the
     /// <see cref="StructLayoutBinder"/> helper writes the resolved

@@ -69,15 +69,24 @@ internal sealed class CustomAttributeEncoder
     private readonly EmitContext emitCtx;
     private readonly WellKnownReferences wellKnown;
     private readonly Func<Type, TypeReferenceHandle> getTypeReference;
+    private readonly Func<StructSymbol, EntityHandle> resolvePrimaryCtorToken;
+    private readonly Func<StructSymbol, EntityHandle> resolveDefaultCtorToken;
+    private readonly Func<StructSymbol, ConstructorSymbol, EntityHandle> resolveExplicitCtorToken;
 
     public CustomAttributeEncoder(
         EmitContext emitCtx,
         WellKnownReferences wellKnown,
-        Func<Type, TypeReferenceHandle> getTypeReference)
+        Func<Type, TypeReferenceHandle> getTypeReference,
+        Func<StructSymbol, EntityHandle> resolvePrimaryCtorToken = null,
+        Func<StructSymbol, EntityHandle> resolveDefaultCtorToken = null,
+        Func<StructSymbol, ConstructorSymbol, EntityHandle> resolveExplicitCtorToken = null)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
         this.wellKnown = wellKnown ?? throw new ArgumentNullException(nameof(wellKnown));
         this.getTypeReference = getTypeReference ?? throw new ArgumentNullException(nameof(getTypeReference));
+        this.resolvePrimaryCtorToken = resolvePrimaryCtorToken;
+        this.resolveDefaultCtorToken = resolveDefaultCtorToken;
+        this.resolveExplicitCtorToken = resolveExplicitCtorToken;
     }
 
     /// <summary>
@@ -467,6 +476,19 @@ internal sealed class CustomAttributeEncoder
 
     public void EmitBoundAttribute(EntityHandle parent, BoundAttribute attr)
     {
+        // Issue #1921: a same-compilation user class deriving from
+        // System.Attribute (accepted by GS0200 via
+        // StructSymbol.DerivesFromSystemAttribute) has no ClrType until
+        // emitted — the CLR-reflection path below can't resolve its
+        // constructor. Mirror that path symbolically instead so a plain
+        // `@Note("x")` on a user `NoteAttribute` round-trips into a real
+        // CustomAttribute row the same way a BCL attribute does.
+        if (attr.AttributeType is StructSymbol userAttrType && userAttrType.ClrType == null)
+        {
+            this.EmitUserBoundAttribute(parent, userAttrType, attr);
+            return;
+        }
+
         var clrType = attr.AttributeType.ClrType;
         if (clrType == null)
         {
@@ -532,6 +554,145 @@ internal sealed class CustomAttributeEncoder
             parent: parent,
             constructor: ctorRef,
             value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
+    }
+
+    /// <summary>
+    /// Issue #1921: emits a <c>CustomAttribute</c> row for an attribute whose
+    /// resolved type is a same-compilation <see cref="StructSymbol"/> (no
+    /// <c>ClrType</c> yet — it hasn't been emitted). Selects the
+    /// primary or an explicit constructor by exact arity against
+    /// <paramref name="attr"/>'s positional arguments (the same "match the
+    /// constructor shape" step <see cref="ResolveAttributeConstructor"/> does
+    /// for CLR types, minus params-array expansion, which no G# constructor
+    /// declaration can express) and writes the fixed-argument blob using each
+    /// parameter's own (always-primitive-or-string, hence already-resolved)
+    /// <c>TypeSymbol.ClrType</c>.
+    /// </summary>
+    /// <remarks>
+    /// Named (property/field) arguments are intentionally NOT supported for
+    /// user-defined attribute types here: <see cref="WriteCustomAttributeNamedArg"/>
+    /// resolves the target member's CLR type via <c>Type.GetProperty</c>/
+    /// <c>Type.GetField</c> reflection, which is unavailable for a type
+    /// that hasn't been emitted yet. Reimplementing that against
+    /// <see cref="StructSymbol"/> fields/properties (including nested-enum
+    /// underlying types, <see cref="System.Type"/> arguments, etc.) is a
+    /// separate, considerably larger feature than closing the GS0200
+    /// recognition gap this issue is about; named arguments on a user
+    /// attribute are silently dropped rather than crashing, matching the
+    /// existing "unknown member — skip silently" behavior in
+    /// <see cref="WriteCustomAttributeNamedArg"/> for the CLR path.
+    /// </remarks>
+    private void EmitUserBoundAttribute(EntityHandle parent, StructSymbol attributeType, BoundAttribute attr)
+    {
+        if (!this.TryResolveUserAttributeConstructor(attributeType, attr.PositionalArguments.Length, out var ctorToken, out var paramTypes))
+        {
+            return;
+        }
+
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001); // Prolog
+        for (int i = 0; i < paramTypes.Length; i++)
+        {
+            var writeType = NormalizeWellKnownType(paramTypes[i]);
+            WriteCustomAttributeFixedArg(valueBlob, writeType, attr.PositionalArguments[i].Value);
+        }
+
+        valueBlob.WriteUInt16(0); // NumNamed — see remarks above.
+
+        this.emitCtx.Metadata.AddCustomAttribute(
+            parent: parent,
+            constructor: ctorToken,
+            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
+    }
+
+    /// <summary>
+    /// Selects the primary or an explicit constructor of <paramref name="attributeType"/>
+    /// whose arity exactly matches <paramref name="argCount"/> and returns the
+    /// already-correct emit-ready <see cref="EntityHandle"/> for it (a bare
+    /// <c>MethodDef</c>, or — for a constructed generic attribute type — a
+    /// <c>MemberRef</c> parented at the constructed TypeSpec; both cases are
+    /// handled by the injected resolver delegates, the same ones used for
+    /// `newobj` against a user constructor). Returns <see langword="false"/>
+    /// when no arity match exists or a parameter's type has no
+    /// <see cref="TypeSymbol.ClrType"/> (an as-yet-unemitted user type used as
+    /// an attribute constructor parameter — unsupported, same as the CLR path
+    /// bailing out when it can't resolve a parameter type).
+    /// </summary>
+    private bool TryResolveUserAttributeConstructor(
+        StructSymbol attributeType,
+        int argCount,
+        out EntityHandle ctorToken,
+        out Type[] paramTypes)
+    {
+        ctorToken = default;
+        paramTypes = null;
+
+        if (attributeType.HasPrimaryConstructor
+            && attributeType.PrimaryConstructorParameters.Length == argCount
+            && this.resolvePrimaryCtorToken != null
+            && TryGetClrParameterTypes(attributeType.PrimaryConstructorParameters, out paramTypes))
+        {
+            ctorToken = this.resolvePrimaryCtorToken(attributeType);
+            return true;
+        }
+
+        if (this.resolveExplicitCtorToken != null)
+        {
+            foreach (var ctor in attributeType.EffectiveExplicitConstructors)
+            {
+                if (ctor.Parameters.Length != argCount)
+                {
+                    continue;
+                }
+
+                if (!TryGetClrParameterTypes(ctor.Parameters, out paramTypes))
+                {
+                    continue;
+                }
+
+                ctorToken = this.resolveExplicitCtorToken(attributeType, ctor);
+                return true;
+            }
+        }
+
+        if (argCount == 0 && this.resolveDefaultCtorToken != null)
+        {
+            try
+            {
+                ctorToken = this.resolveDefaultCtorToken(attributeType);
+            }
+            catch (InvalidOperationException)
+            {
+                // No emitted default ctor (e.g. an attribute class declared
+                // with only explicit `init(...)` constructors) — nothing
+                // else to try for a zero-arg application.
+                return false;
+            }
+
+            paramTypes = Array.Empty<Type>();
+            return true;
+        }
+
+        paramTypes = null;
+        return false;
+    }
+
+    private static bool TryGetClrParameterTypes(ImmutableArray<ParameterSymbol> parameters, out Type[] clrTypes)
+    {
+        clrTypes = new Type[parameters.Length];
+        for (int i = 0; i < parameters.Length; i++)
+        {
+            var clr = parameters[i].Type?.ClrType;
+            if (clr == null)
+            {
+                clrTypes = null;
+                return false;
+            }
+
+            clrTypes[i] = clr;
+        }
+
+        return true;
     }
 
     private static ConstructorInfo ResolveAttributeConstructor(Type attributeType, ImmutableArray<BoundAttributeArgument> positional)

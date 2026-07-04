@@ -66,6 +66,34 @@ public class AttributeBinderTests
     }
 
     [Fact]
+    public void Issue1921_PlainColonAttributeBase_DoesNotReportGS0200()
+    {
+        // Issue #1921: a same-compilation user class with a plain
+        // `: Attribute` base clause (no `@Attribute` declaration sugar) must
+        // be recognized as a valid attribute type — GS0200 previously fired
+        // here because IsAttributeType only consulted the IsAttributeClass
+        // sugar flag or the (still-null, pre-emission) ClrType, never the
+        // symbol-level BaseClass/ImportedBaseType chain.
+        var globalScope = BindSource(
+            "class NoteAttribute : Attribute {\n}\n\n@Note\nfunc Helper() {\n}\n");
+
+        Assert.DoesNotContain(GetBinderDiagnostics(globalScope), d => d.Id == "GS0200");
+        var helper = globalScope.Functions.Single(f => f.Name == "Helper");
+        Assert.Single(helper.Attributes);
+        Assert.Equal("NoteAttribute", helper.Attributes[0].AttributeType.Name);
+    }
+
+    [Fact]
+    public void Issue1921_FullyQualifiedSystemAttributeBase_DoesNotReportGS0200()
+    {
+        // Same as above but spelled with the fully-qualified base name.
+        var globalScope = BindSource(
+            "class NoteAttribute : System.Attribute {\n}\n\n@Note\nfunc Helper() {\n}\n");
+
+        Assert.DoesNotContain(GetBinderDiagnostics(globalScope), d => d.Id == "GS0200");
+    }
+
+    [Fact]
     public void Reports_Invalid_Use_Site_Target_On_Function()
     {
         // `@field:` is not valid on a function declaration.

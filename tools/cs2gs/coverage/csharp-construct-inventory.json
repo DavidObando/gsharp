@@ -206,7 +206,7 @@
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/AttributeList.cs",
     "issue": "https://github.com/DavidObando/gsharp/issues/1913",
-    "notes": "BCL attributes green; parameter attributes silently dropped and generic attributes emit non-parsing G# (issue #1913)."
+    "notes": "BCL attributes and user-defined attribute classes (issue #1921, fixed) green; parameter attributes silently dropped and generic attributes emit non-parsing G# (issue #1913)."
   },
   {
     "kind": "AttributeTargetSpecifier",

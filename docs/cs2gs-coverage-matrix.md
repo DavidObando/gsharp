@@ -35,7 +35,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | Attribute | AttributeSyntax | ADR-0115 §B.11 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/AttributeList.cs |  | User-defined attribute classes blocked by gsc GS0200 (issue #1921). |
 | AttributeArgument | AttributeArgumentSyntax | ADR-0115 §B.11 |  |  |  |  |
 | AttributeArgumentList | AttributeArgumentListSyntax | ADR-0115 §B.11 |  |  |  |  |
-| AttributeList | AttributeListSyntax | ADR-0115 §B.11 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/AttributeList.cs | https://github.com/DavidObando/gsharp/issues/1913 | BCL attributes green; parameter attributes silently dropped and generic attributes emit non-parsing G# (issue #1913). |
+| AttributeList | AttributeListSyntax | ADR-0115 §B.11 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/AttributeList.cs | https://github.com/DavidObando/gsharp/issues/1913 | BCL attributes and user-defined attribute classes (issue #1921, fixed) green; parameter attributes silently dropped and generic attributes emit non-parsing G# (issue #1913). |
 | AttributeTargetSpecifier | AttributeTargetSpecifierSyntax | ADR-0115 §B.11 |  |  |  |  |
 | AwaitExpression | AwaitExpressionSyntax | ADR-0115 §B.23 |  | tools/cs2gs/corpus/grid/G10-Async-Console/Constructs/AwaitExpression.cs |  | Task/Task<T> green incl. ConfigureAwait and await foreach; ValueTask blocked by gsc (issue #1918); async Main mislowers (issue #1904). |
 | BaseConstructorInitializer | ConstructorInitializerSyntax | ADR-0115 §B.28 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/BaseConstructorInitializer.cs |  |  |

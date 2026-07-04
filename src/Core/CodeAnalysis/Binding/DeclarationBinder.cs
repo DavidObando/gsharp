@@ -8117,9 +8117,15 @@ internal sealed class DeclarationBinder
 
     private static bool IsAttributeType(TypeSymbol typeSymbol)
     {
-        if (typeSymbol is StructSymbol structSym && structSym.IsAttributeClass)
+        // Issue #1921: a same-compilation user class deriving from
+        // System.Attribute (via either the `@Attribute` sugar or a plain
+        // `: Attribute` / `: System.Attribute` base clause) has no CLR type
+        // yet — it hasn't been emitted — so ClrType is null and the CLR
+        // base-chain walk below can't see it. StructSymbol.DerivesFromSystemAttribute
+        // walks the symbol-level BaseClass chain instead of relying on ClrType.
+        if (typeSymbol is StructSymbol structSym)
         {
-            return true;
+            return structSym.DerivesFromSystemAttribute();
         }
 
         var clr = typeSymbol?.ClrType;
