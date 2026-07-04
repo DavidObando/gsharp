@@ -487,13 +487,18 @@ public class InterpolatedStringTests
             return System.Math.Max(best, 1);
         }
 
-        var small = TimeParse(BuildSource(500));
-        var large = TimeParse(BuildSource(4000)); // 8x the holes/text
+        // Use a large-enough `small` baseline that fixed per-run overhead and
+        // scheduler/cache noise are a small fraction of the measurement — a
+        // tiny baseline (e.g. 500 holes) is dominated by noise on shared CI
+        // hardware and makes the ratio spuriously large (see issue #2088).
+        var small = TimeParse(BuildSource(2000));
+        var large = TimeParse(BuildSource(16000)); // 8x the holes/text
 
         // Quadratic behavior would show ~64x growth; near-linear should stay
-        // well under that. Generous bound to avoid flakiness on shared CI
-        // hardware while still catching a regression back to O(n^2).
-        Assert.True(large < small * 30, $"expected near-linear scaling, got small={small} large={large} ratio={(double)large / small}");
+        // well under that. Bound is generous (50x for 8x input) to tolerate
+        // wall-clock noise on oversubscribed CI runners while still catching a
+        // regression back to O(n^2).
+        Assert.True(large < small * 50, $"expected near-linear scaling, got small={small} large={large} ratio={(double)large / small}");
     }
 
     private static (ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Diagnostics, System.Collections.Generic.Dictionary<VariableSymbol, object> Variables) Evaluate(string source)
