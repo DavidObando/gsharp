@@ -1,10 +1,9 @@
-// inventory: Parameter — QUARANTINED at compile (gsc): C#13 params
-// collections translate but the expanded-form call sites do not bind:
-//   GS0154 "Parameter 'values' requires a value of type List`1[Int32]"
-//     for Total(1, 2, 3),
-//   GS0129 "Binary operator '+=' is not defined for types 'int32' and
-//     List`1[Int32]" inside the foreach lowering,
-//   GS0154 for JoinParts("a", "b", "c") against IEnumerable<string>.
+// inventory: Parameter — C#13 params collections (params List&lt;int&gt;,
+// params IEnumerable&lt;string&gt;). Issue #1901: gsc's own variadic parameter
+// is always an array/slice, so these are declared as ordinary parameters of
+// the full collection type; an expanded call site (`Total(1, 2, 3)`,
+// including the zero-arg `Total()` form) is lowered into an explicit
+// collection construction (`List[int32]{1, 2, 3}` / `List[int32]()`).
 using System;
 using System.Collections.Generic;
 

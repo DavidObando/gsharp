@@ -18,9 +18,11 @@ namespace Corpus.Grid09
             MethodGroupConversionFixture.Run();
             NameColonFixture.Run();
             OptionalAndParamsArrayFixture.Run();
+            ParamsCollectionsProbeFixture.Run();
             ParenthesizedLambdaExpressionFixture.Run();
             ParenthesizedLambdaExpressionAsyncFixture.Run();
             ParenthesizedLambdaExpressionAttributedFixture.Run();
+            ParenthesizedLambdaExpressionDefaultsFixture.Run();
             SimpleLambdaExpressionFixture.Run();
         }
     }
