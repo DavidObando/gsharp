@@ -5197,6 +5197,24 @@ public sealed class CSharpToGSharpTranslator
                             "supports a flat target list.";
                         this.context.ReportUnsupported(assignment, message);
                     }
+                    else if (leftTuple.Arguments.Any(a => a.Expression is not IdentifierNameSyntax and not DeclarationExpressionSyntax))
+                    {
+                        // A non-identifier target (`arr[i]`, `obj.F`, ...) in a
+                        // deconstruction-assignment. C# evaluates all LHS storage
+                        // references BEFORE the RHS; `LowerTupleAssignment` spills
+                        // the RHS first and writes targets afterward, reversing
+                        // that order. For a plain identifier there is nothing to
+                        // evaluate (no side effect), so the reorder is safe; for
+                        // anything else (element/member access, deref, ...) it can
+                        // silently miscompile if the RHS mutates state the target
+                        // expression reads (issue #1895). Gap loudly instead.
+                        string message = "a non-identifier target ('arr[i]', 'obj.F', ...) in a " +
+                            "deconstruction-assignment has no safe G# lowering yet (issue #1895): " +
+                            "C# evaluates LHS storage references before the right-hand side, but " +
+                            "G#'s lowering must spill the right-hand side first, which would " +
+                            "silently reverse evaluation order for a side-effecting target.";
+                        this.context.ReportUnsupported(assignment, message);
+                    }
                     else
                     {
                         return this.LowerTupleAssignment(leftTuple, assignment.Right);
@@ -5640,13 +5658,17 @@ public sealed class CSharpToGSharpTranslator
             {
                 ExpressionSyntax targetExpr = leftTuple.Arguments[i].Expression;
 
-                // A true discard element (`(x, _) = ...`) needs no temp at all —
-                // G#'s native deconstruction binding already treats a literal
-                // `_` name as a discard.
+                // A true discard element — either the bare-assignment form
+                // (`(x, _) = ...`) or the declaration form (`(x, var _) = ...`,
+                // parsed as a `DeclarationExpressionSyntax` wrapping a
+                // `DiscardDesignationSyntax`) — needs no temp at all: G#'s
+                // native deconstruction binding already treats a literal `_`
+                // name as a discard.
                 temps.Add(
-                    targetExpr is IdentifierNameSyntax discardCandidate &&
+                    (targetExpr is IdentifierNameSyntax discardCandidate &&
                         discardCandidate.Identifier.ValueText == "_" &&
-                        this.IsTrueDiscard(discardCandidate)
+                        this.IsTrueDiscard(discardCandidate)) ||
+                        targetExpr is DeclarationExpressionSyntax { Designation: DiscardDesignationSyntax }
                         ? "_"
                         : $"__decon{this.deconCounter++}");
             }

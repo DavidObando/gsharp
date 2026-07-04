@@ -201,6 +201,103 @@ namespace Corpus.Issue1895
             d => d.Message.Contains("nested tuple target", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void DeclarationDiscardTarget_UsesUnderscoreInSpillNoUnusedTemp()
+    {
+        // `(x, var _) = e`: the discard is a `DeclarationExpressionSyntax`
+        // wrapping a `DiscardDesignationSyntax`, not a bare `_` identifier.
+        // It must spill as a literal `_` (discarded by G#'s native
+        // deconstruction binding), not an unused `__deconN` temp.
+        string rendered = Render(@"
+namespace Corpus.Issue1895
+{
+    public class Holder
+    {
+        public void M()
+        {
+            int x = 1;
+            (x, var _) = (2, 3);
+            System.Console.WriteLine(x);
+        }
+    }
+}
+");
+
+        Assert.Contains("let (__decon0, _) = (2, 3)", rendered, StringComparison.Ordinal);
+        Assert.Contains("x = __decon0", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
+    public void ElementAccessTarget_StaysLoudGap()
+    {
+        // `(arr[i], y) = rhs`: C# evaluates `arr`/`i` before `rhs`, but the
+        // lowering must spill `rhs` first, reversing that order. If `rhs`
+        // mutates `arr`/`i` this would silently miscompile, so gap loudly
+        // instead (issue #1895).
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Source.cs", @"
+namespace Corpus.Issue1895
+{
+    public class Holder
+    {
+        public void M()
+        {
+            int[] arr = new int[2];
+            int i = 0;
+            int y = 1;
+            (arr[i], y) = (2, 3);
+            System.Console.WriteLine(arr[0] + y);
+        }
+    }
+}
+") });
+
+        Assert.True(project.BoundWithoutErrors);
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.Contains(
+            context.Diagnostics,
+            d => d.Message.Contains("non-identifier target", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void MemberAccessTarget_StaysLoudGap()
+    {
+        // `(obj.F, y) = rhs`: same reversed-evaluation-order hazard as an
+        // element-access target.
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Source.cs", @"
+namespace Corpus.Issue1895
+{
+    public class Box
+    {
+        public int F;
+    }
+
+    public class Holder
+    {
+        public void M()
+        {
+            var obj = new Box();
+            int y = 1;
+            (obj.F, y) = (2, 3);
+            System.Console.WriteLine(obj.F + y);
+        }
+    }
+}
+") });
+
+        Assert.True(project.BoundWithoutErrors);
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.Contains(
+            context.Diagnostics,
+            d => d.Message.Contains("non-identifier target", StringComparison.Ordinal));
+    }
+
     private static void AssertRoundTripParses(string rendered)
     {
         RoundTripResult result = GSharpRoundTrip.Validate(rendered);
