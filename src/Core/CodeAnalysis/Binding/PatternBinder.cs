@@ -196,7 +196,16 @@ internal sealed class PatternBinder
             return new BoundConstantPattern(syntax, discriminantType, new BoundErrorExpression(syntax));
         }
 
-        var value = conversion.IsIdentity ? expression : new BoundConversionExpression(syntax, discriminantType, expression);
+        // Issue #2072: route the nil-arm conversion through the same
+        // classifier entry point used everywhere else (`ConversionClassifier.
+        // BindConversion`) instead of constructing a bare
+        // BoundConversionExpression. That entry point owns the issue #504
+        // lowering of `nil -> Nullable<value-type>` to a BoundDefaultExpression
+        // (required because value-type Nullable<T> can't take `ldnull`); building
+        // the conversion node directly here bypassed that lowering and crashed
+        // emit with GS9998 on `case nil:` against a value-type Nullable<T>
+        // discriminant.
+        var value = conversion.IsIdentity ? expression : conversions.BindConversion(syntax.Expression.Location, expression, discriminantType);
         var op = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, discriminantType, discriminantType);
         if (op == null && discriminantType is NullableTypeSymbol nullable)
         {
