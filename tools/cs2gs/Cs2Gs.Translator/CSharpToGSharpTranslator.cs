@@ -1617,6 +1617,38 @@ public sealed class CSharpToGSharpTranslator
             // fields directly, which is now valid G#.
             ConstructorLift lift = this.AnalyzeConstructorLift(node, mergedMembers, symbol, kind.Value);
 
+            // Issue #1990: a G# `struct`/`data struct` can NEVER carry an
+            // explicit `init(...)` constructor — the parser only accepts it on a
+            // `class` header (`DeclarationBinder.BindConstructors` early-returns
+            // for a non-class type). ADR-0115 §B.5 and §B.14 document this as a
+            // BY-DESIGN restriction: a G# value aggregate admits no explicit
+            // `init` at all, full stop — it is constructed only via primary
+            // constructors and struct literals. The lift above only drops the
+            // explicit constructor for the single-ctor, fully-liftable shape; a
+            // struct with MULTIPLE instance constructors — or one unliftable
+            // constructor (e.g. it reads an instance member, or reassigns a
+            // field) — leaves `lift.DropConstructor` false. There is no
+            // canonical G# form for this C# shape (silently downgrading the
+            // type to a `class` would flip value semantics to reference
+            // semantics — `Equals`, `default(T)`, copy-vs-alias, and boxing all
+            // change — which is exactly the kind of guess ADR-0115 §B forbids).
+            // Per the translator's "never guess" rule, record this as a loud,
+            // structured unsupported-construct gap instead and drop the type
+            // from the emitted output, same as the `unsupported aggregate kind`
+            // path above: a human must either rework the C# source to a single
+            // liftable constructor, explicitly accept a documented class
+            // downgrade, or file a G# language-gap issue to allow explicit
+            // `init` on a struct.
+            if (!lift.DropConstructor &&
+                (kind == TypeDeclarationKind.Struct || kind == TypeDeclarationKind.DataStruct) &&
+                mergedMembers.OfType<ConstructorDeclarationSyntax>().Any(c => !c.Modifiers.Any(SyntaxKind.StaticKeyword)))
+            {
+                this.context.ReportUnsupported(
+                    node,
+                    $"'{node.Identifier.Text}' has no canonical G# form: it is a '{(kind == TypeDeclarationKind.DataStruct ? "record struct" : "struct")}' with multiple and/or unliftable instance constructors, and a G# struct/data struct admits no explicit 'init(...)' constructor by design (ADR-0115 §B.5, §B.14; issue #1990). Silently mapping it to a class would change value semantics to reference semantics (Equals/GetHashCode become reference-identity, default(T) becomes null, copies become aliases, storage becomes heap-allocated), so it is not auto-translated. Rework the C# type to a single liftable constructor, explicitly accept a documented class downgrade and re-author it as a class, or file a G# language-gap issue requesting explicit 'init' support on structs.");
+                return null;
+            }
+
             // Issue #2003: a primary-constructor parameter (native C#12 shape or
             // T2-lifted from an explicit ctor) becomes a same-named G# field
             // (ADR-0065 §5) that is a cs2gs-SYNTHESIZED sibling — it has no
