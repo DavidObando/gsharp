@@ -796,9 +796,11 @@
   {
     "kind": "ExplicitInterfaceSpecifier",
     "nodeType": "ExplicitInterfaceSpecifierSyntax",
-    "status": "Gap",
+    "status": "Lowered",
+    "rule": "ADR-0091 / ADR-0115 \u00A7B",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1911"
+    "fixture": "tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/ExplicitInterfaceSpecifier.cs",
+    "notes": "G# has no explicit-interface-implementation surface (ADR-0091 rejected an \u0027IFoo.M(this)\u0027 spelling); a lone explicit impl lowers to a plain public method (fixes the prior ilverify miss, issue #1911). An explicit impl coexisting with a same-signature public method is dropped in favor of the public method (disclosed semantic-loss diagnostic, not covered by this fixture\u0027s stdout parity); two explicit impls of different interfaces with no public sibling de-duplicate to one surviving public method with no semantic loss."
   },
   {
     "kind": "ExpressionColon",

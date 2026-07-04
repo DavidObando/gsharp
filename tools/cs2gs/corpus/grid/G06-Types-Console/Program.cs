@@ -18,10 +18,7 @@ namespace Corpus.Grid06
             // QUARANTINED (see Quarantined/): EnumMemberDeclarationFixture — explicit
             // enum member values are SILENTLY dropped (translate+compile pass; stdout
             // parity catches 'banana=2' vs 'banana=1'); [Flags] is erased too.
-            // QUARANTINED (see Quarantined/): ExplicitInterfaceSpecifierFixture —
-            // explicit interface impl is lowered to a plain method: with a same-name
-            // public method it fails compile (GS0264 duplicate overload); alone it
-            // compiles but fails ilverify ("Class implements interface but not method").
+            ExplicitInterfaceSpecifierFixture.Run();
             InterfaceDeclarationFixture.Run();
 
             // QUARANTINED (see Quarantined/): PartialClassFixture — partial class parts

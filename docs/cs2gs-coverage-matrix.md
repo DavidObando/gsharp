@@ -7,9 +7,9 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | --- | --- |
 | Unclassified | 0 |
 | Translated | 223 |
-| Lowered | 12 |
+| Lowered | 13 |
 | UnsupportedByDesign | 56 |
-| Gap | 30 |
+| Gap | 29 |
 
 ## Translated (223)
 
@@ -239,7 +239,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | YieldBreakStatement | YieldStatementSyntax | ADR-0115 §B.34 |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/YieldBreakStatement.cs |  | Issue #994 (resolved). |
 | YieldReturnStatement | YieldStatementSyntax | ADR-0115 §B.34 |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/YieldReturnStatement.cs |  |  |
 
-## Lowered (12)
+## Lowered (13)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -247,6 +247,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | AnonymousObjectMemberDeclarator | AnonymousObjectMemberDeclaratorSyntax | ADR-0115 §B.4 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/AnonymousObjectCreationExpression.cs |  | Each declarator becomes one positional tuple-literal element (issue #1934); exercised by the AnonymousObjectCreationExpression fixture. |
 | AscendingOrdering | OrderingSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/OrderByClause.cs |  | Query syntax lowered to the method-call chain, mirroring Roslyn. |
 | DescendingOrdering | OrderingSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/OrderByClause.cs |  | Query syntax lowered to the method-call chain, mirroring Roslyn. |
+| ExplicitInterfaceSpecifier | ExplicitInterfaceSpecifierSyntax | ADR-0091 / ADR-0115 §B |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/ExplicitInterfaceSpecifier.cs |  | G# has no explicit-interface-implementation surface (ADR-0091 rejected an 'IFoo.M(this)' spelling); a lone explicit impl lowers to a plain public method (fixes the prior ilverify miss, issue #1911). An explicit impl coexisting with a same-signature public method is dropped in favor of the public method (disclosed semantic-loss diagnostic, not covered by this fixture's stdout parity); two explicit impls of different interfaces with no public sibling de-duplicate to one surviving public method with no semantic loss. |
 | ForStatement | ForStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/ForStatement.cs |  | Lowered to a while loop when clauses demand it (issue #1732 incrementor-on-continue fix). |
 | FromClause | FromClauseSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/QueryExpression.cs | https://github.com/DavidObando/gsharp/issues/1902 | First from lowers; a second from (SelectMany) has no lowering (issue #1902). |
 | OrderByClause | OrderByClauseSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/OrderByClause.cs |  | Query syntax lowered to the method-call chain, mirroring Roslyn. |
@@ -317,13 +318,12 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | XmlText | XmlTextSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | XmlTextAttribute | XmlTextAttributeSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 
-## Gap (30)
+## Gap (29)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | CheckedExpression | CheckedExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1881 |  |
 | EnumMemberDeclaration | EnumMemberDeclarationSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1912 | Explicit values, [Flags], negative and alias members erased to sequential ordinals — parity-verified divergence. |
-| ExplicitInterfaceSpecifier | ExplicitInterfaceSpecifierSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1911 |  |
 | ExtensionBlockDeclaration | ExtensionBlockDeclarationSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1879 | C# 14 headline; classic this-param extensions map to receiver funcs and are green (grid G13). |
 | FieldExpression | FieldExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1907 | C# 14 field keyword. |
 | FunctionPointerCallingConvention | FunctionPointerCallingConventionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |

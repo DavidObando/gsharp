@@ -12,6 +12,7 @@ EnumDeclaration: cherry=2
 EnumDeclaration: west=3
 EnumDeclaration: picked-is-banana=true
 EnumDeclaration: banana-not-cherry=true
+ExplicitInterfaceSpecifier: interface=hello-explicit
 InterfaceDeclaration: length=12
 InterfaceDeclaration: describe=rope of 12
 InterfaceDeclaration: default-method=42
