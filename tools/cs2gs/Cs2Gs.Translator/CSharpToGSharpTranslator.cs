@@ -583,6 +583,16 @@ public sealed class CSharpToGSharpTranslator
         private readonly HashSet<ISymbol> hoistedNullableGuardLocals =
             new HashSet<ISymbol>(SymbolEqualityComparer.Default);
 
+        // Issue #1967: designation nodes (`SingleVariableDesignationSyntax`) already
+        // checked by `ReportIfIndexOrRangeTypedDesignation` for an Index/Range-typed
+        // declared symbol. A single designation can be reached from more than one
+        // translation path for the SAME node (e.g. a loop-condition pattern's main
+        // binder is inspected by both `FindMainPatternBinder` and
+        // `EmitMustHoldGuards`/`IsBindOnlyMainBinder`); this dedupes so the loud gap
+        // is reported once per designation, not once per visit.
+        private readonly HashSet<SyntaxNode> reportedIndexRangeDesignations =
+            new HashSet<SyntaxNode>();
+
         // C# post-increment/decrement (`i++`, `i--`) sub-expressions that the
         // surrounding statement seam has hoisted into trailing `i++` statements
         // (G# models inc/dec as statements, not expressions; spec §Statements).
@@ -5187,6 +5197,11 @@ public sealed class CSharpToGSharpTranslator
                     return new[] { this.TranslateForStatement(forStatement) };
 
                 case ForEachStatementSyntax forEach:
+                    // Issue #1967: `foreach (Index i in xs)` declares `i` directly
+                    // on this node (no declarator, no designation) — check it here
+                    // before it can bypass the issue #1894 loud-gap guard.
+                    this.ReportIfIndexOrRangeTypedForEachVariable(forEach);
+
                     // The iterable receiver gets the same nullable-narrowing `!!`
                     // treatment as a member/element-access receiver: a declared-
                     // nullable (or #1072-promoted) field/property iterated inside a
@@ -5790,23 +5805,102 @@ public sealed class CSharpToGSharpTranslator
             return index;
         }
 
-        // Issue #1894: whether `expression` sits directly in a bracketed index
-        // argument position (`recv[EXPR]` / `recv?[EXPR]`) — the one position
+        // Issue #1894/#1967: whether `expression` sits directly in a bracketed
+        // index argument position (`recv[EXPR]` / `recv?[EXPR]` / a dictionary/
+        // collection-initializer element `{ [EXPR] = v }`) — the one position
         // where gsc's own parser recognises a leading `^` as a from-end marker
         // rather than one's-complement (Parser.ParseIndexBound). A `^n` nested
         // any deeper (e.g. as a `RangeExpressionSyntax` bound, `recv[a..^n]`) is
         // NOT a direct argument — `TranslateRangeBound` emits it as its own
         // native `FromEndIndexExpression` (gsc's `^n`) before it ever reaches
         // this generic prefix-unary path (an inline `recv[a..^n]` slice never
-        // gaps).
+        // gaps). `ImplicitElementAccessSyntax` is the initializer-element shape
+        // (`{ [^1] = v }` inside a collection/object initializer) — Roslyn binds
+        // its bracketed argument list directly to it (no `ElementAccessExpressionSyntax`
+        // wrapper), so it must be recognised here too or a from-end index inside
+        // an initializer element would over-gap (issue #1967).
         private static bool IsDirectIndexBracketArgument(ExpressionSyntax expression) =>
             expression.Parent is ArgumentSyntax
             {
                 Parent: BracketedArgumentListSyntax
                 {
-                    Parent: ElementAccessExpressionSyntax or ElementBindingExpressionSyntax,
+                    Parent: ElementAccessExpressionSyntax or ElementBindingExpressionSyntax or ImplicitElementAccessSyntax,
                 },
             };
+
+        // Issue #1967: hardens the issue #1894 loud-gap check (see
+        // `TranslateLocalDeclaration`'s declared-symbol check) against Index/Range
+        // locals bound OUTSIDE a `var`/typed local declarator — `foreach (Index i in
+        // xs)`, `x is Index i`/`case Index i`, `M(out Index i)`, and tuple/positional
+        // deconstruction (`var (i, r) = ...`) all declare a NEW `ILocalSymbol`
+        // without ever going through `TranslateLocalDeclaration`, so an Index/Range
+        // local bound at one of those sites would silently bypass the existing
+        // guard. Every one of those sites resolves its designation to a declared
+        // symbol independently; this is the single choke point they all route
+        // through to report the same gap uniformly.
+        private void ReportIfIndexOrRangeTypedDesignation(SingleVariableDesignationSyntax designation)
+        {
+            if (designation == null || !this.reportedIndexRangeDesignations.Add(designation))
+            {
+                return;
+            }
+
+            if (this.context.GetDeclaredSymbol(designation) is ILocalSymbol { Type: { } type } &&
+                CSharpTypeMapper.IsSystemIndexOrRange(type))
+            {
+                this.context.Report(new TranslationDiagnostic(
+                    type.Name,
+                    $"local '{designation.Identifier.Text}' has type 'System.{type.Name}', which has no canonical G# type — see CSharpTypeMapper.Map (issue #1894).",
+                    designation.GetLocation(),
+                    TranslationSeverity.Unsupported));
+            }
+        }
+
+        // Issue #1967: scans every `SingleVariableDesignationSyntax` nested
+        // anywhere inside a pattern tree (a bare `Index i`, or one nested inside a
+        // recursive/positional/list/`and`/`or`/`not` pattern) and reports the same
+        // Index/Range loud gap as a declarator. Called once per pattern ROOT (never
+        // from the recursive per-subpattern translators) so a nested designation is
+        // checked exactly once.
+        private void ReportIndexOrRangeDesignationsInPattern(PatternSyntax pattern)
+        {
+            if (pattern == null)
+            {
+                return;
+            }
+
+            foreach (SingleVariableDesignationSyntax designation in
+                pattern.DescendantNodesAndSelf().OfType<SingleVariableDesignationSyntax>())
+            {
+                this.ReportIfIndexOrRangeTypedDesignation(designation);
+            }
+        }
+
+        // Issue #1967: `foreach (Index i in xs)` declares its loop variable
+        // directly on the `ForEachStatementSyntax` node itself (no designation
+        // syntax at all — unlike every other declaration site), so it needs its
+        // own symbol-based guard mirroring `ReportIfIndexOrRangeTypedDesignation`.
+        private void ReportIfIndexOrRangeTypedForEachVariable(ForEachStatementSyntax forEach)
+        {
+            if (this.context.GetDeclaredSymbol(forEach) is ILocalSymbol { Type: { } type } &&
+                CSharpTypeMapper.IsSystemIndexOrRange(type))
+            {
+                this.context.Report(new TranslationDiagnostic(
+                    type.Name,
+                    $"local '{forEach.Identifier.Text}' has type 'System.{type.Name}', which has no canonical G# type — see CSharpTypeMapper.Map (issue #1894).",
+                    forEach.GetLocation(),
+                    TranslationSeverity.Unsupported));
+            }
+        }
+
+        // Issue #1967: `M(out Index i)` declares `i` via an out-argument
+        // designation, not a declarator — check it here, the single choke point
+        // every `out var`/`out T` argument translates through.
+        private GExpression TranslateOutVarDesignation(SingleVariableDesignationSyntax single)
+        {
+            this.ReportIfIndexOrRangeTypedDesignation(single);
+            return new OutArgumentExpression("out var", SanitizeIdentifier(single.Identifier.Text));
+        }
 
         // Reports whether the element-access target indexes by `int32`: a C# array,
         // or a type whose bound indexer takes a single `int32` parameter (such as
@@ -7184,6 +7278,14 @@ public sealed class CSharpToGSharpTranslator
                     ILocalSymbol localSymbol = declaration.Designation is SingleVariableDesignationSyntax singleDesignation
                         ? this.context.GetDeclaredSymbol(singleDesignation) as ILocalSymbol
                         : null;
+
+                    // Issue #1967: `(x, Index i) = ...` declares `i` via this
+                    // mixed-tuple-assignment designation, not a declarator.
+                    if (declaration.Designation is SingleVariableDesignationSyntax indexCheckDesignation)
+                    {
+                        this.ReportIfIndexOrRangeTypedDesignation(indexCheckDesignation);
+                    }
+
                     BindingKind binding = localSymbol != null && this.IsLocalReassigned(localSymbol)
                         ? BindingKind.Var
                         : BindingKind.Let;
@@ -7224,6 +7326,13 @@ public sealed class CSharpToGSharpTranslator
                         SingleVariableDesignationSyntax single => single.Identifier.Text,
                         _ => "_",
                     });
+
+                    // Issue #1967: `var (i, r) = ...` declares each element via a
+                    // designation, not a declarator.
+                    if (designation is SingleVariableDesignationSyntax indexCheckSingle)
+                    {
+                        this.ReportIfIndexOrRangeTypedDesignation(indexCheckSingle);
+                    }
                 }
 
                 names = collected;
@@ -7243,6 +7352,13 @@ public sealed class CSharpToGSharpTranslator
                         SingleVariableDesignationSyntax single => single.Identifier.Text,
                         _ => "_",
                     });
+
+                    // Issue #1967: `(var i, var r) = ...` — same as above, one
+                    // designation per tuple element.
+                    if (declaration.Designation is SingleVariableDesignationSyntax indexCheckSingle)
+                    {
+                        this.ReportIfIndexOrRangeTypedDesignation(indexCheckSingle);
+                    }
                 }
 
                 names = collected;
@@ -8166,6 +8282,11 @@ public sealed class CSharpToGSharpTranslator
 
                 return;
             }
+
+            // Issue #1967: a loop-condition `is`-pattern (`while (x is Index i)`)
+            // never reaches `TranslateIsPattern` — it is hoisted here instead — so
+            // its designations need the same guard applied at this entry point.
+            this.ReportIndexOrRangeDesignationsInPattern(isPattern.Pattern);
 
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
             ITypeSymbol scrutineeType = this.context.GetTypeInfo(isPattern.Expression).Type;
@@ -9867,6 +9988,12 @@ public sealed class CSharpToGSharpTranslator
 
         private GExpression TranslateIsPattern(IsPatternExpressionSyntax isPattern)
         {
+            // Issue #1967: `x is Index i` (or any nested designation inside a
+            // recursive/positional pattern) declares `i` via a pattern designation,
+            // not a declarator — check the whole pattern tree here, the entry point
+            // for every non-loop-condition `is`-pattern.
+            this.ReportIndexOrRangeDesignationsInPattern(isPattern.Pattern);
+
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
             ITypeSymbol receiverType = this.context.GetTypeInfo(isPattern.Expression).Type;
 
@@ -12682,7 +12809,7 @@ public sealed class CSharpToGSharpTranslator
                     return declaration.Designation switch
                     {
                         DiscardDesignationSyntax => new OutArgumentExpression("out", "_"),
-                        SingleVariableDesignationSyntax single => new OutArgumentExpression("out var", SanitizeIdentifier(single.Identifier.Text)),
+                        SingleVariableDesignationSyntax single => this.TranslateOutVarDesignation(single),
                         _ => new UnaryExpression("&", this.TranslateExpression(argument.Expression)),
                     };
                 }
@@ -13915,6 +14042,11 @@ public sealed class CSharpToGSharpTranslator
                 var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
                 var usedDesignators = new HashSet<string>(StringComparer.Ordinal);
                 var guards = new List<GExpression>();
+
+                // Issue #1967: `case Index i:`/`Index i =>` binds via a switch
+                // pattern designation, not a declarator — check the whole arm
+                // pattern tree here.
+                this.ReportIndexOrRangeDesignationsInPattern(arm.Pattern);
                 GPattern pattern = this.TranslatePattern(arm.Pattern, subject, bindings, usedDesignators, guards);
 
                 foreach ((ISymbol symbol, GExpression replacement) in bindings)
@@ -13988,6 +14120,10 @@ public sealed class CSharpToGSharpTranslator
                             var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
                             var usedDesignators = new HashSet<string>(StringComparer.Ordinal);
                             var guards = new List<GExpression>();
+
+                            // Issue #1967: same guard as the switch-expression arm
+                            // path above, for the switch-statement `case` form.
+                            this.ReportIndexOrRangeDesignationsInPattern(patternLabel.Pattern);
                             GPattern pattern = this.TranslatePattern(patternLabel.Pattern, subject, bindings, usedDesignators, guards);
 
                             // Issue #1730: install the pattern's bindings before
@@ -14116,6 +14252,15 @@ public sealed class CSharpToGSharpTranslator
             // form, so `await foreach` keeps the older temp+let lowering.
             List<string> names = new List<string>();
             CollectForEachVariableNames(node.Variable, names);
+
+            // Issue #1967: `foreach (var (i, r) in pairs)` declares each element
+            // via a designation nested in `node.Variable` — check every one here,
+            // this method's single entry point for deconstructing foreach.
+            foreach (SingleVariableDesignationSyntax designation in
+                node.Variable.DescendantNodesAndSelf().OfType<SingleVariableDesignationSyntax>())
+            {
+                this.ReportIfIndexOrRangeTypedDesignation(designation);
+            }
 
             if (names.Count >= 2)
             {
