@@ -194,6 +194,28 @@ public sealed class CSharpTypeMapper
 
         if (type is IArrayTypeSymbol array)
         {
+            if (array.Rank > 1)
+            {
+                // Issue #1893: gsc has no rectangular multi-dim array type (only
+                // the fixed-length `[N]T`/slice `[]T`, both rank 1). A
+                // multi-dim TYPE reached here (e.g. an explicit `T[,] x;` with
+                // no initializer, a field/parameter/return type) has no symbol
+                // for TranslateLocalDeclaration's flat-lowering to hang
+                // per-dimension sizes on, so — rather than silently returning a
+                // 1-D `ArrayTypeReference` that drops the rank (the original
+                // bug) — report the gap loudly. A local declared AND
+                // initialized in one statement from `new T[d0, d1, ...]` avoids
+                // this path entirely: TranslateLocalDeclaration omits the type
+                // clause and relies on inference over the already-flat-lowered
+                // initializer.
+                string multiDimTypeGapMessage =
+                    $"multi-dimensional array type '{array}' (rank {array.Rank}) has no canonical G# type; " +
+                    "only a local declared and initialized in the same statement from `new T[d0, d1, ...]` " +
+                    "or a rectangular initializer is supported today.";
+                context.Report(new TranslationDiagnostic(
+                    "ArrayType", multiDimTypeGapMessage, location, TranslationSeverity.Unsupported));
+            }
+
             return new ArrayTypeReference(this.Map(array.ElementType, context, location));
         }
 

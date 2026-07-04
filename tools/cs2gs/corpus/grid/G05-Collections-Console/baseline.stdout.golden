@@ -3,6 +3,8 @@ ArrayCreationExpression: sized=10,20,30
 ArrayCreationExpression: words=alpha,beta
 ArrayCreationExpression: jagged0=1,2 jagged1=3,4,5
 ArrayCreationExpression: withInit=7,8,9
+ArrayCreationExpressionMultiDim: sum=21 rows=2 cols=3
+ArrayCreationExpressionMultiDim: lit[1,2]=6 lit[0,1]=2
 ArrayInitializerExpression: xs=1,2,3
 ArrayInitializerExpression: names=north,south
 ArrayInitializerExpression: single=42 len=1

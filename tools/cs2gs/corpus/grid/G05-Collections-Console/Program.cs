@@ -11,6 +11,7 @@ namespace Corpus.Grid05
         {
             AnonymousObjectCreationExpressionFixture.Run();
             ArrayCreationExpressionFixture.Run();
+            ArrayCreationExpressionMultiDimFixture.Run();
             ArrayInitializerExpressionFixture.Run();
             CollectionExpressionFixture.Run();
             CollectionInitializerExpressionFixture.Run();
