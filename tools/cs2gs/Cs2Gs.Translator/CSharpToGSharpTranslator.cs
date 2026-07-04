@@ -2207,7 +2207,12 @@ public sealed class CSharpToGSharpTranslator
                     break;
 
                 case OperatorDeclarationSyntax op:
-                    yield return this.TranslateOperator(op);
+                    (GMember opMember, bool opIsStatic) = this.TranslateOperator(op);
+                    if (opMember != null)
+                    {
+                        yield return (opMember, opIsStatic);
+                    }
+
                     break;
 
                 case EventFieldDeclarationSyntax eventField:
@@ -3157,6 +3162,23 @@ public sealed class CSharpToGSharpTranslator
         }
 
         /// <summary>
+        /// Whether <paramref name="kind"/> is a C# 14 instance compound-assignment
+        /// operator token (<c>op_AdditionAssignment</c> and siblings).
+        /// </summary>
+        private static bool IsCompoundAssignmentOperatorToken(SyntaxKind kind) => kind is
+            SyntaxKind.PlusEqualsToken or
+            SyntaxKind.MinusEqualsToken or
+            SyntaxKind.AsteriskEqualsToken or
+            SyntaxKind.SlashEqualsToken or
+            SyntaxKind.PercentEqualsToken or
+            SyntaxKind.AmpersandEqualsToken or
+            SyntaxKind.BarEqualsToken or
+            SyntaxKind.CaretEqualsToken or
+            SyntaxKind.LessThanLessThanEqualsToken or
+            SyntaxKind.GreaterThanGreaterThanEqualsToken or
+            SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken;
+
+        /// <summary>
         /// Translates a C# operator overload (<c>public static X operator +(X a, X b)</c>)
         /// to the canonical G# receiver-clause operator form
         /// <c>func (a X) operator +(b X) X</c> (ADR-0035, sample <c>Operators.gs</c>;
@@ -3164,11 +3186,33 @@ public sealed class CSharpToGSharpTranslator
         /// operands become parameters (a unary operator has no parameters). The
         /// declaration is lifted to a top-level sibling because a receiver-clause
         /// <c>func</c> only binds at top level.
+        ///
+        /// C# 14 instance compound-assignment operators (<c>operator +=</c> and
+        /// siblings, <c>op_AdditionAssignment</c> etc.) have no canonical G# form
+        /// — G# operator declarations are binary/unary only (ADR-0035) and there
+        /// is no lossless mechanical rewrite to a binary operator, since the
+        /// compound form mutates instance state in place rather than returning a
+        /// new value. These are reported as an unsupported gap instead of
+        /// emitting the C# token text verbatim into a <c>operator +=</c>
+        /// declaration that fails to parse (issue #1908).
         /// </summary>
         private (GMember Member, bool IsStatic) TranslateOperator(OperatorDeclarationSyntax node)
         {
-            var symbol = this.context.GetDeclaredSymbol(node) as IMethodSymbol;
             string operatorToken = node.OperatorToken.Text;
+
+            if (IsCompoundAssignmentOperatorToken(node.OperatorToken.Kind()))
+            {
+                string binaryToken = operatorToken.TrimEnd('=');
+                string message =
+                    $"C# 14 instance compound-assignment operator 'operator {operatorToken}' has no canonical " +
+                    "G# form: G# operator declarations are binary/unary only (ADR-0035) and there is no lossless " +
+                    $"mechanical rewrite to a binary 'operator {binaryToken}', since the compound form may " +
+                    "mutate instance state beyond its return value.";
+                this.context.ReportUnsupported(node, message);
+                return (null, false);
+            }
+
+            var symbol = this.context.GetDeclaredSymbol(node) as IMethodSymbol;
 
             List<Parameter> allParameters = this.MapParameters(symbol, node.ParameterList, skipFirst: false);
             Receiver receiver;
