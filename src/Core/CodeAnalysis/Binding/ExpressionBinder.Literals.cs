@@ -931,15 +931,35 @@ internal sealed partial class ExpressionBinder
             // accessor). Resolve fields first, then fall back to properties so
             // both `class C { var X int32 }` and `class C { prop X int32 { get;
             // init; } }` accept `C{X: ...}`.
-            var hasField = TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, fieldName, MemberQuery.Instance(MemberKinds.Field), out var field, out _);
+            var hasField = TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, fieldName, MemberQuery.Instance(MemberKinds.Field), out var field, out var fieldDeclaringType);
             PropertySymbol property = null;
+            StructSymbol propertyDeclaringType = null;
             if (!hasField)
             {
-                if (!TypeMemberModel.TryGetProperty(structSymbol, fieldName, out property))
+                if (!TypeMemberModel.TryGetProperty(structSymbol, fieldName, out property, out propertyDeclaringType))
                 {
                     Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, fieldName);
                     continue;
                 }
+            }
+
+            // Issue #2059: a composite/struct literal `Foo{ member: value }`
+            // writes the member directly, bypassing normal assignment binding
+            // — so it must enforce the SAME `private`/`protected` accessibility
+            // rule as a qualified write (`receiver.field = value`, #2044/#2048).
+            // This is independent of the get-only/init "is it writable at all"
+            // check below; an inaccessible member is rejected here even when it
+            // otherwise has a setter.
+            if (!AccessibilityChecker.IsAccessible(
+                hasField ? field.Accessibility : property.Accessibility,
+                hasField ? fieldDeclaringType : propertyDeclaringType,
+                this.function))
+            {
+                Diagnostics.ReportMemberInaccessible(
+                    initSyntax.FieldIdentifier.Location,
+                    fieldName,
+                    (hasField ? fieldDeclaringType : propertyDeclaringType).Name,
+                    hasField ? field.Accessibility : property.Accessibility);
             }
 
             // Issue #1567: a braced member value `Member: { a, b }` populates the
