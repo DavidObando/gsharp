@@ -497,6 +497,20 @@ internal sealed class DeclarationBinder
                 return declaredValues.TryGetValue(name.IdentifierToken.Text, out value);
 
             case UnaryExpressionSyntax unary:
+                // Issue #1912 follow-up: the lexer types a decimal literal one past
+                // int.MaxValue (e.g. 2147483648) as uint per the integer-literal type
+                // lattice, since it doesn't fit int. Negating that literal (int.MinValue,
+                // 1 << 31, etc.) is a common real value (sign-bit flags), so special-case
+                // a uint literal directly under unary minus and fold via long to avoid
+                // overflow.
+                if (unary.OperatorToken.Kind == SyntaxKind.MinusToken &&
+                    unary.Operand is LiteralExpressionSyntax { Value: uint negatedLiteral } &&
+                    negatedLiteral <= (uint)int.MaxValue + 1)
+                {
+                    value = unchecked((int)-(long)negatedLiteral);
+                    return true;
+                }
+
                 if (!TryFoldEnumMemberValue(unary.Operand, declaredValues, out var operandValue))
                 {
                     value = 0;

@@ -57,6 +57,30 @@ public class Issue1912ExplicitEnumMemberValueTests
     }
 
     [Fact]
+    public void MinValueExplicitValue_Binds()
+    {
+        // Regression: the decimal literal 2147483648 (int.MinValue's magnitude)
+        // lexes as uint, not int, per the integer-literal type lattice (it
+        // doesn't fit int32). Negating it is the standard C#/G# spelling of
+        // int.MinValue and must still fold.
+        var symbol = BindEnum(@"enum X { Reserved = -2147483648 }");
+
+        Assert.Equal(int.MinValue, symbol.Members[0].Value);
+    }
+
+    [Fact]
+    public void MinValueExplicitValue_EvaluatesToTheRequestedRuntimeInt()
+    {
+        var result = Evaluate(@"
+enum X { Reserved = -2147483648 }
+int32(X.Reserved)
+");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(int.MinValue, result.Value);
+    }
+
+    [Fact]
     public void FlagsBitShiftAndOrExpressions_FoldToCorrectValues()
     {
         var symbol = BindEnum(@"enum Access { None = 0, Read = 1 << 2, Write = 1 << 3, ReadWrite = Read | Write }");

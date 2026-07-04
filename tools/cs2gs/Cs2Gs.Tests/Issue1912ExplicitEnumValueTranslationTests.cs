@@ -101,6 +101,43 @@ namespace Demo
     }
 
     [Fact]
+    public void MinValueAndShiftedIntValues_SurviveTranslationAndMatchCSharpAtRuntime()
+    {
+        // Regression: the decimal literal 2147483648 (int.MinValue's magnitude)
+        // lexes as uint in G#, not int, so a naive fold of a negated/high-bit
+        // value used to fail to compile with "must be a constant int32
+        // expression" (issue #1912 follow-up). Covers int.MinValue itself and
+        // `1 << 31`, both of which the C# semantic model resolves to the same
+        // int32 bit pattern.
+        const string Source = @"
+using System;
+
+namespace Demo
+{
+    public enum MinValueEnum { Reserved = int.MinValue }
+
+    public enum ShiftedEnum { Reserved = 1 << 31 }
+
+    public static class C
+    {
+        public static void Run()
+        {
+            Console.WriteLine(
+                ((int)MinValueEnum.Reserved).ToString() + "","" +
+                ((int)ShiftedEnum.Reserved).ToString());
+        }
+    }
+}
+";
+        string printed = TranslateAndValidate(Source);
+
+        Assert.Contains("Reserved = -2147483648", printed, StringComparison.Ordinal);
+
+        string stdout = CompileAndRun(printed, "C.Run()");
+        Assert.Equal("-2147483648,-2147483648", stdout.Trim());
+    }
+
+    [Fact]
     public void AliasMember_SurvivesTranslationAndEqualsOriginalAtRuntime()
     {
         const string Source = @"
