@@ -31,3 +31,9 @@ TryStatement: while iterations=2
 TryStatement: try value=5
 TryStatement: catch messageLength=8
 TryStatement: finally value=99
+UsingStatement: opened outer
+UsingStatement: inside block form
+UsingStatement: disposed outer
+UsingStatement: opened declared
+UsingStatement: after declaration form
+UsingStatement: disposed declared

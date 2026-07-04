@@ -846,7 +846,7 @@ public static class GSharpPrinter
                 var initClause = local.Initializer == null
                     ? string.Empty
                     : $" = {RenderExpression(local.Initializer, indent)}";
-                var usingPrefix = local.IsUsing ? "using " : string.Empty;
+                var usingPrefix = local.IsUsing ? (local.IsAwait ? "await using " : "using ") : string.Empty;
                 return $"{pad}{usingPrefix}{RenderBinding(local.Binding)} {local.Name}{typeClause}{initClause}";
 
             case ExpressionStatement expression:
