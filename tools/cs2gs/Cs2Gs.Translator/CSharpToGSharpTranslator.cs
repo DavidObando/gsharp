@@ -2330,6 +2330,22 @@ public sealed class CSharpToGSharpTranslator
             ExtensionBlockDeclarationSyntax node,
             TypeDeclarationKind ownerKind)
         {
+            // Issue #1879: a generic extension block (`extension<T>(IEnumerable<T> src)
+            // where T : notnull { ... }`) is a real C# 14 form, but G#'s
+            // receiver-clause `func`/`prop` grammar carries no block-level type
+            // parameter or constraint clause. Silently dropping `T` would emit a
+            // dangling, wrong-generic G# member with no gap raised — a silent
+            // miscompile. Full generic-extension lowering (synthesizing a generic
+            // owner, threading `T` through every member and call site) is a larger
+            // follow-up; gap loudly instead (ADR-0115 §B.19).
+            if (node.TypeParameterList != null || node.ConstraintClauses.Count > 0)
+            {
+                this.context.ReportUnsupported(
+                    node,
+                    "a generic extension block (`extension<T>(...)`) has no canonical G# mapping yet; G#'s receiver-clause `func`/`prop` grammar carries no block-level type parameter or constraint clause (ADR-0115 §B.19).");
+                yield break;
+            }
+
             ParameterSyntax receiverParameter = node.ParameterList.Parameters.Count > 0
                 ? node.ParameterList.Parameters[0]
                 : null;
@@ -9035,6 +9051,25 @@ public sealed class CSharpToGSharpTranslator
                         this.TranslateExpression(conditionalAccess.WhenNotNull));
 
                 case MemberBindingExpressionSyntax memberBinding:
+                    // Issue #1879: `word?.DoubledLength` binds to the same
+                    // instance extension property as `word.DoubledLength`
+                    // (lowered to a get-only receiver-clause `func`,
+                    // ADR-0115 §B.19); the call-site rewrite `TranslateMemberAccess`
+                    // applies to the plain form must also apply here, or the
+                    // print emits a bare property-style access on a func member
+                    // — a silent-wrong `?.` read.
+                    if (this.context.GetSymbolInfo(memberBinding).Symbol is IPropertySymbol extBindingProperty
+                        && !extBindingProperty.IsStatic
+                        && TryGetExtensionBlockOwner(extBindingProperty, out _))
+                    {
+                        return new InvocationExpression(
+                            new MemberAccessExpression(
+                                new ConditionalReceiverExpression(),
+                                SanitizeIdentifier(memberBinding.Name.Identifier.Text)),
+                            new List<GExpression>(),
+                            null);
+                    }
+
                     // The `.b` continuation of a null-conditional chain. Its
                     // receiver is the empty conditional-receiver placeholder, so it
                     // renders as the bare `.b` that follows the `?`.
@@ -10777,6 +10812,22 @@ public sealed class CSharpToGSharpTranslator
 
                 if (extSymbol is IPropertySymbol)
                 {
+                    // `nameof(word.DoubledLength)` binds to the very same property
+                    // symbol as an ordinary read, but `nameof` takes a name
+                    // reference, not a value (G#'s NameOfExpression parses its
+                    // argument as a plain expression and the binder rejects
+                    // anything but a name/member-access/generic-name). Wrapping
+                    // in a zero-arg call here would print `nameof(word.DoubledLength())`,
+                    // which re-parses as a call and is rejected — leave the bare
+                    // member access; its printed name is exactly the lowered
+                    // func's name, so `nameof` still resolves correctly.
+                    if (member.Parent is ArgumentSyntax nameOfArgument && IsNameOfArgument(nameOfArgument))
+                    {
+                        return new MemberAccessExpression(
+                            this.TranslateExpression(member.Expression),
+                            SanitizeIdentifier(member.Name.Identifier.Text));
+                    }
+
                     // An instance extension property has no receiver-clause form
                     // in G#'s `prop` grammar and is lowered to a get-only
                     // receiver-clause `func` of the same name (ADR-0115 §B.19);

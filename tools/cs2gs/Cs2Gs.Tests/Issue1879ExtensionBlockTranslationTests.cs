@@ -256,6 +256,106 @@ namespace Corpus.Issue1879
     }
 
     [Fact]
+    public void ExtensionBlock_GenericTypeParameter_ReportsLoudGap()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("Source.cs", @"
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Corpus.Issue1879
+{
+    public static class E
+    {
+        extension<T>(IEnumerable<T> src) where T : notnull
+        {
+            public T First()
+            {
+                return src.First();
+            }
+        }
+    }
+}
+"),
+        });
+
+        Assert.True(project.BoundWithoutErrors);
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.Contains(context.Diagnostics, d => d.Message.Contains("generic extension block", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void InstanceExtensionProperty_ConditionalAccess_RewritesToInvocation()
+    {
+        string rendered = Render(@"
+namespace Corpus.Issue1879
+{
+    public static class E
+    {
+        extension(string s)
+        {
+            public int DoubledLength => s.Length * 2;
+        }
+    }
+
+    public static class Caller
+    {
+        public static int? Run(string? word)
+        {
+            return word?.DoubledLength;
+        }
+    }
+}
+");
+
+        Assert.Contains("word?.DoubledLength()", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
+    public void InstanceExtensionProperty_NameOf_RejectedByCSharpItself_TranslatorNeverSeesIt()
+    {
+        // Roslyn (CS9316 "Extension members are not allowed as an argument to
+        // 'nameof'") rejects `nameof(word.DoubledLength)` on an instance
+        // extension member at the C# source level — for classic `this T x`
+        // extension methods/properties too, not just extension blocks — so
+        // this construct can never reach TranslateMemberAccess. The nameof
+        // guard added there (skip the zero-arg-call rewrite for a member used
+        // as a bare nameof argument) is kept as a defensive no-op belt only;
+        // this test documents WHY there is no reachable rendered-output
+        // assertion to make here.
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("Source.cs", @"
+namespace Corpus.Issue1879
+{
+    public static class E
+    {
+        extension(string s)
+        {
+            public int DoubledLength => s.Length * 2;
+        }
+    }
+
+    public static class Caller
+    {
+        public static string Run(string word)
+        {
+            return nameof(word.DoubledLength);
+        }
+    }
+}
+"),
+        });
+
+        Assert.False(project.BoundWithoutErrors);
+        Assert.Contains(project.ErrorDiagnostics, d => d.Id == "CS9316");
+    }
+
+    [Fact]
     public void ExtensionBlock_EnumReceiver_ReportsLoudGap()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
