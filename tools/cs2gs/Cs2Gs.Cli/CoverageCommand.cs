@@ -81,6 +81,24 @@ internal static class CoverageCommand
         }
 
         var inventory = new ConstructInventory(entries);
+
+        // Never write (or report "in sync") from a structurally-broken
+        // inventory (e.g. a duplicate-kind row surviving a bad merge/hand
+        // edit): a duplicate row inflates the row count invisibly in one
+        // status bucket while the header total silently drifts out of sync
+        // with the docs matrix on a later regeneration (#2020).
+        IReadOnlyList<string> violations = inventory.Validate(repoRoot);
+        if (violations.Count > 0)
+        {
+            Console.Error.WriteLine("cs2gs coverage: construct inventory is invalid; fix before writing:");
+            foreach (string violation in violations)
+            {
+                Console.Error.WriteLine($"  {violation}");
+            }
+
+            return 2;
+        }
+
         string inventoryJson = inventory.ToJson();
         string matrix = inventory.BuildMatrixMarkdown();
         string golden = RoslynSurface.BuildSnapshot();
