@@ -515,6 +515,7 @@ public sealed record BoundBinaryOperator
         list.Add(new BoundBinaryOperator(SyntaxKind.AmpersandHatToken, BoundBinaryOperatorKind.BitClear, t));
         list.Add(new BoundBinaryOperator(SyntaxKind.ShiftLeftToken, BoundBinaryOperatorKind.ShiftLeft, t, TypeSymbol.Int32, t));
         list.Add(new BoundBinaryOperator(SyntaxKind.ShiftRightToken, BoundBinaryOperatorKind.ShiftRight, t, TypeSymbol.Int32, t));
+        list.Add(new BoundBinaryOperator(SyntaxKind.UnsignedShiftRightToken, BoundBinaryOperatorKind.UnsignedShiftRight, t, TypeSymbol.Int32, t));
     }
 
     private static void AddComparisonOperators(System.Collections.Generic.List<BoundBinaryOperator> list, TypeSymbol t)

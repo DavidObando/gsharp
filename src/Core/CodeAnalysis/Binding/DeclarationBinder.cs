@@ -571,6 +571,9 @@ internal sealed class DeclarationBinder
                     case SyntaxKind.ShiftRightToken:
                         value = leftValue >> rightValue;
                         return true;
+                    case SyntaxKind.UnsignedShiftRightToken:
+                        value = unchecked((int)((uint)leftValue >> rightValue));
+                        return true;
                     default:
                         value = 0;
                         return false;
@@ -4752,7 +4755,7 @@ internal sealed class DeclarationBinder
         // 0x1F, 64-bit types → count & 0x3F) and right-shift uses the operand's
         // actual signedness (arithmetic for signed, logical for unsigned), so
         // the compile-time result matches the runtime `shl`/`shr` emission.
-        if (kind is BoundBinaryOperatorKind.ShiftLeft or BoundBinaryOperatorKind.ShiftRight)
+        if (kind is BoundBinaryOperatorKind.ShiftLeft or BoundBinaryOperatorKind.ShiftRight or BoundBinaryOperatorKind.UnsignedShiftRight)
         {
             return FoldShift(kind, left, right);
         }
@@ -4798,18 +4801,19 @@ internal sealed class DeclarationBinder
         var is64 = left is long or ulong;
         var count = (int)(rawCount & (is64 ? 0x3F : 0x1F));
         var isLeft = kind == BoundBinaryOperatorKind.ShiftLeft;
+        var isUnsigned = kind == BoundBinaryOperatorKind.UnsignedShiftRight;
 
         switch (left)
         {
             case long l:
-                return isLeft ? l << count : l >> count;
+                return isLeft ? l << count : isUnsigned ? (long)((ulong)l >> count) : l >> count;
             case ulong ul:
                 return isLeft ? ul << count : ul >> count;
             case uint u:
                 return (long)(isLeft ? u << count : u >> count);
             case int or short or sbyte or byte or ushort or char:
                 var i = System.Convert.ToInt32(left, System.Globalization.CultureInfo.InvariantCulture);
-                return (long)(isLeft ? i << count : i >> count);
+                return (long)(isLeft ? i << count : isUnsigned ? unchecked((int)((uint)i >> count)) : i >> count);
             default:
                 return null;
         }

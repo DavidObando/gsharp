@@ -33,6 +33,7 @@ internal static class OperatorNames
             SyntaxKind.HatToken => "op_ExclusiveOr",
             SyntaxKind.ShiftLeftToken => "op_LeftShift",
             SyntaxKind.ShiftRightToken => "op_RightShift",
+            SyntaxKind.UnsignedShiftRightToken => "op_UnsignedRightShift",
             SyntaxKind.EqualsEqualsToken => "op_Equality",
             SyntaxKind.BangEqualsToken => "op_Inequality",
             SyntaxKind.LessToken => "op_LessThan",

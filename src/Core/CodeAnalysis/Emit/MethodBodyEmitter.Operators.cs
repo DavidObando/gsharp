@@ -688,6 +688,9 @@ internal sealed partial class MethodBodyEmitter
             case BoundBinaryOperatorKind.ShiftRight:
                 this.il.OpCode(isUnsigned ? ILOpCode.Shr_un : ILOpCode.Shr);
                 break;
+            case BoundBinaryOperatorKind.UnsignedShiftRight:
+                this.il.OpCode(ILOpCode.Shr_un);
+                break;
             case BoundBinaryOperatorKind.BitwiseAnd:
                 this.il.OpCode(ILOpCode.And);
                 break;
@@ -910,6 +913,7 @@ internal sealed partial class MethodBodyEmitter
             case BoundBinaryOperatorKind.Remainder:
             case BoundBinaryOperatorKind.ShiftLeft:
             case BoundBinaryOperatorKind.ShiftRight:
+            case BoundBinaryOperatorKind.UnsignedShiftRight:
             case BoundBinaryOperatorKind.BitwiseAnd:
             case BoundBinaryOperatorKind.BitwiseOr:
             case BoundBinaryOperatorKind.BitwiseXor:

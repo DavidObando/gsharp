@@ -59,6 +59,8 @@ namespace Corpus.Grid02
             TypeOfExpressionFixture.Run();
             UnaryMinusExpressionFixture.Run();
             UnaryPlusExpressionFixture.Run();
+            UnsignedRightShiftAssignmentExpressionFixture.Run();
+            UnsignedRightShiftExpressionFixture.Run();
         }
     }
 }

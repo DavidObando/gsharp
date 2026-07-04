@@ -6,12 +6,12 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | Status | Count |
 | --- | --- |
 | Unclassified | 0 |
-| Translated | 225 |
+| Translated | 227 |
 | Lowered | 17 |
 | UnsupportedByDesign | 56 |
-| Gap | 23 |
+| Gap | 21 |
 
-## Translated (225)
+## Translated (227)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -228,6 +228,8 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | UnaryPlusExpression | PrefixUnaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/UnaryPlusExpression.cs |  |  |
 | UncheckedStatement | CheckedStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/UncheckedStatement.cs |  | Wrap-around parity verified (grid G03). |
 | UnsafeStatement | UnsafeStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/UnsafeStatement.cs |  |  |
+| UnsignedRightShiftAssignmentExpression | AssignmentExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/UnsignedRightShiftAssignmentExpression.cs |  |  |
+| UnsignedRightShiftExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/UnsignedRightShiftExpression.cs |  |  |
 | UsingDirective | UsingDirectiveSyntax | ADR-0115 §B.1 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/TypeAliasDeclaration.cs | https://github.com/DavidObando/gsharp/issues/1914 | Plain + simple-alias green; alias-any-type (C#12) tuple-RHS green too (issue #1914; array/pointer/nullable-value-type RHS forms remain unexercised). |
 | UsingStatement | UsingStatementSyntax | ADR-0115 §B.29 |  | tools/cs2gs/corpus/grid/G10-Async-Console/Constructs/UsingStatement.cs |  | await using preserves async-dispose semantics (fixed, issue #1903): lowers to G#'s own await using let form, binding IAsyncDisposable.DisposeAsync instead of plain using let/Dispose. |
 | Utf8StringLiteralExpression | LiteralExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/Utf8StringLiteralExpression.cs |  | C# 11 u8 literals translate and reach parity (grid G01). |
@@ -324,7 +326,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | XmlText | XmlTextSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | XmlTextAttribute | XmlTextAttributeSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 
-## Gap (23)
+## Gap (21)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -349,5 +351,3 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | RefType | RefTypeSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1900 |  |
 | SpreadElement | SpreadElementSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1897 |  |
 | UncheckedExpression | CheckedExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1881 |  |
-| UnsignedRightShiftAssignmentExpression | AssignmentExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1880 | Emits >>>= verbatim; never parses. |
-| UnsignedRightShiftExpression | BinaryExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1880 | Translator crash: Unknown binary operator >>>. |

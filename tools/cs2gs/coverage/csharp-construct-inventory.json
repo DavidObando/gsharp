@@ -2327,18 +2327,18 @@
   {
     "kind": "UnsignedRightShiftAssignmentExpression",
     "nodeType": "AssignmentExpressionSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1880",
-    "notes": "Emits \u003E\u003E\u003E= verbatim; never parses."
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/UnsignedRightShiftAssignmentExpression.cs"
   },
   {
     "kind": "UnsignedRightShiftExpression",
     "nodeType": "BinaryExpressionSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1880",
-    "notes": "Translator crash: Unknown binary operator \u003E\u003E\u003E."
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/UnsignedRightShiftExpression.cs"
   },
   {
     "kind": "UsingDirective",
