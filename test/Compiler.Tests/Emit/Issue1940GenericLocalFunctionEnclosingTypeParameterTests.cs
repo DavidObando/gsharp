@@ -144,6 +144,181 @@ public class Issue1940GenericLocalFunctionEnclosingTypeParameterTests
         Assert.Equal("42\ndone\n", output);
     }
 
+    [Fact]
+    public void GenericLocalFunction_IsExpressionTargetsEnclosingTypeParameter_ReportsGS0468()
+    {
+        var source = """
+            package P
+
+            func Outer[U]() {
+                let Inner[T] = func (x object) bool {
+                    return x is U
+                }
+            }
+            Outer[string]()
+            """;
+
+        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS0468", stdout + stderr);
+    }
+
+    [Fact]
+    public void GenericLocalFunction_TypeOfTargetsEnclosingTypeParameter_ReportsGS0468()
+    {
+        var source = """
+            package P
+            import System
+
+            func Outer[U]() {
+                let Inner[T] = func () Type {
+                    return typeof(U)
+                }
+            }
+            Outer[string]()
+            """;
+
+        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS0468", stdout + stderr);
+    }
+
+    [Fact]
+    public void GenericLocalFunction_SizeOfTargetsEnclosingTypeParameter_ReportsGS0468()
+    {
+        var source = """
+            package P
+
+            func Outer[U unmanaged](seed U) {
+                let Inner[T] = func () int32 {
+                    return sizeof(U)
+                }
+            }
+            Outer(42)
+            """;
+
+        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS0468", stdout + stderr);
+    }
+
+    [Fact]
+    public void GenericLocalFunction_UserInstanceGenericCallTargetsEnclosingTypeParameter_ReportsGS0468()
+    {
+        var source = """
+            package P
+
+            class Box {
+                func Peek[T]() int32 {
+                    return 0
+                }
+            }
+
+            func Outer[U]() {
+                let b = Box{}
+                let Inner[T] = func () int32 {
+                    return b.Peek[U]()
+                }
+            }
+            Outer[string]()
+            """;
+
+        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS0468", stdout + stderr);
+    }
+
+    [Fact]
+    public void GenericLocalFunction_ImportedStaticGenericCallTargetsEnclosingTypeParameter_ReportsGS0468()
+    {
+        var source = """
+            package P
+            import System.Runtime.CompilerServices
+
+            func Outer[U]() {
+                let Inner[T] = func () bool {
+                    return RuntimeHelpers.IsReferenceOrContainsReferences[U]()
+                }
+            }
+            Outer[string]()
+            """;
+
+        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS0468", stdout + stderr);
+    }
+
+    [Fact]
+    public void NestedGenericLocalFunctions_InnermostReferencesOutermostTypeParameter_ReportsGS0468()
+    {
+        // Two levels of local-function nesting: Innermost[V] must see the outermost
+        // Outer[T]'s T as an enclosing type parameter, skipping over Middle[U]'s scope.
+        var source = """
+            package P
+
+            func Outer[T]() {
+                let Middle[U] = func () {
+                    let Innermost[V] = func (x V) T {
+                        return default
+                    }
+                }
+            }
+            Outer[string]()
+            """;
+
+        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS0468", stdout + stderr);
+    }
+
+    [Fact]
+    public void NonGenericLocalFunction_ReferencesEnclosingMethodTypeParameter_CompilesAndRunsWithoutGS0468()
+    {
+        // N2: a NON-generic local function (no [T] of its own) referencing the
+        // enclosing method's type parameter is legal — it is hoisted with the
+        // enclosing generic's own MVAR slots reachable, not a fresh method with
+        // an unrelated type-parameter list. Must not false-positive.
+        var source = """
+            package P
+
+            func Outer[U](seed U) U {
+                let Echo = func () {
+                    var z U = seed
+                    Console.WriteLine(z)
+                }
+                Echo()
+                return seed
+            }
+            Console.WriteLine(Outer("hi"))
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("hi\nhi\n", output);
+    }
+
+    [Fact]
+    public void GenericLocalFunction_ShadowingSameNameAsEnclosingTypeParameter_CompilesAndRunsWithoutGS0468()
+    {
+        // N3: `Inner[T]` nested in `Outer[T]` — the inner `T` SHADOWS the outer
+        // `T` (a distinct symbol with the same name). Referencing `T` inside
+        // `Inner` resolves to the inner function's own type parameter, not the
+        // enclosing one, and must not false-positive.
+        var source = """
+            package P
+
+            func Outer[T](seed T) T {
+                let Inner[T] = func (x T) T {
+                    return x
+                }
+                return Inner(seed)
+            }
+            Console.WriteLine(Outer(7))
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("7\n", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: true);

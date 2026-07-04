@@ -1856,12 +1856,33 @@ internal sealed class LambdaBinder
             }
 
             CheckType(node.Type);
-            if (node is BoundCallExpression call && !call.MethodTypeArguments.IsDefaultOrEmpty)
+            switch (node)
             {
-                foreach (var typeArgument in call.MethodTypeArguments)
-                {
-                    CheckType(typeArgument);
-                }
+                case BoundCallExpression call:
+                    CheckTypeArguments(call.MethodTypeArguments);
+                    break;
+                case BoundUserInstanceCallExpression userInstanceCall:
+                    CheckTypeArguments(userInstanceCall.MethodTypeArguments);
+                    break;
+                case BoundImportedCallExpression importedCall:
+                    CheckTypeArguments(importedCall.TypeArgumentSymbols);
+                    break;
+                case BoundImportedInstanceCallExpression importedInstanceCall:
+                    CheckTypeArguments(importedInstanceCall.TypeArgumentSymbols);
+                    break;
+                case BoundIsExpression isExpression:
+                    CheckType(isExpression.TargetType);
+                    break;
+
+                // Issue #1940: TypeOf/SizeOf are opaque leaves in BoundTreeWalker
+                // (no VisitXxx dispatch), so their referenced type must be checked
+                // here — base.VisitExpression never reaches it otherwise.
+                case BoundTypeOfExpression typeOfExpression:
+                    CheckType(typeOfExpression.OperandType);
+                    break;
+                case BoundSizeOfExpression sizeOfExpression:
+                    CheckType(sizeOfExpression.MeasuredType);
+                    break;
             }
 
             base.VisitExpression(node);
@@ -1892,6 +1913,19 @@ internal sealed class LambdaBinder
 
             CheckType(node.Variable.Type);
             base.VisitVariableDeclaration(node);
+        }
+
+        private void CheckTypeArguments(ImmutableArray<TypeSymbol> typeArguments)
+        {
+            if (typeArguments.IsDefaultOrEmpty)
+            {
+                return;
+            }
+
+            foreach (var typeArgument in typeArguments)
+            {
+                CheckType(typeArgument);
+            }
         }
     }
 }
