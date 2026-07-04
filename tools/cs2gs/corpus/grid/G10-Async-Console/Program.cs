@@ -31,13 +31,7 @@ namespace Corpus.Grid10
             await ForEachStatementFixture.RunAsync();
             await SimpleLambdaExpressionFixture.RunAsync();
             await TryStatementFixture.RunAsync();
-
-            // QUARANTINED: UsingStatement (await using over IAsyncDisposable).
-            // cs2gs lowers `await using` to a plain G# `using`, and gsc then
-            // fails with GS0119: "Type 'AsyncResource' cannot be used in a
-            // 'using' statement because it does not provide a public Dispose()
-            // method." See Constructs/UsingStatement.cs.quarantined.
-            // await UsingStatementFixture.RunAsync();
+            await UsingStatementFixture.RunAsync();
         }
     }
 }

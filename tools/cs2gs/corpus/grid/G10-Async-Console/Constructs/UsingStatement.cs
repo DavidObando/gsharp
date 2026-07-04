@@ -1,4 +1,4 @@
-// inventory: UsingStatement — await using over an IAsyncDisposable (probe)
+// inventory: UsingStatement — await using over an IAsyncDisposable
 // Both `await using` forms: the block statement and the local-declaration
 // form. DisposeAsync returns an already-completed ValueTask and prints, so the
 // open/inside/dispose ordering is the deterministic oracle.

@@ -2349,9 +2349,8 @@
     "status": "Translated",
     "rule": "ADR-0115 \u00A7B.29",
     "rationale": "None",
-    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/UsingStatement.cs",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1903",
-    "notes": "await using drops async-dispose semantics (issue #1903)."
+    "fixture": "tools/cs2gs/corpus/grid/G10-Async-Console/Constructs/UsingStatement.cs",
+    "notes": "await using preserves async-dispose semantics (fixed, issue #1903): lowers to G#\u0027s own await using let form, binding IAsyncDisposable.DisposeAsync instead of plain using let/Dispose."
   },
   {
     "kind": "Utf8StringLiteralExpression",

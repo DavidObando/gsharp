@@ -54,18 +54,26 @@ public sealed class LocalDeclarationStatement : GStatement
     /// <param name="type">The optional explicit type clause.</param>
     /// <param name="initializer">The optional initializer expression.</param>
     /// <param name="isUsing">Whether this is a <c>using</c> resource declaration.</param>
+    /// <param name="isAwait">
+    /// Whether this is an <c>await using</c> resource declaration — the
+    /// resource is disposed via <c>IAsyncDisposable.DisposeAsync</c> instead
+    /// of <c>IDisposable.Dispose</c> (issue #1903; ADR-0030). Only meaningful
+    /// when <paramref name="isUsing"/> is <see langword="true"/>.
+    /// </param>
     public LocalDeclarationStatement(
         BindingKind binding,
         string name,
         GTypeReference type = null,
         GExpression initializer = null,
-        bool isUsing = false)
+        bool isUsing = false,
+        bool isAwait = false)
     {
         Binding = binding;
         Name = name;
         Type = type;
         Initializer = initializer;
         IsUsing = isUsing;
+        IsAwait = isAwait;
     }
 
     /// <summary>Gets the binding keyword.</summary>
@@ -77,6 +85,12 @@ public sealed class LocalDeclarationStatement : GStatement
     /// enclosing block; sample <c>Defer.gs</c>).
     /// </summary>
     public bool IsUsing { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether this <c>using</c> resource is
+    /// asynchronously disposed (<c>await using let</c>, issue #1903).
+    /// </summary>
+    public bool IsAwait { get; }
 
     /// <summary>Gets the local name.</summary>
     public string Name { get; }

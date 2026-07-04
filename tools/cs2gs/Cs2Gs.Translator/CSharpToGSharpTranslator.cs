@@ -3898,7 +3898,8 @@ public sealed class CSharpToGSharpTranslator
                     return this.TranslateLocalDeclaration(
                         local.Declaration,
                         local.IsConst,
-                        isUsing: local.UsingKeyword != default);
+                        isUsing: local.UsingKeyword != default,
+                        isAwait: !local.AwaitKeyword.IsKind(SyntaxKind.None));
 
                 case ExpressionStatementSyntax expressionStatement:
                     return this.TranslateExpressionStatements(expressionStatement.Expression);
@@ -4071,7 +4072,7 @@ public sealed class CSharpToGSharpTranslator
             }
         }
 
-        private IEnumerable<GStatement> TranslateLocalDeclaration(VariableDeclarationSyntax declaration, bool isConst, bool isUsing = false)
+        private IEnumerable<GStatement> TranslateLocalDeclaration(VariableDeclarationSyntax declaration, bool isConst, bool isUsing = false, bool isAwait = false)
         {
             var results = new List<GStatement>();
             bool hasExplicitType = !declaration.Type.IsVar;
@@ -4267,7 +4268,8 @@ public sealed class CSharpToGSharpTranslator
                     SanitizeIdentifier(declarator.Identifier.Text),
                     type,
                     initializer,
-                    isUsing: isUsing));
+                    isUsing: isUsing,
+                    isAwait: isAwait));
             }
 
             return results;
@@ -5025,14 +5027,20 @@ public sealed class CSharpToGSharpTranslator
 
         private GStatement TranslateUsingStatement(UsingStatementSyntax node)
         {
-            // C# `using (var r = e) body` has no `using (...)` block form in G#
-            // (it is GS0005); it maps to a scoped block holding a `using let`
-            // resource declaration followed by the body, so the resource is
-            // disposed at the end of that block (sample Defer.gs; ADR-0115 §B).
+            // C# `using (var r = e) body` / `await using (var r = e) body` has
+            // no `using (...)` block form in G# (it is GS0005); it maps to a
+            // scoped block holding a `using let` / `await using let` resource
+            // declaration followed by the body, so the resource is disposed at
+            // the end of that block (sample Defer.gs; ADR-0115 §B; ADR-0030).
+            // The C# `await` keyword (issue #1903) selects `DisposeAsync` over
+            // `Dispose` — dropping it silently would compile a sync `using`
+            // against an `IAsyncDisposable`-only type and gsc would reject it
+            // (GS0119), so it must be threaded through, never elided.
+            bool isAwait = node.AwaitKeyword != default;
             var statements = new List<GStatement>();
             if (node.Declaration != null)
             {
-                statements.AddRange(this.TranslateLocalDeclaration(node.Declaration, isConst: false, isUsing: true));
+                statements.AddRange(this.TranslateLocalDeclaration(node.Declaration, isConst: false, isUsing: true, isAwait: isAwait));
             }
             else if (node.Expression != null)
             {
@@ -5044,7 +5052,8 @@ public sealed class CSharpToGSharpTranslator
                     "__using",
                     type: null,
                     initializer: this.TranslateExpression(node.Expression),
-                    isUsing: true));
+                    isUsing: true,
+                    isAwait: isAwait));
             }
 
             BlockStatement bodyBlock = this.TranslateStatementAsBlock(node.Statement);
