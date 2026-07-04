@@ -6,12 +6,12 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | Status | Count |
 | --- | --- |
 | Unclassified | 0 |
-| Translated | 227 |
-| Lowered | 17 |
+| Translated | 224 |
+| Lowered | 12 |
 | UnsupportedByDesign | 56 |
-| Gap | 21 |
+| Gap | 29 |
 
-## Translated (227)
+## Translated (224)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -58,7 +58,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | CharacterLiteralExpression | LiteralExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/CharacterLiteralExpression.cs |  |  |
 | CheckedStatement | CheckedStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/CheckedStatement.cs | https://github.com/DavidObando/gsharp/issues/1881 | Overflow semantics silently erased — emitted as a plain block (issue #1881, parity-verified divergence); non-overflow subset green. |
 | ClassConstraint | ClassOrStructConstraintSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/ClassConstraint.cs |  |  |
-| ClassDeclaration | ClassDeclarationSyntax | ADR-0115 §B.4 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/ClassDeclaration.cs |  | C#12 primary ctors dropped (issue #1909); partial parts across multiple declarations/files now merge into one G# type declaration (issue #1910, resolved). |
+| ClassDeclaration | ClassDeclarationSyntax | ADR-0115 §B.4 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/ClassDeclaration.cs |  | C#12 primary ctors dropped (issue #1909); partial parts not merged (issue #1910). |
 | CoalesceAssignmentExpression | AssignmentExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/CoalesceAssignmentExpression.cs |  | Nullable value-type targets now emit verifiable IL (issue #1916, resolved); reference and value-type forms are both green. |
 | CoalesceExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/CoalesceExpression.cs |  | Binary ?? (issue #941, resolved). |
 | CollectionExpression | CollectionExpressionSyntax | ADR-0115 §B.36 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/CollectionExpression.cs | https://github.com/DavidObando/gsharp/issues/1897 | Array targets green; List<T> targets fail conversion; spread unsupported (issues #1897). |
@@ -89,8 +89,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | ElementBindingExpression | ElementBindingExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/ElementBindingExpression.cs |  | Null-conditional ?. / ?[. |
 | ElseClause | ElseClauseSyntax | ADR-0115 §B |  |  |  |  |
 | EmptyStatement | EmptyStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/EmptyStatement.cs |  |  |
-| EnumDeclaration | EnumDeclarationSyntax | ADR-0115 §B.11 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/EnumDeclaration.cs |  | Member values (explicit or implicit) and [Flags] are preserved (issue #1912, fixed). |
-| EnumMemberDeclaration | EnumMemberDeclarationSyntax | ADR-0115 §B.11 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/EnumMemberDeclaration.cs |  | Explicit/negative/[Flags] bit-shift-or/alias values resolve via the semantic model's IFieldSymbol.ConstantValue and are emitted as an explicit G# `= value` (new language feature, issue #1912, fixed). |
+| EnumDeclaration | EnumDeclarationSyntax | ADR-0115 §B.11 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/EnumDeclaration.cs |  | Implicit member values only; explicit values/[Flags] silently erased (issue #1912). |
 | EqualsExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/EqualsExpression.cs |  |  |
 | EqualsValueClause | EqualsValueClauseSyntax | ADR-0115 §B.3 |  |  |  |  |
 | EventDeclaration | EventDeclarationSyntax | ADR-0052 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/EventDeclaration.cs |  | Explicit add/remove accessor event maps to the G# event declaration's explicit-accessor form (ADR-0052 §2). |
@@ -100,9 +99,9 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | ExpressionColon | ExpressionColonSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/ExpressionColon.cs | https://github.com/DavidObando/gsharp/issues/1891 | is-form green; switch-expression arm form unsupported (issue #1891). |
 | ExpressionElement | ExpressionElementSyntax | ADR-0115 §B.36 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/CollectionExpression.cs |  |  |
 | ExpressionStatement | ExpressionStatementSyntax | ADR-0115 §B |  |  |  |  |
-| ExtensionBlockDeclaration | ExtensionBlockDeclarationSyntax | ADR-0115 §B.19 |  | tools/cs2gs/corpus/grid/G13-Extensions-Console/Constructs/ExtensionBlockDeclaration.cs | https://github.com/DavidObando/gsharp/issues/1879 | C# 14 `extension(T x)`/`extension(T)` block members map onto the same target as a classic this-param extension method (ADR-0115 §B.19): an instance method/property lowers to a receiver-clause func (a property becomes a get-only func, since G#'s prop grammar has no receiver clause, with call sites rewritten to a zero-arg call); a static member becomes a plain shared member of the declaring class, with call sites rewritten from the extended type's name to the real owner. An enum receiver and a settable instance extension property are each reported as an explicit gap (grid G13). |
 | FalseLiteralExpression | LiteralExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/FalseLiteralExpression.cs |  |  |
 | FieldDeclaration | FieldDeclarationSyntax | ADR-0115 §B.3 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/FieldDeclaration.cs |  |  |
+| FieldExpression | FieldExpressionSyntax | ADR-0051 §2 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/FieldExpression.cs |  |  |
 | FileScopedNamespaceDeclaration | FileScopedNamespaceDeclarationSyntax | ADR-0115 §B.1 |  |  |  |  |
 | FinallyClause | FinallyClauseSyntax | ADR-0115 §B.27 |  |  |  |  |
 | FixedStatement | FixedStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FixedStatement.cs | https://github.com/DavidObando/gsharp/issues/1933 | Compiles end-to-end under the ilverify allow-unsafe policy (issue #1933); IL is unverifiable by design, not a gsc defect. |
@@ -228,8 +227,6 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | UnaryPlusExpression | PrefixUnaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/UnaryPlusExpression.cs |  |  |
 | UncheckedStatement | CheckedStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/UncheckedStatement.cs |  | Wrap-around parity verified (grid G03). |
 | UnsafeStatement | UnsafeStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/UnsafeStatement.cs |  |  |
-| UnsignedRightShiftAssignmentExpression | AssignmentExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/UnsignedRightShiftAssignmentExpression.cs |  |  |
-| UnsignedRightShiftExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/UnsignedRightShiftExpression.cs |  |  |
 | UsingDirective | UsingDirectiveSyntax | ADR-0115 §B.1 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/TypeAliasDeclaration.cs | https://github.com/DavidObando/gsharp/issues/1914 | Plain + simple-alias green; alias-any-type (C#12) tuple-RHS green too (issue #1914; array/pointer/nullable-value-type RHS forms remain unexercised). |
 | UsingStatement | UsingStatementSyntax | ADR-0115 §B.29 |  | tools/cs2gs/corpus/grid/G10-Async-Console/Constructs/UsingStatement.cs |  | await using preserves async-dispose semantics (fixed, issue #1903): lowers to G#'s own await using let form, binding IAsyncDisposable.DisposeAsync instead of plain using let/Dispose. |
 | Utf8StringLiteralExpression | LiteralExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/Utf8StringLiteralExpression.cs |  | C# 11 u8 literals translate and reach parity (grid G01). |
@@ -243,7 +240,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | YieldBreakStatement | YieldStatementSyntax | ADR-0115 §B.34 |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/YieldBreakStatement.cs |  | Issue #994 (resolved). |
 | YieldReturnStatement | YieldStatementSyntax | ADR-0115 §B.34 |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/YieldReturnStatement.cs |  |  |
 
-## Lowered (17)
+## Lowered (12)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -251,16 +248,11 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | AnonymousObjectMemberDeclarator | AnonymousObjectMemberDeclaratorSyntax | ADR-0115 §B.4 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/AnonymousObjectCreationExpression.cs |  | Each declarator becomes one positional tuple-literal element (issue #1934); exercised by the AnonymousObjectCreationExpression fixture. |
 | AscendingOrdering | OrderingSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/OrderByClause.cs |  | Query syntax lowered to the method-call chain, mirroring Roslyn. |
 | DescendingOrdering | OrderingSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/OrderByClause.cs |  | Query syntax lowered to the method-call chain, mirroring Roslyn. |
-| ExplicitInterfaceSpecifier | ExplicitInterfaceSpecifierSyntax | ADR-0091 / ADR-0115 §B |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/ExplicitInterfaceSpecifier.cs |  | G# has no explicit-interface-implementation surface (ADR-0091 rejected an 'IFoo.M(this)' spelling); a lone explicit impl lowers to a plain public method (fixes the prior ilverify miss, issue #1911). An explicit impl coexisting with a same-signature public method is dropped in favor of the public method (disclosed semantic-loss diagnostic, not covered by this fixture's stdout parity); two explicit impls of different interfaces with no public sibling de-duplicate to one surviving public method with no semantic loss. |
 | ForStatement | ForStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/ForStatement.cs |  | Lowered to a while loop when clauses demand it (issue #1732 incrementor-on-continue fix). |
-| FromClause | FromClauseSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/FromClauseSelectMany.cs |  | First from lowers to the source receiver; a second/subsequent from lowers to SelectMany with a transparent-identifier tuple result selector (issue #1902). |
-| GroupClause | GroupClauseSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/GroupClause.cs |  | Query syntax lowered to the method-call chain, mirroring Roslyn (GroupBy, with identity-projection elision matching `select n`). |
-| JoinClause | JoinClauseSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/JoinClause.cs |  | Query syntax lowered to the method-call chain, mirroring Roslyn (Join with a transparent-identifier tuple result selector). |
-| JoinIntoClause | JoinIntoClauseSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/JoinIntoClause.cs |  | Query syntax lowered to the method-call chain, mirroring Roslyn (GroupJoin, with the `into` group variable typed `sequence[T]`). |
-| LetClause | LetClauseSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/LetClause.cs |  | Query syntax lowered to the method-call chain, mirroring Roslyn (Select widening the scope tuple with the let-bound value). |
+| FromClause | FromClauseSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/QueryExpression.cs | https://github.com/DavidObando/gsharp/issues/1902 | First from lowers; a second from (SelectMany) has no lowering (issue #1902). |
 | OrderByClause | OrderByClauseSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/OrderByClause.cs |  | Query syntax lowered to the method-call chain, mirroring Roslyn. |
 | QueryBody | QueryBodySyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/QueryExpression.cs |  | Query syntax lowered to the method-call chain, mirroring Roslyn. |
-| QueryContinuation | QueryContinuationSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/QueryContinuation.cs |  | Both select-into and group-into continuations re-scope the chain to the continuation variable (issue #1902). |
+| QueryContinuation | QueryContinuationSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/QueryContinuation.cs |  | Non-group into green; group-based continuation blocked by GroupClause (issue #1902). |
 | QueryExpression | QueryExpressionSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/QueryExpression.cs |  | Query syntax lowered to the method-call chain, mirroring Roslyn. |
 | SelectClause | SelectClauseSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/QueryExpression.cs |  | Query syntax lowered to the method-call chain, mirroring Roslyn. |
 | WhereClause | WhereClauseSyntax | ADR-0115 §B.21 |  | tools/cs2gs/corpus/grid/G11-Linq-Console/Constructs/WhereClause.cs |  | Query syntax lowered to the method-call chain, mirroring Roslyn. |
@@ -326,12 +318,14 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | XmlText | XmlTextSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | XmlTextAttribute | XmlTextAttributeSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 
-## Gap (21)
+## Gap (29)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | CheckedExpression | CheckedExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1881 |  |
-| FieldExpression | FieldExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1907 | C# 14 field keyword. |
+| EnumMemberDeclaration | EnumMemberDeclarationSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1912 | Explicit values, [Flags], negative and alias members erased to sequential ordinals — parity-verified divergence. |
+| ExplicitInterfaceSpecifier | ExplicitInterfaceSpecifierSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1911 |  |
+| ExtensionBlockDeclaration | ExtensionBlockDeclarationSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1879 | C# 14 headline; classic this-param extensions map to receiver funcs and are green (grid G13). |
 | FunctionPointerCallingConvention | FunctionPointerCallingConventionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |
 | FunctionPointerParameter | FunctionPointerParameterSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |
 | FunctionPointerParameterList | FunctionPointerParameterListSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1906 |  |
@@ -341,9 +335,13 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | GotoCaseStatement | GotoStatementSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1884 |  |
 | GotoDefaultStatement | GotoStatementSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1884 |  |
 | GotoStatement | GotoStatementSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1884 |  |
+| GroupClause | GroupClauseSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1902 | Query syntax lowered to the method-call chain, mirroring Roslyn. |
 | ImplicitElementAccess | ImplicitElementAccessSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1897 |  |
 | ImplicitStackAllocArrayCreationExpression | ImplicitStackAllocArrayCreationExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1897 | ADR-0124 stackalloc surface. |
+| JoinClause | JoinClauseSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1902 | Query syntax lowered to the method-call chain, mirroring Roslyn. |
+| JoinIntoClause | JoinIntoClauseSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1902 | Query syntax lowered to the method-call chain, mirroring Roslyn. |
 | LabeledStatement | LabeledStatementSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1884 |  |
+| LetClause | LetClauseSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1902 | Query syntax lowered to the method-call chain, mirroring Roslyn. |
 | PointerMemberAccessExpression | MemberAccessExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1905 | p->X lowered to p.X; (*p).X compiles. |
 | PrimaryConstructorBaseType | PrimaryConstructorBaseTypeSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1909 |  |
 | RangeExpression | RangeExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1896 | Lowers to .Slice(...) which gsc cannot resolve on arrays/strings. |
@@ -351,3 +349,5 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | RefType | RefTypeSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1900 |  |
 | SpreadElement | SpreadElementSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1897 |  |
 | UncheckedExpression | CheckedExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1881 |  |
+| UnsignedRightShiftAssignmentExpression | AssignmentExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1880 | Emits >>>= verbatim; never parses. |
+| UnsignedRightShiftExpression | BinaryExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1880 | Translator crash: Unknown binary operator >>>. |

@@ -871,10 +871,10 @@
   {
     "kind": "FieldExpression",
     "nodeType": "FieldExpressionSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0051 \u00A72",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1907",
-    "notes": "C# 14 field keyword."
+    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/FieldExpression.cs"
   },
   {
     "kind": "FileScopedNamespaceDeclaration",
