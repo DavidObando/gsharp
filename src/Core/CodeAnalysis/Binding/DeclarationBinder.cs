@@ -2216,7 +2216,8 @@ internal sealed class DeclarationBinder
                         eventName,
                         handlerType,
                         Accessibility.Private,
-                        isReadOnly: false);
+                        isReadOnly: false,
+                        isEventBackingField: true);
                     eventSymbol.BackingField = backingField;
                 }
                 else
@@ -2777,7 +2778,8 @@ internal sealed class DeclarationBinder
                         handlerType,
                         Accessibility.Private,
                         isReadOnly: false,
-                        isStatic: true);
+                        isStatic: true,
+                        isEventBackingField: true);
                     eventSymbol.BackingField = backingField;
                 }
                 else

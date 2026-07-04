@@ -138,34 +138,87 @@ internal sealed partial class MethodBodyEmitter
     }
 
     /// <summary>
+    /// Issue #2083: returns true when <paramref name="source"/> is a read of
+    /// a field-like event's compiler-synthesized backing field — the only
+    /// case, so far, where the emitter *knows* a statically non-nullable
+    /// delegate-typed source can genuinely be <c>null</c> at runtime (an
+    /// unsubscribed event's backing field is null even though the event's
+    /// declared type isn't nullable). Every other non-nullable source
+    /// (a plain local, parameter, or ordinary field) is expected to hold a
+    /// real delegate; if it doesn't, that is a null-safety bug the emitted
+    /// code should surface loudly rather than mask. Reached either through a
+    /// direct field access (<c>this.MyEvent</c>) or the implicit bare-name
+    /// field variable synthesized for in-class event reads (issue #1213);
+    /// both route through the same underlying <see cref="FieldSymbol"/>, and
+    /// smart-cast narrowing (<see cref="BoundFieldAccessExpression.NarrowedType"/>)
+    /// does not change which field is read.
+    /// </summary>
+    private static bool IsKnownLegitimateNullDelegateSource(BoundExpression source)
+    {
+        return source switch
+        {
+            BoundFieldAccessExpression fieldAccess => fieldAccess.Field?.IsEventBackingField == true,
+            BoundVariableExpression { Variable: ImplicitFieldVariableSymbol implicitField } => implicitField.Field?.IsEventBackingField == true,
+            _ => false,
+        };
+    }
+
+    /// <summary>
     /// Issue #2066 / #2083: emits the shared <c>dup / ldvirtftn / newobj</c>
-    /// delegate-to-delegate adaptation sequence. When <paramref name="source"/>
-    /// is actually nullable (its bound type is a <see cref="NullableTypeSymbol"/>,
-    /// e.g. an unsubscribed field-like event snapshotted into a nullable
-    /// function/delegate-typed local), the sequence is guarded so a <c>null</c>
-    /// source flows through as <c>null</c> instead of unconditionally rebuilding
-    /// a delegate — without the guard, `ldvirtftn` resolves the (non-null)
-    /// Invoke method pointer even over a `null` instance reference, and the
-    /// subsequent `newobj` then throws <see cref="ArgumentException"/> at
-    /// runtime ("Delegate to an instance method cannot have null 'this'")
-    /// because the CLR delegate ctor requires a non-null target for an
-    /// instance-method pointer.
+    /// delegate-to-delegate adaptation sequence.
     ///
-    /// The null path must not leave the un-adapted source value (statically
-    /// typed as the *source* delegate type, e.g. <c>Func&lt;string&gt;</c>) on
-    /// the stack: when the target is a covariant-adapted delegate type (e.g.
-    /// <c>Func&lt;object&gt;</c>), merging that source-typed value with the
-    /// non-null path's newly-constructed *target*-typed value at the shared
-    /// label widens the verifier-computed stack type down to their common
-    /// ancestor (<see cref="MulticastDelegate"/>), which then fails to verify
-    /// against the target's expected type. Instead, the null path pops the
-    /// leftover copy and pushes an explicit <c>ldnull</c>, whose null-reference
-    /// type merges cleanly with any reference type, including the adapted
-    /// target delegate type.
+    /// When <see cref="IsKnownLegitimateNullDelegateSource"/> recognizes
+    /// <paramref name="source"/> as a case the emitter knows can legitimately
+    /// be <c>null</c> despite its non-nullable static type (currently: a
+    /// field-like event's backing field, e.g. an unsubscribed field-like
+    /// event snapshotted into a delegate-typed local), the sequence is
+    /// guarded so a <c>null</c> source flows through as <c>null</c> instead
+    /// of unconditionally rebuilding a delegate — without the guard,
+    /// `ldvirtftn` resolves the (non-null) Invoke method pointer even over a
+    /// `null` instance reference, and the subsequent `newobj` then throws
+    /// <see cref="ArgumentException"/> at runtime ("Delegate to an instance
+    /// method cannot have null 'this'") because the CLR delegate ctor
+    /// requires a non-null target for an instance-method pointer.
+    ///
+    /// For every other source, that same throw is the *desired* pre-#2079
+    /// fail-fast behavior: a plain non-nullable local/parameter/field that is
+    /// unexpectedly null at runtime indicates a null-safety bug (e.g. a
+    /// nullability escape via interop), and silently producing a null
+    /// delegate instead of throwing would mask it. So the guard is only
+    /// emitted for the known-legitimate-null sources; every other case emits
+    /// the plain (unguarded, branch-free) sequence, matching prior behavior
+    /// and avoiding the extra branch/label on the common non-nullable path.
+    ///
+    /// The null path (guarded case only) must not leave the un-adapted
+    /// source value (statically typed as the *source* delegate type, e.g.
+    /// <c>Func&lt;string&gt;</c>) on the stack: when the target is a
+    /// covariant-adapted delegate type (e.g. <c>Func&lt;object&gt;</c>),
+    /// merging that source-typed value with the non-null path's newly-
+    /// constructed *target*-typed value at the shared label widens the
+    /// verifier-computed stack type down to their common ancestor
+    /// (<see cref="MulticastDelegate"/>), which then fails to verify against
+    /// the target's expected type. Instead, the null path pops the leftover
+    /// copy and pushes an explicit <c>ldnull</c>, whose null-reference type
+    /// merges cleanly with any reference type, including the adapted target
+    /// delegate type.
     /// </summary>
     private void EmitNullGuardedDelegateToDelegateAdaptation(BoundExpression source, EntityHandle invokeRef, EntityHandle ctorRef)
     {
         this.EmitExpression(source);
+
+        if (!IsKnownLegitimateNullDelegateSource(source))
+        {
+            // Plain fail-fast sequence: no null check. If the source is
+            // unexpectedly null at runtime, `newobj` throws
+            // ArgumentException here rather than silently producing null.
+            this.il.OpCode(ILOpCode.Dup);
+            this.il.OpCode(ILOpCode.Ldvirtftn);
+            this.il.Token(invokeRef);
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(ctorRef);
+            return;
+        }
+
         this.il.OpCode(ILOpCode.Dup);
         var notNullLabel = this.il.DefineLabel();
         var doneLabel = this.il.DefineLabel();
