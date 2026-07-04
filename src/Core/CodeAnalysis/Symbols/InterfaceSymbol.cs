@@ -5,6 +5,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -19,6 +20,13 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 public sealed class InterfaceSymbol : TypeSymbol
 {
     private static readonly ConcurrentDictionary<(InterfaceSymbol Def, TypeArgsKey Args), InterfaceSymbol> ConstructedCache = new();
+
+    // Issue #1958: the projector supplied to Construct(), retained so the
+    // (possibly deferred, see EnsureMembersResolved) member substitution pass
+    // can close constructed-generic member types in the right reflection
+    // context. Null for definitions and for constructed instances built
+    // without a projector (single-context callers; unchanged behavior).
+    private readonly System.Func<System.Type, System.Type> mapClrType;
 
     private ImmutableArray<FunctionSymbol> methods;
     private ImmutableArray<FunctionSymbol> staticMethods = ImmutableArray<FunctionSymbol>.Empty;
@@ -52,7 +60,7 @@ public sealed class InterfaceSymbol : TypeSymbol
         Definition = this;
     }
 
-    private InterfaceSymbol(InterfaceSymbol definition, ImmutableArray<TypeSymbol> typeArguments, string constructedName)
+    private InterfaceSymbol(InterfaceSymbol definition, ImmutableArray<TypeSymbol> typeArguments, string constructedName, System.Func<System.Type, System.Type> mapClrType)
         : base(constructedName)
     {
         Accessibility = definition.Accessibility;
@@ -62,6 +70,7 @@ public sealed class InterfaceSymbol : TypeSymbol
         TypeParameters = ImmutableArray<TypeParameterSymbol>.Empty;
         TypeArguments = typeArguments;
         Definition = definition;
+        this.mapClrType = mapClrType;
     }
 
     /// <summary>Gets the interface accessibility.</summary>
@@ -518,8 +527,15 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// </summary>
     /// <param name="definition">The generic definition to instantiate.</param>
     /// <param name="typeArguments">The type arguments. Length must match <see cref="TypeParameters"/>.</param>
+    /// <param name="mapClrType">
+    /// Issue #1958: projects a host CLR <see cref="System.Type"/> into the reflection
+    /// context (typically a <see cref="System.Reflection.MetadataLoadContext"/>) that a
+    /// member's constructed generic CLR type was resolved from, mirroring
+    /// <c>Binder.SubstituteType</c>'s <c>mapClrType</c> (issue #1926 / PR #1956). Pass
+    /// <see langword="null"/> (the default) for single-context callers.
+    /// </param>
     /// <returns>A constructed <see cref="InterfaceSymbol"/> whose <see cref="Definition"/> is the original.</returns>
-    public static InterfaceSymbol Construct(InterfaceSymbol definition, ImmutableArray<TypeSymbol> typeArguments)
+    public static InterfaceSymbol Construct(InterfaceSymbol definition, ImmutableArray<TypeSymbol> typeArguments, System.Func<System.Type, System.Type> mapClrType = null)
     {
         if (definition == null || !definition.IsGenericDefinition)
         {
@@ -527,7 +543,7 @@ public sealed class InterfaceSymbol : TypeSymbol
         }
 
         var key = BuildArgsKey(typeArguments);
-        return ConstructedCache.GetOrAdd((definition, key), _ => CreateConstructed(definition, typeArguments));
+        return ConstructedCache.GetOrAdd((definition, key), _ => CreateConstructed(definition, typeArguments, mapClrType));
     }
 
     /// <summary>
@@ -587,7 +603,7 @@ public sealed class InterfaceSymbol : TypeSymbol
 
     private static TypeArgsKey BuildArgsKey(ImmutableArray<TypeSymbol> typeArguments) => new(typeArguments);
 
-    private static InterfaceSymbol CreateConstructed(InterfaceSymbol definition, ImmutableArray<TypeSymbol> typeArguments)
+    private static InterfaceSymbol CreateConstructed(InterfaceSymbol definition, ImmutableArray<TypeSymbol> typeArguments, System.Func<System.Type, System.Type> mapClrType)
     {
         var argParts = new string[typeArguments.Length];
         for (var i = 0; i < typeArguments.Length; i++)
@@ -596,7 +612,7 @@ public sealed class InterfaceSymbol : TypeSymbol
         }
 
         var constructedName = $"{definition.Name}[{string.Join(", ", argParts)}]";
-        var instance = new InterfaceSymbol(definition, typeArguments, constructedName);
+        var instance = new InterfaceSymbol(definition, typeArguments, constructedName, mapClrType);
 
         // ADR-0087 R5 / issue #765: defer the actual member substitution
         // (Methods / StaticMethods / PrivateMethods / StaticPrivateMethods)
@@ -616,12 +632,13 @@ public sealed class InterfaceSymbol : TypeSymbol
         Dictionary<TypeParameterSymbol, TypeSymbol> subst,
         InterfaceSymbol instance,
         bool isStatic,
-        bool isPrivate)
+        bool isPrivate,
+        System.Func<System.Type, System.Type> mapClrType)
     {
         var substParams = ImmutableArray.CreateBuilder<ParameterSymbol>(m.Parameters.Length);
         foreach (var p in m.Parameters)
         {
-            var newParam = new ParameterSymbol(p.Name, SubstituteType(p.Type, subst), isVariadic: p.IsVariadic, isScoped: p.IsScoped, refKind: p.RefKind);
+            var newParam = new ParameterSymbol(p.Name, SubstituteType(p.Type, subst, mapClrType), isVariadic: p.IsVariadic, isScoped: p.IsScoped, refKind: p.RefKind);
             if (p.HasExplicitDefaultValue)
             {
                 newParam.SetExplicitDefaultValue(p.ExplicitDefaultValue);
@@ -630,7 +647,7 @@ public sealed class InterfaceSymbol : TypeSymbol
             substParams.Add(newParam);
         }
 
-        var substReturn = SubstituteType(m.Type, subst);
+        var substReturn = SubstituteType(m.Type, subst, mapClrType);
         var substMethod = new FunctionSymbol(
             m.Name,
             substParams.MoveToImmutable(),
@@ -684,7 +701,7 @@ public sealed class InterfaceSymbol : TypeSymbol
             var builder = ImmutableArray.CreateBuilder<FunctionSymbol>(defMethods.Length);
             foreach (var m in defMethods)
             {
-                builder.Add(SubstituteMethod(m, subst, this, isStatic: false, isPrivate: false));
+                builder.Add(SubstituteMethod(m, subst, this, isStatic: false, isPrivate: false, mapClrType));
             }
 
             Methods = builder.MoveToImmutable();
@@ -695,7 +712,7 @@ public sealed class InterfaceSymbol : TypeSymbol
             var builder = ImmutableArray.CreateBuilder<FunctionSymbol>(defStatic.Length);
             foreach (var m in defStatic)
             {
-                builder.Add(SubstituteMethod(m, subst, this, isStatic: true, isPrivate: false));
+                builder.Add(SubstituteMethod(m, subst, this, isStatic: true, isPrivate: false, mapClrType));
             }
 
             StaticMethods = builder.MoveToImmutable();
@@ -706,7 +723,7 @@ public sealed class InterfaceSymbol : TypeSymbol
             var builder = ImmutableArray.CreateBuilder<FunctionSymbol>(defPriv.Length);
             foreach (var m in defPriv)
             {
-                builder.Add(SubstituteMethod(m, subst, this, isStatic: false, isPrivate: true));
+                builder.Add(SubstituteMethod(m, subst, this, isStatic: false, isPrivate: true, mapClrType));
             }
 
             PrivateMethods = builder.MoveToImmutable();
@@ -717,7 +734,7 @@ public sealed class InterfaceSymbol : TypeSymbol
             var builder = ImmutableArray.CreateBuilder<FunctionSymbol>(defStaticPriv.Length);
             foreach (var m in defStaticPriv)
             {
-                builder.Add(SubstituteMethod(m, subst, this, isStatic: true, isPrivate: true));
+                builder.Add(SubstituteMethod(m, subst, this, isStatic: true, isPrivate: true, mapClrType));
             }
 
             StaticPrivateMethods = builder.MoveToImmutable();
@@ -726,7 +743,7 @@ public sealed class InterfaceSymbol : TypeSymbol
         membersResolved = true;
     }
 
-    private static TypeSymbol SubstituteType(TypeSymbol type, Dictionary<TypeParameterSymbol, TypeSymbol> subst)
+    private static TypeSymbol SubstituteType(TypeSymbol type, Dictionary<TypeParameterSymbol, TypeSymbol> subst, System.Func<System.Type, System.Type> mapClrType)
     {
         if (type is TypeParameterSymbol tp && subst.TryGetValue(tp, out var concrete))
         {
@@ -743,13 +760,13 @@ public sealed class InterfaceSymbol : TypeSymbol
             var changed = false;
             for (var i = 0; i < iface.TypeArguments.Length; i++)
             {
-                var substituted = SubstituteType(iface.TypeArguments[i], subst);
+                var substituted = SubstituteType(iface.TypeArguments[i], subst, mapClrType);
                 substitutedArgs.Add(substituted);
                 changed |= !ReferenceEquals(substituted, iface.TypeArguments[i]);
             }
 
             return changed
-                ? Construct(iface.Definition, substitutedArgs.MoveToImmutable())
+                ? Construct(iface.Definition, substitutedArgs.MoveToImmutable(), mapClrType)
                 : iface;
         }
 
@@ -767,7 +784,7 @@ public sealed class InterfaceSymbol : TypeSymbol
             var changed = false;
             for (var i = 0; i < imported.TypeArguments.Length; i++)
             {
-                var substituted = SubstituteType(imported.TypeArguments[i], subst);
+                var substituted = SubstituteType(imported.TypeArguments[i], subst, mapClrType);
                 substitutedArgs.Add(substituted);
                 changed |= !ReferenceEquals(substituted, imported.TypeArguments[i]);
             }
@@ -777,10 +794,17 @@ public sealed class InterfaceSymbol : TypeSymbol
                 return imported;
             }
 
+            // Issue #1958: project each resolved CLR arg into the same
+            // reflection context as `imported.OpenDefinition` before calling
+            // MakeGenericType — mirrors Binder.SubstituteType's mapClrType
+            // fix for issue #1926 (PR #1956). Without this, a raw host CLR
+            // type mixed with an MLC-resolved open definition throws
+            // ArgumentException and silently erases the substitution.
             var resolvedClrArgs = new System.Type[substitutedArgs.Count];
             for (var i = 0; i < substitutedArgs.Count; i++)
             {
-                resolvedClrArgs[i] = substitutedArgs[i].ClrType ?? typeof(object);
+                var clr = substitutedArgs[i].ClrType ?? typeof(object);
+                resolvedClrArgs[i] = mapClrType != null ? mapClrType(clr) : clr;
             }
 
             try
@@ -790,25 +814,33 @@ public sealed class InterfaceSymbol : TypeSymbol
             }
             catch (System.ArgumentException)
             {
+                // Issue #1958: with the mapClrType projection above, a
+                // cross-reflection-context mismatch here should no longer be
+                // reachable. Assert loudly in debug builds instead of the
+                // silent fallback that made #1926 hard to diagnose; still
+                // fall back to the erased constructed form so release builds
+                // degrade gracefully rather than crash.
+                var assertMessage = $"InterfaceSymbol.SubstituteType: MakeGenericType failed for '{imported.OpenDefinition}' with args [{string.Join(", ", resolvedClrArgs.Select(t => t.ToString()))}] even after mapClrType projection.";
+                System.Diagnostics.Debug.Assert(false, assertMessage);
                 return imported;
             }
         }
 
         if (type is SliceTypeSymbol s)
         {
-            var sub = SubstituteType(s.ElementType, subst);
+            var sub = SubstituteType(s.ElementType, subst, mapClrType);
             return sub == s.ElementType ? s : SliceTypeSymbol.Get(sub);
         }
 
         if (type is ArrayTypeSymbol a)
         {
-            var sub = SubstituteType(a.ElementType, subst);
+            var sub = SubstituteType(a.ElementType, subst, mapClrType);
             return sub == a.ElementType ? a : ArrayTypeSymbol.Get(sub, a.Length);
         }
 
         if (type is NullableTypeSymbol n)
         {
-            var sub = SubstituteType(n.UnderlyingType, subst);
+            var sub = SubstituteType(n.UnderlyingType, subst, mapClrType);
             return sub == n.UnderlyingType ? n : NullableTypeSymbol.Get(sub);
         }
 

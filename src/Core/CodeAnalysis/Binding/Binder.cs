@@ -2564,7 +2564,7 @@ public sealed class Binder
                         return null;
                     }
 
-                    element = InterfaceSymbol.Construct(iface, typeArgs);
+                    element = InterfaceSymbol.Construct(iface, typeArgs, scope.References.MapClrTypeToReferences);
                 }
                 else if (element is StructSymbol genericStruct)
                 {
@@ -2913,7 +2913,7 @@ public sealed class Binder
             case StructSymbol genericStruct when genericStruct.IsGenericDefinition && genericStruct.TypeParameters.Length == typeArgs.Length:
                 return StructSymbol.Construct(genericStruct, typeArgs);
             case InterfaceSymbol genericIface when genericIface.IsGenericDefinition && genericIface.TypeParameters.Length == typeArgs.Length:
-                return InterfaceSymbol.Construct(genericIface, typeArgs);
+                return InterfaceSymbol.Construct(genericIface, typeArgs, scope.References.MapClrTypeToReferences);
             case DelegateTypeSymbol genericDelegate when genericDelegate.IsGenericDefinition && genericDelegate.TypeParameters.Length == typeArgs.Length:
                 return DelegateTypeSymbol.Construct(genericDelegate, typeArgs);
             default:
@@ -4249,7 +4249,7 @@ public sealed class Binder
             }
 
             return ifaceChanged
-                ? InterfaceSymbol.Construct(ifaceType.Definition, newIfaceArgs.MoveToImmutable())
+                ? InterfaceSymbol.Construct(ifaceType.Definition, newIfaceArgs.MoveToImmutable(), mapClrType)
                 : type;
         }
 
@@ -4309,7 +4309,15 @@ public sealed class Binder
                     }
                     catch (System.ArgumentException)
                     {
-                        // Fall through to the erased constructed form below.
+                        // Issue #1958: with the mapClrType projection above, a
+                        // cross-reflection-context mismatch here should no
+                        // longer be reachable. Assert loudly in debug builds
+                        // instead of the silent fallback that made #1926 hard
+                        // to diagnose; still fall through to the erased
+                        // constructed form so release builds degrade
+                        // gracefully rather than crash.
+                        var assertMessage = $"Binder.SubstituteType: MakeGenericType failed for '{it.OpenDefinition}' with args [{string.Join(", ", clrArgs.Select(t => t.ToString()))}] even after mapClrType projection.";
+                        System.Diagnostics.Debug.Assert(false, assertMessage);
                     }
                 }
             }

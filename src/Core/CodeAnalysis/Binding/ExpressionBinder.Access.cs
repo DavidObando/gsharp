@@ -1243,7 +1243,7 @@ internal sealed partial class ExpressionBinder
             case InterfaceSymbol nestedIface:
                 var ifaceDef = nestedIface.Definition ?? nestedIface;
                 nestedType = !ownArgs.IsDefaultOrEmpty
-                    ? InterfaceSymbol.Construct(ifaceDef, ownArgs)
+                    ? InterfaceSymbol.Construct(ifaceDef, ownArgs, scope.References.MapClrTypeToReferences)
                     : ifaceDef;
                 return true;
 
@@ -2256,7 +2256,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        constructed = InterfaceSymbol.Construct(ifaceDef, typeArgs);
+        constructed = InterfaceSymbol.Construct(ifaceDef, typeArgs, scope.References.MapClrTypeToReferences);
         return true;
     }
 
@@ -2344,7 +2344,7 @@ internal sealed partial class ExpressionBinder
                     constructedStruct = StructSymbol.Construct(structDef, typeArgs);
                     return true;
                 case InterfaceSymbol ifaceDef:
-                    constructedInterface = InterfaceSymbol.Construct(ifaceDef, typeArgs);
+                    constructedInterface = InterfaceSymbol.Construct(ifaceDef, typeArgs, scope.References.MapClrTypeToReferences);
                     return true;
             }
         }
@@ -2432,7 +2432,7 @@ internal sealed partial class ExpressionBinder
                     constructedStruct = StructSymbol.Construct(structDef, typeArgs);
                     return true;
                 case InterfaceSymbol ifaceDef:
-                    constructedInterface = InterfaceSymbol.Construct(ifaceDef, typeArgs);
+                    constructedInterface = InterfaceSymbol.Construct(ifaceDef, typeArgs, scope.References.MapClrTypeToReferences);
                     return true;
             }
         }
