@@ -696,6 +696,11 @@ public sealed class CSharpToGSharpTranslator
         // stands in (see <see cref="BuildScopeParameter"/>).
         private int queryScopeCounter;
 
+        // Issue #1998: the query currently being lowered, set for the duration of
+        // `TranslateQuery` — anchors the arity-cap diagnostic in
+        // `BuildScopeParameter`.
+        private QueryExpressionSyntax currentQueryNode;
+
         // Issue #1897: numbers the `__spreadN` temporary built to lower a
         // collection-expression spread element (see
         // <see cref="TranslateSpreadCollectionExpression"/>).
@@ -14785,7 +14790,23 @@ public sealed class CSharpToGSharpTranslator
             // tuple (see <see cref="BuildScopeParameter"/>).
             var scope = new List<(string Name, GTypeReference Type)> { (from.Identifier.Text, rangeType) };
 
-            current = this.LowerQueryBody(query.Body, scope, current);
+            // Issue #1998: track the enclosing query node so a scope that grows
+            // past G#'s tuple arity cap (see <see cref="BuildScopeParameter"/>)
+            // can anchor a precise diagnostic rather than silently emitting a
+            // tuple shape that would only surface as an opaque GS0159 much
+            // later, at G# bind time. Save/restore to stay correct for a
+            // (rare) query nested inside this one's lambda bodies.
+            QueryExpressionSyntax previousQueryNode = this.currentQueryNode;
+            this.currentQueryNode = query;
+            try
+            {
+                current = this.LowerQueryBody(query.Body, scope, current);
+            }
+            finally
+            {
+                this.currentQueryNode = previousQueryNode;
+            }
+
             return current;
         }
 
@@ -15127,12 +15148,63 @@ public sealed class CSharpToGSharpTranslator
                 return new Parameter(SanitizeIdentifier(scope[0].Name), scope[0].Type);
             }
 
-            string tupleParamName = $"__q{this.queryScopeCounter++}";
+            // Issue #1998: G#'s tuple family (mirroring the BCL's `ValueTuple`)
+            // tops out at arity 7 — a query scope this wide (`from` plus 6+
+            // `let`/second-`from`/`join` clauses) has no canonical tuple to
+            // widen into. Report a precise, actionable diagnostic HERE (rather
+            // than silently emitting the oversized tuple shape, which would
+            // only surface as an opaque GS0159 much later at G# bind time) and
+            // still emit the best-effort shape so a single query with one
+            // over-wide scope doesn't block translating the rest of the file.
+            if (scope.Count > 7 && this.currentQueryNode != null)
+            {
+                string scopeMessage =
+                    $"Query scope has grown to {scope.Count} range variables ({string.Join(", ", scope.Select(v => v.Name))}); " +
+                    "G# tuples support at most 7 elements (ADR-0115 §B), so this scope has no canonical G# lowering. " +
+                    "Split the query (e.g. an intermediate `select new { ... }`-style projection via a `let`, or a nested query) " +
+                    "to keep each transparent-identifier scope at 7 or fewer range variables.";
+                this.context.Report(new TranslationDiagnostic(
+                    nameof(QueryExpressionSyntax),
+                    scopeMessage,
+                    this.currentQueryNode.GetLocation(),
+                    TranslationSeverity.Unsupported));
+            }
+
+            // Issue #1998: guard against a `__qN` collision with EITHER a
+            // range variable already in this scope OR any other user local
+            // visible at the query (a user local literally named `__q0`
+            // outside the query scope would otherwise still shadow/be
+            // shadowed by the synthesized tuple parameter) — bump the counter
+            // past any hit.
+            string tupleParamName;
+            do
+            {
+                tupleParamName = $"__q{this.queryScopeCounter++}";
+            }
+            while (scope.Any(v => v.Name == tupleParamName) || this.IsNameVisibleAtCurrentQuery(tupleParamName));
+
             prologue.Add(new TupleDeconstructionStatement(
                 BindingKind.Let,
                 scope.Select(v => SanitizeIdentifier(v.Name)).ToList(),
                 new IdentifierExpression(tupleParamName)));
             return new Parameter(tupleParamName, new TupleTypeReference(scope.Select(v => v.Type).ToList()));
+        }
+
+        // Issue #1998: whether `name` resolves to any symbol (local, parameter,
+        // field, …) visible at the currently-lowering query's position, via the
+        // active semantic model. Backs the `__qN` collision guard above —
+        // `LookupSymbols` sees every C# local in scope at that source position,
+        // not just the query's own range variables (`scope`).
+        private bool IsNameVisibleAtCurrentQuery(string name)
+        {
+            if (this.currentQueryNode == null)
+            {
+                return false;
+            }
+
+            return this.context.SemanticModel
+                .LookupSymbols(this.currentQueryNode.SpanStart, name: name)
+                .Length > 0;
         }
 
         /// <summary>
