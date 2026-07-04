@@ -3384,6 +3384,16 @@ internal sealed class OverloadResolver
             return new BoundErrorExpression(syntax);
         }
 
+        // Issue #2067: enforce `protected`/`private` on an explicit `init(...)`
+        // constructor the same way BindUserInstanceCall enforces it on regular
+        // method calls (issue #2058) — a separate binder path resolves
+        // constructor calls, so it needs its own accessibility gate.
+        if (selectedCtor.DeclaringType is StructSymbol ctorDeclaringType
+            && !AccessibilityChecker.IsAccessible(selectedCtor.Function.Accessibility, ctorDeclaringType, getCurrentFunction()))
+        {
+            Diagnostics.ReportMemberInaccessible(syntax.Identifier.Location, "init", ctorDeclaringType.Name, selectedCtor.Function.Accessibility);
+        }
+
         return new BoundConstructorCallExpression(syntax, classType, convertedArguments.ToImmutable(), selectedCtor);
     }
 
