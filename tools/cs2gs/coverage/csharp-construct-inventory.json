@@ -901,8 +901,9 @@
     "status": "Translated",
     "rule": "ADR-0115 \u00A7B",
     "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/TupleExpression.cs",
     "issue": "https://github.com/DavidObando/gsharp/issues/1922",
-    "notes": "Translates; blocked by gsc ValueTuple deconstruction (issue #1922)."
+    "notes": "Sync foreach tuple-deconstruction translates to first-class G# \u0060for (a, b) in xs\u0060; ValueTuple deconstruction now supported by gsc (issue #1922 fixed). await foreach still lowers via temp\u002Blet (no first-class async form)."
   },
   {
     "kind": "ForStatement",
