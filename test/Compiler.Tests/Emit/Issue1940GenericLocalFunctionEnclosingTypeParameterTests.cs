@@ -319,6 +319,44 @@ public class Issue1940GenericLocalFunctionEnclosingTypeParameterTests
         Assert.Equal("7\n", output);
     }
 
+    [Fact]
+    public void GenericLocalFunction_ConstrainedStaticVoidCallTargetsEnclosingTypeParameter_ReportsGS0468()
+    {
+        // NB1 (review #2013): a static-virtual interface call `U.M(...)` with a
+        // VOID return has node.Type == void, so the enclosing type parameter `U`
+        // in the constrained receiver is only reachable via the call node's own
+        // TypeParameter field — otherwise silent invalid IL.
+        var source = """
+            package P
+
+            import System
+
+            sealed interface ISink {
+                shared {
+                    func Consume(x int32);
+                }
+            }
+
+            class Printer : ISink {
+                shared {
+                    func Consume(x int32) {
+                    }
+                }
+            }
+
+            func Outer[U ISink](w U) {
+                let Inner[V] = func () {
+                    U.Consume(1)
+                }
+            }
+            Outer(Printer{})
+            """;
+
+        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS0468", stdout + stderr);
+    }
+
     private static string CompileAndRun(string source)
     {
         var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: true);

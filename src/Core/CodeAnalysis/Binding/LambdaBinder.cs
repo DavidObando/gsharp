@@ -1883,6 +1883,13 @@ internal sealed class LambdaBinder
                 case BoundSizeOfExpression sizeOfExpression:
                     CheckType(sizeOfExpression.MeasuredType);
                     break;
+
+                // Issue #1940 (NB1): a constrained static-abstract call `U.M()` with
+                // void return has node.Type == void, so the enclosing type parameter
+                // in the constrained receiver is otherwise missed -> silent invalid IL.
+                case BoundConstrainedStaticCallExpression constrainedStaticCall:
+                    CheckType(constrainedStaticCall.TypeParameter);
+                    break;
             }
 
             base.VisitExpression(node);
