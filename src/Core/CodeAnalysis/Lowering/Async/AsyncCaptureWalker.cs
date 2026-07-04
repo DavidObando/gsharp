@@ -83,7 +83,17 @@ public static class AsyncCaptureWalker
             // field, so it must stay a MoveNext local. This is safe because such
             // locals are always constructed and fully consumed within a single
             // expression and never stay live across an await suspension.
-            if (local.Type?.ClrType?.IsByRefLike == true)
+            // Issue #1919: use the metadata-load-safe TypeSymbol.IsByRefLike
+            // helper rather than reading Type.IsByRefLike directly. A
+            // delegate-typed local (e.g. a `Func[T, Task[T]]` backing an async
+            // lambda variable) whose ClrType was built by mixing the host's
+            // live `typeof(Func<,>)` with a MetadataLoadContext-projected type
+            // argument (gsc's `/reference:` mode) realizes as a
+            // `System.Reflection.Emit.TypeBuilderInstantiation` — an
+            // intentionally-tolerated cross-context artifact (see
+            // Binding/Conversion.cs) whose `IsByRefLike` throws
+            // NotSupportedException instead of returning a real answer.
+            if (TypeSymbol.IsByRefLike(local.Type))
             {
                 continue;
             }

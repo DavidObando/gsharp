@@ -8700,6 +8700,49 @@ public sealed class CSharpToGSharpTranslator
             };
         }
 
+        // Issue #1891: lowers an extended property subpattern's dotted member
+        // path (`Start.X`, `A.B.C`, ...) to nested G# `PropertyPattern` fields —
+        // `Start.X: 0` becomes `Start: { X: 0 }` — since a G# property-pattern
+        // field is a single identifier with no dotted form. Supports any chain
+        // depth; the innermost field carries the actual subpattern translated
+        // against the fully-qualified member-access receiver (so a binding like
+        // `Start.X: var x` still reads `receiver.Start.X`).
+        private PropertyPatternField BuildExtendedPropertyField(
+            ExpressionSyntax memberPath,
+            PatternSyntax leafPattern,
+            GExpression receiver,
+            List<(ISymbol Symbol, GExpression Replacement)> bindings,
+            HashSet<string> usedDesignators)
+        {
+            var names = new List<string>();
+            ExpressionSyntax current = memberPath;
+            while (current is MemberAccessExpressionSyntax memberAccess)
+            {
+                names.Insert(0, memberAccess.Name.Identifier.Text);
+                current = memberAccess.Expression;
+            }
+
+            names.Insert(0, current.ToString());
+
+            GExpression memberReceiver = receiver;
+            for (int i = 0; i < names.Count - 1; i++)
+            {
+                memberReceiver = new MemberAccessExpression(memberReceiver, SanitizeIdentifier(names[i]));
+            }
+
+            string leafName = SanitizeIdentifier(names[^1]);
+            PropertyPatternField field = new PropertyPatternField(
+                leafName,
+                this.TranslatePattern(leafPattern, new MemberAccessExpression(memberReceiver, leafName), bindings, usedDesignators));
+
+            for (int i = names.Count - 2; i >= 0; i--)
+            {
+                field = new PropertyPatternField(SanitizeIdentifier(names[i]), new PropertyPattern(new List<PropertyPatternField> { field }));
+            }
+
+            return field;
+        }
+
         // Resolves the property name each positional subpattern of `recursive`
         // deconstructs to (issue #1887), so a positional pattern can lower to the
         // same nested member-access form a property pattern uses. Returns null
@@ -11567,16 +11610,27 @@ public sealed class CSharpToGSharpTranslator
             // sequence whose element is a tuple. G#'s two-name `for k, v in xs`
             // form is NOT tuple deconstruction — it is index/element iteration
             // (the key is the int32 index), so emitting `for a, b in xs` would
-            // bind `a` to the loop index. Instead iterate a single element and
-            // deconstruct it inside the body: `for __deconN in xs { let (a, b) =
-            // __deconN; <body> }` (ADR-0115 §B).
+            // bind `a` to the loop index. Issue #1922: G# now has a first-class
+            // deconstructing loop header, `for (a, b) in xs { <body> }`, so a
+            // synchronous foreach translates directly to that instead of a
+            // hidden temp variable plus a separate `let (a, b) = tmp` (ADR-0115
+            // §B's older form). G# has no first-class `await for (a, b) in`
+            // form, so `await foreach` keeps the older temp+let lowering.
             List<string> names = new List<string>();
             CollectForEachVariableNames(node.Variable, names);
 
             if (names.Count >= 2)
             {
-                string pair = $"__decon{this.deconCounter++}";
+                bool isAwait = !node.AwaitKeyword.IsKind(SyntaxKind.None);
                 BlockStatement body = this.TranslateStatementAsBlock(node.Statement);
+                var iterable = this.TranslateReceiverWithNullForgiveness(node.Expression);
+
+                if (!isAwait)
+                {
+                    return new ForTupleInStatement(names, iterable, body);
+                }
+
+                string pair = $"__decon{this.deconCounter++}";
                 var statements = new List<GStatement>(body.Statements.Count + 1)
                 {
                     new TupleDeconstructionStatement(
@@ -11586,11 +11640,7 @@ public sealed class CSharpToGSharpTranslator
                 };
                 statements.AddRange(body.Statements);
 
-                return new ForInStatement(
-                    pair,
-                    this.TranslateReceiverWithNullForgiveness(node.Expression),
-                    new BlockStatement(statements),
-                    isAwait: !node.AwaitKeyword.IsKind(SyntaxKind.None));
+                return new ForInStatement(pair, iterable, new BlockStatement(statements), isAwait: true);
             }
 
             this.context.ReportUnsupported(
@@ -11651,6 +11701,15 @@ public sealed class CSharpToGSharpTranslator
         {
             switch (pattern)
             {
+                // Issue #1890: Roslyn parses a bare TYPE name after a combinator
+                // (e.g. `int or Widget`) as a ConstantPattern over an identifier
+                // — same ambiguity as the boolean-test path's
+                // `IsTypeReferencePattern` check — so it must be recognized as a
+                // type test before falling through to the literal-equality case
+                // below.
+                case ConstantPatternSyntax constant when this.IsTypeReferencePattern(constant.Expression):
+                    return new TypePattern("_", this.MapTypeSyntax((TypeSyntax)constant.Expression));
+
                 case ConstantPatternSyntax constant:
                     return new ConstantPattern(this.TranslateExpression(constant.Expression));
 
@@ -11668,6 +11727,15 @@ public sealed class CSharpToGSharpTranslator
                     return new TypePattern(
                         SanitizeIdentifier(variable.Identifier.Text),
                         this.MapTypeSyntax(declaration.Type));
+
+                // Issue #1890: a bare-type arm (`int =>`, no binder) is Roslyn's
+                // `TypePatternSyntax` — same shape as `DeclarationPatternSyntax`
+                // but with no designation at all. G#'s own `TypePattern` grammar
+                // always requires a designator before `is`, but treats `_` as a
+                // real discard there (PatternBinder.BindTypePattern's `isDiscard`
+                // check), so no binding is introduced — this is the bare form.
+                case TypePatternSyntax typePattern:
+                    return new TypePattern("_", this.MapTypeSyntax(typePattern.Type));
 
                 // `var v` (a top-level switch arm, or a nested `{ Prop: var v }`
                 // subpattern — this method recurses for both) ALWAYS matches, so
@@ -11826,20 +11894,35 @@ public sealed class CSharpToGSharpTranslator
                 {
                     foreach (SubpatternSyntax sub in recursive.PropertyPatternClause.Subpatterns)
                     {
-                        if (sub.NameColon == null)
+                        if (sub.NameColon != null)
                         {
-                            this.context.ReportUnsupported(sub, "positional subpattern has no canonical G# form yet (ADR-0115 §B).");
+                            string fieldName = SanitizeIdentifier(sub.NameColon.Name.Identifier.Text);
+                            fields.Add(new PropertyPatternField(
+                                fieldName,
+                                this.TranslatePattern(
+                                    sub.Pattern,
+                                    new MemberAccessExpression(receiver, fieldName),
+                                    bindings,
+                                    usedDesignators)));
                             continue;
                         }
 
-                        string fieldName = SanitizeIdentifier(sub.NameColon.Name.Identifier.Text);
-                        fields.Add(new PropertyPatternField(
-                            fieldName,
-                            this.TranslatePattern(
-                                sub.Pattern,
-                                new MemberAccessExpression(receiver, fieldName),
-                                bindings,
-                                usedDesignators)));
+                        if (sub.ExpressionColon != null)
+                        {
+                            // Issue #1891: an extended property subpattern
+                            // (`Start.X: 0`) parses as `ExpressionColon`, not
+                            // `NameColon`. G#'s property-pattern field is a single
+                            // identifier (no dotted member path), so the chain
+                            // lowers to nested `PropertyPattern`s instead —
+                            // `Start.X: 0` becomes `Start: { X: 0 }`, agreeing
+                            // with the nested-pattern form a user could already
+                            // write directly. Works to any chain depth.
+                            fields.Add(this.BuildExtendedPropertyField(
+                                sub.ExpressionColon.Expression, sub.Pattern, receiver, bindings, usedDesignators));
+                            continue;
+                        }
+
+                        this.context.ReportUnsupported(sub, "positional subpattern has no canonical G# form yet (ADR-0115 §B).");
                     }
                 }
 

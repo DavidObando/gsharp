@@ -206,7 +206,7 @@
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/AttributeList.cs",
     "issue": "https://github.com/DavidObando/gsharp/issues/1913",
-    "notes": "BCL attributes green; parameter attributes silently dropped and generic attributes emit non-parsing G# (issue #1913)."
+    "notes": "BCL attributes and user-defined attribute classes (issue #1921, fixed) green; parameter attributes silently dropped and generic attributes emit non-parsing G# (issue #1913)."
   },
   {
     "kind": "AttributeTargetSpecifier",
@@ -909,8 +909,9 @@
     "status": "Translated",
     "rule": "ADR-0115 \u00A7B",
     "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/TupleExpression.cs",
     "issue": "https://github.com/DavidObando/gsharp/issues/1922",
-    "notes": "Translates; blocked by gsc ValueTuple deconstruction (issue #1922)."
+    "notes": "Sync foreach tuple-deconstruction translates to first-class G# \u0060for (a, b) in xs\u0060; ValueTuple deconstruction now supported by gsc (issue #1922 fixed). await foreach still lowers via temp\u002Blet (no first-class async form)."
   },
   {
     "kind": "ForStatement",
@@ -2249,10 +2250,11 @@
   {
     "kind": "TypePattern",
     "nodeType": "TypePatternSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1890",
-    "notes": "Bare-type switch-expression arms; is/case binder forms work (DeclarationPattern)."
+    "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/TypePattern.cs",
+    "notes": "Bare-type switch-arm (\u0060int =\u003E\u0060, no binder \u2014 issue #1890, resolved): lowers to G#\u0027s own discard-designator type pattern \u0060_ is T\u0060 (\u0060PatternBinder.BindTypePattern\u0060\u0027s \u0060isDiscard\u0060 check), since gsc\u0027s own \u0060TypePattern\u0060 grammar always requires a designator token before \u0060is\u0060 but treats \u0060_\u0060 as a non-binding discard there. Roslyn parses a bare user-type name (e.g. \u0060Widget =\u003E\u0060) as a \u0060ConstantPatternSyntax\u0060 over an identifier rather than \u0060TypePatternSyntax\u0060; the switch-arm path now shares the boolean-test path\u0027s \u0060IsTypeReferencePattern\u0060 type-vs-constant disambiguation to still route it to \u0060_ is T\u0060."
   },
   {
     "kind": "UnaryMinusExpression",

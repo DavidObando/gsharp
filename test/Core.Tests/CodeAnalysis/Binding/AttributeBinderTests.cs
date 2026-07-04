@@ -66,6 +66,69 @@ public class AttributeBinderTests
     }
 
     [Fact]
+    public void Issue1921_PlainColonAttributeBase_DoesNotReportGS0200()
+    {
+        // Issue #1921: a same-compilation user class with a plain
+        // `: Attribute` base clause (no `@Attribute` declaration sugar) must
+        // be recognized as a valid attribute type — GS0200 previously fired
+        // here because IsAttributeType only consulted the IsAttributeClass
+        // sugar flag or the (still-null, pre-emission) ClrType, never the
+        // symbol-level BaseClass/ImportedBaseType chain.
+        var globalScope = BindSource(
+            "class NoteAttribute : Attribute {\n}\n\n@Note\nfunc Helper() {\n}\n");
+
+        Assert.DoesNotContain(GetBinderDiagnostics(globalScope), d => d.Id == "GS0200");
+        var helper = globalScope.Functions.Single(f => f.Name == "Helper");
+        Assert.Single(helper.Attributes);
+        Assert.Equal("NoteAttribute", helper.Attributes[0].AttributeType.Name);
+    }
+
+    [Fact]
+    public void Issue1921_FullyQualifiedSystemAttributeBase_DoesNotReportGS0200()
+    {
+        // Same as above but spelled with the fully-qualified base name.
+        var globalScope = BindSource(
+            "class NoteAttribute : System.Attribute {\n}\n\n@Note\nfunc Helper() {\n}\n");
+
+        Assert.DoesNotContain(GetBinderDiagnostics(globalScope), d => d.Id == "GS0200");
+    }
+
+    [Fact]
+    public void Issue1921_NamedArgumentOnUserAttribute_ReportsGS0466()
+    {
+        // Code-review follow-up: a named (property/field-style) argument on a
+        // same-compilation user attribute type used to bind clean and then be
+        // silently dropped by the emitter (never written to metadata). It
+        // must now be rejected at bind time with a clear diagnostic instead.
+        var source = """
+            class NoteAttribute : Attribute {
+                var Tag string = ""
+            }
+
+            @Note(Tag: "x")
+            func Helper() {
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.Contains(GetBinderDiagnostics(globalScope), d => d.Id == "GS0466" && d.Message.Contains("Tag"));
+    }
+
+    [Fact]
+    public void Issue1921_NamedArgumentOnClrAttribute_StillWorks()
+    {
+        // Sanity check: the GS0466 rejection is scoped to same-compilation
+        // user attribute types only; a CLR-imported attribute with named args
+        // (e.g. System.Diagnostics.Conditional's implicit named-arg support
+        // via AttributeUsage) must be unaffected. Using a positional-only CLR
+        // attribute here since most BCL attributes usable from G# take no
+        // named args; this asserts no GS0466 leaks onto the CLR path.
+        var globalScope = BindSource("@Obsolete(\"msg\")\nfunc Helper() {\n}\n");
+
+        Assert.DoesNotContain(GetBinderDiagnostics(globalScope), d => d.Id == "GS0466");
+    }
+
+    [Fact]
     public void Reports_Invalid_Use_Site_Target_On_Function()
     {
         // `@field:` is not valid on a function declaration.

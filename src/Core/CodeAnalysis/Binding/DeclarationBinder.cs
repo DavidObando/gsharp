@@ -4283,6 +4283,15 @@ internal sealed class DeclarationBinder
                     : new[] { forRange.FirstIdentifier.Text };
                 return TryFindInstanceMemberReference(forRange.Body, forbiddenNames, WithShadowed(shadowedNames, forRangeNames), out offendingName, out offendingLocation);
 
+            case ForTupleRangeStatementSyntax forTupleRange:
+                if (TryFindInstanceMemberReference(forTupleRange.Collection, forbiddenNames, shadowedNames, out offendingName, out offendingLocation))
+                {
+                    return true;
+                }
+
+                var forTupleRangeNames = forTupleRange.Identifiers.Select(t => t.Text);
+                return TryFindInstanceMemberReference(forTupleRange.Body, forbiddenNames, WithShadowed(shadowedNames, forTupleRangeNames), out offendingName, out offendingLocation);
+
             case ForEllipsisStatementSyntax forEllipsis:
                 if (TryFindInstanceMemberReference(forEllipsis.LowerBound, forbiddenNames, shadowedNames, out offendingName, out offendingLocation) ||
                     TryFindInstanceMemberReference(forEllipsis.UpperBound, forbiddenNames, shadowedNames, out offendingName, out offendingLocation))
@@ -8010,6 +8019,21 @@ internal sealed class DeclarationBinder
             {
                 if (argSyntax is NamedArgumentExpressionSyntax namedArg)
                 {
+                    // Issue #1921 code review (GS0466): the emitter can only
+                    // write named args against an already-emitted CLR type
+                    // (it resolves the target member via reflection); a
+                    // same-compilation user attribute has no ClrType yet, so
+                    // reject named args on it here instead of silently
+                    // dropping them at emit time.
+                    if (attrType is StructSymbol { ClrType: null })
+                    {
+                        Diagnostics.ReportNamedArgumentsNotSupportedOnUserAttribute(
+                            namedArg.NameToken.Location,
+                            nameIsExact ? nameText : (nameText + "Attribute"),
+                            namedArg.NameToken.Text);
+                        continue;
+                    }
+
                     if (!TryBindAttributeArgument(namedArg.Expression, out var value, out var valueType))
                     {
                         Diagnostics.ReportAttributeArgumentNotConstant(namedArg.Expression.Location);
@@ -8117,9 +8141,15 @@ internal sealed class DeclarationBinder
 
     private static bool IsAttributeType(TypeSymbol typeSymbol)
     {
-        if (typeSymbol is StructSymbol structSym && structSym.IsAttributeClass)
+        // Issue #1921: a same-compilation user class deriving from
+        // System.Attribute (via either the `@Attribute` sugar or a plain
+        // `: Attribute` / `: System.Attribute` base clause) has no CLR type
+        // yet — it hasn't been emitted — so ClrType is null and the CLR
+        // base-chain walk below can't see it. StructSymbol.DerivesFromSystemAttribute
+        // walks the symbol-level BaseClass chain instead of relying on ClrType.
+        if (typeSymbol is StructSymbol structSym)
         {
-            return true;
+            return structSym.DerivesFromSystemAttribute();
         }
 
         var clr = typeSymbol?.ClrType;

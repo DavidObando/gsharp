@@ -1,6 +1,8 @@
 // inventory: StructConstraint — where T : struct
-// Note: the `_tag = seed + 2` transformed-parameter assignment prevents the generic-primary-ctor gsc ICE (GS9998,
-// see ClassConstraint.cs).
+// Issue #1920 (fixed): previously the `_tag = seed + 2` transform was needed to
+// dodge the generic-primary-ctor gsc ICE (GS9998, see ClassConstraint.cs). Kept
+// as a trivial passthrough ctor now that the fix lands, exercising the same
+// primary-ctor path for a `struct` constraint.
 using System;
 
 namespace Corpus.Grid08
@@ -14,7 +16,7 @@ namespace Corpus.Grid08
         public ValueCell(T value, int seed)
         {
             _value = value;
-            _tag = seed + 2;
+            _tag = seed;
         }
 
         public T Value()

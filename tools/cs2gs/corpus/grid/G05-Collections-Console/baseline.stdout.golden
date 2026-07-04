@@ -29,3 +29,5 @@ TupleExpression: items=2,two
 TupleExpression: named=3,three
 TupleExpression: deconstructed=2,two
 TupleExpression: nested=1,2,pair
+TupleExpression: foreach=alice,1
+TupleExpression: foreach=bob,2

@@ -5536,6 +5536,16 @@ public class Parser
             return ParseForInfiniteStatement();
         }
 
+        // Issue #1922: `for (a, b, ...) in coll { ... }` — checked before
+        // `LooksLikeForRange` (which requires an identifier right after
+        // `for`, so it never matches here) and before `LooksLikeForClause`
+        // (whose plain semicolon scan would otherwise misparse the `(a, b)`
+        // header as a parenthesized C-style-for expression).
+        if (LooksLikeForTupleRange())
+        {
+            return ParseForTupleRangeStatement();
+        }
+
         if (LooksLikeForRange())
         {
             return ParseForRangeStatement();
@@ -5552,6 +5562,55 @@ public class Parser
         }
 
         return ParseForConditionStatement();
+    }
+
+    private bool LooksLikeForTupleRange()
+    {
+        // `for ( <ident> (, <ident>)+ ) in <expr> { ... }` — at least two
+        // identifiers (arity ≥ 2, matching TupleTypeSymbol's minimum) so this
+        // never collides with a parenthesized boolean condition such as
+        // `for (x > 0) { ... }` (no comma) or a single-name grouped
+        // expression `for (x) in xs { ... }` isn't legal G# anyway, but the
+        // 2+ identifier requirement keeps this check unambiguous and cheap.
+        if (Peek(1).Kind != SyntaxKind.OpenParenthesisToken || Peek(2).Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        int o = 3;
+        var sawComma = false;
+        while (Peek(o).Kind == SyntaxKind.CommaToken && Peek(o + 1).Kind == SyntaxKind.IdentifierToken)
+        {
+            sawComma = true;
+            o += 2;
+        }
+
+        if (!sawComma || Peek(o).Kind != SyntaxKind.CloseParenthesisToken)
+        {
+            return false;
+        }
+
+        return Peek(o + 1).Kind == SyntaxKind.IdentifierToken && Peek(o + 1).Text == "in";
+    }
+
+    private StatementSyntax ParseForTupleRangeStatement()
+    {
+        var keyword = MatchToken(SyntaxKind.ForKeyword);
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        nodesAndSeparators.Add(MatchToken(SyntaxKind.IdentifierToken));
+        while (Current.Kind == SyntaxKind.CommaToken)
+        {
+            nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            nodesAndSeparators.Add(MatchToken(SyntaxKind.IdentifierToken));
+        }
+
+        var identifiers = new SeparatedSyntaxList<SyntaxToken>(nodesAndSeparators.ToImmutable());
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        var inToken = MatchToken(SyntaxKind.IdentifierToken); // contextual `in`, guarded by LooksLikeForTupleRange
+        var collection = ParseExpressionInBodyHeader(allowEmptyStructLiteralCollection: true);
+        var body = ParseStatement();
+        return new ForTupleRangeStatementSyntax(syntaxTree, keyword, openParen, identifiers, closeParen, inToken, collection, body);
     }
 
     private bool LooksLikeForRange()
@@ -8028,7 +8087,21 @@ public class Parser
         // non-identifier type clause (`[][]int32{ … }`, `[]*int32{ … }`, …).
         // Parse the element recursively when the token after `]` does not begin
         // a plain identifier element; otherwise keep the flat identifier form.
-        if (Current.Kind != SyntaxKind.IdentifierToken)
+        //
+        // Issue #1924: an array-of-generic literal (`[]Task[int32]{ … }`) or an
+        // array of a dotted/qualified named type (`[]Outer.Inner{ … }`) also
+        // needs the recursive `ParseTypeClause()` route — the flat identifier
+        // fast path below has no way to consume a trailing `[T, ...]`
+        // type-argument list or a `.Member` qualifier tail. `TryScanTypeClause`
+        // (used by the expression-position generic-call/index disambiguation)
+        // already parses these composite shapes in TYPE position, so the same
+        // `[` / `.` lookahead used there disambiguates here too — a `[` or `.`
+        // right after the element identifier can only start a type-argument
+        // list or dotted-name tail in this array-element-type position, never
+        // an index or member-access expression.
+        if (Current.Kind != SyntaxKind.IdentifierToken
+            || Peek(1).Kind == SyntaxKind.OpenSquareBracketToken
+            || Peek(1).Kind == SyntaxKind.DotToken)
         {
             var nestedElementType = ParseTypeClause();
             var (nestedOpenBrace, nestedElements, nestedCloseBrace, nestedHasElements) = ParseOptionalArrayInitializer();

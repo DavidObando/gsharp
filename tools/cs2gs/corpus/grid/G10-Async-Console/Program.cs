@@ -35,14 +35,7 @@ namespace Corpus.Grid10
             // await AwaitExpressionValueTaskFixture.RunAsync();
             await AwaitExpressionWhenAllFixture.RunAsync();
             await ForEachStatementFixture.RunAsync();
-            // QUARANTINED: SimpleLambdaExpression (async lambdas). The emitted
-            // G# (`let twice async (int32) -> int32 = async (x int32) -> await
-            // Task.FromResult(x * 2)`) compiles in gsc's default host mode, but
-            // under the pipeline's /reference: (MetadataLoadContext) mode gsc
-            // ICEs with GS9998 "NotSupportedException: Derived classes must
-            // provide an implementation." for every async-lambda form.
-            // See Constructs/SimpleLambdaExpression.cs.quarantined.
-            // await SimpleLambdaExpressionFixture.RunAsync();
+            await SimpleLambdaExpressionFixture.RunAsync();
             await TryStatementFixture.RunAsync();
 
             // QUARANTINED: UsingStatement (await using over IAsyncDisposable).

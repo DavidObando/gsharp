@@ -24,6 +24,7 @@ DiscardPattern: 2 -> nonzero
 DiscardPattern: -5 -> negative
 ExpressionColon: line starts on y-axis = True
 ExpressionColon: line ends above 4 = True
+ExpressionColon: switch-arm classification = starts-on-axis-ends-at-5
 ListPattern: exact length match
 ListPattern: edge slice match
 ListPattern: empty match
@@ -83,3 +84,7 @@ SwitchExpression: 0 -> zero
 SwitchExpression: 2 -> plain positive (2)
 SwitchExpression: 4 -> multiple of four (4)
 SwitchExpression: quarter 3 -> summer
+TypePattern: switch(int) = int expected
+TypePattern: is-test string match
+TypePattern: switch-statement int match
+TypePattern: or-combinator switch(whole number) = whole number expected
