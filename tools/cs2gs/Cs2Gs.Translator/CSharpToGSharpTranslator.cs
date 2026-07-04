@@ -4517,11 +4517,10 @@ public sealed class CSharpToGSharpTranslator
         // where gsc's own parser recognises a leading `^` as a from-end marker
         // rather than one's-complement (Parser.ParseIndexBound). A `^n` nested
         // any deeper (e.g. as a `RangeExpressionSyntax` bound, `recv[a..^n]`) is
-        // NOT a direct argument — the translator pre-lowers ranges to
-        // `Slice(start, length)` arithmetic outside any bracket, so a `^` bound
-        // there is folded into `Length`-relative arithmetic by
-        // `TranslateRangeBound` before it ever reaches this generic prefix-
-        // unary path (an inline `recv[a..^n]` slice never gaps).
+        // NOT a direct argument — `TranslateRangeBound` emits it as its own
+        // native `FromEndIndexExpression` (gsc's `^n`) before it ever reaches
+        // this generic prefix-unary path (an inline `recv[a..^n]` slice never
+        // gaps).
         private static bool IsDirectIndexBracketArgument(ExpressionSyntax expression) =>
             expression.Parent is ArgumentSyntax
             {
@@ -8128,10 +8127,10 @@ public sealed class CSharpToGSharpTranslator
                     if (elementAccess.ArgumentList.Arguments.Count == 1 &&
                         elementAccess.ArgumentList.Arguments[0].Expression is RangeExpressionSyntax sliceRange)
                     {
-                        // `span[a..b]` / `span[..n]` / `span[i..]`: G# has no range
-                        // operator, so lower the System.Range indexer to the
-                        // faithful `Slice(start, length)` / `Slice(start)` call the
-                        // C# range indexer itself lowers to (ADR-0115 §B).
+                        // `span[a..b]` / `span[..n]` / `span[i..]`: gsc has its own
+                        // native range-index operator (Issue #1896), so lower
+                        // directly to that same `recv[start..end]` form instead
+                        // of desugaring to `Slice`.
                         return this.TranslateRangeSlice(
                             this.TranslateReceiverWithNullForgiveness(elementAccess.Expression),
                             elementAccess.Expression,
@@ -9535,74 +9534,29 @@ public sealed class CSharpToGSharpTranslator
             }
         }
 
+        // Issue #1896: gsc has its OWN native range-index syntax
+        // (`recv[start..end]` / `recv[..end]` / `recv[start..]` / `recv[..]`,
+        // with `^n` from-end bounds on either side — Parser.ParseIndexArgument /
+        // ParseIndexBound) and its binder (BindRangeSlice) resolves it directly
+        // against arrays, `string`, and any CLR span-like type with a
+        // `Length`+`Slice(int,int)` shape or a `System.Range` indexer — the same
+        // set of receivers C# itself allows a range index against. So the
+        // C# range index needs no desugaring at all: it round-trips to the
+        // identical native G# form (`GExpression.IndexExpression` wrapping a
+        // `RangeIndexExpression`, already used by the issue #1889 list-pattern
+        // slice lowering below). This also drops #1894's `Length`-arithmetic
+        // and receiver-spill workarounds entirely — gsc's own `^n` bound
+        // handles from-end offsets and the receiver is only ever embedded once.
         private GExpression TranslateRangeSlice(GExpression receiver, ExpressionSyntax receiverSyntax, RangeExpressionSyntax range)
         {
-            // Issue #1894 follow-up: a from-end bound (`^n`) folds into
-            // `receiver.Length - n` below (see `TranslateRangeBound`), which
-            // embeds `receiver` a SECOND time alongside the `.Slice(...)` call
-            // built here — a side-effecting receiver (e.g. `GetArray()[1..^2]`)
-            // would otherwise run twice. Spill it first so both embeds read the
-            // same evaluation; `SpillOperand` already no-ops for a trivial
-            // receiver (bare identifier/`this`/literal), so `a[1..^2]` is
-            // unchanged.
-            if (IsFromEndBound(range.LeftOperand) || IsFromEndBound(range.RightOperand))
-            {
-                receiver = this.SpillOperand(receiver, receiverSyntax);
-            }
-
-            // `recv[start..end]` → `recv.Slice(start, end - start)`;
-            // `recv[start..]`    → `recv.Slice(start)`;
-            // `recv[..end]`      → `recv.Slice(0, end)`.
-            GExpression start = range.LeftOperand != null
-                ? this.TranslateRangeBound(receiver, range.LeftOperand)
-                : LiteralExpression.Int("0");
-
-            var slice = new MemberAccessExpression(receiver, "Slice");
-
-            if (range.RightOperand == null)
-            {
-                return new InvocationExpression(slice, new List<GExpression> { start });
-            }
-
-            // `start` is embedded both as the `Slice` start argument and inside
-            // the `end - start` length below; a non-trivial left operand (e.g. a
-            // side-effecting `Next()`) would otherwise be re-evaluated a second
-            // time here — C# evaluates the range's start once (issue #1731).
-            if (range.LeftOperand != null)
-            {
-                start = this.SpillOperand(start, range.LeftOperand);
-            }
-
-            GExpression end = this.TranslateRangeBound(receiver, range.RightOperand);
-            GExpression length = range.LeftOperand == null
-                ? end
-                : new BinaryExpression(end, "-", start);
-
-            return new InvocationExpression(slice, new List<GExpression> { start, length });
+            GExpression start = range.LeftOperand != null ? this.TranslateRangeBound(range.LeftOperand) : null;
+            GExpression end = range.RightOperand != null ? this.TranslateRangeBound(range.RightOperand) : null;
+            return new IndexExpression(receiver, new RangeIndexExpression(start, end));
         }
 
-        // Issue #1894 regression: a from-end range bound (`a[start..^n]`,
-        // `a[^n..]`) has its `^n` printed OUTSIDE any bracket once the range is
-        // desugared to a plain `.Slice(start, length)` call above — the ONE
-        // bracket-argument position gsc's own parser (Parser.ParseIndexBound)
-        // accepts a bare `^n` in is gone by then, so letting it fall through to
-        // the generic `TranslateExpression` would (correctly, per issue #1894)
-        // gap it as an ambiguous bitwise-complement. Rather than lose an
-        // otherwise-valid inline slice to that gap, fold the from-end bound
-        // directly into arithmetic against the sliced receiver's own `Length`:
-        // "n back from the end" is exactly `receiver.Length - n`. `receiver` is
-        // already spilled by `TranslateRangeSlice` above when a from-end bound
-        // is present, so re-embedding it here (and again in `.Slice(...)`)
-        // reads the same single evaluation rather than re-running it.
-        private static bool IsFromEndBound(ExpressionSyntax bound) =>
-            bound is PrefixUnaryExpressionSyntax fromEnd && fromEnd.IsKind(SyntaxKind.IndexExpression);
-
-        private GExpression TranslateRangeBound(GExpression receiver, ExpressionSyntax bound) =>
-            IsFromEndBound(bound)
-                ? new BinaryExpression(
-                    new MemberAccessExpression(receiver, "Length"),
-                    "-",
-                    this.TranslateExpression(((PrefixUnaryExpressionSyntax)bound).Operand))
+        private GExpression TranslateRangeBound(ExpressionSyntax bound) =>
+            bound is PrefixUnaryExpressionSyntax fromEnd && fromEnd.IsKind(SyntaxKind.IndexExpression)
+                ? new FromEndIndexExpression(this.TranslateExpression(fromEnd.Operand))
                 : this.TranslateExpression(bound);
 
         private GTypeReference ResolveExpressionType(ExpressionSyntax expression)
@@ -9614,8 +9568,9 @@ public sealed class CSharpToGSharpTranslator
             // `Data[Next()..2]`) is implicitly converted by the C# compiler to
             // `System.Index` purely because it sits inside a `Range`-indexer
             // argument list — the value itself is, and always was, an `int`.
-            // `TranslateRangeSlice` already re-lowers the whole range to a plain
-            // `Slice(start, length)` call before this operand is ever typed, so
+            // `TranslateRangeSlice` already re-lowers the whole range to its
+            // own native `RangeIndexExpression` (with `^n` bounds emitted as
+            // `FromEndIndexExpression`) before this operand is ever typed, so
             // that Index/Range conversion is a compiler-internal artifact, never
             // an actual value the translation carries forward. Falling back to
             // the operand's own natural type here avoids gapping perfectly valid

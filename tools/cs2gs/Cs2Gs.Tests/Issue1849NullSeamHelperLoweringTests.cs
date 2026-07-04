@@ -35,6 +35,17 @@ namespace Cs2Gs.Tests;
 /// method body with a normal statement seam. No parser/grammar change is
 /// needed, and the shape is no longer reported <c>Unsupported</c>.
 /// </para>
+/// <para>
+/// Issue #1896 update: a range-slice's start/end bounds are no longer
+/// desugared to a double-embedding <c>.Slice(start, end - start)</c> call —
+/// gsc's own native <c>recv[start..end]</c> range-index form embeds each
+/// bound exactly once, in any context, with no spill needed at all. A
+/// range-slice operand is therefore no longer a null-seam site by itself;
+/// the helper lowering below remains reachable only via a non-trivial
+/// <c>is</c>-pattern scrutinee (a range-slice nested inside one is simply
+/// embedded once, as part of the scrutinee capture — see
+/// <see cref="FieldInitializer_NestedNullSeamOperand_LowersCleanlyWithNoDanglingHelperCall"/>).
+/// </para>
 /// </summary>
 public class Issue1849NullSeamHelperLoweringTests
 {
@@ -69,8 +80,14 @@ namespace Demo
     }
 
     [Fact]
-    public void FieldInitializer_RangeSliceSideEffectingOperand_LowersToHelper()
+    public void FieldInitializer_RangeSliceSideEffectingOperand_LowersToNativeRangeIndex()
     {
+        // Issue #1896 follow-up: a range-slice's native `recv[start..end]`
+        // form embeds each bound exactly once regardless of context, so a
+        // field initializer never needs the #1849 helper lowering for a
+        // range-slice operand — that helper machinery only remains reachable
+        // for a non-trivial `is`-pattern scrutinee (see the sibling
+        // `PatternScrutineeSideEffectingReceiver` tests above).
         (string printed, TranslationContext context) = TranslateUnitWithContext(@"
 namespace Demo
 {
@@ -86,9 +103,10 @@ namespace Demo
     }
 }");
 
-        Assert.Equal(2, CountOccurrences(printed, "Next()")); // 1 declaration + 1 call-site use (was N-per-embed before the fix)
-        Assert.Contains(".Slice(", printed);
-        Assert.Contains("__init0(", printed);
+        Assert.Equal(2, CountOccurrences(printed, "Next()")); // 1 declaration + 1 call-site use
+        Assert.Contains("Data[C.Next()..2]", printed);
+        Assert.DoesNotContain(".Slice(", printed);
+        Assert.DoesNotContain("__init0", printed);
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
     }
 
@@ -118,8 +136,10 @@ namespace Demo
     }
 
     [Fact]
-    public void StaticPropertyInitializer_RangeSliceSideEffectingOperand_LowersToHelper()
+    public void StaticPropertyInitializer_RangeSliceSideEffectingOperand_LowersToNativeRangeIndex()
     {
+        // Issue #1896 follow-up: same as the field-initializer case above —
+        // the native range-index form needs no helper here either.
         (string printed, TranslationContext context) = TranslateUnitWithContext(@"
 namespace Demo
 {
@@ -135,9 +155,10 @@ namespace Demo
     }
 }");
 
-        Assert.Equal(2, CountOccurrences(printed, "Next()")); // 1 declaration + 1 call-site use (was N-per-embed before the fix)
-        Assert.Contains(".Slice(", printed);
-        Assert.Contains("__init0(", printed);
+        Assert.Equal(2, CountOccurrences(printed, "Next()")); // 1 declaration + 1 call-site use
+        Assert.Contains("Data[C.Next()..2]", printed);
+        Assert.DoesNotContain(".Slice(", printed);
+        Assert.DoesNotContain("__init0", printed);
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
     }
 
@@ -173,7 +194,7 @@ namespace Demo
     }
 
     [Fact]
-    public void ThisConstructorArgument_RangeSliceSideEffectingOperand_LowersToHelper()
+    public void ThisConstructorArgument_RangeSliceSideEffectingOperand_LowersToNativeRangeIndex()
     {
         (string printed, TranslationContext context) = TranslateUnitWithContext(@"
 namespace Demo
@@ -190,15 +211,14 @@ namespace Demo
     }
 }");
 
-        // `s` and `j` are the DELEGATING constructor's own parameters, not
-        // field/static state — they must be threaded through as additional
-        // (same-named) helper parameters alongside the genuinely captured
-        // `Next()` operand, since a static helper method cannot otherwise see
-        // them at all.
-        Assert.Equal(2, CountOccurrences(printed, "Next()")); // 1 declaration + 1 call-site use (was N-per-embed before the fix)
-        Assert.Contains(".Slice(", printed);
-        Assert.Contains("__init0(s, j,", printed);
-        Assert.Contains("private func __init0(s []int32, j int32,", printed);
+        // Issue #1896 follow-up: the delegating constructor's own parameters
+        // (`s`, `j`) are already in scope at the `this(...)` argument list —
+        // no helper is needed to thread them through, since the native
+        // range-index form needs no helper at all here.
+        Assert.Equal(2, CountOccurrences(printed, "Next()")); // 1 declaration + 1 call-site use
+        Assert.Contains("init(s[C.Next()..j])", printed);
+        Assert.DoesNotContain(".Slice(", printed);
+        Assert.DoesNotContain("__init0", printed);
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
     }
 
@@ -282,20 +302,26 @@ namespace Demo
     }
 
     /// <summary>
-    /// Reviewer follow-up: a null-seam operand that is ITSELF nested inside
-    /// another null-seam operand — here, the is-pattern scrutinee
-    /// <c>Y[Z()..a]</c> is a range-slice whose start <c>Z()</c> is also
-    /// non-trivial and gets spilled first. Naively lowering both to captures
-    /// of the SAME helper would pass the inner spill's synthesized parameter
-    /// name (<c>__p0</c>) as part of the outer capture's call-site argument
-    /// (<c>__init0(Z(), Y[__p0..a])</c>) — but <c>__p0</c> only exists as a
-    /// parameter INSIDE the helper body, so it is a dangling identifier at
-    /// the field-initializer call site. This must bail to the loud
-    /// <c>Unsupported</c> diagnostic (the pre-#1849 behavior) instead of
-    /// emitting a broken helper call.
+    /// Reviewer follow-up, re-verified after #1896: a null-seam operand
+    /// nested inside another null-seam operand — here, the is-pattern
+    /// scrutinee <c>Y[Z()..a]</c> is a range-slice whose start <c>Z()</c> is
+    /// non-trivial. Before #1896, the range-slice's <c>.Slice</c> desugaring
+    /// ALSO needed a single-evaluation spill of <c>Z()</c>, so this was two
+    /// nested null-seam lowerings sharing one synthesized helper — and the
+    /// inner spill's parameter name (<c>__p0</c>) leaking into the outer
+    /// capture's own call-site argument was a genuine dangling-identifier
+    /// hazard, guarded by bailing to the loud <c>Unsupported</c> diagnostic.
+    /// #1896's native <c>recv[start..end]</c> range-index form embeds
+    /// <c>Z()</c> exactly once with no spill of its own — the range-slice is
+    /// no longer a null-seam site at all, only the outer <c>is</c>-pattern
+    /// scrutinee is. So there is only ONE capture now (the whole
+    /// <c>Y[Z()..a]</c> expression, captured as-is by the pattern-match
+    /// helper), the dangling-<c>__p0</c> hazard this test guarded no longer
+    /// exists, and the correct current behavior is a clean helper lowering
+    /// with no <c>Unsupported</c> diagnostic.
     /// </summary>
     [Fact]
-    public void FieldInitializer_NestedNullSeamOperand_ReportsUnsupportedInsteadOfDanglingHelperCall()
+    public void FieldInitializer_NestedNullSeamOperand_LowersCleanlyWithNoDanglingHelperCall()
     {
         (string printed, TranslationContext context) = TranslateUnitWithContext(@"
 namespace Demo
@@ -312,9 +338,13 @@ namespace Demo
     }
 }");
 
-        Assert.Contains(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
-        Assert.DoesNotContain("__init0", printed);
-        Assert.DoesNotContain("__p0", printed);
+        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        // The whole range-slice `Y[Z()..a]` is the single (only) capture, at
+        // the call site, exactly once — no dangling `__p0` leaks into the
+        // argument list itself (a `__p0` parameter name is fine INSIDE the
+        // synthesized helper's own body/signature, since it is in scope
+        // there).
+        Assert.Contains("__init0(C.Y[C.Z()..C.a])", printed);
     }
 
     private static int CountOccurrences(string haystack, string needle)

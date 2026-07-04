@@ -225,8 +225,11 @@ namespace Demo
     }
 }");
 
+        // Issue #1896: the native `recv[start..end]` range-index form embeds
+        // `Next()` exactly once with no `.Slice` desugaring/spill needed.
         Assert.Equal(2, CountOccurrences(printed, "Next()")); // 1 declaration + 1 call
-        Assert.Contains(".Slice(", printed);
+        Assert.Contains("s[Next()..j]", printed);
+        Assert.DoesNotContain(".Slice(", printed);
     }
 
     /// <summary>
@@ -299,15 +302,21 @@ namespace Demo
     // arbitrary parenthesized expression" postfix form to smuggle one in as
     // an immediately-invoked lambda either. #1731 settled for REPORTING the
     // gap (TranslationSeverity.Unsupported) instead of silently
-    // double-evaluating. Issue #1849 closes the gap for real: the whole
-    // null-seam initializer/argument is lowered to a call to a synthesized
-    // private static helper method, so the non-trivial operand is evaluated
-    // exactly once (by the caller, as the helper-call argument) instead of
+    // double-evaluating. Issue #1849 closes the gap for real for a
+    // non-trivial `is`-pattern scrutinee: the whole null-seam
+    // initializer/argument is lowered to a call to a synthesized private
+    // static helper method, so the non-trivial operand is evaluated exactly
+    // once (by the caller, as the helper-call argument) instead of
     // re-embedded — see Issue1849NullSeamHelperLoweringTests for the full
     // helper-lowering coverage (all four sites, static-vs-instance/ctor-
-    // parameter passthrough, name uniquification). These four cases are kept
-    // here, updated to assert the fixed behavior, since they are the exact
-    // reproducers #1731 N1 originally reported as unsupported.) ------------
+    // parameter passthrough, name uniquification). Issue #1896 then closed
+    // the range-slice half of the original N1 gap a different way: the
+    // native `recv[start..end]` range-index form embeds each bound exactly
+    // once in ANY context, so a range-slice null-seam operand no longer
+    // needs the #1849 helper (or any spill) at all — see the two
+    // RangeSlice* cases below, kept here as the exact reproducers #1731 N1
+    // originally reported as unsupported, updated to assert the current
+    // native-form behavior. ------------------------------------------------
 
     [Fact]
     public void FieldInitializer_PatternScrutineeSideEffectingReceiver_LowersToHelper()
@@ -341,7 +350,7 @@ namespace Demo
     }
 
     [Fact]
-    public void FieldInitializer_RangeSliceSideEffectingOperand_LowersToHelper()
+    public void FieldInitializer_RangeSliceSideEffectingOperand_LowersToNativeRangeIndex()
     {
         (string printed, TranslationContext context) = TranslateUnitWithContext(@"
 namespace Demo
@@ -358,9 +367,12 @@ namespace Demo
     }
 }");
 
+        // Issue #1896: no helper needed — the native range-index form
+        // already embeds `Next()` exactly once.
         Assert.Equal(2, CountOccurrences(printed, "Next()")); // 1 declaration + 1 call-site use
-        Assert.Contains(".Slice(", printed);
-        Assert.Contains("__init0(", printed);
+        Assert.Contains("Data[C.Next()..2]", printed);
+        Assert.DoesNotContain(".Slice(", printed);
+        Assert.DoesNotContain("__init0(", printed);
         Assert.DoesNotContain(
             context.Diagnostics,
             d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("1731 N1"));
@@ -399,7 +411,7 @@ namespace Demo
     }
 
     [Fact]
-    public void ThisConstructorArgument_RangeSliceSideEffectingOperand_LowersToHelper()
+    public void ThisConstructorArgument_RangeSliceSideEffectingOperand_LowersToNativeRangeIndex()
     {
         (string printed, TranslationContext context) = TranslateUnitWithContext(@"
 namespace Demo
@@ -416,9 +428,13 @@ namespace Demo
     }
 }");
 
+        // Issue #1896: no helper needed — `s`/`j` are already in scope at
+        // the `this(...)` argument list, and the native range-index form
+        // already embeds `Next()` exactly once.
         Assert.Equal(2, CountOccurrences(printed, "Next()")); // 1 declaration + 1 call-site use
-        Assert.Contains(".Slice(", printed);
-        Assert.Contains("__init0(", printed);
+        Assert.Contains("init(s[C.Next()..j])", printed);
+        Assert.DoesNotContain(".Slice(", printed);
+        Assert.DoesNotContain("__init0(", printed);
         Assert.DoesNotContain(
             context.Diagnostics,
             d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("1731 N1"));

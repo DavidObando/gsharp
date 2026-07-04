@@ -133,11 +133,15 @@ namespace Demo
     }
 
     /// <summary>
-    /// A range index over a span (<c>s[a..b]</c>) lowers to a <c>.Slice(start,
-    /// length)</c> call — G# has no range operator (gsc gap; ADR-0115 §G).
+    /// A range index over a span (<c>s[a..b]</c>) lowers to gsc's OWN native
+    /// range-index syntax (<c>recv[start..end]</c>) — gsc's binder
+    /// (<c>ExpressionBinder.BindRangeSlice</c>) resolves it directly against
+    /// any CLR span-like type with a <c>Length</c>+<c>Slice(int,int)</c>
+    /// shape, so no <c>.Slice</c> desugaring is needed here either (issue
+    /// #1896).
     /// </summary>
     [Fact]
-    public void RangeExpression_OverSpan_LoweredToSlice()
+    public void RangeExpression_OverSpan_LoweredToNativeRangeIndex()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -152,9 +156,10 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Slice(1, 3 - 1)", printed);
-        Assert.Contains("Slice(2)", printed);
-        Assert.Contains("Slice(0, 4)", printed);
+        Assert.Contains("s[1..3]", printed);
+        Assert.Contains("s[2..]", printed);
+        Assert.Contains("s[..4]", printed);
+        Assert.DoesNotContain(".Slice(", printed);
     }
 
     /// <summary>

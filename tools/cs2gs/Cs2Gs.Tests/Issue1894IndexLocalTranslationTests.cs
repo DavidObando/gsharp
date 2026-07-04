@@ -39,8 +39,10 @@ namespace Cs2Gs.Tests;
 /// </list>
 /// The direct inline case, <c>a[^3]</c>, is unaffected: it still lowers to
 /// the bare native G# <c>a[^3]</c>. An inline range bound, <c>a[1..^2]</c>,
-/// is also unaffected: <c>CSharpToGSharpTranslator.TranslateRangeBound</c>
-/// folds it into <c>Length</c>-relative arithmetic instead of gapping.
+/// is also unaffected: issue #1896 root-caused range-slice lowering to gsc's
+/// own native <c>a[1..^2]</c> range-index syntax (see
+/// <c>CSharpToGSharpTranslator.TranslateRangeSlice</c>), which accepts a
+/// bracket-scoped <c>^n</c> bound directly — no arithmetic folding needed.
 /// </summary>
 public class Issue1894IndexLocalTranslationTests
 {
@@ -68,9 +70,10 @@ namespace Corpus.Issue1894
     {
         // `a[1..^2]`, `a[^2..]`, `a[..^1]`: the `^n` bound is nested inside a
         // `RangeExpressionSyntax` that is itself a direct bracket argument —
-        // a valid, working inline slice (folded to `Length`-relative
-        // arithmetic by `TranslateRangeBound`), not the #1894 silent-
-        // miscompile shape (a bare `^n` stored/reused outside any bracket).
+        // a valid, working inline slice. Issue #1896 root-caused this: gsc
+        // has its OWN native range-index syntax, so the whole range (`^n`
+        // bound included) now round-trips to the identical native G# form
+        // instead of being desugared to `.Slice(...)`.
         string rendered = Render(@"
 namespace Corpus.Issue1894
 {
@@ -85,19 +88,21 @@ namespace Corpus.Issue1894
 }
 ");
 
-        Assert.Contains(".Slice(", rendered, StringComparison.Ordinal);
+        Assert.Contains("a[1..^2]", rendered, StringComparison.Ordinal);
+        Assert.Contains("a[^2..]", rendered, StringComparison.Ordinal);
+        Assert.Contains("a[..^1]", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain(".Slice(", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
     [Fact]
-    public void InlineRangeSlice_FromEndBound_SpillsSideEffectingReceiverOnce()
+    public void InlineRangeSlice_FromEndBound_EvaluatesSideEffectingReceiverOnce()
     {
-        // Regression: `TranslateRangeBound` re-embeds the receiver inside
-        // `receiver.Length` alongside the `.Slice(...)` call built in
-        // `TranslateRangeSlice` — a side-effecting receiver (`Src()`) must be
-        // evaluated exactly once, not twice, when a from-end bound is
-        // present. A trivial identifier receiver (`a`) must stay unchanged,
-        // no spill temp introduced.
+        // Issue #1896: the native `recv[start..^n]` form embeds `recv` exactly
+        // once (unlike the retired `.Slice(...)` desugaring, which needed a
+        // receiver spill to avoid a double-evaluated `receiver.Length` +
+        // `.Slice(...)` pair). A side-effecting receiver (`Src()`) must still
+        // be called exactly once, now with no spill temp at all.
         string rendered = Render(@"
 namespace Corpus.Issue1894
 {
@@ -117,11 +122,12 @@ namespace Corpus.Issue1894
         string sideEffectingBody = rendered.Substring(sideEffectingStart, sideEffectingEnd - sideEffectingStart);
         int srcCallCount = System.Text.RegularExpressions.Regex.Matches(sideEffectingBody, @"Src\(\)").Count;
         Assert.Equal(1, srcCallCount);
-        Assert.Contains("let __spill", sideEffectingBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("let __", sideEffectingBody, StringComparison.Ordinal);
+        Assert.Contains("Src()[1..^2]", sideEffectingBody, StringComparison.Ordinal);
 
         string trivialBody = rendered.Substring(sideEffectingEnd);
         Assert.DoesNotContain("let __", trivialBody, StringComparison.Ordinal);
-        Assert.Contains("a.Slice(", trivialBody, StringComparison.Ordinal);
+        Assert.Contains("a[1..^2]", trivialBody, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
