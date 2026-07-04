@@ -133,7 +133,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | LogicalNotExpression | PrefixUnaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LogicalNotExpression.cs |  |  |
 | LogicalOrExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LogicalOrExpression.cs |  |  |
 | MemberBindingExpression | MemberBindingExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/MemberBindingExpression.cs |  | Null-conditional ?. / ?[. |
-| MethodDeclaration | MethodDeclarationSyntax | ADR-0115 §B.5 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/MethodDeclaration.cs |  |  |
+| MethodDeclaration | MethodDeclarationSyntax | ADR-0115 §B.5 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/MethodDeclaration.cs |  | Receiver-clause functions now retain their G# extension semantics across compiled assembly references (issue #1929). |
 | ModuloAssignmentExpression | AssignmentExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/ModuloAssignmentExpression.cs |  |  |
 | ModuloExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/ModuloExpression.cs |  |  |
 | MultiplyAssignmentExpression | AssignmentExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/MultiplyAssignmentExpression.cs |  |  |
@@ -189,7 +189,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | StackAllocArrayCreationExpression | StackAllocArrayCreationExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/StackAllocArrayCreationExpression.cs | https://github.com/DavidObando/gsharp/issues/1933 | Compiles end-to-end under the ilverify allow-unsafe policy (issue #1933); stackalloc's localloc IL is unverifiable by design, not a gsc defect. |
 | StringLiteralExpression | LiteralExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/StringLiteralExpression.cs |  |  |
 | StructConstraint | ClassOrStructConstraintSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/StructConstraint.cs |  |  |
-| StructDeclaration | StructDeclarationSyntax | ADR-0115 §B.4 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/StructDeclaration.cs |  | Generic-struct ctor zip declined (issue #1915). |
+| StructDeclaration | StructDeclarationSyntax | ADR-0115 §B.4 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/StructDeclaration.cs |  | Generic-struct ctor zip declined (issue #1915). Cross-assembly G# metadata now preserves imported data-struct / primary-constructor semantics (issue #1929). |
 | Subpattern | SubpatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/RecursivePattern.cs |  | Property sub-patterns; designator collisions fixed in issue #1839. |
 | SubtractAssignmentExpression | AssignmentExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/SubtractAssignmentExpression.cs |  |  |
 | SubtractExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/SubtractExpression.cs |  |  |
