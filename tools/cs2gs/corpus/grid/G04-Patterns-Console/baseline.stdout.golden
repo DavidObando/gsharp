@@ -24,6 +24,7 @@ DiscardPattern: 2 -> nonzero
 DiscardPattern: -5 -> negative
 ExpressionColon: line starts on y-axis = True
 ExpressionColon: line ends above 4 = True
+ExpressionColon: switch-arm classification = starts-on-axis-ends-at-5
 ListPattern: exact length match
 ListPattern: edge slice match
 ListPattern: empty match

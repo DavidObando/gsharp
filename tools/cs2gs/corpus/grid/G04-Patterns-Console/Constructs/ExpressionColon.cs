@@ -1,8 +1,4 @@
 // inventory: ExpressionColon
-// NOTE: quarantined sub-case: an extended property pattern used in a
-// switch-expression arm (`{ Start.X: 0, End.Y: 5 } => ...`) fails stage 1 with
-// CS2GS-GAP "positional subpattern has no canonical G# form yet (ADR-0115 §B)".
-// The is-pattern form below is kept.
 using System;
 
 namespace Corpus.Grid04.Constructs
@@ -24,6 +20,18 @@ namespace Corpus.Grid04.Constructs
 
             bool endsHigh = line is { End.Y: > 4 };
             Console.WriteLine($"ExpressionColon: line ends above 4 = {endsHigh}");
+
+            // Switch-expression subject uses a separately-declared non-nullable
+            // value: G#'s property pattern (unlike the is-pattern lowering
+            // above) requires a struct/class value, not a nullable reference.
+            EcLine solidLine = new EcLine(new EcPoint(0, 1), new EcPoint(4, 5));
+            string classification = solidLine switch
+            {
+                { Start.X: 0, End.Y: 5 } => "starts-on-axis-ends-at-5",
+                { Start.X: > 0 } => "off-axis",
+                _ => "other",
+            };
+            Console.WriteLine($"ExpressionColon: switch-arm classification = {classification}");
         }
     }
 }
