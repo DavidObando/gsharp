@@ -120,6 +120,7 @@ internal sealed class SideEffectSpiller : BoundTreeRewriter
             program.Globals)
         {
             Imports = program.Imports,
+            FriendAssemblies = program.FriendAssemblies,
         };
     }
 

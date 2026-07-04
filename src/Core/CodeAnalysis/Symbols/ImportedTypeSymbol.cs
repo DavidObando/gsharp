@@ -177,6 +177,7 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         var bindingFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
 
         var fieldBuilder = ImmutableArray.CreateBuilder<FieldSymbol>();
+        var fieldByToken = new System.Collections.Generic.Dictionary<int, FieldSymbol>();
         foreach (var field in ClrTypeUtilities.SafeGetFields(type, bindingFlags))
         {
             if (field.IsStatic || !IsVisible(field, includeInternal) || field.IsSpecialName || field.Name.StartsWith("<", StringComparison.Ordinal))
@@ -184,11 +185,13 @@ public sealed class ImportedTypeSymbol : TypeSymbol
                 continue;
             }
 
-            fieldBuilder.Add(new FieldSymbol(
+            var fieldSymbol = new FieldSymbol(
                 field.Name,
                 TypeSymbol.FromClrType(field.FieldType),
                 MapAccessibility(field),
-                isReadOnly: field.IsInitOnly));
+                isReadOnly: field.IsInitOnly);
+            fieldBuilder.Add(fieldSymbol);
+            fieldByToken[field.MetadataToken] = fieldSymbol;
         }
 
         var propertyBuilder = ImmutableArray.CreateBuilder<PropertySymbol>();
@@ -229,7 +232,7 @@ public sealed class ImportedTypeSymbol : TypeSymbol
             isData: semantics.IsData,
             isInline: false,
             isClass: false,
-            primaryConstructorParameters: BuildPrimaryConstructorParameters(fieldBuilder.ToImmutable(), propertyBuilder.ToImmutable(), semantics),
+            primaryConstructorParameters: BuildPrimaryConstructorParameters(fieldBuilder.ToImmutable(), propertyBuilder.ToImmutable(), fieldByToken, semantics),
             isOpen: false,
             baseClass: null,
             clrType: type);
@@ -243,6 +246,7 @@ public sealed class ImportedTypeSymbol : TypeSymbol
     private static ImmutableArray<ParameterSymbol> BuildPrimaryConstructorParameters(
         ImmutableArray<FieldSymbol> fields,
         ImmutableArray<PropertySymbol> properties,
+        System.Collections.Generic.Dictionary<int, FieldSymbol> fieldByToken,
         ImportedTypeSemantics semantics)
     {
         if (semantics.PrimaryConstructorParameterNames.IsDefaultOrEmpty)
@@ -252,9 +256,28 @@ public sealed class ImportedTypeSymbol : TypeSymbol
 
         var fieldMap = fields.ToDictionary(f => f.Name, StringComparer.Ordinal);
         var propertyMap = properties.ToDictionary(p => p.Name, StringComparer.Ordinal);
+        var tokens = semantics.PrimaryConstructorParameterFieldTokens;
         var builder = ImmutableArray.CreateBuilder<ParameterSymbol>(semantics.PrimaryConstructorParameterNames.Length);
-        foreach (var name in semantics.PrimaryConstructorParameterNames)
+        for (var i = 0; i < semantics.PrimaryConstructorParameterNames.Length; i++)
         {
+            var name = semantics.PrimaryConstructorParameterNames[i];
+
+            // Prefer the exact backing field recorded by metadata token
+            // (issue #1953 follow-up) — this is immune to the parameter name
+            // ever diverging from the field name (renames, lowering,
+            // mangling). Only fall back to a name-based lookup when no token
+            // was recorded (older payload shape) or the token failed to
+            // resolve (e.g. a property-backed parameter).
+            if (!tokens.IsDefaultOrEmpty
+                && i < tokens.Length
+                && tokens[i] != 0
+                && fieldByToken != null
+                && fieldByToken.TryGetValue(tokens[i], out var tokenField))
+            {
+                builder.Add(new ParameterSymbol(name, tokenField.Type));
+                continue;
+            }
+
             if (fieldMap.TryGetValue(name, out var field))
             {
                 builder.Add(new ParameterSymbol(name, field.Type));

@@ -3297,10 +3297,29 @@ internal sealed class ReflectionMetadataEmitter
 
         this.EmitGSharpTypeSemantics(assemblyHandle);
 
+        // Issue #1929/#1953: producer-declared friend assemblies. Each
+        // `@assembly:InternalsVisibleTo("Foo")` annotation becomes a real
+        // System.Runtime.CompilerServices.InternalsVisibleToAttribute row so
+        // cross-assembly internal access is genuine producer opt-in — no
+        // consumer-side name heuristic (see ImportedAssemblySemantics).
+        this.EmitFriendAssemblyAttributes(assemblyHandle);
+
         // 2. NullableContextAttribute(1) — declares the assembly's default
         // nullable context as "annotated" so C# consumers see non-null by
         // default for GSharp types (GSharp has no null references).
         this.EmitNullableContextAttribute(assemblyHandle);
+    }
+
+    private void EmitFriendAssemblyAttributes(AssemblyDefinitionHandle assemblyHandle)
+    {
+        foreach (var friend in this.emitCtx.Program.FriendAssemblies)
+        {
+            this.customAttrEncoder.EmitStringAttribute(
+                assemblyHandle,
+                "System.Runtime.CompilerServices.InternalsVisibleToAttribute",
+                typeof(System.Runtime.CompilerServices.InternalsVisibleToAttribute),
+                friend);
+        }
     }
 
     private void EmitGSharpTypeSemantics(AssemblyDefinitionHandle assemblyHandle)
@@ -3314,12 +3333,33 @@ internal sealed class ReflectionMetadataEmitter
                 continue;
             }
 
+            // Issue #1953 follow-up: pair each primary-ctor parameter name
+            // with its backing field's metadata token (0 when no backing
+            // field is found, e.g. a property-backed parameter), so the
+            // importer (ImportedTypeSymbol.BuildPrimaryConstructorParameters)
+            // can recover the parameter's type via the exact field even when
+            // a future lowering/mangling pass makes the parameter name differ
+            // from the field name — falling back to name matching only when
+            // no token was recorded.
+            var fieldsByName = type.Fields.ToDictionary(f => f.Name, StringComparer.Ordinal);
+            var parameterEntries = type.PrimaryConstructorParameters.Select(p =>
+            {
+                var token = 0;
+                if (fieldsByName.TryGetValue(p.Name, out var backingField)
+                    && this.cache.StructFieldDefs.TryGetValue(backingField, out var fieldHandle))
+                {
+                    token = MetadataTokens.GetToken(fieldHandle);
+                }
+
+                return $"{p.Name}:{token.ToString(CultureInfo.InvariantCulture)}";
+            });
+
             var payload = string.Join(
                 "|",
                 MetadataTokens.GetToken(handle).ToString(CultureInfo.InvariantCulture),
                 "struct",
                 type.IsData ? "1" : "0",
-                string.Join(",", type.PrimaryConstructorParameters.Select(p => p.Name)));
+                string.Join(",", parameterEntries));
             this.customAttrEncoder.EmitStringPairAttribute(
                 assemblyHandle,
                 "System.Reflection.AssemblyMetadataAttribute",

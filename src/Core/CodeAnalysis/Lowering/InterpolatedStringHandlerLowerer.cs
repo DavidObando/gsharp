@@ -111,6 +111,7 @@ internal sealed class InterpolatedStringHandlerLowerer : BoundTreeRewriter
             program.Globals)
         {
             Imports = program.Imports,
+            FriendAssemblies = program.FriendAssemblies,
         };
 
         return result;

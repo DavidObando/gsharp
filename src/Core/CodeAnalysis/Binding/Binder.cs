@@ -976,6 +976,26 @@ public sealed class Binder
 
         var result = new BoundGlobalScope(previous, entryPointPackage, packagesInOrder.ToImmutable(), diagnostics, imports, functions, variables, typeAliases, structs, interfaces, enums, delegates, entryPoint, statements.ToImmutable());
         result.PreprocessorSymbols = preprocessorSymbols ?? ImmutableHashSet<string>.Empty;
+
+        // Issue #1929/#1953: collect producer-declared friend assemblies
+        // (`@assembly:InternalsVisibleTo("...")`) so the emitter can write
+        // real InternalsVisibleToAttribute rows. Diagnostics for malformed
+        // declarations report through binder.Diagnostics above, but that bag
+        // was already snapshotted into `diagnostics`, so append here too.
+        var friendDiagnostics = new DiagnosticBag();
+        var friendAssemblies = FriendAssemblyDeclarations.Collect(syntaxTrees, friendDiagnostics);
+        result.FriendAssemblies = previous == null
+            ? friendAssemblies
+            : previous.FriendAssemblies.AddRange(friendAssemblies.Where(f => !previous.FriendAssemblies.Contains(f)));
+        if (friendDiagnostics.Any())
+        {
+            result = new BoundGlobalScope(previous, entryPointPackage, packagesInOrder.ToImmutable(), diagnostics.AddRange(friendDiagnostics), imports, functions, variables, typeAliases, structs, interfaces, enums, delegates, entryPoint, statements.ToImmutable())
+            {
+                PreprocessorSymbols = result.PreprocessorSymbols,
+                FriendAssemblies = result.FriendAssemblies,
+            };
+        }
+
         return result;
     }
 
@@ -1470,6 +1490,7 @@ public sealed class Binder
         return new BoundProgram(globalScope.Package, globalScope.Packages, diagnostics.ToImmutable(), functionBodies.ToImmutable(), globalScope.EntryPoint, statement, globalScope.Structs, globalScope.Interfaces, globalScope.Enums, globals, globalScope.Delegates)
         {
             Imports = globalScope.Imports,
+            FriendAssemblies = globalScope.FriendAssemblies,
         };
     }
 

@@ -271,4 +271,15 @@ public sealed class BoundGlobalScope
     /// function bodies. Defaults to <see cref="ImmutableHashSet{T}.Empty"/>.
     /// </summary>
     public ImmutableHashSet<string> PreprocessorSymbols { get; internal set; } = ImmutableHashSet<string>.Empty;
+
+    /// <summary>
+    /// Gets the distinct set of friend-assembly names this compilation
+    /// declares via <c>@assembly:InternalsVisibleTo("...")</c> annotations
+    /// (issue #1929/#1953). The emitter writes a real
+    /// <see cref="System.Runtime.CompilerServices.InternalsVisibleToAttribute"/>
+    /// custom attribute row for each entry so the producer genuinely opts
+    /// in to cross-assembly internal access — there is no consumer-side
+    /// name-based heuristic.
+    /// </summary>
+    public ImmutableArray<string> FriendAssemblies { get; internal set; } = ImmutableArray<string>.Empty;
 }

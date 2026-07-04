@@ -65,12 +65,14 @@ internal static class ImportedAssemblySemantics
                 return true;
             }
 
-            if (!string.IsNullOrEmpty(ownerName)
-                && string.Equals(normalizedConsumer, ownerName + ".Tests", StringComparison.Ordinal))
-            {
-                return true;
-            }
-
+            // No unilateral ".Tests"-suffix auto-friend heuristic here — the
+            // producer must explicitly opt in via a real
+            // InternalsVisibleToAttribute row (either hand-written
+            // `[assembly: InternalsVisibleTo(...)]` from a .NET-language
+            // producer, or gsc's `@assembly:InternalsVisibleTo("...")`
+            // annotation — see
+            // ReflectionMetadataEmitter.EmitFriendAssemblyAttributes). A
+            // consumer name is only trusted if the owner actually declared it.
             return Cache.GetOrAdd(assembly, ReadAssemblySemantics).FriendAssemblies.Contains(normalizedConsumer);
         }
         catch
@@ -158,17 +160,43 @@ internal static class ImportedAssemblySemantics
 
         var kind = parts[1];
         var isData = string.Equals(parts[2], "1", StringComparison.Ordinal);
-        var primaryParameterNames = parts[3].Length == 0
-            ? ImmutableArray<string>.Empty
-            : parts[3]
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .ToImmutableArray();
+
+        // Issue #1953 follow-up: each entry is "name:backingFieldToken" (token
+        // is "0" when the emitter found no backing field, e.g. a property-
+        // backed parameter). Tolerate the old name-only format too (no ':')
+        // so a stale-but-compatible payload never turns into an outright
+        // parse failure — it just carries no token.
+        var primaryParameterNames = ImmutableArray<string>.Empty;
+        var primaryParameterFieldTokens = ImmutableArray<int>.Empty;
+        if (parts[3].Length != 0)
+        {
+            var entries = parts[3].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var namesBuilder = ImmutableArray.CreateBuilder<string>(entries.Length);
+            var tokensBuilder = ImmutableArray.CreateBuilder<int>(entries.Length);
+            foreach (var entry in entries)
+            {
+                var colon = entry.IndexOf(':');
+                if (colon < 0)
+                {
+                    namesBuilder.Add(entry);
+                    tokensBuilder.Add(0);
+                    continue;
+                }
+
+                namesBuilder.Add(entry.Substring(0, colon));
+                tokensBuilder.Add(int.TryParse(entry.Substring(colon + 1), out var token) ? token : 0);
+            }
+
+            primaryParameterNames = namesBuilder.ToImmutable();
+            primaryParameterFieldTokens = tokensBuilder.ToImmutable();
+        }
 
         semantics = new ImportedTypeSemantics(
             MetadataToken: metadataToken,
             IsValueType: string.Equals(kind, "struct", StringComparison.Ordinal),
             IsData: isData,
-            PrimaryConstructorParameterNames: primaryParameterNames);
+            PrimaryConstructorParameterNames: primaryParameterNames,
+            PrimaryConstructorParameterFieldTokens: primaryParameterFieldTokens);
         return true;
     }
 
@@ -198,4 +226,5 @@ internal sealed record ImportedTypeSemantics(
     int MetadataToken,
     bool IsValueType,
     bool IsData,
-    ImmutableArray<string> PrimaryConstructorParameterNames);
+    ImmutableArray<string> PrimaryConstructorParameterNames,
+    ImmutableArray<int> PrimaryConstructorParameterFieldTokens = default);

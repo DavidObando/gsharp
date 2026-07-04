@@ -102,7 +102,6 @@ func Foo() {
     [InlineData("property")]
     [InlineData("event")]
     [InlineData("module")]
-    [InlineData("assembly")]
     [InlineData("genericparam")]
     public void Parses_All_Canonical_Use_Site_Targets(string kind)
     {
@@ -134,6 +133,36 @@ func F() {
 ";
         var tree = SyntaxTree.Parse(source);
         Assert.Contains(tree.Diagnostics, d => d.Id == "GS0197");
+    }
+
+    /// <summary>
+    /// Issue #1929/#1953: unlike every other use-site target, <c>assembly:</c>
+    /// is consumed by the parser at file scope (between <c>import</c>s and
+    /// the first member) rather than attaching to the next declaration — it
+    /// is the producer-side friend-assembly opt-in surface
+    /// (<c>@assembly:InternalsVisibleTo("...")</c>), not a per-declaration
+    /// custom attribute.
+    /// </summary>
+    [Fact]
+    public void Assembly_Target_Annotation_Attaches_At_File_Scope_Not_To_Next_Member()
+    {
+        const string source = @"
+package P
+
+@assembly:InternalsVisibleTo(""Foo.Tests"")
+func F() {
+}
+";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var annotation = Assert.Single(tree.Root.AssemblyAttributes);
+        Assert.NotNull(annotation.Target);
+        Assert.Equal("assembly", annotation.Target.KindIdentifier.Text);
+        Assert.Equal("InternalsVisibleTo", annotation.GetNameText());
+
+        var fn = tree.Root.Members.OfType<FunctionDeclarationSyntax>().Single();
+        Assert.Empty(fn.Annotations);
     }
 
     [Fact]

@@ -10,6 +10,8 @@ package GsharpLibrary
 
 import System
 
+@assembly:InternalsVisibleTo("GsharpLibrary.Tests")
+
 class Greeter {
     func Greet(name string) string {
         return "Hello, " + name + "!"
