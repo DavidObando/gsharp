@@ -3827,6 +3827,26 @@ public sealed class Binder
 
             InferTypeArguments(pf.ReturnType, af.ReturnType, substitution);
         }
+        else if (TryGetUserGenericArguments(parameterType, out var userParamDef, out var userParamArgs)
+            && userParamArgs.Any(TypeSymbol.ContainsTypeParameter))
+        {
+            // Issue #1932: mirror the ImportedTypeSymbol (`List[T]`) inference
+            // below for USER-DEFINED generic types (struct/class `StructSymbol`,
+            // `interface InterfaceSymbol`) — e.g. parameter `Pair[T]` matched
+            // against argument `Pair[string]`, or parameter `IHolder[T]`
+            // matched against an argument whose type implements `IHolder[string]`.
+            // Unify positionally against whichever constructed instance (the
+            // argument itself, or one of its implemented interfaces) shares the
+            // parameter's generic definition.
+            if (TryFindUserGenericArguments(argumentType, userParamDef, out var userArgArgs)
+                && userParamArgs.Length == userArgArgs.Length)
+            {
+                for (var i = 0; i < userParamArgs.Length; i++)
+                {
+                    InferTypeArguments(userParamArgs[i], userArgArgs[i], substitution);
+                }
+            }
+        }
         else if (parameterType is ImportedTypeSymbol pit && pit.HasTypeParameterArgument)
         {
             // #313: infer from a generic type parameterized by an in-scope type
@@ -3867,6 +3887,59 @@ public sealed class Binder
                 }
             }
         }
+    }
+
+    // Issue #1932: extract the generic definition + constructed type arguments
+    // of a USER-DEFINED generic type (`struct`/`class` -> StructSymbol,
+    // `interface` -> InterfaceSymbol), so generic-method inference can unify
+    // a parameter like `Pair[T]` against an argument like `Pair[string]` the
+    // same way it already does for imported CLR generics (`List[T]`).
+    private static bool TryGetUserGenericArguments(TypeSymbol type, out TypeSymbol definition, out ImmutableArray<TypeSymbol> typeArguments)
+    {
+        switch (type)
+        {
+            case StructSymbol s when !s.TypeArguments.IsDefaultOrEmpty:
+                definition = s.Definition;
+                typeArguments = s.TypeArguments;
+                return true;
+            case InterfaceSymbol i when !i.TypeArguments.IsDefaultOrEmpty:
+                definition = i.Definition;
+                typeArguments = i.TypeArguments;
+                return true;
+            default:
+                definition = null;
+                typeArguments = ImmutableArray<TypeSymbol>.Empty;
+                return false;
+        }
+    }
+
+    // Issue #1932: find the constructed type arguments for `definition` on
+    // `type` itself, or (when `type` is a struct/class) on one of its
+    // implemented interfaces — e.g. matching parameter `IHolder[T]` against
+    // an argument struct/class that implements `IHolder[string]`.
+    private static bool TryFindUserGenericArguments(TypeSymbol type, TypeSymbol definition, out ImmutableArray<TypeSymbol> typeArguments)
+    {
+        if (TryGetUserGenericArguments(type, out var ownDefinition, out typeArguments)
+            && ReferenceEquals(ownDefinition, definition))
+        {
+            return true;
+        }
+
+        if (type is StructSymbol s && !s.Interfaces.IsDefaultOrEmpty)
+        {
+            foreach (var iface in s.Interfaces)
+            {
+                if (TryGetUserGenericArguments(iface, out var ifaceDefinition, out var ifaceArgs)
+                    && ReferenceEquals(ifaceDefinition, definition))
+                {
+                    typeArguments = ifaceArgs;
+                    return true;
+                }
+            }
+        }
+
+        typeArguments = ImmutableArray<TypeSymbol>.Empty;
+        return false;
     }
 
     // #313: surface the CLR generic arguments of an argument type (e.g. the
