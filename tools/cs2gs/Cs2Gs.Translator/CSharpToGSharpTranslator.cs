@@ -8189,12 +8189,143 @@ public sealed class CSharpToGSharpTranslator
                     return new ParenthesizedExpression(
                         this.TranslatePatternTest(receiver, parenthesized.Pattern, receiverType, receiverSyntax));
 
+                case ListPatternSyntax listPattern:
+                    return this.TranslateListPatternTest(receiver, listPattern, receiverType);
+
                 default:
                     this.context.ReportUnsupported(
                         pattern,
                         $"is-pattern '{pattern.Kind()}' has no canonical G# form yet (ADR-0115 §B).");
                     return new BinaryExpression(receiver, "!=", LiteralExpression.Null());
             }
+        }
+
+        // Issue #1889: G#'s `is` operator only tests a type (ADR-0115 §B), so —
+        // same as the recursive/positional-pattern branches above — a list
+        // pattern lowers to a hand-composed boolean: a length test (exact when
+        // there is no slice, a minimum when there is) ANDed with a per-element
+        // test against the element read at that position. An element before the
+        // (at most one) slice reads forward from the start; an element after it
+        // reads backward from the end (gsc has no negative array index, so
+        // `Length - distanceFromEnd` spells that out). A discard element
+        // contributes no test, matching the positional-pattern discard carve-out.
+        private GExpression TranslateListPatternTest(GExpression receiver, ListPatternSyntax listPattern, ITypeSymbol receiverType)
+        {
+            SeparatedSyntaxList<PatternSyntax> elements = listPattern.Patterns;
+            int sliceIndex = FindSlicePatternIndex(elements);
+            ITypeSymbol elementType = GetEnumerableElementType(receiverType);
+            var lengthAccess = new MemberAccessExpression(receiver, "Length");
+
+            GExpression test = sliceIndex < 0
+                ? new BinaryExpression(lengthAccess, "==", LiteralExpression.Int(elements.Count.ToString()))
+                : new BinaryExpression(lengthAccess, ">=", LiteralExpression.Int((elements.Count - 1).ToString()));
+
+            for (int i = 0; i < elements.Count; i++)
+            {
+                PatternSyntax element = elements[i];
+                if (element is SlicePatternSyntax slice)
+                {
+                    GExpression sliceTest = this.TranslateSlicePatternTest(receiver, slice, i, elements.Count - i - 1, receiverType);
+                    if (sliceTest != null)
+                    {
+                        test = new BinaryExpression(test, "&&", sliceTest);
+                    }
+
+                    continue;
+                }
+
+                if (element is DiscardPatternSyntax)
+                {
+                    continue;
+                }
+
+                GExpression elementReceiver = this.BuildListElementReceiver(receiver, lengthAccess, i, elements.Count, sliceIndex);
+                GExpression elementTest = this.TranslatePatternTest(elementReceiver, element, elementType);
+                test = new BinaryExpression(test, "&&", elementTest);
+            }
+
+            return test;
+        }
+
+        // Issue #1889: a slice ("rest") subpattern either captures the middle
+        // slice (`.. var rest`/`.. T rest`, a binder — registered as a
+        // patternBindings substitution, same mechanism as a top-level `var`/
+        // declaration pattern) or tests it against a nested subpattern (`..[>
+        // 0]`, recursed against the materialized slice value); a bare `..`
+        // contributes neither. Returns `null` when there is no additional
+        // boolean test to AND in (a bare discard slice, or a successful bind).
+        private GExpression TranslateSlicePatternTest(
+            GExpression receiver, SlicePatternSyntax slice, int prefixCount, int suffixCount, ITypeSymbol receiverType)
+        {
+            switch (slice.Pattern)
+            {
+                case null:
+                    return null;
+
+                case VarPatternSyntax { Designation: SingleVariableDesignationSyntax variable }
+                    when this.context.GetDeclaredSymbol(variable) is { } boundSymbol:
+                    this.patternBindings[boundSymbol] = BuildSliceExpression(receiver, prefixCount, suffixCount);
+                    return null;
+
+                case VarPatternSyntax { Designation: DiscardDesignationSyntax }:
+                    return null;
+
+                case VarPatternSyntax varTuple when varTuple.Designation is ParenthesizedVariableDesignationSyntax:
+                    this.context.ReportUnsupported(varTuple, "var pattern with tuple designation ('var (a, b)') has no canonical G# form yet (ADR-0115 §B).");
+                    return null;
+
+                case DeclarationPatternSyntax { Designation: SingleVariableDesignationSyntax declVariable }
+                    when this.context.GetDeclaredSymbol(declVariable) is { } declBoundSymbol:
+                    // A typed slice capture (`.. T rest`) can only ever narrow to
+                    // the slice's own `[]T` type, so the (redundant) type check is
+                    // dropped — same bind-only treatment as the `var` capture above.
+                    this.patternBindings[declBoundSymbol] = BuildSliceExpression(receiver, prefixCount, suffixCount);
+                    return null;
+
+                default:
+                    // A nested subpattern tested against the middle slice (e.g.
+                    // `.. { Length: 0 }`, `.. [1, 2]`) — recurse the normal
+                    // boolean-test lowering against the materialized slice value.
+                    return this.TranslatePatternTest(BuildSliceExpression(receiver, prefixCount, suffixCount), slice.Pattern, receiverType);
+            }
+        }
+
+        // Issue #1889: the index of an element read forward from the start (no
+        // slice yet seen, or before it) vs. backward from the end (past it) —
+        // shared by the boolean-test and G#-pattern lowering paths.
+        private GExpression BuildListElementReceiver(GExpression receiver, GExpression lengthAccess, int index, int elementCount, int sliceIndex)
+        {
+            if (sliceIndex < 0 || index < sliceIndex)
+            {
+                return new IndexExpression(receiver, LiteralExpression.Int(index.ToString()));
+            }
+
+            return new IndexExpression(
+                receiver,
+                new BinaryExpression(lengthAccess, "-", LiteralExpression.Int((elementCount - index).ToString())));
+        }
+
+        // Issue #1889: the materialized slice value for a list pattern's `..`
+        // element — `receiver[prefix..^suffix]` (open at whichever end has a
+        // zero count), matching gsc's own array-slice binder (BindArraySlice).
+        private static GExpression BuildSliceExpression(GExpression receiver, int prefixCount, int suffixCount)
+        {
+            GExpression start = prefixCount == 0 ? null : LiteralExpression.Int(prefixCount.ToString());
+            GExpression end = suffixCount == 0 ? null : new FromEndIndexExpression(LiteralExpression.Int(suffixCount.ToString()));
+            return new IndexExpression(receiver, new RangeIndexExpression(start, end));
+        }
+
+        private static int FindSlicePatternIndex(SeparatedSyntaxList<PatternSyntax> elements)
+        {
+            for (int i = 0; i < elements.Count; i++)
+            {
+                if (elements[i] is SlicePatternSyntax)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
         }
 
         private GExpression TranslateNotPatternTest(
@@ -11370,11 +11501,101 @@ public sealed class CSharpToGSharpTranslator
                 case ParenthesizedPatternSyntax parenthesized:
                     return new ParenthesizedPattern(this.TranslatePattern(parenthesized.Pattern, receiver, bindings, usedDesignators));
 
+                case ListPatternSyntax listPattern:
+                    return this.TranslateListPattern(listPattern, receiver, bindings, usedDesignators);
+
                 default:
                     this.context.ReportUnsupported(
                         pattern,
                         $"pattern '{pattern.Kind()}' has no canonical G# form yet (ADR-0115 §B).");
                     return new DiscardPattern();
+            }
+        }
+
+        // Issue #1889: G# has a native list pattern (spec §Pattern matching,
+        // ListPatternSyntax/SlicePatternSyntax) that structurally matches an
+        // array/slice element-by-element — unlike the property/positional-
+        // pattern branches above, no manual member-test composition is needed;
+        // gsc's own pattern binder tests length and element shape at runtime.
+        // Each non-slice, non-discard element still recurses through the shared
+        // `TranslatePattern` so a `var`/declaration binder at that position picks
+        // up the SAME discard-plus-substitution treatment as everywhere else
+        // (issue #1888) — the substitution receiver is the element read at that
+        // position (forward from the start, or backward from the end once past
+        // the slice, since gsc has no negative array index).
+        private GPattern TranslateListPattern(
+            ListPatternSyntax listPattern,
+            GExpression receiver,
+            List<(ISymbol Symbol, GExpression Replacement)> bindings,
+            HashSet<string> usedDesignators)
+        {
+            SeparatedSyntaxList<PatternSyntax> elements = listPattern.Patterns;
+            int sliceIndex = FindSlicePatternIndex(elements);
+            var lengthAccess = new MemberAccessExpression(receiver, "Length");
+            var translated = new List<GPattern>(elements.Count);
+
+            for (int i = 0; i < elements.Count; i++)
+            {
+                PatternSyntax element = elements[i];
+                if (element is SlicePatternSyntax slice)
+                {
+                    translated.Add(this.TranslateSlicePattern(slice, receiver, i, elements.Count - i - 1, bindings, usedDesignators));
+                    continue;
+                }
+
+                if (element is DiscardPatternSyntax)
+                {
+                    translated.Add(new DiscardPattern());
+                    continue;
+                }
+
+                GExpression elementReceiver = this.BuildListElementReceiver(receiver, lengthAccess, i, elements.Count, sliceIndex);
+                translated.Add(this.TranslatePattern(element, elementReceiver, bindings, usedDesignators));
+            }
+
+            return new ListPattern(translated);
+        }
+
+        // Issue #1889: a named capture (`.. var rest`/`.. T rest`) binds directly
+        // to G#'s own slice-capture designator (`..rest`) — a REAL runtime
+        // binding (unlike a scalar element's `var`, this one needs no
+        // discard-plus-substitution: the captured name IS the designator, so
+        // references to it in the arm body resolve naturally). A nested
+        // subpattern (`..[> 0]`) recurses through `TranslatePattern` against the
+        // materialized slice value, matching G#'s own `SlicePattern.Pattern`
+        // (spec §Pattern matching). A bare `..` carries neither.
+        private GPattern TranslateSlicePattern(
+            SlicePatternSyntax slice,
+            GExpression receiver,
+            int prefixCount,
+            int suffixCount,
+            List<(ISymbol Symbol, GExpression Replacement)> bindings,
+            HashSet<string> usedDesignators)
+        {
+            switch (slice.Pattern)
+            {
+                case null:
+                    return new SlicePattern(designator: null);
+
+                case VarPatternSyntax { Designation: SingleVariableDesignationSyntax variable }:
+                    return new SlicePattern(SanitizeIdentifier(variable.Identifier.Text));
+
+                case VarPatternSyntax { Designation: DiscardDesignationSyntax }:
+                    return new SlicePattern(designator: null);
+
+                case VarPatternSyntax varTuple when varTuple.Designation is ParenthesizedVariableDesignationSyntax:
+                    this.context.ReportUnsupported(varTuple, "var pattern with tuple designation ('var (a, b)') has no canonical G# form yet (ADR-0115 §B).");
+                    return new SlicePattern(designator: null);
+
+                case DeclarationPatternSyntax { Designation: SingleVariableDesignationSyntax declVariable }:
+                    // G#'s slice capture designator is always typed as the
+                    // slice's own `[]T`, so the (redundant) C# declared type is
+                    // dropped — same bind-only treatment as the `var` capture above.
+                    return new SlicePattern(SanitizeIdentifier(declVariable.Identifier.Text));
+
+                default:
+                    GExpression sliceValue = BuildSliceExpression(receiver, prefixCount, suffixCount);
+                    return new SlicePattern(designator: null, this.TranslatePattern(slice.Pattern, sliceValue, bindings, usedDesignators));
             }
         }
 
