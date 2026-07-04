@@ -15,6 +15,11 @@ public sealed class BlockStatementSyntax : StatementSyntax
     // invalidates the node's cached span (issue #1675).
     private SyntaxToken unsafeKeyword;
 
+    // Issue #1881: backing fields for the checked/unchecked contextual block
+    // keyword, mirroring the unsafeKeyword pattern above.
+    private SyntaxToken checkedKeyword;
+    private SyntaxToken uncheckedKeyword;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="BlockStatementSyntax"/> class.
     /// </summary>
@@ -56,6 +61,45 @@ public sealed class BlockStatementSyntax : StatementSyntax
 
     /// <summary>Gets a value indicating whether this block is an <c>unsafe { … }</c> block (ADR-0122 / issue #1014).</summary>
     public bool IsUnsafe => UnsafeKeyword != null;
+
+    /// <summary>
+    /// Gets or sets the optional <c>checked</c> contextual keyword (issue #1881)
+    /// that introduces this block as a <c>checked { … }</c> block. When
+    /// non-null, integral <c>+</c>/<c>-</c>/<c>*</c> and narrowing numeric
+    /// conversions inside the block trap on overflow. Assigned by the parser;
+    /// <c>null</c> for ordinary blocks.
+    /// </summary>
+    public SyntaxToken CheckedKeyword
+    {
+        get => checkedKeyword;
+        set
+        {
+            checkedKeyword = value;
+            InvalidateCachedSpan();
+        }
+    }
+
+    /// <summary>Gets a value indicating whether this block is a <c>checked { … }</c> block (issue #1881).</summary>
+    public bool IsChecked => CheckedKeyword != null;
+
+    /// <summary>
+    /// Gets or sets the optional <c>unchecked</c> contextual keyword (issue #1881)
+    /// that introduces this block as an <c>unchecked { … }</c> block, restoring
+    /// truncating arithmetic/conversions inside the block. Assigned by the
+    /// parser; <c>null</c> for ordinary blocks.
+    /// </summary>
+    public SyntaxToken UncheckedKeyword
+    {
+        get => uncheckedKeyword;
+        set
+        {
+            uncheckedKeyword = value;
+            InvalidateCachedSpan();
+        }
+    }
+
+    /// <summary>Gets a value indicating whether this block is an <c>unchecked { … }</c> block (issue #1881).</summary>
+    public bool IsUnchecked => UncheckedKeyword != null;
 
     /// <summary>
     /// Gets the open brace token.

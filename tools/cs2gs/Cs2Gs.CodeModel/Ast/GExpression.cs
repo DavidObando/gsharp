@@ -653,6 +653,32 @@ public sealed class ParenthesizedExpression : GExpression
 }
 
 /// <summary>
+/// A <c>checked(inner)</c>/<c>unchecked(inner)</c> expression (issue #1881).
+/// G# has no compile-time constant folding, so unlike real C# a checked
+/// constant overflow is not a translation-time error here — it is simply
+/// evaluated at run time like any other checked arithmetic.
+/// </summary>
+public sealed class CheckedExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="CheckedExpression"/> class.
+    /// </summary>
+    /// <param name="inner">The inner expression.</param>
+    /// <param name="isChecked"><see langword="true"/> for <c>checked(...)</c>, <see langword="false"/> for <c>unchecked(...)</c>.</param>
+    public CheckedExpression(GExpression inner, bool isChecked)
+    {
+        Inner = inner;
+        IsChecked = isChecked;
+    }
+
+    /// <summary>Gets the inner expression.</summary>
+    public GExpression Inner { get; }
+
+    /// <summary>Gets a value indicating whether this is <c>checked(...)</c> (true) or <c>unchecked(...)</c> (false).</summary>
+    public bool IsChecked { get; }
+}
+
+/// <summary>
 /// A lambda (ADR-0074). An expression body renders as the arrow form
 /// <c>(x int32) -&gt; expr</c> (an expression-block); a block body renders as the
 /// function-literal form <c>func (x int32) RetType { … }</c> (a statement-block),

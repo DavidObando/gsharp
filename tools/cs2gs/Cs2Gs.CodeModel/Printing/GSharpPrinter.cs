@@ -530,6 +530,9 @@ public static class GSharpPrinter
             case ParenthesizedExpression parenthesized:
                 return $"({RenderExpression(parenthesized.Inner, indent)})";
 
+            case CheckedExpression checkedExpr:
+                return $"{(checkedExpr.IsChecked ? "checked" : "unchecked")}({RenderExpression(checkedExpr.Inner, indent)})";
+
             case LambdaExpression lambda:
                 return RenderLambda(lambda, indent);
 
@@ -1041,7 +1044,7 @@ public static class GSharpPrinter
 
     private static string RenderBlock(BlockStatement block, int indent)
     {
-        var prefix = block.IsUnsafe ? "unsafe " : string.Empty;
+        var prefix = block.IsUnsafe ? "unsafe " : block.IsChecked ? "checked " : block.IsUnchecked ? "unchecked " : string.Empty;
         if (block.Statements.Count == 0)
         {
             return prefix + "{\n" + Indent(indent) + "}";

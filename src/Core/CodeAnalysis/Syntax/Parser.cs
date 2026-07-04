@@ -4862,6 +4862,30 @@ public class Parser
             return unsafeBlock;
         }
 
+        // Issue #1881: a `checked { … }` / `unchecked { … }` block establishes
+        // the named overflow context for the statements inside it. Both are
+        // contextual keywords — only immediately followed by `{` are they
+        // treated as the block form (a bare identifier named `checked` used
+        // as an ordinary value is unaffected).
+        if (Current.Kind == SyntaxKind.IdentifierToken
+            && (Current.Text == "checked" || Current.Text == "unchecked")
+            && Peek(1).Kind == SyntaxKind.OpenBraceToken)
+        {
+            var isCheckedBlock = Current.Text == "checked";
+            var checkedKeyword = NextToken();
+            var checkedBlock = ParseBlockStatement();
+            if (isCheckedBlock)
+            {
+                checkedBlock.CheckedKeyword = checkedKeyword;
+            }
+            else
+            {
+                checkedBlock.UncheckedKeyword = checkedKeyword;
+            }
+
+            return checkedBlock;
+        }
+
         // ADR-0125 / issue #1026: a `fixed name *T = source { … }` pinning
         // statement. `fixed` is a contextual keyword — only the precise
         // `fixed IDENT *` shape (the binding name followed by a pointer type)
@@ -8421,6 +8445,14 @@ public class Parser
             current = ParseSizeOfExpression();
         }
         else if (Current.Kind == SyntaxKind.IdentifierToken
+            && (Current.Text == "checked" || Current.Text == "unchecked")
+            && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
+        {
+            // Issue #1881: contextual `checked(expr)` / `unchecked(expr)` —
+            // argument is an arithmetic expression, not a type clause.
+            current = ParseCheckedExpression();
+        }
+        else if (Current.Kind == SyntaxKind.IdentifierToken
             && Current.Text == "nameof"
             && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
         {
@@ -9360,6 +9392,18 @@ public class Parser
         var typeClause = ParseTypeClause();
         var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
         return new SizeOfExpressionSyntax(syntaxTree, sizeOfIdentifier, openParen, typeClause, closeParen);
+    }
+
+    private ExpressionSyntax ParseCheckedExpression()
+    {
+        // Issue #1881: `checked(expr)` / `unchecked(expr)` — the argument is
+        // an ordinary expression evaluated in the named overflow context.
+        var isChecked = Current.Text == "checked";
+        var keyword = MatchToken(SyntaxKind.IdentifierToken);
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var expression = ParseExpression();
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        return new CheckedExpressionSyntax(syntaxTree, keyword, openParen, expression, closeParen, isChecked);
     }
 
     private DefaultExpressionSyntax ParseDefaultExpression()

@@ -19,12 +19,20 @@ public sealed class BoundBinaryExpression : BoundExpression
     /// <param name="left">The left bound expression.</param>
     /// <param name="op">The bound binary operator.</param>
     /// <param name="right">The right bound expression.</param>
-    public BoundBinaryExpression(SyntaxNode syntax, BoundExpression left, BoundBinaryOperator op, BoundExpression right)
+    /// <param name="isChecked">
+    /// When true and <paramref name="op"/> is Sum/Difference/Product, the emitter
+    /// and interpreter use overflow-trapping arithmetic (issue #1881): a
+    /// `checked(...)` expression or `checked { }` statement puts its arithmetic
+    /// in this context; the default (no `checked` context) is unchecked, matching
+    /// the C# project default.
+    /// </param>
+    public BoundBinaryExpression(SyntaxNode syntax, BoundExpression left, BoundBinaryOperator op, BoundExpression right, bool isChecked = false)
         : base(syntax)
     {
         Left = left;
         Op = op;
         Right = right;
+        IsChecked = isChecked;
     }
 
     /// <inheritdoc/>
@@ -47,4 +55,11 @@ public sealed class BoundBinaryExpression : BoundExpression
     /// Gets the rught bound expression.
     /// </summary>
     public BoundExpression Right { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether this operator runs in a checked /
+    /// overflow-trapping context (issue #1881). Only observed for Sum,
+    /// Difference, and Product on integral operands.
+    /// </summary>
+    public bool IsChecked { get; }
 }

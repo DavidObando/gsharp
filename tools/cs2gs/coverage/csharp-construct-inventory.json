@@ -368,8 +368,10 @@
   {
     "kind": "CheckedExpression",
     "nodeType": "CheckedExpressionSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
     "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/CheckedExpression.cs",
     "issue": "https://github.com/DavidObando/gsharp/issues/1881"
   },
   {
@@ -380,7 +382,7 @@
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/CheckedStatement.cs",
     "issue": "https://github.com/DavidObando/gsharp/issues/1881",
-    "notes": "Overflow semantics silently erased \u2014 emitted as a plain block (issue #1881, parity-verified divergence); non-overflow subset green."
+    "notes": "gsc gained native checked/unchecked expression \u002B block support (issue #1881); overflow semantics preserved, including the overflow-in-try/catch(OverflowException) sub-case. Stdout parity verified (grid G03)."
   },
   {
     "kind": "ClassConstraint",
@@ -2284,8 +2286,10 @@
   {
     "kind": "UncheckedExpression",
     "nodeType": "CheckedExpressionSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B",
     "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/UncheckedExpression.cs",
     "issue": "https://github.com/DavidObando/gsharp/issues/1881"
   },
   {
@@ -2295,6 +2299,7 @@
     "rule": "ADR-0115 \u00A7B",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/UncheckedStatement.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1881",
     "notes": "Wrap-around parity verified (grid G03)."
   },
   {

@@ -64,6 +64,9 @@ public class Issue1675SyntaxNodeChildEnumerationTests
         // issue #1925: compound indirect assignment through a pointer-arithmetic dereference
         "package p\nunsafe func F() {\n  var arr = []int32{1, 2, 3}\n  var p *int32 = &arr[0]\n  var i int32 = 0\n  *(p + i) += 1\n}\n",
 
+        // issue #1881: checked/unchecked expressions and blocks
+        "package p\nfunc F() {\n  var a int32 = 1\n  var b int32 = 2\n  var c = checked(a + b)\n  var d = unchecked(a + b)\n  checked {\n    var e = a + b\n  }\n  unchecked {\n    var f = a + b\n  }\n}\n",
+
         // member field / member index / compound index assignments
         "package p\nstruct Inner { var x int32 }\nstruct S {\n  var arr []int32\n  var inner Inner\n}\nfunc F(s S, arr []int32) {\n  s.inner.x = 1\n  s.arr[0] = 1\n  arr[0] += 1\n  s.arr[0] += 2\n}\n",
 

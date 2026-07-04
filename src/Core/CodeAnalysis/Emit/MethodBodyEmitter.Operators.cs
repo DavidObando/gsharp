@@ -668,13 +668,18 @@ internal sealed partial class MethodBodyEmitter
         switch (b.Op.Kind)
         {
             case BoundBinaryOperatorKind.Sum:
-                this.il.OpCode(ILOpCode.Add);
+                // Issue #1881: inside a `checked(...)`/`checked { }` context
+                // (b.IsChecked), integral +/-/* trap on overflow via the
+                // `.ovf` opcodes; floating-point never traps (IEEE 754
+                // overflow saturates to infinity) so it always uses the
+                // plain opcode regardless of the checked context.
+                this.il.OpCode(b.IsChecked && !isFloat ? (isUnsigned ? ILOpCode.Add_ovf_un : ILOpCode.Add_ovf) : ILOpCode.Add);
                 break;
             case BoundBinaryOperatorKind.Difference:
-                this.il.OpCode(ILOpCode.Sub);
+                this.il.OpCode(b.IsChecked && !isFloat ? (isUnsigned ? ILOpCode.Sub_ovf_un : ILOpCode.Sub_ovf) : ILOpCode.Sub);
                 break;
             case BoundBinaryOperatorKind.Product:
-                this.il.OpCode(ILOpCode.Mul);
+                this.il.OpCode(b.IsChecked && !isFloat ? (isUnsigned ? ILOpCode.Mul_ovf_un : ILOpCode.Mul_ovf) : ILOpCode.Mul);
                 break;
             case BoundBinaryOperatorKind.Quotient:
                 this.il.OpCode(isUnsigned ? ILOpCode.Div_un : ILOpCode.Div);
@@ -1119,7 +1124,7 @@ internal sealed partial class MethodBodyEmitter
             ?? throw new InvalidOperationException(
                 $"Lifted binary result Nullable<{resultUnderlying.Name}>: underlying has no CLR type.");
 
-        this.EmitLiftedArithmetic(b.Op.Kind, lhsSlot, rhsSlot, slots.ResultSlot, leftUnderlying, leftUnderlyingClr, rightUnderlyingClr, resultUnderlyingClr);
+        this.EmitLiftedArithmetic(b.Op.Kind, lhsSlot, rhsSlot, slots.ResultSlot, leftUnderlying, leftUnderlyingClr, rightUnderlyingClr, resultUnderlyingClr, b.IsChecked);
     }
 
     private void EmitLiftedEquality(
@@ -1232,7 +1237,8 @@ internal sealed partial class MethodBodyEmitter
         TypeSymbol underlying,
         Type leftUnderlyingClr,
         Type rightUnderlyingClr,
-        Type resultUnderlyingClr)
+        Type resultUnderlyingClr,
+        bool isChecked = false)
     {
         var getHasValueLhs = this.outer.wellKnown.GetNullableGetHasValueReference(leftUnderlyingClr);
         var getHasValueRhs = this.outer.wellKnown.GetNullableGetHasValueReference(rightUnderlyingClr);
@@ -1272,7 +1278,7 @@ internal sealed partial class MethodBodyEmitter
         this.il.LoadLocalAddress(rhsSlot);
         this.il.OpCode(ILOpCode.Call);
         this.il.Token(getValueRhs);
-        this.EmitUnderlyingArithmetic(kind, underlying);
+        this.EmitUnderlyingArithmetic(kind, underlying, isChecked);
         this.il.OpCode(ILOpCode.Newobj);
         this.il.Token(this.outer.GetCtorReference(ctor));
         this.il.Branch(ILOpCode.Br, end);
@@ -1356,7 +1362,7 @@ internal sealed partial class MethodBodyEmitter
     // op_* methods; primitive types map to the matching opcode and then
     // apply sub-i4 truncation when the underlying is byte / sbyte /
     // short / ushort / char.
-    private void EmitUnderlyingArithmetic(BoundBinaryOperatorKind kind, TypeSymbol underlying)
+    private void EmitUnderlyingArithmetic(BoundBinaryOperatorKind kind, TypeSymbol underlying, bool isChecked = false)
     {
         if (underlying == TypeSymbol.Decimal)
         {
@@ -1369,16 +1375,19 @@ internal sealed partial class MethodBodyEmitter
         }
 
         bool isUnsigned = IsUnsignedOrChar(underlying);
+        bool isFloatUnderlying = underlying == TypeSymbol.Float32 || underlying == TypeSymbol.Float64;
         switch (kind)
         {
             case BoundBinaryOperatorKind.Sum:
-                this.il.OpCode(ILOpCode.Add);
+                // Issue #1881: lifted (Nullable<T>) checked arithmetic traps the
+                // same as the non-lifted path — see EmitBinary below.
+                this.il.OpCode(isChecked && !isFloatUnderlying ? (isUnsigned ? ILOpCode.Add_ovf_un : ILOpCode.Add_ovf) : ILOpCode.Add);
                 break;
             case BoundBinaryOperatorKind.Difference:
-                this.il.OpCode(ILOpCode.Sub);
+                this.il.OpCode(isChecked && !isFloatUnderlying ? (isUnsigned ? ILOpCode.Sub_ovf_un : ILOpCode.Sub_ovf) : ILOpCode.Sub);
                 break;
             case BoundBinaryOperatorKind.Product:
-                this.il.OpCode(ILOpCode.Mul);
+                this.il.OpCode(isChecked && !isFloatUnderlying ? (isUnsigned ? ILOpCode.Mul_ovf_un : ILOpCode.Mul_ovf) : ILOpCode.Mul);
                 break;
             case BoundBinaryOperatorKind.Quotient:
                 this.il.OpCode(isUnsigned ? ILOpCode.Div_un : ILOpCode.Div);

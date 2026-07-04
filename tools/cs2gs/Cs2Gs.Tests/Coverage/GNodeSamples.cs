@@ -89,6 +89,7 @@ public static class GNodeSamples
                     initializer: new StackAllocExpression(Type("uint8"), Int("4")))),
                 isUnsafe: true)),
             [typeof(ParenthesizedExpression)] = () => Expr(new ParenthesizedExpression(Int("1"))),
+            [typeof(CheckedExpression)] = () => Expr(new CheckedExpression(new BinaryExpression(Int("1"), "+", Int("2")), isChecked: true)),
             [typeof(LambdaExpression)] = () => Expr(new LambdaExpression(
                 List(new Parameter("n", Type("int32"))),
                 expressionBody: Id("n"))),

@@ -4,6 +4,8 @@ CatchFilterClause: filter accepted code-1
 CatchFilterClause: filter rejected, outer caught code-2
 CheckedStatement: checked product = 2000000000
 CheckedStatement: checked sum without overflow = 42
+CheckedStatement: overflow caught = True
+CheckedStatement: unexpected wrap = 0
 ContinueStatement: sum of odds 1..10 = 25
 ContinueStatement: multiples of 3 in 1..9 = 3
 DoStatement: doubled to 128 in 7 steps

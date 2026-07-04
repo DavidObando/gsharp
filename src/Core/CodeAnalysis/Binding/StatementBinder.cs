@@ -243,6 +243,14 @@ internal sealed class StatementBinder
         // unsafe context — its top-level block carries no `unsafe` keyword, so
         // consult the current function's unsafe flag as well.
         var entersUnsafe = syntax.IsUnsafe || (function?.IsUnsafe ?? false);
+
+        // Issue #1881: a `checked { … }` / `unchecked { … }` block establishes
+        // the named overflow context for its statements; an ordinary block
+        // leaves the enclosing context untouched (unlike `unsafe`, there is no
+        // ambient default to fall back to).
+        using var checkedScope = syntax.IsChecked || syntax.IsUnchecked
+            ? binderCtx.PushCheckedContext(syntax.IsChecked)
+            : default;
         using (binderCtx.PushUnsafeContext(entersUnsafe))
         {
             BindBlockStatements(syntax.Statements, 0, statements);

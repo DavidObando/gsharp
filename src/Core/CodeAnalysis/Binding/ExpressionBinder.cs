@@ -264,6 +264,9 @@ internal sealed partial class ExpressionBinder
         {
             case SyntaxKind.ParenthesizedExpression:
                 return BindParenthesizedExpression((ParenthesizedExpressionSyntax)syntax);
+            case SyntaxKind.CheckedExpression:
+            case SyntaxKind.UncheckedExpression:
+                return BindCheckedExpression((CheckedExpressionSyntax)syntax);
             case SyntaxKind.LiteralExpression:
                 return BindLiteralExpression((LiteralExpressionSyntax)syntax);
             case SyntaxKind.InterpolatedStringExpression:
@@ -396,6 +399,17 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindParenthesizedExpression(ParenthesizedExpressionSyntax syntax)
     {
+        return BindExpression(syntax.Expression);
+    }
+
+    // Issue #1881: `checked(expr)` / `unchecked(expr)` binds the inner
+    // expression under the named overflow context — no dedicated bound node
+    // is needed (mirrors Roslyn: the context only steers which opcodes the
+    // arithmetic/conversions inside pick). Innermost nesting wins via the
+    // save/restore scope.
+    private BoundExpression BindCheckedExpression(CheckedExpressionSyntax syntax)
+    {
+        using var scope = binderCtx.PushCheckedContext(syntax.IsChecked);
         return BindExpression(syntax.Expression);
     }
 

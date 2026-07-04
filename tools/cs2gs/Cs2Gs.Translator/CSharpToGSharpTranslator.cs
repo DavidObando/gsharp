@@ -4877,9 +4877,17 @@ public sealed class CSharpToGSharpTranslator
                     return new[] { this.TranslateLocalFunction(localFunction) };
 
                 case CheckedStatementSyntax checkedStatement:
-                    // G# arithmetic is unchecked by default and has no
-                    // `checked`/`unchecked` block keyword; emit the inner block.
-                    return new[] { (GStatement)this.TranslateBlock(checkedStatement.Block) };
+                    // Issue #1881: a C# `checked { }`/`unchecked { }` block maps to
+                    // the G# `checked { }`/`unchecked { }` block (gsc now supports
+                    // both natively), introducing a checked/unchecked arithmetic
+                    // context instead of silently dropping the overflow semantics.
+                    return new[]
+                    {
+                        (GStatement)new BlockStatement(
+                            this.TranslateBlock(checkedStatement.Block).Statements,
+                            isChecked: checkedStatement.IsKind(SyntaxKind.CheckedStatement),
+                            isUnchecked: checkedStatement.IsKind(SyntaxKind.UncheckedStatement)),
+                    };
 
                 case UnsafeStatementSyntax unsafeStatement:
                     // ADR-0122 / issue #1014: a C# `unsafe { … }` block maps to the
@@ -9172,6 +9180,14 @@ public sealed class CSharpToGSharpTranslator
 
                 case ParenthesizedExpressionSyntax parenthesized:
                     return new ParenthesizedExpression(this.TranslateExpression(parenthesized.Expression));
+
+                case CheckedExpressionSyntax checkedExpr:
+                    // Issue #1881: `checked(expr)`/`unchecked(expr)` maps directly to
+                    // the G# `checked(...)`/`unchecked(...)` expression (gsc now
+                    // supports both natively).
+                    return new CheckedExpression(
+                        this.TranslateExpression(checkedExpr.Expression),
+                        checkedExpr.IsKind(SyntaxKind.CheckedExpression));
 
                 case InterpolatedStringExpressionSyntax interpolated:
                     return this.TranslateInterpolatedString(interpolated);

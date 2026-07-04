@@ -149,6 +149,19 @@ internal sealed class BinderContext
     public bool InUnsafeContext => UnsafeDepth > 0;
 
     /// <summary>
+    /// Gets a value indicating whether the current <c>checked</c>/<c>unchecked</c>
+    /// arithmetic context is checked (issue #1881): <see langword="true"/> inside
+    /// a `checked(...)` expression or a `checked { }` statement,
+    /// <see langword="false"/> inside `unchecked(...)`/`unchecked { }` or when no
+    /// such context has been entered (the C# project default is unchecked).
+    /// Innermost context wins — <see cref="PushCheckedContext"/> saves and
+    /// restores the previous value, so nesting `checked { unchecked { … } }`
+    /// resolves correctly. Only observed by the Sum/Difference/Product binary
+    /// operator and by narrowing numeric conversions.
+    /// </summary>
+    public bool IsCheckedContext { get; private set; }
+
+    /// <summary>
     /// Gets or sets the scope the binder currently operates against. Starts
     /// at the binder's root scope; mutated during nested-scope push/pop by
     /// statement, expression, and lambda binding helpers — so a writable
@@ -457,6 +470,20 @@ internal sealed class BinderContext
     }
 
     /// <summary>
+    /// Issue #1881. Enters a `checked`/`unchecked` arithmetic context for the
+    /// lifetime of the returned token; disposing the token restores the
+    /// previous context (innermost nesting wins).
+    /// </summary>
+    /// <param name="isChecked">Whether the entered context is checked (true) or unchecked (false).</param>
+    /// <returns>A disposable token that restores the previous context when disposed.</returns>
+    public CheckedContextScope PushCheckedContext(bool isChecked)
+    {
+        var previous = IsCheckedContext;
+        IsCheckedContext = isChecked;
+        return new CheckedContextScope(this, previous);
+    }
+
+    /// <summary>
     /// Disposable token returned by <see cref="PushUnsafeContext"/> that
     /// decrements <see cref="UnsafeDepth"/> on disposal (ADR-0122 / issue #1014).
     /// </summary>
@@ -477,6 +504,31 @@ internal sealed class BinderContext
             if (active)
             {
                 owner.UnsafeDepth--;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Disposable token returned by <see cref="PushCheckedContext"/> that
+    /// restores the enclosing checked/unchecked context on disposal (issue #1881).
+    /// </summary>
+    public readonly struct CheckedContextScope : IDisposable
+    {
+        private readonly BinderContext owner;
+        private readonly bool previous;
+
+        internal CheckedContextScope(BinderContext owner, bool previous)
+        {
+            this.owner = owner;
+            this.previous = previous;
+        }
+
+        /// <inheritdoc/>
+        public void Dispose()
+        {
+            if (owner != null)
+            {
+                owner.IsCheckedContext = previous;
             }
         }
     }
