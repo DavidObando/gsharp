@@ -36,6 +36,9 @@ public sealed class AnnotationSyntax : SyntaxNode
     /// <param name="openParenthesisToken">Optional opening <c>(</c> token. Non-<c>null</c> iff an argument list was supplied.</param>
     /// <param name="arguments">The positional / named-argument list (per ADR-0047 §1). Empty when no argument list was supplied.</param>
     /// <param name="closeParenthesisToken">Optional closing <c>)</c> token. Non-<c>null</c> iff <paramref name="openParenthesisToken"/> is non-<c>null</c>.</param>
+    /// <param name="typeArgumentOpenBracketToken">Issue #1913: the opening <c>[</c> of a C#11-style generic attribute's type-argument list (e.g. <c>@Tag[int32]</c>), or <c>null</c> when the attribute name carries none.</param>
+    /// <param name="typeArguments">The generic attribute's type-argument list, or the default value when none is present.</param>
+    /// <param name="typeArgumentCloseBracketToken">The closing <c>]</c> of the type-argument list, or <c>null</c> when none is present.</param>
     public AnnotationSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken atToken,
@@ -44,7 +47,10 @@ public sealed class AnnotationSyntax : SyntaxNode
         ImmutableArray<SyntaxToken> dotTokens,
         SyntaxToken openParenthesisToken,
         SeparatedSyntaxList<ExpressionSyntax> arguments,
-        SyntaxToken closeParenthesisToken)
+        SyntaxToken closeParenthesisToken,
+        SyntaxToken typeArgumentOpenBracketToken = null,
+        SeparatedSyntaxList<TypeClauseSyntax> typeArguments = default,
+        SyntaxToken typeArgumentCloseBracketToken = null)
         : base(syntaxTree)
     {
         AtToken = atToken;
@@ -54,6 +60,9 @@ public sealed class AnnotationSyntax : SyntaxNode
         OpenParenthesisToken = openParenthesisToken;
         Arguments = arguments;
         CloseParenthesisToken = closeParenthesisToken;
+        TypeArgumentOpenBracketToken = typeArgumentOpenBracketToken;
+        TypeArguments = typeArguments;
+        TypeArgumentCloseBracketToken = typeArgumentCloseBracketToken;
     }
 
     /// <inheritdoc/>
@@ -80,8 +89,20 @@ public sealed class AnnotationSyntax : SyntaxNode
     /// <summary>Gets the optional closing <c>)</c> of the argument list; <c>null</c> when no parenthesised argument list was supplied.</summary>
     public SyntaxToken CloseParenthesisToken { get; }
 
+    /// <summary>Gets the opening <c>[</c> of a C#11-style generic attribute's type-argument list (issue #1913), or <c>null</c> when none is present.</summary>
+    public SyntaxToken TypeArgumentOpenBracketToken { get; }
+
+    /// <summary>Gets the generic attribute's type-argument list (issue #1913); the default value when none is present.</summary>
+    public SeparatedSyntaxList<TypeClauseSyntax> TypeArguments { get; }
+
+    /// <summary>Gets the closing <c>]</c> of the type-argument list (issue #1913), or <c>null</c> when none is present.</summary>
+    public SyntaxToken TypeArgumentCloseBracketToken { get; }
+
     /// <summary>Gets a value indicating whether this annotation carries a parenthesised argument list.</summary>
     public bool HasArgumentList => OpenParenthesisToken != null;
+
+    /// <summary>Gets a value indicating whether this annotation carries a generic type-argument list (issue #1913, e.g. <c>@Tag[int32]</c>).</summary>
+    public bool HasTypeArgumentList => TypeArgumentOpenBracketToken != null;
 
     /// <summary>Gets the dotted attribute name as a string (e.g. <c>"System.Diagnostics.Conditional"</c>).</summary>
     /// <returns>The flattened dotted name; segments are joined with <c>.</c>.</returns>
