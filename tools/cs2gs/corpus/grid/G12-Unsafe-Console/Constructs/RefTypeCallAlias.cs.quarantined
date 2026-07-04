@@ -1,0 +1,28 @@
+// inventory: RefType — QUARANTINED at translate: CS2GS-GAP. Re-aliasing a
+// ref-returning call's result ('ref int middle = ref Middle(data)') has no
+// gsc construct to bind to: gsc's ref-alias binder (IsLvalue /
+// IsLvalueForRefReturn) only accepts a variable, field, or array-element
+// access as the aliased lvalue, never a call result, even a ref-returning
+// one (issue #1900).
+using System;
+
+namespace Corpus.Grid12.Constructs
+{
+    public static class RefTypeCallAliasFixture
+    {
+        public static void Run()
+        {
+            int[] data = new int[] { 1, 2, 3 };
+
+            ref int middle = ref Middle(data);
+            middle += 5;
+
+            Console.WriteLine($"RefTypeCallAlias: data={data[0]},{data[1]},{data[2]}");
+        }
+
+        private static ref int Middle(int[] values)
+        {
+            return ref values[1];
+        }
+    }
+}

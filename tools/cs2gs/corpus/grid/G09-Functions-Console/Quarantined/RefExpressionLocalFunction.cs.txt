@@ -1,0 +1,33 @@
+// inventory: RefExpression — QUARANTINED at translate: CS2GS-GAP. Two ref
+// shapes have no gsc construct to bind to:
+//   1. a ref-returning local function ('static ref int Pick(...)') — a local
+//      function lowers to a G# `func` literal, and G#'s `ref` return modifier
+//      only exists on a genuine top-level/method function declaration
+//      (issue #1900).
+//   2. re-aliasing a ref-returning call's result ('ref int q = ref
+//      Pick(xs, 2)') — gsc's ref-alias binder (IsLvalue / IsLvalueForRefReturn)
+//      only accepts a variable, field, or array-element access as the
+//      aliased lvalue, never a call result, even a ref-returning one
+//      (issue #1900).
+using System;
+
+namespace Corpus.Grid09
+{
+    public static class RefExpressionLocalFunctionFixture
+    {
+        public static void Run()
+        {
+            int[] xs = { 1, 2, 3 };
+
+            // Ref-returning local function.
+            static ref int Pick(int[] a, int i)
+            {
+                return ref a[i];
+            }
+
+            ref int q = ref Pick(xs, 2);
+            q = 30;
+            Console.WriteLine($"RefExpressionLocalFunction: xs={string.Join(",", xs)}");
+        }
+    }
+}

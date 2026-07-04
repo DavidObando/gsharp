@@ -2429,7 +2429,8 @@ public sealed class CSharpToGSharpTranslator
                 isOverride: isOverride,
                 isAsync: symbol != null && symbol.IsAsync,
                 attributes: this.MapAttributes(node.AttributeLists),
-                expressionBody: arrowBody);
+                expressionBody: arrowBody,
+                isRefReturn: symbol != null && symbol.ReturnsByRef);
 
             return (method, isStatic);
         }
@@ -3354,6 +3355,11 @@ public sealed class CSharpToGSharpTranslator
                         : null;
                 }
 
+                // Issue #1900: `symbol.ReturnType` is already the pointee type T
+                // for a `ref`-returning method (Roslyn strips the `ref`); the
+                // `ref` modifier itself is reinstated at the MethodDeclaration
+                // (IsRefReturn) by the caller, mapping to G#'s native
+                // ref-return (`func F(...) ref T`, issue #490/ADR-0060).
                 return this.typeMapper.Map(returnType, this.context, node.ReturnType.GetLocation());
             }
 
@@ -3991,7 +3997,7 @@ public sealed class CSharpToGSharpTranslator
                         }
                     }
 
-                    returnPrologue.Add(new ReturnStatement(returnValue));
+                    returnPrologue.Add(new ReturnStatement(returnValue, isRef: ret.Expression is RefExpressionSyntax));
                     return returnPrologue;
                 }
 
@@ -4074,6 +4080,15 @@ public sealed class CSharpToGSharpTranslator
 
         private IEnumerable<GStatement> TranslateLocalDeclaration(VariableDeclarationSyntax declaration, bool isConst, bool isUsing = false, bool isAwait = false)
         {
+            // Issue #1900: `ref int r = ref xs[1];` — a ref local. `declaration.Type`
+            // is a `RefTypeSyntax`; every declarator in this statement is a ref
+            // local aliasing storage, which maps to G#'s native ref-aliasing local
+            // (see TranslateRefExpression / TranslateRefLocalDeclaration).
+            if (declaration.Type is RefTypeSyntax)
+            {
+                return this.TranslateRefLocalDeclaration(declaration);
+            }
+
             var results = new List<GStatement>();
             bool hasExplicitType = !declaration.Type.IsVar;
 
@@ -4270,6 +4285,60 @@ public sealed class CSharpToGSharpTranslator
                     initializer,
                     isUsing: isUsing,
                     isAwait: isAwait));
+            }
+
+            return results;
+        }
+
+        /// <summary>
+        /// Translates every declarator of a ref-local declaration (<c>ref int r =
+        /// ref xs[1];</c>, issue #1900) into G#'s native ref-aliasing local
+        /// (<c>let ref name T = lvalue</c> / <c>var ref name T = lvalue</c>,
+        /// issue #491/ADR-0060 §follow-up). Unlike C#, the RHS carries no second
+        /// `ref` keyword — the `ref` modifier on the binding itself is what marks
+        /// the local as an alias. Reads and writes of the local afterward are
+        /// ordinary identifier references; gsc routes them through the alias
+        /// transparently, so — unlike a hand-rolled pointer lowering — no
+        /// rewriting of later usages is needed here.
+        /// </summary>
+        private IEnumerable<GStatement> TranslateRefLocalDeclaration(VariableDeclarationSyntax declaration)
+        {
+            var results = new List<GStatement>();
+
+            foreach (VariableDeclaratorSyntax declarator in declaration.Variables)
+            {
+                if (this.context.GetDeclaredSymbol(declarator) is not ILocalSymbol localSymbol)
+                {
+                    continue;
+                }
+
+                string name = SanitizeIdentifier(declarator.Identifier.Text);
+
+                GExpression initializer = declarator.Initializer?.Value is RefExpressionSyntax refInit
+                    ? this.TranslateRefExpression(refInit)
+                    : null;
+
+                if (initializer == null)
+                {
+                    string message = $"ref local '{declarator.Identifier.Text}' has no `ref` initializer expression; a ref local must be aliased at declaration (issue #1900).";
+                    this.context.ReportUnsupported(declarator, message);
+                    continue;
+                }
+
+                GTypeReference pointeeType = this.typeMapper.Map(localSymbol.Type, this.context, declaration.Type.GetLocation());
+
+                // The alias is written through by a plain `name = value` in the
+                // original C# (e.g. `r = 20;`) exactly like a normal local, so the
+                // existing reassignment heuristic decides `let ref` vs `var ref`
+                // the same way it decides `let` vs `var` for any other local.
+                BindingKind binding = this.IsLocalReassigned(localSymbol) ? BindingKind.Var : BindingKind.Let;
+
+                results.Add(new LocalDeclarationStatement(
+                    binding,
+                    name,
+                    pointeeType,
+                    initializer,
+                    isRefAlias: true));
             }
 
             return results;
@@ -6278,6 +6347,25 @@ public sealed class CSharpToGSharpTranslator
 
         private GStatement TranslateLocalFunction(LocalFunctionStatementSyntax localFunction)
         {
+            // Issue #1900: a ref-returning local function (`static ref int
+            // Pick(...)`) has no G# canonical form. A C# local function lowers to
+            // a G# `func` LITERAL bound via `let` (ParseFunctionLiteralExpression
+            // has no `ref`-return-modifier slot at all — only a genuine top-level
+            // `func`/method declaration does, ADR-0060 §follow-up/issue #490), and
+            // gsc separately forbids a managed pointer as a function-literal
+            // return type outright (GS9004 "a managed pointer (*T) cannot be the
+            // return type of a function literal"). There is no lowering that
+            // preserves ref-aliasing through a func literal, so this gaps loudly
+            // rather than emitting a form that either drops the aliasing (a
+            // silent semantic change) or fails to compile.
+            if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol { ReturnsByRef: true })
+            {
+                this.context.ReportUnsupported(
+                    localFunction,
+                    $"ref-returning local function '{localFunction.Identifier.Text}' has no canonical G# form: a local function lowers to a `func` literal, and G#'s `ref` return modifier only exists on a genuine top-level/method function declaration (issue #1900).");
+                return new RawStatement($"// unsupported: ref-returning local function '{localFunction.Identifier.Text}'");
+            }
+
             // A C# local function maps to a G# local `let` bound to a function
             // literal `func (params) RetType { … }` (NOT an arrow lambda — a local
             // function may be recursive and needs an explicit return type).
@@ -7722,6 +7810,19 @@ public sealed class CSharpToGSharpTranslator
                         when addressOf.IsKind(SyntaxKind.AddressOfExpression)
                             && this.BindsTo(addressOf.Operand, symbol):
                         return true;
+
+                    // Issue #1900: `ref int alias = ref v;` aliases `v`'s storage
+                    // through G#'s native ref-local (`let/var ref alias T = v`,
+                    // no address-of operator on the RHS — see
+                    // TranslateRefExpression). gsc's ref-alias binder rejects
+                    // aliasing a `let`-bound (read-only) variable
+                    // (GS9005-equivalent "cannot take address of constant"), so
+                    // `v` must be forced to `var` here exactly like a variable
+                    // whose address is taken with the unsafe `&` operator above.
+                    case RefExpressionSyntax refOf
+                        when refOf.Expression is IdentifierNameSyntax
+                            && this.BindsTo(refOf.Expression, symbol):
+                        return true;
                 }
             }
 
@@ -8024,6 +8125,9 @@ public sealed class CSharpToGSharpTranslator
 
                 case IdentifierNameSyntax identifier:
                     return this.TranslateIdentifierName(identifier);
+
+                case RefExpressionSyntax refExpression:
+                    return this.TranslateRefExpression(refExpression);
 
                 case GenericNameSyntax generic:
                     // A generic name used as an expression is most often a generic
@@ -11729,6 +11833,38 @@ public sealed class CSharpToGSharpTranslator
             return symbol != null
                 ? this.typeMapper.Map(symbol, this.context, type.GetLocation())
                 : new NamedTypeReference(type.ToString());
+        }
+
+        /// <summary>
+        /// Translates the `ref expr` operand of a ref local's initializer
+        /// (<c>ref int r = ref xs[1]</c>) or a ref return (<c>return ref
+        /// values[1]</c>) — issue #1900. G# has a native ref-aliasing local
+        /// (<c>let/var ref name T = lvalue</c>, issue #491/ADR-0060) and a native
+        /// ref-returning function (<c>func F(...) ref T { return ref lvalue }</c>,
+        /// issue #490); both alias the RHS lvalue directly with no explicit
+        /// address-of syntax, so the operand is translated as-is.
+        ///
+        /// gsc's own lvalue check for both features (<c>IsLvalue</c> /
+        /// <c>IsLvalueForRefReturn</c> in StatementBinder.cs) accepts only a
+        /// variable, field access, array-element access, or dereference — never a
+        /// call result, even one returned by ref. So `ref Pick(xs, 2)` (aliasing a
+        /// ref-returning call's result at ANOTHER call/return site) has no gsc
+        /// construct to bind to; that shape gaps loudly rather than emitting G#
+        /// that fails to compile or, worse, silently drops the aliasing.
+        /// </summary>
+        private GExpression TranslateRefExpression(RefExpressionSyntax refExpression)
+        {
+            ExpressionSyntax operand = refExpression.Expression;
+
+            if (operand is IdentifierNameSyntax or ElementAccessExpressionSyntax or MemberAccessExpressionSyntax)
+            {
+                return this.TranslateExpression(operand);
+            }
+
+            this.context.ReportUnsupported(
+                refExpression,
+                $"ref expression over '{operand.Kind()}' has no canonical G# form yet: G#'s ref-aliasing local/return only aliases a variable, array element, or field — not a call result, even a ref-returning one (issue #1900).");
+            return new IdentifierExpression("nil");
         }
 
         private GExpression TranslatePredefinedTypeExpression(PredefinedTypeSyntax predefined)
