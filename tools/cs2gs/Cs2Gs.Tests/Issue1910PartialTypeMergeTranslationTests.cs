@@ -115,6 +115,123 @@ namespace Demo
         Assert.Contains("func Balance(", printed);
     }
 
+    [Fact]
+    public void PartialClass_AttributesOnBothParts_AreMergedOntoSingleDeclaration()
+    {
+        string printed = TranslateFiles(
+            ("Part1.cs", @"
+using System;
+
+namespace Demo
+{
+    [Obsolete(""old"")]
+    public partial class Ledger
+    {
+        private int _balance;
+    }
+}"),
+            ("Part2.cs", @"
+using System;
+
+namespace Demo
+{
+    [Serializable]
+    public partial class Ledger
+    {
+        public void Deposit(int amount)
+        {
+            _balance = _balance + amount;
+        }
+    }
+}")).Single(p => p.Contains("class Ledger"));
+
+        // Both parts' type-level attributes must survive onto the single
+        // merged declaration (issue #1910 gap 1) — Roslyn's
+        // `symbol.GetAttributes()` already merges them; the translator must
+        // not read only the primary part's own `AttributeLists`.
+        Assert.Contains("Obsolete", printed);
+        Assert.Contains("Serializable", printed);
+        Assert.Equal(1, CountOccurrences(printed, "class Ledger"));
+    }
+
+    [Fact]
+    public void PartialClass_UnsafeOnNonPrimaryPart_IsPreserved()
+    {
+        string printed = TranslateFiles(
+            ("Part1.cs", @"
+namespace Demo
+{
+    public partial class Ledger
+    {
+        private int _balance;
+
+        public void Deposit(int amount)
+        {
+            _balance = _balance + amount;
+        }
+    }
+}"),
+            ("Part2.cs", @"
+namespace Demo
+{
+    public unsafe partial class Ledger
+    {
+        public void Withdraw(int amount)
+        {
+            _balance = _balance - amount;
+        }
+    }
+}")).Single(p => p.Contains("class Ledger"));
+
+        // `unsafe` on the SECOND (non-primary) part must still mark the
+        // merged G# type unsafe (issue #1910 gap 2) — C# allows `unsafe` on
+        // any partial declaration, not just the primary one.
+        Assert.Contains("unsafe", printed);
+    }
+
+    [Fact]
+    public void PartialClass_UsingOnlyOnNonPrimaryPartFile_ResolvesInMergedOutput()
+    {
+        IReadOnlyList<string> printed = TranslateFiles(
+            ("Part1.cs", @"
+namespace Demo
+{
+    public partial class Ledger
+    {
+        private int _balance;
+    }
+}"),
+            ("Part2.cs", @"
+using System.Text;
+
+namespace Demo
+{
+    public partial class Ledger
+    {
+        public string Describe()
+        {
+            var builder = new StringBuilder();
+            builder.Append(_balance);
+            return builder.ToString();
+        }
+    }
+}"));
+
+        string primaryFile = printed[0];
+
+        // `System.Text` is only `using`d in Part2.cs (the non-primary part),
+        // yet `Describe`'s body — merged into the primary declaration in
+        // Part1.cs's output — references `StringBuilder` by its short name.
+        // The primary file's import block must union in Part2.cs's `using`s
+        // so the merged output resolves (issue #1910 gap 3).
+        Assert.Contains("StringBuilder", primaryFile);
+        Assert.Contains("import System.Text", primaryFile);
+
+        // Round-trip already validated in TranslateFiles; also confirm the
+        // type is still declared exactly once.
+        Assert.Equal(1, CountOccurrences(primaryFile, "class Ledger"));
+    }
+
     private static int CountOccurrences(string haystack, string needle)
     {
         int count = 0;

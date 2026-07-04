@@ -88,8 +88,22 @@ public sealed class CSharpToGSharpTranslator
     {
         CompilationUnitSyntax root = document.GetRoot();
 
+        Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts =
+            GetOrCollectPartialTypeParts(context.Compilation);
+
         string package = this.ResolvePackage(root, context);
-        IReadOnlyList<ImportDirective> imports = this.TranslateImports(root, context);
+
+        // Issue #1910 (gap 3): a merged-in member from a non-primary partial
+        // part (see `VisitAggregateCore`) is translated using ITS OWN file's
+        // semantic model (`TranslationContext.UseSemanticModelFor`), so a short
+        // type/member name it emits may only resolve under a `using` that
+        // lives in that OTHER file, not this (primary) one. Union in the
+        // `using` directives of every non-primary part whose primary part is
+        // declared in THIS tree, so the merged output's import block covers
+        // every name the merged-in bodies rely on.
+        IEnumerable<Microsoft.CodeAnalysis.SyntaxTree> extraUsingTrees =
+            CollectExtraUsingTrees(root, partialTypeParts);
+        IReadOnlyList<ImportDirective> imports = this.TranslateImports(root, extraUsingTrees, context);
 
         HashSet<INamedTypeSymbol> openBases = GetOrCollectSubclassedBaseTypes(context.Compilation);
         HashSet<INamedTypeSymbol> staticUsingTargets = CollectStaticUsingTargets(root, context);
@@ -104,9 +118,6 @@ public sealed class CSharpToGSharpTranslator
         // recompute it (`Compilation.GetEntryPoint` re-walks the compilation).
         IMethodSymbol entryPoint = context.Compilation.GetEntryPoint(default);
         INamedTypeSymbol entryType = entryPoint?.ContainingType;
-
-        Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts =
-            GetOrCollectPartialTypeParts(context.Compilation);
 
         var visitor = new DeclarationVisitor(context, new CSharpTypeMapper(), openBases, staticUsingTargets, entryPoint, partialTypeParts);
 
@@ -231,6 +242,36 @@ public sealed class CSharpToGSharpTranslator
         return result;
     }
 
+    // Issue #1910 (gap 3): for every partial type whose PRIMARY part lives in
+    // `root`, collect the distinct `SyntaxTree`s of its OTHER (non-primary)
+    // parts. Those trees' `using` directives are unioned into `root`'s import
+    // block by `TranslateImports`, because merged-in member bodies from those
+    // parts are translated under their own file's semantic model and may rely
+    // on a `using` that only exists there.
+    private static HashSet<Microsoft.CodeAnalysis.SyntaxTree> CollectExtraUsingTrees(
+        CompilationUnitSyntax root,
+        Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts)
+    {
+        var trees = new HashSet<Microsoft.CodeAnalysis.SyntaxTree>();
+        foreach (List<TypeDeclarationSyntax> parts in partialTypeParts.Values)
+        {
+            if (parts[0].SyntaxTree != root.SyntaxTree)
+            {
+                continue;
+            }
+
+            foreach (TypeDeclarationSyntax part in parts.Skip(1))
+            {
+                if (part.SyntaxTree != root.SyntaxTree)
+                {
+                    trees.Add(part.SyntaxTree);
+                }
+            }
+        }
+
+        return trees;
+    }
+
     private static HashSet<INamedTypeSymbol> CollectSubclassedBaseTypes(Compilation compilation)
     {
         var bases = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
@@ -305,11 +346,22 @@ public sealed class CSharpToGSharpTranslator
         return dominant;
     }
 
-    private IReadOnlyList<ImportDirective> TranslateImports(CompilationUnitSyntax root, TranslationContext context)
+    private IReadOnlyList<ImportDirective> TranslateImports(
+        CompilationUnitSyntax root,
+        IEnumerable<Microsoft.CodeAnalysis.SyntaxTree> extraUsingTrees,
+        TranslationContext context)
     {
         var imports = new List<ImportDirective>();
+        var seen = new HashSet<(string Name, string Alias)>();
         IEnumerable<UsingDirectiveSyntax> usings = root.Usings
             .Concat(root.DescendantNodes().OfType<BaseNamespaceDeclarationSyntax>().SelectMany(n => n.Usings));
+
+        foreach (Microsoft.CodeAnalysis.SyntaxTree extraTree in extraUsingTrees)
+        {
+            CompilationUnitSyntax extraRoot = (CompilationUnitSyntax)extraTree.GetRoot();
+            usings = usings.Concat(extraRoot.Usings)
+                .Concat(extraRoot.DescendantNodes().OfType<BaseNamespaceDeclarationSyntax>().SelectMany(n => n.Usings));
+        }
 
         foreach (UsingDirectiveSyntax directive in usings)
         {
@@ -372,7 +424,13 @@ public sealed class CSharpToGSharpTranslator
                 }
             }
 
-            imports.Add(new ImportDirective(name, alias));
+            // Issue #1910 (gap 3): dedup by (name, alias) once non-primary
+            // parts' `using` directives are unioned in — the same directive
+            // commonly appears in both files.
+            if (seen.Add((name, alias)))
+            {
+                imports.Add(new ImportDirective(name, alias));
+            }
         }
 
         return imports;
@@ -1584,6 +1642,17 @@ public sealed class CSharpToGSharpTranslator
                     TranslationSeverity.Info));
             }
 
+            // Issue #1910 (gap 1 & 2): a `partial` type's attributes/`unsafe`
+            // modifier can legally sit on ANY part, not just the primary one
+            // (Roslyn's `symbol.GetAttributes()` already merges them). Union in
+            // every other part's `AttributeLists`/`Modifiers` so nothing
+            // declared on a non-primary part is silently dropped.
+            IEnumerable<AttributeListSyntax> mergedAttributeLists = otherParts == null
+                ? node.AttributeLists
+                : node.AttributeLists.Concat(otherParts.SelectMany(p => p.AttributeLists));
+            bool isUnsafe = node.Modifiers.Any(SyntaxKind.UnsafeKeyword) ||
+                (otherParts != null && otherParts.Any(p => p.Modifiers.Any(SyntaxKind.UnsafeKeyword)));
+
             return new TypeDeclaration(
                 kind.Value,
                 SanitizeIdentifier(node.Identifier.Text),
@@ -1595,8 +1664,8 @@ public sealed class CSharpToGSharpTranslator
                 visibility: MapVisibility(symbol, this.context, node),
                 isOpen: isOpen || wasAbstract,
                 isAbstract: false,
-                attributes: this.MapAttributes(node.AttributeLists),
-                isUnsafe: node.Modifiers.Any(SyntaxKind.UnsafeKeyword));
+                attributes: this.MapAttributes(mergedAttributeLists),
+                isUnsafe: isUnsafe);
         }
 
         /// <summary>
@@ -3500,7 +3569,7 @@ public sealed class CSharpToGSharpTranslator
                 .Any();
         }
 
-        private List<AttributeUse> MapAttributes(SyntaxList<AttributeListSyntax> attributeLists)
+        private List<AttributeUse> MapAttributes(IEnumerable<AttributeListSyntax> attributeLists)
         {
             var attributes = new List<AttributeUse>();
             foreach (AttributeListSyntax list in attributeLists)
