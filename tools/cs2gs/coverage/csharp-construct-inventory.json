@@ -2345,9 +2345,11 @@
   {
     "kind": "VarPattern",
     "nodeType": "VarPatternSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.22",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1888"
+    "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/SwitchExpression.cs",
+    "notes": "Always-matching bind (issue #1888, resolved): an is-pattern/loop-condition \u0060x is var v\u0060 lowers to the literal \u0060true\u0060 test with \u0060v\u0060 bound directly to the receiver; a switch/property-pattern \u0060var v\u0060 arm lowers to the G# discard \u0060_\u0060 (gsc\u0027s own total-arm check) with \u0060v\u0060 bound via translator-side substitution to the arm\u0027s discriminant/property receiver."
   },
   {
     "kind": "VariableDeclaration",

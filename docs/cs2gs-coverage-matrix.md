@@ -6,12 +6,12 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | Status | Count |
 | --- | --- |
 | Unclassified | 0 |
-| Translated | 210 |
+| Translated | 211 |
 | Lowered | 12 |
 | UnsupportedByDesign | 56 |
-| Gap | 43 |
+| Gap | 42 |
 
-## Translated (210)
+## Translated (211)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -219,6 +219,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | UsingDirective | UsingDirectiveSyntax | ADR-0115 §B.1 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/TypeAliasDeclaration.cs | https://github.com/DavidObando/gsharp/issues/1914 | Plain + simple-alias green; alias-any-type (C#12) unsupported (issue #1914). |
 | UsingStatement | UsingStatementSyntax | ADR-0115 §B.29 |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/UsingStatement.cs | https://github.com/DavidObando/gsharp/issues/1903 | await using drops async-dispose semantics (issue #1903). |
 | Utf8StringLiteralExpression | LiteralExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/Utf8StringLiteralExpression.cs |  | C# 11 u8 literals translate and reach parity (grid G01). |
+| VarPattern | VarPatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/SwitchExpression.cs |  | Always-matching bind (issue #1888, resolved): an is-pattern/loop-condition `x is var v` lowers to the literal `true` test with `v` bound directly to the receiver; a switch/property-pattern `var v` arm lowers to the G# discard `_` (gsc's own total-arm check) with `v` bound via translator-side substitution to the arm's discriminant/property receiver. |
 | VariableDeclaration | VariableDeclarationSyntax | ADR-0115 §B.3 |  |  |  |  |
 | VariableDeclarator | VariableDeclaratorSyntax | ADR-0115 §B.3 |  |  |  |  |
 | WhenClause | WhenClauseSyntax | ADR-0115 §B.22 |  |  |  | Pattern guards (issue #991, resolved). |
@@ -304,7 +305,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | XmlText | XmlTextSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | XmlTextAttribute | XmlTextAttributeSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 
-## Gap (43)
+## Gap (42)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -348,6 +349,5 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | UncheckedExpression | CheckedExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1881 |  |
 | UnsignedRightShiftAssignmentExpression | AssignmentExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1880 | Emits >>>= verbatim; never parses. |
 | UnsignedRightShiftExpression | BinaryExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1880 | Translator crash: Unknown binary operator >>>. |
-| VarPattern | VarPatternSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1888 |  |
 | WithExpression | WithExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1892 | Stray bare assignment emitted before the with-expression. |
 | WithInitializerExpression | InitializerExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1892 |  |
