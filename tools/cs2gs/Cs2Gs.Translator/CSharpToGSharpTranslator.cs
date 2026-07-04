@@ -14897,6 +14897,26 @@ public sealed class CSharpToGSharpTranslator
                             }
 
                             ExtendedPropertyFieldTree tree = extendedFieldTrees[rootName];
+                            if (tree.HasCollision)
+                            {
+                                // Bug (N1, Opus review of #1971): a path segment
+                                // that is BOTH a leaf value check (`A.B: 0`) AND
+                                // a nested-member check (`A.B.C: 1`) at the same
+                                // name cannot be merged into a single
+                                // PropertyPattern field — one side would have to
+                                // be silently dropped. Per ADR-0115 ("never
+                                // guess"), report the gap loudly instead of
+                                // guessing which side to keep, and fall back to
+                                // an empty nested field for '{rootName}' so the
+                                // merge optimization doesn't emit a
+                                // semantically-wrong pattern.
+                                this.context.ReportUnsupported(
+                                    recursive.PropertyPatternClause,
+                                    $"extended property pattern mixes a direct value check and a nested member check on the same path segment '{tree.CollisionSegment}' (rooted at '{rootName}'); not supported.");
+                                fields[placeholderIndex] = new PropertyPatternField(rootName, new PropertyPattern(new List<PropertyPatternField>()));
+                                continue;
+                            }
+
                             List<PropertyPatternField> childFields = tree.ConvertChildren(
                                 this, new MemberAccessExpression(receiver, rootName), bindings, usedDesignators, guards);
                             fields[placeholderIndex] = new PropertyPatternField(rootName, new PropertyPattern(childFields));
@@ -15696,12 +15716,35 @@ public sealed class CSharpToGSharpTranslator
             private readonly Dictionary<string, PatternSyntax> leaves = new Dictionary<string, PatternSyntax>();
             private readonly Dictionary<string, ExtendedPropertyFieldTree> children = new Dictionary<string, ExtendedPropertyFieldTree>();
 
+            // Bug (N1, Opus review of #1971): set when a path segment is
+            // targeted by BOTH a leaf value check (`A.B: 0`) and a nested
+            // member check (`A.B.C: 1`) — merging those into one
+            // PropertyPattern field would require silently dropping one side.
+            // Propagated up from whichever depth the collision occurs at, so
+            // the caller can detect it anywhere in the (sub)tree and bail out
+            // of the whole merge for the offending root instead of guessing.
+            public bool HasCollision { get; private set; }
+
+            public string CollisionSegment { get; private set; }
+
             public void Insert(List<string> names, int index, PatternSyntax leafPattern)
             {
                 string name = names[index];
                 if (index == names.Count - 1)
                 {
-                    if (!this.leaves.ContainsKey(name) && !this.children.ContainsKey(name))
+                    if (this.children.ContainsKey(name))
+                    {
+                        // A nested-member check for `name` was already inserted
+                        // (e.g. `A.B.C: ...` seen before `A.B: ...`) — this
+                        // leaf check would collide with it. Don't add it as a
+                        // leaf (that would silently drop the nested subtree);
+                        // record the collision instead.
+                        this.HasCollision = true;
+                        this.CollisionSegment = name;
+                        return;
+                    }
+
+                    if (!this.leaves.ContainsKey(name))
                     {
                         this.order.Add(name);
                     }
@@ -15710,17 +15753,31 @@ public sealed class CSharpToGSharpTranslator
                     return;
                 }
 
+                if (this.leaves.ContainsKey(name))
+                {
+                    // A leaf value check for `name` was already inserted (e.g.
+                    // `A.B: ...` seen before `A.B.C: ...`) — this nested check
+                    // would collide with it. Don't create/descend into a child
+                    // (that would silently drop the leaf check); record the
+                    // collision instead.
+                    this.HasCollision = true;
+                    this.CollisionSegment = name;
+                    return;
+                }
+
                 if (!this.children.TryGetValue(name, out ExtendedPropertyFieldTree child))
                 {
                     child = new ExtendedPropertyFieldTree();
                     this.children[name] = child;
-                    if (!this.leaves.ContainsKey(name))
-                    {
-                        this.order.Add(name);
-                    }
+                    this.order.Add(name);
                 }
 
                 child.Insert(names, index + 1, leafPattern);
+                if (child.HasCollision)
+                {
+                    this.HasCollision = true;
+                    this.CollisionSegment = child.CollisionSegment;
+                }
             }
 
             public List<PropertyPatternField> ConvertChildren(

@@ -264,6 +264,151 @@ namespace Corpus.Issue1971
         AssertRoundTripParses(rendered);
     }
 
+    [Fact]
+    public void SwitchExpression_LeafThenNestedCollisionOnSameSegment_ReportsUnsupportedInsteadOfSilentlyDroppingSubpattern()
+    {
+        // Bug (N1, Opus review of #1971): `A.B: not null` (leaf check on `B`)
+        // and `A.B.C: 1` (nested check under `B`) target the same path
+        // segment `B`, ONE LEVEL UNDER the shared root `A`, in two
+        // incompatible ways. The merge optimization must not silently keep
+        // one and drop the other — it must report a loud gap. (`B: not null`
+        // is used as the leaf check — rather than `B: null`, which would make
+        // the arm statically unreachable per CS8510 since it contradicts the
+        // nested `B.C` check — since a reference-typed `B` can be
+        // pattern-compared against `not null` while ALSO exposing a member
+        // for the nested check; an `int` leaf check couldn't do both, since
+        // `int` has no further members to nest into.)
+        (Cs2Gs.CodeModel.Ast.CompilationUnit unit, TranslationContext context) = RenderAllowingDiagnostics(@"
+namespace Corpus.Issue1971
+{
+    public class TypeB
+    {
+        public int C;
+    }
+
+    public class TypeA
+    {
+        public TypeB B;
+    }
+
+    public class RootHolder
+    {
+        public TypeA A;
+    }
+
+    public class Holder
+    {
+        public string Describe(RootHolder root) => root switch
+        {
+            { A.B: not null, A.B.C: 1 } => ""match"",
+            _ => ""other"",
+        };
+    }
+}
+");
+
+        Assert.Contains(
+            context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported
+                && d.Message.Contains("'B'", StringComparison.Ordinal)
+                && d.Message.Contains("'A'", StringComparison.Ordinal));
+
+        string rendered = GSharpPrinter.Print(unit);
+
+        // Neither subpattern's condition should be silently emitted as if the
+        // merge had fully succeeded (that would hide the data loss).
+        Assert.DoesNotContain("{ A: { B: { C: 1 } } }", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("B: not nil", rendered, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SwitchExpression_NestedThenLeafCollisionOnSameSegment_ReportsUnsupportedInsteadOfSilentlyDroppingSubpattern()
+    {
+        // Mirror case of the above: the nested-member check (`A.B.C: 1`) is
+        // seen BEFORE the leaf check (`A.B: not null`) on the same segment
+        // `B`. Must still report the gap loudly, not silently drop either
+        // side.
+        (Cs2Gs.CodeModel.Ast.CompilationUnit unit, TranslationContext context) = RenderAllowingDiagnostics(@"
+namespace Corpus.Issue1971
+{
+    public class TypeB
+    {
+        public int C;
+    }
+
+    public class TypeA
+    {
+        public TypeB B;
+    }
+
+    public class RootHolder
+    {
+        public TypeA A;
+    }
+
+    public class Holder
+    {
+        public string Describe(RootHolder root) => root switch
+        {
+            { A.B.C: 1, A.B: not null } => ""match"",
+            _ => ""other"",
+        };
+    }
+}
+");
+
+        Assert.Contains(
+            context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported
+                && d.Message.Contains("'B'", StringComparison.Ordinal)
+                && d.Message.Contains("'A'", StringComparison.Ordinal));
+
+        string rendered = GSharpPrinter.Print(unit);
+
+        Assert.DoesNotContain("{ A: { B: { C: 1 } } }", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("B: not nil", rendered, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SwitchArm_NullableIntermediate_PreservesNestedFieldForEmitterNullGuard()
+    {
+        // Switch-arm counterpart to IsPattern_NullableIntermediate_EmitsNullGuardBeforeMemberChain:
+        // the switch-arm lowering (nested PropertyPattern, not a flattened
+        // member-access chain) should free-ride on gsc's existing #1923
+        // null-guard in MethodBodyEmitter.EmitPropertyPattern, as long as the
+        // intermediate field's G# type stays nullable (`Start` on `Point?`).
+        string rendered = Render(NullableStartSource + @"
+    public class Holder
+    {
+        public string Describe(Segment s) => s switch
+        {
+            { Start.X: 0 } => ""origin-x"",
+            _ => ""other"",
+        };
+    }
+}
+");
+
+        Assert.Contains("{ Start: { X: 0 } }", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    private static (Cs2Gs.CodeModel.Ast.CompilationUnit Unit, TranslationContext Context) RenderAllowingDiagnostics(string source)
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Source.cs", source) });
+
+        Assert.True(
+            project.BoundWithoutErrors,
+            "inline source should bind with no C# errors: " +
+                string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        Cs2Gs.CodeModel.Ast.CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        return (unit, context);
+    }
+
     private static void AssertRoundTripParses(string rendered)
     {
         RoundTripResult result = GSharpRoundTrip.Validate(rendered);
