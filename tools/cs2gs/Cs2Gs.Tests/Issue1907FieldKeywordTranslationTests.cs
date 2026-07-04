@@ -123,6 +123,41 @@ namespace Corpus.Issue1907
         AssertRoundTripParses(rendered);
     }
 
+    [Fact]
+    public void FieldWithInitializer_CarriesInitializerToBackingField()
+    {
+        string rendered = Render(@"
+namespace Corpus.Issue1907
+{
+    public class ClampedGauge
+    {
+        public int Level { get; set => field = value < 0 ? 0 : value; } = 5;
+    }
+}
+");
+
+        Assert.Contains("private var _level int32 = 5", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
+    public void StaticFieldKeywordProperty_GetsStaticBackingField()
+    {
+        string rendered = Render(@"
+namespace Corpus.Issue1907
+{
+    public class Config
+    {
+        public static string Name { get => field ??= ""x""; }
+    }
+}
+");
+
+        Assert.Contains("shared", rendered, StringComparison.Ordinal);
+        Assert.Contains("private var _name string?", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
     private static void AssertRoundTripParses(string rendered)
     {
         RoundTripResult result = GSharpRoundTrip.Validate(rendered);

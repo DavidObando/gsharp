@@ -1,5 +1,6 @@
 // inventory: FieldExpression — C#14 `field` contextual keyword in property accessors:
-// custom-set + auto-get sharing one field, get-with-`??=` + auto-set, both-custom.
+// custom-set + auto-get sharing one field, get-with-`??=` + auto-set, both-custom,
+// and a property initializer seeding the synthesized backing field.
 using System;
 
 namespace Corpus.Grid07
@@ -12,6 +13,12 @@ namespace Corpus.Grid07
             get => field;
             set => field = value < 0 ? 0 : value;
         }
+    }
+
+    public class ClampedGaugeWithInit
+    {
+        // Initializer seeds the compiler-synthesized backing field, not just the property.
+        public int Level { get; set => field = value < 0 ? 0 : value; } = 5;
     }
 
     public class LazyLabel
@@ -58,6 +65,11 @@ namespace Corpus.Grid07
             counter.Count = 2;
             Console.WriteLine("FieldExpression: counter=" + counter.Count.ToString());
             Console.WriteLine("FieldExpression: changes=" + counter.ChangeCount.ToString());
+
+            ClampedGaugeWithInit initGauge = new ClampedGaugeWithInit();
+            Console.WriteLine("FieldExpression: init=" + initGauge.Level.ToString());
+            initGauge.Level = -1;
+            Console.WriteLine("FieldExpression: initClamped=" + initGauge.Level.ToString());
         }
     }
 }

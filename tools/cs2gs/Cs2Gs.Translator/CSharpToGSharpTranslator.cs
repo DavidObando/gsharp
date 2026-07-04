@@ -2253,7 +2253,8 @@ public sealed class CSharpToGSharpTranslator
                         // keyword property is emitted alongside (before) the
                         // property itself, mirroring a hand-written computed
                         // property with an explicit backing field (ADR-0051 §2).
-                        yield return (fieldKeywordBackingField, false);
+                        // Static/instance-ness must match the property's own.
+                        yield return (fieldKeywordBackingField, propIsStatic);
                     }
 
                     yield return (propMember, propIsStatic);
@@ -3364,8 +3365,15 @@ public sealed class CSharpToGSharpTranslator
             GTypeReference backingType = fieldKeywordBackingSymbol != null
                 ? this.PromoteIfUsedAsNullable(type, fieldKeywordBackingSymbol)
                 : type;
+
+            // Issue #1907: a property initializer (`{ get; set => ...; } = 5;`)
+            // seeds the compiler-synthesized backing field, not the property
+            // itself — carry it over or the field silently starts at default(T).
+            GExpression backingInitializer = fieldKeywordBackingName != null && node.Initializer != null
+                ? this.TranslateNullSeamExpression(node.Initializer.Value, symbol?.ContainingType)
+                : null;
             GMember backingField = fieldKeywordBackingName != null
-                ? new FieldDeclaration(BindingKind.Var, fieldKeywordBackingName, backingType, visibility: Visibility.Private)
+                ? new FieldDeclaration(BindingKind.Var, fieldKeywordBackingName, backingType, initializer: backingInitializer, visibility: Visibility.Private)
                 : null;
 
             List<PropertyAccessor> accessors = this.MapAccessors(node, fieldKeywordBackingName);
