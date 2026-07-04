@@ -10,6 +10,7 @@ namespace Corpus.Grid09
     {
         private static void Main()
         {
+            AnonymousMethodExpressionFixture.Run();
             ConditionalAccessExpressionFixture.Run();
             DeclarationExpressionFixture.Run();
             DelegateDeclarationFixture.Run();

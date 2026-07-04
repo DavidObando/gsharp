@@ -1,7 +1,4 @@
-// inventory: AnonymousMethodExpression — QUARANTINED at translate:
-// CS2GS-GAP "expression 'AnonymousMethodExpression' has no canonical G# form
-// yet; emitted an identifier placeholder (ADR-0115 §B)." for every form
-// (delegate (int x) {...}, parameterless delegate {...}, Action-typed).
+// inventory: AnonymousMethodExpression
 using System;
 
 namespace Corpus.Grid09
@@ -22,6 +19,13 @@ namespace Corpus.Grid09
                 return 42;
             };
             Console.WriteLine($"AnonymousMethodExpression: answer={answer()}");
+
+            // Parameterless anonymous method targeting a zero-arg delegate type.
+            Action greet = delegate
+            {
+                Console.WriteLine("AnonymousMethodExpression: greet=hi");
+            };
+            greet();
 
             Action<string> shout = delegate (string s)
             {

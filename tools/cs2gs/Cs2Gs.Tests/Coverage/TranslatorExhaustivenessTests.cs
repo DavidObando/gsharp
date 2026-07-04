@@ -78,19 +78,19 @@ public class TranslatorExhaustivenessTests
     [Fact]
     public void UnregisteredConstruct_IsClassifiedAsGap()
     {
-        // Anonymous method expressions (`delegate { ... }`) currently have no
-        // translation rule and are deliberately NOT in the UnsupportedByDesign
-        // registry, so the choke point must classify this as an accidental
-        // gap. If this construct gains a translation (or a registry entry),
-        // swap the snippet for another unregistered kind — the mechanism
-        // under test is the classification.
+        // Checked expressions (`checked(...)`) currently have no translation
+        // rule and are deliberately NOT in the UnsupportedByDesign registry,
+        // so the choke point must classify this as an accidental gap. If
+        // this construct gains a translation (or a registry entry), swap the
+        // snippet for another unregistered kind — the mechanism under test
+        // is the classification.
         TranslationContext context = Translate(
-            "namespace S { public static class C { public static void M() { System.Func<int> f = delegate { return 1; }; } } }");
+            "namespace S { public static class C { public static void M() { int x = checked(1 + 1); } } }");
 
         TranslationDiagnostic diagnostic = context.Diagnostics.FirstOrDefault(d => d.IsUnsupported);
         Assert.True(
             diagnostic is not null,
-            "expected the anonymous method to be unsupported; if it translates now, update this test's snippet.");
+            "expected the checked expression to be unsupported; if it translates now, update this test's snippet.");
         Assert.Equal(UnsupportedClassification.Gap, diagnostic.Classification);
         Assert.Equal(UnsupportedRationale.None, diagnostic.Rationale);
     }

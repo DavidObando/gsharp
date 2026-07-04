@@ -73,9 +73,10 @@
   {
     "kind": "AnonymousMethodExpression",
     "nodeType": "AnonymousMethodExpressionSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0115 \u00A7B.20",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1898"
+    "fixture": "tools/cs2gs/corpus/grid/G09-Functions-Console/Constructs/AnonymousMethodExpression.cs"
   },
   {
     "kind": "AnonymousObjectCreationExpression",
