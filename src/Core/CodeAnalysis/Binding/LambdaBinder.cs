@@ -9,6 +9,7 @@ using System.Linq;
 using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Core.CodeAnalysis.Text;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -372,6 +373,45 @@ internal sealed class LambdaBinder
         }
 
         return new BoundFunctionLiteralExpression(null, synthetic, fnType, (BoundBlockStatement)body, captured);
+    }
+
+    /// <summary>
+    /// Issue #2016: checks a NON-generic named local function (<c>let Name = func (...)
+    /// ... {...}</c>, no <c>[T, ...]</c> of its own — the sibling case of #1940's generic
+    /// local function) for a direct reference to a type parameter owned by an enclosing
+    /// generic method or class in its own parameter type, return type, or body, and reports
+    /// GS0468 if found. Such a local function that captures no outer variables is hoisted to
+    /// a top-level static method (issue #1469's zero-capture fast path) UNLESS it is nested
+    /// inside a non-generic user type purely for accessibility (see
+    /// <c>ClosureEmitter.SynthesizeClosures</c>). When there is no such non-generic-struct
+    /// nesting available — because the local function is declared at top level (inside a
+    /// plain/generic top-level function) or because its enclosing user type is itself
+    /// generic — that hoisted method carries none of the enclosing type parameters, so the
+    /// reference has no corresponding CLR slot: invalid IL that silently crashes at run time
+    /// with <see cref="System.BadImageFormatException"/> instead of failing to compile —
+    /// the same invalid-IL family as the generic-local-function case, but without that fix's
+    /// own-type-parameter list to hide behind.
+    /// </summary>
+    /// <param name="location">The text location of the declaring <c>let</c> identifier.</param>
+    /// <param name="name">The local function's declared name (the <c>let</c> variable name).</param>
+    /// <param name="literal">The already-bound function-literal expression.</param>
+    public void CheckNonGenericLocalFunctionEnclosingTypeParameterReference(TextLocation location, string name, BoundFunctionLiteralExpression literal)
+    {
+        if (literal?.Function == null
+            || literal.CapturedVariables.Length > 0
+            || literal.Function.IsAsync
+            || binderCtx.CurrentTypeParameters is not { Count: > 0 } enclosingTypeParametersInScope
+            || (literal.Function.LexicalEnclosingType is StructSymbol enclosingStruct
+                && enclosingStruct.TypeParameters.IsDefaultOrEmpty))
+        {
+            return;
+        }
+
+        var offender = FindEnclosingTypeParameterReference(literal.Function, literal.Body, enclosingTypeParametersInScope.Values.ToImmutableArray());
+        if (offender != null)
+        {
+            Diagnostics.ReportGenericLocalFunctionCannotReferenceEnclosingTypeParameter(location, name, offender.Name);
+        }
     }
 
     /// <summary>

@@ -266,7 +266,8 @@ public sealed class Binder
             bindVariableDeclarationAttributes: (annotations, positionDescription) => declarations.BindAttributes(annotations, AttributeTargetKind.Field, VariableDeclarationAllowedTargets, positionDescription, System.AttributeTargets.Field),
             getCurrentFunction: () => this.function,
             bindLambdaWithTargetType: (syntax, targetType) => lambdas.BindLambdaExpression(syntax, targetType),
-            bindGenericLocalFunctionDeclaration: syntax => lambdas.BindGenericLocalFunctionDeclaration(syntax));
+            bindGenericLocalFunctionDeclaration: syntax => lambdas.BindGenericLocalFunctionDeclaration(syntax),
+            checkNonGenericLocalFunctionEnclosingTypeParameterReference: (location, name, literal) => lambdas.CheckNonGenericLocalFunctionEnclosingTypeParameterReference(location, name, literal));
         declarations = new DeclarationBinder(
             binderCtx,
             conversions,

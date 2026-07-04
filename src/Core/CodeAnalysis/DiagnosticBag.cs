@@ -694,21 +694,28 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
-    /// Reports that a generic local function (issue #1886) references a type parameter owned by an
-    /// enclosing generic method or class (issue #1940). A generic local function is hoisted to its own
-    /// top-level static method carrying only its own type-parameter list as CLR method-generic (MVAR)
-    /// slots; the enclosing method/class type parameter has no corresponding slot on that hoisted method,
-    /// so referencing it (in a parameter type, return type, local declaration, or body expression) would
-    /// silently emit invalid IL (an unresolvable MVAR/VAR reference) that crashes at run time with
-    /// <c>InvalidProgramException</c> instead of failing to compile.
+    /// Reports that a local function references a type parameter owned by an enclosing generic
+    /// method or class, directly in its own parameter type, return type, or body — the sibling
+    /// invalid-IL shapes of issue #1940 (a GENERIC local function declaring its own
+    /// <c>[T, ...]</c>) and issue #2016 (a NON-generic local function that captures no outer
+    /// variables). A generic local function is hoisted to its own top-level static method
+    /// carrying only its own type-parameter list as CLR method-generic (MVAR) slots; a
+    /// non-generic, zero-capture local function is instead hoisted to a plain top-level static
+    /// method (issue #1469's zero-capture fast path) unless nested inside a non-generic user
+    /// type purely for accessibility. In both shapes, the enclosing method/class type parameter
+    /// has no corresponding slot on the hoisted method, so referencing it would silently emit
+    /// invalid IL (an unresolvable MVAR/VAR reference) that crashes at run time with
+    /// <c>InvalidProgramException</c> or <c>BadImageFormatException</c> instead of failing to
+    /// compile.
     /// </summary>
     /// <param name="location">The text location of the declaration's identifier.</param>
     /// <param name="name">The name of the declared local function.</param>
     /// <param name="enclosingTypeParameterName">The name of the referenced enclosing type parameter.</param>
     public void ReportGenericLocalFunctionCannotReferenceEnclosingTypeParameter(TextLocation location, string name, string enclosingTypeParameterName)
     {
-        var message = $"Generic local function '{name}' cannot reference '{enclosingTypeParameterName}', a type parameter of an enclosing method or class. " +
-            "A generic local function is emitted as its own generic method and cannot close over an enclosing type parameter.";
+        var message = $"Local function '{name}' cannot reference '{enclosingTypeParameterName}', a type parameter of an enclosing method or class. " +
+            "A generic local function is emitted as its own generic method, and a local function that captures no outer variables is emitted as a " +
+            "top-level method; neither can close over an enclosing type parameter.";
         Report(location, "GS0468", message);
     }
 
