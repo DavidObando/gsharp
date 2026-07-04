@@ -13,11 +13,7 @@ namespace Corpus.Grid08
             AllowsConstraintClauseFixture.Run();
             ClassConstraintFixture.Run();
             ConstructorConstraintFixture.Run();
-
-            // QUARANTINED (see Quarantined/): DefaultConstraintFixture — the abstract
-            // generic method with T? that `where T : default` requires trips gsc
-            // issue #987 (GS0387/GS0386 abstract member not implemented, GS0185
-            // override mismatch on `value T?`, GS0151 inference).
+            DefaultConstraintFixture.Run();
 
             // QUARANTINED (see Quarantined/): GenericAttributeFixture — C#11 generic
             // attribute application `[Tag<int>]` emits `@Tag<int>` which does not

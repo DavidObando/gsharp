@@ -1,4 +1,4 @@
-// inventory: DefaultConstraint — where T : default on an override (probe)
+// inventory: DefaultConstraint — where T : default on an override
 using System;
 
 namespace Corpus.Grid08

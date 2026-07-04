@@ -27,12 +27,11 @@ namespace Corpus.Grid09
             };
             Console.WriteLine($"ParenthesizedLambdaExpression: stmt={stmt(5)}");
 
-            // Statement-bodied Action. Uses concatenation, not interpolation:
-            // the gsc emitter cannot yet emit InterpolatedStringExpression
-            // inside lambda bodies (GS9998).
+            // Statement-bodied Action. Keep interpolation here so the grid
+            // catches regressions in nested-body emit lowering (#1928).
             Action<int, int> report = (a, b) =>
             {
-                Console.WriteLine("ParenthesizedLambdaExpression: report=" + a.ToString() + "/" + b.ToString());
+                Console.WriteLine($"ParenthesizedLambdaExpression: report={a}/{b}");
             };
             report(6, 7);
         }

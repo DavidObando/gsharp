@@ -285,7 +285,18 @@ internal sealed partial class ExpressionBinder
         // the conversion (so we do NOT truncate, e.g. an `nint` to a byte) and
         // retarget it to `*T`. This never masks a real dereference — a value
         // produced by a numeric conversion is never a pointer.
+        //
+        // Issue #1925: the cast-recognition below must only fire for the
+        // actual `* IDENT ( expr )` cast syntax, not for an arbitrary operand
+        // that merely *binds* to a BoundConversionExpression. Pointer
+        // arithmetic (`p + i`) lowers to a BoundConversionExpression back to
+        // the pointer type (see LowerPointerOffset), so a genuine dereference
+        // of a parenthesized pointer-arithmetic expression like `*(p + i)`
+        // also binds its operand to a BoundConversionExpression whose Type is
+        // the pointer type `*T` — without a syntax-shape guard this was
+        // mistaken for a `*T(expr)` cast and rewrapped as `**T`.
         if (binderCtx.InUnsafeContext
+            && syntax.Operand is CallExpressionSyntax
             && operand is BoundConversionExpression conv
             && conv.Type is { } pointee
             && (TypeSymbol.IsLegalPointeeType(pointee) || BlittableDetector.IsBlittableValueStructPointee(pointee)))

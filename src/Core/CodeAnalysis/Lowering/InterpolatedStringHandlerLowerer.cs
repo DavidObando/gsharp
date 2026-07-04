@@ -39,7 +39,7 @@ namespace GSharp.Core.CodeAnalysis.Lowering;
 /// This rewrite is applied only on the emit path; the tree-walk interpreter
 /// renders <see cref="BoundInterpolatedStringExpression"/> directly.
 /// </remarks>
-internal sealed class InterpolatedStringHandlerLowerer : BoundTreeRewriter
+internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewriter
 {
     private static readonly System.Type HandlerType = typeof(DefaultInterpolatedStringHandler);
     private static readonly TypeSymbol HandlerTypeSymbol = TypeSymbol.FromClrType(HandlerType);

@@ -6874,6 +6874,21 @@ public class Parser
             return new IndirectAssignmentExpressionSyntax(syntaxTree, unaryDeref, equalsToken, value);
         }
 
+        // Issue #1925: compound indirect assignment `*p op= expr` (e.g.
+        // `*(p + i) += 1`), for ANY compound operator (`+=`, `-=`, `*=`, ...).
+        // Mirrors the plain `=` case above; the binder single-evaluates the
+        // pointer expression via a synthesized temp local (see
+        // CompoundIndexAssignmentExpressionSyntax for the analogous indexer
+        // pattern) before desugaring to `*tmp = *tmp op value`.
+        if (expression is UnaryExpressionSyntax unaryDerefCompound
+            && unaryDerefCompound.OperatorToken.Kind == SyntaxKind.StarToken
+            && SyntaxFacts.TryGetCompoundAssignmentBaseOperator(Current.Kind, out _))
+        {
+            var compoundOpToken = NextToken();
+            var value = ParseAssignmentExpression();
+            return new IndirectCompoundAssignmentExpressionSyntax(syntaxTree, unaryDerefCompound, compoundOpToken, value);
+        }
+
         // Stream B′: `receiver.Event += handler` / `receiver.Event -= handler`
         // is captured as an EventSubscriptionExpressionSyntax once the LHS has
         // been parsed as a member-access chain. The binder later validates that

@@ -2978,7 +2978,7 @@ internal sealed partial class ExpressionBinder
                 var variadicParam = method.Parameters[method.Parameters.Length - 1];
                 var sliceType = (SliceTypeSymbol)variadicParam.Type;
                 var substitutedSlice = substitution != null
-                    ? (SliceTypeSymbol)Binder.SubstituteType(sliceType, substitution)
+                    ? (SliceTypeSymbol)Binder.SubstituteType(sliceType, substitution, scope.References.MapClrTypeToReferences)
                     : sliceType;
                 var hasVariadicErrors = false;
 
@@ -3046,7 +3046,7 @@ internal sealed partial class ExpressionBinder
                 // open-type-parameter shortcut so generic static out-parameters
                 // (`func G[T](out r T)`) are handled too.
                 var slotSyntax = i < ce.Arguments.Count ? ce.Arguments[i] : null;
-                var substitutedPointeeType = substitution != null ? Binder.SubstituteType(paramType, substitution) : paramType;
+                var substitutedPointeeType = substitution != null ? Binder.SubstituteType(paramType, substitution, scope.References.MapClrTypeToReferences) : paramType;
                 var reboundOutVar = TryRebindInlineOutVarPlaceholder(permutedArgs[i], slotSyntax, method.Parameters[i], substitutedPointeeType);
                 if (reboundOutVar != null)
                 {
@@ -3078,13 +3078,13 @@ internal sealed partial class ExpressionBinder
                     // the literal's concrete signature and the reified
                     // Func/Action TypeSpec at the call site dispatches
                     // through real Invoke without DynamicInvoke marshalling.
-                    var substitutedOpenTarget = (Binder.SubstituteType(openFunctionParameter, substitution) as FunctionTypeSymbol)
+                    var substitutedOpenTarget = (Binder.SubstituteType(openFunctionParameter, substitution, scope.References.MapClrTypeToReferences) as FunctionTypeSymbol)
                         ?? openFunctionParameter;
                     convertedArgs.Add(lambdas.CreateErasedFunctionLiteralAdapter(functionLiteralArgument, substitutedOpenTarget));
                     continue;
                 }
 
-                var expectedType = substitution != null ? Binder.SubstituteType(paramType, substitution) : paramType;
+                var expectedType = substitution != null ? Binder.SubstituteType(paramType, substitution, scope.References.MapClrTypeToReferences) : paramType;
                 var argLoc = i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Location;
                 convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArgs[i], expectedType, method.Parameters[i]));
             }
@@ -3101,28 +3101,56 @@ internal sealed partial class ExpressionBinder
             var staticGenericOwner = structSym?.Definition != null ? structSym : null;
             var staticGenericInterfaceOwner = ifaceSym?.Definition != null ? ifaceSym : null;
 
+            // Issue #1931: stash the method's own (explicit or inferred) type
+            // arguments on the bound node so the emitter's MethodSpec
+            // construction can use this authoritative bind-time result
+            // instead of re-deriving it via structural unification (which
+            // can fail for uninformative argument shapes like a bare `nil`).
+            var methodTypeArguments = default(ImmutableArray<TypeSymbol>);
+            if (method.IsGeneric && substitution != null)
+            {
+                var methodTypeArgsBuilder = ImmutableArray.CreateBuilder<TypeSymbol>(method.TypeParameters.Length);
+                foreach (var tp in method.TypeParameters)
+                {
+                    methodTypeArgsBuilder.Add(substitution[tp]);
+                }
+
+                methodTypeArguments = methodTypeArgsBuilder.MoveToImmutable();
+            }
+
+            BoundCallExpression MakeStaticGenericCall(TypeSymbol substitutedReturnOverride)
+            {
+                var result = new BoundCallExpression(null, method, convertedArgs.ToImmutable(), substitutedReturnOverride)
+                {
+                    StaticGenericOwnerType = staticGenericOwner,
+                    StaticGenericInterfaceOwnerType = staticGenericInterfaceOwner,
+                    MethodTypeArguments = methodTypeArguments,
+                };
+                return result;
+            }
+
             if (substitution != null)
             {
-                var substitutedReturn = Binder.SubstituteType(method.Type, substitution);
+                var substitutedReturn = Binder.SubstituteType(method.Type, substitution, scope.References.MapClrTypeToReferences);
                 if (method.IsAsync && !isAsyncIteratorReturnType(method.Type))
                 {
                     substitutedReturn = lambdas.WrapAsTask(substitutedReturn);
-                    return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), substitutedReturn) { StaticGenericOwnerType = staticGenericOwner, StaticGenericInterfaceOwnerType = staticGenericInterfaceOwner };
+                    return MakeStaticGenericCall(substitutedReturn);
                 }
 
                 if (!ReferenceEquals(substitutedReturn, method.Type))
                 {
-                    return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), substitutedReturn) { StaticGenericOwnerType = staticGenericOwner, StaticGenericInterfaceOwnerType = staticGenericInterfaceOwner };
+                    return MakeStaticGenericCall(substitutedReturn);
                 }
             }
 
             if (method.IsAsync && !isAsyncIteratorReturnType(method.Type))
             {
                 var asyncReturn = lambdas.WrapAsTask(method.Type);
-                return new BoundCallExpression(null, method, convertedArgs.ToImmutable(), asyncReturn) { StaticGenericOwnerType = staticGenericOwner, StaticGenericInterfaceOwnerType = staticGenericInterfaceOwner };
+                return MakeStaticGenericCall(asyncReturn);
             }
 
-            return new BoundCallExpression(null, method, convertedArgs.ToImmutable()) { StaticGenericOwnerType = staticGenericOwner, StaticGenericInterfaceOwnerType = staticGenericInterfaceOwner };
+            return MakeStaticGenericCall(null);
         }
 
         Diagnostics.ReportUnableToFindMember(ce.Location, methodName);
@@ -4005,11 +4033,11 @@ internal sealed partial class ExpressionBinder
             }
 
             var paramType = readSubstitution != null
-                ? Binder.SubstituteType(readIndexer.Parameters[0].Type, readSubstitution)
+                ? Binder.SubstituteType(readIndexer.Parameters[0].Type, readSubstitution, scope.References.MapClrTypeToReferences)
                 : readIndexer.Parameters[0].Type;
             var indexArg = ConvertIndex(paramType);
             var elementType = readSubstitution != null
-                ? Binder.SubstituteType(readIndexer.Type, readSubstitution)
+                ? Binder.SubstituteType(readIndexer.Type, readSubstitution, scope.References.MapClrTypeToReferences)
                 : readIndexer.Type;
             return new BoundUserInstanceCallExpression(
                 null,
@@ -4385,10 +4413,10 @@ internal sealed partial class ExpressionBinder
             }
 
             var paramType = writeSubstitution != null
-                ? Binder.SubstituteType(writeIndexer.Parameters[0].Type, writeSubstitution)
+                ? Binder.SubstituteType(writeIndexer.Parameters[0].Type, writeSubstitution, scope.References.MapClrTypeToReferences)
                 : writeIndexer.Parameters[0].Type;
             var elementType = writeSubstitution != null
-                ? Binder.SubstituteType(writeIndexer.Type, writeSubstitution)
+                ? Binder.SubstituteType(writeIndexer.Type, writeSubstitution, scope.References.MapClrTypeToReferences)
                 : writeIndexer.Type;
 
             var indexArg = conversions.BindConversion(indexSyntax, paramType);

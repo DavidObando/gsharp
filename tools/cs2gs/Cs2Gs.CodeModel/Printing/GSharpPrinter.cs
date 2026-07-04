@@ -870,7 +870,7 @@ public static class GSharpPrinter
                 return $"{pad}{forKeyword} {loopVars} in {RenderExpression(forIn.Iterable, indent)} {RenderBlock(forIn.Body, indent)}";
 
             case DeferStatement defer:
-                return $"{pad}defer {RenderBlock(defer.Body, indent)}";
+                return $"{pad}defer {RenderExpression(defer.Call, indent)}";
 
             case TryStatement tryStatement:
                 return RenderTry(tryStatement, indent);

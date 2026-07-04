@@ -9,13 +9,11 @@ namespace Corpus.Grid13.Constructs
 {
     public static class GenericExtensions
     {
-        // NOTE: `this IReadOnlyList<T> items` is avoided on purpose — gsc
-        // cannot convert the List<int> argument to the interface-typed generic
-        // receiver (GS0155: "Cannot convert type
-        // 'System.Collections.Generic.List`1[[System.Int32,...]]' to
-        // 'System.Collections.Generic.IReadOnlyList`1[int32]'"). An exact
-        // receiver type keeps the generic extension green.
-        public static T MiddleElement<T>(this List<T> items)
+        // Issue #1926 (fixed): `this IReadOnlyList<T> items` — a receiver-clause
+        // (extension) function whose declared receiver is a constructed generic
+        // CLR interface must accept a concrete implementing type at the call
+        // site (`List<int>`/`List<string>` both implement `IReadOnlyList<T>`).
+        public static T MiddleElement<T>(this IReadOnlyList<T> items)
         {
             return items[items.Count / 2];
         }

@@ -27,12 +27,7 @@ public class PrinterExhaustivenessTests
     /// entry is asserted to still fail: fixing the gap flips the test and
     /// forces removal from this list. Keep this list as small as possible.
     /// </summary>
-    private static readonly IReadOnlyDictionary<Type, string> KnownRoundTripGaps = new Dictionary<Type, string>
-    {
-        [typeof(DeferStatement)] = "the printer renders `defer { … }` (block body) but the G# parser " +
-            "only accepts `defer <expression>` (Parser.ParseDeferStatement; sample Defer.gs uses " +
-            "`defer record(\"x\")`), so every printed DeferStatement fails to re-parse with GS0005.",
-    };
+    private static readonly IReadOnlyDictionary<Type, string> KnownRoundTripGaps = new Dictionary<Type, string>();
 
     /// <summary>
     /// MemberData source: the simple name of every registered sample type,

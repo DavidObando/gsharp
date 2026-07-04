@@ -48,7 +48,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// back-references <see cref="Binder"/> except for the small set of
 /// static helpers that remain on the root (
 /// <see cref="Binder.InferTypeArguments"/>,
-/// <see cref="Binder.SubstituteType"/>,
+/// <see cref="Binder.SubstituteType(TypeSymbol, Dictionary{TypeParameterSymbol, TypeSymbol})"/>,
 /// <see cref="Binder.SatisfiesConstraint"/>,
 /// <see cref="Binder.DescribeConstraint"/>,
 /// <see cref="Binder.GetClrGenericArguments"/>,
@@ -364,6 +364,8 @@ internal sealed partial class ExpressionBinder
                 return BindThrowExpression((ThrowExpressionSyntax)syntax);
             case SyntaxKind.IndirectAssignmentExpression:
                 return BindIndirectAssignmentExpression((IndirectAssignmentExpressionSyntax)syntax);
+            case SyntaxKind.IndirectCompoundAssignmentExpression:
+                return BindIndirectCompoundAssignmentExpression((IndirectCompoundAssignmentExpressionSyntax)syntax);
             case SyntaxKind.IsExpression:
                 return BindIsExpression((IsExpressionSyntax)syntax);
             case SyntaxKind.AsExpression:

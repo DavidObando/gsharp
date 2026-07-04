@@ -6324,6 +6324,15 @@ internal sealed class ReflectionMetadataEmitter
     internal EntityHandle BuildMethodSpecForGenericCall(EntityHandle openMethod, BoundCallExpression call)
     {
         var tps = call.Function.TypeParameters;
+
+        // Issue #1931: prefer the bind-time-resolved method type arguments
+        // (explicit `[T]` list or inference) stashed on the bound node — see
+        // BuildMethodSpecForGenericInstanceCall for the rationale.
+        if (!call.MethodTypeArguments.IsDefaultOrEmpty && call.MethodTypeArguments.Length == tps.Length)
+        {
+            return this.BuildMethodSpec(openMethod, call.MethodTypeArguments.ToArray());
+        }
+
         var args = new TypeSymbol[tps.Length];
         for (int i = 0; i < tps.Length; i++)
         {
@@ -6341,6 +6350,19 @@ internal sealed class ReflectionMetadataEmitter
     internal EntityHandle BuildMethodSpecForGenericInstanceCall(EntityHandle openMethod, BoundUserInstanceCallExpression call)
     {
         var tps = call.Method.TypeParameters;
+
+        // Issue #1931: prefer the authoritative (explicit-or-inferred) method
+        // type arguments the binder already resolved and stashed on the bound
+        // node. Falling back to structural re-inference over the call's
+        // arguments/return shape is unsafe in general — e.g. an explicit
+        // `shower.Show[string](nil)` call has no argument or return shape that
+        // structurally mentions `T`, so re-deriving it here would fail even
+        // though the call bound successfully.
+        if (!call.MethodTypeArguments.IsDefaultOrEmpty && call.MethodTypeArguments.Length == tps.Length)
+        {
+            return this.BuildMethodSpec(openMethod, call.MethodTypeArguments.ToArray());
+        }
+
         var args = new TypeSymbol[tps.Length];
         var calleeParameterOffset = call.Method.ExplicitReceiverParameter == null ? 0 : 1;
 
@@ -6468,6 +6490,19 @@ internal sealed class ReflectionMetadataEmitter
         {
             inferred = actual;
             return true;
+        }
+
+        // Issue #1931: a `T?` formal (NullableTypeSymbol wrapping the type
+        // parameter, e.g. `Show[T](value T?)` under `where T : default`)
+        // arrives here unpeeled. Unify against the underlying `T`, peeling a
+        // matching `T?` actual too if present, so a plain non-nullable actual
+        // (`shower.Show("x")`) still infers `T = string` at emit time — the
+        // binder already accepts this per the InferTypeArguments fix; this
+        // mirrors that unwrap for MethodSpec inference.
+        if (formal is NullableTypeSymbol fn)
+        {
+            var actualUnwrapped = actual is NullableTypeSymbol an ? an.UnderlyingType : actual;
+            return TryUnify(fn.UnderlyingType, actualUnwrapped, tp, out inferred);
         }
 
         if (formal is SliceTypeSymbol fs && actual is SliceTypeSymbol asl)

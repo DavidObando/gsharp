@@ -97,6 +97,17 @@ public sealed class BoundCallExpression : BoundExpression
     public TypeSymbol ReturnType { get; }
 
     /// <summary>
+    /// Gets the call-site (explicit or inferred) method type arguments for a
+    /// generic top-level/static function call, positionally aligned with
+    /// <see cref="FunctionSymbol.TypeParameters"/> on <see cref="Function"/>,
+    /// or a default (empty) array for a non-generic call. Issue #1931: mirrors
+    /// <see cref="BoundUserInstanceCallExpression.MethodTypeArguments"/> so the
+    /// emitter can use the authoritative bind-time substitution instead of
+    /// blindly re-inferring it from (possibly uninformative) argument shapes.
+    /// </summary>
+    public ImmutableArray<TypeSymbol> MethodTypeArguments { get; internal set; }
+
+    /// <summary>
     /// Gets a value indicating whether this call has been elided by
     /// <c>[Conditional]</c> processing (ADR-0047 §6 / issue #176). When
     /// <c>true</c>, the emitter and interpreter must not evaluate the

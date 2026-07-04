@@ -1,11 +1,13 @@
-// inventory: ObjectInitializerExpression — object initializer (required-members probe removed)
+// inventory: ObjectInitializerExpression — object initializer, including a
+// `required` member (issue #1892: previously any object initializer emitted
+// stray bare assignment statements before the composite literal).
 using System;
 
 namespace Corpus.Grid06
 {
     public class ProfileCard
     {
-        public string Name { get; set; } = "";
+        public required string Name { get; set; } = "";
 
         public int Age { get; set; }
     }

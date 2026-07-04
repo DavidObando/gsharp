@@ -1305,6 +1305,94 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Issue #1925: binds a compound indirect assignment <c>*p op= expr</c>
+    /// (e.g. <c>*(p + i) += 1</c>). Unlike the plain <c>*p = expr</c> form,
+    /// the pointer expression must be read AND written through, so — mirroring
+    /// <see cref="BindIndexedWriteThroughChain"/>'s single-evaluation of an
+    /// indexer receiver — the pointer expression (which may be an arbitrary
+    /// pointer-arithmetic expression like <c>p + i</c>, not just a bare
+    /// variable) is hoisted into a synthesized read-only temp local so it is
+    /// evaluated exactly once, then desugared to <c>*tmp = *tmp op value</c>.
+    /// </summary>
+    private BoundExpression BindIndirectCompoundAssignmentExpression(IndirectCompoundAssignmentExpressionSyntax syntax)
+    {
+        var pointer = BindExpression(syntax.Target.Operand);
+        if (pointer is BoundErrorExpression)
+        {
+            return pointer;
+        }
+
+        if (!TypeSymbol.TryGetPointeeType(pointer.Type, out var pointeeType))
+        {
+            Diagnostics.ReportUndefinedUnaryOperator(syntax.Target.OperatorToken.Location, syntax.Target.OperatorToken.Text, pointer.Type);
+            return new BoundErrorExpression(null);
+        }
+
+        // ADR-0122 §3 / issue #1033: a true `*void` pointer carries no element
+        // type and cannot be read or written through directly; cast to a
+        // typed pointer `*T` (e.g. `*int32(p)`) first.
+        if (TypeSymbol.IsVoidPointer(pointer.Type))
+        {
+            Diagnostics.ReportVoidPointerOperationNotAllowed(syntax.Target.OperatorToken.Location, "dereference");
+            return new BoundErrorExpression(null);
+        }
+
+        if (!SyntaxFacts.TryGetCompoundAssignmentBaseOperator(syntax.OperatorToken.Kind, out var baseOpKind))
+        {
+            // Defensive: parser only emits this node for kinds recognised by
+            // TryGetCompoundAssignmentBaseOperator above.
+            return new BoundErrorExpression(null);
+        }
+
+        var tempName = $"<derefAsn{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
+        var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, pointer.Type);
+        if (!scope.TryDeclareVariable(tempVar))
+        {
+            // Defensive: synthesized names cannot collide with user identifiers
+            // (the `<...>` prefix is not a valid identifier token), so a failure
+            // here means a duplicate synthesized name within the same scope,
+            // which Interlocked.Increment guarantees against. Treat as fatal.
+            throw new System.InvalidOperationException(
+                $"Failed to declare synthesized indirect-assignment target local '{tempName}'.");
+        }
+
+        var declaration = new BoundVariableDeclaration(syntax, tempVar, pointer);
+        var tempRef = new BoundVariableExpression(null, tempVar);
+        var indirectRead = new BoundDereferenceExpression(null, tempRef);
+
+        var rhsBound = BindExpression(syntax.Value);
+        if (rhsBound is BoundErrorExpression || rhsBound.Type == TypeSymbol.Error)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        // issue #1226 / #1246: the right operand of the compound operation
+        // participates in the SAME constant-integer-literal adaptation and
+        // implicit numeric widening as the equivalent binary `*p op value`.
+        var combined = TryBindCompoundBinaryOperation(baseOpKind, indirectRead, rhsBound, syntax.Value.Location);
+        if (combined == null)
+        {
+            Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, indirectRead.Type, rhsBound.Type);
+            return new BoundErrorExpression(null);
+        }
+
+        if (combined.Type != pointeeType && combined.Type != TypeSymbol.Error)
+        {
+            var converted = Conversion.Classify(combined.Type, pointeeType);
+            if (!converted.IsImplicit)
+            {
+                Diagnostics.ReportCannotConvert(syntax.Value.Location, combined.Type, pointeeType);
+                return new BoundErrorExpression(null);
+            }
+
+            combined = new BoundConversionExpression(null, pointeeType, combined);
+        }
+
+        var assignment = new BoundIndirectAssignmentExpression(syntax, tempRef, combined);
+        return new BoundBlockExpression(syntax, ImmutableArray.Create<BoundStatement>(declaration), assignment);
+    }
+
+    /// <summary>
     /// ADR-0060: binds a <c>ref</c>/<c>out</c>/<c>in</c> argument-position expression.
     /// For the lvalue form (e.g. <c>ref x</c>, <c>out result</c>, <c>in rect</c>) the
     /// inner expression is bound to a <see cref="BoundAddressOfExpression"/>. For the

@@ -64,7 +64,7 @@ namespace GSharp.Core.CodeAnalysis.Lowering;
 /// tree size grows only where duplication risk was real.
 /// </para>
 /// </remarks>
-internal sealed class SideEffectSpiller : BoundTreeRewriter
+internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
 {
     private const string TempPrefix = "<>spill";
 

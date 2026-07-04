@@ -590,6 +590,7 @@ internal sealed class StatementBinder
             case IndexAssignmentExpressionSyntax:
             case CompoundIndexAssignmentExpressionSyntax:
             case IndirectAssignmentExpressionSyntax:
+            case IndirectCompoundAssignmentExpressionSyntax:
             case FieldAssignmentExpressionSyntax:
                 mayMutateMemberPaths = true;
                 break;

@@ -1991,6 +1991,27 @@ public sealed class StructSymbol : TypeSymbol
             return false;
         }
 
+        // Issue #1931: a generic abstract method's own type parameter(s) (e.g.
+        // `open func Show[T](value T?)`) are distinct TypeParameterSymbol
+        // instances from the overriding method's own `[T]` — even though `subst`
+        // (the enclosing class's constructed-base substitution) already maps the
+        // CLASS-level type parameters, it knows nothing about these METHOD-level
+        // ones. Extend a copy of `subst` positionally so `T` in the abstract
+        // signature substitutes to the override's `T`, letting `T?` compare equal
+        // instead of every generic-method override looking unimplemented.
+        if (baseArity > 0)
+        {
+            var methodSubst = subst == null
+                ? new Dictionary<TypeParameterSymbol, TypeSymbol>()
+                : new Dictionary<TypeParameterSymbol, TypeSymbol>(subst);
+            for (var i = 0; i < baseArity; i++)
+            {
+                methodSubst[abstractMethod.TypeParameters[i]] = candidate.TypeParameters[i];
+            }
+
+            subst = methodSubst;
+        }
+
         for (var i = 0; i < baseParams.Length; i++)
         {
             if (baseParams[i].RefKind != derivedParams[i].RefKind)
