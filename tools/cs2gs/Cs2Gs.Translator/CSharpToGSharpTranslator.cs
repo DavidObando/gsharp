@@ -8262,7 +8262,7 @@ public sealed class CSharpToGSharpTranslator
                     return LiteralExpression.Bool(true);
 
                 case UnaryPatternSyntax unary when unary.IsKind(SyntaxKind.NotPattern):
-                    return this.TranslateNotPatternTest(receiver, unary.Pattern, receiverType);
+                    return this.TranslateNotPatternTest(receiver, unary.Pattern, receiverType, isNestedPatternMember);
 
                 case BinaryPatternSyntax binaryPattern
                     when binaryPattern.OperatorToken.IsKind(SyntaxKind.OrKeyword)
@@ -8280,7 +8280,7 @@ public sealed class CSharpToGSharpTranslator
                         this.TranslatePatternTest(receiver, parenthesized.Pattern, receiverType, receiverSyntax, isNestedPatternMember));
 
                 case ListPatternSyntax listPattern:
-                    return this.TranslateListPatternTest(receiver, listPattern, receiverType);
+                    return this.TranslateListPatternTest(receiver, listPattern, receiverType, isNestedPatternMember);
 
                 default:
                     this.context.ReportUnsupported(
@@ -8299,7 +8299,7 @@ public sealed class CSharpToGSharpTranslator
         // reads backward from the end (gsc has no negative array index, so
         // `Length - distanceFromEnd` spells that out). A discard element
         // contributes no test, matching the positional-pattern discard carve-out.
-        private GExpression TranslateListPatternTest(GExpression receiver, ListPatternSyntax listPattern, ITypeSymbol receiverType)
+        private GExpression TranslateListPatternTest(GExpression receiver, ListPatternSyntax listPattern, ITypeSymbol receiverType, bool isNestedPatternMember = false)
         {
             SeparatedSyntaxList<PatternSyntax> elements = listPattern.Patterns;
             int sliceIndex = FindSlicePatternIndex(elements);
@@ -8315,7 +8315,7 @@ public sealed class CSharpToGSharpTranslator
                 PatternSyntax element = elements[i];
                 if (element is SlicePatternSyntax slice)
                 {
-                    GExpression sliceTest = this.TranslateSlicePatternTest(receiver, slice, i, elements.Count - i - 1, receiverType);
+                    GExpression sliceTest = this.TranslateSlicePatternTest(receiver, slice, i, elements.Count - i - 1, receiverType, isNestedPatternMember);
                     if (sliceTest != null)
                     {
                         test = new BinaryExpression(test, "&&", sliceTest);
@@ -8330,7 +8330,7 @@ public sealed class CSharpToGSharpTranslator
                 }
 
                 GExpression elementReceiver = this.BuildListElementReceiver(receiver, lengthAccess, i, elements.Count, sliceIndex);
-                GExpression elementTest = this.TranslatePatternTest(elementReceiver, element, elementType);
+                GExpression elementTest = this.TranslatePatternTest(elementReceiver, element, elementType, isNestedPatternMember: isNestedPatternMember);
                 test = new BinaryExpression(test, "&&", elementTest);
             }
 
@@ -8345,7 +8345,7 @@ public sealed class CSharpToGSharpTranslator
         // contributes neither. Returns `null` when there is no additional
         // boolean test to AND in (a bare discard slice, or a successful bind).
         private GExpression TranslateSlicePatternTest(
-            GExpression receiver, SlicePatternSyntax slice, int prefixCount, int suffixCount, ITypeSymbol receiverType)
+            GExpression receiver, SlicePatternSyntax slice, int prefixCount, int suffixCount, ITypeSymbol receiverType, bool isNestedPatternMember = false)
         {
             switch (slice.Pattern)
             {
@@ -8376,7 +8376,7 @@ public sealed class CSharpToGSharpTranslator
                     // A nested subpattern tested against the middle slice (e.g.
                     // `.. { Length: 0 }`, `.. [1, 2]`) — recurse the normal
                     // boolean-test lowering against the materialized slice value.
-                    return this.TranslatePatternTest(BuildSliceExpression(receiver, prefixCount, suffixCount), slice.Pattern, receiverType);
+                    return this.TranslatePatternTest(BuildSliceExpression(receiver, prefixCount, suffixCount), slice.Pattern, receiverType, isNestedPatternMember: isNestedPatternMember);
             }
         }
 
@@ -8419,7 +8419,7 @@ public sealed class CSharpToGSharpTranslator
         }
 
         private GExpression TranslateNotPatternTest(
-            GExpression receiver, PatternSyntax inner, ITypeSymbol receiverType = null)
+            GExpression receiver, PatternSyntax inner, ITypeSymbol receiverType = null, bool isNestedPatternMember = false)
         {
             switch (inner)
             {
@@ -8481,7 +8481,7 @@ public sealed class CSharpToGSharpTranslator
                     return new UnaryExpression(
                         "!",
                         new ParenthesizedExpression(
-                            this.TranslatePatternTest(receiver, inner, receiverType)));
+                            this.TranslatePatternTest(receiver, inner, receiverType, isNestedPatternMember: isNestedPatternMember)));
             }
         }
 
