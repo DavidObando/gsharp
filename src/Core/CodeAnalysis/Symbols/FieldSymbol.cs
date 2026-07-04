@@ -18,7 +18,8 @@ public sealed class FieldSymbol : Symbol
     /// <param name="isReadOnly">True when the field is init-only after construction.</param>
     /// <param name="isStatic">True when the field is declared inside a <c>shared</c> block (ADR-0053).</param>
     /// <param name="isConst">True when the field is a compile-time constant declared with <c>const</c> (Issue #948). Const fields are implicitly static and read-only and emitted as literal fields.</param>
-    public FieldSymbol(string name, TypeSymbol type, Accessibility accessibility, bool isReadOnly = false, bool isStatic = false, bool isConst = false)
+    /// <param name="isEventBackingField">True when this field is the compiler-synthesized backing field of a field-like <c>event</c> declaration (issue #2083). Unlike an ordinary non-nullable field/local/parameter, an event backing field's declared (non-nullable) delegate type does not guarantee a non-null runtime value: an unsubscribed event's backing field genuinely holds <c>null</c>. The emitter uses this flag to keep the null-guarded delegate-to-delegate adaptation (issue #2066) for event snapshots while restoring the fail-fast (throwing) adaptation for every other statically non-nullable source.</param>
+    public FieldSymbol(string name, TypeSymbol type, Accessibility accessibility, bool isReadOnly = false, bool isStatic = false, bool isConst = false, bool isEventBackingField = false)
         : base(name)
     {
         Type = type;
@@ -26,6 +27,7 @@ public sealed class FieldSymbol : Symbol
         IsReadOnly = isReadOnly;
         IsStatic = isStatic;
         IsConst = isConst;
+        IsEventBackingField = isEventBackingField;
     }
 
     /// <inheritdoc/>
@@ -51,6 +53,14 @@ public sealed class FieldSymbol : Symbol
     /// <see cref="ConstantValue"/> rather than a field load.
     /// </summary>
     public bool IsConst { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether this field is the compiler-synthesized
+    /// backing field of a field-like <c>event</c> (issue #2083). See the
+    /// constructor parameter of the same name for why this distinction
+    /// matters to the emitter's delegate-to-delegate null-guard.
+    /// </summary>
+    public bool IsEventBackingField { get; }
 
     /// <summary>
     /// Gets the compile-time constant value for a <see cref="IsConst"/> field
