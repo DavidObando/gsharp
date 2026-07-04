@@ -39,12 +39,12 @@ namespace Corpus.Grid13.Constructs
         {
             Console.WriteLine($"ExtensionMethodsClassic: bracketed={"hi".Bracketed()}");
 
-            // NOTE: `7.Squared()` (extension invoked directly on an int
-            // literal) is avoided on purpose: the emitted G# `7.Squared()`
-            // does not round-trip (`7.` lexes as a float literal; GS0005/
-            // GS0157). A named local receiver works.
-            int seven = 7;
-            Console.WriteLine($"ExtensionMethodsClassic: squared={seven.Squared()}");
+            // Issue #1883: an extension method invoked directly on an int
+            // literal (`7.Squared()`) must translate to a parenthesized
+            // receiver (`(7).Squared()`) — G#'s grammar never chains postfix
+            // access onto a bare numeric-literal token (ADR-0054), so an
+            // unparenthesized `7.Squared()` fails to parse (GS0005/GS0157).
+            Console.WriteLine($"ExtensionMethodsClassic: squared={7.Squared()}");
 
             Box box = new Box(21);
             Console.WriteLine($"ExtensionMethodsClassic: userType={box.Doubled()}");

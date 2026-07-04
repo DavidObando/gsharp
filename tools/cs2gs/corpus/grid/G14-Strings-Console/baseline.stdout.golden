@@ -20,6 +20,8 @@ InterpolationFormatClause: hex=00FF dec=000255
 InterpolationFormatClause: f2=3.14 padded=     3.142
 StringConcatenation: s=concatenation
 StringConcatenation: mixed=n=42 c=x b=True
+StringConcatenation: literalConcat=n=42
+StringConcatenation: literalToString=42
 StringConcatenation: built=1;2;3;
 StringFormatParity: format=Grace-   7-007
 StringFormatParity: interp=Grace-   7-007

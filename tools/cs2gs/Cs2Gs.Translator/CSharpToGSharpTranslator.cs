@@ -5371,7 +5371,7 @@ public sealed class CSharpToGSharpTranslator
                 return translated;
             }
 
-            GExpression receiver = translated is BinaryExpression or IfExpression
+            GExpression receiver = translated is BinaryExpression or IfExpression || IsBareNumericLiteral(translated)
                 ? new ParenthesizedExpression(translated)
                 : translated;
 
@@ -11190,11 +11190,27 @@ public sealed class CSharpToGSharpTranslator
             if (this.ReceiverNeedsNullForgiveness(recv)
                 || this.ReceiverIsNullableReferenceFieldOrProperty(recv))
             {
-                return new NonNullAssertionExpression(translated);
+                translated = new NonNullAssertionExpression(translated);
             }
 
-            return translated;
+            return ParenthesizeIfBareNumericLiteral(translated);
         }
+
+        // ADR-0054: G#'s parser never chains postfix member/index/call access
+        // directly onto a numeric-literal token (`42.ToString()`, `7.Squared()`)
+        // because the lexer would otherwise have to guess whether `.` starts a
+        // float's fractional part or a member access; the grammar resolves this by
+        // simply disallowing the chain and requiring `(42).ToString()` instead. Any
+        // receiver that renders as a bare int/float literal — decimal, hex, octal,
+        // binary, or suffixed (`L`/`UL`/`F`/`D`/`M`) — therefore needs parentheses
+        // wherever it is used as a member-access/call receiver; a non-literal
+        // receiver (identifier, call, existing parenthesized expression, etc.) is
+        // left untouched.
+        private static bool IsBareNumericLiteral(GExpression expr) =>
+            expr is LiteralExpression { Kind: LiteralKind.Int or LiteralKind.Float };
+
+        private static GExpression ParenthesizeIfBareNumericLiteral(GExpression expr) =>
+            IsBareNumericLiteral(expr) ? new ParenthesizedExpression(expr) : expr;
 
         /// <summary>
         /// True when a member-/element-access <paramref name="recv"/> receiver is a
