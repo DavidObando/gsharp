@@ -26,6 +26,8 @@ InterfaceDeclaration: length=12
 InterfaceDeclaration: describe=rope of 12
 InterfaceDeclaration: default-method=42
 PartialClass: balance=25
+PrimaryConstructorBaseType: name=widget
+PrimaryConstructorBaseType: derived=gadget/25
 RecordDeclaration: x=3 y=4
 RecordDeclaration: other-y=9
 RecordDeclaration: not-equal=true

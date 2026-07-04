@@ -20,14 +20,12 @@ namespace Corpus.Grid07
             // this app fails by design and is tolerated via tools/cs2gs/triage/gaps.json.
             CompoundAssignmentOperatorDeclarationFixture.Run();
 
-            // QUARANTINED (see Quarantined/):
-            //  * FieldExpressionFixture — C#14 `field` keyword: CS2GS-GAP placeholder +
-            //    CS2GS-ROUNDTRIP (GS0288).
             ConstructorDeclarationFixture.Run();
             ConversionOperatorDeclarationFixture.Run();
             EventDeclarationFixture.Run();
             EventFieldDeclarationFixture.Run();
             FieldDeclarationFixture.Run();
+            FieldExpressionFixture.Run();
             IndexerDeclarationFixture.Run();
             InitAccessorDeclarationFixture.Run();
             MethodDeclarationFixture.Run();

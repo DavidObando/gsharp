@@ -21,6 +21,11 @@ public sealed class TypeDeclaration : GMember
     /// <param name="typeParameters">The generic type parameters.</param>
     /// <param name="primaryConstructorParameters">The optional primary-constructor parameter list.</param>
     /// <param name="baseType">The optional base type (rendered first in the base clause).</param>
+    /// <param name="baseConstructorArguments">
+    /// The optional primary-constructor base-call arguments (<c>: Base(args)</c>,
+    /// issue #1909) — forwards this type's primary-constructor parameters (or
+    /// other expressions) to the base class's designated constructor.
+    /// </param>
     /// <param name="interfaces">The implemented interfaces.</param>
     /// <param name="members">The body members.</param>
     /// <param name="visibility">The accessibility.</param>
@@ -36,6 +41,7 @@ public sealed class TypeDeclaration : GMember
         IReadOnlyList<TypeParameter> typeParameters = null,
         IReadOnlyList<Parameter> primaryConstructorParameters = null,
         GTypeReference baseType = null,
+        IReadOnlyList<GExpression> baseConstructorArguments = null,
         IReadOnlyList<GTypeReference> interfaces = null,
         IReadOnlyList<GMember> members = null,
         Visibility visibility = Visibility.Default,
@@ -51,6 +57,7 @@ public sealed class TypeDeclaration : GMember
         TypeParameters = typeParameters ?? new List<TypeParameter>();
         PrimaryConstructorParameters = primaryConstructorParameters;
         BaseType = baseType;
+        BaseConstructorArguments = baseConstructorArguments;
         Interfaces = interfaces ?? new List<GTypeReference>();
         Members = members ?? new List<GMember>();
         Visibility = visibility;
@@ -76,6 +83,13 @@ public sealed class TypeDeclaration : GMember
 
     /// <summary>Gets the optional base type, rendered first in the base clause.</summary>
     public GTypeReference BaseType { get; }
+
+    /// <summary>
+    /// Gets the optional primary-constructor base-call arguments (<c>: Base(args)</c>,
+    /// issue #1909), or <see langword="null"/> when the base clause carries no
+    /// argument list (implicit parameterless base chaining).
+    /// </summary>
+    public IReadOnlyList<GExpression> BaseConstructorArguments { get; }
 
     /// <summary>Gets the implemented interfaces.</summary>
     public IReadOnlyList<GTypeReference> Interfaces { get; }

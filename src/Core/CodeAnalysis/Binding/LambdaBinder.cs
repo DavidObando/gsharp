@@ -425,6 +425,28 @@ internal sealed class LambdaBinder
                 Diagnostics.ReportGenericLocalFunctionCannotCapture(syntax.Identifier.Location, name);
             }
 
+            // Issue #1940: a generic local function is hoisted to its own
+            // top-level static method carrying only ITS OWN type parameters
+            // as CLR MVAR slots. Referencing a type parameter owned by an
+            // enclosing generic method or class (available here only because
+            // BindFunctionLiteralExpression's body bind saw the merged
+            // enclosing + own CurrentTypeParameters dictionary above) has no
+            // corresponding slot on that hoisted method and would silently
+            // emit invalid IL. Detect any such reference — in a parameter
+            // type, the return type, or anywhere in the body — and report a
+            // diagnostic instead of letting it reach the emitter.
+            var enclosingTypeParameters = previousTypeParameters == null
+                ? ImmutableArray<TypeParameterSymbol>.Empty
+                : previousTypeParameters.Values.ToImmutableArray();
+            if (enclosingTypeParameters.Length > 0)
+            {
+                var offender = FindEnclosingTypeParameterReference(literal.Function, literal.Body, enclosingTypeParameters);
+                if (offender != null)
+                {
+                    Diagnostics.ReportGenericLocalFunctionCannotReferenceEnclosingTypeParameter(syntax.Identifier.Location, name, offender.Name);
+                }
+            }
+
             if (!Scope.TryDeclareFunction(literal.Function))
             {
                 Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
@@ -1322,6 +1344,31 @@ internal sealed class LambdaBinder
         return ReferenceEquals(literalReturn, targetReturn);
     }
 
+    /// <summary>
+    /// Issue #1940: scans a generic local function's parameter types, return type, and body for any
+    /// reference to a <paramref name="enclosingTypeParameters"/> member — a type parameter owned by an
+    /// enclosing generic method or class rather than the local function's own <c>[T, U, …]</c> list.
+    /// </summary>
+    /// <param name="function">The generic local function's symbol (already carrying its own type parameters).</param>
+    /// <param name="body">The bound body to scan.</param>
+    /// <param name="enclosingTypeParameters">The in-scope type parameters owned by an enclosing method or class.</param>
+    /// <returns>The first offending enclosing type parameter found, or <see langword="null"/> if none.</returns>
+    private static TypeParameterSymbol FindEnclosingTypeParameterReference(
+        FunctionSymbol function,
+        BoundStatement body,
+        ImmutableArray<TypeParameterSymbol> enclosingTypeParameters)
+    {
+        var walker = new EnclosingTypeParameterReferenceWalker(enclosingTypeParameters);
+        foreach (var parameter in function.Parameters)
+        {
+            walker.CheckType(parameter.Type);
+        }
+
+        walker.CheckType(function.Type);
+        walker.Visit(body);
+        return walker.Found;
+    }
+
     private static ImmutableArray<VariableSymbol> CollectCapturedVariables(BoundStatement body, ImmutableArray<ParameterSymbol> parameters)
     {
         var paramSet = new HashSet<VariableSymbol>(parameters);
@@ -1762,6 +1809,129 @@ internal sealed class LambdaBinder
                 && this.seen.Add(variable))
             {
                 this.captured.Add(variable);
+            }
+        }
+    }
+
+    // Issue #1940: walks a generic local function's bound body looking for any reference — an
+    // expression's type, a local's declared type, an explicit/inferred method type argument, or a
+    // type-pattern's tested type — to a type parameter owned by an enclosing generic method or class.
+    // Stops at nested function literals (BoundTreeWalker already treats FunctionLiteralExpression as
+    // opaque): a nested generic local function is checked independently, against its own enclosing set,
+    // when it is bound.
+    private sealed class EnclosingTypeParameterReferenceWalker : BoundTreeWalker
+    {
+        private readonly ImmutableArray<TypeParameterSymbol> enclosingTypeParameters;
+
+        public EnclosingTypeParameterReferenceWalker(ImmutableArray<TypeParameterSymbol> enclosingTypeParameters)
+        {
+            this.enclosingTypeParameters = enclosingTypeParameters;
+        }
+
+        public TypeParameterSymbol Found { get; private set; }
+
+        public void CheckType(TypeSymbol type)
+        {
+            if (Found != null || type == null)
+            {
+                return;
+            }
+
+            TypeSymbol.AnyTypeParameter(type, tp =>
+            {
+                if (Found == null && enclosingTypeParameters.Contains(tp))
+                {
+                    Found = tp;
+                }
+
+                return Found != null;
+            });
+        }
+
+        public override void VisitExpression(BoundExpression node)
+        {
+            if (node == null || Found != null)
+            {
+                return;
+            }
+
+            CheckType(node.Type);
+            switch (node)
+            {
+                case BoundCallExpression call:
+                    CheckTypeArguments(call.MethodTypeArguments);
+                    break;
+                case BoundUserInstanceCallExpression userInstanceCall:
+                    CheckTypeArguments(userInstanceCall.MethodTypeArguments);
+                    break;
+                case BoundImportedCallExpression importedCall:
+                    CheckTypeArguments(importedCall.TypeArgumentSymbols);
+                    break;
+                case BoundImportedInstanceCallExpression importedInstanceCall:
+                    CheckTypeArguments(importedInstanceCall.TypeArgumentSymbols);
+                    break;
+                case BoundIsExpression isExpression:
+                    CheckType(isExpression.TargetType);
+                    break;
+
+                // Issue #1940: TypeOf/SizeOf are opaque leaves in BoundTreeWalker
+                // (no VisitXxx dispatch), so their referenced type must be checked
+                // here — base.VisitExpression never reaches it otherwise.
+                case BoundTypeOfExpression typeOfExpression:
+                    CheckType(typeOfExpression.OperandType);
+                    break;
+                case BoundSizeOfExpression sizeOfExpression:
+                    CheckType(sizeOfExpression.MeasuredType);
+                    break;
+
+                // Issue #1940 (NB1): a constrained static-abstract call `U.M()` with
+                // void return has node.Type == void, so the enclosing type parameter
+                // in the constrained receiver is otherwise missed -> silent invalid IL.
+                case BoundConstrainedStaticCallExpression constrainedStaticCall:
+                    CheckType(constrainedStaticCall.TypeParameter);
+                    break;
+            }
+
+            base.VisitExpression(node);
+        }
+
+        public override void VisitPattern(BoundPattern node)
+        {
+            if (node == null || Found != null)
+            {
+                return;
+            }
+
+            CheckType(node.Type);
+            if (node is BoundTypePattern typePattern)
+            {
+                CheckType(typePattern.TargetType);
+            }
+
+            base.VisitPattern(node);
+        }
+
+        protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
+        {
+            if (Found != null)
+            {
+                return;
+            }
+
+            CheckType(node.Variable.Type);
+            base.VisitVariableDeclaration(node);
+        }
+
+        private void CheckTypeArguments(ImmutableArray<TypeSymbol> typeArguments)
+        {
+            if (typeArguments.IsDefaultOrEmpty)
+            {
+                return;
+            }
+
+            foreach (var typeArgument in typeArguments)
+            {
+                CheckType(typeArgument);
             }
         }
     }

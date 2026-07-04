@@ -397,7 +397,7 @@
     "rule": "ADR-0115 \u00A7B.4",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/ClassDeclaration.cs",
-    "notes": "C#12 primary ctors dropped (issue #1909); partial parts across multiple declarations/files now merge into one G# type declaration (issue #1910, resolved)."
+    "notes": "C#12 primary ctors now map to native G# primary constructors (issue #1909, resolved); partial parts across multiple declarations/files now merge into one G# type declaration (issue #1910, resolved)."
   },
   {
     "kind": "CoalesceAssignmentExpression",
@@ -871,10 +871,10 @@
   {
     "kind": "FieldExpression",
     "nodeType": "FieldExpressionSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0051 \u00A72",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1907",
-    "notes": "C# 14 field keyword."
+    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/FieldExpression.cs"
   },
   {
     "kind": "FileScopedNamespaceDeclaration",
@@ -1727,9 +1727,11 @@
   {
     "kind": "PrimaryConstructorBaseType",
     "nodeType": "PrimaryConstructorBaseTypeSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0065 \u00A75",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1909"
+    "fixture": "tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/PrimaryConstructorBaseType.cs",
+    "notes": "A derived primary-ctor class\u0027s \u0060: Base(arg)\u0060 forwarding call now maps to the G# base-call form \u0060class Derived(...) : Base(args) { ... }\u0060 (issue #1909, resolved)."
   },
   {
     "kind": "PropertyDeclaration",
