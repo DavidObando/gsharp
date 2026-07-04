@@ -157,6 +157,8 @@ public enum SyntaxKind
     UnaryExpression,
     BinaryExpression,
     ParenthesizedExpression,
+    CheckedExpression,
+    UncheckedExpression,
     LiteralExpression,
     InterpolatedStringExpression,
     NameExpression,

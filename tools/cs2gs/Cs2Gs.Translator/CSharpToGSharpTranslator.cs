@@ -4921,9 +4921,17 @@ public sealed class CSharpToGSharpTranslator
                     return new[] { this.TranslateLocalFunction(localFunction) };
 
                 case CheckedStatementSyntax checkedStatement:
-                    // G# arithmetic is unchecked by default and has no
-                    // `checked`/`unchecked` block keyword; emit the inner block.
-                    return new[] { (GStatement)this.TranslateBlock(checkedStatement.Block) };
+                    // Issue #1881: a C# `checked { }`/`unchecked { }` block maps to
+                    // the G# `checked { }`/`unchecked { }` block (gsc now supports
+                    // both natively), introducing a checked/unchecked arithmetic
+                    // context instead of silently dropping the overflow semantics.
+                    return new[]
+                    {
+                        (GStatement)new BlockStatement(
+                            this.TranslateBlock(checkedStatement.Block).Statements,
+                            isChecked: checkedStatement.IsKind(SyntaxKind.CheckedStatement),
+                            isUnchecked: checkedStatement.IsKind(SyntaxKind.UncheckedStatement)),
+                    };
 
                 case UnsafeStatementSyntax unsafeStatement:
                     // ADR-0122 / issue #1014: a C# `unsafe { … }` block maps to the
@@ -5454,7 +5462,7 @@ public sealed class CSharpToGSharpTranslator
                 return translated;
             }
 
-            GExpression receiver = translated is BinaryExpression or IfExpression
+            GExpression receiver = translated is BinaryExpression or IfExpression || IsBareNumericLiteral(translated)
                 ? new ParenthesizedExpression(translated)
                 : translated;
 
@@ -9217,6 +9225,14 @@ public sealed class CSharpToGSharpTranslator
                 case ParenthesizedExpressionSyntax parenthesized:
                     return new ParenthesizedExpression(this.TranslateExpression(parenthesized.Expression));
 
+                case CheckedExpressionSyntax checkedExpr:
+                    // Issue #1881: `checked(expr)`/`unchecked(expr)` maps directly to
+                    // the G# `checked(...)`/`unchecked(...)` expression (gsc now
+                    // supports both natively).
+                    return new CheckedExpression(
+                        this.TranslateExpression(checkedExpr.Expression),
+                        checkedExpr.IsKind(SyntaxKind.CheckedExpression));
+
                 case InterpolatedStringExpressionSyntax interpolated:
                     return this.TranslateInterpolatedString(interpolated);
 
@@ -11273,11 +11289,30 @@ public sealed class CSharpToGSharpTranslator
             if (this.ReceiverNeedsNullForgiveness(recv)
                 || this.ReceiverIsNullableReferenceFieldOrProperty(recv))
             {
-                return new NonNullAssertionExpression(translated);
+                translated = new NonNullAssertionExpression(translated);
             }
 
-            return translated;
+            return ParenthesizeIfBareNumericLiteral(translated);
         }
+
+        // ADR-0054: G#'s parser never chains postfix member/index/call access
+        // directly onto a numeric-literal token (`42.ToString()`, `7.Squared()`)
+        // because the lexer would otherwise have to guess whether `.` starts a
+        // float's fractional part or a member access; the grammar resolves this by
+        // simply disallowing the chain and requiring `(42).ToString()` instead. Any
+        // receiver that renders as a bare int/float literal — decimal, hex, octal,
+        // binary, or suffixed (`L`/`UL`/`F`/`D`/`M`) — therefore needs parentheses
+        // wherever it is used as a member-access/call receiver; a non-literal
+        // receiver (identifier, call, existing parenthesized expression, etc.) is
+        // left untouched. A prefix unary on a numeric literal (`-5`, `+5`, `~5`)
+        // still renders with a trailing numeric token, so it is treated the same
+        // (e.g. `"x=" + -5` -> `(-5).ToString()`).
+        private static bool IsBareNumericLiteral(GExpression expr) =>
+            expr is LiteralExpression { Kind: LiteralKind.Int or LiteralKind.Float }
+            || (expr is UnaryExpression u && IsBareNumericLiteral(u.Operand));
+
+        private static GExpression ParenthesizeIfBareNumericLiteral(GExpression expr) =>
+            IsBareNumericLiteral(expr) ? new ParenthesizedExpression(expr) : expr;
 
         /// <summary>
         /// True when a member-/element-access <paramref name="recv"/> receiver is a
@@ -13036,6 +13071,27 @@ public sealed class CSharpToGSharpTranslator
 
         private GExpression TranslateInterpolatedString(InterpolatedStringExpressionSyntax interpolated)
         {
+            // Issue #2015: the number of leading `$` characters on the string-start
+            // token (StringStartToken.Text, e.g. "$\"", "$$\"\"\"", "$$$\"\"\"")
+            // determines the interpolation-hole delimiter width N for THIS string.
+            // For classic/N==1 interpolated strings (including 1-dollar raw
+            // strings), a brace run of exactly 2 in the text token is Roslyn's
+            // "escaped single literal brace" (see #1882) and must collapse to 1.
+            // For raw interpolated strings with N>=2 dollars, brace-doubling is
+            // NOT an escape at all: per the C# spec, any brace run SHORTER than N
+            // is embedded verbatim, and any run of length >= N is already split by
+            // the parser into (literal remainder) + (an actual hole, handled by
+            // the InterpolationSyntax case below) — so InterpolatedStringTextSyntax
+            // content for N>=2 never needs unescaping and must be copied as-is.
+            int dollarCount = 0;
+            while (dollarCount < interpolated.StringStartToken.Text.Length
+                && interpolated.StringStartToken.Text[dollarCount] == '$')
+            {
+                dollarCount++;
+            }
+
+            bool isClassicSingleDollar = dollarCount <= 1;
+
             var parts = new List<InterpolationPart>();
             foreach (InterpolatedStringContentSyntax content in interpolated.Contents)
             {
@@ -13048,10 +13104,10 @@ public sealed class CSharpToGSharpTranslator
                         // see Lexer.cs), so `{`/`}` are always plain literal chars in G#
                         // and need no escaping at all. Unescape here or the doubled
                         // braces get copied verbatim into the G# output.
-                        string unescapedBraces = text.TextToken.ValueText
-                            .Replace("{{", "{")
-                            .Replace("}}", "}");
-                        parts.Add(InterpolationPart.Literal(unescapedBraces));
+                        string literalText = isClassicSingleDollar
+                            ? text.TextToken.ValueText.Replace("{{", "{").Replace("}}", "}")
+                            : text.TextToken.ValueText;
+                        parts.Add(InterpolationPart.Literal(literalText));
                         break;
 
                     case InterpolationSyntax hole:

@@ -11,6 +11,8 @@ InterpolatedStringText: left-5-middle-6-right
 braces={x} dollar=$9.99
 braces={5} hole=5
 plain braces: {x} and {{y}}
+RawInterpolatedStringText: literal braces {{ and }} stay doubled
+RawInterpolatedStringText: hole value=5 done
 Interpolation: sum=13 product=42
 Interpolation: call=IN cond=less
 Interpolation: nested=outer[inner(in)]
@@ -20,6 +22,8 @@ InterpolationFormatClause: hex=00FF dec=000255
 InterpolationFormatClause: f2=3.14 padded=     3.142
 StringConcatenation: s=concatenation
 StringConcatenation: mixed=n=42 c=x b=True
+StringConcatenation: literalConcat=n=42
+StringConcatenation: literalToString=42
 StringConcatenation: built=1;2;3;
 StringFormatParity: format=Grace-   7-007
 StringFormatParity: interp=Grace-   7-007

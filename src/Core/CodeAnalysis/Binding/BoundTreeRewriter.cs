@@ -577,7 +577,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundBinaryExpression(null, left, node.Op, right);
+        return new BoundBinaryExpression(null, left, node.Op, right, node.IsChecked);
     }
 
     /// <summary>

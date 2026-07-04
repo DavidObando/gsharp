@@ -539,7 +539,12 @@ internal sealed class ConversionClassifier
             return BindTupleConversion(diagnosticLocation, expression, sourceTuple, targetTuple, allowExplicit);
         }
 
-        return new BoundConversionExpression(null, type, expression);
+        // Issue #1881: a conversion bound inside a `checked(...)`/`checked { }`
+        // context traps on narrowing overflow via the emitter's `conv.ovf.*`
+        // opcodes (and the interpreter's checked numeric convert) instead of
+        // truncating. Harmless for non-numeric / widening conversions, which
+        // never consult the flag.
+        return new BoundConversionExpression(null, type, expression, binderCtx.IsCheckedContext);
     }
 
     // ----- CLR parameter / argument conversions -----
