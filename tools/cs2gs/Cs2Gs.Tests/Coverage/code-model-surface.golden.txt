@@ -49,6 +49,7 @@ ExpressionStatement
 FixedStatement
 ForInStatement
 ForStatement
+ForTupleInStatement
 IfStatement
 IncrementDecrementStatement
 LocalDeclarationStatement

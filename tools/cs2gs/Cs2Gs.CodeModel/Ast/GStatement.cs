@@ -352,6 +352,37 @@ public sealed class ForInStatement : GStatement
 }
 
 /// <summary>
+/// A deconstructing <c>for (a, b, ...) in coll</c> loop (issue #1922): the
+/// first-class G# form of a C# <c>foreach (var (a, b) in xs)</c> over a
+/// tuple-typed sequence. Unlike <see cref="ForInStatement"/>'s two-name
+/// key/value form, every name here binds a positional element of the
+/// current tuple-typed value — there is no hidden temp variable or
+/// separate <see cref="TupleDeconstructionStatement"/> in the body.
+/// </summary>
+public sealed class ForTupleInStatement : GStatement
+{
+    /// <summary>Initializes a new instance of the <see cref="ForTupleInStatement"/> class.</summary>
+    /// <param name="names">The deconstruction target names, in order (arity ≥ 2).</param>
+    /// <param name="iterable">The iterated expression.</param>
+    /// <param name="body">The loop body.</param>
+    public ForTupleInStatement(IReadOnlyList<string> names, GExpression iterable, BlockStatement body)
+    {
+        Names = names;
+        Iterable = iterable;
+        Body = body;
+    }
+
+    /// <summary>Gets the deconstruction target names, in order.</summary>
+    public IReadOnlyList<string> Names { get; }
+
+    /// <summary>Gets the iterated expression.</summary>
+    public GExpression Iterable { get; }
+
+    /// <summary>Gets the loop body.</summary>
+    public BlockStatement Body { get; }
+}
+
+/// <summary>
 /// A <c>throw</c> statement.
 /// </summary>
 public sealed class ThrowStatement : GStatement

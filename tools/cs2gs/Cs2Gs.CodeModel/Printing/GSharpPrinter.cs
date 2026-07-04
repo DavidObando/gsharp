@@ -888,6 +888,10 @@ public static class GSharpPrinter
                 var forKeyword = forIn.IsAwait ? "await for" : "for";
                 return $"{pad}{forKeyword} {loopVars} in {RenderExpression(forIn.Iterable, indent)} {RenderBlock(forIn.Body, indent)}";
 
+            case ForTupleInStatement forTupleIn:
+                var tupleLoopVars = string.Join(", ", forTupleIn.Names);
+                return $"{pad}for ({tupleLoopVars}) in {RenderExpression(forTupleIn.Iterable, indent)} {RenderBlock(forTupleIn.Body, indent)}";
+
             case DeferStatement defer:
                 return $"{pad}defer {RenderExpression(defer.Call, indent)}";
 
