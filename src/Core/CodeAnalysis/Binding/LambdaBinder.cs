@@ -781,12 +781,20 @@ internal sealed class LambdaBinder
     /// <param name="element">The element type (the lambda's declared
     /// return type, or for top-level async functions the method's
     /// return type).</param>
+    /// <param name="useValueTask">Issue #1918: when <see langword="true"/>,
+    /// widen to <c>ValueTask</c> / <c>ValueTask&lt;T&gt;</c> instead of
+    /// <c>Task</c> / <c>Task&lt;T&gt;</c> — set for an async function whose
+    /// declared return-type clause explicitly spelled the <c>ValueTask</c>
+    /// wrapper (<see cref="FunctionSymbol.AsyncReturnsValueTask"/>).</param>
     /// <returns>The Task-widened type, or
     /// <paramref name="element"/> when widening is not possible (e.g.
     /// the BCL <c>Task</c> reference is unresolved, or the element is
     /// a user-defined GSharp type — Phase 5.1 / ADR-0023).</returns>
-    public TypeSymbol WrapAsTask(TypeSymbol element)
+    public TypeSymbol WrapAsTask(TypeSymbol element, bool useValueTask = false)
     {
+        var wrapperName = useValueTask ? "System.Threading.Tasks.ValueTask" : "System.Threading.Tasks.Task";
+        var wrapperOpenName = wrapperName + "`1";
+
         if (element == TypeSymbol.Error)
         {
             return TypeSymbol.Error;
@@ -794,7 +802,7 @@ internal sealed class LambdaBinder
 
         if (element == TypeSymbol.Void)
         {
-            if (Scope.References.TryResolveType("System.Threading.Tasks.Task", out var taskType))
+            if (Scope.References.TryResolveType(wrapperName, out var taskType))
             {
                 return ImportedTypeSymbol.Get(taskType);
             }
@@ -819,7 +827,7 @@ internal sealed class LambdaBinder
             // `Task<T?>` (e.g. "Cannot find member Result" at the call site).
             if ((element is StructSymbol or InterfaceSymbol or EnumSymbol
                 || (element is NullableTypeSymbol nullableUserVt && nullableUserVt.UnderlyingType is StructSymbol or InterfaceSymbol or EnumSymbol))
-                && Scope.References.TryResolveType("System.Threading.Tasks.Task`1", out var symbolicTaskOpen))
+                && Scope.References.TryResolveType(wrapperOpenName, out var symbolicTaskOpen))
             {
                 // Issue #502 / #320: a user-defined async result type has no CLR
                 // Type yet, so close Task<T> over an object placeholder for
@@ -835,7 +843,7 @@ internal sealed class LambdaBinder
             return element;
         }
 
-        if (Scope.References.TryResolveType("System.Threading.Tasks.Task`1", out var taskOpen))
+        if (Scope.References.TryResolveType(wrapperOpenName, out var taskOpen))
         {
             // Route the element CLR type through the SAME resolver as Task`1.
             // Under the SDK build path the references are loaded via a

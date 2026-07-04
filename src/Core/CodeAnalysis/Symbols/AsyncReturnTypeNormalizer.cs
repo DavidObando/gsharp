@@ -32,8 +32,23 @@ internal static class AsyncReturnTypeNormalizer
     /// <param name="awaited">The unwrapped awaited result type, when this returns <c>true</c>.</param>
     /// <returns><c>true</c> when <paramref name="type"/> is a Task / ValueTask shape.</returns>
     public static bool TryUnwrapTaskReturnType(TypeSymbol type, out TypeSymbol awaited)
+        => TryUnwrapTaskReturnType(type, out awaited, out _);
+
+    /// <summary>
+    /// Issue #1918: same as the two-parameter overload above,
+    /// but also reports whether the unwrapped shape was a <c>ValueTask</c> /
+    /// <c>ValueTask[T]</c> (as opposed to a <c>Task</c> / <c>Task[T]</c>) —
+    /// the async-function declaration binder needs this to select the
+    /// matching state-machine builder / observable return type.
+    /// </summary>
+    /// <param name="type">The (declared) return type symbol to unwrap.</param>
+    /// <param name="awaited">The unwrapped awaited result type, when this returns <c>true</c>.</param>
+    /// <param name="isValueTask"><c>true</c> when the unwrapped shape was <c>ValueTask</c> / <c>ValueTask[T]</c>.</param>
+    /// <returns><c>true</c> when <paramref name="type"/> is a Task / ValueTask shape.</returns>
+    public static bool TryUnwrapTaskReturnType(TypeSymbol type, out TypeSymbol awaited, out bool isValueTask)
     {
         awaited = null;
+        isValueTask = false;
         if (type == null)
         {
             return false;
@@ -52,6 +67,7 @@ internal static class AsyncReturnTypeNormalizer
                 || openName == "System.Threading.Tasks.ValueTask`1")
             {
                 awaited = imported.TypeArguments[0];
+                isValueTask = openName == "System.Threading.Tasks.ValueTask`1";
                 return true;
             }
         }
@@ -65,6 +81,7 @@ internal static class AsyncReturnTypeNormalizer
         if (clr.IsSameAs(typeof(Task)) || clr.IsSameAs(typeof(ValueTask)))
         {
             awaited = TypeSymbol.Void;
+            isValueTask = clr.IsSameAs(typeof(ValueTask));
             return true;
         }
 
@@ -74,6 +91,7 @@ internal static class AsyncReturnTypeNormalizer
             if (definition.IsSameAs(typeof(Task<>)) || definition.IsSameAs(typeof(ValueTask<>)))
             {
                 awaited = TypeSymbol.FromClrType(clr.GetGenericArguments()[0]);
+                isValueTask = definition.IsSameAs(typeof(ValueTask<>));
                 return true;
             }
         }
@@ -82,7 +100,7 @@ internal static class AsyncReturnTypeNormalizer
     }
 
     /// <summary>
-    /// CLR-type companion to <see cref="TryUnwrapTaskReturnType"/>: unwraps the
+    /// CLR-type companion to <see cref="TryUnwrapTaskReturnType(TypeSymbol, out TypeSymbol)"/>: unwraps the
     /// awaited result of a <c>Task</c> / <c>Task&lt;T&gt;</c> / <c>ValueTask</c>
     /// / <c>ValueTask&lt;T&gt;</c> CLR return type (the non-generic forms resolve
     /// to <c>typeof(void)</c>). Used for matching an async method against an

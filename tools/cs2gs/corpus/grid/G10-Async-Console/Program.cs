@@ -26,13 +26,7 @@ namespace Corpus.Grid10
         {
             await AwaitExpressionFixture.RunAsync();
             await AwaitExpressionConfigureAwaitFixture.RunAsync();
-            // QUARANTINED: AwaitExpression over ValueTask / ValueTask<T>.
-            // async ValueTask(-of-T) method bodies fail gsc (GS0155 + GS0100:
-            // return value not wrapped), and even awaiting a synchronously
-            // constructed ValueTask crashes gsc with GS9998
-            // (NotSupportedException: "Derived classes must provide an
-            // implementation."). See AwaitExpressionValueTask.cs.quarantined.
-            // await AwaitExpressionValueTaskFixture.RunAsync();
+            await AwaitExpressionValueTaskFixture.RunAsync();
             await AwaitExpressionWhenAllFixture.RunAsync();
             await ForEachStatementFixture.RunAsync();
             await SimpleLambdaExpressionFixture.RunAsync();

@@ -206,9 +206,15 @@ public static class AsyncStateMachineTypeBuilder
             return null;
         }
 
+        // Issue #1918: honor an explicit `ValueTask` / `ValueTask[T]` async
+        // return-type annotation by resolving the ValueTask wrapper instead
+        // of the default Task wrapper.
+        var wrapperName = kickoff.AsyncReturnsValueTask ? "System.Threading.Tasks.ValueTask" : "System.Threading.Tasks.Task";
+        var wrapperOpenName = wrapperName + "`1";
+
         if (kickoff.Type == TypeSymbol.Void)
         {
-            return references.TryResolveType("System.Threading.Tasks.Task", out var taskType) ? taskType : null;
+            return references.TryResolveType(wrapperName, out var taskType) ? taskType : null;
         }
 
         // Issue #530: for a nullable value type (e.g. `int32?`), the CLR type
@@ -258,7 +264,7 @@ public static class AsyncStateMachineTypeBuilder
             }
         }
 
-        return references.TryResolveType("System.Threading.Tasks.Task`1", out var open)
+        return references.TryResolveType(wrapperOpenName, out var open)
             ? open.MakeGenericType(inner)
             : null;
     }
