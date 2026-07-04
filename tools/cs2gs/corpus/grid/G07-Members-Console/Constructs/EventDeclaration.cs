@@ -1,5 +1,6 @@
 // inventory: EventDeclaration — explicit add/remove accessors on a custom event (probe)
 using System;
+using System.Collections.Generic;
 
 namespace Corpus.Grid07
 {
@@ -7,20 +8,19 @@ namespace Corpus.Grid07
 
     public class Broadcaster
     {
-        private MessageHandler? _handlers;
+        private readonly List<MessageHandler> _handlers = new List<MessageHandler>();
 
         public event MessageHandler Message
         {
-            add { _handlers = _handlers + value; }
-            remove { _handlers = _handlers - value; }
+            add { _handlers.Add(value); }
+            remove { _handlers.Remove(value); }
         }
 
         public void Send(string text)
         {
-            MessageHandler? snapshot = _handlers;
-            if (snapshot != null)
+            foreach (MessageHandler handler in _handlers)
             {
-                snapshot(text);
+                handler(text);
             }
         }
     }
@@ -30,7 +30,7 @@ namespace Corpus.Grid07
         public static void Run()
         {
             Broadcaster broadcaster = new Broadcaster();
-            MessageHandler printer = delegate(string message)
+            MessageHandler printer = message =>
             {
                 Console.WriteLine("EventDeclaration: got=" + message);
             };

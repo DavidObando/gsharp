@@ -9,9 +9,11 @@
   {
     "kind": "AddAccessorDeclaration",
     "nodeType": "AccessorDeclarationSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0052",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1899"
+    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/EventDeclaration.cs",
+    "notes": "The explicit add/remove accessor body of an event declaration (ADR-0052 \u00A72); translates like any other accessor body."
   },
   {
     "kind": "AddAssignmentExpression",
@@ -595,9 +597,11 @@
   {
     "kind": "DelegateDeclaration",
     "nodeType": "DelegateDeclarationSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0059",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1899"
+    "fixture": "tools/cs2gs/corpus/grid/G09-Functions-Console/Constructs/DelegateDeclaration.cs",
+    "notes": "Maps to the G# named delegate type alias \u0060type Name = delegate func(params) R\u0060 (ADR-0059). A generic delegate (a type-parameter list) still gaps loudly; NamedDelegateDeclaration has no type-parameter slot."
   },
   {
     "kind": "DescendingOrdering",
@@ -758,16 +762,20 @@
   {
     "kind": "EventDeclaration",
     "nodeType": "EventDeclarationSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0052",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1899"
+    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/EventDeclaration.cs",
+    "notes": "Explicit add/remove accessor event maps to the G# event declaration\u0027s explicit-accessor form (ADR-0052 \u00A72)."
   },
   {
     "kind": "EventFieldDeclaration",
     "nodeType": "EventFieldDeclarationSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0052",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1899"
+    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/EventFieldDeclaration.cs",
+    "notes": "Field-like event maps to the G# field-like event declaration (ADR-0052 \u00A72)."
   },
   {
     "kind": "ExclusiveOrAssignmentExpression",
@@ -1871,9 +1879,11 @@
   {
     "kind": "RemoveAccessorDeclaration",
     "nodeType": "AccessorDeclarationSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0052",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1899"
+    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/EventDeclaration.cs",
+    "notes": "The explicit add/remove accessor body of an event declaration (ADR-0052 \u00A72); translates like any other accessor body."
   },
   {
     "kind": "ReturnStatement",

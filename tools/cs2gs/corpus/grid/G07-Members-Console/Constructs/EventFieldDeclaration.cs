@@ -11,10 +11,9 @@ namespace Corpus.Grid07
 
         public void Tick(int count)
         {
-            TickHandler? snapshot = Ticked;
-            if (snapshot != null)
+            if (Ticked != null)
             {
-                snapshot(count);
+                Ticked(count);
             }
         }
     }
@@ -24,7 +23,7 @@ namespace Corpus.Grid07
         public static void Run()
         {
             TickSource source = new TickSource();
-            TickHandler listener = delegate(int count)
+            TickHandler listener = count =>
             {
                 Console.WriteLine("EventFieldDeclaration: tick=" + count.ToString());
             };

@@ -385,16 +385,22 @@ public sealed class EventDeclaration : GMember
     /// <param name="type">The handler/delegate type.</param>
     /// <param name="visibility">The accessibility.</param>
     /// <param name="attributes">The event attributes.</param>
+    /// <param name="addBody">The explicit <c>add</c> accessor body, or <see langword="null"/> for a field-like event.</param>
+    /// <param name="removeBody">The explicit <c>remove</c> accessor body, or <see langword="null"/> for a field-like event.</param>
     public EventDeclaration(
         string name,
         GTypeReference type,
         Visibility visibility = Visibility.Default,
-        IReadOnlyList<AttributeUse> attributes = null)
+        IReadOnlyList<AttributeUse> attributes = null,
+        BlockStatement addBody = null,
+        BlockStatement removeBody = null)
     {
         Name = name;
         Type = type;
         Visibility = visibility;
         Attributes = attributes ?? new List<AttributeUse>();
+        AddBody = addBody;
+        RemoveBody = removeBody;
     }
 
     /// <summary>Gets the event name.</summary>
@@ -408,4 +414,19 @@ public sealed class EventDeclaration : GMember
 
     /// <summary>Gets the event attributes.</summary>
     public IReadOnlyList<AttributeUse> Attributes { get; }
+
+    /// <summary>
+    /// Gets the explicit <c>add</c> accessor body, or <see langword="null"/> for a
+    /// field-like event (ADR-0052 §2 "Event with explicit accessors").
+    /// </summary>
+    public BlockStatement AddBody { get; }
+
+    /// <summary>
+    /// Gets the explicit <c>remove</c> accessor body, or <see langword="null"/> for a
+    /// field-like event.
+    /// </summary>
+    public BlockStatement RemoveBody { get; }
+
+    /// <summary>Gets a value indicating whether this event has explicit add/remove accessor bodies.</summary>
+    public bool HasExplicitAccessors => AddBody != null || RemoveBody != null;
 }

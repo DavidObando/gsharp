@@ -12,6 +12,7 @@ namespace Corpus.Grid09
         {
             ConditionalAccessExpressionFixture.Run();
             DeclarationExpressionFixture.Run();
+            DelegateDeclarationFixture.Run();
             LocalFunctionStatementGenericFixture.Run();
             MethodGroupConversionFixture.Run();
             NameColonFixture.Run();

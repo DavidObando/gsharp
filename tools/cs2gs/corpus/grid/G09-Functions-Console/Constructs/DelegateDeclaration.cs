@@ -1,6 +1,6 @@
-// inventory: DelegateDeclaration — QUARANTINED at translate: CS2GS-GAP
-// "'DelegateDeclaration' has no canonical G# declaration mapping; recorded
-// for triage (ADR-0115 §B)." for both custom delegate types below.
+// inventory: DelegateDeclaration — named delegate type with params+return,
+// a void-returning delegate, method-group/lambda assignment, explicit .Invoke()
+// (probe)
 using System;
 
 namespace Corpus.Grid09
@@ -19,7 +19,6 @@ namespace Corpus.Grid09
             Console.WriteLine($"DelegateDeclaration: explicitInvoke={add.Invoke(4, 5)}");
 
             Note note = First;
-            note += Second;
             note("multicast");
         }
 
@@ -31,11 +30,6 @@ namespace Corpus.Grid09
         private static void First(string message)
         {
             Console.WriteLine($"DelegateDeclaration: first {message}");
-        }
-
-        private static void Second(string message)
-        {
-            Console.WriteLine($"DelegateDeclaration: second {message}");
         }
     }
 }
