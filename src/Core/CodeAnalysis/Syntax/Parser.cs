@@ -1176,6 +1176,13 @@ public class Parser
         {
             var startToken = Current;
 
+            // Issue #2129: interface members accept Kotlin-style @annotations
+            // (ADR-0047) exactly like class/struct members. Parse the leading
+            // annotation list once and attach it to whichever member follows —
+            // property, event, or method signature — mirroring how ParseMember
+            // threads annotations onto class members.
+            var annotations = ParseAnnotations();
+
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "shared" && Peek(1).Kind == SyntaxKind.OpenBraceToken)
             {
                 // Issue #865 revision: static-virtual members live in a
@@ -1184,15 +1191,15 @@ public class Parser
             }
             else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
             {
-                properties.Add(ParsePropertyDeclaration(accessibilityModifier: null, openModifier: null, overrideModifier: null));
+                properties.Add(ParsePropertyDeclaration(accessibilityModifier: null, openModifier: null, overrideModifier: null).WithAnnotations(annotations));
             }
             else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "event")
             {
-                events.Add(ParseEventDeclaration(accessibilityModifier: null, openModifier: null, overrideModifier: null));
+                events.Add(ParseEventDeclaration(accessibilityModifier: null, openModifier: null, overrideModifier: null).WithAnnotations(annotations));
             }
             else if (IsInterfaceMethodSignatureStart())
             {
-                methods.Add(ParseInterfaceMethodSignature());
+                methods.Add((FunctionDeclarationSyntax)ParseInterfaceMethodSignature().WithAnnotations(annotations));
             }
             else
             {
@@ -2468,21 +2475,26 @@ public class Parser
             // Issue #865 revision: static-virtual members (ADR-0089) live in a
             // `shared { … }` block. No accessibility / open / override
             // modifiers are accepted on plain method signatures.
+            // Issue #2129: interface members accept Kotlin-style @annotations
+            // (ADR-0047) like class members — parse them here and attach to the
+            // property / event / method signature that follows.
+            var annotations = ParseAnnotations();
+
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "shared" && Peek(1).Kind == SyntaxKind.OpenBraceToken)
             {
                 ParseInterfaceSharedBlock(methods, properties, staticFields, ref seenSharedBlock, identifier.Text);
             }
             else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
             {
-                properties.Add(ParsePropertyDeclaration(accessibilityModifier: null, openModifier: null, overrideModifier: null));
+                properties.Add(ParsePropertyDeclaration(accessibilityModifier: null, openModifier: null, overrideModifier: null).WithAnnotations(annotations));
             }
             else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "event")
             {
-                events.Add(ParseEventDeclaration(accessibilityModifier: null, openModifier: null, overrideModifier: null));
+                events.Add(ParseEventDeclaration(accessibilityModifier: null, openModifier: null, overrideModifier: null).WithAnnotations(annotations));
             }
             else if (IsInterfaceMethodSignatureStart())
             {
-                methods.Add(ParseInterfaceMethodSignature());
+                methods.Add((FunctionDeclarationSyntax)ParseInterfaceMethodSignature().WithAnnotations(annotations));
             }
             else
             {

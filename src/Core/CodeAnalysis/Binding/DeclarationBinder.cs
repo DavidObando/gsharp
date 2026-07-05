@@ -5303,6 +5303,19 @@ internal sealed class DeclarationBinder
 
             Binder.AttachDocumentation(methodSymbol, methodSyntax);
 
+            // Issue #2129: bind @annotations on an interface method signature
+            // so they emit as CustomAttribute rows on the interface MethodDef,
+            // mirroring the class-method path.
+            if (!methodSyntax.Annotations.IsDefaultOrEmpty)
+            {
+                methodSymbol.SetAttributes(BindAttributes(
+                    methodSyntax.Annotations,
+                    AttributeTargetKind.Method,
+                    Binder.FunctionDeclarationAllowedTargets,
+                    "a method declaration",
+                    System.AttributeTargets.Method));
+            }
+
             // ADR-0085: reject `open` / `override` modifiers on interface
             // members — these are tracked as deferred follow-ups (GS0321).
             // The parser does not currently accept them on interface method
@@ -5525,6 +5538,20 @@ internal sealed class DeclarationBinder
                 }
 
                 Binder.AttachDocumentation(propSymbol, propSyntax);
+
+                // Issue #2129: bind @annotations on an interface property so
+                // they emit as real CustomAttribute rows on the interface
+                // PropertyDef, mirroring the class-property path.
+                if (!propSyntax.Annotations.IsDefaultOrEmpty)
+                {
+                    propSymbol.SetAttributes(BindAttributes(
+                        propSyntax.Annotations,
+                        AttributeTargetKind.Property,
+                        Binder.PropertyDeclarationAllowedTargets,
+                        "a property declaration",
+                        System.AttributeTargets.Property));
+                }
+
                 propertiesBuilder.Add(propSymbol);
             }
 
@@ -5560,6 +5587,20 @@ internal sealed class DeclarationBinder
                     declaration: eventSyntax);
 
                 Binder.AttachDocumentation(eventSymbol, eventSyntax);
+
+                // Issue #2129: bind @annotations on an interface event so they
+                // emit as CustomAttribute rows on the interface EventDef,
+                // mirroring the class-event path.
+                if (!eventSyntax.Annotations.IsDefaultOrEmpty)
+                {
+                    eventSymbol.SetAttributes(BindAttributes(
+                        eventSyntax.Annotations,
+                        AttributeTargetKind.Event,
+                        Binder.EventDeclarationAllowedTargets,
+                        "an event declaration",
+                        System.AttributeTargets.Event));
+                }
+
                 eventsBuilder.Add(eventSymbol);
             }
 
