@@ -383,6 +383,14 @@ internal sealed class StatementBinder
                 // later mutation invalidates it again. Runs last so it wins over
                 // the invalidation pass for the same statement.
                 ApplyAssignmentNarrowing(statement, memberNotNullFrame);
+
+                // Issue #2159: `if`-join narrowing. After invalidation (which
+                // drops any narrowing the `if` mutates), lift a nullable `var`
+                // local that both the then- and else-branch leave non-null into
+                // the persistent frame, so subsequent reads see the non-nullable
+                // type. Runs after invalidation for the same reason as the
+                // assignment narrowing above.
+                ApplyIfJoinNarrowings(statement, memberNotNullFrame);
             }
         }
         finally
@@ -698,29 +706,48 @@ internal sealed class StatementBinder
     /// </summary>
     private void ApplyAssignmentNarrowing(BoundStatement statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
-        if (statement is not BoundExpressionStatement { Expression: BoundAssignmentExpression assign })
+        if (statement is BoundExpressionStatement { Expression: BoundAssignmentExpression assign }
+            && TryClassifyNonNullAssignment(assign, out var local, out var underlying))
         {
-            return;
+            persistentFrame[local] = underlying;
         }
+    }
+
+    /// <summary>
+    /// Issue #1123 / issue #2159: classifies whether <paramref name="assign"/>
+    /// assigns a statically <em>non-nullable</em> value to a nullable
+    /// reference-like <c>var</c> local, proving the local is non-null after the
+    /// assignment. Shared by <see cref="ApplyAssignmentNarrowing"/> (straight-
+    /// line assignment narrowing) and the <c>if</c>-join narrowing pass (which
+    /// consults it to decide whether a branch leaves the local non-null).
+    /// </summary>
+    /// <param name="assign">The bound assignment to classify.</param>
+    /// <param name="local">On success, the narrowed local.</param>
+    /// <param name="underlying">On success, the local's underlying non-nullable type.</param>
+    /// <returns><see langword="true"/> when the assignment narrows the local.</returns>
+    private bool TryClassifyNonNullAssignment(BoundAssignmentExpression assign, out LocalVariableSymbol local, out TypeSymbol underlying)
+    {
+        local = null;
+        underlying = null;
 
         // Narrow locals only — never parameters, fields, or read-only `let`
         // locals (a `let` cannot be reassigned, so it never reaches here with a
         // re-narrowable shape anyway). This matches the receiver-stability rule
         // the type-test smart cast applies to `var` locals.
-        if (assign.Variable is not LocalVariableSymbol local || local.IsReadOnly)
+        if (assign.Variable is not LocalVariableSymbol l || l.IsReadOnly)
         {
-            return;
+            return false;
         }
 
-        if (local.Type is not NullableTypeSymbol nullable)
+        if (l.Type is not NullableTypeSymbol nullable)
         {
-            return;
+            return false;
         }
 
         var assignedType = assign.AssignedValueType;
         if (assignedType == null || assignedType == TypeSymbol.Error)
         {
-            return;
+            return false;
         }
 
         // A possibly-null right-hand side does not narrow (invalidation already
@@ -728,7 +755,7 @@ internal sealed class StatementBinder
         // proves the local is non-null after the assignment.
         if (assignedType is NullableTypeSymbol)
         {
-            return;
+            return false;
         }
 
         // Issue #1123 is scoped to reference (and interface) types. Nullable
@@ -737,10 +764,10 @@ internal sealed class StatementBinder
         // for a `var`-local read, so a narrowed value-type read produces
         // unverifiable IL. Reference nullability is purely an annotation, so a
         // narrowed reference read needs no special emit.
-        var underlying = nullable.UnderlyingType;
-        if (!IsReferenceLikeType(underlying))
+        var u = nullable.UnderlyingType;
+        if (!IsReferenceLikeType(u))
         {
-            return;
+            return false;
         }
 
         // The right-hand side must be implicitly convertible to the local's
@@ -748,13 +775,369 @@ internal sealed class StatementBinder
         // value converts to the nullable declared type; this guards the value
         // narrowing to the underlying type (e.g. excludes shapes where the only
         // conversion to the bare underlying type would be explicit).
-        var conversion = Conversion.Classify(assignedType, underlying);
+        var conversion = Conversion.Classify(assignedType, u);
         if (!conversion.Exists || !conversion.IsImplicit)
+        {
+            return false;
+        }
+
+        local = l;
+        underlying = u;
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #2159: <c>if</c>-join narrowing. When both the then-branch and the
+    /// else-branch (explicit or the implicit negated-condition else) of a
+    /// fall-through <see cref="BoundIfStatement"/> leave a nullable <c>var</c>
+    /// local non-null at their exit, lift that narrowing into the enclosing
+    /// block's persistent frame so subsequent reads see the non-nullable type.
+    /// This generalises the straight-line assignment narrowing (issue #1123)
+    /// and the early-exit narrowing (issue #700) to the ubiquitous
+    /// "null-check then reassign in the null branch" idiom.
+    /// <para>
+    /// A branch leaves the local non-null when it either (a) assigns it a
+    /// statically non-null value (see <see cref="TryClassifyNonNullAssignment"/>),
+    /// or (b) is entered under a condition that narrows it non-null
+    /// (<c>x != nil</c>) and never reassigns it to a nullable value. The result
+    /// is the intersection over the two branch exits, so the local is narrowed
+    /// only when proven non-null on every path that reaches the join.
+    /// </para>
+    /// Runs after <see cref="InvalidateNarrowingsForAssignedVariables"/> (which
+    /// clears any stale narrowing on variables the <c>if</c> mutates) so the
+    /// fresh join narrowing supersedes the clearing pass; a later statement that
+    /// reassigns the local to a nullable value re-nullable-izes it through its
+    /// own invalidation pass.
+    /// </summary>
+    private void ApplyIfJoinNarrowings(BoundStatement statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
+    {
+        if (statement is not BoundIfStatement ifStmt)
         {
             return;
         }
 
-        persistentFrame[local] = underlying;
+        // Both branches must fall through to the join. A branch that
+        // unconditionally exits (return/throw/break/continue/goto) is the
+        // early-exit case handled by ApplyEarlyExitNarrowings; requiring both
+        // branches to fall through here keeps the two passes from overlapping.
+        if (EndsInUnconditionalExit(ifStmt.ThenStatement))
+        {
+            return;
+        }
+
+        if (ifStmt.ElseStatement != null && EndsInUnconditionalExit(ifStmt.ElseStatement))
+        {
+            return;
+        }
+
+        var joined = ComputeIfJoinNonNull(ifStmt, entry: null);
+        if (joined == null || joined.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var kv in joined)
+        {
+            var path = kv.Key;
+
+            // Lift plain nullable reference-like `var` locals only, matching the
+            // scope of the straight-line assignment narrowing. Value-type
+            // nullables and member paths are intentionally excluded.
+            if (path.HasMembers
+                || path.Root is not LocalVariableSymbol local
+                || local.IsReadOnly
+                || local.Type is not NullableTypeSymbol nullable
+                || !IsReferenceLikeType(nullable.UnderlyingType))
+            {
+                continue;
+            }
+
+            persistentFrame[path] = nullable.UnderlyingType;
+        }
+    }
+
+    /// <summary>
+    /// Issue #2159: computes the set of locals proven non-null at the normal
+    /// (fall-through) exit of <paramref name="ifStmt"/>, given the non-null
+    /// locals on entry (<paramref name="entry"/>). Recurses through
+    /// <c>else if</c> chains (an <c>else if</c> is a nested
+    /// <see cref="BoundIfStatement"/>). Returns <see langword="null"/> when the
+    /// whole <c>if</c> exits unconditionally (no path falls through).
+    /// </summary>
+    private Dictionary<AccessPath, TypeSymbol> ComputeIfJoinNonNull(BoundIfStatement ifStmt, Dictionary<AccessPath, TypeSymbol> entry)
+    {
+        var (thenNarrow, elseNarrow) = ComputeConditionNarrowing(ifStmt.Condition);
+
+        var thenState = ComputeBranchFallthroughNonNull(ifStmt.ThenStatement, MergeLocalNonNull(entry, thenNarrow));
+
+        var elseState = ifStmt.ElseStatement == null
+
+            // Implicit else: no statements run, so the only non-null facts are
+            // the entry set plus whatever the negated condition narrows.
+            ? MergeLocalNonNull(entry, elseNarrow)
+            : ComputeBranchFallthroughNonNull(ifStmt.ElseStatement, MergeLocalNonNull(entry, elseNarrow));
+
+        if (thenState == null && elseState == null)
+        {
+            return null;
+        }
+
+        // When one branch exits, the join is reached only through the other, so
+        // that branch's non-null set holds unconditionally at the join.
+        if (thenState == null)
+        {
+            return elseState;
+        }
+
+        if (elseState == null)
+        {
+            return thenState;
+        }
+
+        return IntersectNonNull(thenState, elseState);
+    }
+
+    /// <summary>
+    /// Issue #2159: computes the locals proven non-null at the normal exit of a
+    /// single branch <paramref name="branch"/>, seeded with the non-null locals
+    /// on entry. Returns <see langword="null"/> when the branch unconditionally
+    /// exits (does not fall through to the join).
+    /// </summary>
+    private Dictionary<AccessPath, TypeSymbol> ComputeBranchFallthroughNonNull(BoundStatement branch, Dictionary<AccessPath, TypeSymbol> entry)
+    {
+        switch (branch)
+        {
+            case BoundReturnStatement:
+            case BoundThrowStatement:
+            case BoundGotoStatement:
+                return null;
+
+            case BoundIfStatement nested:
+                return ComputeIfJoinNonNull(nested, entry);
+
+            case BoundBlockStatement block:
+                {
+                    var state = entry ?? new Dictionary<AccessPath, TypeSymbol>();
+                    if (block.Statements.IsDefaultOrEmpty)
+                    {
+                        return state;
+                    }
+
+                    foreach (var s in block.Statements)
+                    {
+                        if (!ProcessBranchStatement(s, state))
+                        {
+                            return null;
+                        }
+                    }
+
+                    return state;
+                }
+
+            default:
+                {
+                    var state = entry ?? new Dictionary<AccessPath, TypeSymbol>();
+                    return ProcessBranchStatement(branch, state) ? state : null;
+                }
+        }
+    }
+
+    /// <summary>
+    /// Issue #2159: folds a single branch statement into the running non-null
+    /// <paramref name="state"/>. Returns <see langword="false"/> when the
+    /// statement unconditionally exits the branch (so later statements are
+    /// unreachable).
+    /// </summary>
+    private bool ProcessBranchStatement(BoundStatement stmt, Dictionary<AccessPath, TypeSymbol> state)
+    {
+        switch (stmt)
+        {
+            case BoundReturnStatement:
+            case BoundThrowStatement:
+            case BoundGotoStatement:
+                return false;
+
+            case BoundExpressionStatement { Expression: BoundAssignmentExpression assign }:
+                if (TryClassifyNonNullAssignment(assign, out var local, out var underlying))
+                {
+                    state[AccessPath.ForVariable(local)] = underlying;
+                }
+                else if (assign.Variable != null)
+                {
+                    // Any other assignment to a tracked local (nullable value,
+                    // value type, …) drops its narrowing.
+                    RemoveByRoot(state, assign.Variable);
+                }
+
+                return true;
+
+            case BoundIfStatement nested:
+                {
+                    // The nested join is the exact post-if non-null set given the
+                    // current state as entry, so it fully replaces the tracked
+                    // state (it carries surviving entry facts through).
+                    var nestedResult = ComputeIfJoinNonNull(nested, new Dictionary<AccessPath, TypeSymbol>(state));
+                    if (nestedResult == null)
+                    {
+                        return false;
+                    }
+
+                    state.Clear();
+                    foreach (var kv in nestedResult)
+                    {
+                        state[kv.Key] = kv.Value;
+                    }
+
+                    return true;
+                }
+
+            case BoundBlockStatement inner:
+                foreach (var s in inner.Statements)
+                {
+                    if (!ProcessBranchStatement(s, state))
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+
+            default:
+                // Loops, switches, and any other construct that could reassign a
+                // tracked local: conservatively drop every narrowing on a local
+                // the statement's subtree assigns anywhere.
+                ClearAssignedRoots(stmt, state);
+                return true;
+        }
+    }
+
+    /// <summary>
+    /// Issue #2159: recomputes the then / else condition-implied non-null
+    /// narrowing frames for an <c>if</c> condition, mirroring the composition
+    /// <see cref="BindIfStatement"/> performs (nil guard, <c>[NotNullWhen]</c>
+    /// bool call, and type-test), so the join analysis sees the same seeds the
+    /// branches were bound under.
+    /// </summary>
+    private (Dictionary<AccessPath, TypeSymbol> Then, Dictionary<AccessPath, TypeSymbol> Else) ComputeConditionNarrowing(BoundExpression condition)
+    {
+        var (thenNarrow, elseNarrow) = TryClassifyNilGuard(condition);
+        if (thenNarrow == null && elseNarrow == null)
+        {
+            (thenNarrow, elseNarrow) = TryClassifyBoolCallNarrowing(condition);
+        }
+
+        var (typeThen, typeElse) = TryClassifyTypeTestNarrowing(condition);
+        thenNarrow = MergeNarrowingFrames(thenNarrow, typeThen);
+        elseNarrow = MergeNarrowingFrames(elseNarrow, typeElse);
+        return (thenNarrow, elseNarrow);
+    }
+
+    /// <summary>
+    /// Issue #2159: returns a fresh dictionary combining <paramref name="baseState"/>
+    /// with the plain-local entries of <paramref name="add"/> (a
+    /// condition-narrowing frame). Only plain-variable paths rooted at a local
+    /// are kept — parameters and member paths are outside the join pass's lift
+    /// scope.
+    /// </summary>
+    private static Dictionary<AccessPath, TypeSymbol> MergeLocalNonNull(Dictionary<AccessPath, TypeSymbol> baseState, Dictionary<AccessPath, TypeSymbol> add)
+    {
+        var result = baseState == null
+            ? new Dictionary<AccessPath, TypeSymbol>()
+            : new Dictionary<AccessPath, TypeSymbol>(baseState);
+
+        if (add != null)
+        {
+            foreach (var kv in add)
+            {
+                if (!kv.Key.HasMembers && kv.Key.Root is LocalVariableSymbol)
+                {
+                    result[kv.Key] = kv.Value;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Issue #2159: intersects two branch-exit non-null maps, keeping a local
+    /// only when both branches prove it non-null with the same underlying type.
+    /// </summary>
+    private static Dictionary<AccessPath, TypeSymbol> IntersectNonNull(Dictionary<AccessPath, TypeSymbol> a, Dictionary<AccessPath, TypeSymbol> b)
+    {
+        var result = new Dictionary<AccessPath, TypeSymbol>();
+        foreach (var kv in a)
+        {
+            if (b.TryGetValue(kv.Key, out var other) && Equals(other, kv.Value))
+            {
+                result[kv.Key] = kv.Value;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Issue #2159: removes every narrowing whose access path is rooted at
+    /// <paramref name="root"/> from <paramref name="state"/>.
+    /// </summary>
+    private static void RemoveByRoot(Dictionary<AccessPath, TypeSymbol> state, VariableSymbol root)
+    {
+        List<AccessPath> toRemove = null;
+        foreach (var key in state.Keys)
+        {
+            if (ReferenceEquals(key.Root, root))
+            {
+                (toRemove ??= new List<AccessPath>()).Add(key);
+            }
+        }
+
+        if (toRemove != null)
+        {
+            foreach (var key in toRemove)
+            {
+                state.Remove(key);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Issue #2159: conservatively drops every narrowing on a local that
+    /// <paramref name="node"/>'s bound subtree assigns anywhere.
+    /// </summary>
+    private static void ClearAssignedRoots(BoundNode node, Dictionary<AccessPath, TypeSymbol> state)
+    {
+        if (state.Count == 0)
+        {
+            return;
+        }
+
+        var collector = new AssignedRootsCollector();
+        collector.Visit(node);
+        foreach (var root in collector.Roots)
+        {
+            RemoveByRoot(state, root);
+        }
+    }
+
+    /// <summary>
+    /// Issue #2159: bound-tree walker collecting the root variable of every
+    /// plain assignment target in a subtree, used to conservatively invalidate
+    /// join narrowings across constructs the flow analysis does not model.
+    /// </summary>
+    private sealed class AssignedRootsCollector : BoundTreeWalker
+    {
+        public HashSet<VariableSymbol> Roots { get; } = new HashSet<VariableSymbol>();
+
+        protected override void VisitAssignmentExpression(BoundAssignmentExpression node)
+        {
+            if (node.Variable != null)
+            {
+                Roots.Add(node.Variable);
+            }
+
+            base.VisitAssignmentExpression(node);
+        }
     }
 
     /// <summary>
@@ -775,6 +1158,15 @@ internal sealed class StatementBinder
         if (type is StructSymbol structSymbol)
         {
             return structSymbol.IsClass;
+        }
+
+        // Issue #2159: a type parameter constrained to a reference type
+        // (`class`) or a reference base class is a reference type at the CLR
+        // level, so `T?` → `T` is a metadata-only narrowing that emits a
+        // verifiable read — matching the reference-nullable case above.
+        if (type is TypeParameterSymbol typeParameter)
+        {
+            return typeParameter.HasReferenceTypeConstraint || typeParameter.ClassConstraint != null;
         }
 
         if (type?.ClrType is { } clrBacking)
