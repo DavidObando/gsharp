@@ -743,7 +743,14 @@ public sealed class Conversion
                             continue;
                         }
 
-                        if (ifaceClr == to.ClrType || to.ClrType.IsAssignableFrom(ifaceClr))
+                        // Issue #2135: `to.ClrType` may be a
+                        // TypeBuilderInstantiation (a same-compilation generic
+                        // user interface instantiated concretely) whose
+                        // IsAssignableFrom throws NotSupportedException at emit.
+                        // Route through the reference-context-independent
+                        // by-name helper, which guards that call and falls back
+                        // to the interface/base-class name walk.
+                        if (ifaceClr == to.ClrType || ClrTypeUtilities.IsAssignableByName(to.ClrType, ifaceClr))
                         {
                             return Conversion.Implicit;
                         }
@@ -847,7 +854,12 @@ public sealed class Conversion
                 foreach (var baseClrInterface in fromInterface.BaseClrInterfaces)
                 {
                     var clr = baseClrInterface?.ClrType;
-                    if (clr != null && (clr.IsSameAs(toClrInterface) || toClrInterface.IsAssignableFrom(clr)))
+
+                    // Issue #2135: `toClrInterface` may be a
+                    // TypeBuilderInstantiation whose IsAssignableFrom throws
+                    // NotSupportedException at emit; use the guarded by-name
+                    // helper instead of calling IsAssignableFrom directly.
+                    if (clr != null && (clr.IsSameAs(toClrInterface) || ClrTypeUtilities.IsAssignableByName(toClrInterface, clr)))
                     {
                         return Conversion.Implicit;
                     }

@@ -578,7 +578,12 @@ internal sealed partial class MethodBodyEmitter
                 foreach (var baseClrInterface in srcInterface.BaseClrInterfaces)
                 {
                     var clr = baseClrInterface?.ClrType;
-                    if (clr != null && (clr.IsSameAs(targetClrInterface) || targetClrInterface.IsAssignableFrom(clr)))
+
+                    // Issue #2135: `targetClrInterface` may be a
+                    // TypeBuilderInstantiation whose IsAssignableFrom throws
+                    // NotSupportedException at emit; use the guarded by-name
+                    // helper instead of calling IsAssignableFrom directly.
+                    if (clr != null && (clr.IsSameAs(targetClrInterface) || ClrTypeUtilities.IsAssignableByName(targetClrInterface, clr)))
                     {
                         return true;
                     }
@@ -659,7 +664,11 @@ internal sealed partial class MethodBodyEmitter
                         continue;
                     }
 
-                    if (ifaceClr == b.ClrType || b.ClrType.IsAssignableFrom(ifaceClr))
+                    // Issue #2135: `b.ClrType` may be a
+                    // TypeBuilderInstantiation whose IsAssignableFrom throws
+                    // NotSupportedException at emit; use the guarded by-name
+                    // helper instead of calling IsAssignableFrom directly.
+                    if (ifaceClr == b.ClrType || ClrTypeUtilities.IsAssignableByName(b.ClrType, ifaceClr))
                     {
                         return true;
                     }
