@@ -68,6 +68,9 @@ public sealed class NullableTypeSymbol : TypeSymbol
     /// Issue #1212: a nullable array/slice must render with the <c>?</c> bound to
     /// the array itself (<c>[]?T</c> / <c>[N]?T</c>) so its display name is distinct
     /// from an array of nullable elements (<c>[]T?</c> = <c>Slice(Nullable(T))</c>).
+    /// Issue #2160: a nullable function type must wrap the whole arrow shape in
+    /// parentheses (<c>((int32) -> void)?</c>) so the <c>?</c> applies to the
+    /// function type and not just its return type (never <c>(int32) -> void?</c>).
     /// For all other underlying types the nullable marker trails the name (<c>T?</c>).
     /// </summary>
     /// <param name="underlyingType">The non-nullable underlying type.</param>
@@ -78,6 +81,7 @@ public sealed class NullableTypeSymbol : TypeSymbol
         {
             SliceTypeSymbol slice => $"[]?{slice.ElementType.Name}",
             ArrayTypeSymbol array => $"[{array.Length}]?{array.ElementType.Name}",
+            FunctionTypeSymbol function => $"({function.Name})?",
             _ => underlyingType.Name + "?",
         };
     }
