@@ -6739,6 +6739,21 @@ public sealed class CSharpToGSharpTranslator
                         this.TranslateExpression(prefix.Operand),
                         prefix.OperatorToken.Text);
 
+                case SwitchExpressionSyntax switchExpression:
+                    // A C# switch EXPRESSION used in statement position — reached
+                    // via a discard (`_ = x switch { ... };`, lowered by
+                    // TranslateExpressionStatements) or any other expression-
+                    // statement context. G#'s switch-EXPRESSION arm form uses
+                    // `case P: expr` (an expression per arm) and is only valid in
+                    // value position; a bare switch expression at statement
+                    // position is parsed as a switch STATEMENT, whose arms require
+                    // a `case P { block }` body — so emitting the expression form
+                    // here produces invalid G# (GS0005 "expected OpenBraceToken").
+                    // Lower to a genuine switch STATEMENT instead, running each
+                    // arm's expression for its side effect (the value is discarded,
+                    // exactly as in C#'s `_ = <switch expr>`); issue #914.
+                    return this.TranslateSwitchExpressionAsStatement(switchExpression);
+
                 default:
                     return new ExpressionStatement(this.TranslateExpression(expression));
             }
@@ -14610,6 +14625,90 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return new SwitchExpression(subject, arms);
+        }
+
+        // Lowers a C# switch EXPRESSION that appears in statement position
+        // (a discard `_ = x switch { ... };` or any other expression-statement)
+        // into a G# switch STATEMENT. Each arm's expression is run for its side
+        // effect only — the switch value is discarded, exactly as in C# — so the
+        // arm body becomes a single-statement block wrapping the arm expression.
+        // Mirrors TranslateSwitchExpression's pattern/guard/binding handling and
+        // its exhaustiveness rule (issue #914).
+        private GStatement TranslateSwitchExpressionAsStatement(SwitchExpressionSyntax node)
+        {
+            GExpression subject = this.TranslateExpression(node.GoverningExpression);
+            var cases = new List<SwitchStatementCase>();
+            bool hasTotalArm = false;
+
+            foreach (SwitchExpressionArmSyntax arm in node.Arms)
+            {
+                var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
+                var usedDesignators = new HashSet<string>(StringComparer.Ordinal);
+                var guards = new List<GExpression>();
+
+                this.ReportIndexOrRangeDesignationsInPattern(arm.Pattern);
+                GPattern pattern = this.TranslatePattern(arm.Pattern, subject, bindings, usedDesignators, guards);
+
+                foreach ((ISymbol symbol, GExpression replacement) in bindings)
+                {
+                    this.patternBindings[symbol] = replacement;
+                }
+
+                GExpression guard;
+                GStatement body;
+                try
+                {
+                    guard = arm.WhenClause != null
+                        ? this.TranslateExpression(arm.WhenClause.Condition)
+                        : null;
+                    guard = CombinePatternGuards(guards, guard);
+                    body = this.TranslateSwitchArmExpressionAsStatement(arm.Expression);
+                }
+                finally
+                {
+                    foreach ((ISymbol symbol, _) in bindings)
+                    {
+                        this.patternBindings.Remove(symbol);
+                    }
+                }
+
+                cases.Add(new SwitchStatementCase(pattern, new BlockStatement(new[] { body }), guard));
+
+                hasTotalArm |= guard == null && (pattern == null || pattern is DiscardPattern);
+            }
+
+            // As in TranslateSwitchExpression: a C# switch expression is
+            // exhaustive by construction, but gsc's switch only treats a literal
+            // unguarded discard/`default` as total (GS0176). When none is present,
+            // synthesize a trailing default that throws — mirroring C#'s own
+            // runtime SwitchExpressionException for an unmatched value.
+            if (!hasTotalArm)
+            {
+                GExpression unmatchedThrow = new ThrowExpression(
+                    BuildConstruction(
+                        new NamedTypeReference("InvalidOperationException"),
+                        new List<GExpression> { LiteralExpression.String("Unmatched switch expression value.") }),
+                    null);
+                cases.Add(new SwitchStatementCase(
+                    null,
+                    new BlockStatement(new[] { (GStatement)new ExpressionStatement(unmatchedThrow) })));
+            }
+
+            return new SwitchStatement(subject, cases);
+        }
+
+        // Renders a switch-expression arm's value expression as a single G#
+        // statement for the discarded switch-statement lowering above. A `throw`
+        // arm becomes a throw statement; every other expression is emitted as an
+        // expression statement (its value is discarded).
+        private GStatement TranslateSwitchArmExpressionAsStatement(ExpressionSyntax expression)
+        {
+            if (expression is ThrowExpressionSyntax throwExpression)
+            {
+                return new ThrowStatement(this.TranslateExpression(throwExpression.Expression));
+            }
+
+            return new ExpressionStatement(this.TranslateExpression(expression));
         }
 
         private GStatement TranslateSwitchStatement(SwitchStatementSyntax node)
