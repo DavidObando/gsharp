@@ -1602,7 +1602,10 @@ internal sealed class ConversionClassifier
 
         // Extended CLR-type path: walk self + transitive interfaces so a
         // CLR class inheriting Dispose solely through IDisposable is found.
-        var clrType = variable.Type?.ClrType;
+        // Issue #2148: a same-compilation user class deriving from an imported
+        // IDisposable base has no ClrType of its own, so fall back to the
+        // nearest imported base's ClrType to find the inherited Dispose.
+        var clrType = variable.Type?.ClrType ?? GetNearestImportedBaseClrType(variable.Type);
         if (clrType == null)
         {
             Diagnostics.ReportTypeNotDisposable(location, variable.Type ?? TypeSymbol.Error);
@@ -1646,7 +1649,9 @@ internal sealed class ConversionClassifier
         }
 
         // CLR-type path: walk self + transitive interfaces for DisposeAsync.
-        var clrType = variable.Type?.ClrType;
+        // Issue #2148: fall back to the nearest imported base's ClrType for a
+        // same-compilation user class deriving from an imported IAsyncDisposable.
+        var clrType = variable.Type?.ClrType ?? GetNearestImportedBaseClrType(variable.Type);
         if (clrType == null)
         {
             Diagnostics.ReportTypeNotAsyncDisposable(location, variable.Type ?? TypeSymbol.Error);
@@ -1676,6 +1681,36 @@ internal sealed class ConversionClassifier
     }
 
     // ----- Private helpers (kept here because they are only used by methods in this class) -----
+
+    /// <summary>
+    /// Issue #2148: returns the <see cref="TypeSymbol.ClrType"/> of the nearest
+    /// imported base class in <paramref name="type"/>'s inheritance chain, or
+    /// <see langword="null"/> if none exists. A same-compilation user class has
+    /// no <c>ClrType</c> of its own; when it derives (transitively) from an
+    /// imported CLR base, that base's reflectible type carries the inherited
+    /// members (e.g. <c>Dispose</c>/<c>DisposeAsync</c>) that duck-typed
+    /// protocol probes need to see.
+    /// </summary>
+    private static Type GetNearestImportedBaseClrType(TypeSymbol type)
+    {
+        if (type is StructSymbol structSymbol)
+        {
+            for (var current = structSymbol; current != null; current = current.BaseClass)
+            {
+                if (current.ClrType != null)
+                {
+                    return current.ClrType;
+                }
+
+                if (current.ImportedBaseType?.ClrType != null)
+                {
+                    return current.ImportedBaseType.ClrType;
+                }
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// Issue #1017: resolves a user-defined conversion declared on a
