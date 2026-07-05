@@ -4568,7 +4568,14 @@ public sealed class CSharpToGSharpTranslator
                 // `ref` modifier itself is reinstated at the MethodDeclaration
                 // (IsRefReturn) by the caller, mapping to G#'s native
                 // ref-return (`func F(...) ref T`, issue #490/ADR-0060).
-                return this.typeMapper.Map(returnType, this.context, node.ReturnType.GetLocation());
+                GTypeReference mapped = this.typeMapper.Map(returnType, this.context, node.ReturnType.GetLocation());
+
+                // Issue #2113: promote the return type to `T?` when the
+                // whole-program taint analysis proved this method's RETURN
+                // null-tainted (an oblivious compilation with a `return null` /
+                // nullable-returning path). Type-parameter returns are excluded
+                // for the same reason as declaration sites.
+                return this.PromoteReturnIfTainted(mapped, symbol, returnType);
             }
 
             return node.ReturnType is PredefinedTypeSyntax predefined &&
@@ -9744,6 +9751,33 @@ public sealed class CSharpToGSharpTranslator
             return this.IsPromotedToNullableReference(symbol) ? MakeNullable(type) : type;
         }
 
+        // Issue #2113: promote a method's mapped return type to `T?` when the
+        // whole-program oblivious taint analysis proved the method's RETURN
+        // null-tainted. Value-type returns, already-nullable returns, and
+        // type-parameter returns are left untouched (the last for the same
+        // reason declaration sites exclude type parameters — a `T?` return of an
+        // unconstrained parameter has no faithful non-null call site). No-op for
+        // a nullable-enabled compilation, where `IsTainted` is always false.
+        private GTypeReference PromoteReturnIfTainted(
+            GTypeReference type,
+            IMethodSymbol symbol,
+            ITypeSymbol returnType)
+        {
+            if (type == null
+                || type.IsNullable
+                || symbol == null
+                || returnType is not { IsReferenceType: true }
+                || returnType is ITypeParameterSymbol
+                || returnType.NullableAnnotation == NullableAnnotation.Annotated)
+            {
+                return type;
+            }
+
+            return ObliviousNullabilityAnalyzer.IsTainted(this.context.Compilation, symbol)
+                ? MakeNullable(type)
+                : type;
+        }
+
         // Issue #1072 (field/property initializer form): when a field or property is
         // emitted with an explicit declared type plus an initializer whose
         // Roslyn-inferred type is nullable (e.g. the value comes from a `?.`
@@ -9869,6 +9903,20 @@ public sealed class CSharpToGSharpTranslator
             if (symbol is IParameterSymbol { HasExplicitDefaultValue: true } defaulted
                 && defaulted.ExplicitDefaultValue is null
                 && defaulted.Type.TypeKind == TypeKind.Delegate)
+            {
+                return true;
+            }
+
+            // Issue #2113: in a nullable-OBLIVIOUS compilation, a reference
+            // declaration is rendered `T?` iff the whole-program transitive
+            // null-taint analysis proved this symbol null-tainted. This is the
+            // ONLY behavioral change for oblivious code — for a nullable-enabled
+            // compilation `IsTainted` short-circuits to false, so every existing
+            // path stays byte-identical. Type parameters are excluded: promoting
+            // a `where T : class` declaration to `T?` would break `Cast[T]`/
+            // `typeof(T)` name positions.
+            if (declared is not ITypeParameterSymbol
+                && ObliviousNullabilityAnalyzer.IsTainted(this.context.Compilation, symbol))
             {
                 return true;
             }
@@ -12401,6 +12449,21 @@ public sealed class CSharpToGSharpTranslator
 
             ISymbol symbol = this.context.GetSymbolInfo(recv).Symbol;
 
+            // Issue #2113: in a nullable-OBLIVIOUS compilation the whole-program
+            // taint analysis may promote a LOCAL or PARAMETER receiver to `T?`.
+            // gsc smart-casts locals only after a flow-proven guard (inert under
+            // oblivious metadata), so an unguarded `x.Member` / `x[i]` / `for … in
+            // x` on such a receiver is rejected (GS0158/GS0116). Assert `x!!` to
+            // both compile and preserve C#'s throw-on-null semantics for the same
+            // access. Gated to oblivious so nullable-enabled projects (whose
+            // locals gsc DOES smart-cast) keep their flow-driven path untouched.
+            if (this.IsObliviousCompilation()
+                && symbol is ILocalSymbol or IParameterSymbol
+                && this.IsPromotedToNullableReference(symbol))
+            {
+                return true;
+            }
+
             ITypeSymbol declared = symbol switch
             {
                 IPropertySymbol property => property.Type,
@@ -12416,6 +12479,14 @@ public sealed class CSharpToGSharpTranslator
             return declared.NullableAnnotation == NullableAnnotation.Annotated
                 || this.IsPromotedToNullableReference(symbol);
         }
+
+        // Issue #2113: true for a nullable-oblivious compilation
+        // (NullableContextOptions.Disable) — the only mode in which the
+        // whole-program taint analysis runs and its declaration/receiver
+        // adjustments apply. A nullable-enabled compilation is byte-identical to
+        // pre-#2113 behavior.
+        private bool IsObliviousCompilation() =>
+            this.context.Compilation.Options.NullableContextOptions == NullableContextOptions.Disable;
 
         // True when <paramref name="member"/> binds to an extension method whose
         // (reduced) `this` parameter is nullable-annotated (`this T? x`). Such a
@@ -12662,10 +12733,15 @@ public sealed class CSharpToGSharpTranslator
             // field/property chain, so an unforgiven nullable delegate field is
             // "not a function" (GS0131) even inside an `if handler != nil` guard.
             // This is the invocation-callee analog of the receiver `!!` pass
-            // (#1594); locals are excluded by the shared helper. It fires for any
-            // nullable delegate field/property callee, not just this one shape.
+            // (#1594). It is restricted to a field/property callee: a `!!`-asserted
+            // callee only parses as `recv!!.member`, never as a standalone `recv!!`
+            // invocation target, so a nullable LOCAL/PARAMETER delegate callee is
+            // NOT forgiven here — gsc smart-casts those from an `if d != nil` guard
+            // instead (the promotion that made them `T?` comes from #2113).
             if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol
                     { MethodKind: MethodKind.DelegateInvoke }
+                && this.context.GetSymbolInfo(invocation.Expression).Symbol
+                    is IFieldSymbol or IPropertySymbol
                 && this.ReceiverIsNullableReferenceFieldOrProperty(invocation.Expression))
             {
                 target = new NonNullAssertionExpression(target);
