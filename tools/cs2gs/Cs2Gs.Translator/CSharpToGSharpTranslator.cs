@@ -13022,13 +13022,58 @@ public sealed class CSharpToGSharpTranslator
         // that case is reported unsupported instead of silently reordering side
         // effects (a source-order fallback is emitted so translation still
         // produces compiling, if diagnostically-flagged, output).
+        // Resolves the method (or constructor) a mixed/named argument list is
+        // being passed to, so an EXPANDED `params` element — which has no
+        // per-argument IArgumentOperation of its own — can still be mapped to the
+        // params parameter it feeds. Returns null when the enclosing call cannot
+        // be resolved (the caller then falls back to source-order emission).
+        private IMethodSymbol ResolveInvokedMethodForArguments(SeparatedSyntaxList<ArgumentSyntax> arguments)
+        {
+            SyntaxNode callSyntax = arguments.FirstOrDefault()?.Parent?.Parent;
+            if (callSyntax == null)
+            {
+                return null;
+            }
+
+            if (this.context.SemanticModel.GetSymbolInfo(callSyntax).Symbol is IMethodSymbol symbolMethod)
+            {
+                return symbolMethod;
+            }
+
+            return this.context.SemanticModel.GetOperation(callSyntax) switch
+            {
+                IInvocationOperation invocation => invocation.TargetMethod,
+                IObjectCreationOperation creation => creation.Constructor,
+                _ => null,
+            };
+        }
+
         private List<GExpression> TranslateNamedArguments(SeparatedSyntaxList<ArgumentSyntax> arguments)
         {
             var resolved = new List<(ArgumentSyntax Syntax, IParameterSymbol Parameter)>();
+            IMethodSymbol invokedForArguments = this.ResolveInvokedMethodForArguments(arguments);
             foreach (ArgumentSyntax argument in arguments)
             {
-                if (this.context.SemanticModel.GetOperation(argument) is not IArgumentOperation operation ||
-                    operation.Parameter == null)
+                IParameterSymbol parameter = null;
+                if (this.context.SemanticModel.GetOperation(argument) is IArgumentOperation operation &&
+                    operation.Parameter != null)
+                {
+                    parameter = operation.Parameter;
+                }
+                else if (invokedForArguments != null)
+                {
+                    // An EXPANDED `params` element (e.g. the trailing positional
+                    // arguments in `Merge(additionalCapacity: 8, a, b, c)`) has no
+                    // per-argument IArgumentOperation: Roslyn folds every expanded
+                    // element into a single array-creation argument bound to the
+                    // params parameter, so `GetOperation` on the individual syntax
+                    // returns null. Resolve it directly to that params parameter
+                    // (they share its ordinal) instead of gapping — source order
+                    // among same-ordinal params elements is already correct.
+                    parameter = invokedForArguments.Parameters.FirstOrDefault(p => p.IsParams);
+                }
+
+                if (parameter == null)
                 {
                     string message = "a named argument could not be resolved to a parameter via the semantic " +
                         "model; emitted in source order, which may mis-bind (issue #1727).";
@@ -13036,7 +13081,7 @@ public sealed class CSharpToGSharpTranslator
                     return arguments.Select(a => this.TranslateArgument(a)).ToList();
                 }
 
-                resolved.Add((argument, operation.Parameter));
+                resolved.Add((argument, parameter));
             }
 
             for (int i = 0; i < resolved.Count; i++)
@@ -13045,8 +13090,9 @@ public sealed class CSharpToGSharpTranslator
                 {
                     // resolved is in lexical (source) order by construction, so i < j
                     // is "before" lexically; declaration order disagrees whenever the
-                    // ordinals are not increasing in the same direction.
-                    bool declarationOrderAgrees = resolved[i].Parameter.Ordinal < resolved[j].Parameter.Ordinal;
+                    // ordinals decrease. Equal ordinals (multiple EXPANDED `params`
+                    // elements) keep their source order, so they already agree.
+                    bool declarationOrderAgrees = resolved[i].Parameter.Ordinal <= resolved[j].Parameter.Ordinal;
                     if (!declarationOrderAgrees &&
                         (IsPotentiallySideEffecting(resolved[i].Syntax.Expression) ||
                             IsPotentiallySideEffecting(resolved[j].Syntax.Expression)))
