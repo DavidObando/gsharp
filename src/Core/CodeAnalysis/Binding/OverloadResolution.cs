@@ -852,6 +852,44 @@ internal static class OverloadResolution
     }
 
     /// <summary>
+    /// Issue #2146: implements the C# §7.5.3.4 "better conversion target" rule
+    /// for reference-type targets, mirroring <see cref="CompareNumericTargets"/>.
+    /// Returns a negative value when <paramref name="t1"/> is the better
+    /// (more-derived) target, positive when <paramref name="t2"/> is, and 0 when
+    /// the two targets are unrelated (neither implicitly converts to the other),
+    /// preserving genuine ambiguity. Convertibility is probed one-directionally
+    /// via <see cref="ClassifyImplicit"/> so user classes, interfaces, and
+    /// imported/BCL reference types are handled uniformly.
+    /// </summary>
+    /// <param name="t1">The first candidate target type.</param>
+    /// <param name="t2">The second candidate target type.</param>
+    /// <returns>-1, 0, or +1 per the description above.</returns>
+    public static int CompareReferenceTargets(Type t1, Type t2)
+    {
+        if (t1 is null || t2 is null || ClrTypeUtilities.AreSame(t1, t2))
+        {
+            return 0;
+        }
+
+        // T1 is a better target than T2 when an implicit conversion T1->T2
+        // exists (T1 is more derived) and none exists T2->T1.
+        var t1ToT2 = ClassifyImplicit(t2, t1) is not ImplicitConversionKind.None and not ImplicitConversionKind.Identity;
+        var t2ToT1 = ClassifyImplicit(t1, t2) is not ImplicitConversionKind.None and not ImplicitConversionKind.Identity;
+
+        if (t1ToT2 && !t2ToT1)
+        {
+            return -1;
+        }
+
+        if (t2ToT1 && !t1ToT2)
+        {
+            return 1;
+        }
+
+        return 0;
+    }
+
+    /// <summary>
     /// Compares two candidate conversion targets for the same source type per
     /// C# §7.5.3.4 "Better conversion target". Returns a negative value when
     /// <paramref name="t1"/> is the better target, a positive value when
@@ -3059,6 +3097,19 @@ internal static class OverloadResolution
         if (ka == ImplicitConversionKind.ConstantNarrowing)
         {
             return CompareNumericTargets(paramA, paramB, source);
+        }
+
+        // Issue #2146: reference "better conversion target" tie-break
+        // (C# §7.5.3.4). When both candidates convert the SAME argument by a
+        // non-identity implicit reference/boxing conversion to related targets
+        // (e.g. Dog->object vs Dog->Animal, or Type->object vs Type->Type?),
+        // prefer the MORE DERIVED target instead of tying and relying solely on
+        // IsAtLeastAsSpecific: target T1 is better than T2 when an implicit
+        // conversion exists from T1 to T2 but not from T2 to T1. Unrelated
+        // targets stay tied (0), preserving genuine ambiguity.
+        if (ka == ImplicitConversionKind.Reference || ka == ImplicitConversionKind.Boxing)
+        {
+            return CompareReferenceTargets(paramA, paramB);
         }
 
         // Issue #1150: when two candidates both convert a delegate argument by
