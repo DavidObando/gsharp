@@ -516,6 +516,18 @@ internal static class OverloadResolution
             return ImplicitConversionKind.DelegateStructuralMatch;
         }
 
+        // Issue #2142: a lambda/arrow literal (natural CLR type Func<…>/Action<…>)
+        // converts to an expression-tree parameter Expression<TDelegate> when its
+        // TDelegate is structurally compatible with the source delegate. The
+        // conversion is ranked identically to the underlying delegate conversion
+        // (so a competing plain-delegate overload is decided purely on parameter
+        // specificity, as in C#: e.g. Queryable.Where over Enumerable.Where for an
+        // IQueryable receiver).
+        if (TryClassifyLambdaToExpressionTree(target, source, supplementaryInterfaceCheck, out var expressionTreeKind))
+        {
+            return expressionTreeKind;
+        }
+
         return ImplicitConversionKind.None;
     }
 
@@ -1628,6 +1640,138 @@ internal static class OverloadResolution
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Issue #2142: determines whether a source delegate (a lambda/arrow
+    /// literal's natural <c>Func&lt;...&gt;</c>/<c>Action&lt;...&gt;</c> type, or
+    /// any delegate value) converts to an expression-tree parameter
+    /// <c>System.Linq.Expressions.Expression&lt;TDelegate&gt;</c>. Mirrors the
+    /// symbolic-path helper <c>MemberLookup.TryGetExpressionTreeDelegateType</c>:
+    /// the target must be a closed <c>Expression`1</c> whose single type argument
+    /// (<c>TDelegate</c>) is a delegate type, and the source must be a delegate
+    /// that is <em>compatible</em> with <c>TDelegate</c> — identity, a
+    /// structural delegate match, or reference/covariant/numeric-widening return
+    /// adaptation (the same conversions the resolver already accepts between two
+    /// plain delegate types). A genuine signature mismatch (different arity or
+    /// incompatible parameter/return types) yields <see langword="false"/> so the
+    /// candidate is still dropped, preserving overload-resolution rejection of a
+    /// truly non-matching lambda. The <c>TDelegate</c> must be fully closed (no
+    /// open generic parameters); open candidates are closed by
+    /// <see cref="EvaluateCandidate"/> before applicability runs, so this holds at
+    /// every real call site.
+    /// </summary>
+    /// <param name="target">The candidate parameter type.</param>
+    /// <param name="source">The argument's natural delegate type.</param>
+    /// <param name="supplementaryInterfaceCheck">Optional user-class interface hook, threaded through the recursive inner-delegate classification.</param>
+    /// <param name="kind">On success, the underlying delegate conversion kind (identity or a delegate adaptation) so the expression-tree conversion ranks identically to the plain-delegate conversion.</param>
+    /// <returns><see langword="true"/> when the lambda-to-expression-tree conversion applies.</returns>
+    private static bool TryClassifyLambdaToExpressionTree(Type target, Type source, Func<Type, Type, bool> supplementaryInterfaceCheck, out ImplicitConversionKind kind)
+    {
+        kind = ImplicitConversionKind.None;
+
+        if (source is null || !ClrTypeUtilities.IsDelegateType(source))
+        {
+            return false;
+        }
+
+        if (target is null
+            || !target.IsGenericType
+            || target.ContainsGenericParameters)
+        {
+            return false;
+        }
+
+        var openDefinition = target.GetGenericTypeDefinition();
+        if (!string.Equals(openDefinition.FullName, "System.Linq.Expressions.Expression`1", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var typeArguments = target.GetGenericArguments();
+        if (typeArguments.Length != 1)
+        {
+            return false;
+        }
+
+        var targetDelegate = typeArguments[0];
+        if (targetDelegate is null || !ClrTypeUtilities.IsDelegateType(targetDelegate))
+        {
+            return false;
+        }
+
+        // A lambda converts to Expression<TDelegate> when its natural delegate
+        // shape is compatible with TDelegate. Accept an exact/adaptable delegate
+        // match (identity or one of the delegate adaptations the resolver already
+        // recognises between two plain delegates), OR — mirroring C#'s lambda
+        // conversion — a signature whose parameter types match and whose body
+        // (source return) is implicitly convertible to TDelegate's return type,
+        // including value-type→object boxing (e.g. `(e) -> e.Id` [int32] into
+        // `Expression<Func<T, object?>>`). A genuine parameter/arity mismatch, or
+        // a return that does not convert, yields false so the candidate is still
+        // dropped.
+        var inner = ClassifyImplicit(targetDelegate, source, supplementaryInterfaceCheck);
+        switch (inner)
+        {
+            case ImplicitConversionKind.Identity:
+            case ImplicitConversionKind.DelegateStructuralMatch:
+            case ImplicitConversionKind.DelegateReturnCovariance:
+            case ImplicitConversionKind.DelegateReturnNumericWidening:
+                kind = inner;
+                return true;
+        }
+
+        if (IsLambdaBodyConvertibleToDelegate(targetDelegate, source, supplementaryInterfaceCheck))
+        {
+            kind = ImplicitConversionKind.DelegateReturnCovariance;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #2142: determines whether a source delegate's signature is
+    /// compatible with a target delegate under a lambda conversion — the
+    /// parameter types are pairwise identical and the source's return type is
+    /// implicitly convertible (identity, reference, boxing, numeric widening,
+    /// nullable-wrap, or user-defined) to the target's return type. This is the
+    /// delegate-return counterpart of a lambda-body conversion and is used only
+    /// when unwrapping an <c>Expression&lt;TDelegate&gt;</c> target, so a lambda
+    /// whose body converts to <c>TDelegate</c>'s return (e.g. an <c>int32</c>
+    /// body boxing into an <c>object?</c> return) still binds the expression
+    /// tree. A <c>void</c> return on either side, a parameter mismatch, or a
+    /// non-convertible return yields <see langword="false"/>.
+    /// </summary>
+    private static bool IsLambdaBodyConvertibleToDelegate(Type targetDelegate, Type source, Func<Type, Type, bool> supplementaryInterfaceCheck)
+    {
+        if (!TryGetDelegateSignature(targetDelegate, out var targetParams, out var targetReturn)
+            || !TryGetDelegateSignature(source, out var sourceParams, out var sourceReturn)
+            || targetReturn is null
+            || sourceReturn is null
+            || targetParams.Length != sourceParams.Length)
+        {
+            return false;
+        }
+
+        // A void return has no body value to convert; the identity / structural
+        // delegate paths already handle exact void-return matches.
+        if (string.Equals(targetReturn.FullName, "System.Void", StringComparison.Ordinal)
+            || string.Equals(sourceReturn.FullName, "System.Void", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        for (var i = 0; i < targetParams.Length; i++)
+        {
+            if (!ClrTypeUtilities.AreSame(targetParams[i], sourceParams[i]))
+            {
+                return false;
+            }
+        }
+
+        var returnConversion = ClassifyImplicit(targetReturn, sourceReturn, supplementaryInterfaceCheck);
+        return returnConversion != ImplicitConversionKind.None;
     }
 
     /// <summary>
@@ -3734,6 +3878,20 @@ internal static class OverloadResolution
         {
             var openDef = parameterType.GetGenericTypeDefinition();
             var paramArgs = parameterType.GetGenericArguments();
+
+            // Issue #2142: an expression-tree parameter Expression<TDelegate>
+            // never matches a delegate argument's class hierarchy (a Func<…> is
+            // not an Expression<…>), so FindClosedGeneric below returns null and
+            // any method type parameter mentioned only inside TDelegate (e.g.
+            // HasOne<TRelated>(Expression<Func<TEntity, TRelated?>>)) would never
+            // be inferred. Unwrap the expression tree and unify its delegate type
+            // argument directly against the supplied delegate argument.
+            if (string.Equals(openDef.FullName, "System.Linq.Expressions.Expression`1", StringComparison.Ordinal)
+                && paramArgs.Length == 1
+                && ClrTypeUtilities.IsDelegateType(argumentType))
+            {
+                return UnifyForInference(paramArgs[0], argumentType, bounds);
+            }
 
             // Find the argument type (or any of its base types or interfaces)
             // matching the parameter's open generic definition. Walk class

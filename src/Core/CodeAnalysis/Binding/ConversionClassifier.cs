@@ -765,8 +765,27 @@ internal sealed class ConversionClassifier
                     }
 
                     var targetType = substituted ?? TypeSymbol.FromClrType(parameterType);
+
+                    // Issue #2142 (follow-up to #2130/#2139): a lambda/arrow
+                    // literal flowing into an imported method's
+                    // `Expression<Func<…>>` parameter must be routed through
+                    // `BindConversion`, which lowers it to an expression tree
+                    // (#2139). The general `Conversion.Classify` gate below does
+                    // NOT recognise a function-literal → `Expression<TDelegate>`
+                    // conversion (that classification lives only inside
+                    // `BindConversion` itself), so without this the argument was
+                    // left as a bare `Func<…>` delegate and either mismatched the
+                    // parameter (verifier failure) or, for imported generic-class
+                    // instance methods whose delegate depends on the receiver's
+                    // class type argument, caused the candidate to be dropped
+                    // entirely (GS0159). Scoping the routing to this imported-call
+                    // site keeps the same-compilation user-method path (which has
+                    // its own expression-tree handling) unchanged.
+                    var isExpressionTreeLiteralTarget = argument is BoundFunctionLiteralExpression
+                        && MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(targetType, out _);
+
                     if (argument.Type != targetType
-                        && Conversion.Classify(argument.Type, targetType).Exists
+                        && (Conversion.Classify(argument.Type, targetType).Exists || isExpressionTreeLiteralTarget)
                         && NeedsBindClrParameterConversion(argument.Type, parameterType, substituted))
                     {
                         // Issue #506: the source-argument list may not align with
