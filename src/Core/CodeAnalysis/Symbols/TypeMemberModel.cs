@@ -310,6 +310,46 @@ public static class TypeMemberModel
         return false;
     }
 
+    /// <summary>
+    /// Issue #2150: tries to find a data-class positional (primary-constructor)
+    /// parameter named <paramref name="name"/> on <paramref name="type"/> or any
+    /// class in its base chain. Positional parameters are materialized as public
+    /// instance fields (not <see cref="StructSymbol.Properties"/>), yet — like a
+    /// C# record's positional property — they satisfy a matching interface
+    /// property contract. The base-chain walk is this-first, mirroring
+    /// <see cref="TryGetProperty(TypeSymbol, string, out PropertySymbol)"/> and
+    /// issue #1066 semantics.
+    /// </summary>
+    /// <param name="type">The type to resolve against.</param>
+    /// <param name="name">The parameter name.</param>
+    /// <param name="parameter">The found positional parameter on success.</param>
+    /// <returns>True if found.</returns>
+    public static bool TryGetPrimaryConstructorParameter(TypeSymbol type, string name, out ParameterSymbol parameter)
+    {
+        if (type is StructSymbol structSymbol)
+        {
+            for (var c = structSymbol; c != null; c = c.BaseClass)
+            {
+                if (c.PrimaryConstructorParameters.IsDefaultOrEmpty)
+                {
+                    continue;
+                }
+
+                foreach (var p in c.PrimaryConstructorParameters)
+                {
+                    if (p.Name == name)
+                    {
+                        parameter = p;
+                        return true;
+                    }
+                }
+            }
+        }
+
+        parameter = null;
+        return false;
+    }
+
     /// <summary>Tries to find a static property named <paramref name="name"/> on <paramref name="type"/>.</summary>
     /// <param name="type">The type to resolve against.</param>
     /// <param name="name">The property name.</param>
