@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
 
@@ -212,7 +213,14 @@ public sealed class BoundGlobalScope
     public ImmutableArray<Diagnostic> Diagnostics { get; }
 
     /// <summary>
-    /// Gets the imports for the current compilation.
+    /// Gets the imports declared directly by <em>this</em> compilation's own
+    /// syntax trees — NOT the transitively-visible import set (issue #2101).
+    /// Mirrors <see cref="Functions"/>/<see cref="Variables"/>, which have
+    /// always been per-level deltas rather than a cumulative snapshot. Callers
+    /// that need every import visible across a chained REPL session (e.g.
+    /// emit, which must see imports from every prior submission) should use
+    /// <see cref="GetCumulativeImports"/> instead of reading this property
+    /// directly on a single link of the <see cref="Previous"/> chain.
     /// </summary>
     public ImmutableArray<ImportSymbol> Imports { get; }
 
@@ -282,4 +290,31 @@ public sealed class BoundGlobalScope
     /// name-based heuristic.
     /// </summary>
     public ImmutableArray<string> FriendAssemblies { get; internal set; } = ImmutableArray<string>.Empty;
+
+    /// <summary>
+    /// Returns every import visible across the whole <see cref="Previous"/>
+    /// chain, oldest submission first (issue #2101). This is the cumulative
+    /// view that <see cref="Imports"/> itself used to provide directly —
+    /// moved here (an explicit, one-time O(chain length) walk) so that
+    /// per-level binding (<see cref="Binder.BindGlobalScope(BoundGlobalScope, ImmutableArray{Syntax.SyntaxTree}, Symbols.ReferenceResolver, bool, ImmutableHashSet{string}, bool)"/>)
+    /// no longer has to re-flatten (and get re-flattened by) the entire
+    /// history on every single chained submission.
+    /// </summary>
+    /// <returns>The cumulative imports, oldest-declared first.</returns>
+    public ImmutableArray<ImportSymbol> GetCumulativeImports()
+    {
+        var chain = new Stack<BoundGlobalScope>();
+        for (var scope = this; scope != null; scope = scope.Previous)
+        {
+            chain.Push(scope);
+        }
+
+        var builder = ImmutableArray.CreateBuilder<ImportSymbol>();
+        while (chain.Count > 0)
+        {
+            builder.AddRange(chain.Pop().Imports);
+        }
+
+        return builder.ToImmutable();
+    }
 }

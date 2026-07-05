@@ -735,7 +735,7 @@ public static class SemanticLookup
             }
         }
 
-        foreach (var import in compilation.GlobalScope.Imports)
+        foreach (var import in compilation.GlobalScope.GetCumulativeImports())
         {
             if (import.Declaration?.AliasIdentifier is { } aliasIdentifier)
             {
