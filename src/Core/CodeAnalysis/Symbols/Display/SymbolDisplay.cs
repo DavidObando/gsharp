@@ -653,7 +653,19 @@ public static class SymbolDisplay
         switch (type)
         {
             case NullableTypeSymbol nullable:
-                return $"{FormatType(nullable.UnderlyingType)}?";
+                // Issue #2160: a nullable function type must wrap the whole
+                // arrow shape in parentheses so the `?` applies to the function
+                // type and not just its return type (`((int32) -> void)?`,
+                // never `(int32) -> void?`). Because FormatType recurses,
+                // parenthesizing here also fixes nested occurrences (slice
+                // element, generic arg, tuple element). Non-function nullable
+                // types are rendered unchanged.
+                var underlying = FormatType(nullable.UnderlyingType);
+                return nullable.UnderlyingType is FunctionTypeSymbol
+                    ? $"({underlying})?"
+                    : $"{underlying}?";
+            case FunctionTypeSymbol function:
+                return FormatFunctionType(function);
             case SliceTypeSymbol slice:
                 return $"[]{FormatType(slice.ElementType)}";
             case AsyncSequenceTypeSymbol asyncSequence:
@@ -669,6 +681,44 @@ public static class SymbolDisplay
             default:
                 return type.Name;
         }
+    }
+
+    /// <summary>
+    /// Renders a <see cref="FunctionTypeSymbol"/> in its canonical arrow shape
+    /// <c>(P1, P2, ...) -> R</c> (ADR-0075 / issue #715), recursing through
+    /// <see cref="FormatType"/> so nested imported/wrapper element types render
+    /// consistently. A trailing variadic parameter is rendered with the
+    /// <c>...</c> prefix and its element type (ADR-0102 follow-up / issue #818),
+    /// and a void return renders as <c>void</c>.
+    /// </summary>
+    private static string FormatFunctionType(FunctionTypeSymbol function)
+    {
+        var hasVariadicFlags = !function.IsVariadic.IsDefaultOrEmpty;
+        var sb = new System.Text.StringBuilder();
+        sb.Append('(');
+        for (var i = 0; i < function.ParameterTypes.Length; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(", ");
+            }
+
+            if (hasVariadicFlags && function.IsVariadic[i])
+            {
+                sb.Append("...");
+                sb.Append(function.ParameterTypes[i] is SliceTypeSymbol slice
+                    ? FormatType(slice.ElementType)
+                    : FormatType(function.ParameterTypes[i]));
+            }
+            else
+            {
+                sb.Append(FormatType(function.ParameterTypes[i]));
+            }
+        }
+
+        sb.Append(") -> ");
+        sb.Append(FormatType(function.ReturnType));
+        return sb.ToString();
     }
 
     /// <summary>
