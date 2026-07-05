@@ -200,7 +200,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | RightShiftExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/RightShiftExpression.cs |  |  |
 | ScopedType | ScopedTypeSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/ScopedType.cs |  | scoped Span/scoped ref parameters translate and verify (grid G12). |
 | SetAccessorDeclaration | AccessorDeclarationSyntax | ADR-0115 §B.11 |  |  |  |  |
-| SimpleAssignmentExpression | AssignmentExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/SimpleAssignmentExpression.cs | https://github.com/DavidObando/gsharp/issues/1895 | Deconstruction-assignment into existing locals emits let bindings (issue #1895). |
+| SimpleAssignmentExpression | AssignmentExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/SimpleAssignmentExpression.cs | https://github.com/DavidObando/gsharp/issues/1895, https://github.com/DavidObando/gsharp/issues/1974 | Deconstruction-assignment into existing locals emits let bindings (issue #1895); generalized to expression position and nested targets (issue #1974). |
 | SimpleBaseType | SimpleBaseTypeSyntax | ADR-0115 §B.6 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/SimpleBaseType.cs |  |  |
 | SimpleLambdaExpression | SimpleLambdaExpressionSyntax | ADR-0115 §B.20 |  | tools/cs2gs/corpus/grid/G09-Functions-Console/Constructs/SimpleLambdaExpression.cs |  |  |
 | SimpleMemberAccessExpression | MemberAccessExpressionSyntax | ADR-0115 §B |  |  |  |  |

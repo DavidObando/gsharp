@@ -226,6 +226,33 @@ namespace Corpus.Issue1895
     }
 
     [Fact]
+    public void NestedAllDiscardTarget_SkipsPointlessInnerBinding()
+    {
+        // `(x, (_, _)) = e` (issue #2099, item 3): the nested arm is entirely
+        // discards, so it must not allocate a real temp for itself or emit a
+        // pointless inner `let (_, _) = __deconN` binding.
+        string rendered = Render(@"
+namespace Corpus.Issue1895
+{
+    public class Holder
+    {
+        public void M()
+        {
+            int x = 1;
+            (x, (_, _)) = (2, (3, 4));
+            System.Console.WriteLine(x);
+        }
+    }
+}
+");
+
+        Assert.Contains("let (__decon0, _) = (2, (3, 4))", rendered, StringComparison.Ordinal);
+        Assert.Contains("x = __decon0", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("let (_, _)", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
     public void ElementAccessTarget_StaysLoudGap()
     {
         // `(arr[i], y) = rhs`: C# evaluates `arr`/`i` before `rhs`, but the

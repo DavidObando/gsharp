@@ -1981,8 +1981,8 @@
     "rule": "ADR-0115 \u00A7B",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/SimpleAssignmentExpression.cs",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1895",
-    "notes": "Deconstruction-assignment into existing locals emits let bindings (issue #1895)."
+    "issue": "https://github.com/DavidObando/gsharp/issues/1895, https://github.com/DavidObando/gsharp/issues/1974",
+    "notes": "Deconstruction-assignment into existing locals emits let bindings (issue #1895); generalized to expression position and nested targets (issue #1974)."
   },
   {
     "kind": "SimpleBaseType",
