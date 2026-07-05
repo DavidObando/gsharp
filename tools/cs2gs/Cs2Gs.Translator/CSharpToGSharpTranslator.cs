@@ -3807,6 +3807,15 @@ public sealed class CSharpToGSharpTranslator
                 ? this.typeMapper.Map(symbol.Type, this.context, node.GetLocation())
                 : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
 
+            // Issue #2157 / #1354: an oblivious indexer whose getter yields a
+            // nullable value (`?.` / `??` / `return null`), or one null-checked
+            // in its declaring type, is rendered `T?` so the getter body
+            // type-checks.
+            if (symbol != null)
+            {
+                type = this.PromoteIfUsedAsNullable(type, symbol);
+            }
+
             List<Parameter> indexParameters = symbol != null
                 ? symbol.Parameters.Select(p => this.MapParameter(p, node)).ToList()
                 : this.MapParameterList(node.ParameterList);
