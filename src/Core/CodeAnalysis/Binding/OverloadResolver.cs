@@ -1314,6 +1314,56 @@ internal sealed class OverloadResolver
             return OverloadResolution.CompareNumericTargets(paramA?.ClrType, paramB?.ClrType, source?.ClrType);
         }
 
+        // Issue #2146: reference "better conversion target" tie-break
+        // (C# §7.5.3.2 / §7.5.3.4). When both conversions for the same argument
+        // fold into the Reference bucket (both are non-identity implicit
+        // reference/boxing/interface conversions, e.g. Dog->object vs
+        // Dog->Animal, or Type->object vs Type->Type?), the previous code tied
+        // (returned 0) and the call was reported ambiguous (GS0266) even though
+        // C# prefers the MORE DERIVED target. Apply the reference-type rule:
+        // target T1 is a better conversion target than T2 when an implicit
+        // conversion exists from T1 to T2 but not from T2 to T1. That makes the
+        // more-derived reference parameter win (Animal over object; Type? over
+        // object). If neither target converts to the other (genuinely unrelated
+        // reference types), leave the tie (0) so real ambiguity is preserved.
+        if (ka == OverloadResolution.ImplicitConversionKind.Reference && paramA != null && paramB != null && !ReferenceEquals(paramA, paramB))
+        {
+            return CompareReferenceTargets(paramA, paramB);
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Issue #2146: implements the C# §7.5.3.4 "better conversion target" rule
+    /// for reference-type targets. Returns a negative value when
+    /// <paramref name="targetA"/> is the better (more-derived) target, positive
+    /// when <paramref name="targetB"/> is, and 0 when the two targets are
+    /// unrelated (neither implicitly converts to the other) — preserving genuine
+    /// ambiguity. Convertibility is probed one-directionally via
+    /// <see cref="Conversion.Classify"/> rather than hand-rolled type checks so
+    /// user classes, interfaces, and imported/BCL reference types are all
+    /// handled uniformly.
+    /// </summary>
+    private static int CompareReferenceTargets(TypeSymbol targetA, TypeSymbol targetB)
+    {
+        var aToB = Conversion.Classify(targetA, targetB);
+        var bToA = Conversion.Classify(targetB, targetA);
+
+        var aToBImplicit = aToB.IsImplicit && !aToB.IsIdentity;
+        var bToAImplicit = bToA.IsImplicit && !bToA.IsIdentity;
+
+        if (aToBImplicit && !bToAImplicit)
+        {
+            // A converts to B but not vice versa => A is more derived => A better.
+            return -1;
+        }
+
+        if (bToAImplicit && !aToBImplicit)
+        {
+            return 1;
+        }
+
         return 0;
     }
 
@@ -1348,7 +1398,21 @@ internal sealed class OverloadResolver
 
         if (paramType is NullableTypeSymbol nullableParam && argType == nullableParam.UnderlyingType)
         {
-            return OverloadResolution.ImplicitConversionKind.NullableWrap;
+            // Issue #2146: `T -> T?` is a genuine value-type nullable WRAP only
+            // when the underlying is a value type. For a REFERENCE-type nullable
+            // (e.g. `Type -> Type?`) the wrap carries no runtime cost — it is a
+            // reference conversion (a nullability annotation) — and ranking it as
+            // NullableWrap (worse than Reference) would make an unrelated
+            // `object` reference upcast spuriously win. Classify it as Reference
+            // so the reference "better conversion target" tie-break (below, in
+            // CompareUserConversions) correctly prefers the more-derived `T?`
+            // target over `object`.
+            if (NullableLifting.IsValueTypeNullable(nullableParam))
+            {
+                return OverloadResolution.ImplicitConversionKind.NullableWrap;
+            }
+
+            return OverloadResolution.ImplicitConversionKind.Reference;
         }
 
         // ponytail: widening-then-wrap (e.g. int32 -> int64?) is not caught by
