@@ -615,6 +615,25 @@ public sealed class ReferenceResolver : IDisposable
             return null;
         }
 
+        // Issue #2126: the overload-resolution sentinels (the inline `out var`
+        // placeholder and the untyped `default` literal) are synthetic marker
+        // types defined in GSharp.Core purely for betterness ranking. They must
+        // be rebound to the resolved parameter's real type before binding
+        // completes and must NEVER be projected — a sentinel reaching here means
+        // an inline `out var`/`default` argument leaked out of a binder exit path
+        // without being rebound. Fail with an actionable internal-compiler-error
+        // that names the bug instead of the opaque MetadataLoadContext projection
+        // failure it would otherwise cause.
+        if (ReferenceEquals(hostType, GSharp.Core.CodeAnalysis.Binding.OverloadResolution.InlineOutVarArgumentType)
+            || ReferenceEquals(hostType, GSharp.Core.CodeAnalysis.Binding.OverloadResolution.DefaultLiteralArgumentType))
+        {
+            throw new InvalidOperationException(
+                $"Internal compiler error: the overload-resolution sentinel '{hostType.FullName}' escaped the " +
+                "binder and reached type projection. An inline `out var`/`out let`/`out _` or `default` argument " +
+                "was not rebound to its resolved parameter type on some binder exit path (issue #2126). This is a " +
+                "compiler bug; the sentinel must never participate in generic inference, projection, or emit.");
+        }
+
         // The Default resolver searches host-runtime assemblies, so host types
         // already share identity with anything TryResolveType returns. No
         // projection is needed (and attempting one would be wasted work).
