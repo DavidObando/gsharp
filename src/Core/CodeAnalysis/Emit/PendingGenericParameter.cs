@@ -32,10 +32,20 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// a required custom modifier of
 /// <c>System.Runtime.InteropServices.UnmanagedType</c>.
 /// </param>
+/// <param name="PreResolvedConstraintHandle">
+/// Issue #2118: a pre-resolved <c>TypeDefOrRefOrSpec</c> handle for the
+/// interface constraint, resolved eagerly while an emit-time context (such as a
+/// generic-promoted lambda's type-parameter remap) was active. When present it
+/// is used verbatim by <see cref="TypeDefEmitter.FlushPendingGenericParameters"/>
+/// instead of re-resolving <see cref="InterfaceConstraintType"/> at flush time
+/// (when the context is gone), so the constraint encodes the method's own
+/// <c>MVar</c> slots rather than the enclosing parameter it textually references.
+/// </param>
 internal readonly record struct PendingGenericParameter(
     EntityHandle Owner,
     GenericParameterAttributes Attributes,
     string Name,
     ushort Index,
     GSharp.Core.CodeAnalysis.Symbols.TypeSymbol InterfaceConstraintType,
-    bool HasUnmanagedConstraint = false);
+    bool HasUnmanagedConstraint = false,
+    EntityHandle? PreResolvedConstraintHandle = null);

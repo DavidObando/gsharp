@@ -387,6 +387,81 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    // Issue #2118: a non-capturing lambda whose signature/body references an
+    // enclosing method/type parameter (e.g. `func Build[T IComparable[T]]() ...
+    // = (x T, y T) -> x.CompareTo(y)`) is hosted as a top-level `<Program>`
+    // static method. To emit verifiable IL that method must be a genuine
+    // GENERIC method declaring its OWN type parameters — cloned from the
+    // referenced enclosing ones (carrying their constraints) — otherwise the
+    // body's `!!0` references a method type parameter the method never declares
+    // (ilverify DelegateCtor at the delegate site + StackUnexpected on any
+    // `constrained.` call inside the body). While emitting such a lambda's
+    // signature and body, this remap translates each referenced ENCLOSING type
+    // parameter into the lambda method's own freshly-cloned method
+    // type-parameter ordinal (MVar(idx)). Pushed around the lambda's
+    // EmitFunction call; null everywhere else.
+    internal Dictionary<TypeParameterSymbol, int> activeLambdaMethodTypeParamRemap;
+
+    // Issue #2118: per-lambda-function original-enclosing-TP -> own-clone-ordinal
+    // remap, produced by ClosureEmitter.PromoteGenericLambda and consulted via
+    // PushLambdaMethodRemap while the lambda's MethodDef signature and body are
+    // emitted.
+    internal readonly Dictionary<FunctionSymbol, Dictionary<TypeParameterSymbol, int>> lambdaMethodTypeParamRemapsByFunction =
+        new Dictionary<FunctionSymbol, Dictionary<TypeParameterSymbol, int>>(ReferenceEqualityComparer.Instance);
+
+    // Issue #2118: per-lambda-function ordered ORIGINAL enclosing type
+    // parameters used as the MethodSpec type arguments when the lambda is
+    // referenced (`ldftn <lambda><...enclosing args...>`) at its delegate
+    // materialization site.
+    internal readonly Dictionary<FunctionSymbol, ImmutableArray<TypeParameterSymbol>> lambdaMethodTypeArgsByFunction =
+        new Dictionary<FunctionSymbol, ImmutableArray<TypeParameterSymbol>>(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
+    /// Issue #2118: pushes the enclosing-TP -> own-clone-ordinal remap for a
+    /// generic-promoted non-capturing lambda so that every
+    /// <see cref="EncodeTypeSymbol"/> call made while its signature and body are
+    /// emitted translates references to the enclosing type parameters into the
+    /// lambda method's own <c>MVar(idx)</c> slots. Restores the previous remap
+    /// on dispose.
+    /// </summary>
+    /// <param name="function">The lambda function being emitted.</param>
+    /// <returns>A disposable scope that restores the previous remap.</returns>
+    internal LambdaMethodRemapScope PushLambdaMethodRemap(FunctionSymbol function)
+    {
+        if (function == null
+            || !this.lambdaMethodTypeParamRemapsByFunction.TryGetValue(function, out var remap)
+            || remap == null)
+        {
+            return new LambdaMethodRemapScope(this, null, restore: false);
+        }
+
+        var prev = this.activeLambdaMethodTypeParamRemap;
+        this.activeLambdaMethodTypeParamRemap = remap;
+        return new LambdaMethodRemapScope(this, prev, restore: true);
+    }
+
+    internal readonly struct LambdaMethodRemapScope : IDisposable
+    {
+        private readonly ReflectionMetadataEmitter owner;
+        private readonly Dictionary<TypeParameterSymbol, int> previous;
+        private readonly bool restore;
+
+        public LambdaMethodRemapScope(ReflectionMetadataEmitter owner, Dictionary<TypeParameterSymbol, int> previous, bool restore)
+        {
+            this.owner = owner;
+            this.previous = previous;
+            this.restore = restore;
+        }
+
+        public void Dispose()
+        {
+            if (this.restore)
+            {
+                this.owner.activeLambdaMethodTypeParamRemap = this.previous;
+            }
+        }
+    }
+
     /// <summary>
     /// Issue #1465: reifies an async state-machine struct over an
     /// ordinal-aligned copy of the type parameters in scope at its kickoff
@@ -2315,7 +2390,19 @@ internal sealed class ReflectionMetadataEmitter
                     continue;
                 }
 
-                this.lambdaBodies[literal.Function] = (BoundBlockStatement)Lowerer.Lower(literal.Body);
+                var loweredLambdaBody = (BoundBlockStatement)Lowerer.Lower(literal.Body);
+                this.lambdaBodies[literal.Function] = loweredLambdaBody;
+
+                // Issue #2118: a non-capturing lambda hosted as a top-level
+                // <Program> static method must be promoted to a GENERIC method
+                // declaring its own type parameters (cloned, with constraints,
+                // from the enclosing type parameters its signature/body
+                // references) — otherwise its body's `!!0`/`!0` references a
+                // type parameter the method never declares, producing
+                // unverifiable IL (DelegateCtor at the delegate site and
+                // StackUnexpected on any `constrained.` call in the body).
+                this.TryPromoteNonCapturingGenericLambda(literal, loweredLambdaBody);
+
                 hostBucket.Add(literal.Function);
             }
         }
@@ -2925,7 +3012,13 @@ internal sealed class ReflectionMetadataEmitter
                     body = this.lambdaBodies[fn];
                 }
 
-                this.EmitFunction(fn, body, isEntryPoint: false);
+                // Issue #2118: a generic-promoted non-capturing lambda's
+                // signature and body reference the enclosing type parameters;
+                // push the remap so they encode as this method's own MVar slots.
+                using (this.PushLambdaMethodRemap(fn))
+                {
+                    this.EmitFunction(fn, body, isEntryPoint: false);
+                }
             }
 
             if (this.emitCtx.Program.EntryPoint is not null && pkg == entryPointPackage && !entryPointIsClassOwned)
@@ -5018,7 +5111,32 @@ internal sealed class ReflectionMetadataEmitter
         // method immediately after AddMethodDefinition. The signature's
         // genericParameterCount above and these rows together make the method
         // a proper CLR generic method definition.
+        var gpRowStart = this.emitCtx.PendingGenericParameters.Count;
         TypeDefEmitter.EmitGenericParamRows(this.emitCtx, handle, function.TypeParameters);
+
+        // Issue #2118: a generic-promoted non-capturing lambda's type-parameter
+        // constraints textually reference the *enclosing* type parameters they
+        // were cloned from (the interface-constraint symbol is cached and does
+        // not carry the clone). Their deferred GenericParamConstraint rows would
+        // otherwise be resolved at flush time — after this method's remap is
+        // gone — encoding the enclosing Var/MVar slot instead of this method's
+        // own MVar. Resolve them now, while the remap is active, so the
+        // constraint encodes `!!idx` for both class- and method-parameter roots.
+        if (this.activeLambdaMethodTypeParamRemap != null)
+        {
+            var pendingRows = this.emitCtx.PendingGenericParameters;
+            for (var gi = gpRowStart; gi < pendingRows.Count; gi++)
+            {
+                var gpRow = pendingRows[gi];
+                if (gpRow.InterfaceConstraintType != null)
+                {
+                    pendingRows[gi] = gpRow with
+                    {
+                        PreResolvedConstraintHandle = this.GetElementTypeToken(gpRow.InterfaceConstraintType),
+                    };
+                }
+            }
+        }
 
         // Phase 4/5 (ADR-0027 §7.7a): hand the body's sequence points and
         // locals to the PDB emitter, keyed by the freshly minted MethodDef row
@@ -6054,7 +6172,15 @@ internal sealed class ReflectionMetadataEmitter
             // generic over enclosing TYPE parameters, so any TP present in the
             // active remap (class or method) maps to the synthesized class's
             // own VAR(idx) slot.
-            if (this.activeIteratorStateMachineRemap != null
+            if (this.activeLambdaMethodTypeParamRemap != null
+                && this.activeLambdaMethodTypeParamRemap.TryGetValue(tpSym, out var lambdaMethodOrd))
+            {
+                // Issue #2118: reference to an enclosing type parameter inside a
+                // generic-promoted non-capturing lambda's signature/body maps to
+                // the lambda method's own MVar(idx) slot.
+                encoder.GenericMethodTypeParameter(lambdaMethodOrd);
+            }
+            else if (this.activeIteratorStateMachineRemap != null
                 && this.activeIteratorStateMachineRemap.TryGetValue(tpSym, out var smClassOrd))
             {
                 encoder.GenericTypeParameter(smClassOrd);
@@ -6378,6 +6504,97 @@ internal sealed class ReflectionMetadataEmitter
     // bodies, the constructed instantiation `Box`1<int32>` for
     // external uses). The helpers below provide that routing.
     // -----------------------------------------------------------------
+
+    /// <summary>
+    /// Issue #2118: promotes a non-capturing lambda that references enclosing
+    /// type parameters into a generic method. Clones the referenced enclosing
+    /// type parameters (with their constraints remapped onto the clones) as the
+    /// lambda function's own method type parameters, records the
+    /// enclosing-TP -> own-clone-ordinal remap (so the signature/body encode
+    /// translates references into the method's own <c>MVar</c> slots) and the
+    /// ordered originals (used as MethodSpec type arguments at the delegate
+    /// materialization site). No-op for a lambda that references no enclosing
+    /// type parameter or that already declares its own.
+    /// </summary>
+    /// <param name="literal">The non-capturing lambda literal being hosted as a top-level static method.</param>
+    /// <param name="loweredBody">The lambda's lowered body (walked for type-parameter references).</param>
+    private void TryPromoteNonCapturingGenericLambda(BoundFunctionLiteralExpression literal, BoundBlockStatement loweredBody)
+    {
+        var fn = literal?.Function;
+        if (fn == null || fn.IsGeneric)
+        {
+            return;
+        }
+
+        var referenced = new List<TypeParameterSymbol>();
+        foreach (var parameter in fn.Parameters)
+        {
+            TypeSymbol.CollectReferencedTypeParameters(parameter.Type, referenced);
+        }
+
+        TypeSymbol.CollectReferencedTypeParameters(fn.Type, referenced);
+        LambdaEnclosingTypeParameterCollector.Collect(loweredBody, referenced);
+
+        if (referenced.Count == 0)
+        {
+            return;
+        }
+
+        // Canonical order: class type parameters (Var) before method type
+        // parameters (MVar), each by original ordinal — matching
+        // SynthesizedClosureReifier.CollectOrdered so the clone list is
+        // deterministic.
+        referenced.Sort(static (a, b) =>
+        {
+            var ak = a.IsMethodTypeParameter ? 1 : 0;
+            var bk = b.IsMethodTypeParameter ? 1 : 0;
+            return ak != bk ? ak - bk : a.Ordinal - b.Ordinal;
+        });
+
+        var origTPs = referenced.ToImmutableArray();
+        var clones = SynthesizedClosureReifier.CloneWithRemappedConstraints(origTPs);
+
+        // Setting TypeParameters flips each clone's IsMethodTypeParameter flag,
+        // so the emitter encodes body/signature references as MVar(idx).
+        fn.TypeParameters = clones;
+
+        var remap = new Dictionary<TypeParameterSymbol, int>(origTPs.Length, ReferenceEqualityComparer.Instance);
+        for (var i = 0; i < origTPs.Length; i++)
+        {
+            remap[origTPs[i]] = i;
+        }
+
+        this.lambdaMethodTypeParamRemapsByFunction[fn] = remap;
+        this.lambdaMethodTypeArgsByFunction[fn] = origTPs;
+    }
+
+    /// <summary>
+    /// Issue #2118: resolves the <c>ldftn</c> target token for a non-capturing
+    /// lambda function. When the lambda was generic-promoted
+    /// (<see cref="TryPromoteNonCapturingGenericLambda"/>) the token is a
+    /// MethodSpec instantiating the open lambda method with the enclosing type
+    /// parameters (in the referencing method's context); otherwise it is the
+    /// bare MethodDef handle.
+    /// </summary>
+    /// <param name="fn">The lambda function whose function pointer is loaded.</param>
+    /// <returns>The MethodDef or MethodSpec token for the <c>ldftn</c>.</returns>
+    internal EntityHandle ResolveLambdaFunctionFtnToken(FunctionSymbol fn)
+    {
+        var methodHandle = this.cache.FunctionHandles[fn];
+        if (this.lambdaMethodTypeArgsByFunction.TryGetValue(fn, out var typeArgs)
+            && !typeArgs.IsDefaultOrEmpty)
+        {
+            var args = new TypeSymbol[typeArgs.Length];
+            for (var i = 0; i < typeArgs.Length; i++)
+            {
+                args[i] = typeArgs[i];
+            }
+
+            return this.BuildMethodSpec(methodHandle, args);
+        }
+
+        return methodHandle;
+    }
 
     /// <summary>
     /// ADR-0087 §3 R3+R4: builds a MethodSpec for a generic G# user
@@ -10109,6 +10326,15 @@ internal sealed class ReflectionMetadataEmitter
         }
         else if (type is TypeParameterSymbol tp)
         {
+            // Issue #2118: inside a generic-promoted non-capturing lambda's
+            // signature/body, references to the enclosing type parameters map to
+            // the lambda method's own MVar(idx) slots.
+            if (this.activeLambdaMethodTypeParamRemap != null
+                && this.activeLambdaMethodTypeParamRemap.TryGetValue(tp, out var lambdaMethodOrd))
+            {
+                encoder.GenericMethodTypeParameter(lambdaMethodOrd);
+            }
+
             // Issue #810: when emitting a state-machine method (or the
             // state-machine class itself), references to the OUTER
             // method's type parameters are encoded as the SM class's
@@ -10117,7 +10343,7 @@ internal sealed class ReflectionMetadataEmitter
             // `!0` on the SM class. The remap is pushed by
             // EmitIteratorStateMachineMember and is keyed by the
             // method TP's instance identity.
-            if (this.activeIteratorStateMachineRemap != null
+            else if (this.activeIteratorStateMachineRemap != null
                 && tp.IsMethodTypeParameter
                 && this.activeIteratorStateMachineRemap.TryGetValue(tp, out var classOrdinal))
             {

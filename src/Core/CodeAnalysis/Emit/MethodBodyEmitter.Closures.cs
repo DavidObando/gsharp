@@ -345,7 +345,7 @@ internal sealed partial class MethodBodyEmitter
                 $"Function literal '{literal.Function.Name}' captures outer variables; closure emit fell through synthesis.");
         }
 
-        if (!this.outer.cache.FunctionHandles.TryGetValue(literal.Function, out var methodHandle))
+        if (!this.outer.cache.FunctionHandles.TryGetValue(literal.Function, out _))
         {
             throw new InvalidOperationException(
                 $"Function literal '{literal.Function.Name}' has no emitted MethodDef.");
@@ -353,7 +353,7 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.OpCode(ILOpCode.Ldnull);
         this.il.OpCode(ILOpCode.Ldftn);
-        this.il.Token(methodHandle);
+        this.il.Token(this.outer.ResolveLambdaFunctionFtnToken(literal.Function));
         this.il.OpCode(ILOpCode.Newobj);
         this.il.Token(delegateCtorHandle);
     }
@@ -683,7 +683,7 @@ internal sealed partial class MethodBodyEmitter
                 $"Function literal '{literal.Function.Name}' captures outer variables; closure emit fell through synthesis.");
         }
 
-        if (!this.outer.cache.FunctionHandles.TryGetValue(literal.Function, out var methodHandle))
+        if (!this.outer.cache.FunctionHandles.TryGetValue(literal.Function, out _))
         {
             throw new InvalidOperationException(
                 $"Function literal '{literal.Function.Name}' has no emitted MethodDef.");
@@ -691,7 +691,7 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.OpCode(ILOpCode.Ldnull);
         this.il.OpCode(ILOpCode.Ldftn);
-        this.il.Token(methodHandle);
+        this.il.Token(this.outer.ResolveLambdaFunctionFtnToken(literal.Function));
         this.il.OpCode(ILOpCode.Newobj);
 
         // ADR-0087 §3 R6: see capture-bearing branch above — reified

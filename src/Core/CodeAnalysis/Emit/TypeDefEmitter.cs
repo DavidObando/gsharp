@@ -2018,7 +2018,7 @@ internal sealed class TypeDefEmitter
             {
                 metadata.AddGenericParameterConstraint(
                     gpHandle,
-                    resolveConstraintHandle(row.InterfaceConstraintType));
+                    row.PreResolvedConstraintHandle ?? resolveConstraintHandle(row.InterfaceConstraintType));
             }
 
             // Issue #1336: emit the `unmanaged` constraint as a
