@@ -96,7 +96,16 @@ public sealed class TupleTypeSymbol : TypeSymbol
 
     private static Type BuildClrType(ImmutableArray<TypeSymbol> elementTypes)
     {
-        if (elementTypes.Any(t => t.ClrType == null))
+        // Issue #2119: an element that is a constructed generic over an in-scope
+        // type parameter (e.g. `IEnumerator[T]`) has a NON-null but type-erased
+        // ClrType (`IEnumerator<object>`). Building a closed CLR tuple from that
+        // erases `T` to `object`, so the value-tuple local/field emitted for a
+        // deconstruction expects `IEnumerator<object>` while the stack carries
+        // `IEnumerator<T>` (ilverify StackUnexpected). Force a null ClrType so
+        // the emitter routes through the symbolic TypeSpec path (GetTupleTypeSpec
+        // -> EncodeTypeSymbol), which preserves each element's real `G<T>` shape.
+        // The bare `ClrType == null` check below only covered a bare `T` element.
+        if (elementTypes.Any(t => t.ClrType == null || TypeSymbol.ContainsTypeParameter(t)))
         {
             return null;
         }
