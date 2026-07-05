@@ -3,29 +3,23 @@
 // </copyright>
 
 using System;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace GSharp.Repl.Shell;
 
 /// <summary>
 /// Reads keyboard and mouse-wheel input from the console. On Windows it uses the native
-/// <c>ReadConsoleInput</c> API so wheel notches surface as scroll events. On macOS/Linux it
-/// puts the terminal into raw mode (via <c>stty</c>), enables SGR mouse reporting, and decodes
-/// the raw byte stream with <see cref="VtInputDecoder"/>. When neither path is available (input
-/// redirected, or setup fails) it falls back to <see cref="Console.ReadKey(bool)"/> for keys only.
+/// <c>ReadConsoleInput</c> API so wheel notches surface as scroll events. On macOS/Linux there is
+/// no reliable low-level mouse path, so input is read via <see cref="Console.ReadKey(bool)"/>
+/// (keyboard only); scrolling on Unix is expected to be done via the keyboard (e.g. PageUp/PageDown).
 /// </summary>
 internal sealed class ConsoleInputReader : IInputReader, IDisposable
 {
     private readonly bool useWindowsNative;
-    private readonly VtInputDecoder? decoder;
 
     private IntPtr stdInHandle = IntPtr.Zero;
     private uint originalMode;
     private bool windowsModeChanged;
-
-    private bool unixActive;
-    private string? savedStty;
 
     private bool restored;
 
@@ -40,32 +34,7 @@ internal sealed class ConsoleInputReader : IInputReader, IDisposable
         if (OperatingSystem.IsWindows())
         {
             this.useWindowsNative = this.TrySetupWindows();
-            return;
         }
-
-        // The Unix raw-mode + mouse path is opt-in: enabling raw mode and reading stdin
-        // directly can conflict with the terminal's line discipline on some hosts and mangle
-        // keyboard input. Until it is verified broadly, default to the safe Console.ReadKey
-        // fallback (keyboard only) and let users opt in explicitly to try mouse scrolling.
-        if (UnixMouseOptIn() && this.TrySetupUnix())
-        {
-            this.decoder = new VtInputDecoder(this.ReadByteUnix, this.HasInputUnix);
-            this.unixActive = true;
-        }
-    }
-
-    private static bool UnixMouseOptIn()
-    {
-        var value = Environment.GetEnvironmentVariable("GSI_MOUSE");
-        if (string.IsNullOrEmpty(value))
-        {
-            return false;
-        }
-
-        return value is "1" or "true" or "yes" or "on"
-            || value.Equals("true", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("on", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Finalizes an instance of the <see cref="ConsoleInputReader"/> class.</summary>
@@ -77,11 +46,6 @@ internal sealed class ConsoleInputReader : IInputReader, IDisposable
     /// <inheritdoc/>
     public InputEvent? Read()
     {
-        if (this.unixActive && this.decoder is not null)
-        {
-            return this.decoder.Next();
-        }
-
         if (this.useWindowsNative)
         {
             return this.ReadWindowsNative();
@@ -190,93 +154,6 @@ internal sealed class ConsoleInputReader : IInputReader, IDisposable
         }
     }
 
-    private bool TrySetupUnix()
-    {
-        if (Console.IsOutputRedirected)
-        {
-            return false;
-        }
-
-        try
-        {
-            this.savedStty = RunStty("-g", capture: true);
-            if (string.IsNullOrWhiteSpace(this.savedStty))
-            {
-                return false;
-            }
-
-            if (RunStty("-echo -icanon -isig -ixon min 1 time 0", capture: false) is null)
-            {
-                return false;
-            }
-
-            // Enable X10 + SGR mouse reporting.
-            Console.Out.Write("\u001b[?1000h\u001b[?1006h");
-            Console.Out.Flush();
-            return true;
-        }
-        catch
-        {
-            if (this.savedStty is not null)
-            {
-                try
-                {
-                    RunStty(this.savedStty, capture: false);
-                }
-                catch
-                {
-                    // Best effort.
-                }
-            }
-
-            return false;
-        }
-    }
-
-    private static string? RunStty(string arguments, bool capture)
-    {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "stty",
-            Arguments = arguments,
-            UseShellExecute = false,
-            RedirectStandardOutput = capture,
-            RedirectStandardInput = false,
-            RedirectStandardError = true,
-        };
-
-        using var process = Process.Start(psi);
-        if (process is null)
-        {
-            return null;
-        }
-
-        var output = capture ? process.StandardOutput.ReadToEnd() : string.Empty;
-        process.WaitForExit();
-        if (process.ExitCode != 0)
-        {
-            return null;
-        }
-
-        return capture ? output.Trim() : string.Empty;
-    }
-
-    private int ReadByteUnix()
-    {
-        var buffer = new byte[1];
-        var n = NativeMethods.read(0, buffer, 1);
-        return n == 1 ? buffer[0] : -1;
-    }
-
-    private bool HasInputUnix(int timeoutMs)
-    {
-        var fds = new NativeMethods.PollFd[1];
-        fds[0].Fd = 0;
-        fds[0].Events = NativeMethods.POLLIN;
-        var result = NativeMethods.poll(fds, 1, timeoutMs);
-        return result > 0 && (fds[0].Revents & NativeMethods.POLLIN) != 0;
-    }
-
     private void Restore()
     {
         if (this.restored)
@@ -295,32 +172,6 @@ internal sealed class ConsoleInputReader : IInputReader, IDisposable
             catch
             {
                 // Best effort.
-            }
-        }
-
-        if (this.unixActive)
-        {
-            this.unixActive = false;
-            try
-            {
-                Console.Out.Write("\u001b[?1006l\u001b[?1000l");
-                Console.Out.Flush();
-            }
-            catch
-            {
-                // Best effort.
-            }
-
-            if (this.savedStty is not null)
-            {
-                try
-                {
-                    RunStty(this.savedStty, capture: false);
-                }
-                catch
-                {
-                    // Best effort.
-                }
             }
         }
     }
@@ -343,8 +194,6 @@ internal sealed class ConsoleInputReader : IInputReader, IDisposable
         public const uint LEFT_CTRL_PRESSED = 0x0008;
         public const uint RIGHT_CTRL_PRESSED = 0x0004;
 
-        public const short POLLIN = 0x001;
-
         public static readonly IntPtr INVALID_HANDLE_VALUE = new(-1);
 
         [DllImport("kernel32.dll", SetLastError = true)]
@@ -358,20 +207,6 @@ internal sealed class ConsoleInputReader : IInputReader, IDisposable
 
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "ReadConsoleInputW")]
         public static extern bool ReadConsoleInput(IntPtr hConsoleInput, [Out] InputRecord[] lpBuffer, uint nLength, out uint lpNumberOfEventsRead);
-
-        [DllImport("libc", SetLastError = true)]
-        public static extern nint read(int fd, [Out] byte[] buffer, nint count);
-
-        [DllImport("libc", SetLastError = true)]
-        public static extern int poll([In, Out] PollFd[] fds, uint nfds, int timeout);
-
-        [StructLayout(LayoutKind.Sequential)]
-        public struct PollFd
-        {
-            public int Fd;
-            public short Events;
-            public short Revents;
-        }
 
         [StructLayout(LayoutKind.Sequential)]
         public struct Coord
