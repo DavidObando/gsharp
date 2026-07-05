@@ -12464,6 +12464,24 @@ public sealed class CSharpToGSharpTranslator
                 return true;
             }
 
+            // Issue #2113 follow-up: a value produced by an EXTERNAL (metadata)
+            // member compiled WITHOUT a nullable context is oblivious — Roslyn
+            // reports its reference-type return/type as `NullableAnnotation.None`
+            // — and gsc maps every such oblivious external reference type to `T?`.
+            // A method-call/property/field receiver like `searcher.Get()` (from an
+            // unannotated package, e.g. System.Management) is therefore rejected on
+            // `recv.Member` / `recv[i]` / `for … in recv` (GS0158/GS0116) even
+            // though C# accepts it (it would `NullReferenceException` on null just
+            // the same). Assert `recv!!` to compile and preserve that throw-on-null
+            // behavior. Gated to oblivious so nullable-enabled projects — whose
+            // external refs carry real annotations — are untouched.
+            if (this.IsObliviousCompilation()
+                && (IsObliviousExternalNullableMember(symbol)
+                    || this.LocalInitializedFromObliviousExternalNullable(symbol)))
+            {
+                return true;
+            }
+
             ITypeSymbol declared = symbol switch
             {
                 IPropertySymbol property => property.Type,
@@ -12487,6 +12505,73 @@ public sealed class CSharpToGSharpTranslator
         // pre-#2113 behavior.
         private bool IsObliviousCompilation() =>
             this.context.Compilation.Options.NullableContextOptions == NullableContextOptions.Disable;
+
+        // Issue #2113 follow-up: true when <paramref name="symbol"/> is an EXTERNAL
+        // (metadata) method/property/field whose reference-type return/type is
+        // oblivious (<c>NullableAnnotation.None</c>, i.e. the declaring assembly was
+        // compiled without a nullable context, e.g. System.Management). gsc maps
+        // every such oblivious external reference type to <c>T?</c>, so a value
+        // read from one is nullable from gsc's point of view. Restricted to
+        // external symbols because a SOURCE symbol in an oblivious compilation is
+        // also <c>None</c> but its nullability is decided by the whole-program
+        // taint analysis instead, not treated as unconditionally nullable.
+        private static bool IsObliviousExternalNullableMember(ISymbol symbol)
+        {
+            if (symbol is not (IMethodSymbol or IPropertySymbol or IFieldSymbol)
+                || !symbol.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+            {
+                return false;
+            }
+
+            // Use the member's ORIGINAL (unsubstituted) return/type: gsc maps a
+            // member to `T?` based on the nullable context of the assembly that
+            // DECLARES it, not on a type argument the consumer supplies. An
+            // annotated BCL member like `IReadOnlyList<T>.this[int]` returns the
+            // type parameter `T` (excluded below), so `list[i]` stays non-null even
+            // in oblivious consumer code — only a member whose own declared return
+            // is a concrete oblivious reference type (e.g. System.Management's
+            // `ManagementObjectSearcher.Get()` -> `ManagementObjectCollection`) is
+            // treated as nullable.
+            ISymbol original = symbol.OriginalDefinition;
+            ITypeSymbol type = original switch
+            {
+                IMethodSymbol m => m.ReturnType,
+                IPropertySymbol p => p.Type,
+                IFieldSymbol f => f.Type,
+                _ => null,
+            };
+
+            return type is { IsReferenceType: true }
+                and not ITypeParameterSymbol
+                && type.NullableAnnotation == NullableAnnotation.None;
+        }
+
+        // Issue #2113 follow-up: true when <paramref name="symbol"/> is a `let`
+        // local whose type is inferred from an initializer that reads an oblivious
+        // external nullable member (e.g. `let coll = searcher.Get()`). gsc infers
+        // such a local as `T?`, so a `coll.Member` / `for … in coll` use needs a
+        // `!!` — but promoting the local's DECLARATION to `T?` cascades
+        // nullable-conversion errors at its other (non-null) uses, so the
+        // assertion is applied only here at the receiver/foreach-source use site.
+        private bool LocalInitializedFromObliviousExternalNullable(ISymbol symbol)
+        {
+            if (symbol is not ILocalSymbol local)
+            {
+                return false;
+            }
+
+            foreach (SyntaxReference reference in local.DeclaringSyntaxReferences)
+            {
+                if (reference.GetSyntax() is VariableDeclaratorSyntax { Initializer.Value: { } initializer }
+                    && IsObliviousExternalNullableMember(
+                        this.context.GetSymbolInfo(initializer).Symbol))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
 
         // True when <paramref name="member"/> binds to an extension method whose
         // (reduced) `this` parameter is nullable-annotated (`this T? x`). Such a
