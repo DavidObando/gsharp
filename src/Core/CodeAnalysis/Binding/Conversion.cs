@@ -1948,6 +1948,25 @@ public sealed class Conversion
             return false;
         }
 
+        // Issue #2051: a `NullableTypeSymbol` relays its UNDERLYING type's
+        // `ClrType` (see `NullableTypeSymbol.ClrType` / ADR-0001 §Phase 3.C.1) —
+        // for a value-type underlying, that is the bare `T`, NOT the actual CLR
+        // runtime representation `System.Nullable<T>`. Without this guard, a
+        // tuple-shaped `T` compared against `Nullable<T>` (e.g. `(int32,int32)`
+        // vs `(int32,int32)?`) would satisfy `ta.ClrType == b.ClrType` below
+        // purely because of that relay, misclassifying the true CLR-widening
+        // `T -> Nullable<T>` lift (#504) as a same-representation `Identity`
+        // conversion. That skips the `newobj Nullable<T>::.ctor(T)` wrap
+        // entirely, leaving a raw `ValueTuple` on the stack where a
+        // `Nullable<ValueTuple>` is expected (ilverify `StackUnexpected`).
+        // Scalar value-type nullables (`int32?`) never reach this helper — it
+        // only fires when one side is a `TupleTypeSymbol` — so this is scoped
+        // to the ValueTuple-shaped case the issue describes.
+        if (a is NullableTypeSymbol || b is NullableTypeSymbol)
+        {
+            return false;
+        }
+
         if (a is TupleTypeSymbol ta && b is not TupleTypeSymbol)
         {
             return ta.ClrType != null && b.ClrType != null && ta.ClrType == b.ClrType;
