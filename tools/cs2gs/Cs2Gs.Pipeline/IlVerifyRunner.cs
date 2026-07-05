@@ -248,8 +248,19 @@ public class IlVerifyRunner
 
         if (additionalReferences is not null)
         {
+            // Skip package copies of framework assemblies so ilverify does not
+            // load two identities for the same assembly (Refs #914).
+            var runtimeFileNames = new HashSet<string>(
+                BuildDefaultRuntimeReferences().Select(Path.GetFileName),
+                StringComparer.OrdinalIgnoreCase);
             foreach (string reference in additionalReferences)
             {
+                if (!string.IsNullOrEmpty(reference)
+                    && runtimeFileNames.Contains(Path.GetFileName(reference)))
+                {
+                    continue;
+                }
+
                 Add(reference);
             }
         }

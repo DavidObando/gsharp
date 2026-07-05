@@ -47,7 +47,7 @@ public sealed class CompileStage : IMigrationStage
             gsFiles,
             outputPath,
             context.App.TargetKind,
-            BuildReferenceSet(context.App.ReferencedAssemblies));
+            BuildReferenceSet(context.App.ReferencedAssemblies, context.ExternalReferencePaths));
 
         File.WriteAllText(
             Path.Combine(context.AppRunDir, "gsc.compile.log"),
@@ -64,7 +64,25 @@ public sealed class CompileStage : IMigrationStage
         foreach (GscDiagnostic diagnostic in result.Errors)
         {
             EmittedGsFile file = MatchEmittedFile(context.EmittedFiles, diagnostic.File);
+
+            // Errors located in a referenced sibling project's emitted file are
+            // that project's own concern (measured in its own run), not charged
+            // against this app. Sibling files are compile inputs only, so the
+            // app's uses of sibling types resolve (Refs #914).
+            if (file is not null && file.IsFromReferencedProject)
+            {
+                continue;
+            }
+
             artifacts.Add(context.Triage.CompileError(diagnostic, file));
+        }
+
+        // Every parsed error was in a referenced sibling file: the app's own G#
+        // compiled cleanly. gsc still produced no assembly (the whole
+        // compilation failed), so IL-verify simply has nothing to read.
+        if (artifacts.Count == 0 && result.Errors.Count > 0)
+        {
+            return Task.FromResult(StageOutcome.Passed());
         }
 
         // Exit was non-zero but no structured GSxxxx error was parsed (e.g. a
@@ -98,8 +116,16 @@ public sealed class CompileStage : IMigrationStage
     /// <c>Span</c>) resolvable while keeping the app's own sibling references.
     /// </summary>
     /// <param name="appReferences">The app's sibling assembly references.</param>
+    /// <param name="externalReferences">
+    /// External (NuGet package) assembly paths captured from the C# compilation
+    /// by the Translate stage. Any whose file name matches a framework assembly
+    /// is skipped to avoid ref-pack / runtime double-identity; the rest let
+    /// package types (e.g. <c>System.Management</c>) resolve (Refs #914).
+    /// </param>
     /// <returns>The deduplicated reference path set.</returns>
-    private static IReadOnlyList<string> BuildReferenceSet(IReadOnlyList<string> appReferences)
+    private static IReadOnlyList<string> BuildReferenceSet(
+        IReadOnlyList<string> appReferences,
+        IReadOnlyList<string> externalReferences = null)
     {
         var references = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -115,11 +141,34 @@ public sealed class CompileStage : IMigrationStage
             }
         }
 
+        var frameworkFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (string frameworkReference in FrameworkReferencePaths())
         {
+            frameworkFileNames.Add(Path.GetFileName(frameworkReference));
             if (seen.Add(frameworkReference))
             {
                 references.Add(frameworkReference);
+            }
+        }
+
+        if (externalReferences is not null)
+        {
+            foreach (string reference in externalReferences)
+            {
+                if (string.IsNullOrWhiteSpace(reference) || !seen.Add(reference))
+                {
+                    continue;
+                }
+
+                // Skip package copies of framework assemblies to avoid the
+                // gsc MetadataLoadContext resolving two identities for the same
+                // assembly (the shared-framework version already covers them).
+                if (frameworkFileNames.Contains(Path.GetFileName(reference)))
+                {
+                    continue;
+                }
+
+                references.Add(reference);
             }
         }
 

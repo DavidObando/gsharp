@@ -79,6 +79,16 @@ public sealed class StageExecutionContext
     public List<EmittedGsFile> EmittedFiles { get; } = new List<EmittedGsFile>();
 
     /// <summary>
+    /// Gets the absolute paths of the external (NuGet package) assemblies the
+    /// C# project resolved against, captured by the Translate stage from the
+    /// Roslyn compilation's metadata references. The Compile stage adds these to
+    /// gsc's <c>/reference:</c> set so package types (e.g. <c>System.Management</c>,
+    /// EF Core, Spectre.Console) resolve. Framework assemblies and stripped
+    /// sibling-project outputs are excluded downstream (Refs #914).
+    /// </summary>
+    public List<string> ExternalReferencePaths { get; } = new List<string>();
+
+    /// <summary>
     /// Gets or sets the absolute path of the assembly emitted by the Compile
     /// stage, published for the IL-verify stage to read (ADR-0115 §C). It is
     /// <see langword="null"/> until a green stage-2 compile has run.
@@ -152,6 +162,16 @@ public sealed class EmittedGsFile
     /// limitation in gsc).
     /// </summary>
     public IReadOnlyList<string> BaseClassNames { get; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether this file was emitted from a
+    /// referenced (<c>ProjectReference</c>) project rather than the app under
+    /// migration. Such files are included as compile inputs so the app's uses of
+    /// sibling types resolve, but the Compile stage attributes errors only to
+    /// app-owned files — a referenced project's own gaps are measured in its own
+    /// run, not charged against every dependent (Refs #914).
+    /// </summary>
+    public bool IsFromReferencedProject { get; set; }
 }
 
 /// <summary>

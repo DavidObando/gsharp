@@ -13,6 +13,7 @@ using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using Microsoft.CodeAnalysis;
 
 namespace Cs2Gs.Pipeline;
 
@@ -38,9 +39,10 @@ public sealed class TranslateStage : IMigrationStage
             throw new ArgumentNullException(nameof(context));
         }
 
-        LoadedCSharpProject project = await CSharpProjectLoader
-            .LoadProjectAsync(context.App.ProjectPath, cancellationToken)
+        IReadOnlyList<LoadedCSharpProject> projects = await CSharpProjectLoader
+            .LoadProjectWithReferencesAsync(context.App.ProjectPath, cancellationToken)
             .ConfigureAwait(false);
+        LoadedCSharpProject project = projects[0];
 
         var artifacts = new List<TriageArtifact>();
         Directory.CreateDirectory(context.AppRunDir);
@@ -63,48 +65,88 @@ public sealed class TranslateStage : IMigrationStage
 
         var usedGsFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (LoadedDocument document in project.Documents)
+        // Translate the app itself (index 0) plus its transitively referenced
+        // sibling projects (Refs #914). Sibling G# is emitted so the app's uses
+        // of sibling types resolve at the gsc compile stage; those files are
+        // flagged IsFromReferencedProject so the Compile stage attributes errors
+        // only to the app's own files (a sibling's own gaps are measured in its
+        // own run, not charged against every dependent).
+        for (int projectIndex = 0; projectIndex < projects.Count; projectIndex++)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            LoadedCSharpProject currentProject = projects[projectIndex];
+            bool isReferencedProject = projectIndex > 0;
 
-            var translationContext = new TranslationContext(
-                project.Compilation,
-                document.SemanticModel,
-                document.FilePath);
-
-            CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, translationContext);
-            string printed = GSharpPrinter.Print(unit);
-
-            string gsFileName = EmittedFileNaming.UniqueGsFileName(document.FilePath, usedGsFileNames);
-            string gsPath = Path.Combine(context.AppRunDir, gsFileName);
-            File.WriteAllText(gsPath, printed);
-
-            var declaredTypeNames = new List<string>();
-            var baseClassNames = new List<string>();
-            CollectTypeGraph(unit.Members, declaredTypeNames, baseClassNames);
-
-            string relativeGsPath = MigrationPipeline.SanitizeAppId(context.App.Id) + "/" + gsFileName;
-            var emitted = new EmittedGsFile(
-                gsPath,
-                relativeGsPath,
-                document.FilePath,
-                printed,
-                declaredTypeNames,
-                baseClassNames);
-            context.EmittedFiles.Add(emitted);
-
-            foreach (TranslationDiagnostic diagnostic in translationContext.Diagnostics
-                .Where(d => d.Severity == TranslationSeverity.Unsupported))
+            // Capture the external (NuGet package) assemblies each project
+            // resolved against so the Compile stage can add them to gsc's
+            // reference set. Only on-disk file-backed references are recorded
+            // here; the Compile stage further excludes any whose file name
+            // collides with a framework assembly (ref-pack / runtime
+            // double-identity) and stripped sibling outputs are already absent
+            // from disk (Refs #914).
+            foreach (PortableExecutableReference peReference in currentProject.Compilation.References
+                .OfType<PortableExecutableReference>())
             {
-                artifacts.Add(context.Triage.TranslationUnsupported(diagnostic));
+                string referencePath = peReference.FilePath;
+                if (!string.IsNullOrEmpty(referencePath) && File.Exists(referencePath))
+                {
+                    context.ExternalReferencePaths.Add(referencePath);
+                }
             }
 
-            RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
-            if (!roundTrip.Success)
+            foreach (LoadedDocument document in currentProject.Documents)
             {
-                artifacts.Add(context.Triage.RoundTripFailure(
-                    emitted,
-                    roundTrip.Errors.FirstOrDefault() ?? "unknown parse error"));
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var translationContext = new TranslationContext(
+                    currentProject.Compilation,
+                    document.SemanticModel,
+                    document.FilePath);
+
+                CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, translationContext);
+                string printed = GSharpPrinter.Print(unit);
+
+                string gsFileName = EmittedFileNaming.UniqueGsFileName(document.FilePath, usedGsFileNames);
+                string gsPath = Path.Combine(context.AppRunDir, gsFileName);
+                File.WriteAllText(gsPath, printed);
+
+                var declaredTypeNames = new List<string>();
+                var baseClassNames = new List<string>();
+                CollectTypeGraph(unit.Members, declaredTypeNames, baseClassNames);
+
+                string relativeGsPath = MigrationPipeline.SanitizeAppId(context.App.Id) + "/" + gsFileName;
+                var emitted = new EmittedGsFile(
+                    gsPath,
+                    relativeGsPath,
+                    document.FilePath,
+                    printed,
+                    declaredTypeNames,
+                    baseClassNames)
+                {
+                    IsFromReferencedProject = isReferencedProject,
+                };
+                context.EmittedFiles.Add(emitted);
+
+                // Only the app's own files gate the Translate stage and produce
+                // triage artifacts; a referenced sibling's translation issues are
+                // its own run's concern.
+                if (isReferencedProject)
+                {
+                    continue;
+                }
+
+                foreach (TranslationDiagnostic diagnostic in translationContext.Diagnostics
+                    .Where(d => d.Severity == TranslationSeverity.Unsupported))
+                {
+                    artifacts.Add(context.Triage.TranslationUnsupported(diagnostic));
+                }
+
+                RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
+                if (!roundTrip.Success)
+                {
+                    artifacts.Add(context.Triage.RoundTripFailure(
+                        emitted,
+                        roundTrip.Errors.FirstOrDefault() ?? "unknown parse error"));
+                }
             }
         }
 

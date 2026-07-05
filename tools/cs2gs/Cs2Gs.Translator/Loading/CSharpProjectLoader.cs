@@ -129,18 +129,63 @@ public static class CSharpProjectLoader
                 .Where(d => d.Kind == WorkspaceDiagnosticKind.Failure)
                 .Select(d => Diagnostic.Create(MSBuildWorkspaceLoadFailureDescriptor, Location.None, d.Message)));
 
-        Compilation compilation = await project.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
-        if (compilation is not CSharpCompilation csharpCompilation)
+        return await BuildLoadedProjectAsync(project, loadDiagnostics, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Loads a C# project together with the transitive closure of its
+    /// same-solution <c>ProjectReference</c>s, each as its own bound
+    /// <see cref="LoadedCSharpProject"/>. The primary (requested) project is
+    /// returned first and carries any MSBuild workspace load-failure diagnostics;
+    /// the referenced projects follow. This lets the migration pipeline translate
+    /// sibling-project source into G# so an app's uses of sibling types resolve at
+    /// the gsc compile stage (Refs #914). Package references are unaffected — they
+    /// remain metadata references on each compilation.
+    /// </summary>
+    /// <param name="projectPath">The absolute or relative path to the app's <c>.csproj</c>.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The primary project followed by its transitively referenced C# projects.</returns>
+    public static async Task<IReadOnlyList<LoadedCSharpProject>> LoadProjectWithReferencesAsync(
+        string projectPath,
+        CancellationToken cancellationToken = default)
+    {
+        if (projectPath is null)
         {
-            throw new InvalidOperationException(
-                $"Project '{fullPath}' did not produce a C# compilation (language: {project.Language}).");
+            throw new ArgumentNullException(nameof(projectPath));
         }
 
-        string projectDirectory = Path.GetDirectoryName(fullPath);
-        IReadOnlyList<LoadedDocument> documents = BuildDocuments(csharpCompilation, projectDirectory, loadDiagnostics);
-        loadDiagnostics.AddRange(SignificantDiagnostics(csharpCompilation));
+        string fullPath = Path.GetFullPath(projectPath);
+        if (!File.Exists(fullPath))
+        {
+            throw new FileNotFoundException($"Project file not found: {fullPath}", fullPath);
+        }
 
-        return new LoadedCSharpProject(csharpCompilation, documents, loadDiagnostics);
+        EnsureMSBuildRegistered();
+
+        var workspaceFailures = new List<Diagnostic>();
+        using var workspace = MSBuildWorkspace.Create();
+        workspace.LoadMetadataForReferencedProjects = true;
+
+        Project project = await workspace.OpenProjectAsync(fullPath, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+
+        workspaceFailures.AddRange(
+            workspace.Diagnostics
+                .Where(d => d.Kind == WorkspaceDiagnosticKind.Failure)
+                .Select(d => Diagnostic.Create(MSBuildWorkspaceLoadFailureDescriptor, Location.None, d.Message)));
+
+        var results = new List<LoadedCSharpProject>
+        {
+            await BuildLoadedProjectAsync(project, workspaceFailures, cancellationToken).ConfigureAwait(false),
+        };
+
+        foreach (Project referenced in TransitiveCSharpProjectReferences(project))
+        {
+            results.Add(await BuildLoadedProjectAsync(referenced, new List<Diagnostic>(), cancellationToken)
+                .ConfigureAwait(false));
+        }
+
+        return results;
     }
 
     /// <summary>
@@ -211,6 +256,73 @@ public static class CSharpProjectLoader
             .Where(path => path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && File.Exists(path))
             .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
             .ToImmutableArray();
+    }
+
+    /// <summary>
+    /// Enumerates the transitive closure of a project's same-solution
+    /// <c>ProjectReference</c>s that produce a C# compilation, each visited once
+    /// (breadth-first). The root project itself is excluded.
+    /// </summary>
+    private static IEnumerable<Project> TransitiveCSharpProjectReferences(Project root)
+    {
+        Solution solution = root.Solution;
+        var seen = new HashSet<ProjectId>();
+        var queue = new Queue<Project>();
+        foreach (ProjectReference reference in root.ProjectReferences)
+        {
+            Project referenced = solution.GetProject(reference.ProjectId);
+            if (referenced is not null)
+            {
+                queue.Enqueue(referenced);
+            }
+        }
+
+        while (queue.Count > 0)
+        {
+            Project current = queue.Dequeue();
+            if (!seen.Add(current.Id))
+            {
+                continue;
+            }
+
+            if (string.Equals(current.Language, LanguageNames.CSharp, StringComparison.Ordinal))
+            {
+                yield return current;
+            }
+
+            foreach (ProjectReference reference in current.ProjectReferences)
+            {
+                Project referenced = solution.GetProject(reference.ProjectId);
+                if (referenced is not null && !seen.Contains(referenced.Id))
+                {
+                    queue.Enqueue(referenced);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Builds a <see cref="LoadedCSharpProject"/> from a bound Roslyn
+    /// <see cref="Project"/>, seeding its diagnostics with the supplied list
+    /// (e.g. workspace load failures for the primary project).
+    /// </summary>
+    private static async Task<LoadedCSharpProject> BuildLoadedProjectAsync(
+        Project project,
+        List<Diagnostic> seedDiagnostics,
+        CancellationToken cancellationToken)
+    {
+        Compilation compilation = await project.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
+        if (compilation is not CSharpCompilation csharpCompilation)
+        {
+            throw new InvalidOperationException(
+                $"Project '{project.FilePath}' did not produce a C# compilation (language: {project.Language}).");
+        }
+
+        string projectDirectory = Path.GetDirectoryName(project.FilePath);
+        IReadOnlyList<LoadedDocument> documents = BuildDocuments(csharpCompilation, projectDirectory, seedDiagnostics);
+        seedDiagnostics.AddRange(SignificantDiagnostics(csharpCompilation));
+
+        return new LoadedCSharpProject(csharpCompilation, documents, seedDiagnostics);
     }
 
     private static IReadOnlyList<LoadedDocument> BuildDocuments(

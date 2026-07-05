@@ -64,9 +64,12 @@ public sealed class IlVerifyStage : IMigrationStage
             return Task.FromResult(StageOutcome.Passed());
         }
 
+        IReadOnlyList<string> verifyReferences = context.App.ReferencedAssemblies is { Count: > 0 } appRefs
+            ? appRefs.Concat(context.ExternalReferencePaths).ToList()
+            : context.ExternalReferencePaths;
         IlVerifyResult result = this.runner.Verify(
             context.EmittedAssemblyPath,
-            context.App.ReferencedAssemblies);
+            verifyReferences);
 
         File.WriteAllText(
             Path.Combine(context.AppRunDir, "ilverify.log"),

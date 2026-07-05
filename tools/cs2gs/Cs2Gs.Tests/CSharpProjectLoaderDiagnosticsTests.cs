@@ -158,6 +158,59 @@ namespace Sample
         Assert.Contains(project.Documents, d => d.FilePath.Replace('\\', '/').EndsWith("src/obji/Foo.cs", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// Refs #914: an app that references a sibling class-library project must be
+    /// loaded together with that sibling so the app's uses of sibling types can
+    /// be resolved at the gsc compile stage.
+    /// <see cref="CSharpProjectLoader.LoadProjectWithReferencesAsync"/> returns
+    /// the app first followed by its transitively referenced C# projects, so the
+    /// sibling's source documents are available for translation.
+    /// </summary>
+    [Fact]
+    public async Task LoadProjectWithReferencesAsync_IncludesReferencedSiblingProject()
+    {
+        string root = NewScratchDir("with-references");
+        File.WriteAllText(Path.Combine(root, "Directory.Build.props"), "<Project></Project>");
+
+        string libDir = Path.Combine(root, "Lib");
+        Directory.CreateDirectory(libDir);
+        File.WriteAllText(Path.Combine(libDir, "Lib.csproj"), @"<Project Sdk=""Microsoft.NET.Sdk"">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+</Project>
+");
+        File.WriteAllText(
+            Path.Combine(libDir, "IWidget.cs"),
+            "namespace Lib { public interface IWidget { int Value { get; } } }");
+
+        string appDir = Path.Combine(root, "App");
+        Directory.CreateDirectory(appDir);
+        File.WriteAllText(Path.Combine(appDir, "App.csproj"), @"<Project Sdk=""Microsoft.NET.Sdk"">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include=""..\Lib\Lib.csproj"" />
+  </ItemGroup>
+</Project>
+");
+        File.WriteAllText(
+            Path.Combine(appDir, "Widget.cs"),
+            "namespace App { public class Widget : Lib.IWidget { public int Value => 42; } }");
+
+        System.Collections.Generic.IReadOnlyList<LoadedCSharpProject> projects =
+            await CSharpProjectLoader.LoadProjectWithReferencesAsync(Path.Combine(appDir, "App.csproj"));
+
+        Assert.True(projects.Count >= 2, "Expected the app project plus its referenced sibling.");
+        Assert.Contains(
+            projects[0].Documents,
+            d => d.FilePath.Replace('\\', '/').EndsWith("App/Widget.cs", StringComparison.Ordinal));
+        Assert.Contains(
+            projects.Skip(1).SelectMany(p => p.Documents),
+            d => d.FilePath.Replace('\\', '/').EndsWith("Lib/IWidget.cs", StringComparison.Ordinal));
+    }
+
     private static string NewScratchDir(string label)
     {
         string root = Path.Combine(AppContext.BaseDirectory, "loader-tests", label, Guid.NewGuid().ToString("N"));
