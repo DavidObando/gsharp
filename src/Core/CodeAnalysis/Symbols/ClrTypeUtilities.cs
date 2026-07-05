@@ -221,9 +221,13 @@ public static class ClrTypeUtilities
                 // by-name walk, which is reference-context independent and only
                 // ever returns true for real inheritance / implementation.
             }
-            catch (InvalidOperationException)
+            catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
             {
-                // MLC types throw for some cross-context paths; fall through.
+                // InvalidOperationException: MLC types throw for some cross-context paths.
+                // NotSupportedException: a TypeBuilderInstantiation (generic instantiation of
+                // a type still being defined by emit's TypeBuilders) throws from
+                // IsAssignableFrom. In both cases fall through to the reference-context-
+                // independent by-name walk below (issue #2135).
             }
         }
 
