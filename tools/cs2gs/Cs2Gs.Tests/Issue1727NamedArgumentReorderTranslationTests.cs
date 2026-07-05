@@ -210,6 +210,34 @@ namespace Demo
         Assert.Contains("Foo(1, 2, 3)", printed, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A named argument for a leading optional parameter followed by EXPANDED
+    /// <c>params</c> positional elements (<c>Merge(additionalCapacity: 8, a, b)</c>).
+    /// Roslyn folds the expanded elements into a single array-creation argument, so
+    /// <c>GetOperation</c> on each element syntax returns null — the reorder path
+    /// previously gapped ("could not be resolved to a parameter", issue #1727) even
+    /// though source order already matches declaration order. It must now emit the
+    /// call in source order (the named value first, then the params elements).
+    /// </summary>
+    [Fact]
+    public void NamedArgument_FollowedByExpandedParams_EmitsSourceOrder()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        public byte[] Merge(int additionalCapacity = 0, params byte[][] arrays) => arrays[0];
+
+        public byte[] Caller(byte[] a, byte[] b)
+        {
+            return Merge(additionalCapacity: 8, a, b);
+        }
+    }
+}");
+        Assert.Contains("Merge(8, a, b)", printed, StringComparison.Ordinal);
+    }
+
     private static string TranslateUnit(string source)
     {
         (CompilationUnit unit, _) = Translate(source);
