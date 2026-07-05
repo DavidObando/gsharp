@@ -231,6 +231,24 @@ internal static class OverloadResolution
     public static readonly Type DefaultLiteralArgumentType = typeof(DefaultLiteralArgumentMarker);
 #pragma warning restore SA1201
 
+    /// <summary>
+    /// Issue #2126: reports whether <paramref name="argType"/> is a resolution
+    /// sentinel — the inline <c>out var</c> placeholder
+    /// (<see cref="InlineOutVarArgumentType"/>) or the untyped <c>default</c>
+    /// literal (<see cref="DefaultLiteralArgumentType"/>). These are synthetic
+    /// marker types defined in <c>GSharp.Core</c> that stand in for an argument
+    /// whose real type is not yet known (an inline <c>out var</c>) or is supplied
+    /// by the chosen parameter (a bare <c>default</c>). A sentinel must never be
+    /// projected into a reference set's <see cref="MetadataLoadContext"/> — it has
+    /// no name there — and must never leak into emitted IL; it is normalised to
+    /// its erased <see cref="object"/> form before a generic candidate is closed
+    /// (see the projection loop in <c>EvaluateCandidate</c>).
+    /// </summary>
+    /// <param name="argType">The candidate argument/type-argument CLR type.</param>
+    /// <returns><see langword="true"/> when the type is a resolution sentinel.</returns>
+    public static bool IsResolutionSentinel(Type argType) =>
+        ReferenceEquals(argType, InlineOutVarArgumentType) || ReferenceEquals(argType, DefaultLiteralArgumentType);
+
     // Issue #658 / #1311 / #1634: the supplementary-interface and constant-
     // narrowing checks used to live here as mutable (later [ThreadStatic])
     // fields, set immediately before and nulled immediately after each
@@ -1906,7 +1924,22 @@ internal static class OverloadResolution
                 {
                     for (var t = 0; t < typeArgs.Length; t++)
                     {
-                        typeArgs[t] = projectTypeArgument(typeArgs[t]) ?? typeArgs[t];
+                        // Issue #2126: a resolution sentinel (the inline `out var`
+                        // placeholder — issue #977/#1599/#1601 — or the untyped
+                        // `default` literal — issue #1391) was bound to this type
+                        // parameter because the corresponding argument's real type
+                        // is a same-compilation value type with no reference-context
+                        // CLR type (so it is erased to `object` everywhere else).
+                        // The sentinel is a GSharp.Core marker with no name in the
+                        // reference set: projecting it threw and surfaced as a fatal
+                        // GS9998 ICE during emit. Normalise it to its erased `object`
+                        // form (projected into the candidate's context) — the same
+                        // erasure the argument types already carry — so the generic
+                        // candidate closes via the issue #1325 value-type-placeholder
+                        // path and emit uses the recovered symbolic type argument.
+                        typeArgs[t] = IsResolutionSentinel(typeArgs[t])
+                            ? (projectTypeArgument(typeof(object)) ?? typeof(object))
+                            : (projectTypeArgument(typeArgs[t]) ?? typeArgs[t]);
                     }
                 }
 
@@ -2088,7 +2121,13 @@ internal static class OverloadResolution
             {
                 for (var t = 0; t < typeArgs.Length; t++)
                 {
-                    typeArgs[t] = projectTypeArgument(typeArgs[t]) ?? typeArgs[t];
+                    // Issue #2126: see the primary projection loop above — a
+                    // resolution sentinel must be normalised to its erased
+                    // `object` form rather than projected, or it throws a fatal
+                    // GS9998 ICE when projected into a MetadataLoadContext.
+                    typeArgs[t] = IsResolutionSentinel(typeArgs[t])
+                        ? (projectTypeArgument(typeof(object)) ?? typeof(object))
+                        : (projectTypeArgument(typeArgs[t]) ?? typeArgs[t]);
                 }
             }
 
