@@ -126,6 +126,93 @@ namespace Demo
         Assert.Contains("maybe string?", printed);
     }
 
+    [Fact]
+    public void Oblivious_ForEachOverObliviousExternalCall_ForgivesSource()
+    {
+        // `Ext.Get()` comes from an assembly compiled WITHOUT a nullable context,
+        // so Roslyn reports its `List<int>` return as oblivious (NullableAnnotation
+        // .None) and gsc maps it to `List[int32]?`. A plain `for x in ext.Get()`
+        // is then rejected (GS0116 "not indexable"); the source must be asserted
+        // non-null (`ext.Get()!!`), matching C#'s throw-on-null foreach semantics.
+        string printed = TranslateObliviousWithObliviousLibrary(@"
+namespace Demo
+{
+    public class C
+    {
+        public void Run(Ext ext)
+        {
+            foreach (var x in ext.Get()) { }
+        }
+    }
+}");
+
+        Assert.Contains("for x in ext.Get()!!", printed);
+    }
+
+    [Fact]
+    public void Oblivious_ForEachOverLocalFromObliviousExternalCall_ForgivesSource()
+    {
+        // Same as above but the oblivious external result is bound to a `let` local
+        // first (`let items = ext.Get()`). gsc infers the local as `List[int32]?`,
+        // so the foreach source needs `items!!`. Promoting the local's declaration
+        // to `T?` would cascade nullable-conversion errors at its non-null uses, so
+        // the `!!` is applied at the use site only.
+        string printed = TranslateObliviousWithObliviousLibrary(@"
+namespace Demo
+{
+    public class C
+    {
+        public void Run(Ext ext)
+        {
+            var items = ext.Get();
+            foreach (var x in items) { }
+        }
+    }
+}");
+
+        Assert.Contains("for x in items!!", printed);
+    }
+
+    private static string TranslateObliviousWithObliviousLibrary(string source)
+    {
+        // A tiny "external" library compiled WITHOUT a nullable context: its
+        // `Get()` return type is oblivious (NullableAnnotation.None), exactly like
+        // an unannotated NuGet package (e.g. System.Management).
+        var libTree = CSharpSyntaxTree.ParseText(
+            @"public class Ext { public System.Collections.Generic.List<int> Get() { return null; } }",
+            new CSharpParseOptions(LanguageVersion.Latest));
+        var libCompilation = CSharpCompilation.Create(
+            "ObliviousLib",
+            new[] { libTree },
+            CSharpProjectLoader.RuntimeReferences(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+                .WithNullableContextOptions(NullableContextOptions.Disable));
+        using var peStream = new System.IO.MemoryStream();
+        Microsoft.CodeAnalysis.Emit.EmitResult emit = libCompilation.Emit(peStream);
+        Assert.True(emit.Success, string.Join(Environment.NewLine, emit.Diagnostics));
+        peStream.Position = 0;
+        MetadataReference libReference = MetadataReference.CreateFromStream(peStream);
+
+        var parseOptions = new CSharpParseOptions(LanguageVersion.Latest);
+        SyntaxTree tree = CSharpSyntaxTree.ParseText(source, parseOptions, path: "Snippet.cs");
+        var compilation = CSharpCompilation.Create(
+            "Cs2Gs.ObliviousExternalInMemory",
+            new[] { tree },
+            CSharpProjectLoader.RuntimeReferences().Append(libReference).ToImmutableArray(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+                .WithNullableContextOptions(NullableContextOptions.Disable)
+                .WithAllowUnsafe(true));
+
+        Assert.DoesNotContain(
+            compilation.GetDiagnostics(),
+            d => d.Severity == DiagnosticSeverity.Error);
+
+        SemanticModel model = compilation.GetSemanticModel(tree);
+        var document = new LoadedDocument("Snippet.cs", tree, model);
+        var context = new TranslationContext(compilation, model, document.FilePath);
+        return PrintAndValidate(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+    }
+
     private static string TranslateOblivious(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
