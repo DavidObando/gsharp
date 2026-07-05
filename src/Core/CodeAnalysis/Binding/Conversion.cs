@@ -911,6 +911,21 @@ public sealed class Conversion
             }
         }
 
+        // Issue #2140: a G# slice `[]T` is backed at runtime by a CLR
+        // one-dimensional array, which derives from the base class
+        // `System.Array`. This upcast is element-INDEPENDENT and a no-op
+        // reference upcast at IL level. The concrete-element case already
+        // flows through the general #521 CLR reference-upcast arm below;
+        // this arm additionally accepts the generic-type-parameter /
+        // same-compilation-user element case whose backing `ClrType` is
+        // null during binding (so the #521 arm cannot fire). Use the
+        // cross-context-safe `IsSameAs` (reference identity is forbidden,
+        // guard test #835).
+        if (from is SliceTypeSymbol && to?.ClrType?.IsSameAs(typeof(System.Array)) == true)
+        {
+            return Conversion.Implicit;
+        }
+
         // Slice-to-interface: a G# slice `[]T` is backed by a CLR `T[]`
         // at runtime. Extend to every interface that `T[]` implements
         // (IEnumerable<T>, IReadOnlyList<T>, IList<T>, non-generic
@@ -2089,6 +2104,16 @@ public sealed class Conversion
     /// </summary>
     private static bool SliceImplementsInterfaceSymbolically(SliceTypeSymbol slice, TypeSymbol targetInterface)
     {
+        // Issue #2140: element-INDEPENDENT non-generic array interfaces.
+        // Every one-dimensional array implements these regardless of its
+        // element type, so a `[]T` (generic-type-parameter or same-
+        // compilation-user element, null backing ClrType) converts to them
+        // unconditionally. Match by the target's full name.
+        if (IsElementIndependentArrayInterface(targetInterface))
+        {
+            return true;
+        }
+
         if (targetInterface is not ImportedTypeSymbol imported
             || imported.OpenDefinition is null
             || imported.TypeArguments.Length != 1)
@@ -2115,6 +2140,40 @@ public sealed class Conversion
         }
 
         return AreTypeArgumentsEquivalent(imported.TypeArguments[0], slice.ElementType);
+    }
+
+    /// <summary>
+    /// Issue #2140: true when <paramref name="target"/> is one of the
+    /// element-INDEPENDENT array supertype interfaces that EVERY one-
+    /// dimensional array implements regardless of element type — the non-
+    /// generic collection interfaces plus <c>ICloneable</c>,
+    /// <c>IStructuralComparable</c> and <c>IStructuralEquatable</c>. Because
+    /// they carry no element type argument, a slice `[]T` (any element)
+    /// converts to them as a no-op reference upcast without loosening the
+    /// invariance enforced for the generic element interfaces
+    /// (<c>IEnumerable&lt;T&gt;</c> etc.). Uses the cross-context-safe
+    /// <c>IsSameAs</c> (reference identity is forbidden, guard test #835).
+    /// </summary>
+    /// <param name="target">The candidate target type.</param>
+    /// <returns>
+    /// <see langword="true"/> when <paramref name="target"/> is an element-
+    /// independent non-generic array supertype interface; otherwise
+    /// <see langword="false"/>.
+    /// </returns>
+    private static bool IsElementIndependentArrayInterface(TypeSymbol target)
+    {
+        var clr = target?.ClrType;
+        if (clr is null)
+        {
+            return false;
+        }
+
+        return clr.IsSameAs(typeof(System.Collections.IEnumerable))
+            || clr.IsSameAs(typeof(System.Collections.ICollection))
+            || clr.IsSameAs(typeof(System.Collections.IList))
+            || clr.IsSameAs(typeof(System.ICloneable))
+            || clr.IsSameAs(typeof(System.Collections.IStructuralComparable))
+            || clr.IsSameAs(typeof(System.Collections.IStructuralEquatable));
     }
 
     /// <summary>

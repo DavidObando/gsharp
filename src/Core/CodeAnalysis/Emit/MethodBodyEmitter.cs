@@ -781,6 +781,33 @@ internal sealed partial class MethodBodyEmitter
             }
         }
 
+        // Issue #2140: a G# slice `[]T` (any element type) is backed at
+        // runtime by a one-dimensional CLR array. Upcasting it to the base
+        // class `System.Array` — or to any of the element-INDEPENDENT non-
+        // generic array supertype interfaces (IEnumerable, ICollection,
+        // IList, ICloneable, IStructuralComparable, IStructuralEquatable) —
+        // is a no-op reference conversion: the slot already holds an array
+        // reference that is assignment-compatible with the wider static
+        // type. The concrete-element case reaches emit through the #521 /
+        // #570 CLR arms above; these arms additionally recognise the
+        // generic-type-parameter / same-compilation-user element case whose
+        // backing `ClrType` is null during emit.
+        if (a is SliceTypeSymbol)
+        {
+            var bClr = b?.ClrType;
+            if (bClr != null
+                && (bClr.IsSameAs(typeof(System.Array))
+                    || bClr.IsSameAs(typeof(System.Collections.IEnumerable))
+                    || bClr.IsSameAs(typeof(System.Collections.ICollection))
+                    || bClr.IsSameAs(typeof(System.Collections.IList))
+                    || bClr.IsSameAs(typeof(System.ICloneable))
+                    || bClr.IsSameAs(typeof(System.Collections.IStructuralComparable))
+                    || bClr.IsSameAs(typeof(System.Collections.IStructuralEquatable))))
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 
