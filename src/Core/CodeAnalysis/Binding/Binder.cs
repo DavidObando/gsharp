@@ -284,6 +284,7 @@ public sealed class Binder
             isPrimitiveTypeName: IsPrimitiveTypeName,
             refKindToString: RefKindToString,
             getCurrentFunction: () => this.function,
+            setCurrentFunction: fn => this.function = fn,
             bindInterpolatedStringAsFormattable: (syntax, targetType) => expressions.BindInterpolatedStringAsFormattable(syntax, targetType));
         expressions = new ExpressionBinder(
             binderCtx,

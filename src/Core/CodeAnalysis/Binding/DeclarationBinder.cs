@@ -87,6 +87,7 @@ internal sealed class DeclarationBinder
     private readonly Func<string, bool> isPrimitiveTypeName;
     private readonly Func<RefKind, string> refKindToString;
     private readonly Func<FunctionSymbol> getCurrentFunction;
+    private readonly Action<FunctionSymbol> setCurrentFunction;
 
     private readonly List<(StructDeclarationSyntax Syntax, StructSymbol Symbol)> pendingInterfaceImplementationChecks
         = new List<(StructDeclarationSyntax, StructSymbol)>();
@@ -145,6 +146,7 @@ internal sealed class DeclarationBinder
         Func<string, bool> isPrimitiveTypeName,
         Func<RefKind, string> refKindToString,
         Func<FunctionSymbol> getCurrentFunction,
+        Action<FunctionSymbol> setCurrentFunction,
         BindInterpolatedStringAsFormattableDelegate bindInterpolatedStringAsFormattable = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
@@ -163,6 +165,7 @@ internal sealed class DeclarationBinder
         this.isPrimitiveTypeName = isPrimitiveTypeName ?? throw new ArgumentNullException(nameof(isPrimitiveTypeName));
         this.refKindToString = refKindToString ?? throw new ArgumentNullException(nameof(refKindToString));
         this.getCurrentFunction = getCurrentFunction ?? throw new ArgumentNullException(nameof(getCurrentFunction));
+        this.setCurrentFunction = setCurrentFunction ?? throw new ArgumentNullException(nameof(setCurrentFunction));
     }
 
     private DiagnosticBag Diagnostics => binderCtx.Diagnostics;
@@ -2921,7 +2924,22 @@ internal sealed class DeclarationBinder
         {
             var savedFieldInitScope = scope;
             var savedFieldInitTypeParameters = binderCtx.CurrentTypeParameters;
+            var savedFieldInitFunction = getCurrentFunction();
             scope = fieldInitScope;
+
+            // Issue #2111: a static field/property initializer is bound outside
+            // any function body, so no "current function" is established. The
+            // accessibility gate (AccessibilityChecker) derives the enclosing
+            // type from the current function, so without one a `private`/
+            // `protected` member of the ENCLOSING type accessed through a
+            // type-qualified receiver (`Type.Member`) or a constructor call
+            // (`Type()`) is wrongly rejected with GS0472 — even though the
+            // initializer belongs to that very type. Establish the enclosing
+            // type as the accessibility context for the duration of initializer
+            // binding by installing a synthetic static function owned by
+            // `structSymbol`, mirroring how a `shared` function body (which
+            // already works) carries its `StaticOwnerType`.
+            setCurrentFunction(CreateFieldInitializerAccessibilityContext(structSymbol));
             if (!structSymbol.TypeParameters.IsDefaultOrEmpty)
             {
                 binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
@@ -2949,6 +2967,7 @@ internal sealed class DeclarationBinder
             {
                 scope = savedFieldInitScope;
                 binderCtx.CurrentTypeParameters = savedFieldInitTypeParameters;
+                setCurrentFunction(savedFieldInitFunction);
             }
         });
 
@@ -3011,6 +3030,32 @@ internal sealed class DeclarationBinder
         {
             pendingAbstractImplementationChecks.Add((syntax, structSymbol));
         }
+    }
+
+    /// <summary>
+    /// Issue #2111: builds the synthetic static function used as the
+    /// accessibility context while binding a type's deferred static/instance
+    /// field and property initializers. The function carries no body and is
+    /// never emitted; its sole purpose is to expose <paramref name="owner"/> as
+    /// the enclosing type (via <see cref="FunctionSymbol.StaticOwnerType"/>) so
+    /// that <see cref="AccessibilityChecker"/> treats a `private`/`protected`
+    /// member of the enclosing type reached through a type-qualified receiver
+    /// (`Type.Member`) or a constructor call (`Type()`) as accessible — matching
+    /// how a `shared` function body already behaves.
+    /// </summary>
+    /// <param name="owner">The type whose initializers are being bound.</param>
+    /// <returns>A synthetic static function owned by <paramref name="owner"/>.</returns>
+    private static FunctionSymbol CreateFieldInitializerAccessibilityContext(StructSymbol owner)
+    {
+        var context = new FunctionSymbol(
+            "<field-initializer>",
+            ImmutableArray<ParameterSymbol>.Empty,
+            TypeSymbol.Void)
+        {
+            IsStatic = true,
+            StaticOwnerType = owner,
+        };
+        return context;
     }
 
     /// <summary>
