@@ -22,6 +22,7 @@ public sealed class SharedBlockSyntax : SyntaxNode
     /// <param name="properties">The property declarations.</param>
     /// <param name="events">The event declarations.</param>
     /// <param name="methods">The method declarations.</param>
+    /// <param name="initBlocks">The <c>init { … }</c> static-initializer blocks (ADR-0140 / issue #2131).</param>
     /// <param name="closeBraceToken">The closing brace.</param>
     public SharedBlockSyntax(
         SyntaxTree syntaxTree,
@@ -31,6 +32,7 @@ public sealed class SharedBlockSyntax : SyntaxNode
         ImmutableArray<PropertyDeclarationSyntax> properties,
         ImmutableArray<EventDeclarationSyntax> events,
         ImmutableArray<FunctionDeclarationSyntax> methods,
+        ImmutableArray<StaticInitializerBlockSyntax> initBlocks,
         SyntaxToken closeBraceToken)
         : base(syntaxTree)
     {
@@ -40,6 +42,7 @@ public sealed class SharedBlockSyntax : SyntaxNode
         Properties = properties;
         Events = events;
         Methods = methods;
+        InitBlocks = initBlocks;
         CloseBraceToken = closeBraceToken;
     }
 
@@ -63,6 +66,9 @@ public sealed class SharedBlockSyntax : SyntaxNode
 
     /// <summary>Gets the method declarations.</summary>
     public ImmutableArray<FunctionDeclarationSyntax> Methods { get; }
+
+    /// <summary>Gets the <c>init { … }</c> static-initializer blocks (ADR-0140 / issue #2131).</summary>
+    public ImmutableArray<StaticInitializerBlockSyntax> InitBlocks { get; }
 
     /// <summary>Gets the closing brace.</summary>
     public SyntaxToken CloseBraceToken { get; }

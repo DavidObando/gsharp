@@ -486,6 +486,16 @@ internal sealed class TypeDefEmitter
             baseType = this.wellKnown.ValueTypeRef;
         }
 
+        // ADR-0140 / issue #2131: a type with a `shared { init { … } }`
+        // static-initializer block has an explicit `.cctor` body, so — like C#
+        // when a static constructor is declared — it must NOT be
+        // `beforefieldinit` (which would let the runtime run the type
+        // initializer at an unspecified time before first field access).
+        if (structSym.HasStaticInitializerBlock)
+        {
+            typeAttrs &= ~TypeAttributes.BeforeFieldInit;
+        }
+
         // ADR-0087 §3 R1: a generic user type's TypeDef name is mangled with
         // backtick-arity per ECMA-335 II.10.3.1 (`Box` becomes `Box`1`) and one
         // GenericParam row is emitted per type parameter immediately after
@@ -627,6 +637,13 @@ internal sealed class TypeDefEmitter
         }
 
         // Nested types have no namespace in ECMA-335 metadata.
+        // ADR-0140 / issue #2131: drop `beforefieldinit` on a nested type that
+        // declares a `shared { init { … } }` static-initializer block.
+        if (structSym.HasStaticInitializerBlock)
+        {
+            typeAttrs &= ~TypeAttributes.BeforeFieldInit;
+        }
+
         // Issue #810: when the state-machine class is generic over the
         // outer method's type parameters (mirroring how Roslyn emits
         // `<Empty>d__0<T>`), mangle the name with the backtick-arity

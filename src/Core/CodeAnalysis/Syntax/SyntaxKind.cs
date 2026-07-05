@@ -283,6 +283,11 @@ public enum SyntaxKind
     // ADR-0053: static (shared) members
     SharedBlock,
 
+    // ADR-0140 / issue #2131: `init { … }` static-initializer block inside a
+    // `shared { … }` block. Its statements emit into the type's `.cctor`
+    // (static constructor) after the static-field initializers.
+    StaticInitializerBlock,
+
     // Issue #306: standalone user-defined constructor declarations (`init(...)`)
     ConstructorDeclaration,
 

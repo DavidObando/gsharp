@@ -227,6 +227,7 @@ SlicePattern
 StackAllocExpression
 StarEqualsToken
 StarToken
+StaticInitializerBlock
 StringToken
 StructDeclaration
 StructKeyword

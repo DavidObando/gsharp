@@ -1672,6 +1672,38 @@ internal sealed partial class ExpressionBinder
             return new BoundBlockExpression(syntax, ImmutableArray.Create<BoundStatement>(declaration), assignment);
         }
 
+        // ADR-0140 / issue #2131: the static-field counterpart of the
+        // implicit-field case above. A bare static array/slice field name
+        // (e.g. `Table` inside a `shared` method or `init { … }` block)
+        // resolves to an ImplicitStaticFieldVariableSymbol, which has no local
+        // slot in the emitter. Initialise a temp local from the static-field
+        // access (for an array/slice this is the reference, so the subsequent
+        // stelem mutates the underlying storage), then do the indexed write to
+        // that real local.
+        if (variable is ImplicitStaticFieldVariableSymbol implicitStaticField)
+        {
+            var fieldAccess = implicitStaticField.InterfaceType != null
+                ? new BoundFieldAccessExpression(null, implicitStaticField.Field, implicitStaticField.InterfaceType)
+                : new BoundFieldAccessExpression(
+                    null,
+                    receiver: null,
+                    implicitStaticField.StructType,
+                    implicitStaticField.Field);
+
+            var tempName = $"<idxAsn{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
+            var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, fieldAccess.Type);
+            scope.TryDeclareVariable(tempVar);
+            var declaration = new BoundVariableDeclaration(syntax, tempVar, fieldAccess);
+
+            var assignment = BindIndexedAssignmentToVariable(tempVar, syntax.Index, syntax.Value, syntax.TargetIdentifier.Location);
+            if (assignment is BoundErrorExpression)
+            {
+                return assignment;
+            }
+
+            return new BoundBlockExpression(syntax, ImmutableArray.Create<BoundStatement>(declaration), assignment);
+        }
+
         return BindIndexedAssignmentToVariable(variable, syntax.Index, syntax.Value, syntax.TargetIdentifier.Location);
     }
 
