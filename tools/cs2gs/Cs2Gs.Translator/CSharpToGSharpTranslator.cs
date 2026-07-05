@@ -1039,6 +1039,20 @@ public sealed class CSharpToGSharpTranslator
                     // positions, so it is omitted (ADR-0115 §B.10).
                     return Visibility.Default;
                 case Accessibility.Private:
+                    // A `private` static member of a `static class` that ALSO
+                    // declares extension methods becomes unreachable once those
+                    // methods are lifted to top-level `func`s (ADR-0115 §B.5): the
+                    // lifted func qualifies the sibling reference through the owning
+                    // type (`Owner.Helper`), but G# accessibility then treats the
+                    // former class-private member as inaccessible (GS0472). Widen it
+                    // to the position default so the qualified reference still binds
+                    // (a private helper of a static utility class is an internal
+                    // implementation detail with no external callers to over-expose).
+                    if (IsMemberOfExtensionBearingStaticClass(symbol))
+                    {
+                        return Visibility.Default;
+                    }
+
                     return Visibility.Private;
                 case Accessibility.Internal:
                     return Visibility.Internal;
@@ -1062,6 +1076,32 @@ public sealed class CSharpToGSharpTranslator
                 default:
                     return Visibility.Default;
             }
+        }
+
+        /// <summary>
+        /// Returns <see langword="true"/> when <paramref name="symbol"/> is a member
+        /// of a <c>static class</c> that also declares at least one extension method.
+        /// Such a class is decomposed at translation time — its extension methods are
+        /// lifted to top-level receiver-clause <c>func</c>s (ADR-0115 §B.5) — so any
+        /// sibling <c>private</c> member the lifted funcs reference must be widened to
+        /// stay reachable across the resulting file scope (would otherwise be GS0472).
+        /// </summary>
+        private static bool IsMemberOfExtensionBearingStaticClass(ISymbol symbol)
+        {
+            if (symbol.ContainingType is not { IsStatic: true, TypeKind: TypeKind.Class } container)
+            {
+                return false;
+            }
+
+            foreach (ISymbol member in container.GetMembers())
+            {
+                if (member is IMethodSymbol { IsExtensionMethod: true })
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>

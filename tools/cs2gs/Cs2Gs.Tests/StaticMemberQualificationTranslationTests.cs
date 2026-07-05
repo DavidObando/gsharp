@@ -107,6 +107,33 @@ namespace Corpus.StaticMember
         Assert.DoesNotContain("Box.Tab", rendered, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void PrivateHelper_OfExtensionBearingStaticClass_IsWidenedForLiftedCallers()
+    {
+        // A `private` non-extension member of a `static class` that also declares
+        // extension methods becomes unreachable once those extension methods are
+        // lifted to top-level `func`s: the lifted func qualifies the sibling call
+        // through the owning type (`Helpers.SendOrPost`), and G# accessibility then
+        // rejects the class-private member (GS0472). The private modifier must be
+        // dropped so the qualified reference still binds.
+        const string source = @"
+namespace Corpus.PrivateHelper
+{
+    public static class Helpers
+    {
+        private static void SendOrPost(System.Action work) => work();
+
+        public static void Post(this System.Threading.SynchronizationContext ctx, System.Action work)
+            => SendOrPost(work);
+    }
+}
+";
+        string rendered = TranslateAndPrint(source);
+
+        Assert.Contains("Helpers.SendOrPost", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("private func SendOrPost", rendered, StringComparison.Ordinal);
+    }
+
     private static string TranslateAndPrint(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
