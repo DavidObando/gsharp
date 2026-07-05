@@ -3615,6 +3615,17 @@ internal sealed class DeclarationBinder
             var inheritedDefaultsBySignature = new Dictionary<string, (FunctionSymbol Method, InterfaceSymbol Iface)>(System.StringComparer.Ordinal);
             var conflictsReported = new HashSet<string>(System.StringComparer.Ordinal);
 
+            // Issue #2150: data-class positional parameters that satisfy an
+            // interface property are materialized only as public fields, so the
+            // CLR interface slot (get_/set_ accessor) would be missing and the
+            // emitted type would fail to load. Collect the parameters that
+            // satisfy an interface property here, then synthesize backing
+            // auto-property accessor members below so the interface contract is
+            // fulfilled at the IL level. Keyed by parameter name; the flag
+            // tracks whether any satisfied interface property also requires a
+            // setter.
+            var positionalInterfaceProps = new Dictionary<string, (ParameterSymbol Param, bool NeedsSetter)>(System.StringComparer.Ordinal);
+
             foreach (var iface in structSymbol.Interfaces)
             {
                 foreach (var imethod in iface.Methods)
@@ -3796,6 +3807,44 @@ internal sealed class DeclarationBinder
                         }
                     }
 
+                    // Issue #2150: a data-class positional (primary-constructor)
+                    // parameter is materialized as a public instance field and,
+                    // like a C# record's positional property, may satisfy a
+                    // matching get/set interface property. It never appears in
+                    // `.Properties`, so `TryGetProperty` misses it. Walk the
+                    // this-first BaseClass chain (mirroring `TryGetProperty` and
+                    // issue #1066) and treat a same-name, type-compatible
+                    // positional parameter as satisfying the property contract.
+                    if (!found && TypeMemberModel.TryGetPrimaryConstructorParameter(structSymbol, iprop.Name, out var positionalParam))
+                    {
+                        found = true;
+
+                        if (!System.Collections.Generic.EqualityComparer<TypeSymbol>.Default.Equals(positionalParam.Type, iprop.Type))
+                        {
+                            // Name matches but the type is incompatible: the
+                            // positional parameter does not satisfy the contract.
+                            // Fall through to the single GS0187 report below.
+                            found = false;
+                        }
+                        else
+                        {
+                            // Record the positional parameter so a backing
+                            // auto-property is synthesized below, filling the
+                            // interface's get_/set_ accessor slots. A data-class
+                            // positional parameter is a mutable public field, so
+                            // it can satisfy a setter requirement too.
+                            var needsSetter = iprop.HasSetter;
+                            if (positionalInterfaceProps.TryGetValue(iprop.Name, out var existing))
+                            {
+                                positionalInterfaceProps[iprop.Name] = (existing.Param, existing.NeedsSetter || needsSetter);
+                            }
+                            else
+                            {
+                                positionalInterfaceProps[iprop.Name] = (positionalParam, needsSetter);
+                            }
+                        }
+                    }
+
                     if (!found)
                     {
                         Diagnostics.ReportInterfaceMethodNotImplemented(
@@ -3804,6 +3853,58 @@ internal sealed class DeclarationBinder
                             iface.Name,
                             iprop.Name);
                     }
+                }
+            }
+
+            // Issue #2150: materialize synthesized backing auto-properties for
+            // every data-class positional parameter that satisfied an interface
+            // property above. Member access still resolves to the underlying
+            // field (fields are probed before properties), so this only adds the
+            // get_/set_ accessor methods the CLR interface slot requires. The
+            // existing property-emission path (planning, accessor IL, PropertyDef
+            // rows, and Virtual|NewSlot promotion for interface implementation)
+            // consumes these uniformly.
+            //
+            // The synthesized property is attached to the class that actually
+            // declares the backing field (this class or a base). Emitting it on
+            // the declaring type keeps it a same-type auto-property — the field
+            // planner only reserves a backing-field row when the auto-property's
+            // backing field is NOT one of the type's own fields, so a
+            // cross-type backing reference would corrupt the FieldDef range.
+            // The accessor is virtual (NewSlot), so a derived class that lists
+            // the interface satisfies the slot through inheritance.
+            if (positionalInterfaceProps.Count > 0)
+            {
+                foreach (var entry in positionalInterfaceProps.Values)
+                {
+                    var param = entry.Param;
+                    if (!structSymbol.TryGetFieldIncludingInherited(param.Name, out var backingField, out var declaringType))
+                    {
+                        continue;
+                    }
+
+                    // Skip if the declaring type already exposes a property of
+                    // this name (a real one that already satisfies the slot, or
+                    // one synthesized by an earlier derived-class check).
+                    if (TypeMemberModel.TryGetProperty(declaringType, param.Name, out _))
+                    {
+                        continue;
+                    }
+
+                    var synthProp = new PropertySymbol(
+                        name: param.Name,
+                        type: param.Type,
+                        accessibility: Accessibility.Public,
+                        hasGetter: true,
+                        hasSetter: entry.NeedsSetter,
+                        isAutoProperty: true,
+                        isVirtual: true,
+                        isOverride: false)
+                    {
+                        BackingField = backingField,
+                    };
+
+                    declaringType.SetProperties(declaringType.Properties.Add(synthProp));
                 }
             }
 
