@@ -1075,6 +1075,11 @@ internal sealed class TypeDefEmitter
         // user annotations same as the class-method path, or @Note-style
         // attributes silently vanish for interface members.
         this.EmitUserAttributesOnParameters(paramHandles, method.Parameters);
+
+        // Issue #2129: method-level @annotations on an abstract interface
+        // method signature emit as CustomAttribute rows on the MethodDef,
+        // mirroring the bodied (EmitFunction) path.
+        this.emitUserAttributes(handle, method, AttributeTargetKind.Method);
     }
 
     /// <summary>
@@ -1119,7 +1124,7 @@ internal sealed class TypeDefEmitter
             attrs |= MethodAttributes.Abstract;
         }
 
-        this.emitCtx.Metadata.AddMethodDefinition(
+        var handle = this.emitCtx.Metadata.AddMethodDefinition(
             attributes: attrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.emitCtx.Metadata.GetOrAddString(method.Name),
@@ -1130,6 +1135,10 @@ internal sealed class TypeDefEmitter
         // Issue #1913: same as EmitAbstractMethod — static-virtual interface
         // slots must keep their parameter annotations.
         this.EmitUserAttributesOnParameters(paramHandles, method.Parameters);
+
+        // Issue #2129: method-level @annotations on a static-virtual interface
+        // method emit as CustomAttribute rows on the MethodDef.
+        this.emitUserAttributes(handle, method, AttributeTargetKind.Method);
     }
 
     /// <summary>

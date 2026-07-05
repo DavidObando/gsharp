@@ -938,7 +938,8 @@ internal sealed class ReflectionMetadataEmitter
             this.GetTypeReference,
             this.GetTypeHandleForMember,
             this.ResolveFieldToken,
-            this.customAttrEncoder.EmitNullableAttributeOnProperty);
+            this.customAttrEncoder.EmitNullableAttributeOnProperty,
+            this.customAttrEncoder.EmitUserAttributes);
 
         // PR-E-8: TypeDefEmitter wires up after MemberDefEmitter. It depends
         // on the same EmitContext/MetadataTokenCache/WellKnownReferences

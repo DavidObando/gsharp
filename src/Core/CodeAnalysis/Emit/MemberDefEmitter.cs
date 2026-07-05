@@ -78,6 +78,7 @@ internal sealed class MemberDefEmitter
     private readonly Func<Type, EntityHandle> getTypeHandleForMember;
     private readonly Func<StructSymbol, FieldSymbol, EntityHandle> resolveFieldToken;
     private readonly Action<PropertyDefinitionHandle, TypeSymbol> emitNullableAttributeOnProperty;
+    private readonly Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes;
 
     public MemberDefEmitter(
         EmitContext emitCtx,
@@ -89,7 +90,8 @@ internal sealed class MemberDefEmitter
         Func<Type, TypeReferenceHandle> getTypeReference,
         Func<Type, EntityHandle> getTypeHandleForMember,
         Func<StructSymbol, FieldSymbol, EntityHandle> resolveFieldToken,
-        Action<PropertyDefinitionHandle, TypeSymbol> emitNullableAttributeOnProperty)
+        Action<PropertyDefinitionHandle, TypeSymbol> emitNullableAttributeOnProperty,
+        Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
@@ -101,6 +103,7 @@ internal sealed class MemberDefEmitter
         this.getTypeHandleForMember = getTypeHandleForMember ?? throw new ArgumentNullException(nameof(getTypeHandleForMember));
         this.resolveFieldToken = resolveFieldToken ?? throw new ArgumentNullException(nameof(resolveFieldToken));
         this.emitNullableAttributeOnProperty = emitNullableAttributeOnProperty ?? throw new ArgumentNullException(nameof(emitNullableAttributeOnProperty));
+        this.emitUserAttributes = emitUserAttributes ?? throw new ArgumentNullException(nameof(emitUserAttributes));
     }
 
     public void EmitPropertyAccessors(StructSymbol structSym)
@@ -186,6 +189,10 @@ internal sealed class MemberDefEmitter
             }
 
             this.emitNullableAttributeOnProperty(propDef, prop.Type);
+
+            // Issue #2129: emit user @annotations as CustomAttribute rows on
+            // the PropertyDef (parity with the class/interface member path).
+            this.emitUserAttributes(propDef, prop, AttributeTargetKind.Property);
         }
 
         // PropertyMap row: links the TypeDef to its first PropertyDef.
@@ -449,6 +456,10 @@ internal sealed class MemberDefEmitter
             }
 
             this.emitNullableAttributeOnProperty(propDef, prop.Type);
+
+            // Issue #2129: emit user @annotations as CustomAttribute rows on
+            // the PropertyDef (parity with the class/interface member path).
+            this.emitUserAttributes(propDef, prop, AttributeTargetKind.Property);
         }
 
         // PropertyMap row: links the TypeDef to its first PropertyDef.
@@ -569,6 +580,10 @@ internal sealed class MemberDefEmitter
                 attributes: EventAttributes.None,
                 name: this.emitCtx.Metadata.GetOrAddString(ev.Name),
                 type: eventTypeHandle);
+
+            // Issue #2129: emit user @annotations as CustomAttribute rows on
+            // the EventDef (parity with the class/interface member path).
+            this.emitUserAttributes(eventDef, ev, AttributeTargetKind.Event);
 
             if (firstEventDef.IsNil)
             {
@@ -820,6 +835,10 @@ internal sealed class MemberDefEmitter
                 attributes: EventAttributes.None,
                 name: this.emitCtx.Metadata.GetOrAddString(ev.Name),
                 type: eventTypeHandle);
+
+            // Issue #2129: emit user @annotations as CustomAttribute rows on
+            // the EventDef (parity with the class/interface member path).
+            this.emitUserAttributes(eventDef, ev, AttributeTargetKind.Event);
 
             if (firstEventDef.IsNil)
             {
@@ -1349,6 +1368,10 @@ internal sealed class MemberDefEmitter
             }
 
             this.emitNullableAttributeOnProperty(propDef, prop.Type);
+
+            // Issue #2129: emit user @annotations as CustomAttribute rows on
+            // the PropertyDef (parity with the class/interface member path).
+            this.emitUserAttributes(propDef, prop, AttributeTargetKind.Property);
         }
 
         // PropertyMap row: links the TypeDef to its first PropertyDef.
@@ -1423,6 +1446,10 @@ internal sealed class MemberDefEmitter
                 attributes: EventAttributes.None,
                 name: this.emitCtx.Metadata.GetOrAddString(ev.Name),
                 type: eventTypeHandle);
+
+            // Issue #2129: emit user @annotations as CustomAttribute rows on
+            // the EventDef (parity with the class/interface member path).
+            this.emitUserAttributes(eventDef, ev, AttributeTargetKind.Event);
 
             if (firstEventDef.IsNil)
             {
