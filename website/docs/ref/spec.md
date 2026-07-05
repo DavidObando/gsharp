@@ -52,20 +52,20 @@ letter     = unicode_letter | "_" .
 The reserved keywords are:
 
 ```text
-as async await break case catch chan class const continue default defer do else enum false fallthrough finally for func go goto guard if import interface internal is let map nil open operator override package private protected public range return scope sealed select sequence struct switch throw true try type using var while
+as async await break case catch chan class const continue default defer do else enum false fallthrough finally for func go goto guard if import interface internal is let lock map nil open operator override package private protected public range return scope sealed select sequence struct switch throw true try type using var while
 ```
 
 Several words are contextual rather than reserved: they retain identifier status except in the specific grammar contexts described below. The full set the parser recognises contextually is:
 
 ```text
-add and base convenience data deinit delegate event explicit fixed get implicit in init inline make nameof not or out params prop raise ref remove scoped set shared stackalloc this typeof unmanaged unsafe when with yield
+add and base checked convenience data deinit delegate event explicit fixed get implicit in init inline make nameof not or out params prop raise ref remove scoped set shared stackalloc this typeof unchecked unmanaged unsafe when with yield
 ```
 
-Notable contextual roles: `prop`, `event`, `delegate`, `data`, `inline`, `shared`, `convenience`, and `deinit` introduce or modify members; `get`, `set`, `add`, `remove`, and `raise` name accessors; `in`, `out`, `ref`, `scoped`, and `params` modify parameters; `explicit` and `implicit` mark conversion operators; `and`, `or`, and `not` combine patterns; `this` and `base` reference the receiver; `when` guards a `catch`/`case`; and `make`, `with`, `yield`, `typeof`, and `nameof` are expression forms. The `init` parameterless-constructor constraint (`[T init()]`) was renamed from the former `new()` spelling by ADR-0097 (issue #997); `new` is therefore no longer a constraint keyword. The unsafe/low-level words `unsafe`, `fixed`, `stackalloc`, and `unmanaged` are contextual (for example `stackalloc` is recognised only in the `stackalloc [` shape) and otherwise remain ordinary identifiers. The legacy `record` contextual keyword was removed by ADR-0078; the lexer still recognises it so the parser can emit the GS0307 migration diagnostic (`use data struct` / `data class`).
+Notable contextual roles: `prop`, `event`, `delegate`, `data`, `inline`, `shared`, `convenience`, and `deinit` introduce or modify members; `get`, `set`, `add`, `remove`, and `raise` name accessors; `in`, `out`, `ref`, `scoped`, and `params` modify parameters; `explicit` and `implicit` mark conversion operators; `and`, `or`, and `not` combine patterns; `this` and `base` reference the receiver; `when` guards a `catch`/`case`; and `make`, `with`, `yield`, `typeof`, and `nameof` are expression forms. The `init` parameterless-constructor constraint (`[T init()]`) was renamed from the former `new()` spelling by ADR-0097 (issue #997); `new` is therefore no longer a constraint keyword. The unsafe/low-level words `unsafe`, `fixed`, `stackalloc`, and `unmanaged` are contextual (for example `stackalloc` is recognised only in the `stackalloc [` shape) and otherwise remain ordinary identifiers. `checked` and `unchecked` (issue #1881) are contextual overflow-context markers, recognised as the block/expression forms only when immediately followed by `{` or `(` respectively. `lock` (issue #1885) is a reserved keyword, not contextual. The legacy `record` contextual keyword was removed by ADR-0078; the lexer still recognises it so the parser can emit the GS0307 migration diagnostic (`use data struct` / `data class`).
 
 ### Operators and punctuation
 
-Compound assignment recognizes `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, and `>>=`. The parser rewrites these as assignment with the corresponding binary operator. `++` and `--` are statement forms on identifiers. The null-coalescing compound assignment `??=` (ADR-0072) writes the right-hand side into the left only when the lvalue currently reads as nil; see [Null-coalescing compound assignment](#null-coalescing-compound-assignment--adr-0072) under *Statements*. The `..` range operator slices a sliceable value inside an indexer (`a[lo..hi]`) and also forms a standalone `System.Range` value (`let r = 1..3`; issue #1038), and a leading `^n` marks a from-end index (`a[^1]`, `a[1..^1]`); see [Range and slice expressions](#range-and-slice-expressions-issue-1016). `@` begins annotations on declarations.
+Compound assignment recognizes `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, `>>=`, and `>>>=`. The parser rewrites these as assignment with the corresponding binary operator. `>>` is the signed (arithmetic) right shift, replicating the sign bit; `>>>` (issue #1880) is the unsigned (logical) right shift, which always shifts in zero bits regardless of the operand's signedness. `++` and `--` are statement forms on identifiers. The null-coalescing compound assignment `??=` (ADR-0072) writes the right-hand side into the left only when the lvalue currently reads as nil; see [Null-coalescing compound assignment](#null-coalescing-compound-assignment--adr-0072) under *Statements*. The `..` range operator slices a sliceable value inside an indexer (`a[lo..hi]`) and also forms a standalone `System.Range` value (`let r = 1..3`; issue #1038), and a leading `^n` marks a from-end index (`a[^1]`, `a[1..^1]`); see [Range and slice expressions](#range-and-slice-expressions-issue-1016). `@` begins annotations on declarations.
 
 ### Integer literals
 
@@ -512,7 +512,8 @@ StructMember     = Annotation* Accessibility? ( OpenOrOverride* ( MethodDecl | P
 OpenOrOverride   = "open" | "override" .
 ConstructorDecl  = "init" "(" Parameters? ")" ( ":" identifier "(" Arguments? ")" )? Block .
 SharedBlock      = "shared" "{" SharedMember* "}" .
-SharedMember     = Accessibility? ( MethodDecl | PropertyDecl | EventDecl | FieldDecl ) .
+SharedMember     = Accessibility? ( MethodDecl | PropertyDecl | EventDecl | FieldDecl ) | StaticInitializerBlock .
+StaticInitializerBlock = "init" Block .  (* ADR-0140 / issue #2131: runs in the type's .cctor after static-field initializers *)
 FieldDecl        = Accessibility? ( "var" | "let" ) identifier TypeClause ( "=" Expression )? .
 PropertyDecl     = "prop" ( identifier | IndexerHeader ) TypeClause ( PropertyBody | "->" Expression )? .  (* "->" Expression = read-only computed property/indexer, ADR-0131 *)
 IndexerHeader    = "this" "[" Parameters "]" .  (* ADR-0118: user indexer member, emitted as the CLR default `Item` property *)
@@ -843,6 +844,8 @@ default: "many"
 
 Patterns include list-like patterns, property patterns, type tests with `is`, wildcard `_`, relational patterns, and expression patterns.
 
+A list pattern (`[p1, p2, ...]`) may include at most one **slice ("rest") subpattern** (issue #1505): a bare `..` discards the middle slice, `..name` captures it into a `[]T` binding, and `..pattern` matches it against a nested pattern (e.g. `[first, .., last]`, `[head, ..rest]`, `[.., > 0]`). The slice subpattern greedily absorbs whichever elements are not matched by the fixed-position patterns before and after it.
+
 Patterns may be combined with the **combinators** `and`, `or`, and `not` (issue #992), mirroring C#. `not P` matches when `P` does not; `P and Q` matches when both match (left-to-right, with `Q` evaluated only if `P` matched); `P or Q` matches when either matches (short-circuit). The combinators are contextual keywords usable in pattern position only and remain ordinary identifiers everywhere else. Precedence — matching C# — is `not` (tightest), then `and`, then `or`, so `a or b and c` parses as `a or (b and c)` and `not a and b` as `(not a) and b`; parentheses `( … )` override the default grouping. Combinators compose with every pattern kind, e.g. `case > 0 and < 10:`, `case < 0 or > 100:`, `case _ is Dog and { Name: "Rex" }:`. A type pattern that introduces a binding variable is **not** permitted under `or`/`not` — the variable would not be definitely assigned — and is rejected with `GS0390`; use the discard `_` instead. Smart-cast narrowing of the discriminator is applied under `and` (the union of the sub-patterns' narrowings) and, soundly, only under `or` when **both** branches prove the same narrowing; `not` contributes no positive narrowing. A combined pattern is treated conservatively by exhaustiveness analysis: it never acts as a total/`default` arm, so it cannot by itself make a value-returning `switch` exhaustive.
 
 A pattern in a `switch` arm — in both the expression form and the statement form — may be followed by an optional `when <bool-expr>` guard (issue #991), mirroring C#. `when` is a contextual keyword: it introduces a guard only in this position and remains usable as an ordinary identifier everywhere else. An arm with a guard is selected only when **both** the pattern matches **and** the guard expression evaluates to `true`; otherwise control falls through to the next arm. The guard applies to the whole arm after the (possibly combined) pattern matches, and sees any pattern narrowing / smart-cast in effect for the arm (so the guard of `case x is T when …` observes the discriminator as `T`). A non-`bool` guard is rejected with the standard conversion diagnostic. Because a guarded arm can fail at run time, it never contributes to exhaustiveness: a guarded discard (`case _ when …`) does **not** act as a total/`default` arm, so a value-returning `switch` whose only catch-all is guarded still requires a reachable `default` arm (`GS0176`).
@@ -1087,8 +1090,15 @@ ForStmt = "for" Statement
         | "for" Expression Statement
         | "for" SimpleStmt? ";" Expression? ";" SimpleStmt? Statement
         | "for" identifier ( "," identifier )? "in" Expression Statement
-        | "for" identifier "in" Expression "..." Expression Statement .
+        | "for" identifier "in" Expression "..." Expression Statement
+        | "for" "(" identifier ( "," identifier )* ")" "in" Expression Statement .
+```
 
+The last form (issue #1922) deconstructs each element of a `ValueTuple`
+sequence into the parenthesized identifier list, one binding per tuple slot
+(`for (k, v) in pairs { ... }`).
+
+```ebnf
 WhileStmt    = "while" Expression Statement .
 DoWhileStmt  = "do" Block "while" Expression .
 ```
@@ -1113,7 +1123,7 @@ context within a header (issue #1023).
 true. `do`-`while` always runs the body once before evaluating the condition;
 the body must be a block.
 
-### Labeled loops, break, and continue (ADR-0070)
+### Labeled loops, break, continue, and `goto` (ADR-0070, ADR-0139)
 
 `for`, `while`, and `do`-`while` may be prefixed with `identifier ":"` to
 declare a label. `break identifier` and `continue identifier` then target the
@@ -1122,17 +1132,54 @@ matching enclosing loop instead of the innermost one. Unlabeled
 label after `break`/`continue` must appear on the same source line as the
 keyword (mirroring `return` value parsing).
 
+Per ADR-0139 (issue #1884), `identifier ":"` may also prefix any **non-loop**
+statement, declaring a `goto` target instead of a loop label. `goto
+identifier` performs an unconditional jump to that label; the label namespace
+is local to the enclosing function, and a `goto` may forward-reference a
+label declared later in the same function or jump out of a nested block to a
+label in an enclosing one (jumping *into* a nested block is not supported).
+
 Diagnostics:
 
 - **GS0293** — `break`/`continue` names a label that is not in scope on the
   enclosing loop stack.
-- **GS0294** — a label declaration prefixes a statement that is not a loop.
 - **GS0295** — *warning*. A loop label shadows another label of the same name
   on the enclosing loop stack.
 - **GS0120** — pre-existing — `break`/`continue` used outside any loop.
+- **GS0469** — `goto` targets a label that does not exist in the current
+  function.
+- **GS0470** — two `label:` declarations with the same name in the same
+  function.
+- **GS0294** is retired (ADR-0139) — a label on a non-loop statement is now a
+  valid `goto` target rather than an error.
 
 ```ebnf
-LabeledLoopStmt   ::= identifier ':' ( ForStmt | WhileStmt | DoWhileStmt )
+LabeledStmt ::= identifier ':' Statement   (* loop => ADR-0070 break/continue target; any other statement => ADR-0139 goto target *)
+GotoStmt    ::= 'goto' identifier
+```
+
+### `lock` statement (issue #1885)
+
+`lock expr { ... }` establishes mutual exclusion around its body for the
+lifetime of the object referenced by `expr`. The binder lowers it to the
+classic `System.Threading.Monitor` `Enter`/`try`/`finally`/`Exit` pattern.
+
+```ebnf
+LockStmt ::= 'lock' Expression Statement
+```
+
+### `checked`/`unchecked` blocks and expressions (issue #1881)
+
+`checked { ... }` / `unchecked { ... }` establish the named integer-overflow
+context for the arithmetic in the block; `checked(expr)` / `unchecked(expr)`
+do the same for a single expression. Both `checked` and `unchecked` are
+**contextual** identifiers — they are only recognized as the block/expression
+forms when immediately followed by `{` or `(` respectively; a bare identifier
+named `checked` used as an ordinary value is unaffected.
+
+```ebnf
+CheckedStmt       ::= ('checked' | 'unchecked') Block
+CheckedExpression ::= ('checked' | 'unchecked') '(' Expression ')'
 ```
 
 ### Return and yield
@@ -1367,8 +1414,9 @@ The compiler renders the merged documentation in hover for both G# declarations 
 ```ebnf
 (* Several terminals below are CONTEXTUAL identifiers, not reserved keywords:
    data, inline, ref, scoped, delegate, convenience, init, deinit, shared, prop,
-   event, get, set, add, remove, raise, make, typeof, nameof, unmanaged, with,
-   base, the variance markers in/out, and the parameter ref-kinds ref/out/in.
+   event, get, set, add, remove, raise, make, typeof, nameof, unmanaged,
+   with, base, checked, unchecked, fixed, the variance markers in/out, and the
+   parameter ref-kinds ref/out/in. `lock` IS a reserved keyword (issue #1885).
    They are written as quoted terminals here for brevity. *)
 
 CompilationUnit   ::= PackageDecl? ImportDecl* Member* EOF
@@ -1423,6 +1471,8 @@ ConstructorDecl   ::= 'convenience'? 'func'? 'init' '(' Parameters? ')' (':' ide
 DeinitDecl        ::= 'deinit' Block                     (* class-only; no parameters or return type *)
 SharedBlock       ::= 'shared' '{' SharedMember* '}'
 SharedMember      ::= Annotation* Accessibility? (Async? MethodDecl | PropertyDecl | EventDecl | FieldDecl)
+                    | StaticInitializerBlock
+StaticInitializerBlock ::= 'init' Block          (* ADR-0140 / issue #2131: statements run in the type's .cctor after field initializers *)
 MethodDecl        ::= FunctionDecl
 FieldDecl         ::= Accessibility? ('var' | 'let') identifier TypeClause ('=' Expression)?
 PropertyDecl      ::= 'prop' (identifier | IndexerHeader) TypeClause (PropertyBody | '->' Expression)?   (* '->' Expression = read-only computed property/indexer, ADR-0131 *)
@@ -1463,11 +1513,14 @@ TypeClauseList    ::= TypeClause (',' TypeClause)*
 Block             ::= '{' Statement* '}'
 Statement         ::= Block
                     | Annotation* VariableDecl
-                    | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | WhileStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt
-                    | SwitchStmt | FallthroughStmt | TryStmt | ThrowStmt | UsingStmt | AwaitUsingStmt | DeferStmt | GoStmt | ScopeStmt
-                    | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt
+                    | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | ForTupleRangeStmt | WhileStmt | DoWhileStmt | LabeledStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt
+                    | SwitchStmt | FallthroughStmt | TryStmt | ThrowStmt | UsingStmt | AwaitUsingStmt | DeferStmt | GoStmt | ScopeStmt | LockStmt
+                    | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | GotoStmt | CheckedStmt
                     | IncDecStmt | ChannelSendStmt | ExpressionStmt
-VariableDecl      ::= ('const' | 'let' | 'var') 'scoped'? 'ref'? identifier TypeClause? '=' Expression
+VariableDecl      ::= ('const' | 'let' | 'var') 'scoped'? 'ref'? identifier TypeParamList? TypeClause? '=' Expression
+                      (* TypeParamList is 'let'-only (issue #1886): `let Name[T] = func (...) ... { ... }` hangs a generic
+                         parameter list off the binding, since the anonymous function-literal initializer has nowhere
+                         else to carry one. *)
                     | 'var' 'scoped'? identifier TypeClause                                  (* no initializer; binds the type's zero value *)
                     | 'let' '(' identifier (',' identifier)* ')' '=' Expression               (* tuple deconstruction *)
                     | 'let' '{' identifier '=' identifier (',' identifier '=' identifier)* '}' '=' Expression   (* named deconstruction *)
@@ -1485,9 +1538,13 @@ ForStmt           ::= 'for' Block
                     | 'for' SimpleStmt? ';' Expression? ';' SimpleStmt? Block
                     | 'for' identifier (',' identifier)? 'in' Expression Block
                     | 'for' identifier 'in' Expression '...' Expression Block
+ForTupleRangeStmt ::= 'for' '(' identifier (',' identifier)* ')' 'in' Expression Block   (* tuple deconstruction over a ValueTuple sequence, issue #1922 *)
 WhileStmt         ::= 'while' Expression Statement
 DoWhileStmt       ::= 'do' Statement 'while' Expression
-LabeledLoopStmt   ::= identifier ':' Statement            (* the binder requires the inner statement to be a loop, GS0294 *)
+LabeledStmt       ::= identifier ':' Statement            (* issue #1884: a label on a loop is an ADR-0070 break/continue target; a label on any other statement is a 'goto' jump target instead *)
+LockStmt          ::= 'lock' Expression Statement          (* issue #1885: mutual exclusion around the body, lowered to Monitor Enter/try/finally/Exit *)
+GotoStmt          ::= 'goto' identifier                    (* issue #1884: unconditional jump to a same-function 'label:' target *)
+CheckedStmt       ::= ('checked' | 'unchecked') Block       (* issue #1881: names the overflow-checking context for the block's statements; 'checked'/'unchecked' are contextual, recognised only immediately before '{' *)
 SimpleStmt        ::= ('var' | 'let') 'scoped'? 'ref'? identifier TypeClause? '=' Expression
                     | 'var' 'scoped'? identifier TypeClause
                     | IncDecStmt
@@ -1509,12 +1566,14 @@ OrPattern         ::= AndPattern ('or' AndPattern)*
 AndPattern        ::= UnaryPattern ('and' UnaryPattern)*
 UnaryPattern      ::= 'not' UnaryPattern | PrimaryPattern
 PrimaryPattern    ::= '(' Pattern ')'
-                    | '[' Pattern (',' Pattern)* ']'
+                    | '[' ListPatternElement (',' ListPatternElement)* ']'
                     | '{' identifier ':' Pattern (',' identifier ':' Pattern)* '}'
                     | identifier 'is' TypeClause
                     | '_'                                  (* discard: identifier '_' not followed by '(' or '.' *)
                     | ('<' | '<=' | '>' | '>=' | '==' | '!=') Expression
                     | Expression
+ListPatternElement ::= Pattern | SlicePattern
+SlicePattern      ::= '..' (identifier | Pattern)?           (* slice ("rest") subpattern, issue #1505: bare '..' discards the middle slice; '..name' captures it into a '[]T' binding; '..pattern' matches it against a nested pattern *)
 
 TryStmt           ::= 'try' Block CatchClause* FinallyClause?
 CatchClause       ::= 'catch' '(' identifier TypeClause? ')' Block
@@ -1547,11 +1606,12 @@ ConditionalExpression ::= RangeExpression ('?' Assignment ':' Assignment)?   (* 
 RangeExpression   ::= NullCoalescingExpression? '..' ('^'? NullCoalescingExpression)? | NullCoalescingExpression   (* standalone System.Range value, issue #1038; `..` binds looser than all binary operators. A leading '^' is rejected (GS0410); a '^' upper bound is a from-end marker. Suppressed inside an index bound (IndexArgument owns '..'); re-enabled inside parens/argument lists. *)
 NullCoalescingExpression ::= WithExpression ('??' NullCoalescingExpression)?  (* right-assoc null-coalescing, Issue #941 *)
 WithExpression    ::= BinaryExpression ('with' '{' FieldEqualsList? '}')*    (* non-destructive record update *)
-CompoundAssign    ::= '+=' | '-=' | '*=' | '/=' | '%=' | '^=' | '&=' | '|=' | '&^=' | '<<=' | '>>=' | '??='
+CompoundAssign    ::= '+=' | '-=' | '*=' | '/=' | '%=' | '^=' | '&=' | '|=' | '&^=' | '<<=' | '>>=' | '>>>=' | '??='   (* '>>>=' unsigned right shift assign, issue #1880 *)
 BinaryExpression  ::= PrefixExpression BinaryTail*
 BinaryTail        ::= BinaryOperator PrefixExpression
                     | ('is' | 'as' | '!' 'is') TypeClause                (* type test / cast, ADR-0069 *)
-BinaryOperator    ::= '*' | '/' | '%' | '<<' | '>>' | '&' | '&^'
+BinaryOperator    ::= '*' | '/' | '%' | '<<' | '>>' | '>>>' | '&' | '&^'
+                      (* '>>>' unsigned (logical) right shift, issue #1880: discards the sign bit instead of replicating it *)
                     | '+' | '-' | '|' | '^'
                     | '==' | '!=' | '<' | '<=' | '>' | '>='
                     | '&&'
@@ -1569,7 +1629,7 @@ PrimaryExpression ::= Literal | identifier
                     | FunctionLiteral | LambdaExpression
                     | SwitchExpr | IfExpression
                     | '(' Expression ')' | TupleLiteral
-                    | MakeChannel | TypeOf | NameOf | DefaultExpression | BaseInterfaceCall
+                    | MakeChannel | TypeOf | NameOf | DefaultExpression | BaseInterfaceCall | CheckedExpression
                     | ThrowExpr                                          (* throw-expression, issue #1018 *)
 Literal           ::= Number | String | InterpolatedString | 'true' | 'false' | 'nil' | char
 InterpolatedString ::= '"' ( InterpolationText | '$$' | '$' identifier | InterpolationHole )* '"'
@@ -1604,6 +1664,7 @@ TypeOf            ::= 'typeof' '(' TypeClause ')'
 NameOf            ::= 'nameof' '(' Expression ')'
 DefaultExpression ::= 'default' ('(' TypeClause ')')?                     (* ADR-0100 *)
 BaseInterfaceCall ::= 'base' '[' TypeClause ']' '.' identifier TypeArgList? '(' Arguments? ')'   (* explicit-base interface call, ADR-0091 *)
+CheckedExpression ::= ('checked' | 'unchecked') '(' Expression ')'         (* issue #1881: names the overflow-checking context for evaluating the argument expression *)
 IfExpression      ::= 'if' Expression Block ('else' (IfExpression | Block))?   (* if-as-expression, issue #669 *)
 TupleLiteral      ::= '(' Expression ',' Expression (',' Expression)* ')'
 Arguments         ::= Argument (',' Argument)*
