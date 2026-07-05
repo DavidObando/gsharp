@@ -416,6 +416,17 @@ public sealed class StructSymbol : TypeSymbol
     /// <summary>Gets the bound initializer expressions for instance fields with non-default values (Issue #640). Keyed by field symbol; iterated in <see cref="Fields"/> source order at emit time.</summary>
     public ImmutableDictionary<FieldSymbol, BoundExpression> InstanceFieldInitializers { get; private set; } = ImmutableDictionary<FieldSymbol, BoundExpression>.Empty;
 
+    /// <summary>
+    /// Gets the bound, lowered statements of the type's <c>shared { init { … } }</c>
+    /// static-initializer block(s) (ADR-0140 / issue #2131), concatenated in
+    /// source order. Emitted into the type's <c>.cctor</c> after the static-field
+    /// initializers. Defaults to empty.
+    /// </summary>
+    public ImmutableArray<BoundStatement> StaticInitializerStatements { get; private set; } = ImmutableArray<BoundStatement>.Empty;
+
+    /// <summary>Gets a value indicating whether the type declares a <c>shared { init { … } }</c> static-initializer block (ADR-0140 / issue #2131). Such a type must not be marked <c>beforefieldinit</c>.</summary>
+    public bool HasStaticInitializerBlock => !StaticInitializerStatements.IsDefaultOrEmpty;
+
     /// <summary>Gets the type parameters when this is a generic definition (Phase 4.3 / ADR-0020). Empty for non-generic types and for constructed instances.</summary>
     public ImmutableArray<TypeParameterSymbol> TypeParameters { get; private set; } = ImmutableArray<TypeParameterSymbol>.Empty;
 
@@ -744,6 +755,13 @@ public sealed class StructSymbol : TypeSymbol
     public void SetInstanceFieldInitializers(ImmutableDictionary<FieldSymbol, BoundExpression> initializers)
     {
         InstanceFieldInitializers = initializers;
+    }
+
+    /// <summary>Sets <see cref="StaticInitializerStatements"/> after binding the type's <c>shared { init { … } }</c> block(s) (ADR-0140 / issue #2131).</summary>
+    /// <param name="statements">The bound, lowered statements concatenated in source order.</param>
+    public void SetStaticInitializerStatements(ImmutableArray<BoundStatement> statements)
+    {
+        StaticInitializerStatements = statements;
     }
 
     /// <summary>Tries to find a static field by name on this type (ADR-0053).</summary>

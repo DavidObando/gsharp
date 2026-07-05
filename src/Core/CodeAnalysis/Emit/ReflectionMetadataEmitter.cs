@@ -1720,7 +1720,9 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             // Issue #262: plan .cctor row for classes with static field initializers.
-            if (!c.StaticFieldInitializers.IsEmpty)
+            // ADR-0140 / issue #2131: also plan it when the class declares a
+            // `shared { init { … } }` static-initializer block.
+            if (!c.StaticFieldInitializers.IsEmpty || c.HasStaticInitializerBlock)
             {
                 this.cache.CctorHandles[c] = MetadataTokens.MethodDefinitionHandle(methodRow++);
             }
@@ -1744,7 +1746,7 @@ internal sealed class ReflectionMetadataEmitter
         var structFirstMethodRows = new Dictionary<StructSymbol, int>();
         void PlanStructMethods(StructSymbol s)
         {
-            if (s.Methods.IsDefaultOrEmpty && !s.IsInline && !s.IsData && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty)
+            if (s.Methods.IsDefaultOrEmpty && !s.IsInline && !s.IsData && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty && !s.HasStaticInitializerBlock)
             {
                 return;
             }
@@ -1836,7 +1838,9 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             // Issue #262: plan .cctor row for structs with static field initializers.
-            if (!s.StaticFieldInitializers.IsEmpty)
+            // ADR-0140 / issue #2131: also plan it when the struct declares a
+            // `shared { init { … } }` static-initializer block.
+            if (!s.StaticFieldInitializers.IsEmpty || s.HasStaticInitializerBlock)
             {
                 this.cache.CctorHandles[s] = MetadataTokens.MethodDefinitionHandle(methodRow++);
             }
@@ -2936,7 +2940,7 @@ internal sealed class ReflectionMetadataEmitter
                 this.dataStructSynth.EmitDataStructSynthesizedMembers(s);
             }
 
-            if (s.Methods.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty)
+            if (s.Methods.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty && !s.HasStaticInitializerBlock)
             {
                 return;
             }
@@ -3977,6 +3981,15 @@ internal sealed class ReflectionMetadataEmitter
                 var assignment = new BoundFieldAssignmentExpression(null, null, typeSym, field, initExpr);
                 statements.Add(new BoundExpressionStatement(null, assignment));
             }
+        }
+
+        // ADR-0140 / issue #2131: append the type's `shared { init { … } }`
+        // static-initializer statements after the field initializers, in source
+        // order, so they run as part of the same `.cctor` (matching a C# static
+        // constructor whose body follows the field initializers).
+        if (typeSym.HasStaticInitializerBlock)
+        {
+            statements.AddRange(typeSym.StaticInitializerStatements);
         }
 
         var body = new BoundBlockStatement(null, statements.ToImmutable());

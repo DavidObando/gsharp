@@ -2312,6 +2312,7 @@ public class Parser
         var properties = ImmutableArray.CreateBuilder<PropertyDeclarationSyntax>();
         var events = ImmutableArray.CreateBuilder<EventDeclarationSyntax>();
         var methods = ImmutableArray.CreateBuilder<FunctionDeclarationSyntax>();
+        var initBlocks = ImmutableArray.CreateBuilder<StaticInitializerBlockSyntax>();
 
         while (Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken)
         {
@@ -2372,7 +2373,29 @@ public class Parser
                 }
             }
 
-            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "init"
+                && Peek(1).Kind == SyntaxKind.OpenBraceToken)
+            {
+                // ADR-0140 / issue #2131: an `init { … }` static-initializer
+                // block inside a `shared` block. `init` is contextual — it is
+                // only special as the first token of a shared-block member,
+                // immediately followed by `{`. Its statements emit into the
+                // type's `.cctor` after the static-field initializers.
+                if (sharedMemberAsyncModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(sharedMemberAsyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);
+                }
+
+                if (memberAccessibility != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(memberAccessibility.Location, memberAccessibility.Kind, SyntaxKind.IdentifierToken);
+                }
+
+                var initKeyword = NextToken();
+                var initBody = ParseBlockStatement();
+                initBlocks.Add(new StaticInitializerBlockSyntax(syntaxTree, initKeyword, initBody));
+            }
+            else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
             {
                 if (sharedMemberAsyncModifier != null)
                 {
@@ -2447,6 +2470,7 @@ public class Parser
             properties.ToImmutable(),
             events.ToImmutable(),
             methods.ToImmutable(),
+            initBlocks.ToImmutable(),
             closeBrace);
     }
 

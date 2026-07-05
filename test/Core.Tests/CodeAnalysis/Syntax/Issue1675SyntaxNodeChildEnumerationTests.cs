@@ -52,6 +52,9 @@ public class Issue1675SyntaxNodeChildEnumerationTests
         // generic static receiver
         "package p\nstruct Box[T] { shared { func Make(x int32) int32 { return x } } }\nclass C { func F() int32 { return Box[int32?].Make(5) } }\n",
 
+        // ADR-0140 / issue #2131: shared { init { … } } static-initializer block
+        "package p\nclass W { shared { var Count int32 = 0\n init { Count = 1 } } }\n",
+
         // multi-assignment
         "package p\nfunc F() {\n  var a = 1\n  var b = 2\n  a, b = b, a\n}\n",
 

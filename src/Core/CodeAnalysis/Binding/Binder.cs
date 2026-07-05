@@ -1495,6 +1495,16 @@ public sealed class Binder
             }
         }
 
+        // ADR-0140 / issue #2131: bind `shared { init { … } }` static-initializer
+        // blocks. Their statements run in the type's `.cctor` after the
+        // static-field initializers. Bound in a static context whose owner is
+        // the enclosing type so bare static-member names resolve (and are
+        // assignable), then lowered once and stored on the type symbol.
+        foreach (var structSym in globalScope.Structs)
+        {
+            BindStaticInitializerBlocks(parentScope, structSym, diagnostics);
+        }
+
         var statement = Lowerer.Lower(new BoundBlockStatement(null, globalScope.Statements));
 
         // If the entry point is the synthesized top-level function, its body is
@@ -1739,6 +1749,53 @@ public sealed class Binder
         });
 
         functionBodies.Add(method, loweredBody);
+    }
+
+    /// <summary>
+    /// ADR-0140 / issue #2131: binds the <c>shared { init { … } }</c>
+    /// static-initializer block(s) of <paramref name="structSym"/> and records
+    /// the bound, lowered statements on the symbol. The statements are bound in
+    /// a static context whose <see cref="FunctionSymbol.StaticOwnerType"/> is the
+    /// enclosing type, so bare static-field/property names resolve and are
+    /// assignable — matching a C# static-constructor body. Multiple blocks are
+    /// concatenated in source order and lowered as a single block so generated
+    /// labels stay unique.
+    /// </summary>
+    /// <param name="parentScope">The parent scope the block is bound against.</param>
+    /// <param name="structSym">The type whose init block(s) are being bound.</param>
+    /// <param name="diagnostics">The program-level diagnostics accumulator.</param>
+    private static void BindStaticInitializerBlocks(
+        BoundScope parentScope,
+        StructSymbol structSym,
+        ImmutableArray<Diagnostic>.Builder diagnostics)
+    {
+        var initBlocks = structSym.Declaration?.SharedBlock?.InitBlocks ?? ImmutableArray<StaticInitializerBlockSyntax>.Empty;
+        if (initBlocks.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        var context = new FunctionSymbol(
+            "<static-initializer>",
+            ImmutableArray<ParameterSymbol>.Empty,
+            TypeSymbol.Void)
+        {
+            IsStatic = true,
+            StaticOwnerType = structSym,
+        };
+
+        var binder = new Binder(parentScope, context);
+        var boundBlocks = ImmutableArray.CreateBuilder<BoundStatement>();
+        foreach (var initBlock in initBlocks)
+        {
+            boundBlocks.Add(binder.statements.BindStatement(initBlock.Body));
+        }
+
+        binder.statements.FinalizeUserLabels();
+        var combined = new BoundBlockStatement(null, boundBlocks.ToImmutable());
+        var lowered = Lowerer.Lower(combined, structSym);
+        diagnostics.AddRange(binder.Diagnostics.ToImmutableArray());
+        structSym.SetStaticInitializerStatements(lowered.Statements);
     }
 
     /// <summary>
