@@ -219,7 +219,7 @@
         },
         {
           "name": "keyword.modifier.contextual.gsharp",
-          "match": "\\b(and|convenience|data|deinit|delegate|event|explicit|fixed|implicit|in|init|inline|make|nameof|not|or|out|params|prop|raise|record|ref|remove|scoped|shared|stackalloc|typeof|unmanaged|unsafe|when|with|yield)\\b"
+          "match": "\\b(and|checked|convenience|data|deinit|delegate|event|explicit|fixed|implicit|in|init|inline|make|nameof|not|or|out|params|prop|raise|record|ref|remove|scoped|shared|stackalloc|typeof|unchecked|unmanaged|unsafe|when|with|yield)\\b"
         },
         {
           "name": "keyword.other.accessor.gsharp",
@@ -268,7 +268,7 @@
         },
         {
           "name": "keyword.operator.assignment.gsharp",
-          "match": "<<=|>>="
+          "match": "<<=|>>>=|>>="
         },
         {
           "name": "keyword.operator.null-coalescing.gsharp",
@@ -312,7 +312,7 @@
         },
         {
           "name": "keyword.operator.bitwise.gsharp",
-          "match": "<<|>>"
+          "match": "<<|>>>|>>"
         },
         {
           "name": "keyword.operator.logical.gsharp",
