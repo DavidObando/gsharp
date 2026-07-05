@@ -1305,6 +1305,30 @@ internal sealed partial class ExpressionBinder
             return typeof(object);
         }
 
+        // Issue #2142: a nullable user reference type (`UserClass?`) erases to
+        // the same CLR ride-through as its non-nullable form — nullability is an
+        // annotation only for reference types, so overload resolution (and the
+        // erased-delegate build used for a lambda whose return is `UserClass?`,
+        // e.g. `(e Book) -> e.Conversion` where `Conversion` is a
+        // same-compilation class) must not bail out. Without this, a lambda
+        // argument returning `UserClass?` produced no effective CLR type, so the
+        // whole call failed overload resolution with GS0159 (e.g. EF Core's
+        // `EntityTypeBuilder<Book>.HasOne((e) -> e.Conversion)` where the
+        // navigation property is nullable).
+        if (typeSymbol is NullableTypeSymbol { UnderlyingType: StructSymbol { IsClass: true } nullableUserClass })
+        {
+            return nullableUserClass.ImportedBaseType?.ClrType ?? typeof(object);
+        }
+
+        // A nullable user value struct / interface / named delegate rides
+        // through the same `object` boundary as its non-nullable form.
+        if (typeSymbol is NullableTypeSymbol { UnderlyingType: StructSymbol }
+            || typeSymbol is NullableTypeSymbol { UnderlyingType: InterfaceSymbol }
+            || typeSymbol is NullableTypeSymbol { UnderlyingType: DelegateTypeSymbol })
+        {
+            return typeof(object);
+        }
+
         // User-defined G# class: provide the imported base type's CLR type
         // so that overload resolution can proceed (base-class assignability
         // and the supplementary interface check handle the rest).
