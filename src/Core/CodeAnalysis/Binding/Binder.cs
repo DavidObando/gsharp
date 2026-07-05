@@ -2480,21 +2480,7 @@ public sealed class Binder
                 // CLR shape so member / index / conversion resolution keeps
                 // working, while the symbolic `[T]` is preserved on the result
                 // for inference, substitution, and erased emit.
-                if (TypeSymbol.ContainsTypeParameter(ta))
-                {
-                    hasTypeParameterArg = true;
-                    clrArgs[i] = scope.References.MapClrTypeToReferences(typeof(object));
-                    continue;
-                }
-
-                // Issue #671: a user-defined G# type (class, struct,
-                // interface, enum, delegate) used as a type argument to a CLR
-                // generic has no ClrType at bind time — the CLR TypeDef is only
-                // produced during emit. Handle the same way as type parameters:
-                // project onto System.Object for the closed CLR shape and
-                // preserve the symbolic argument via GetConstructed so the
-                // emitter can recover the real type.
-                if (ta.ClrType == null)
+                if (TypeSymbol.ContainsTypeParameter(ta) || TypeSymbol.ContainsSameCompilationUserType(ta))
                 {
                     hasTypeParameterArg = true;
                     clrArgs[i] = scope.References.MapClrTypeToReferences(typeof(object));
@@ -3473,7 +3459,7 @@ public sealed class Binder
 
             // #313 / #671: in-scope type parameters and user types without a
             // ClrType project onto System.Object under the type-erased model.
-            if (TypeSymbol.ContainsTypeParameter(ta) || ta.ClrType == null)
+            if (TypeSymbol.ContainsTypeParameter(ta) || TypeSymbol.ContainsSameCompilationUserType(ta) || ta.ClrType == null)
             {
                 hasTypeParameterArg = true;
                 clrArgs[i] = scope.References.MapClrTypeToReferences(typeof(object));

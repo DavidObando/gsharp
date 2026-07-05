@@ -1198,6 +1198,119 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
+    /// Issue #2130: resolves the effective lambda target shape for any target
+    /// type that may consume a source lambda — a native function type, a
+    /// delegate, or <c>System.Linq.Expressions.Expression&lt;TDelegate&gt;</c>.
+    /// Returns the underlying delegate/function signature that should be used
+    /// for target-typed lambda parameter/return binding.
+    /// </summary>
+    /// <param name="type">The candidate lambda target type.</param>
+    /// <param name="functionType">The effective function-type shape, on success.</param>
+    /// <returns><see langword="true"/> when <paramref name="type"/> is a valid lambda target.</returns>
+    public static bool TryGetLambdaTargetFunctionTypeFromSymbol(TypeSymbol type, out FunctionTypeSymbol functionType)
+    {
+        if (TryGetDelegateFunctionTypeFromSymbol(type, out functionType))
+        {
+            return true;
+        }
+
+        if (!TryGetExpressionTreeDelegateTypeFromSymbol(type, out var delegateType) || delegateType == null)
+        {
+            functionType = null;
+            return false;
+        }
+
+        return TryGetDelegateFunctionTypeFromSymbol(delegateType, out functionType);
+    }
+
+    /// <summary>
+    /// Issue #2130: resolves the effective lambda target shape for a CLR
+    /// delegate or expression-tree type.
+    /// </summary>
+    /// <param name="type">The candidate lambda target CLR type.</param>
+    /// <param name="functionType">The effective function-type shape, on success.</param>
+    /// <returns><see langword="true"/> when <paramref name="type"/> is a valid lambda target.</returns>
+    public static bool TryGetLambdaTargetFunctionType(Type type, out FunctionTypeSymbol functionType)
+    {
+        if (TryGetDelegateFunctionType(type, out functionType))
+        {
+            return true;
+        }
+
+        if (!TryGetExpressionTreeDelegateType(type, out var delegateType) || delegateType == null)
+        {
+            functionType = null;
+            return false;
+        }
+
+        return TryGetDelegateFunctionType(delegateType, out functionType);
+    }
+
+    /// <summary>
+    /// Issue #2130: returns the delegate type argument of a
+    /// <c>System.Linq.Expressions.Expression&lt;TDelegate&gt;</c> target.
+    /// </summary>
+    /// <param name="type">The candidate expression-tree target type.</param>
+    /// <param name="delegateType">The delegate type argument, on success.</param>
+    /// <returns><see langword="true"/> when <paramref name="type"/> is an expression-tree target.</returns>
+    public static bool TryGetExpressionTreeDelegateTypeFromSymbol(TypeSymbol type, out TypeSymbol delegateType)
+    {
+        delegateType = null;
+        if (type == null)
+        {
+            return false;
+        }
+
+        if (type is ImportedTypeSymbol imported
+            && imported.OpenDefinition != null
+            && string.Equals(imported.OpenDefinition.FullName, "System.Linq.Expressions.Expression`1", StringComparison.Ordinal)
+            && imported.TypeArguments.Length == 1)
+        {
+            delegateType = imported.TypeArguments[0];
+            return true;
+        }
+
+        if (type.ClrType == null || !TryGetExpressionTreeDelegateType(type.ClrType, out var delegateClrType))
+        {
+            return false;
+        }
+
+        delegateType = TypeSymbol.FromClrType(delegateClrType);
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #2130: returns the delegate type argument of a CLR
+    /// <c>Expression&lt;TDelegate&gt;</c> target.
+    /// </summary>
+    /// <param name="type">The candidate CLR expression-tree target type.</param>
+    /// <param name="delegateType">The delegate type argument, on success.</param>
+    /// <returns><see langword="true"/> when <paramref name="type"/> is an expression-tree target.</returns>
+    public static bool TryGetExpressionTreeDelegateType(Type type, out Type delegateType)
+    {
+        delegateType = null;
+        if (type == null || !type.IsGenericType)
+        {
+            return false;
+        }
+
+        var open = type.IsGenericTypeDefinition ? type : type.GetGenericTypeDefinition();
+        if (!string.Equals(open.FullName, "System.Linq.Expressions.Expression`1", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var args = type.GetGenericArguments();
+        if (args.Length != 1)
+        {
+            return false;
+        }
+
+        delegateType = args[0];
+        return true;
+    }
+
+    /// <summary>
     /// Probes <paramref name="delegateType"/> for the canonical delegate
     /// shape (<see cref="System.MulticastDelegate"/>-derived, or
     /// <c>System.Func`N</c>/<c>System.Action`N</c>) and exposes the

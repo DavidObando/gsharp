@@ -403,6 +403,12 @@ public class Compilation
         // enclosing type parameter don't erase it under cs2gs.
         program = Lowering.CaptureBoxingRewriter.Lower(program, (References ?? Symbols.ReferenceResolver.Default()).MapClrTypeToReferences);
 
+        // Issue #2130: after capture-boxing has introduced the closure cells
+        // expression trees must reference, rewrite lambda-to-expression-tree
+        // conversions into ordinary bound calls to System.Linq.Expressions
+        // factory methods.
+        program = Lowering.ExpressionTreeLowerer.Lower(program);
+
         var (lowered, loweredProgram, lowerDiagnostics) = LowerForEmit(program, References ?? Symbols.ReferenceResolver.Default());
         if (lowerDiagnostics.Any(d => d.IsError))
         {
@@ -517,6 +523,12 @@ public class Compilation
         // box classes hoisting an imported constructed generic over an
         // enclosing type parameter don't erase it under cs2gs.
         program = Lowering.CaptureBoxingRewriter.Lower(program, (References ?? Symbols.ReferenceResolver.Default()).MapClrTypeToReferences);
+
+        // Issue #2130: after capture-boxing has introduced the closure cells
+        // expression trees must reference, rewrite lambda-to-expression-tree
+        // conversions into ordinary bound calls to System.Linq.Expressions
+        // factory methods.
+        program = Lowering.ExpressionTreeLowerer.Lower(program);
 
         var (lowered, loweredProgram, lowerDiagnostics) = LowerForEmit(program, References ?? Symbols.ReferenceResolver.Default());
         if (lowerDiagnostics.Any(d => d.IsError))

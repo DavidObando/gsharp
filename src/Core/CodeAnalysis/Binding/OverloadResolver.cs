@@ -657,9 +657,29 @@ internal sealed class OverloadResolver
             || literal.FunctionType is not FunctionTypeSymbol literalFnType
             || literalFnType.ReturnType == TypeSymbol.Void
             || literalFnType.ReturnType == TypeSymbol.Error
-            || !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(expectedType, out var targetFnType)
+            || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(expectedType, out var targetFnType)
             || targetFnType.ReturnType != TypeSymbol.Void
             || targetFnType.Arity != literalFnType.Arity)
+        {
+            return false;
+        }
+
+        var converted = conversions.BindConversion(location, literal, expectedType);
+        if (converted is BoundErrorExpression)
+        {
+            return false;
+        }
+
+        result = converted;
+        return true;
+    }
+
+    private bool TryConvertLiteralArgumentToExpressionTree(BoundExpression argument, TypeSymbol expectedType, TextLocation location, out BoundExpression result)
+    {
+        result = null;
+        if (expectedType == null
+            || !tryGetFunctionLiteral(argument, out var literal)
+            || !MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(expectedType, out _))
         {
             return false;
         }
@@ -2996,6 +3016,12 @@ internal sealed class OverloadResolver
             if (argument.Type != parameter.Type
                 && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
             {
+                if (TryConvertLiteralArgumentToExpressionTree(argument, parameter.Type, parameterSyntax[i].Location, out var expressionTreeArg))
+                {
+                    boundArguments[i] = expressionTreeArg;
+                    continue;
+                }
+
                 // Issue #889: arrow/func literal → void-returning delegate.
                 if (TryConvertLiteralArgumentToVoidDelegate(argument, parameter.Type, parameterSyntax[i].Location, out var voidDelegateArg))
                 {
@@ -3395,6 +3421,12 @@ internal sealed class OverloadResolver
             if (argument.Type != paramType
                 && !Conversion.Classify(argument.Type, paramType).IsImplicit)
             {
+                if (TryConvertLiteralArgumentToExpressionTree(argument, paramType, argLocation, out var expressionTreeArg))
+                {
+                    convertedArguments.Add(expressionTreeArg);
+                    continue;
+                }
+
                 // Issue #889: arrow/func literal → void-returning delegate.
                 if (TryConvertLiteralArgumentToVoidDelegate(argument, paramType, argLocation, out var voidDelegateArg))
                 {
@@ -3816,6 +3848,12 @@ internal sealed class OverloadResolver
             if (argument.Type != parameter.Type
                 && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
             {
+                if (TryConvertLiteralArgumentToExpressionTree(argument, parameter.Type, argLocation, out var expressionTreeArg))
+                {
+                    convertedArgs.Add(expressionTreeArg);
+                    continue;
+                }
+
                 // Issue #889: arrow/func literal → void-returning delegate.
                 if (TryConvertLiteralArgumentToVoidDelegate(argument, parameter.Type, argLocation, out var voidDelegateArg))
                 {
@@ -4045,7 +4083,7 @@ internal sealed class OverloadResolver
         result = null;
         if (syntax.NullableQuestionToken == null
             || variable.Type is not NullableTypeSymbol nullable
-            || !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(nullable.UnderlyingType, out var functionType))
+            || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(nullable.UnderlyingType, out var functionType))
         {
             return false;
         }
@@ -5187,7 +5225,7 @@ internal sealed class OverloadResolver
                     && expectedType != null
                     && expectedType != TypeSymbol.Error
                     && !TypeSymbol.ContainsTypeParameter(expectedType)
-                    && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(expectedType, out var deferredTarget)
+                    && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(expectedType, out var deferredTarget)
                     && deferredTarget != null)
                 {
                     var targeted = bindLambdaWithTarget(deferredLambda, deferredTarget);
@@ -5336,7 +5374,7 @@ internal sealed class OverloadResolver
                 && widenLiteralArg.FunctionType is FunctionTypeSymbol widenLiteralFnType
                 && widenLiteralFnType.ReturnType != TypeSymbol.Void
                 && widenLiteralFnType.ReturnType != TypeSymbol.Error
-                && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(expectedType, out var widenTargetFn)
+                && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(expectedType, out var widenTargetFn)
                 && widenTargetFn != null
                 && widenTargetFn.Arity == widenLiteralFnType.Arity
                 && widenTargetFn.ReturnType != TypeSymbol.Void
@@ -5427,6 +5465,12 @@ internal sealed class OverloadResolver
             {
                 // Issue #889: arrow/func literal → void-returning delegate.
                 var voidDelegateLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
+                if (TryConvertLiteralArgumentToExpressionTree(argument, expectedType, voidDelegateLoc, out var expressionTreeArg))
+                {
+                    boundArguments[i] = expressionTreeArg;
+                    continue;
+                }
+
                 if (TryConvertLiteralArgumentToVoidDelegate(argument, expectedType, voidDelegateLoc, out var voidDelegateArg))
                 {
                     boundArguments[i] = voidDelegateArg;
@@ -6175,7 +6219,7 @@ internal sealed class OverloadResolver
                     continue;
                 }
 
-                if (MemberLookup.TryGetDelegateFunctionType(paramType.ClrType ?? expectedType.ClrType, out var targetDelegateFunctionType)
+                if (MemberLookup.TryGetLambdaTargetFunctionType(paramType.ClrType ?? expectedType.ClrType, out var targetDelegateFunctionType)
                     && functionLiteralArgument.FunctionType != targetDelegateFunctionType)
                 {
                     convertedArgs.Add(createErasedFunctionLiteralAdapter(functionLiteralArgument, targetDelegateFunctionType));
