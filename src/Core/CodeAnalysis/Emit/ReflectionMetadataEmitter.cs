@@ -664,6 +664,54 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    /// <summary>
+    /// Issue #2123: eagerly resolves the interface-constraint handles of the
+    /// <c>GenericParam</c> rows added for a synthesized closure / capture-box /
+    /// reified class since <paramref name="gpRowStart"/>, while that class's
+    /// enclosing-TP → own-<c>VAR(idx)</c> remap
+    /// (<see cref="activeIteratorStateMachineRemap"/>) is still active.
+    /// </summary>
+    /// <remarks>
+    /// A class reified generic over its enclosing type parameters
+    /// (<see cref="SynthesizedClosureReifier.Reify"/>) carries type-parameter
+    /// constraints that still textually reference the ORIGINAL enclosing type
+    /// parameters: <see cref="SynthesizedClosureReifier.CloneWithRemappedConstraints"/>
+    /// cannot rewrite an imported constructed-generic constraint such as
+    /// <c>IComparable[T]</c> (its <see cref="ImportedTypeSymbol"/> substitution
+    /// leaves the original symbolic argument in place). The deferred
+    /// <c>GenericParamConstraint</c> rows would otherwise be resolved at flush
+    /// time — after the remap is gone — encoding the enclosing METHOD type
+    /// parameter as <c>!!0</c> (MVar) instead of this class's own <c>!0</c>
+    /// (Var). That mismatch makes the class's constraint unsatisfiable, so the
+    /// <c>constrained.</c> interface call inside a capturing lambda's
+    /// display-class <c>Invoke</c> fails verification
+    /// (<c>StackUnexpected</c>). Resolving here, with the remap active, encodes
+    /// the class's own <c>Var</c> slot. Mirrors the #2118 non-capturing method
+    /// path (which resolves against <see cref="activeLambdaMethodTypeParamRemap"/>).
+    /// No-op when no reified-class remap is active (unregistered class).
+    /// </remarks>
+    /// <param name="gpRowStart">The <c>PendingGenericParameters</c> count captured before the class's TypeDef was emitted.</param>
+    private void PreResolveReifiedGenericConstraints(int gpRowStart)
+    {
+        if (this.activeIteratorStateMachineRemap == null)
+        {
+            return;
+        }
+
+        var pendingRows = this.emitCtx.PendingGenericParameters;
+        for (var gi = gpRowStart; gi < pendingRows.Count; gi++)
+        {
+            var gpRow = pendingRows[gi];
+            if (gpRow.InterfaceConstraintType != null && gpRow.PreResolvedConstraintHandle == null)
+            {
+                pendingRows[gi] = gpRow with
+                {
+                    PreResolvedConstraintHandle = this.GetElementTypeToken(gpRow.InterfaceConstraintType),
+                };
+            }
+        }
+    }
+
     private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly)
     {
         this.emitCtx = new EmitContext(program, references, assemblyName, metadataOnly);
@@ -2079,7 +2127,9 @@ internal sealed class ReflectionMetadataEmitter
             // slots. No-op for every other class (unregistered → restore:false).
             using (this.PushSmRemap(c))
             {
+                var gpRowStart = this.emitCtx.PendingGenericParameters.Count;
                 this.typeDefEmitter.EmitStructTypeDef(c, structFirstFieldRow[c], classCtorRows[c]);
+                this.PreResolveReifiedGenericConstraints(gpRowStart);
             }
 
             EmitInterfaceImplRows(c);
@@ -2250,7 +2300,9 @@ internal sealed class ReflectionMetadataEmitter
                     // slots. No-op for every other struct.
                     using (this.PushSmRemap(ns))
                     {
+                        var gpRowStart = this.emitCtx.PendingGenericParameters.Count;
                         this.typeDefEmitter.EmitStructTypeDef(ns, structFirstFieldRow[ns], nestedMethodListRow[ns]);
+                        this.PreResolveReifiedGenericConstraints(gpRowStart);
                     }
 
                     EmitInterfaceImplRows(ns);
