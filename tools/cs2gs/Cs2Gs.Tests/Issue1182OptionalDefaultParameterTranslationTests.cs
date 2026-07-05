@@ -77,8 +77,10 @@ namespace Corpus.Issue1182
     {
         string rendered = Render();
 
-        // A reference-type `= null` and a nullable value-type `= null` both become `= nil`.
-        Assert.Contains("name string = nil", rendered, StringComparison.Ordinal);
+        // A reference-type `= null` default is null-tainted, so under a
+        // nullable-oblivious compilation issue #2113 promotes it to `string?`; a
+        // nullable value-type `= null` is `int32?`. Both render `= nil`.
+        Assert.Contains("name string? = nil", rendered, StringComparison.Ordinal);
         Assert.Contains("count int32? = nil", rendered, StringComparison.Ordinal);
     }
 
