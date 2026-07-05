@@ -1249,6 +1249,25 @@ internal sealed class LambdaBinder
         var trailingIsVoidPlaceholder = boundBody is BoundBlockExpression { Expression: BoundLiteralExpression { Type: var trailingLit } }
             && trailingLit == TypeSymbol.Void;
 
+        // Issue #2152: in G#'s Kotlin-like semantics an assignment yields
+        // Unit/void, so a block-body lambda whose trailing expression is an
+        // assignment (simple `=` or a compound `+=`/`-=`/... which the binder
+        // represents with the same assignment bound nodes) contributes `void`
+        // — not the assigned value's type — to target-less return-type
+        // inference. Without this, `(x bool) -> { field = x }` was inferred as
+        // `(bool) -> bool` and failed to match an `Action`-style
+        // `(bool) -> void` delegate parameter during overload resolution
+        // (GS0266/GS0154). This mirrors the target-typed void-discard branch
+        // (issue #889) below and the value-discarding statement the emitter
+        // produces (see EmitTrailingExpression). It only fires on the
+        // target-less path (targetFunctionType == null); the target-typed
+        // paths already reconcile the assignment against the delegate's return
+        // type and are left untouched.
+        var trailingExpression = boundBody is BoundBlockExpression trailingBlock
+            ? trailingBlock.Expression
+            : boundBody;
+        var trailingIsAssignment = IsAssignmentExpression(trailingExpression);
+
         // Issue #891: a block-body arrow lambda whose body never completes
         // normally — every path throws (or otherwise terminates) without a
         // value-producing `return` — has no natural return value. C# treats
@@ -1273,7 +1292,12 @@ internal sealed class LambdaBinder
         var candidates = new List<TypeSymbol>();
         if (!(hasExplicitReturn && trailingIsVoidPlaceholder))
         {
-            candidates.Add(trailingType);
+            // Issue #2152: a trailing assignment contributes void on the
+            // target-less inference path (see the note above).
+            var trailingCandidate = trailingIsAssignment && targetFunctionType == null
+                ? TypeSymbol.Void
+                : trailingType;
+            candidates.Add(trailingCandidate);
         }
 
         candidates.AddRange(returnTypes);
@@ -1337,6 +1361,22 @@ internal sealed class LambdaBinder
 
         return result ?? TypeSymbol.Error;
     }
+
+    // Issue #2152: recognizes every bound-node shape the binder uses to
+    // represent an assignment — the simple `=` variants across the different
+    // assignment targets (locals, fields, properties, indexers, CLR members,
+    // pointers) as well as compound `+=`/`-=`/... forms, which the binder
+    // lowers into these same nodes. Used by InferLambdaReturnType to treat a
+    // trailing assignment as contributing `void` (G#'s Kotlin-like Unit
+    // semantics) on the target-less inference path.
+    private static bool IsAssignmentExpression(BoundExpression expression)
+        => expression?.Kind is BoundNodeKind.AssignmentExpression
+            or BoundNodeKind.FieldAssignmentExpression
+            or BoundNodeKind.PropertyAssignmentExpression
+            or BoundNodeKind.IndexAssignmentExpression
+            or BoundNodeKind.ClrPropertyAssignmentExpression
+            or BoundNodeKind.ClrIndexAssignmentExpression
+            or BoundNodeKind.IndirectAssignmentExpression;
 
     // ADR-0076 / issue #716: a trimmed copy of ExpressionBinder's common-
     // type rule (ADR-0062). Kept here to avoid widening the binder API
