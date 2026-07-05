@@ -358,6 +358,27 @@ public sealed class SharedBlock : GMember
 }
 
 /// <summary>
+/// A static-initializer block mapped to the canonical G# <c>init { … }</c> form
+/// that lives inside a <c>shared { }</c> block (ADR-0140, ADR-0115 §B.11). It
+/// carries the body of a non-foldable C# <c>static</c> constructor, lowering
+/// into the type's <c>.cctor</c> after static field initializers.
+/// </summary>
+public sealed class StaticInitializerBlock : GMember
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="StaticInitializerBlock"/> class.
+    /// </summary>
+    /// <param name="body">The static-initializer body.</param>
+    public StaticInitializerBlock(BlockStatement body)
+    {
+        Body = body;
+    }
+
+    /// <summary>Gets the static-initializer body.</summary>
+    public BlockStatement Body { get; }
+}
+
+/// <summary>
 /// A class finalizer / destructor mapped to the canonical G# <c>deinit { … }</c>
 /// form (ADR-0068; class-only, no parameters or return type). Maps the C#
 /// <c>~Type() { … }</c> destructor.
