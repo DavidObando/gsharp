@@ -319,43 +319,140 @@ internal static class ObliviousNullabilityAnalyzer
     {
         foreach (SyntaxNode node in root.DescendantNodes())
         {
-            ExpressionSyntax arrowBody = null;
-            ISymbol returnSymbol = null;
-
             switch (node)
             {
                 case MethodDeclarationSyntax method:
-                    returnSymbol = model.GetDeclaredSymbol(method);
-                    arrowBody = method.ExpressionBody?.Expression;
+                    SeedMethodLikeReturnTaint(
+                        model.GetDeclaredSymbol(method),
+                        method.ExpressionBody?.Expression,
+                        method.Body,
+                        model,
+                        tainted,
+                        edges);
                     break;
 
                 case LocalFunctionStatementSyntax localFunction:
-                    returnSymbol = model.GetDeclaredSymbol(localFunction);
-                    arrowBody = localFunction.ExpressionBody?.Expression;
+                    SeedMethodLikeReturnTaint(
+                        model.GetDeclaredSymbol(localFunction),
+                        localFunction.ExpressionBody?.Expression,
+                        localFunction.Body,
+                        model,
+                        tainted,
+                        edges);
                     break;
 
-                default:
-                    continue;
+                // Property / indexer getters: the "return type" is the
+                // property's own type and the taint TARGET is the property
+                // symbol itself. A getter whose expression body / `get` accessor
+                // yields a nullable (`?.` / `??` / ternary / `return null`)
+                // value must be emitted as `T?` (issue #2157).
+                case PropertyDeclarationSyntax property:
+                    SeedPropertyLikeReturnTaint(
+                        model.GetDeclaredSymbol(property),
+                        property.ExpressionBody?.Expression,
+                        property.AccessorList,
+                        model,
+                        tainted,
+                        edges);
+                    break;
+
+                case IndexerDeclarationSyntax indexer:
+                    SeedPropertyLikeReturnTaint(
+                        model.GetDeclaredSymbol(indexer),
+                        indexer.ExpressionBody?.Expression,
+                        indexer.AccessorList,
+                        model,
+                        tainted,
+                        edges);
+                    break;
             }
+        }
+    }
 
-            if (returnSymbol is not IMethodSymbol { ReturnsVoid: false } methodSymbol)
+    private static void SeedMethodLikeReturnTaint(
+        ISymbol returnSymbol,
+        ExpressionSyntax arrowBody,
+        BlockSyntax body,
+        SemanticModel model,
+        HashSet<ISymbol> tainted,
+        List<(ISymbol Target, ISymbol Source)> edges)
+    {
+        if (returnSymbol is not IMethodSymbol { ReturnsVoid: false })
+        {
+            return;
+        }
+
+        ISymbol canonicalReturn = Canonical(returnSymbol);
+
+        if (arrowBody != null)
+        {
+            ApplyReturnValue(canonicalReturn, arrowBody, model, tainted, edges, transitive: true);
+        }
+
+        foreach (ReturnStatementSyntax statement in EnumerateOwnReturns(body))
+        {
+            if (statement.Expression != null)
             {
-                continue;
+                ApplyReturnValue(canonicalReturn, statement.Expression, model, tainted, edges, transitive: true);
             }
+        }
+    }
 
-            ISymbol canonicalReturn = Canonical(methodSymbol);
+    private static void SeedPropertyLikeReturnTaint(
+        IPropertySymbol propertySymbol,
+        ExpressionSyntax propertyArrowBody,
+        AccessorListSyntax accessorList,
+        SemanticModel model,
+        HashSet<ISymbol> tainted,
+        List<(ISymbol Target, ISymbol Source)> edges)
+    {
+        // Only reference-typed, not-already-nullable property/indexer types are
+        // governed by this analysis; value types and `T?` declarations are left
+        // untouched.
+        if (propertySymbol is not { Type.IsReferenceType: true } ||
+            propertySymbol.Type.NullableAnnotation == NullableAnnotation.Annotated)
+        {
+            return;
+        }
 
-            if (arrowBody != null)
+        ISymbol canonicalReturn = Canonical(propertySymbol);
+
+        // A property/indexer getter is DIRECT-taint only: a syntactically
+        // nullable body (`?.` / `??`-with-nullable-fallback / ternary /
+        // `return null`) promotes the property to `T?` (issue #2157). We do NOT
+        // record transitive edges here — a getter that merely FORWARDS another
+        // (only-transitively-nullable) declaration keeps its declared type and
+        // relies on the translator's null-forgiveness pass (issue #1354) to
+        // assert the forwarded value non-null, preserving the property contract
+        // for overrides / interface members.
+
+        // `Prop => expr;`
+        if (propertyArrowBody != null)
+        {
+            ApplyReturnValue(canonicalReturn, propertyArrowBody, model, tainted, edges, transitive: false);
+        }
+
+        // Only the `get` accessor produces the property value; `set`/`init`
+        // return void and are ignored.
+        AccessorDeclarationSyntax getter = accessorList?.Accessors
+            .FirstOrDefault(a => a.IsKind(SyntaxKind.GetAccessorDeclaration));
+        if (getter == null)
+        {
+            return;
+        }
+
+        // `get => expr;`
+        if (getter.ExpressionBody?.Expression is ExpressionSyntax getterArrow)
+        {
+            ApplyReturnValue(canonicalReturn, getterArrow, model, tainted, edges, transitive: false);
+        }
+
+        // `get { ... return x; }`
+        foreach (ReturnStatementSyntax statement in EnumerateOwnReturns(getter.Body))
+        {
+            if (statement.Expression != null)
             {
-                ApplyReturnValue(canonicalReturn, arrowBody, model, tainted, edges);
-            }
-
-            foreach (ReturnStatementSyntax statement in EnumerateOwnReturns(node))
-            {
-                if (statement.Expression != null)
-                {
-                    ApplyReturnValue(canonicalReturn, statement.Expression, model, tainted, edges);
-                }
+                ApplyReturnValue(canonicalReturn, statement.Expression, model, tainted, edges, transitive: false);
             }
         }
     }
@@ -365,30 +462,24 @@ internal static class ObliviousNullabilityAnalyzer
         ExpressionSyntax value,
         SemanticModel model,
         HashSet<ISymbol> tainted,
-        List<(ISymbol Target, ISymbol Source)> edges)
+        List<(ISymbol Target, ISymbol Source)> edges,
+        bool transitive)
     {
         if (IsDirectlyNullable(value, model))
         {
             tainted.Add(returnSymbol);
         }
-        else
+        else if (transitive)
         {
             AddEdges(returnSymbol, value, model, edges);
         }
     }
 
-    // The `return` statements that belong to <paramref name="member"/> itself,
+    // The `return` statements that belong to <paramref name="body"/> itself,
     // excluding those inside a nested lambda / local function (which have their
     // own return contract).
-    private static IEnumerable<ReturnStatementSyntax> EnumerateOwnReturns(SyntaxNode member)
+    private static IEnumerable<ReturnStatementSyntax> EnumerateOwnReturns(BlockSyntax body)
     {
-        SyntaxNode body = member switch
-        {
-            MethodDeclarationSyntax m => (SyntaxNode)m.Body,
-            LocalFunctionStatementSyntax l => l.Body,
-            _ => null,
-        };
-
         if (body == null)
         {
             yield break;
