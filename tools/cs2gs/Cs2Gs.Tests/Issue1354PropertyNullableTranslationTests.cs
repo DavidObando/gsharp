@@ -122,6 +122,34 @@ namespace Demo
     }
 
     [Fact]
+    public void NullCheckedComputedProperty_ExpressionBodiedMember_EmitsNonNullAssertion()
+    {
+        // An EXPRESSION-BODIED member (`=> Work`) that returns a promoted `T?`
+        // property where the member is declared non-null `T` must route its
+        // returned value through the null-forgiveness pass, exactly like the
+        // statement-form `return Work;` does. This mirrors Oahu's
+        // `Mp4Operation.OperationTask => Continuation` (issue #1354): before the
+        // fix, WrapExpressionBody used a plain TranslateExpression and dropped
+        // the `!!`, yielding a `T? -> T` mismatch (GS0155).
+        string printed = TranslateUnit(@"
+#nullable enable
+using System.Threading.Tasks;
+namespace Demo
+{
+    public class C
+    {
+        private Task? backing;
+        protected virtual Task Work => backing ?? Task.CompletedTask;
+        public void Guard() { if (Work is null) { } }
+        public Task OperationTask => Work;
+    }
+}");
+
+        Assert.Contains("prop Work Task?", printed);
+        Assert.Contains("prop OperationTask Task -> Work!!", printed);
+    }
+
+    [Fact]
     public void PropertyNeverNullChecked_StaysNonNullable()
     {
         // Precision guard: a property that is never null-checked nor

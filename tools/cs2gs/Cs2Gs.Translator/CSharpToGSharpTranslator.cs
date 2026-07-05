@@ -4944,12 +4944,19 @@ public sealed class CSharpToGSharpTranslator
                     () => this.TranslateExpressionStatements(expression).ToList()).ToList());
             }
 
+            // A non-void expression body is a `return expr`. Route the returned
+            // value through the null-forgiveness pass (issue #1354) exactly like
+            // a statement-form `return expr;` does, so a promoted-nullable value
+            // (`T?`) returned where the member is declared non-null `T` gets its
+            // flow-proven `!!` assertion (e.g. `prop OperationTask Task ->
+            // Continuation!!`). Using plain TranslateExpression here left
+            // expression-bodied members without the assertion → GS0155.
             return new BlockStatement(this.WithSpillSeam(() => this.WithHoistedPostfix(
                 expression,
                 () => this.WithHoistedAssignments(
                     expression,
                     includeSelf: true,
-                    () => new List<GStatement> { new ReturnStatement(this.TranslateExpression(expression)) })).ToList()).ToList());
+                    () => new List<GStatement> { new ReturnStatement(this.TranslateValueWithNullForgiveness(expression)) })).ToList()).ToList());
         }
 
         private BlockStatement TranslateBlock(BlockSyntax block)
