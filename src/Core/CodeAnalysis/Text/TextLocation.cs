@@ -55,7 +55,7 @@ public struct TextLocation : IComparable<TextLocation>
     /// <summary>
     /// Gets the file name.
     /// </summary>
-    public string FileName => Text.FileName;
+    public string FileName => Text?.FileName;
 
     /// <summary>
     /// Compares two text locations, useful for sorting sets of text locations.
@@ -64,7 +64,18 @@ public struct TextLocation : IComparable<TextLocation>
     /// <returns>A value indicating the relation of the first text span to the second one.</returns>
     public int CompareTo(TextLocation other)
     {
-        int cmp = Text.FileName.CompareTo(other.Text.FileName);
+        // A `default(TextLocation)` (e.g. a synthesized or assembly-level
+        // diagnostic with no source location) has a null `Text`, and even a
+        // present `Text` may expose a null `FileName`. Guard both so the
+        // comparer is total and never throws: location-less entries sort
+        // consistently ahead of located ones. A non-total comparer here makes
+        // `OrderBy`/`Array.Sort` throw `InvalidOperationException: Failed to
+        // compare two elements in the array`, which the compiler surfaces as
+        // GS9998 and which masks every other diagnostic in the batch.
+        string thisFile = Text?.FileName;
+        string otherFile = other.Text?.FileName;
+
+        int cmp = string.CompareOrdinal(thisFile, otherFile);
         if (cmp == 0)
         {
             cmp = Span.CompareTo(other.Span);

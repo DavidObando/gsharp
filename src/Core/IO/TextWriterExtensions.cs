@@ -131,6 +131,20 @@ public static class TextWriterExtensions
                 _ => "info",
             };
 
+            // Issue #2144: a location-less diagnostic (default(TextLocation),
+            // so Text == null — e.g. a synthesized or assembly-level
+            // diagnostic) has no file/position/snippet to render. Emit just
+            // the severity/id/message so a single such diagnostic no longer
+            // NREs and masks the whole batch.
+            if (diagnostic.Location.Text is null)
+            {
+                writer.SetForeground(severityColor);
+                writer.Write($"{severityLabel} {diagnostic.Id}: ");
+                writer.WriteLine(diagnostic.Message);
+                writer.ResetColor();
+                continue;
+            }
+
             writer.SetForeground(severityColor);
             writer.Write($"{diagnostic.Location.FileName}({diagnostic.Location.StartLine + 1},{diagnostic.Location.StartCharacter + 1},{diagnostic.Location.EndLine + 1},{diagnostic.Location.EndCharacter + 1}): ");
             writer.Write($"{severityLabel} {diagnostic.Id}: ");
