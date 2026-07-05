@@ -5448,7 +5448,31 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var slice = clrType.GetMethod("Slice", BindingFlags.Public | BindingFlags.Instance, binder: null, new[] { typeof(int), typeof(int) }, modifiers: null);
+        // Issue #2114: probe for `Slice(int, int)` by enumerating candidates and
+        // comparing parameter types with IsSameAs, rather than the reflection
+        // overload that takes a runtime Type[]. When `clrType` is a
+        // MetadataLoadContext RoType (the `/reference:` resolver path), passing
+        // runtime `typeof(int)` to GetMethod makes DefaultBinder.SelectMethod
+        // throw "Type must be a type provided by the MetadataLoadContext" and
+        // crash the compiler (GS9998). IsSameAs works across both contexts.
+        MethodInfo slice = null;
+        foreach (var candidate in clrType.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (candidate.Name != "Slice")
+            {
+                continue;
+            }
+
+            var sliceParams = candidate.GetParameters();
+            if (sliceParams.Length == 2
+                && sliceParams[0].ParameterType.IsSameAs(typeof(int))
+                && sliceParams[1].ParameterType.IsSameAs(typeof(int)))
+            {
+                slice = candidate;
+                break;
+            }
+        }
+
         if (slice == null)
         {
             return false;
