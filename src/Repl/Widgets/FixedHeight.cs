@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Spectre.Console;
 using Spectre.Console.Rendering;
 
 namespace GSharp.Repl.Widgets;
@@ -19,11 +20,13 @@ public sealed class FixedHeight : Renderable
 {
     private readonly IRenderable child;
     private readonly int height;
+    private readonly Style? fill;
 
-    public FixedHeight(IRenderable child, int height)
+    public FixedHeight(IRenderable child, int height, Style? fill = null)
     {
         this.child = child ?? throw new ArgumentNullException(nameof(child));
         this.height = Math.Max(1, height);
+        this.fill = fill;
     }
 
     protected override Measurement Measure(RenderOptions options, int maxWidth)
@@ -32,7 +35,7 @@ public sealed class FixedHeight : Renderable
     protected override IEnumerable<Segment> Render(RenderOptions options, int maxWidth)
     {
         var lines = Segment.SplitLines(child.Render(options, maxWidth))
-            .Select(l => SegmentGrid.PadLine(l, maxWidth))
+            .Select(l => SegmentGrid.PadLine(l, maxWidth, fill))
             .ToList();
 
         if (lines.Count > height)
@@ -43,7 +46,7 @@ public sealed class FixedHeight : Renderable
         {
             while (lines.Count < height)
             {
-                lines.Add(new List<Segment>());
+                lines.Add(SegmentGrid.PadLine(new List<Segment>(), maxWidth, fill));
             }
         }
 

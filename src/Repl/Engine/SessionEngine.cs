@@ -7,6 +7,8 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -161,7 +163,21 @@ public sealed class SessionEngine
     public Func<string?>? InputProvider { get; set; }
 
     /// <summary>Evaluate a submission, append a cell, and return it. Never throws.</summary>
-    public Cell Evaluate(string text)
+    public Cell Evaluate(string text) => EvaluateCore(text, CancellationToken.None);
+
+    /// <summary>
+    /// Evaluates a submission on a background thread so the caller's render loop stays
+    /// responsive. Cancellation is best-effort: the interpreter has no cooperative
+    /// cancellation checks inside a running evaluation (e.g. it cannot break out of an
+    /// infinite loop), so a cancelled token only takes effect at the single checkpoint
+    /// right before the result would be committed to <see cref="Cells"/>/session state —
+    /// if cancelled by then, the cell is dropped and no state changes, but the background
+    /// thread itself keeps running to completion (or forever, for runaway code).
+    /// </summary>
+    public Task<Cell> EvaluateAsync(string text, CancellationToken cancellationToken)
+        => Task.Run(() => EvaluateCore(text, cancellationToken));
+
+    private Cell EvaluateCore(string text, CancellationToken cancellationToken)
     {
         var index = cells.Count + 1;
 
@@ -194,6 +210,12 @@ public sealed class SessionEngine
                 var result = compilation.Evaluate(variables);
 
                 var hasError = result.Diagnostics.Any(d => d.IsError);
+
+                // The only cancellation checkpoint: if the caller interrupted before this
+                // (possibly long-running) evaluation finished, discard the result instead of
+                // committing it to the transcript or session state.
+                cancellationToken.ThrowIfCancellationRequested();
+
                 if (!hasError)
                 {
                     previous = compilation;
@@ -201,7 +223,7 @@ public sealed class SessionEngine
 
                 cell = new Cell(index, text, result.Value, result.Diagnostics, hasError, stdout?.ToString() ?? string.Empty, stderr?.ToString() ?? string.Empty);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 var diag = new Diagnostic(default, "GSI001", DiagnosticSeverity.Error, $"Evaluation error: {ex.Message}");
                 cell = new Cell(index, text, null, ImmutableArray.Create(diag), true, stdout?.ToString() ?? string.Empty, stderr?.ToString() ?? string.Empty);

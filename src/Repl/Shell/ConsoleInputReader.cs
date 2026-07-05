@@ -55,6 +55,17 @@ internal sealed class ConsoleInputReader : IInputReader, IDisposable
     }
 
     /// <inheritdoc/>
+    public InputEvent? Read(TimeSpan timeout, out bool timedOut)
+    {
+        if (this.useWindowsNative)
+        {
+            return this.ReadWindowsNative(timeout, out timedOut);
+        }
+
+        return ReadFallback(timeout, out timedOut);
+    }
+
+    /// <inheritdoc/>
     public void Dispose()
     {
         this.Restore();
@@ -65,6 +76,39 @@ internal sealed class ConsoleInputReader : IInputReader, IDisposable
     {
         var key = Console.ReadKey(intercept: true);
         return InputEvent.FromKey(key);
+    }
+
+    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(15);
+
+    private static InputEvent? ReadFallback(TimeSpan timeout, out bool timedOut)
+    {
+        bool available;
+        try
+        {
+            available = Console.KeyAvailable;
+        }
+        catch (InvalidOperationException)
+        {
+            // Input is redirected (no console to poll) — fall back to a blocking read.
+            timedOut = false;
+            return ReadFallback();
+        }
+
+        var deadline = DateTime.UtcNow + timeout;
+        while (!available && DateTime.UtcNow < deadline)
+        {
+            System.Threading.Thread.Sleep(PollInterval);
+            available = Console.KeyAvailable;
+        }
+
+        if (!available)
+        {
+            timedOut = true;
+            return null;
+        }
+
+        timedOut = false;
+        return InputEvent.FromKey(Console.ReadKey(intercept: true));
     }
 
     private static bool IsModifierKey(ushort vk) => vk switch
@@ -92,7 +136,7 @@ internal sealed class ConsoleInputReader : IInputReader, IDisposable
             }
 
             var mode = this.originalMode;
-            mode |= NativeMethods.ENABLE_MOUSE_INPUT | NativeMethods.ENABLE_EXTENDED_FLAGS;
+            mode |= NativeMethods.ENABLE_EXTENDED_FLAGS;
             mode &= ~NativeMethods.ENABLE_QUICK_EDIT_MODE;
             mode &= ~NativeMethods.ENABLE_VIRTUAL_TERMINAL_INPUT;
             if (!NativeMethods.SetConsoleMode(this.stdInHandle, mode))
@@ -141,15 +185,46 @@ internal sealed class ConsoleInputReader : IInputReader, IDisposable
                 var info = new ConsoleKeyInfo((char)ke.UnicodeChar, (ConsoleKey)vk, shift, alt, control);
                 return InputEvent.FromKey(info);
             }
+        }
+    }
 
-            if (record.EventType == NativeMethods.MOUSE_EVENT)
+    private InputEvent? ReadWindowsNative(TimeSpan timeout, out bool timedOut)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            var remaining = deadline - DateTime.UtcNow;
+            var waitMs = remaining <= TimeSpan.Zero ? 0 : (uint)Math.Min(remaining.TotalMilliseconds, uint.MaxValue - 1);
+            var waitResult = NativeMethods.WaitForSingleObject(this.stdInHandle, waitMs);
+            if (waitResult != NativeMethods.WAIT_OBJECT_0)
             {
-                var me = record.Mouse;
-                if (me.EventFlags == NativeMethods.MOUSE_WHEELED)
+                timedOut = true;
+                return null;
+            }
+
+            var records = new NativeMethods.InputRecord[1];
+            if (!NativeMethods.ReadConsoleInput(this.stdInHandle, records, 1, out var read) || read == 0)
+            {
+                timedOut = false;
+                return ReadFallback();
+            }
+
+            var record = records[0];
+            if (record.EventType == NativeMethods.KEY_EVENT)
+            {
+                var ke = record.Key;
+                if (ke.KeyDown == 0 || IsModifierKey(ke.VirtualKeyCode))
                 {
-                    var delta = (short)((me.ButtonState >> 16) & 0xffff);
-                    return InputEvent.FromScroll(delta > 0 ? ScrollDirection.Up : ScrollDirection.Down);
+                    continue;
                 }
+
+                var state = ke.ControlKeyState;
+                var shift = (state & NativeMethods.SHIFT_PRESSED) != 0;
+                var alt = (state & (NativeMethods.LEFT_ALT_PRESSED | NativeMethods.RIGHT_ALT_PRESSED)) != 0;
+                var control = (state & (NativeMethods.LEFT_CTRL_PRESSED | NativeMethods.RIGHT_CTRL_PRESSED)) != 0;
+                var info = new ConsoleKeyInfo((char)ke.UnicodeChar, (ConsoleKey)ke.VirtualKeyCode, shift, alt, control);
+                timedOut = false;
+                return InputEvent.FromKey(info);
             }
         }
     }
@@ -179,20 +254,19 @@ internal sealed class ConsoleInputReader : IInputReader, IDisposable
     private static class NativeMethods
     {
         public const int STD_INPUT_HANDLE = -10;
-        public const uint ENABLE_MOUSE_INPUT = 0x0010;
         public const uint ENABLE_QUICK_EDIT_MODE = 0x0040;
         public const uint ENABLE_EXTENDED_FLAGS = 0x0080;
         public const uint ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
 
         public const ushort KEY_EVENT = 0x0001;
-        public const ushort MOUSE_EVENT = 0x0002;
-        public const uint MOUSE_WHEELED = 0x0004;
 
         public const uint SHIFT_PRESSED = 0x0010;
         public const uint LEFT_ALT_PRESSED = 0x0002;
         public const uint RIGHT_ALT_PRESSED = 0x0001;
         public const uint LEFT_CTRL_PRESSED = 0x0008;
         public const uint RIGHT_CTRL_PRESSED = 0x0004;
+
+        public const uint WAIT_OBJECT_0 = 0x00000000;
 
         public static readonly IntPtr INVALID_HANDLE_VALUE = new(-1);
 
@@ -204,6 +278,9 @@ internal sealed class ConsoleInputReader : IInputReader, IDisposable
 
         [DllImport("kernel32.dll", SetLastError = true)]
         public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
 
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "ReadConsoleInputW")]
         public static extern bool ReadConsoleInput(IntPtr hConsoleInput, [Out] InputRecord[] lpBuffer, uint nLength, out uint lpNumberOfEventsRead);
@@ -226,15 +303,6 @@ internal sealed class ConsoleInputReader : IInputReader, IDisposable
             public uint ControlKeyState;
         }
 
-        [StructLayout(LayoutKind.Sequential)]
-        public struct MouseEventRecord
-        {
-            public Coord MousePosition;
-            public uint ButtonState;
-            public uint ControlKeyState;
-            public uint EventFlags;
-        }
-
         [StructLayout(LayoutKind.Explicit)]
         public struct InputRecord
         {
@@ -243,9 +311,6 @@ internal sealed class ConsoleInputReader : IInputReader, IDisposable
 
             [FieldOffset(4)]
             public KeyEventRecord Key;
-
-            [FieldOffset(4)]
-            public MouseEventRecord Mouse;
         }
     }
 }

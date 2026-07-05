@@ -34,8 +34,12 @@ internal static class SegmentGrid
         }
     }
 
-    /// <summary>Pads a rendered line with default-styled spaces up to <paramref name="width"/> cells.</summary>
-    public static List<Segment> PadLine(IReadOnlyList<Segment> line, int width)
+    /// <summary>
+    /// Pads a rendered line with spaces up to <paramref name="width"/> cells. The padding
+    /// is styled with <paramref name="fill"/> (defaulting to no style, i.e. the terminal's
+    /// own background) so callers filling a themed canvas can avoid a black gap.
+    /// </summary>
+    public static List<Segment> PadLine(IReadOnlyList<Segment> line, int width, Style? fill = null)
     {
         var row = new List<Segment>(line.Count + 1);
         var used = 0;
@@ -47,7 +51,7 @@ internal static class SegmentGrid
 
         if (used < width)
         {
-            row.Add(new Segment(new string(' ', width - used)));
+            row.Add(new Segment(new string(' ', width - used), fill ?? Style.Plain, null));
         }
 
         return row;

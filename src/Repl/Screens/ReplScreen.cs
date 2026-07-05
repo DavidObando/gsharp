@@ -6,6 +6,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using GSharp.LanguageServer.Protocol;
 using GSharp.Repl.Engine;
 using GSharp.Repl.Shell;
@@ -17,9 +19,10 @@ using Spectre.Console.Rendering;
 namespace GSharp.Repl.Screens;
 
 /// <summary>OpenCode-style single conversation view: scrolling transcript plus a pinned input box.</summary>
-public sealed class ReplScreen : ITabScreen
+public sealed class ReplScreen : ITabScreen, IDisposable
 {
     private const int MaxPopup = 7;
+
     private readonly SessionEngine engine;
     private readonly MultilineEditor editor = new();
     private readonly ScrollState scroll = new();
@@ -28,6 +31,10 @@ public sealed class ReplScreen : ITabScreen
     private int completionIndex;
     private int completionTop;
     private string? hover;
+    private CancellationTokenSource? evalCts;
+    private Task<Cell>? pendingEval;
+    private int evalFrame;
+    private bool cancelRequested;
 
     public ReplScreen(SessionEngine engine)
     {
@@ -40,6 +47,8 @@ public sealed class ReplScreen : ITabScreen
 
     public char NumberKey => '1';
 
+    public bool IsBusy => pendingEval is not null;
+
     public IEnumerable<KeyValuePair<string, string?>> Hints => new[]
     {
         new KeyValuePair<string, string?>("Enter", "run"),
@@ -48,7 +57,57 @@ public sealed class ReplScreen : ITabScreen
         new KeyValuePair<string, string?>("/", "cmds"),
     };
 
+    public IRenderable? FooterOverride
+    {
+        get
+        {
+            if (pendingEval is null)
+            {
+                return null;
+            }
+
+            var brand = Tokens.Tokens.Brand.Value;
+            var brandMarkup = brand.ToMarkup();
+            var tertiary = Tokens.Tokens.TextTertiary.Value.ToMarkup();
+
+            // Themed on every read (not cached) so a theme switch mid-evaluation is picked up;
+            // the spinner itself is cheap (a handful of Color structs) to rebuild per frame.
+            var spinner = new KnightRiderAnimation(
+                width: 6,
+                style: KnightRiderStyle.Blocks,
+                holdStart: 6,
+                holdEnd: 3,
+                colors: KnightRiderAnimation.DeriveTrailColors(brand),
+                defaultColor: KnightRiderAnimation.DeriveInactiveColor(brand, factor: 0.6),
+                minAlpha: 0.3);
+
+            var glyphs = spinner.RenderMarkup(evalFrame, Tokens.Tokens.Canvas);
+
+            // Cancellation can't interrupt a running evaluation (no cooperative cancellation in
+            // the interpreter, see SessionEngine.EvaluateAsync), so give immediate feedback that
+            // Esc registered instead of leaving the hint unchanged until the eval happens to finish.
+            var hint = cancelRequested
+                ? $"[{tertiary}]cancelling…[/]"
+                : $"[{brandMarkup}]Esc[/] [{tertiary}]interrupt[/]";
+            return new Markup($"{glyphs}  {hint}");
+        }
+    }
+
+    public string Status
+    {
+        get
+        {
+            var tertiary = Tokens.Tokens.TextTertiary.Value.ToMarkup();
+            var diag = engine.Cells.SelectMany(c => c.Diagnostics).Count(d => d.IsError);
+            return diag == 0
+                ? $"[{Tokens.Tokens.StatusSuccess.Value.ToMarkup()}]●[/] gsharp [{tertiary}]· ready[/]"
+                : $"[{Tokens.Tokens.StatusError.Value.ToMarkup()}]●[/] gsharp [{tertiary}]· {diag} error(s)[/]";
+        }
+    }
+
     public void OnActivated(IAppShellNavigator nav) => navigator = nav;
+
+    public void Dispose() => evalCts?.Dispose();
 
     public bool HandleScroll(ScrollDirection direction, int lines)
     {
@@ -66,6 +125,17 @@ public sealed class ReplScreen : ITabScreen
 
     public bool HandleKey(ConsoleKeyInfo key)
     {
+        if (pendingEval is not null && key.Key == ConsoleKey.Escape)
+        {
+            if (!cancelRequested)
+            {
+                cancelRequested = true;
+                evalCts?.Cancel();
+            }
+
+            return true;
+        }
+
         if (completions.Count > 0)
         {
             switch (key.Key)
@@ -120,9 +190,15 @@ public sealed class ReplScreen : ITabScreen
                 editor.NewLine();
                 return true;
             case ConsoleKey.Enter:
+                if (pendingEval is not null)
+                {
+                    return true;
+                }
+
                 if (SessionEngine.IsComplete(editor.Text) && !editor.IsEmpty)
                 {
-                    engine.Evaluate(editor.Text);
+                    evalCts = new CancellationTokenSource();
+                    pendingEval = engine.EvaluateAsync(editor.Text, evalCts.Token);
                     editor.Clear();
                     hover = null;
                     scroll.ToBottom();
@@ -154,8 +230,48 @@ public sealed class ReplScreen : ITabScreen
         }
     }
 
+    private void PumpPendingEvaluation()
+    {
+        if (pendingEval is null)
+        {
+            return;
+        }
+
+        if (!pendingEval.IsCompleted)
+        {
+            evalFrame++;
+            return;
+        }
+
+        if (pendingEval.IsFaulted)
+        {
+            // Observe the exception so it isn't reported as unobserved later; EvaluateCore
+            // already funnels evaluation errors into the Cell's diagnostics, so a faulted
+            // task here only happens for cancellation/engine bugs, not G# runtime errors.
+            _ = pendingEval.Exception;
+        }
+
+        // The interpreter can't be interrupted mid-run (see SessionEngine.EvaluateAsync), so a
+        // cancelled submission finishes normally and is just discarded with no result cell. Tell
+        // the user it actually happened instead of leaving them wondering why nothing appeared.
+        // (If Esc lost the race and the eval committed anyway, IsCompletedSuccessfully is true
+        // and no toast is shown — there's a real result on screen instead.)
+        if (cancelRequested && !pendingEval.IsCompletedSuccessfully)
+        {
+            navigator?.ShowToast("Evaluation cancelled.");
+        }
+
+        pendingEval = null;
+        evalCts?.Dispose();
+        evalCts = null;
+        evalFrame = 0;
+        cancelRequested = false;
+    }
+
     public IRenderable Render(int width, int height)
     {
+        PumpPendingEvaluation();
+
         var brand = Tokens.Tokens.Brand.Value.ToMarkup();
         var primary = Tokens.Tokens.TextPrimary.Value.ToMarkup();
         var secondary = Tokens.Tokens.TextSecondary.Value.ToMarkup();
@@ -167,11 +283,6 @@ public sealed class ReplScreen : ITabScreen
 
         var cellBg = Tokens.Tokens.CellBackground.Value;
         var transcript = new List<IRenderable>();
-
-        if (engine.Cells.Count == 0)
-        {
-            transcript.Add(new Markup($"[{tertiary}]Type a G# expression and press Enter. [{brand}]/[/] commands · [{brand}]Ctrl+Space[/] complete · [{brand}]Ctrl+K[/] hover.[/]"));
-        }
 
         // The full history is handed to the Dock, which windows it into the scrollable
         // region; older cells scroll off the top rather than being dropped up front.
@@ -212,7 +323,8 @@ public sealed class ReplScreen : ITabScreen
             }
         }
 
-        var scrollable = new Padder(new Rows(transcript)).Padding(1, 0, 1, 0);
+        var canvasColor = Tokens.Tokens.Canvas;
+        var scrollable = new Backdrop(new Rows(transcript), canvasColor, padLeft: 1, padRight: 1);
 
         // Everything below the scrollable transcript stays pinned to the bottom, just above
         // the footer chrome, and grows upward as the input box gains lines. The Dock measures
@@ -234,19 +346,19 @@ public sealed class ReplScreen : ITabScreen
             });
         }
 
-        footerRows.Add(new Padder(InputBox(brand, tertiary)).Padding(1, 0, 1, 0));
-        var diag = engine.Cells.SelectMany(c => c.Diagnostics).Count(d => d.IsError);
-        var status = diag == 0 ? $"[{Tokens.Tokens.StatusSuccess.Value.ToMarkup()}]●[/] gsharp [{tertiary}]· ready[/]"
-            : $"[{Tokens.Tokens.StatusError.Value.ToMarkup()}]●[/] gsharp [{tertiary}]· {diag} error(s)[/]";
-        footerRows.Add(new Padder(new Markup(status)).Padding(1, 0, 0, 0));
+        footerRows.Add(new Backdrop(InputBox(brand, tertiary), canvasColor, padLeft: 1, padRight: 1));
 
-        var main = (IRenderable)new Dock(scrollable, new Rows(footerRows), height, scroll);
+        // Any blank fill (an empty transcript, the row under the input box, the sidebar
+        // gap) is painted with the theme's canvas color instead of being left unstyled,
+        // which would otherwise show through as the terminal's own (often black) background.
+        var canvas = new Style(background: canvasColor);
+        var main = (IRenderable)new Dock(scrollable, new Rows(footerRows), height, scroll, canvas);
         if (sidebarWidth == 0)
         {
             return main;
         }
 
-        return new SideBySide(main, leftWidth, 2, new FixedHeight(StateSidebar(height), height), sidebarWidth);
+        return new SideBySide(main, leftWidth, 2, new FixedHeight(StateSidebar(height), height, canvas), sidebarWidth, canvas);
     }
 
     private IRenderable InputBox(string brand, string tertiary)
@@ -290,7 +402,7 @@ public sealed class ReplScreen : ITabScreen
         var rows = new List<IRenderable>
         {
             new Markup($"[{brand}]STATE[/]"),
-            new Markup($"[{tertiary}]cells[/] [{primary}]{engine.Cells.Count}[/]  [{tertiary}]theme[/] [{primary}]{Markup.Escape(Theme.Current.Name)}[/]"),
+            new Markup($"[{tertiary}]cells[/] [{primary}]{engine.Cells.Count}[/]"),
         };
 
         AddSection(rows, "imports", state.Imports, brand, secondary, tertiary);
@@ -303,6 +415,17 @@ public sealed class ReplScreen : ITabScreen
             rows.Add(new Text(string.Empty));
             rows.Add(new Markup($"[{tertiary}]No symbols defined yet.[/]"));
         }
+
+        // Pin a footer line (version + theme) to the very bottom of the sidebar by
+        // padding with blank rows up to the fixed height, then appending it last.
+        var footer = new Markup($"[{tertiary}]gsharp[/] [{primary}]{Markup.Escape(ReplHost.GetVersion())}[/] [{tertiary}]| theme[/] [{primary}]{Markup.Escape(Theme.Current.Name)}[/]");
+        var filler = minHeight - 2 - rows.Count - 1;
+        for (var i = 0; i < filler; i++)
+        {
+            rows.Add(new Text(string.Empty));
+        }
+
+        rows.Add(footer);
 
         // Same treatment as the input box: a filled surface with a themed left accent
         // bar, rather than an enclosed box.
@@ -480,7 +603,7 @@ internal static class Palette
     {
         ("reset", "clear session state"),
         ("clear", "clear the editor"),
-        ("theme", "switch theme: gsharp|dark|light|amber"),
+        ("theme", $"switch theme: {string.Join("|", Theme.AvailableNames())}"),
         ("load", "run a .gs file into session"),
         ("exit", "quit the REPL"),
     };

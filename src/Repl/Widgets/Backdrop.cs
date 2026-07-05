@@ -84,7 +84,10 @@ public sealed class Backdrop : Renderable
             var used = 0;
             foreach (var seg in line)
             {
-                row.Add(new Segment(seg.Text, seg.Style.Combine(bg), null));
+                // bg fills in only where the segment has no explicit style of its own
+                // (e.g. plain markup text); an already-backgrounded child segment (a
+                // nested Backdrop, such as a transcript cell) keeps its own color.
+                row.Add(new Segment(seg.Text, bg.Combine(seg.Style), null));
                 used += seg.CellCount();
             }
 

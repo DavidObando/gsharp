@@ -22,6 +22,8 @@ public sealed class Theme
         Themes.GSharp,
         Themes.Dark,
         Themes.Light,
+        Themes.GithubLight,
+        Themes.WarmPaper,
         Themes.Amber,
     };
 
@@ -148,26 +150,73 @@ public static class Themes
         Identifier = new(Color.Gold1),
     };
 
+    /// <summary>Slate-on-paper: light backgrounds with dark, readable text and accents.</summary>
     public static Theme Light { get; } = new()
     {
         Name = "light",
-        TextPrimary = new(Color.White),
-        TextSecondary = new(Color.Grey85),
-        TextTertiary = new(Color.Grey35),
+        TextPrimary = new(Color.Grey11),
+        TextSecondary = new(Color.Grey27),
+        TextTertiary = new(Color.Grey42),
         StatusInfo = new(Color.DarkGreen),
         StatusSuccess = new(Color.DarkGreen),
-        StatusWarning = new(Color.Gold1),
-        StatusError = new(Color.Red),
+        StatusWarning = new(Color.DarkOrange3),
+        StatusError = new(Color.Red3),
         Brand = new(Color.Blue),
         Selected = new(Color.Blue),
-        BorderNeutral = new(Color.Grey35),
+        BorderNeutral = new(Color.Grey42),
         CellBackground = new(Color.Grey93),
         InputBackground = new(Color.Grey85),
         Keyword = new(Color.Blue),
         Number = new(Color.DarkGreen),
-        StringLit = new(Color.Orange1),
-        Comment = new(Color.DarkGreen),
-        Identifier = new(Color.Gold1),
+        StringLit = new(Color.DarkOrange3),
+        Comment = new(Color.Grey42),
+        Identifier = new(new Color(133, 94, 0)),
+    };
+
+    /// <summary>GitHub-light style: crisp white canvas with a cooler blue accent.</summary>
+    public static Theme GithubLight { get; } = new()
+    {
+        Name = "github-light",
+        TextPrimary = new(Color.Grey11),
+        TextSecondary = new(Color.Grey30),
+        TextTertiary = new(Color.Grey46),
+        StatusInfo = new(new Color(26, 127, 55)),
+        StatusSuccess = new(new Color(26, 127, 55)),
+        StatusWarning = new(new Color(154, 103, 0)),
+        StatusError = new(new Color(207, 34, 46)),
+        Brand = new(new Color(9, 105, 218)),
+        Selected = new(new Color(9, 105, 218)),
+        BorderNeutral = new(Color.Grey46),
+        CellBackground = new(Color.Grey100),
+        InputBackground = new(Color.Grey93),
+        Keyword = new(new Color(9, 105, 218)),
+        Number = new(new Color(26, 127, 55)),
+        StringLit = new(new Color(129, 41, 27)),
+        Comment = new(Color.Grey46),
+        Identifier = new(new Color(130, 80, 223)),
+    };
+
+    /// <summary>Warm paper / sepia: off-white canvas with warm brown text and accents.</summary>
+    public static Theme WarmPaper { get; } = new()
+    {
+        Name = "warm-paper",
+        TextPrimary = new(new Color(59, 44, 26)),
+        TextSecondary = new(new Color(94, 74, 51)),
+        TextTertiary = new(new Color(140, 116, 89)),
+        StatusInfo = new(new Color(64, 110, 32)),
+        StatusSuccess = new(new Color(64, 110, 32)),
+        StatusWarning = new(new Color(163, 92, 0)),
+        StatusError = new(new Color(178, 34, 34)),
+        Brand = new(new Color(159, 82, 0)),
+        Selected = new(new Color(159, 82, 0)),
+        BorderNeutral = new(new Color(140, 116, 89)),
+        CellBackground = new(Color.Cornsilk1),
+        InputBackground = new(Color.Wheat1),
+        Keyword = new(new Color(159, 82, 0)),
+        Number = new(new Color(64, 110, 32)),
+        StringLit = new(new Color(140, 90, 30)),
+        Comment = new(new Color(140, 116, 89)),
+        Identifier = new(new Color(120, 60, 140)),
     };
 
     public static Theme Amber { get; } = new()
