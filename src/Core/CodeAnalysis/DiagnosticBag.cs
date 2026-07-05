@@ -4475,6 +4475,37 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Issue #2130: GS0473 — a lambda being converted to an expression tree
+    /// uses a language construct that G# deliberately rejects in expression-
+    /// tree form, matching the C#/Roslyn restriction model.
+    /// </summary>
+    /// <param name="location">The source location of the unsupported construct.</param>
+    /// <param name="feature">The rejected construct description.</param>
+    public void ReportExpressionTreeUnsupported(TextLocation location, string feature)
+    {
+        Report(
+            location,
+            "GS0473",
+            $"An expression-tree lambda may not contain {feature} (issue #2130).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// Issue #2130: GS0474 — a target <c>Expression[T]</c> uses a type
+    /// argument that is not a delegate type, so a lambda cannot convert to it.
+    /// </summary>
+    /// <param name="location">The source location of the attempted conversion.</param>
+    /// <param name="targetType">The invalid target type.</param>
+    public void ReportExpressionTreeTargetMustBeDelegate(TextLocation location, TypeSymbol targetType)
+    {
+        Report(
+            location,
+            "GS0474",
+            $"Cannot convert a lambda expression to '{targetType}' because expression-tree targets must be 'System.Linq.Expressions.Expression[TDelegate]' where 'TDelegate' is a delegate type (issue #2130).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
     /// Issue #1336: GS0415 — a <c>sizeof(T)</c> expression names a type that is
     /// not an unmanaged type. <c>sizeof</c> measures the unmanaged byte size of
     /// its operand, so the operand must be a blittable primitive, an enum, a

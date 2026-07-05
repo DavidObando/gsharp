@@ -919,7 +919,7 @@ internal sealed class StatementBinder
             else if (type != null
                 && syntax.Initializer is LambdaExpressionSyntax targetTypedLambda
                 && bindLambdaWithTargetType != null
-                && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(type, out var targetFnType))
+                && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out var targetFnType))
             {
                 // ADR-0076 / issue #716: when a binding has an explicit
                 // function-type and is initialised with an arrow lambda,

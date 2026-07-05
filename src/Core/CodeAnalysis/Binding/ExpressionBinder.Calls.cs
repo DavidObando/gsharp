@@ -1110,7 +1110,7 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            if (!MemberLookup.TryGetDelegateFunctionType(parameterType, out var candidate) || candidate == null)
+            if (!MemberLookup.TryGetLambdaTargetFunctionType(parameterType, out var candidate) || candidate == null)
             {
                 continue;
             }
@@ -1888,7 +1888,7 @@ internal sealed partial class ExpressionBinder
                     continue;
                 }
 
-                if (!MemberLookup.TryGetDelegateFunctionTypeFromSymbol(candidate.Parameters[paramPos].Type, out var fn) || fn == null)
+                if (!MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(candidate.Parameters[paramPos].Type, out var fn) || fn == null)
                 {
                     continue;
                 }
@@ -2334,7 +2334,7 @@ internal sealed partial class ExpressionBinder
                 var parameterType = parameters[paramIndex].ParameterType;
                 if (parameterType == null
                     || parameterType.ContainsGenericParameters
-                    || !MemberLookup.TryGetDelegateFunctionType(parameterType, out var fn)
+                    || !MemberLookup.TryGetLambdaTargetFunctionType(parameterType, out var fn)
                     || fn == null)
                 {
                     allMapped = false;
@@ -4868,7 +4868,7 @@ internal sealed partial class ExpressionBinder
             var rebound = argument;
             if (paramIndex < parameters.Length
                 && LambdaBinder.TryGetFunctionLiteral(argument, out var literal)
-                && MemberLookup.TryGetDelegateFunctionType(parameters[paramIndex].ParameterType, out var targetFunctionType)
+                && MemberLookup.TryGetLambdaTargetFunctionType(parameters[paramIndex].ParameterType, out var targetFunctionType)
                 && literal.FunctionType != targetFunctionType)
             {
                 // Issue #1512: when the call is a generic method whose delegate
@@ -4970,7 +4970,7 @@ internal sealed partial class ExpressionBinder
                 && literal.FunctionType is FunctionTypeSymbol literalFnType
                 && literalFnType.ReturnType != TypeSymbol.Void
                 && literalFnType.ReturnType != TypeSymbol.Error
-                && MemberLookup.TryGetDelegateFunctionType(parameters[paramIndex].ParameterType, out var targetFunctionType)
+                && MemberLookup.TryGetLambdaTargetFunctionType(parameters[paramIndex].ParameterType, out var targetFunctionType)
                 && targetFunctionType.ReturnType != TypeSymbol.Void
                 && targetFunctionType.ReturnType != TypeSymbol.Error
                 && targetFunctionType.Arity == literalFnType.Arity

@@ -334,6 +334,19 @@ internal sealed class ConversionClassifier
             return BindUserMethodGroupConversion(diagnosticLocation, userMethodGroup, type);
         }
 
+        if (expression is BoundFunctionLiteralExpression expressionTreeLiteral
+            && MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(type, out var expressionTreeDelegateType))
+        {
+            if (!MemberLookup.TryGetDelegateFunctionTypeFromSymbol(expressionTreeDelegateType, out _))
+            {
+                Diagnostics.ReportExpressionTreeTargetMustBeDelegate(diagnosticLocation, type);
+                return new BoundErrorExpression(null);
+            }
+
+            ExpressionTreeRestrictionValidator.Validate(expressionTreeLiteral, type, Diagnostics);
+            return new BoundConversionExpression(null, type, expressionTreeLiteral);
+        }
+
         if (expression is BoundFunctionLiteralExpression literal
             && type is FunctionTypeSymbol targetFunctionType
             && TypeSymbol.ContainsTypeParameter(targetFunctionType))
@@ -353,7 +366,7 @@ internal sealed class ConversionClassifier
             && voidCandidateLiteral.FunctionType is FunctionTypeSymbol voidCandidateFnType
             && voidCandidateFnType.ReturnType != TypeSymbol.Void
             && voidCandidateFnType.ReturnType != TypeSymbol.Error
-            && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(type, out var voidTargetFnType)
+            && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out var voidTargetFnType)
             && voidTargetFnType.ReturnType == TypeSymbol.Void
             && voidTargetFnType.Arity == voidCandidateFnType.Arity
             && !ReferenceEquals(type, voidCandidateFnType))
@@ -378,7 +391,7 @@ internal sealed class ConversionClassifier
             && widenCandidateLiteral.FunctionType is FunctionTypeSymbol widenCandidateFnType
             && widenCandidateFnType.ReturnType != TypeSymbol.Void
             && widenCandidateFnType.ReturnType != TypeSymbol.Error
-            && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(type, out var widenTargetFnType)
+            && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out var widenTargetFnType)
             && widenTargetFnType.ReturnType != TypeSymbol.Void
             && widenTargetFnType.ReturnType != TypeSymbol.Error
             && widenTargetFnType.Arity == widenCandidateFnType.Arity

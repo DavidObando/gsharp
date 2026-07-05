@@ -458,6 +458,25 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #2130: expression-tree lowering builds the lambda node with the
+        // non-generic Expression.Lambda(Type, ...) overload, whose static type
+        // is LambdaExpression. The runtime instance is the exact
+        // Expression<TDelegate> subtype requested by the supplied delegate
+        // Type, so the synthesized final step is an explicit reference cast
+        // from LambdaExpression to Expression<TDelegate>.
+        if (from?.ClrType?.FullName == "System.Linq.Expressions.LambdaExpression"
+            && to?.ClrType != null
+            && to.ClrType.IsGenericType
+            && string.Equals(
+                (to.ClrType.IsGenericTypeDefinition ? to.ClrType : to.ClrType.GetGenericTypeDefinition()).FullName,
+                "System.Linq.Expressions.Expression`1",
+                StringComparison.Ordinal))
+        {
+            this.il.OpCode(ILOpCode.Castclass);
+            this.il.Token(this.outer.GetElementTypeToken(to));
+            return;
+        }
+
         // Phase D: class → interface upcast is a CLR reference-level
         // no-op. The receiver already implements the interface; loading
         // the reference into an interface-typed slot needs no IL.

@@ -2818,7 +2818,7 @@ internal sealed partial class ExpressionBinder
                     }
 
                     if (idx < method.Parameters.Length
-                        && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(method.Parameters[idx].Type, out var staticTarget)
+                        && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(method.Parameters[idx].Type, out var staticTarget)
                         && staticTarget != null)
                     {
                         rebound[idx] = lambdas.BindLambdaExpression(staticLambda, staticTarget);
