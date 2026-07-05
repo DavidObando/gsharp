@@ -1255,6 +1255,8 @@ public static class GSharpPrinter
                 return RenderEvent(eventDeclaration, indent);
             case SharedBlock sharedBlock:
                 return RenderSharedBlock(sharedBlock, indent);
+            case StaticInitializerBlock staticInitializer:
+                return $"{Indent(indent)}init {RenderBlock(staticInitializer.Body, indent)}";
             default:
                 throw new ArgumentException($"Unsupported member: {member?.GetType().Name}");
         }

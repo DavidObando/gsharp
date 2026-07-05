@@ -12,15 +12,17 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Issue #1729 — G# has no static-constructor form, so <c>cs2gs</c> folds a
-/// "simple" static constructor into its fields' initializers and drops the
-/// constructor. The foldability check and the consumption chain had six silent
-/// divergence modes; each is covered here. Modes that CAN be represented
-/// faithfully as a folded initializer are asserted to fold to the CORRECT
-/// value/shape; modes that cannot (cross-type writes, order-dependent RHS,
-/// side-effecting/duplicate instance-lift hoists) are asserted to surface a
-/// visible <see cref="TranslationSeverity.Unsupported"/> diagnostic instead of
-/// silently emitting wrong code.
+/// Issue #1729 — <c>cs2gs</c> folds a "simple" static constructor into its
+/// fields' initializers and drops the constructor. The foldability check and
+/// the consumption chain had six silent divergence modes; each is covered here.
+/// Modes that CAN be represented faithfully as a folded initializer are asserted
+/// to fold to the CORRECT value/shape; modes that cannot fold safely
+/// (cross-type writes, order-dependent RHS) now map the constructor body to a
+/// G# <c>init { }</c> static-initializer block (ADR-0140, ADR-0115 §B.11)
+/// instead of folding, while side-effecting/duplicate instance-lift hoists still
+/// surface a visible <see cref="TranslationSeverity.Unsupported"/> diagnostic or
+/// keep the explicit constructor intact rather than silently emitting wrong
+/// code.
 /// </summary>
 public class Issue1729StaticCtorFoldTranslationTests
 {
@@ -126,12 +128,13 @@ namespace Demo
     /// <summary>
     /// Mode 2: a static constructor that assigns another TYPE's static field is
     /// not foldable (the entry would be keyed by the other type's field symbol
-    /// and never consumed by this type's fields, silently vanishing). It must
-    /// surface an Unsupported diagnostic instead, and the other type's own
-    /// initializer must be left untouched.
+    /// and never consumed by this type's fields, silently vanishing). Instead of
+    /// folding, its body maps to a G# <c>init { }</c> static-initializer block
+    /// (ADR-0140) that assigns the other type's field directly, and the other
+    /// type's own initializer is left untouched.
     /// </summary>
     [Fact]
-    public void StaticCtorAssignsOtherTypesField_ReportsUnsupported_DoesNotFold()
+    public void StaticCtorAssignsOtherTypesField_MapsToInitBlock_DoesNotFold()
     {
         (string printed, TranslationContext context) = Translate(@"
 namespace Demo
@@ -147,7 +150,9 @@ namespace Demo
     }
 }");
 
-        Assert.Contains(context.Diagnostics, d => d.IsUnsupported);
+        Assert.DoesNotContain(context.Diagnostics, d => d.IsUnsupported);
+        Assert.Contains("init {", printed);
+        Assert.Contains("Other.Field = 5", printed);
         Assert.Contains("var Field int32 = 0", printed);
         Assert.DoesNotContain("var Field int32 = 5", printed);
     }
@@ -156,11 +161,12 @@ namespace Demo
     /// Mode 3: a static constructor whose assignment RHS reads the type's OWN
     /// static state cannot be hoisted to the assigned field's declaration
     /// position without risking a change to C#'s
-    /// initializers-then-cctor evaluation order. It must report Unsupported
-    /// rather than silently reorder.
+    /// initializers-then-cctor evaluation order. Instead of folding, its body
+    /// maps to a G# <c>init { }</c> static-initializer block (ADR-0140) that
+    /// preserves the original evaluation order.
     /// </summary>
     [Fact]
-    public void StaticCtorRhsReferencesOwnStaticField_ReportsUnsupported_DoesNotFold()
+    public void StaticCtorRhsReferencesOwnStaticField_MapsToInitBlock_DoesNotFold()
     {
         (string printed, TranslationContext context) = Translate(@"
 namespace Demo
@@ -173,9 +179,10 @@ namespace Demo
     }
 }");
 
-        Assert.Contains(context.Diagnostics, d => d.IsUnsupported);
+        Assert.DoesNotContain(context.Diagnostics, d => d.IsUnsupported);
+        Assert.Contains("init {", printed);
+        Assert.Contains("C.A = C.B * 2", printed);
         Assert.DoesNotContain("var A int32 = B * 2", printed);
-        _ = printed;
     }
 
     /// <summary>

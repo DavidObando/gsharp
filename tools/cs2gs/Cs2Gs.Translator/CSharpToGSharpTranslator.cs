@@ -4004,10 +4004,14 @@ public sealed class CSharpToGSharpTranslator
                     return null;
                 }
 
-                this.context.ReportUnsupported(
-                    node,
-                    "a non-trivial static constructor has no canonical G# form yet (ADR-0115 §B.11).");
-                return null;
+                // ADR-0140 / ADR-0115 §B.11: a non-foldable static constructor
+                // maps to a G# `init { ... }` static-initializer block inside the
+                // type's `shared { }` block. Simple static-field initializers are
+                // hoisted onto their field declarations separately (see
+                // CollectStaticFieldInitializers); the remaining ctor body is
+                // translated as-is here.
+                BlockStatement staticInitBody = this.TranslateBody(node, "static initializer");
+                return new StaticInitializerBlock(staticInitBody);
             }
 
             List<Parameter> parameters = this.MapParameters(symbol, node.ParameterList, skipFirst: false);

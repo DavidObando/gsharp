@@ -192,6 +192,10 @@ public static class GNodeSamples
                 TypeDeclarationKind.Class,
                 "C",
                 members: Members(new DestructorDeclaration(Block())))),
+            [typeof(StaticInitializerBlock)] = () => Unit(new TypeDeclaration(
+                TypeDeclarationKind.Class,
+                "C",
+                members: Members(new SharedBlock(Members(new StaticInitializerBlock(Block())))))),
             [typeof(EventDeclaration)] = () => Unit(new TypeDeclaration(
                 TypeDeclarationKind.Class,
                 "C",
