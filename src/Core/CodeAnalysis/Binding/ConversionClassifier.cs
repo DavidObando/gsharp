@@ -681,8 +681,32 @@ internal sealed class ConversionClassifier
                     // a `List[object]` whose `!0` maps to `object`) is NOT a type
                     // parameter, so this recovery returns null and the argument
                     // still boxes correctly.
+                    //
+                    // Issue #2117: the same erased-`object` slot recovery is
+                    // required when the argument is `T?` — a `NullableTypeSymbol`
+                    // over an unconstrained/reference type parameter — not just a
+                    // bare `T`. For an unconstrained `T`, the `?` annotation is a
+                    // static-only nullability marker: `T?` shares `T`'s CLR
+                    // representation (there is no `Nullable<T>` box because `T`
+                    // may close to a reference type), so `default(T?)` must flow
+                    // into the reified generic slot IDENTICALLY to `default(T)`.
+                    // Without recovering the real `T?` slot here, the closed CLR
+                    // parameter stays erased to `object`, the `T? -> object`
+                    // implicit rule classifies the argument as a boxing
+                    // conversion, and a spurious `box !T` is emitted ahead of a
+                    // call whose symbolically re-closed signature (`FromResult<!T>
+                    // (!!0)`) expects the raw value — the ilverify StackUnexpected
+                    // ("found ref 'T' expected value 'T'") reported in #2117. The
+                    // recovered `T?` slot makes the argument `T? -> T?` identity
+                    // (no conversion node, no box), byte-identical to the working
+                    // `default(T)` control. A value-type-constrained `[T struct]`
+                    // (where `T?` genuinely IS `Nullable<T>`) is likewise reified
+                    // over the real slot, so its proper nullable default is
+                    // preserved; a GENUINE `object` slot still recovers null and
+                    // boxes correctly.
                     if (substituted == null
-                        && argument.Type is TypeParameterSymbol)
+                        && (argument.Type is TypeParameterSymbol
+                            || argument.Type is NullableTypeSymbol { UnderlyingType: TypeParameterSymbol }))
                     {
                         // The erased `object` slot may originate either from the
                         // receiver's generic type arguments (`List[T].Add(!0)`)
