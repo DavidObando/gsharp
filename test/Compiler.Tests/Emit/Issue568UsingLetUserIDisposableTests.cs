@@ -87,6 +87,60 @@ public class Issue568UsingLetUserIDisposableTests
         Assert.Contains(errors, e => e.Contains("GS0119"));
     }
 
+    [Fact]
+    public void UsingLet_GSharpClassInheritsDispose_FromImportedBaseClass()
+    {
+        // Issue #2148: a G# class deriving from an imported IDisposable CLR base
+        // (MemoryStream : Stream : IDisposable) must be usable in a `using`
+        // statement — the inherited Dispose lives on the imported base's CLR type.
+        var source = """
+            package Probe
+            import System
+            import System.IO
+
+            open class MyStream : MemoryStream {
+                init() : base() {}
+            }
+
+            func test() {
+                using let s = MyStream()
+                s.WriteByte(1)
+                Console.WriteLine("used")
+            }
+            test()
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("used\n", output);
+    }
+
+    [Fact]
+    public void AwaitUsingLet_GSharpClassInheritsDisposeAsync_FromImportedBaseClass()
+    {
+        // Issue #2148: the same fallback applies to `await using` — a G# class
+        // deriving from an imported IAsyncDisposable base (Stream implements
+        // IAsyncDisposable) resolves the inherited DisposeAsync on the CLR base.
+        var source = """
+            package Probe
+            import System
+            import System.IO
+
+            open class MyAsyncStream : MemoryStream {
+                init() : base() {}
+            }
+
+            async func test() {
+                await using let s = MyAsyncStream()
+                s.WriteByte(1)
+                Console.WriteLine("aused")
+            }
+            test().GetAwaiter().GetResult()
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("aused\n", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue568_").FullName;
