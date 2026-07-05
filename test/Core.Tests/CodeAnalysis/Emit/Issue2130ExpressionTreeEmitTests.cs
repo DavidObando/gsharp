@@ -158,6 +158,211 @@ func main() int32 {
         }
     }
 
+    [Fact]
+    public void ExpressionTree_ConditionalOperator_IsRepresentedAndExecuted()
+    {
+        const string Source = @"package ExprConditional
+import System
+import System.Linq.Expressions
+
+func main() int32 {
+    let expr Expression[Func[int32, int32]] = (x int32) -> x > 0 ? x : -x
+    let compiled = expr.Compile()
+    return compiled(-42)
+}
+";
+
+        var (asm, ctx) = CompileToAssembly(Source, nameof(ExpressionTree_ConditionalOperator_IsRepresentedAndExecuted));
+        try
+        {
+            Assert.Equal(42, GetProgramMethod(asm, "main").Invoke(null, null));
+        }
+        finally
+        {
+            ctx.Unload();
+        }
+    }
+
+    [Fact]
+    public void ExpressionTree_Indexers_AreRepresentedAndExecuted()
+    {
+        const string Source = @"package ExprIndexers
+import System
+import System.Linq.Expressions
+import System.Collections.Generic
+
+class Repo(data [3]int32) {
+    prop this[index int32] int32 -> this.data[index]
+}
+
+func main() int32 {
+    let expr Expression[Func[int32]] = () -> [3]int32{ 40, 1, 1 }[0] + Repo([3]int32{ 1, 2, 3 })[1]
+    let compiled = expr.Compile()
+    return compiled()
+}
+";
+
+        var (asm, ctx) = CompileToAssembly(Source, nameof(ExpressionTree_Indexers_AreRepresentedAndExecuted));
+        try
+        {
+            Assert.Equal(42, GetProgramMethod(asm, "main").Invoke(null, null));
+        }
+        finally
+        {
+            ctx.Unload();
+        }
+    }
+
+    [Fact]
+    public void ExpressionTree_ObjectConstructionAndArrayCreation_AreRepresentedAndExecuted()
+    {
+        const string Source = @"package ExprNewArray
+import System
+import System.Linq.Expressions
+
+class Book(Id int32)
+
+func main() int32 {
+    let expr Expression[Func[int32]] = () -> Book(40).Id + [2]int32{ 1, 2 }.Length
+    let compiled = expr.Compile()
+    return compiled()
+}
+";
+
+        var (asm, ctx) = CompileToAssembly(Source, nameof(ExpressionTree_ObjectConstructionAndArrayCreation_AreRepresentedAndExecuted));
+        try
+        {
+            Assert.Equal(42, GetProgramMethod(asm, "main").Invoke(null, null));
+        }
+        finally
+        {
+            ctx.Unload();
+        }
+    }
+
+    [Fact]
+    public void ExpressionTree_ObjectInitializer_IsRepresentedAndExecuted()
+    {
+        const string Source = @"package ExprObjectInit
+import System
+import System.Linq.Expressions
+
+class Box {
+    prop Width int32
+    prop Height int32
+    init() { }
+}
+
+func main() int32 {
+    let expr Expression[Func[int32]] = () -> Box() { Width = 40, Height = 2 }.Width
+    let compiled = expr.Compile()
+    return compiled()
+}
+";
+
+        var (asm, ctx) = CompileToAssembly(Source, nameof(ExpressionTree_ObjectInitializer_IsRepresentedAndExecuted));
+        try
+        {
+            Assert.Equal(40, GetProgramMethod(asm, "main").Invoke(null, null));
+        }
+        finally
+        {
+            ctx.Unload();
+        }
+    }
+
+    [Fact]
+    public void ExpressionTree_TypeTests_AreRepresentedAndExecuted()
+    {
+        const string Source = @"package ExprTypeTests
+import System
+import System.Linq.Expressions
+
+func main() int32 {
+    let expr Expression[Func[object, int32]] = (value object) -> (value is string) ? (value as string).Length : 0
+    let compiled = expr.Compile()
+    return compiled(""forty-two"") + compiled(0)
+}
+";
+
+        var (asm, ctx) = CompileToAssembly(Source, nameof(ExpressionTree_TypeTests_AreRepresentedAndExecuted));
+        try
+        {
+            Assert.Equal(9, GetProgramMethod(asm, "main").Invoke(null, null));
+        }
+        finally
+        {
+            ctx.Unload();
+        }
+    }
+
+    [Fact]
+    public void ExpressionTree_NestedLambdaArgument_ForDelegateParameter_Executes()
+    {
+        const string Source = @"package ExprNestedDelegate
+import System
+import System.Linq.Expressions
+
+class Helpers {
+    shared {
+        func ApplyDelegate(f (int32) -> int32, value int32) int32 {
+            return f(value)
+        }
+    }
+}
+
+func main() int32 {
+    let expr Expression[Func[int32, int32]] = (x int32) -> Helpers.ApplyDelegate((y int32) -> y + 2, x)
+    let compiled = expr.Compile()
+    return compiled(40)
+}
+";
+
+        var (asm, ctx) = CompileToAssembly(Source, nameof(ExpressionTree_NestedLambdaArgument_ForDelegateParameter_Executes));
+        try
+        {
+            Assert.Equal(42, GetProgramMethod(asm, "main").Invoke(null, null));
+        }
+        finally
+        {
+            ctx.Unload();
+        }
+    }
+
+    [Fact]
+    public void ExpressionTree_NestedLambdaArgument_ForExpressionParameter_Executes()
+    {
+        const string Source = @"package ExprNestedExpression
+import System
+import System.Linq.Expressions
+
+class Helpers {
+    shared {
+        func ApplyExpression(f Expression[(int32) -> int32], value int32) int32 {
+            let compiled = f.Compile()
+            return compiled(value)
+        }
+    }
+}
+
+func main() int32 {
+    let expr Expression[Func[int32, int32]] = (x int32) -> Helpers.ApplyExpression((y int32) -> y + 2, x)
+    let compiled = expr.Compile()
+    return compiled(40)
+}
+";
+
+        var (asm, ctx) = CompileToAssembly(Source, nameof(ExpressionTree_NestedLambdaArgument_ForExpressionParameter_Executes));
+        try
+        {
+            Assert.Equal(42, GetProgramMethod(asm, "main").Invoke(null, null));
+        }
+        finally
+        {
+            ctx.Unload();
+        }
+    }
+
     private static MethodInfo GetProgramMethod(Assembly asm, string name)
     {
         var programType = asm.GetTypes().FirstOrDefault(t => t.Name == "<Program>");

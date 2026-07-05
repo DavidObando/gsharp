@@ -24,8 +24,14 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
 {
     private static readonly TypeSymbol SystemTypeSymbol = TypeSymbol.FromClrType(typeof(Type));
     private static readonly TypeSymbol ObjectTypeSymbol = TypeSymbol.Object;
+    private static readonly TypeSymbol BindingFlagsTypeSymbol = TypeSymbol.FromClrType(typeof(BindingFlags));
     private static readonly TypeSymbol ReflectionConstructorInfoTypeSymbol = TypeSymbol.FromClrType(typeof(ConstructorInfo));
+    private static readonly TypeSymbol ReflectionFieldInfoTypeSymbol = TypeSymbol.FromClrType(typeof(FieldInfo));
+    private static readonly TypeSymbol ReflectionPropertyInfoTypeSymbol = TypeSymbol.FromClrType(typeof(PropertyInfo));
+    private static readonly TypeSymbol ReflectionMemberInfoTypeSymbol = TypeSymbol.FromClrType(typeof(MemberInfo));
     private static readonly TypeSymbol ExpressionTypeSymbol = TypeSymbol.FromClrType(typeof(System.Linq.Expressions.Expression));
+    private static readonly TypeSymbol MemberBindingTypeSymbol = TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MemberBinding));
+    private static readonly TypeSymbol NewExpressionTypeSymbol = TypeSymbol.FromClrType(typeof(System.Linq.Expressions.NewExpression));
     private static readonly TypeSymbol ParameterExpressionTypeSymbol = TypeSymbol.FromClrType(typeof(System.Linq.Expressions.ParameterExpression));
 
     private static readonly MethodInfo ExpressionParameterMethod = GetRequiredMethod(
@@ -135,6 +141,16 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         nameof(System.Linq.Expressions.Expression.New),
         typeof(ConstructorInfo),
         typeof(System.Linq.Expressions.Expression[]));
+    private static readonly MethodInfo ExpressionMemberInitMethod = GetRequiredMethod(
+        typeof(System.Linq.Expressions.Expression),
+        nameof(System.Linq.Expressions.Expression.MemberInit),
+        typeof(System.Linq.Expressions.NewExpression),
+        typeof(System.Linq.Expressions.MemberBinding[]));
+    private static readonly MethodInfo ExpressionBindMethod = GetRequiredMethod(
+        typeof(System.Linq.Expressions.Expression),
+        nameof(System.Linq.Expressions.Expression.Bind),
+        typeof(MemberInfo),
+        typeof(System.Linq.Expressions.Expression));
     private static readonly MethodInfo ExpressionNewArrayInitMethod = GetRequiredMethod(
         typeof(System.Linq.Expressions.Expression),
         nameof(System.Linq.Expressions.Expression.NewArrayInit),
@@ -158,6 +174,16 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         typeof(Type),
         nameof(Type.GetConstructor),
         typeof(Type[]));
+    private static readonly MethodInfo TypeGetFieldMethod = GetRequiredMethod(
+        typeof(Type),
+        nameof(Type.GetField),
+        typeof(string),
+        typeof(BindingFlags));
+    private static readonly MethodInfo TypeGetPropertyMethod = GetRequiredMethod(
+        typeof(Type),
+        nameof(Type.GetProperty),
+        typeof(string),
+        typeof(BindingFlags));
 
     private int counter;
 
@@ -352,6 +378,8 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 return BuildClrUnaryOperatorExpression(clrUnary, parameterMap);
             case BoundFunctionLiteralExpression nestedDelegateLiteral:
                 return BuildRuntimeConstant(nestedDelegateLiteral, nestedDelegateLiteral.Type);
+            case BoundBlockExpression block when this.TryBuildObjectInitializerExpression(block, parameterMap, out var objectInitializer):
+                return objectInitializer;
             default:
                 throw new NotSupportedException($"Unsupported expression-tree lowering node: {expression.Kind}.");
         }
@@ -832,6 +860,87 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 BuildMethodInfoConstant(expression.Method)));
     }
 
+    private bool TryBuildObjectInitializerExpression(
+        BoundBlockExpression block,
+        Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap,
+        out BoundExpression expression)
+    {
+        expression = null;
+
+        if (!TryMatchObjectInitializer(block, out var tempVariable, out var initializer, out var statements))
+        {
+            return false;
+        }
+
+        var translatedInitializer = this.TranslateExpression(initializer, parameterMap);
+        if (statements.Length == 0)
+        {
+            expression = translatedInitializer;
+            return true;
+        }
+
+        var bindings = ImmutableArray.CreateBuilder<BoundExpression>(statements.Length);
+        foreach (var statement in statements)
+        {
+            if (statement is not BoundExpressionStatement expressionStatement
+                || !this.TryBuildMemberBinding(expressionStatement.Expression, tempVariable, parameterMap, out var binding))
+            {
+                return false;
+            }
+
+            bindings.Add(binding);
+        }
+
+        expression = new BoundClrStaticCallExpression(
+            block.Syntax,
+            ExpressionMemberInitMethod,
+            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MemberInitExpression)),
+            ImmutableArray.Create<BoundExpression>(
+                translatedInitializer.Type == NewExpressionTypeSymbol
+                    ? translatedInitializer
+                    : new BoundConversionExpression(null, NewExpressionTypeSymbol, translatedInitializer),
+                BuildMemberBindingArray(bindings)));
+        return true;
+    }
+
+    private bool TryBuildMemberBinding(
+        BoundExpression expression,
+        VariableSymbol receiver,
+        Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap,
+        out BoundExpression binding)
+    {
+        binding = expression switch
+        {
+            BoundFieldAssignmentExpression field when ReferencesReceiver(field, receiver) =>
+                new BoundClrStaticCallExpression(
+                    field.Syntax,
+                    ExpressionBindMethod,
+                    TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MemberAssignment)),
+                    ImmutableArray.Create<BoundExpression>(
+                        BuildUserFieldInfoLookup(field.StructType, field.Field.Name),
+                        UpcastToExpression(this.TranslateExpression(field.Value, parameterMap)))),
+            BoundPropertyAssignmentExpression property when ReferencesReceiver(property.Receiver, receiver) =>
+                new BoundClrStaticCallExpression(
+                    property.Syntax,
+                    ExpressionBindMethod,
+                    TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MemberAssignment)),
+                    ImmutableArray.Create<BoundExpression>(
+                        BuildUserPropertyInfoLookup(property.StructType, property.Property.Name),
+                        UpcastToExpression(this.TranslateExpression(property.Value, parameterMap)))),
+            BoundClrPropertyAssignmentExpression clrProperty when ReferencesReceiver(clrProperty.Receiver, receiver) =>
+                new BoundClrStaticCallExpression(
+                    clrProperty.Syntax,
+                    ExpressionBindMethod,
+                    TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MemberAssignment)),
+                    ImmutableArray.Create<BoundExpression>(
+                        BuildMemberInfoConstant(clrProperty.Member),
+                        UpcastToExpression(this.TranslateExpression(clrProperty.Value, parameterMap)))),
+            _ => null,
+        };
+
+        return binding != null;
+    }
+
     private ImmutableArray<BoundExpression> TranslateArguments(
         ImmutableArray<BoundExpression> arguments,
         ParameterInfo[] parameters,
@@ -917,6 +1026,33 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
     private static BoundExpression BuildMethodInfoConstant(MethodInfo method)
         => new BoundLiteralExpression(null, method, TypeSymbol.FromClrType(typeof(MethodInfo)));
 
+    private static BoundExpression BuildMemberInfoConstant(MemberInfo member)
+        => new BoundLiteralExpression(null, member, ReflectionMemberInfoTypeSymbol);
+
+    private static BoundExpression BuildUserFieldInfoLookup(TypeSymbol ownerType, string memberName)
+    {
+        return new BoundImportedInstanceCallExpression(
+            null,
+            CreateTypeOf(ownerType),
+            TypeGetFieldMethod,
+            ReflectionFieldInfoTypeSymbol,
+            ImmutableArray.Create<BoundExpression>(
+                new BoundLiteralExpression(null, memberName, TypeSymbol.String),
+                BuildBindingFlagsConstant(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)));
+    }
+
+    private static BoundExpression BuildUserPropertyInfoLookup(TypeSymbol ownerType, string memberName)
+    {
+        return new BoundImportedInstanceCallExpression(
+            null,
+            CreateTypeOf(ownerType),
+            TypeGetPropertyMethod,
+            ReflectionPropertyInfoTypeSymbol,
+            ImmutableArray.Create<BoundExpression>(
+                new BoundLiteralExpression(null, memberName, TypeSymbol.String),
+                BuildBindingFlagsConstant(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)));
+    }
+
     private static BoundExpression CreateTypeOf(TypeSymbol type)
         => new BoundTypeOfExpression(null, type, SystemTypeSymbol);
 
@@ -965,6 +1101,26 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             elements.ToImmutable());
     }
 
+    private static BoundExpression BuildMemberBindingArray(IEnumerable<BoundExpression> bindings)
+    {
+        var elements = ImmutableArray.CreateBuilder<BoundExpression>();
+        foreach (var binding in bindings)
+        {
+            elements.Add(binding.Type == MemberBindingTypeSymbol ? binding : new BoundConversionExpression(null, MemberBindingTypeSymbol, binding));
+        }
+
+        return new BoundArrayCreationExpression(
+            null,
+            ArrayTypeSymbol.Get(MemberBindingTypeSymbol, elements.Count),
+            elements.ToImmutable());
+    }
+
+    private static BoundExpression BuildBindingFlagsConstant(BindingFlags flags)
+        => new BoundConversionExpression(
+            null,
+            BindingFlagsTypeSymbol,
+            new BoundLiteralExpression(null, (int)flags, TypeSymbol.Int32));
+
     private static ImmutableArray<TypeSymbol> GetArgumentTypes(ImmutableArray<BoundExpression> arguments)
     {
         var builder = ImmutableArray.CreateBuilder<TypeSymbol>(arguments.Length);
@@ -1007,6 +1163,37 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return candidate
             ?? throw new NotSupportedException("Expression-tree lambda body did not contain a supported trailing expression.");
     }
+
+    private static bool TryMatchObjectInitializer(
+        BoundBlockExpression block,
+        out VariableSymbol receiver,
+        out BoundExpression initializer,
+        out ImmutableArray<BoundStatement> statements)
+    {
+        receiver = null;
+        initializer = null;
+        statements = default;
+
+        if (block.Expression is not BoundVariableExpression result
+            || block.Statements.IsDefaultOrEmpty
+            || block.Statements[0] is not BoundVariableDeclaration declaration
+            || !ReferenceEquals(declaration.Variable, result.Variable))
+        {
+            return false;
+        }
+
+        receiver = declaration.Variable;
+        initializer = declaration.Initializer;
+        statements = block.Statements.RemoveAt(0);
+        return true;
+    }
+
+    private static bool ReferencesReceiver(BoundExpression expression, VariableSymbol receiver)
+        => expression is BoundVariableExpression variable && ReferenceEquals(variable.Variable, receiver);
+
+    private static bool ReferencesReceiver(BoundFieldAssignmentExpression assignment, VariableSymbol receiver)
+        => ReferenceEquals(assignment.Receiver, receiver)
+            || ReferencesReceiver(assignment.ReceiverExpression, receiver);
 
     private static bool IsDelegateLike(TypeSymbol type)
         => MemberLookup.TryGetDelegateFunctionTypeFromSymbol(type, out _);

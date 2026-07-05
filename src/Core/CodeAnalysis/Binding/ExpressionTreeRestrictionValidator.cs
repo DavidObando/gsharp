@@ -332,7 +332,12 @@ internal static class ExpressionTreeRestrictionValidator
                 diagnostics.ReportExpressionTreeUnsupported(LocationOf(expression.Syntax), "a method group");
                 return;
 
-            case BoundBlockExpression:
+            case BoundBlockExpression block:
+                if (TryValidateObjectInitializer(block, diagnostics))
+                {
+                    return;
+                }
+
                 diagnostics.ReportExpressionTreeUnsupported(LocationOf(expression.Syntax), "a block expression");
                 return;
 
@@ -382,4 +387,86 @@ internal static class ExpressionTreeRestrictionValidator
 
     private static TextLocation LocationOf(SyntaxNode syntax)
         => syntax != null ? syntax.Location : default;
+
+    private static bool TryValidateObjectInitializer(BoundBlockExpression block, DiagnosticBag diagnostics)
+    {
+        if (!TryMatchObjectInitializer(block, out var receiver, out var initializer, out var statements))
+        {
+            return false;
+        }
+
+        ValidateExpression(initializer, diagnostics);
+
+        foreach (var statement in statements)
+        {
+            if (statement is not BoundExpressionStatement expressionStatement)
+            {
+                diagnostics.ReportExpressionTreeUnsupported(LocationOf(statement.Syntax), "a block expression");
+                return true;
+            }
+
+            switch (expressionStatement.Expression)
+            {
+                case BoundFieldAssignmentExpression field when ReferencesReceiver(field, receiver):
+                    ValidateExpression(field.Value, diagnostics);
+                    break;
+                case BoundPropertyAssignmentExpression property when ReferencesReceiver(property.Receiver, receiver):
+                    ValidateExpression(property.Value, diagnostics);
+                    break;
+                case BoundClrPropertyAssignmentExpression clrProperty when ReferencesReceiver(clrProperty.Receiver, receiver):
+                    ValidateExpression(clrProperty.Value, diagnostics);
+                    break;
+                case BoundImportedInstanceCallExpression importedCall when ReferencesReceiver(importedCall.Receiver, receiver):
+                case BoundUserInstanceCallExpression userCall when ReferencesReceiver(userCall.Receiver, receiver):
+                case BoundClrIndexAssignmentExpression clrIndexAssignment when ReferencesReceiver(clrIndexAssignment, receiver):
+                case BoundIndexAssignmentExpression indexAssignment when ReferencesReceiver(indexAssignment, receiver):
+                    diagnostics.ReportExpressionTreeUnsupported(LocationOf(expressionStatement.Expression.Syntax), "a collection initializer");
+                    return true;
+                default:
+                    diagnostics.ReportExpressionTreeUnsupported(LocationOf(expressionStatement.Expression.Syntax), "a block expression");
+                    return true;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryMatchObjectInitializer(
+        BoundBlockExpression block,
+        out VariableSymbol receiver,
+        out BoundExpression initializer,
+        out System.Collections.Immutable.ImmutableArray<BoundStatement> statements)
+    {
+        receiver = null;
+        initializer = null;
+        statements = default;
+
+        if (block.Expression is not BoundVariableExpression result
+            || block.Statements.IsDefaultOrEmpty
+            || block.Statements[0] is not BoundVariableDeclaration declaration
+            || !ReferenceEquals(declaration.Variable, result.Variable))
+        {
+            return false;
+        }
+
+        receiver = declaration.Variable;
+        initializer = declaration.Initializer;
+        statements = block.Statements.RemoveAt(0);
+        return true;
+    }
+
+    private static bool ReferencesReceiver(BoundExpression expression, VariableSymbol receiver)
+        => expression is BoundVariableExpression variable && ReferenceEquals(variable.Variable, receiver);
+
+    private static bool ReferencesReceiver(BoundFieldAssignmentExpression assignment, VariableSymbol receiver)
+        => ReferenceEquals(assignment.Receiver, receiver)
+            || ReferencesReceiver(assignment.ReceiverExpression, receiver);
+
+    private static bool ReferencesReceiver(BoundClrIndexAssignmentExpression assignment, VariableSymbol receiver)
+        => ReferenceEquals(assignment.Target, receiver)
+            || ReferencesReceiver(assignment.TargetExpression, receiver);
+
+    private static bool ReferencesReceiver(BoundIndexAssignmentExpression assignment, VariableSymbol receiver)
+        => ReferenceEquals(assignment.Target, receiver)
+            || ReferencesReceiver(assignment.TargetExpression, receiver);
 }

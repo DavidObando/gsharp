@@ -75,14 +75,16 @@ Supported inside an expression-tree lambda:
 - literal/default/`typeof`
 - field and property access (instance/static)
 - imported and user member calls
-- indexers and array indexing
+- array indexing plus CLR/user-defined indexers
 - unary and binary operators with an expression-factory equivalent
 - conditional `?:`
 - null coalescing `??`
 - reference / numeric conversions
 - `is` type tests and `as`
-- object construction and array creation
-- nested lambda values when a runtime expression/delegate object is required
+- object construction, object-initializer member assignments, and array creation
+- nested lambdas as call arguments:
+  - delegate-typed parameters capture a real runtime delegate via `Expression.Constant`
+  - `Expression[TDelegate]`-typed parameters recursively lower to nested lambda trees
 
 Explicitly rejected with GS0473:
 
@@ -97,8 +99,9 @@ Explicitly rejected with GS0473:
 - local functions
 - `dynamic`
 - unsupported by-ref / pointer / unsafe shapes
-- collection/map literals and other constructs without a stable expression-tree
-  lowering in this compiler
+- collection/list initializer forms (including collection-member initializer
+  subforms inside object initializers), map literals, and other constructs
+  without a stable expression-tree lowering in this compiler
 
 ### 3. Emit-time lowering
 
