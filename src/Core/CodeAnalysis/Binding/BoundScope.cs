@@ -658,6 +658,25 @@ public sealed class BoundScope
         => EnumerateImports().ToImmutableArray();
 
     /// <summary>
+    /// Gets the imports declared directly in <em>this</em> scope only — unlike
+    /// <see cref="GetDeclaredImports"/>, this does not walk <see cref="Parent"/>.
+    /// Used by <see cref="Binder.BindGlobalScope(BoundGlobalScope, ImmutableArray{SyntaxTree}, ReferenceResolver, bool, ImmutableHashSet{string}, bool)"/>
+    /// to populate <see cref="BoundGlobalScope.Imports"/> with only the current
+    /// submission's own imports (issue #2101): that field is later re-seeded,
+    /// one historical <see cref="BoundGlobalScope"/> per chained REPL
+    /// submission, into a fresh per-level <see cref="BoundScope"/> by
+    /// <see cref="Binder.CreateParentScope"/>. Using the walking/cumulative
+    /// <see cref="GetDeclaredImports"/> there previously made every submission
+    /// re-import the ENTIRE flattened history of every prior submission into
+    /// its own scope layer, which was then itself re-flattened on the next
+    /// call — an <c>I(k) = sum(I(0..k-1))</c> recurrence that doubles the
+    /// import count (and binding time) on every single REPL submission.
+    /// </summary>
+    /// <returns>This scope's own declared imports, in declaration order.</returns>
+    public ImmutableArray<ImportSymbol> GetOwnDeclaredImports()
+        => imports?.ToImmutable() ?? ImmutableArray<ImportSymbol>.Empty;
+
+    /// <summary>
     /// Tries to declare a type alias.
     /// </summary>
     /// <param name="name">The alias name.</param>

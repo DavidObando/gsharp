@@ -965,7 +965,7 @@ public sealed class Binder
             }
         }
 
-        var imports = binder.scope.GetDeclaredImports();
+        var imports = binder.scope.GetOwnDeclaredImports();
         var functions = binder.scope.GetDeclaredFunctions();
         var extensionFunctions = binder.scope.GetDeclaredExtensionFunctions();
         if (!extensionFunctions.IsDefaultOrEmpty)
@@ -1515,7 +1515,7 @@ public sealed class Binder
 
         return new BoundProgram(globalScope.Package, globalScope.Packages, diagnostics.ToImmutable(), functionBodies.ToImmutable(), globalScope.EntryPoint, statement, globalScope.Structs, globalScope.Interfaces, globalScope.Enums, globals, globalScope.Delegates)
         {
-            Imports = globalScope.Imports,
+            Imports = globalScope.GetCumulativeImports(),
             FriendAssemblies = globalScope.FriendAssemblies,
         };
     }
