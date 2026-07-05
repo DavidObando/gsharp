@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Spectre.Console;
 using Spectre.Console.Rendering;
 
 namespace GSharp.Repl.Widgets;
@@ -42,13 +43,15 @@ public sealed class Dock : Renderable
     private readonly IRenderable footer;
     private readonly int height;
     private readonly ScrollState scroll;
+    private readonly Style? fill;
 
-    public Dock(IRenderable scrollable, IRenderable footer, int height, ScrollState scroll)
+    public Dock(IRenderable scrollable, IRenderable footer, int height, ScrollState scroll, Style? fill = null)
     {
         this.scrollable = scrollable ?? throw new ArgumentNullException(nameof(scrollable));
         this.footer = footer ?? throw new ArgumentNullException(nameof(footer));
         this.height = Math.Max(1, height);
         this.scroll = scroll ?? throw new ArgumentNullException(nameof(scroll));
+        this.fill = fill;
     }
 
     protected override Measurement Measure(RenderOptions options, int maxWidth)
@@ -57,7 +60,7 @@ public sealed class Dock : Renderable
     protected override IEnumerable<Segment> Render(RenderOptions options, int maxWidth)
     {
         var footerLines = Segment.SplitLines(footer.Render(options, maxWidth))
-            .Select(l => SegmentGrid.PadLine(l, maxWidth))
+            .Select(l => SegmentGrid.PadLine(l, maxWidth, fill))
             .ToList();
 
         var viewportHeight = Math.Max(0, height - footerLines.Count);
@@ -76,12 +79,12 @@ public sealed class Dock : Renderable
             {
                 foreach (var line in lines)
                 {
-                    outLines.Add(SegmentGrid.PadLine(line, maxWidth));
+                    outLines.Add(SegmentGrid.PadLine(line, maxWidth, fill));
                 }
 
                 while (outLines.Count < viewportHeight)
                 {
-                    outLines.Add(new List<Segment>());
+                    outLines.Add(SegmentGrid.PadLine(new List<Segment>(), maxWidth, fill));
                 }
             }
             else
@@ -89,7 +92,7 @@ public sealed class Dock : Renderable
                 var start = total - viewportHeight - offset;
                 for (var i = start; i < start + viewportHeight; i++)
                 {
-                    outLines.Add(SegmentGrid.PadLine(lines[i], maxWidth));
+                    outLines.Add(SegmentGrid.PadLine(lines[i], maxWidth, fill));
                 }
             }
         }

@@ -41,4 +41,15 @@ public interface IInputReader
 {
     /// <summary>Blocks until the next input event, or returns <c>null</c> when input ends.</summary>
     InputEvent? Read();
+
+    /// <summary>
+    /// Blocks until the next input event, end of input, or <paramref name="timeout"/> elapses.
+    /// Set <paramref name="timedOut"/> to distinguish a timeout (no event, input still open —
+    /// used to drive idle animation ticks such as the eval spinner) from end of input.
+    /// </summary>
+    InputEvent? Read(TimeSpan timeout, out bool timedOut)
+    {
+        timedOut = false;
+        return Read();
+    }
 }

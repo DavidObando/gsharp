@@ -15,16 +15,15 @@ namespace GSharp.Repl;
 /// <summary>Owns the alt-screen lifecycle and the AppShell. Restores the terminal on exit.</summary>
 public static class ReplHost
 {
-    public static int Run(string? version = null)
+    public static int Run()
     {
-        version ??= GetVersion();
         var engine = new SessionEngine();
         var tabs = new List<ITabScreen>
         {
             new ReplScreen(engine),
         };
 
-        var shell = new AppShell(AnsiConsole.Console, tabs, version);
+        var shell = new AppShell(AnsiConsole.Console, tabs);
         var prevCtrlC = false;
         try
         {

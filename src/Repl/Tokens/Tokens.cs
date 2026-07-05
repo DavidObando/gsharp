@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Repl.Themes;
+using Spectre.Console;
 
 namespace GSharp.Repl.Tokens;
 
@@ -33,6 +34,16 @@ public static class Tokens
     public static SemanticColor BorderNeutral => Theme.Current.BorderNeutral;
 
     public static SemanticColor CellBackground => Theme.Current.CellBackground;
+
+    /// <summary>
+    /// Background for chrome/gaps between larger sections (header, footer, dock fill,
+    /// sidebar gutter) — a darker shade of <see cref="CellBackground"/> so those gaps
+    /// read as negative space rather than matching or clashing with cell content.
+    /// </summary>
+    public static Color Canvas => Darken(CellBackground.Value, 0.6);
+
+    private static Color Darken(Color c, double factor)
+        => new((byte)(c.R * factor), (byte)(c.G * factor), (byte)(c.B * factor));
 
     public static SemanticColor InputBackground => Theme.Current.InputBackground;
 

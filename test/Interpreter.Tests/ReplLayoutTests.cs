@@ -5,6 +5,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using GSharp.Repl.Engine;
 using GSharp.Repl.Screens;
 using GSharp.Repl.Shell;
@@ -89,6 +90,30 @@ public class ReplLayoutTests
         // The accent bar glyph and a 256-palette background fill are both emitted.
         Assert.Contains("▏", text);
         Assert.Contains("48;5;", text);
+    }
+
+    [Fact]
+    public void Screen_Enter_EvaluatesAsynchronouslyAndClearsBusyOnCompletion()
+    {
+        var engine = new SessionEngine();
+        var screen = new ReplScreen(engine);
+        foreach (var ch in "1 + 1")
+        {
+            screen.HandleKey(new ConsoleKeyInfo(ch, ConsoleKey.NoName, false, false, false));
+        }
+
+        screen.HandleKey(new ConsoleKeyInfo('\r', ConsoleKey.Enter, false, false, false));
+
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (screen.IsBusy && DateTime.UtcNow < deadline)
+        {
+            Thread.Sleep(5);
+            screen.Render(80, 24);
+        }
+
+        Assert.False(screen.IsBusy);
+        Assert.Null(screen.FooterOverride);
+        Assert.Single(engine.Cells);
     }
 
     [Fact]
@@ -239,7 +264,7 @@ public class ReplLayoutTests
     public void AppShell_DispatchScroll_RoutesToActiveTab_ButNotWhenModalOpen()
     {
         var tab = new RecordingTab();
-        var shell = new AppShell(NullConsole(), new[] { (ITabScreen)tab }, "1.0");
+        var shell = new AppShell(NullConsole(), new[] { (ITabScreen)tab });
 
         shell.DispatchScroll(ScrollDirection.Up);
         shell.DispatchScroll(ScrollDirection.Down);

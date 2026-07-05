@@ -24,6 +24,18 @@ public interface ITabScreen
 
     IEnumerable<KeyValuePair<string, string?>> Hints => Array.Empty<KeyValuePair<string, string?>>();
 
+    /// <summary>Optional right-aligned footer status markup (e.g. ready/error state). Null hides it.</summary>
+    string? Status => null;
+
+    /// <summary>
+    /// When set, replaces the left-hand hint bar in the footer (e.g. a busy spinner plus an
+    /// interrupt hint). Null shows the default key-binding hints instead.
+    /// </summary>
+    IRenderable? FooterOverride => null;
+
+    /// <summary>Whether the screen is running a long operation (e.g. evaluating). Drives idle animation ticks.</summary>
+    bool IsBusy => false;
+
     void OnActivated(IAppShellNavigator navigator)
     {
     }

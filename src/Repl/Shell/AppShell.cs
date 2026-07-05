@@ -21,18 +21,23 @@ public sealed class AppShell : IAppShellNavigator
     private readonly IAnsiConsole console;
     private readonly IReadOnlyList<ITabScreen> tabs;
     private readonly CtrlCState ctrlC = new();
-    private readonly string version;
+
+    // Captured once, up front: a cell evaluation can run on a background thread while the
+    // busy spinner keeps this render loop going on the main thread, and SessionEngine
+    // temporarily swaps the *global* Console.Out/Error to capture that cell's stdout. Writing
+    // frames through the live Console.Out property would race with that swap and corrupt the
+    // screen; writing through this captured reference to the real terminal writer never does.
+    private readonly TextWriter realOut = Console.Out;
 
     private int activeTab;
     private IModal? activeModal;
     private string? toast;
     private bool exitRequested;
 
-    public AppShell(IAnsiConsole console, IReadOnlyList<ITabScreen> tabs, string version)
+    public AppShell(IAnsiConsole console, IReadOnlyList<ITabScreen> tabs)
     {
         this.console = console ?? throw new ArgumentNullException(nameof(console));
         this.tabs = tabs is { Count: > 0 } ? tabs : throw new ArgumentException("At least one tab required.", nameof(tabs));
-        this.version = version ?? string.Empty;
     }
 
     public int ActiveTab => activeTab;
@@ -58,6 +63,8 @@ public sealed class AppShell : IAppShellNavigator
 
     public void RequestExit() => exitRequested = true;
 
+    private static readonly TimeSpan BusyPollInterval = TimeSpan.FromMilliseconds(80);
+
     public int Run(IInputReader inputReader)
     {
         ArgumentNullException.ThrowIfNull(inputReader);
@@ -65,7 +72,31 @@ public sealed class AppShell : IAppShellNavigator
         Render();
         while (true)
         {
-            var input = inputReader.Read();
+            InputEvent? input;
+            if (tabs[activeTab].IsBusy)
+            {
+                // Poll instead of blocking indefinitely so the busy spinner keeps animating
+                // while an evaluation runs, without spinning the CPU when idle.
+                input = inputReader.Read(BusyPollInterval, out var timedOut);
+                if (timedOut)
+                {
+                    try
+                    {
+                        Render();
+                    }
+                    catch (Exception ex)
+                    {
+                        toast = $"Render error: {ex.Message}";
+                    }
+
+                    continue;
+                }
+            }
+            else
+            {
+                input = inputReader.Read();
+            }
+
             if (input is null)
             {
                 return 0;
@@ -197,10 +228,10 @@ public sealed class AppShell : IAppShellNavigator
         var width = console.Profile.Width;
         var height = Math.Max(10, console.Profile.Height);
 
-        // Chrome is exactly four lines: header, a rule, a rule, and the footer. The body
-        // fills the rest so the whole frame is exactly the terminal height (no scrolling,
-        // so the header/sidebar/footer never scroll off).
-        var bodyHeight = Math.Max(3, height - 4);
+        // Chrome is exactly two lines: a rule above the footer, and the footer itself.
+        // The body fills the rest so the whole frame is exactly the terminal height (no
+        // scrolling, so the body/sidebar/footer never scroll off).
+        var bodyHeight = Math.Max(3, height - 2);
         var screen = tabs[activeTab];
 
         var useBuffer = !Console.IsOutputRedirected;
@@ -225,18 +256,47 @@ public sealed class AppShell : IAppShellNavigator
 
         var ruleColor = Tokens.Tokens.BorderNeutral.Value.ToMarkup();
         var rule = $"[{ruleColor}]{new string('─', Math.Max(1, width))}[/]";
-        IRenderable footer = toast is not null
-            ? new Markup($"[{Tokens.Tokens.StatusWarning.Value.ToMarkup()}] ! {Markup.Escape(toast)}[/]")
-            : BuildHintBar(screen).Render();
+
+        // Header/rule/footer carry no background of their own, so paint them with the
+        // theme's canvas color; otherwise they fall through to the terminal's own
+        // background (usually black), clashing with the themed body underneath.
+        var canvas = Tokens.Tokens.Canvas;
+        IRenderable Chrome(IRenderable line) => new Backdrop(line, canvas, padLeft: 0, padRight: 0);
+
+        // Render the body first: it pumps any pending evaluation to completion (see
+        // ReplScreen.PumpPendingEvaluation), which can flip IsBusy/FooterOverride for this
+        // very frame. Reading those *after* the body render (not before) is what lets the
+        // footer catch up in the same frame the evaluation finishes, instead of one frame late.
+        var body = screen.Render(width, bodyHeight);
+
+        IRenderable footer;
+        if (toast is not null)
+        {
+            footer = new Markup($"[{Tokens.Tokens.StatusWarning.Value.ToMarkup()}] ! {Markup.Escape(toast)}[/]");
+        }
+        else
+        {
+            var hintBar = screen.FooterOverride ?? BuildHintBar(screen).Render();
+            var status = screen.Status;
+            if (status is null)
+            {
+                footer = hintBar;
+            }
+            else
+            {
+                // Right-align the status against the plain (tag-stripped) length of its markup.
+                var statusWidth = Math.Min(width - 4, Math.Max(1, StripMarkupTags(status).Length));
+                var hintWidth = Math.Max(1, width - statusWidth - 2);
+                footer = new SideBySide(hintBar, hintWidth, 2, new Markup(status), statusWidth, canvas);
+            }
+        }
 
         // A single frame renderable whose line breaks fall only BETWEEN rows, so the total
-        // line count is deterministic: 1 + 1 + bodyHeight + 1 + 1 == height.
+        // line count is deterministic: bodyHeight + 1 + 1 == height.
         IRenderable frame = new Rows(
-            new Markup(BuildHeader()),
-            new Markup(rule),
-            screen.Render(width, bodyHeight),
-            new Markup(rule),
-            footer);
+            body,
+            Chrome(new Markup(rule)),
+            Chrome(footer));
 
         // The command palette floats as a centered modal over the frame; the surrounding
         // chrome stays visible behind it rather than being replaced.
@@ -248,24 +308,18 @@ public sealed class AppShell : IAppShellNavigator
 
         // Clamp to exactly the terminal height and strip any trailing line break so the
         // whole frame fits without scrolling (which would push the header off-screen).
-        target.Write(new FixedHeight(frame, height));
+        target.Write(new FixedHeight(frame, height, new Style(background: canvas)));
 
         if (useBuffer && sw is not null)
         {
             var frameText = AltScreen.InjectEraseBeforeNewlines(sw.ToString());
-            Console.Out.Write($"{AltScreen.SyncStartSequence}\u001b[H{frameText}\u001b[K\u001b[J{AltScreen.SyncEndSequence}");
-            Console.Out.Flush();
+            realOut.Write($"{AltScreen.SyncStartSequence}\u001b[H{frameText}\u001b[K\u001b[J{AltScreen.SyncEndSequence}");
+            realOut.Flush();
         }
     }
 
-    private string BuildHeader()
-    {
-        var brand = Tokens.Tokens.Brand.Value.ToMarkup();
-        var tertiary = Tokens.Tokens.TextTertiary.Value.ToMarkup();
-        var v = string.IsNullOrEmpty(version) ? string.Empty : $"v{version}";
-        var theme = Themes.Theme.Current.Name;
-        return $"[{brand} bold]gsharp[/] [{tertiary}]| session[/]   [{tertiary}]{theme} · {Markup.Escape(v)}[/]";
-    }
+    private static string StripMarkupTags(string markup)
+        => System.Text.RegularExpressions.Regex.Replace(markup, "\\[[^\\]]*\\]", string.Empty);
 
     private HintBar BuildHintBar(ITabScreen screen)
     {
