@@ -60,6 +60,15 @@ internal sealed partial class ExpressionBinder
         var eventName = eventNameSyntax.IdentifierToken.Text;
         var isAdd = syntax.OperatorToken.Kind == SyntaxKind.PlusEqualsToken;
 
+        // Issue #2154: events only support `+=`/`-=` subscription semantics —
+        // any OTHER compound operator (`*=`, `/=`, ...) on the same
+        // member-access LHS can never denote an event and must go straight to
+        // compound-assignment (operator-overload) resolution below, carrying
+        // the actual base operator instead of the +/- `isAdd` bool.
+        var isEventCapableOperator = syntax.OperatorToken.Kind == SyntaxKind.PlusEqualsToken
+            || syntax.OperatorToken.Kind == SyntaxKind.MinusEqualsToken;
+        SyntaxFacts.TryGetCompoundAssignmentBaseOperator(syntax.OperatorToken.Kind, out var baseOpSyntaxKind);
+
         // Resolve receiver: either an ImportedClassSymbol (static event) or
         // any value-producing expression with a CLR-backed type (instance event).
         BoundExpression boundReceiver = null;
@@ -78,17 +87,19 @@ internal sealed partial class ExpressionBinder
             // Issue #263: static event subscription on a user-defined type.
             // Try matching an event first; if no match, fall through to
             // ADR-0053 static field/property compound assignment instead of
-            // reporting an immediate "unable to find member".
-            if (TypeMemberModel.TryGetStaticEvent(staticStruct, eventName, out var ev))
+            // reporting an immediate "unable to find member". Non-+/-
+            // operators (issue #2154) can never be an event, so skip straight
+            // to the compound-assignment fallback.
+            if (isEventCapableOperator && TypeMemberModel.TryGetStaticEvent(staticStruct, eventName, out var ev))
             {
                 var userHandler = BindEventSubscriptionHandler(syntax.Value, ev.Type);
                 return new BoundEventSubscriptionExpression(null, receiver: null, staticStruct, ev, userHandler, isAdd);
             }
 
-            // ADR-0053: `Type.StaticField += rhs` / `Type.StaticProp += rhs`.
+            // ADR-0053: `Type.StaticField op= rhs` / `Type.StaticProp op= rhs`.
             // The simple-assignment path is handled by BindFieldAssignmentExpression
             // (lines ~6586–6619); this is the compound counterpart.
-            if (TryBindUserTypeStaticCompoundAssignment(staticStruct, eventNameSyntax, syntax, isAdd, out var compoundResult))
+            if (TryBindUserTypeStaticCompoundAssignment(staticStruct, eventNameSyntax, syntax, baseOpSyntaxKind, out var compoundResult))
             {
                 return compoundResult;
             }
@@ -100,9 +111,9 @@ internal sealed partial class ExpressionBinder
             && scope.TryLookupTypeAlias(ifaceLeftName.IdentifierToken.Text, out var ifaceTypeAlias)
             && ifaceTypeAlias is InterfaceSymbol staticInterface)
         {
-            // ADR-0089 / issue #1030: `IName.StaticField += rhs` — compound
+            // ADR-0089 / issue #1030: `IName.StaticField op= rhs` — compound
             // assignment to a (non-generic) interface static field.
-            if (TryBindInterfaceStaticCompoundAssignment(staticInterface, eventNameSyntax, syntax, isAdd, out var ifaceCompound))
+            if (TryBindInterfaceStaticCompoundAssignment(staticInterface, eventNameSyntax, syntax, baseOpSyntaxKind, out var ifaceCompound))
             {
                 return ifaceCompound;
             }
@@ -119,20 +130,20 @@ internal sealed partial class ExpressionBinder
         {
             // Issue #1559 (extends ADR-0089 / issue #1030): compound assignment
             // to a static field/property through a constructed generic *type*
-            // receiver — `Foo[int32].x += rhs` (class/struct) or
-            // `IBox[int32].StaticField += rhs` (interface). The receiver is a
+            // receiver — `Foo[int32].x op= rhs` (class/struct) or
+            // `IBox[int32].StaticField op= rhs` (interface). The receiver is a
             // TYPE, resolved to the constructed symbol (mirroring the READ /
             // simple-write paths) rather than bound as element access, and the
             // carried construction drives per-construction emit/storage.
             _ = ctorImported;
             if (ctorStruct != null
-                && TryBindUserTypeStaticCompoundAssignment(ctorStruct, eventNameSyntax, syntax, isAdd, out var ctorStructCompound))
+                && TryBindUserTypeStaticCompoundAssignment(ctorStruct, eventNameSyntax, syntax, baseOpSyntaxKind, out var ctorStructCompound))
             {
                 return ctorStructCompound;
             }
 
             if (ctorInterface != null
-                && TryBindInterfaceStaticCompoundAssignment(ctorInterface, eventNameSyntax, syntax, isAdd, out var ctorCompound))
+                && TryBindInterfaceStaticCompoundAssignment(ctorInterface, eventNameSyntax, syntax, baseOpSyntaxKind, out var ctorCompound))
             {
                 return ctorCompound;
             }
@@ -153,7 +164,8 @@ internal sealed partial class ExpressionBinder
             // events on `open class` bases now resolve (parity with the bare-`this`
             // path in BindBareEventOrCompoundAssignment). The owner symbol remains
             // `userStruct` (the receiver's static type) to preserve the bound-node shape.
-            if (boundReceiver.Type is StructSymbol userStruct && TypeMemberModel.TryGetEvent(userStruct, eventName, out var ev))
+            // Non-+/- operators (issue #2154) can never be an event.
+            if (isEventCapableOperator && boundReceiver.Type is StructSymbol userStruct && TypeMemberModel.TryGetEvent(userStruct, eventName, out var ev))
             {
                 var userHandler = BindEventSubscriptionHandler(syntax.Value, ev.Type);
                 return new BoundEventSubscriptionExpression(null, boundReceiver, userStruct, ev, userHandler, isAdd);
@@ -162,14 +174,15 @@ internal sealed partial class ExpressionBinder
             receiverClrType = boundReceiver.Type?.ClrType;
             if (receiverClrType == null)
             {
-                // Issue #648: compound assignment fallback for chained member access
-                // on user-defined struct/class types (e.g. `a.B.C += 1`). The parser
-                // routes all `lhs.member +=/-=` through EventSubscriptionExpression;
-                // when the member is not an event we fall back to compound assignment.
+                // Issue #648 (generalized by #2154): compound assignment fallback for
+                // chained member access on user-defined struct/class types (e.g.
+                // `a.B.C += 1`, `a.B.C *= 2`). The parser routes all `lhs.member op=
+                // rhs` through EventSubscriptionExpression; when the member is not an
+                // event we fall back to compound assignment.
                 if (boundReceiver.Type is StructSymbol compoundStruct)
                 {
                     var compoundResult = TryBindChainedCompoundAssignment(
-                        compoundStruct, boundReceiver, eventName, eventNameSyntax, syntax, isAdd);
+                        compoundStruct, boundReceiver, eventName, eventNameSyntax, syntax, baseOpSyntaxKind);
                     if (compoundResult != null)
                     {
                         return compoundResult;
@@ -183,15 +196,16 @@ internal sealed partial class ExpressionBinder
             flags = BindingFlags.Public | BindingFlags.Instance;
         }
 
-        var eventInfo = ClrTypeUtilities.SafeGetEvent(receiverClrType, eventName, flags);
+        var eventInfo = isEventCapableOperator ? ClrTypeUtilities.SafeGetEvent(receiverClrType, eventName, flags) : null;
         if (eventInfo == null)
         {
-            // Issue #648: compound assignment fallback for chained CLR member access
-            // (e.g. `obj.Prop += 1` where Prop is a field/property, not an event).
+            // Issue #648 (generalized by #2154): compound assignment fallback for
+            // chained CLR member access (e.g. `obj.Prop += 1`, `obj.Prop *= 2` where
+            // Prop is a field/property, not an event).
             if (boundReceiver != null)
             {
                 var clrCompound = TryBindChainedClrCompoundAssignment(
-                    boundReceiver, receiverClrType, eventName, eventNameSyntax, syntax, isAdd);
+                    boundReceiver, receiverClrType, eventName, eventNameSyntax, syntax, baseOpSyntaxKind);
                 if (clrCompound != null)
                 {
                     return clrCompound;

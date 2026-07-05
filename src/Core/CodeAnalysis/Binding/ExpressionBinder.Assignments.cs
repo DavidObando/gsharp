@@ -902,7 +902,7 @@ internal sealed partial class ExpressionBinder
             {
                 var inheritedReceiver = new BoundVariableExpression(null, effThis);
                 var inheritedCompound = TryBindChainedClrCompoundAssignment(
-                    inheritedReceiver, inheritedBaseClr, name, bareName, syntax, isAdd, includeInherited: true);
+                    inheritedReceiver, inheritedBaseClr, name, bareName, syntax, isAdd ? SyntaxKind.PlusToken : SyntaxKind.MinusToken, includeInherited: true);
                 if (inheritedCompound != null)
                 {
                     return inheritedCompound;
@@ -1005,24 +1005,23 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// ADR-0053: bind <c>Type.StaticField +=/-= rhs</c> or
-    /// <c>Type.StaticProp +=/-= rhs</c> where <paramref name="staticStruct"/>
+    /// ADR-0053 / issue #2154: bind <c>Type.StaticField op= rhs</c> or
+    /// <c>Type.StaticProp op= rhs</c> where <paramref name="staticStruct"/>
     /// is the user-defined receiver type. Returns <c>true</c> if the named
     /// member was a static field/property and the compound assignment was
     /// produced; <c>false</c> if no static field or property by that name
     /// exists on the type (caller falls through to error reporting).
     /// Mirrors the static branch of <see cref="BindFieldAssignmentExpression"/>
-    /// (lines ~6586–6619) but for compound `+=` / `-=`.
+    /// (lines ~6586–6619) but for any compound operator.
     /// </summary>
     private bool TryBindUserTypeStaticCompoundAssignment(
         StructSymbol staticStruct,
         NameExpressionSyntax memberNameSyntax,
         EventSubscriptionExpressionSyntax syntax,
-        bool isAdd,
+        SyntaxKind baseOpSyntaxKind,
         out BoundExpression result)
     {
         var memberName = memberNameSyntax.IdentifierToken.Text;
-        var baseOpSyntaxKind = isAdd ? SyntaxKind.PlusToken : SyntaxKind.MinusToken;
         var boundRhs = BindExpression(syntax.Value);
 
         if (TypeMemberModel.TryGetStaticField(staticStruct, memberName, out var staticField))
@@ -1074,29 +1073,29 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// ADR-0089 / issue #1030: binds <c>IName.StaticField +=/-= rhs</c> for an
-    /// interface static field. <paramref name="interfaceSym"/> may be the open
-    /// definition (non-generic, or self-instantiation) or a constructed generic
-    /// interface (<c>IBox[int32]</c>); the field is resolved on the definition
-    /// and the carried interface symbol drives per-construction emit/storage.
-    /// Returns <c>true</c> when the named member was an interface static field;
+    /// ADR-0089 / issue #1030 (generalized by issue #2154): binds
+    /// <c>IName.StaticField op= rhs</c> for an interface static field.
+    /// <paramref name="interfaceSym"/> may be the open definition (non-generic,
+    /// or self-instantiation) or a constructed generic interface
+    /// (<c>IBox[int32]</c>); the field is resolved on the definition and the
+    /// carried interface symbol drives per-construction emit/storage. Returns
+    /// <c>true</c> when the named member was an interface static field;
     /// <c>false</c> otherwise (caller reports "unable to find member").
     /// </summary>
     /// <param name="interfaceSym">The interface receiver (definition or constructed).</param>
     /// <param name="memberNameSyntax">The member-name syntax.</param>
     /// <param name="syntax">The originating compound-assignment syntax.</param>
-    /// <param name="isAdd">Whether the operator is <c>+=</c> (else <c>-=</c>).</param>
+    /// <param name="baseOpSyntaxKind">The base binary operator token kind (e.g. <c>+</c> for <c>+=</c>).</param>
     /// <param name="result">The bound compound assignment on success.</param>
     /// <returns>Whether the member resolved to an interface static field.</returns>
     private bool TryBindInterfaceStaticCompoundAssignment(
         InterfaceSymbol interfaceSym,
         NameExpressionSyntax memberNameSyntax,
         EventSubscriptionExpressionSyntax syntax,
-        bool isAdd,
+        SyntaxKind baseOpSyntaxKind,
         out BoundExpression result)
     {
         var memberName = memberNameSyntax.IdentifierToken.Text;
-        var baseOpSyntaxKind = isAdd ? SyntaxKind.PlusToken : SyntaxKind.MinusToken;
         var fieldOwner = interfaceSym.Definition ?? interfaceSym;
         var staticField = fieldOwner.GetStaticField(memberName);
         if (staticField == null)
@@ -1126,8 +1125,9 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// Issue #648: compound assignment fallback for chained member access on
-    /// user-defined struct/class types (e.g. <c>a.B.C += 1</c>). Synthesizes
+    /// Issue #648 (generalized by issue #2154): compound assignment fallback
+    /// for chained member access on user-defined struct/class types (e.g.
+    /// <c>a.B.C += 1</c>, <c>a.B.C *= 2</c>). Synthesizes
     /// <c>receiver.field = receiver.field op rhs</c>.
     /// </summary>
     private BoundExpression TryBindChainedCompoundAssignment(
@@ -1136,9 +1136,8 @@ internal sealed partial class ExpressionBinder
         string memberName,
         NameExpressionSyntax memberNameSyntax,
         EventSubscriptionExpressionSyntax syntax,
-        bool isAdd)
+        SyntaxKind baseOpSyntaxKind)
     {
-        var baseOpSyntaxKind = isAdd ? SyntaxKind.PlusToken : SyntaxKind.MinusToken;
         var boundRhs = BindExpression(syntax.Value);
 
         // ADR-0112 A3: this-first base-chain instance field walk, using the
@@ -1220,15 +1219,16 @@ internal sealed partial class ExpressionBinder
         if (GetInheritedClrBaseType(structSym) is System.Type inheritedBaseClr)
         {
             return TryBindChainedClrCompoundAssignment(
-                boundReceiver, inheritedBaseClr, memberName, memberNameSyntax, syntax, isAdd, includeInherited: true);
+                boundReceiver, inheritedBaseClr, memberName, memberNameSyntax, syntax, baseOpSyntaxKind, includeInherited: true);
         }
 
         return null;
     }
 
     /// <summary>
-    /// Issue #648: compound assignment fallback for chained CLR member access
-    /// (e.g. <c>obj.Prop += 1</c> where Prop is a property/field on a CLR type).
+    /// Issue #648 (generalized by issue #2154): compound assignment fallback
+    /// for chained CLR member access (e.g. <c>obj.Prop += 1</c>, <c>obj.Prop *=
+    /// 2</c> where Prop is a property/field on a CLR type).
     /// </summary>
     private BoundExpression TryBindChainedClrCompoundAssignment(
         BoundExpression boundReceiver,
@@ -1236,11 +1236,9 @@ internal sealed partial class ExpressionBinder
         string memberName,
         NameExpressionSyntax memberNameSyntax,
         EventSubscriptionExpressionSyntax syntax,
-        bool isAdd,
+        SyntaxKind baseOpSyntaxKind,
         bool includeInherited = false)
     {
-        var baseOpSyntaxKind = isAdd ? SyntaxKind.PlusToken : SyntaxKind.MinusToken;
-
         MemberInfo instanceMember;
         if (includeInherited)
         {

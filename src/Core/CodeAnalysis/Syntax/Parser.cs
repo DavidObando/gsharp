@@ -7047,8 +7047,18 @@ public class Parser
         // is captured as an EventSubscriptionExpressionSyntax once the LHS has
         // been parsed as a member-access chain. The binder later validates that
         // the LHS resolves to a CLR EventInfo.
+        //
+        // Issue #2154: any OTHER compound operator (`*=`, `/=`, `%=`, `^=`,
+        // `&=`, `|=`, ...) on the same member-access LHS can never denote an
+        // event (events only support `+=`/`-=`), but it MAY denote a compound
+        // assignment through a user-defined `operator` overload (e.g.
+        // `obj.Field *= 2` where Field's type declares `operator *`). Route it
+        // through the same EventSubscriptionExpressionSyntax node — the binder
+        // dispatches on the actual operator token kind, skipping event lookup
+        // entirely for non-`+=`/`-=` operators and going straight to compound
+        // assignment.
         if (expression is AccessorExpressionSyntax accessor
-            && (Current.Kind == SyntaxKind.PlusEqualsToken || Current.Kind == SyntaxKind.MinusEqualsToken))
+            && SyntaxFacts.TryGetCompoundAssignmentBaseOperator(Current.Kind, out _))
         {
             var opToken = NextToken();
             var rhs = ParseAssignmentExpression();
