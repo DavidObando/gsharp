@@ -13009,6 +13009,44 @@ public sealed class CSharpToGSharpTranslator
                     extTypeArgs);
             }
 
+            // A SOURCE-defined extension method called in STATIC (unreduced) form
+            // `Owner.M<T>(recv, args)` — as opposed to the instance form
+            // `recv.M<T>(args)` — must be rewritten to the G# receiver-clause call
+            // `recv.M[T](args)`. cs2gs lifts every non-enum source extension method
+            // of a `static class` to a top-level receiver-clause `func (recv R) M[…](…)`
+            // (ADR-0115 §B.19), which gsc invokes ONLY through the receiver form; the
+            // static-form call site (`JsonSerialization.FromJsonFile<T>(path)`) would
+            // otherwise resolve to a non-existent static member (GS0158). The reduced
+            // instance form already binds directly, so it is excluded via
+            // `MethodKind.ReducedExtension`. Scoped to source-defined, non-enum
+            // extensions to avoid rewriting BCL static-form calls (enum receivers
+            // take the positional path above).
+            if (invocation.Expression is MemberAccessExpressionSyntax staticExtMember
+                && staticExtMember.Expression is TypeSyntax or IdentifierNameSyntax or MemberAccessExpressionSyntax
+                && this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol
+                    { IsExtensionMethod: true, MethodKind: not MethodKind.ReducedExtension } staticExt
+                && staticExt.Parameters.Length >= 1
+                && !(staticExt.ReducedFrom ?? staticExt).DeclaringSyntaxReferences.IsDefaultOrEmpty
+                && (staticExt.Parameters[0].Type?.TypeKind ?? TypeKind.Unknown) != TypeKind.Enum
+                && this.context.SemanticModel.GetSymbolInfo(staticExtMember.Expression).Symbol is not (IParameterSymbol or ILocalSymbol or IFieldSymbol or IPropertySymbol)
+                && invocation.ArgumentList.Arguments.Count >= 1)
+            {
+                GExpression staticExtReceiver =
+                    this.TranslateExpression(invocation.ArgumentList.Arguments[0].Expression);
+                var staticExtRest = this.TranslateArguments(
+                    SyntaxFactory.SeparatedList(invocation.ArgumentList.Arguments.Skip(1)));
+                IReadOnlyList<GTypeReference> staticExtTypeArgs =
+                    staticExtMember.Name is GenericNameSyntax staticExtGeneric
+                        ? this.MapTypeArguments(staticExtGeneric)
+                        : null;
+                return new InvocationExpression(
+                    new MemberAccessExpression(
+                        staticExtReceiver,
+                        SanitizeIdentifier((staticExt.ReducedFrom ?? staticExt).Name)),
+                    staticExtRest,
+                    staticExtTypeArgs);
+            }
+
             // A generic call `Foo<T>(...)` carries its type arguments on the name;
             // lift them onto the G# bracket-type-argument form `Foo[T](...)`.
             if (invocation.Expression is GenericNameSyntax generic)
