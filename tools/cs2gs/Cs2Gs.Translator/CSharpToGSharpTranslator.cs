@@ -13022,6 +13022,15 @@ public sealed class CSharpToGSharpTranslator
                 return true;
             }
 
+            // Issue #2202: `if (F == null) {…} else { …F… }` / `F == null ? … : …F…`
+            // (and the negated forms) narrow `F` to non-null on the guarded
+            // branch — same syntactic-guard rationale as the lazy-init case
+            // above, for a plain null-check guard instead of a lazy-init one.
+            if (this.IsNullGuardNarrowedFieldUse(recv))
+            {
+                return true;
+            }
+
             // Flow analysis must have proven the receiver non-null at this site.
             if (this.context.GetTypeInfo(recv).Nullability.FlowState != NullableFlowState.NotNull)
             {
@@ -13074,13 +13083,27 @@ public sealed class CSharpToGSharpTranslator
         // syntactic because the migrated corpus compiles nullable-oblivious.
         private bool IsLazyInitGuardedFieldUse(ExpressionSyntax recv)
         {
-            // Only a bare/qualified field or property read is a candidate. A read
-            // that is itself the LHS of an assignment, the operand of a null
-            // comparison, or a `nameof` argument is handled by other paths and is
-            // never a value read that a lazy guard makes non-null.
-            ISymbol symbol = this.context.GetSymbolInfo(recv).Symbol;
+            if (!this.TryGetEmittedNullableFieldOrProperty(recv, out ISymbol symbol))
+            {
+                return false;
+            }
+
+            return this.IsDominatedByLazyInitGuard(recv, symbol);
+        }
+
+        // Issue #2202: shared prerequisite for the lazy-init-guard and
+        // null-check-guard `!!` heuristics below — <paramref name="recv"/> must
+        // be a bare/qualified read of a field or property that G# actually
+        // emits as `T?` (declared nullable, or promoted to nullable by the
+        // oblivious taint analysis). A read that is itself the LHS of an
+        // assignment, the operand of a null comparison, or a `nameof` argument
+        // is handled by other paths and is never a value read a guard narrows.
+        private bool TryGetEmittedNullableFieldOrProperty(ExpressionSyntax recv, out ISymbol symbol)
+        {
+            symbol = this.context.GetSymbolInfo(recv).Symbol;
             if (symbol is not (IFieldSymbol or IPropertySymbol))
             {
+                symbol = null;
                 return false;
             }
 
@@ -13097,6 +13120,7 @@ public sealed class CSharpToGSharpTranslator
 
             if (declared is not { IsReferenceType: true })
             {
+                symbol = null;
                 return false;
             }
 
@@ -13104,10 +13128,11 @@ public sealed class CSharpToGSharpTranslator
                 || this.IsPromotedToNullableReference(symbol);
             if (!emittedNullable)
             {
+                symbol = null;
                 return false;
             }
 
-            return this.IsDominatedByLazyInitGuard(recv, symbol);
+            return true;
         }
 
         // Walks outward from the statement containing <paramref name="use"/> to
@@ -13203,6 +13228,92 @@ public sealed class CSharpToGSharpTranslator
                 default:
                     return false;
             }
+        }
+
+        // `F != null` / `null != F` / `F is not null` — the negation of
+        // <see cref="IsNullCheckOf"/>, where `F` binds to <paramref name="symbol"/>.
+        private bool IsNonNullCheckOf(ExpressionSyntax condition, ISymbol symbol)
+        {
+            condition = StripParentheses(condition);
+
+            switch (condition)
+            {
+                case BinaryExpressionSyntax binary
+                    when binary.IsKind(SyntaxKind.NotEqualsExpression):
+                    return (IsNullLiteral(binary.Right) && this.BindsTo(binary.Left, symbol))
+                        || (IsNullLiteral(binary.Left) && this.BindsTo(binary.Right, symbol));
+
+                case IsPatternExpressionSyntax isPattern
+                    when this.BindsTo(isPattern.Expression, symbol):
+                    return IsNullConstantPattern(isPattern.Pattern)
+                        && isPattern.Pattern is UnaryPatternSyntax;
+
+                default:
+                    return false;
+            }
+        }
+
+        // Issue #2202: true when <paramref name="use"/> reads a nullable
+        // (`T?`) field/property from within the branch of an enclosing
+        // `if (F == null) {…} else { …F… }` / `if (F != null) { …F… }` statement
+        // or `F == null ? … : …F…` / `F != null ? …F… : …` conditional expression
+        // whose condition directly null-checks that same field/property — so
+        // `F` is provably non-null on that branch, and gsc (by design,
+        // Kotlin-style) never smart-casts fields/properties across the guard.
+        // The migrated corpus is nullable-oblivious, so Roslyn's own flow state
+        // is empty and the flow-based check below never proves this; the guard
+        // is instead detected from SYNTAX, mirroring
+        // <see cref="IsLazyInitGuardedFieldUse"/>.
+        private bool IsNullGuardNarrowedFieldUse(ExpressionSyntax use)
+        {
+            if (!this.TryGetEmittedNullableFieldOrProperty(use, out ISymbol symbol))
+            {
+                return false;
+            }
+
+            for (SyntaxNode node = use; node != null; node = node.Parent)
+            {
+                switch (node.Parent)
+                {
+                    // An `else` branch's statement is nested one level deeper
+                    // than the `if` itself — its direct parent is the
+                    // `ElseClauseSyntax`, not the `IfStatementSyntax`.
+                    case ElseClauseSyntax elseClause
+                        when elseClause.Parent is IfStatementSyntax ifStatement
+                            && node == elseClause.Statement
+                            && this.IsNullCheckOf(ifStatement.Condition, symbol):
+                        return true;
+
+                    case IfStatementSyntax ifStatement
+                        when node == ifStatement.Statement
+                            && this.IsNonNullCheckOf(ifStatement.Condition, symbol):
+                        return true;
+
+                    case ConditionalExpressionSyntax ternary
+                        when node == ternary.WhenFalse
+                            && this.IsNullCheckOf(ternary.Condition, symbol):
+                        return true;
+
+                    case ConditionalExpressionSyntax ternary
+                        when node == ternary.WhenTrue
+                            && this.IsNonNullCheckOf(ternary.Condition, symbol):
+                        return true;
+                }
+
+                // Stop at the enclosing accessor / method / local-function /
+                // lambda / arrow-body boundary: a guard cannot narrow a use
+                // across a member boundary.
+                if (node is AccessorDeclarationSyntax
+                    or BaseMethodDeclarationSyntax
+                    or LocalFunctionStatementSyntax
+                    or AnonymousFunctionExpressionSyntax
+                    or ArrowExpressionClauseSyntax)
+                {
+                    break;
+                }
+            }
+
+            return false;
         }
 
         // True when <paramref name="body"/> (a lazy-init guard's then-branch)
