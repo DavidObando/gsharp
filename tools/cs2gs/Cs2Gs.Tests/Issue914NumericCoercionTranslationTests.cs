@@ -396,11 +396,12 @@ namespace Demo
 
     /// <summary>
     /// A null-conditional delegate invocation whose receiver is a call (its text ends
-    /// in <c>)</c>) keeps the explicit <c>?.Invoke(...)</c>: G# would parse
-    /// <c>GetHandler()?(args)</c> as the ternary operator, so the rewrite is skipped.
+    /// in <c>)</c>) cannot render <c>GetHandler()?(args)</c> — G# would parse that as
+    /// the ternary operator — nor keep <c>.Invoke</c> reliably, so the receiver is
+    /// spilled into a local that is invoked directly as <c>local?(args)</c> (issue #914).
     /// </summary>
     [Fact]
-    public void NullConditionalInvoke_CallReceiver_KeepsExplicitInvoke()
+    public void NullConditionalInvoke_CallReceiver_SpillsReceiverAndInvokesDirectly()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -412,8 +413,9 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("GetHandler()?.Invoke(x)", printed);
-        Assert.DoesNotContain("?(x)", printed);
+        Assert.DoesNotContain(".Invoke", printed);
+        Assert.Contains("__spill0 = GetHandler()", printed);
+        Assert.Contains("__spill0?(x)", printed);
     }
 
     /// <summary>
