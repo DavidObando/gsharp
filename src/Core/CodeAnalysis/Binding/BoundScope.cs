@@ -597,6 +597,44 @@ public sealed class BoundScope
     }
 
     /// <summary>
+    /// ADR-0134 (extended): enumerates the referenced-assembly CLR types brought
+    /// into unqualified static scope by a <em>type</em> import — the imported-CLR
+    /// analogue of <see cref="BinderContext.GetStaticImportTypes"/> (which only
+    /// covers same-compilation source classes). A C# <c>using static System.Math</c>
+    /// translates to <c>import System.Math</c>; when the dotted import target
+    /// itself resolves to a CLR type (rather than a namespace), that type's
+    /// <c>public static</c> members become available unqualified, mirroring
+    /// C#'s <c>using static</c>. Implicit (compiler-synthesized) and alias
+    /// imports never hoist, matching the source-class rule.
+    /// </summary>
+    /// <returns>The distinct imported static-import CLR types, in import order.</returns>
+    public IEnumerable<System.Type> EnumerateStaticImportClrTypes()
+    {
+        if (References == null)
+        {
+            yield break;
+        }
+
+        System.Collections.Generic.HashSet<System.Type> seen = null;
+        foreach (var import in EnumerateImports())
+        {
+            if (import.IsImplicit || import.IsAlias)
+            {
+                continue;
+            }
+
+            if (References.TryResolveType(import.Target, out var type) && type != null)
+            {
+                seen ??= new System.Collections.Generic.HashSet<System.Type>();
+                if (seen.Add(type))
+                {
+                    yield return type;
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// Tries to look up an imported namespace by the name the user references it with
     /// (the alias if one was declared, otherwise the import path).
     /// </summary>

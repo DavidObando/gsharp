@@ -2984,7 +2984,7 @@ internal sealed partial class ExpressionBinder
         return null;
     }
 
-    private BoundExpression BindAccessorCall(BoundExpression receiver, ImportedClassSymbol classSymbol, CallExpressionSyntax ce)
+    internal BoundExpression BindAccessorCall(BoundExpression receiver, ImportedClassSymbol classSymbol, CallExpressionSyntax ce)
     {
         var methodName = ce.Identifier.Text;
         var hasNamedArguments = ce.Arguments.Any(argument => argument is NamedArgumentExpressionSyntax);

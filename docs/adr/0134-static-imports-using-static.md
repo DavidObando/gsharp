@@ -142,11 +142,19 @@ which now compiles.
 
 ### Deviations from C# `using static`
 
-- **Owned types only.** Hoisting applies to `shared` members of types compiled
-  **together with** the consumer. Bringing the static members of a **referenced
-  CLR static class** (a metadata type from another assembly) into unqualified
-  scope is **out of scope** for this change; only the in-compilation user-type
-  case is handled.
+- **Referenced CLR types now supported.** *(Follow-up, Oahu migration.)*
+  Hoisting originally applied only to `shared` members of types compiled
+  **together with** the consumer. It now also covers `public static` members of
+  a **referenced CLR type** (a metadata type from another assembly): when a
+  non-alias import's dotted target itself resolves to a CLR type
+  (`import System.Math`, the cs2gs spelling of `using static System.Math`), an
+  otherwise-unresolved unqualified call / identifier binds against that type's
+  static members exactly like the qualified `Math.Sqrt(x)` / `Math.PI` form.
+  `BoundScope.EnumerateStaticImportClrTypes` enumerates the candidates (a strict
+  fallback consulted only after the owned-type search fails); the call path
+  routes through the shared `BindAccessorCall` (qualified static-call) binder, so
+  overload resolution, optional / variadic parameters, and generics behave
+  identically to the qualified form. Cross-type ambiguity still reports `GS0414`.
 - **Nested types.** C# `using static` also makes a type's accessible **nested
   types** available unqualified. G# does not yet hoist nested types through a
   static import; only `shared` data and function members are exposed.
