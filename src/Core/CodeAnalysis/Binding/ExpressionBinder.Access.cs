@@ -582,6 +582,25 @@ internal sealed partial class ExpressionBinder
             {
                 return BindExpression(syntax.RightPart);
             }
+
+            // Issue #2203: a type whose simple name equals the last segment of
+            // its own containing package (e.g. `class Tokens` in `package
+            // Oahu.Cli.Tui.Tokens`) is referenced from outside that package as
+            // `Tokens.Tokens.Member` — mirroring the C# idiom where a nested
+            // namespace is visible unqualified from a sibling namespace under a
+            // shared ancestor, which cs2gs translates literally since G# has no
+            // equivalent namespace-visibility rule. The leading "Tokens" plays
+            // the namespace's role and is redundant (G# resolves the trailing
+            // "Tokens" type by simple name from its flat, cross-package type
+            // scope regardless), so peel it off the same way as the
+            // nested-type case above whenever the qualifier names the type's own
+            // simple name AND that name is also the tail of its package.
+            if (headIdentifier == enclosingNameSyntax.IdentifierToken.Text
+                && GetSymbolPackageName(enclosingAliasType) is string ownPackageName
+                && (ownPackageName == headIdentifier || ownPackageName.EndsWith("." + headIdentifier, StringComparison.Ordinal)))
+            {
+                return BindExpression(syntax.RightPart);
+            }
         }
 
         // Determine what the left side of the accessor is: either an imported
@@ -974,6 +993,19 @@ internal sealed partial class ExpressionBinder
         StructSymbol s => s.ContainingType,
         EnumSymbol e => e.ContainingType,
         InterfaceSymbol i => i.ContainingType,
+        _ => null,
+    };
+
+    /// <summary>
+    /// Issue #2203: returns the dotted package name a user-defined aggregate
+    /// type was declared in, or <see langword="null"/> for a kind that has no
+    /// package (or isn't a user aggregate type at all).
+    /// </summary>
+    private static string GetSymbolPackageName(TypeSymbol type) => type switch
+    {
+        StructSymbol s => s.PackageName,
+        EnumSymbol e => e.PackageName,
+        InterfaceSymbol i => i.PackageName,
         _ => null,
     };
 
