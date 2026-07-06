@@ -516,7 +516,8 @@ public sealed class ReferenceResolver : IDisposable
         if (warmNameIndex != null)
         {
             if (warmNameIndex.TryGetValue(fullName, out var assemblyIndex)
-                && TryMaterializeWarmType(fullName, assemblyIndex, out var warm))
+                && TryMaterializeWarmType(fullName, assemblyIndex, out var warm)
+                && IsExternallyResolvable(warm))
             {
                 resolveCache.TryAdd(fullName, warm);
                 type = warm;
@@ -527,7 +528,8 @@ public sealed class ReferenceResolver : IDisposable
             return false;
         }
 
-        if (typeNameIndex.Value.TryGetValue(fullName, out var indexed))
+        if (typeNameIndex.Value.TryGetValue(fullName, out var indexed)
+            && IsExternallyResolvable(indexed))
         {
             resolveCache.TryAdd(fullName, indexed);
             type = indexed;
@@ -787,6 +789,40 @@ public sealed class ReferenceResolver : IDisposable
 
         warmNameIndex = index.ToNameIndex();
         return true;
+    }
+
+    // Issue: an `internal` (non-externally-visible) type declared by a
+    // *referenced* assembly is not accessible to the compilation by name, so it
+    // must not satisfy a user-written type reference. gsc previously indexed
+    // every type returned by `Assembly.GetTypes()` (which includes internal
+    // types), letting an unqualified name such as `ThisAssembly` bind to the
+    // framework-internal `System.Diagnostics.ThisAssembly` instead of failing.
+    // Mirror C# accessibility: a metadata type resolves by name only when it is
+    // externally visible, or when its declaring assembly grants this compilation
+    // internal access via `InternalsVisibleTo`. `Type.IsVisible` already encodes
+    // "public, and — for nested types — every enclosing type is public too".
+    private bool IsExternallyResolvable(Type type)
+    {
+        if (type == null)
+        {
+            return false;
+        }
+
+        if (type.IsVisible)
+        {
+            return true;
+        }
+
+        try
+        {
+            return CanAccessInternalMembers(type.Assembly);
+        }
+        catch (Exception)
+        {
+            // A type whose assembly cannot be inspected is conservatively
+            // treated as inaccessible by name.
+            return false;
+        }
     }
 
     // Issue #854: enumerate every assembly's defined types (top-level + nested)
