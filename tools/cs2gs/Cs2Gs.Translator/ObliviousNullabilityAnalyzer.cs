@@ -236,9 +236,24 @@ internal static class ObliviousNullabilityAnalyzer
             case AssignmentExpressionSyntax assign
                 when assign.IsKind(SyntaxKind.SimpleAssignmentExpression):
                 ISymbol assignTarget = ResolveAssignable(assign.Left, model);
-                if (assignTarget != null && !IsDirectlyNullable(assign.Right, model))
+                if (assignTarget != null)
                 {
-                    AddEdges(assignTarget, assign.Right, model, edges);
+                    // A declaration's emitted type is the JOIN over its
+                    // initializer AND every assignment to it. A later `lhs =
+                    // <nullable>` (e.g. `id = mo["ProcessorID"]!!.ToString()`,
+                    // where `object.ToString()` is declared `string?`) therefore
+                    // promotes `lhs` even when the declaration's initializer was
+                    // non-null (issue #2167, the `var` local-join case). A
+                    // directly-nullable RHS taints immediately; any other RHS
+                    // records a transitive edge so a nullable source propagates.
+                    if (IsDirectlyNullable(assign.Right, model))
+                    {
+                        tainted.Add(assignTarget);
+                    }
+                    else
+                    {
+                        AddEdges(assignTarget, assign.Right, model, edges);
+                    }
                 }
 
                 break;
@@ -417,19 +432,26 @@ internal static class ObliviousNullabilityAnalyzer
 
         ISymbol canonicalReturn = Canonical(propertySymbol);
 
-        // A property/indexer getter is DIRECT-taint only: a syntactically
+        // A property/indexer getter is direct-taint always: a syntactically
         // nullable body (`?.` / `??`-with-nullable-fallback / ternary /
-        // `return null`) promotes the property to `T?` (issue #2157). We do NOT
-        // record transitive edges here — a getter that merely FORWARDS another
-        // (only-transitively-nullable) declaration keeps its declared type and
-        // relies on the translator's null-forgiveness pass (issue #1354) to
-        // assert the forwarded value non-null, preserving the property contract
-        // for overrides / interface members.
+        // `return null`) promotes the property to `T?` (issue #2157).
+        //
+        // Issue #2167: it is ALSO transitive for a property that neither
+        // overrides a base member nor implements an interface member — a getter
+        // that returns a nullable-returning method / forwards a tainted
+        // declaration (e.g. `MotherboardInfo.InstallDate` returning
+        // `ConvertToDateTime(...)` whose own return is `string?`) must itself be
+        // `T?`, otherwise gsc rejects the `T? -> T` return (GS0156). For an
+        // OVERRIDE / interface implementation we keep the direct-taint-only
+        // behavior and rely on the translator's null-forgiveness pass (issue
+        // #1354) to assert the forwarded value non-null, preserving the property
+        // contract with the base / interface declaration.
+        bool transitive = !ImplementsBaseOrInterfaceMember(propertySymbol);
 
         // `Prop => expr;`
         if (propertyArrowBody != null)
         {
-            ApplyReturnValue(canonicalReturn, propertyArrowBody, model, tainted, edges, transitive: false);
+            ApplyReturnValue(canonicalReturn, propertyArrowBody, model, tainted, edges, transitive, callSourcesOnly: true);
         }
 
         // Only the `get` accessor produces the property value; `set`/`init`
@@ -444,7 +466,7 @@ internal static class ObliviousNullabilityAnalyzer
         // `get => expr;`
         if (getter.ExpressionBody?.Expression is ExpressionSyntax getterArrow)
         {
-            ApplyReturnValue(canonicalReturn, getterArrow, model, tainted, edges, transitive: false);
+            ApplyReturnValue(canonicalReturn, getterArrow, model, tainted, edges, transitive, callSourcesOnly: true);
         }
 
         // `get { ... return x; }`
@@ -452,9 +474,44 @@ internal static class ObliviousNullabilityAnalyzer
         {
             if (statement.Expression != null)
             {
-                ApplyReturnValue(canonicalReturn, statement.Expression, model, tainted, edges, transitive: false);
+                ApplyReturnValue(canonicalReturn, statement.Expression, model, tainted, edges, transitive, callSourcesOnly: true);
             }
         }
+    }
+
+    // Whether the property/indexer overrides a base member or implements an
+    // interface member (explicitly or implicitly). Such a member's emitted G#
+    // return type must stay in lock-step with the base / interface declaration,
+    // so it is excluded from TRANSITIVE return promotion (issue #2167 guardrail;
+    // preserves issue #2157 / #1354 behavior for contract members).
+    private static bool ImplementsBaseOrInterfaceMember(IPropertySymbol property)
+    {
+        if (property.IsOverride || !property.ExplicitInterfaceImplementations.IsDefaultOrEmpty)
+        {
+            return true;
+        }
+
+        INamedTypeSymbol containingType = property.ContainingType;
+        if (containingType == null)
+        {
+            return false;
+        }
+
+        foreach (INamedTypeSymbol iface in containingType.AllInterfaces)
+        {
+            foreach (ISymbol member in iface.GetMembers())
+            {
+                if (member is IPropertySymbol
+                    && SymbolEqualityComparer.Default.Equals(
+                        containingType.FindImplementationForInterfaceMember(member),
+                        property))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static void ApplyReturnValue(
@@ -463,7 +520,8 @@ internal static class ObliviousNullabilityAnalyzer
         SemanticModel model,
         HashSet<ISymbol> tainted,
         List<(ISymbol Target, ISymbol Source)> edges,
-        bool transitive)
+        bool transitive,
+        bool callSourcesOnly = false)
     {
         if (IsDirectlyNullable(value, model))
         {
@@ -471,7 +529,7 @@ internal static class ObliviousNullabilityAnalyzer
         }
         else if (transitive)
         {
-            AddEdges(returnSymbol, value, model, edges);
+            AddEdges(returnSymbol, value, model, edges, callSourcesOnly);
         }
     }
 
@@ -498,19 +556,30 @@ internal static class ObliviousNullabilityAnalyzer
     // Adds transitive edges `target <- source` for every declaration symbol the
     // value expression reads (identifier/member) or the method it calls
     // (invocation), unwrapping the compositional forms `??`, `?:`, `(cast)`.
+    // When <paramref name="callSourcesOnly"/> is set, ONLY method-call returns
+    // (`m(args)`) are followed — plain identifier/member forwarding is skipped.
+    // This is the interprocedural edge used for property/indexer getters (issue
+    // #2167): a getter returning a nullable-returning method call is promoted,
+    // but a getter that merely FORWARDS a tainted field/property keeps its
+    // declared type and relies on the translator's null-forgiveness `!!` pass
+    // (issue #1354 / #2157), preserving the property contract.
     private static void AddEdges(
         ISymbol target,
         ExpressionSyntax value,
         SemanticModel model,
-        List<(ISymbol Target, ISymbol Source)> edges)
+        List<(ISymbol Target, ISymbol Source)> edges,
+        bool callSourcesOnly = false)
     {
-        foreach (ISymbol source in ResolveSources(value, model))
+        foreach (ISymbol source in ResolveSources(value, model, callSourcesOnly))
         {
             edges.Add((target, source));
         }
     }
 
-    private static IEnumerable<ISymbol> ResolveSources(ExpressionSyntax expression, SemanticModel model)
+    private static IEnumerable<ISymbol> ResolveSources(
+        ExpressionSyntax expression,
+        SemanticModel model,
+        bool callSourcesOnly = false)
     {
         switch (expression)
         {
@@ -518,7 +587,7 @@ internal static class ObliviousNullabilityAnalyzer
                 yield break;
 
             case ParenthesizedExpressionSyntax paren:
-                foreach (ISymbol source in ResolveSources(paren.Expression, model))
+                foreach (ISymbol source in ResolveSources(paren.Expression, model, callSourcesOnly))
                 {
                     yield return source;
                 }
@@ -532,7 +601,7 @@ internal static class ObliviousNullabilityAnalyzer
             // `a ?? b`: the result is `b`'s value when `a` is null.
             case BinaryExpressionSyntax coalesce
                 when coalesce.IsKind(SyntaxKind.CoalesceExpression):
-                foreach (ISymbol source in ResolveSources(coalesce.Right, model))
+                foreach (ISymbol source in ResolveSources(coalesce.Right, model, callSourcesOnly))
                 {
                     yield return source;
                 }
@@ -541,8 +610,8 @@ internal static class ObliviousNullabilityAnalyzer
 
             // `cond ? a : b`: either branch may flow through.
             case ConditionalExpressionSyntax ternary:
-                foreach (ISymbol source in ResolveSources(ternary.WhenTrue, model)
-                    .Concat(ResolveSources(ternary.WhenFalse, model)))
+                foreach (ISymbol source in ResolveSources(ternary.WhenTrue, model, callSourcesOnly)
+                    .Concat(ResolveSources(ternary.WhenFalse, model, callSourcesOnly)))
                 {
                     yield return source;
                 }
@@ -550,7 +619,7 @@ internal static class ObliviousNullabilityAnalyzer
                 break;
 
             case CastExpressionSyntax cast:
-                foreach (ISymbol source in ResolveSources(cast.Expression, model))
+                foreach (ISymbol source in ResolveSources(cast.Expression, model, callSourcesOnly))
                 {
                     yield return source;
                 }
@@ -568,6 +637,11 @@ internal static class ObliviousNullabilityAnalyzer
 
             case IdentifierNameSyntax:
             case MemberAccessExpressionSyntax:
+                if (callSourcesOnly)
+                {
+                    yield break;
+                }
+
                 ISymbol symbol = model.GetSymbolInfo(expression).Symbol;
                 if (symbol != null && (IsValueDeclarationSymbol(symbol) || symbol is IMethodSymbol))
                 {
