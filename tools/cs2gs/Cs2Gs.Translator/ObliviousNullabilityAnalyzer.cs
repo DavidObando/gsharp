@@ -459,12 +459,24 @@ internal static class ObliviousNullabilityAnalyzer
         // behavior and rely on the translator's null-forgiveness pass (issue
         // #1354) to assert the forwarded value non-null, preserving the property
         // contract with the base / interface declaration.
+        //
+        // Issue #914 (oblivious sink): a NON-CONTRACT getter that merely FORWARDS
+        // a promoted-nullable field/property/local (e.g. `TextWriter Writer =>
+        // logStreamWriter;` where the backing field is a promoted `StreamWriter?`
+        // — null-assigned in `CloseWriter`) must itself be `T?`, otherwise the
+        // `StreamWriter? -> TextWriter` getter return is rejected (GS0155). Such
+        // a property genuinely can be null, so plain identifier/member forwarding
+        // is followed too (`callSourcesOnly: false`); every downstream member use
+        // (`Writer.WriteLine(...)`) then gets its `!!` assertion from the
+        // translator's null-forgiveness pass, which keys off the same promotion.
+        // A contract member stays direct-taint-only (transitive is false below,
+        // so the forwarding edges are not recorded for it regardless).
         bool transitive = !ImplementsBaseOrInterfaceMember(propertySymbol);
 
         // `Prop => expr;`
         if (propertyArrowBody != null)
         {
-            ApplyReturnValue(canonicalReturn, propertyArrowBody, model, tainted, edges, transitive, callSourcesOnly: true);
+            ApplyReturnValue(canonicalReturn, propertyArrowBody, model, tainted, edges, transitive, callSourcesOnly: false);
         }
 
         // Only the `get` accessor produces the property value; `set`/`init`
@@ -479,7 +491,7 @@ internal static class ObliviousNullabilityAnalyzer
         // `get => expr;`
         if (getter.ExpressionBody?.Expression is ExpressionSyntax getterArrow)
         {
-            ApplyReturnValue(canonicalReturn, getterArrow, model, tainted, edges, transitive, callSourcesOnly: true);
+            ApplyReturnValue(canonicalReturn, getterArrow, model, tainted, edges, transitive, callSourcesOnly: false);
         }
 
         // `get { ... return x; }`
@@ -487,7 +499,7 @@ internal static class ObliviousNullabilityAnalyzer
         {
             if (statement.Expression != null)
             {
-                ApplyReturnValue(canonicalReturn, statement.Expression, model, tainted, edges, transitive, callSourcesOnly: true);
+                ApplyReturnValue(canonicalReturn, statement.Expression, model, tainted, edges, transitive, callSourcesOnly: false);
             }
         }
     }
