@@ -1302,6 +1302,30 @@ internal sealed partial class ExpressionBinder
             return typeof(object);
         }
 
+        // Issue #2182: a G# slice `[]T` whose element type has no CLR backing
+        // (a generic type parameter, or another same-compilation user type)
+        // has a null `ClrType`, so `GetEffectiveArgumentClrType` returned null
+        // above. Its runtime backing is still a CLR array whose element rides
+        // through to its erasure — a type parameter erases to `object`
+        // (ADR-0004 / #313), so `[]T` rides through to `object[]`. Surface that
+        // erased array type so overload / constructor resolution can rank an
+        // array-base parameter (`System.Array`,
+        // `System.Collections.ICollection` / `IList` / `IEnumerable`, and their
+        // generic forms) as applicable — reaching parity with a concrete
+        // `[]int32` argument (whose `int[]` ClrType already flows through) and
+        // with the `[]T -> System.Array` conversion that `Conversion.Classify`
+        // already accepts in assignment / return position. Without this the
+        // argument produced no effective CLR type, so overload resolution
+        // never ran and the constructor-as-call lookup dead-ended with GS0159.
+        if (typeSymbol is SliceTypeSymbol slice)
+        {
+            var elementClr = GetEffectiveArgumentClrTypeForOverloadResolution(slice.ElementType);
+            if (elementClr != null && !elementClr.IsByRef && !elementClr.IsPointer)
+            {
+                return elementClr.MakeArrayType();
+            }
+        }
+
         // Issue #2142: a nullable user reference type (`UserClass?`) erases to
         // the same CLR ride-through as its non-nullable form — nullability is an
         // annotation only for reference types, so overload resolution (and the
