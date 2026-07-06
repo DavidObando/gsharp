@@ -60,6 +60,29 @@ internal static class ObliviousNullabilityAnalyzer
     // subclassed-base-types / partial-type-parts caches in the translator.
     private static readonly ConditionalWeakTable<Compilation, TaintResult> Cache = new();
 
+    // Which source expressions a transitive return/forwarding edge follows.
+    private enum SourceScope
+    {
+        // Follow method-call returns AND every value declaration the value
+        // reads (fields, properties, locals, parameters). Default for method /
+        // local-function / lambda return seeding.
+        AllSources,
+
+        // Follow ONLY method-call returns (`m(args)`); plain identifier/member
+        // forwarding is skipped. Property-getter contract guardrail path where
+        // no forwarding may be followed.
+        CallsOnly,
+
+        // Follow method-call returns AND field/local/parameter forwarding, but
+        // NOT property forwarding. Used for a NON-CONTRACT property getter
+        // (issue #914 oblivious sink): `TextWriter Writer => logStreamWriter;`
+        // over a promoted `StreamWriter?` backing FIELD must itself be `T?`,
+        // yet `string Forward => Work;` forwarding another PROPERTY must keep
+        // its declared type and rely on the null-forgiveness `!!` pass, so the
+        // property contract with #1354 / #2167 is preserved.
+        CallsAndNonPropertyDeclarations,
+    }
+
     /// <summary>
     /// Whether <paramref name="symbol"/> (a declaration symbol: field / property
     /// / parameter / local, or a method whose RETURN is under test) is
@@ -226,7 +249,20 @@ internal static class ObliviousNullabilityAnalyzer
         // a parameter that ever receives null becomes `T?` too. This keeps a
         // pass-through call `Callee(maybeNull)` from demanding a non-null
         // parameter (GS0154) once `maybeNull` is promoted.
-        if (node is InvocationExpressionSyntax or ObjectCreationExpressionSyntax)
+        //
+        // Issue #914 (oblivious sink): a constructor initializer delegation
+        // (`: this(...)` / `: base(...)`) is an argument-passing call site too.
+        // A convenience initializer that forwards its own (possibly promoted)
+        // parameters to the designated initializer — e.g. `LogMessage(string
+        // context, string message) : this(DateTime.Now, threadId, context,
+        // message)` where `context`/`message` are themselves promoted `string?`
+        // — must promote the designated initializer's matching parameters, else
+        // the delegating call demands a non-null value (GS0154). Roslyn models a
+        // constructor initializer as an `IInvocationOperation`, so it flows
+        // through the same argument→parameter edge collection.
+        if (node is InvocationExpressionSyntax
+            or ObjectCreationExpressionSyntax
+            or ConstructorInitializerSyntax)
         {
             CollectArgumentEdges(node, model, tainted, edges);
         }
@@ -446,12 +482,27 @@ internal static class ObliviousNullabilityAnalyzer
         // behavior and rely on the translator's null-forgiveness pass (issue
         // #1354) to assert the forwarded value non-null, preserving the property
         // contract with the base / interface declaration.
+        //
+        // Issue #914 (oblivious sink): a NON-CONTRACT getter that merely FORWARDS
+        // a promoted-nullable field/local/parameter (e.g. `TextWriter Writer =>
+        // logStreamWriter;` where the backing field is a promoted `StreamWriter?`
+        // — null-assigned in `CloseWriter`) must itself be `T?`, otherwise the
+        // `StreamWriter? -> TextWriter` getter return is rejected (GS0155). Such
+        // a property genuinely can be null, so field/local/param forwarding is
+        // followed (`SourceScope.CallsAndNonPropertyDeclarations`); every
+        // downstream member use (`Writer.WriteLine(...)`) then gets its `!!`
+        // assertion from the translator's null-forgiveness pass, which keys off
+        // the same promotion. Forwarding ANOTHER PROPERTY is deliberately NOT
+        // followed, so `string Forward => Work;` keeps its declared type and the
+        // #1354 / #2167 property-contract guardrail is preserved. A contract
+        // member stays direct-taint-only (transitive is false below, so the
+        // forwarding edges are not recorded for it regardless).
         bool transitive = !ImplementsBaseOrInterfaceMember(propertySymbol);
 
         // `Prop => expr;`
         if (propertyArrowBody != null)
         {
-            ApplyReturnValue(canonicalReturn, propertyArrowBody, model, tainted, edges, transitive, callSourcesOnly: true);
+            ApplyReturnValue(canonicalReturn, propertyArrowBody, model, tainted, edges, transitive, SourceScope.CallsAndNonPropertyDeclarations);
         }
 
         // Only the `get` accessor produces the property value; `set`/`init`
@@ -466,7 +517,7 @@ internal static class ObliviousNullabilityAnalyzer
         // `get => expr;`
         if (getter.ExpressionBody?.Expression is ExpressionSyntax getterArrow)
         {
-            ApplyReturnValue(canonicalReturn, getterArrow, model, tainted, edges, transitive, callSourcesOnly: true);
+            ApplyReturnValue(canonicalReturn, getterArrow, model, tainted, edges, transitive, SourceScope.CallsAndNonPropertyDeclarations);
         }
 
         // `get { ... return x; }`
@@ -474,7 +525,7 @@ internal static class ObliviousNullabilityAnalyzer
         {
             if (statement.Expression != null)
             {
-                ApplyReturnValue(canonicalReturn, statement.Expression, model, tainted, edges, transitive, callSourcesOnly: true);
+                ApplyReturnValue(canonicalReturn, statement.Expression, model, tainted, edges, transitive, SourceScope.CallsAndNonPropertyDeclarations);
             }
         }
     }
@@ -521,7 +572,7 @@ internal static class ObliviousNullabilityAnalyzer
         HashSet<ISymbol> tainted,
         List<(ISymbol Target, ISymbol Source)> edges,
         bool transitive,
-        bool callSourcesOnly = false)
+        SourceScope scope = SourceScope.AllSources)
     {
         if (IsDirectlyNullable(value, model))
         {
@@ -529,7 +580,7 @@ internal static class ObliviousNullabilityAnalyzer
         }
         else if (transitive)
         {
-            AddEdges(returnSymbol, value, model, edges, callSourcesOnly);
+            AddEdges(returnSymbol, value, model, edges, scope);
         }
     }
 
@@ -556,21 +607,22 @@ internal static class ObliviousNullabilityAnalyzer
     // Adds transitive edges `target <- source` for every declaration symbol the
     // value expression reads (identifier/member) or the method it calls
     // (invocation), unwrapping the compositional forms `??`, `?:`, `(cast)`.
-    // When <paramref name="callSourcesOnly"/> is set, ONLY method-call returns
-    // (`m(args)`) are followed — plain identifier/member forwarding is skipped.
-    // This is the interprocedural edge used for property/indexer getters (issue
-    // #2167): a getter returning a nullable-returning method call is promoted,
-    // but a getter that merely FORWARDS a tainted field/property keeps its
-    // declared type and relies on the translator's null-forgiveness `!!` pass
-    // (issue #1354 / #2157), preserving the property contract.
+    // <paramref name="scope"/> selects which forwarding sources are followed
+    // (see <see cref="SourceScope"/>). This is the interprocedural edge used for
+    // property/indexer getters (issue #2167 / #914): a getter returning a
+    // nullable-returning method call is promoted; a non-contract getter that
+    // forwards a tainted field/local/param is promoted; but a getter that merely
+    // FORWARDS another PROPERTY keeps its declared type and relies on the
+    // translator's null-forgiveness `!!` pass (issue #1354 / #2157), preserving
+    // the property contract.
     private static void AddEdges(
         ISymbol target,
         ExpressionSyntax value,
         SemanticModel model,
         List<(ISymbol Target, ISymbol Source)> edges,
-        bool callSourcesOnly = false)
+        SourceScope scope = SourceScope.AllSources)
     {
-        foreach (ISymbol source in ResolveSources(value, model, callSourcesOnly))
+        foreach (ISymbol source in ResolveSources(value, model, scope))
         {
             edges.Add((target, source));
         }
@@ -579,7 +631,7 @@ internal static class ObliviousNullabilityAnalyzer
     private static IEnumerable<ISymbol> ResolveSources(
         ExpressionSyntax expression,
         SemanticModel model,
-        bool callSourcesOnly = false)
+        SourceScope scope = SourceScope.AllSources)
     {
         switch (expression)
         {
@@ -587,7 +639,7 @@ internal static class ObliviousNullabilityAnalyzer
                 yield break;
 
             case ParenthesizedExpressionSyntax paren:
-                foreach (ISymbol source in ResolveSources(paren.Expression, model, callSourcesOnly))
+                foreach (ISymbol source in ResolveSources(paren.Expression, model, scope))
                 {
                     yield return source;
                 }
@@ -601,7 +653,7 @@ internal static class ObliviousNullabilityAnalyzer
             // `a ?? b`: the result is `b`'s value when `a` is null.
             case BinaryExpressionSyntax coalesce
                 when coalesce.IsKind(SyntaxKind.CoalesceExpression):
-                foreach (ISymbol source in ResolveSources(coalesce.Right, model, callSourcesOnly))
+                foreach (ISymbol source in ResolveSources(coalesce.Right, model, scope))
                 {
                     yield return source;
                 }
@@ -610,8 +662,8 @@ internal static class ObliviousNullabilityAnalyzer
 
             // `cond ? a : b`: either branch may flow through.
             case ConditionalExpressionSyntax ternary:
-                foreach (ISymbol source in ResolveSources(ternary.WhenTrue, model, callSourcesOnly)
-                    .Concat(ResolveSources(ternary.WhenFalse, model, callSourcesOnly)))
+                foreach (ISymbol source in ResolveSources(ternary.WhenTrue, model, scope)
+                    .Concat(ResolveSources(ternary.WhenFalse, model, scope)))
                 {
                     yield return source;
                 }
@@ -619,7 +671,7 @@ internal static class ObliviousNullabilityAnalyzer
                 break;
 
             case CastExpressionSyntax cast:
-                foreach (ISymbol source in ResolveSources(cast.Expression, model, callSourcesOnly))
+                foreach (ISymbol source in ResolveSources(cast.Expression, model, scope))
                 {
                     yield return source;
                 }
@@ -637,13 +689,27 @@ internal static class ObliviousNullabilityAnalyzer
 
             case IdentifierNameSyntax:
             case MemberAccessExpressionSyntax:
-                if (callSourcesOnly)
+                if (scope == SourceScope.CallsOnly)
                 {
                     yield break;
                 }
 
                 ISymbol symbol = model.GetSymbolInfo(expression).Symbol;
-                if (symbol != null && (IsValueDeclarationSymbol(symbol) || symbol is IMethodSymbol))
+                if (symbol == null)
+                {
+                    break;
+                }
+
+                // A NON-CONTRACT getter follows field/local/param forwarding but
+                // never PROPERTY forwarding (that would regress the #1354 /
+                // #2167 property-contract guardrail).
+                if (scope == SourceScope.CallsAndNonPropertyDeclarations
+                    && symbol is IPropertySymbol)
+                {
+                    yield break;
+                }
+
+                if (IsValueDeclarationSymbol(symbol) || symbol is IMethodSymbol)
                 {
                     yield return Canonical(symbol);
                 }

@@ -4450,6 +4450,20 @@ public sealed class CSharpToGSharpTranslator
                 type = this.PromoteIfUsedAsNullable(type, symbol);
             }
 
+            // Issue #914 (oblivious sink): a DELEGATE-typed parameter that is
+            // invoked inside its method with a null (or promoted-nullable)
+            // argument at some position must render that arrow-parameter position
+            // as `T?` — e.g. `SendOrPost(Action<SendOrPostCallback, object>
+            // sendOrPost, …)` whose body does `sendOrPost(o => …, null)` needs the
+            // second arrow parameter to be `object?`, otherwise the `nil -> object`
+            // call argument is rejected (GS0155). The delegate's own invoke
+            // signature carries no nullability in oblivious metadata, so the
+            // evidence is the null argument flowing to it at the call site.
+            if (!variadic)
+            {
+                type = this.PromoteDelegateParameterInvokedWithNull(type, symbol);
+            }
+
             GExpression defaultValue = this.BuildOptionalParameterDefault(symbol, type, fallbackNode);
 
             // Issue #1913: a parameter's own attributes (e.g. `[Note] int x`) live on
@@ -4578,6 +4592,15 @@ public sealed class CSharpToGSharpTranslator
                 // (IsRefReturn) by the caller, mapping to G#'s native
                 // ref-return (`func F(...) ref T`, issue #490/ADR-0060).
                 GTypeReference mapped = this.typeMapper.Map(returnType, this.context, node.ReturnType.GetLocation());
+
+                // Issue #914 (oblivious sink): a TUPLE return whose returned tuple
+                // expression carries a promoted-nullable element (e.g. `return
+                // (dir, file)` where `dir`/`file` are promoted `string?` locals)
+                // is promoted per-element to `(string?, string?)`, otherwise the
+                // `(string?, string?) -> (string, string)` return is rejected
+                // (GS0155). Applied before the scalar promotion below (which is a
+                // no-op for a tuple value type).
+                mapped = this.PromoteTupleReturnIfTainted(mapped, returnType, node);
 
                 // Issue #2113: promote the return type to `T?` when the
                 // whole-program taint analysis proved this method's RETURN
@@ -9816,15 +9839,256 @@ public sealed class CSharpToGSharpTranslator
                 || type.IsNullable
                 || symbol == null
                 || returnType is not { IsReferenceType: true }
-                || returnType is ITypeParameterSymbol
                 || returnType.NullableAnnotation == NullableAnnotation.Annotated)
             {
                 return type;
             }
 
+            // Issue #914 (oblivious deferred-return-promotion): a REFERENCE-
+            // constrained type-parameter return (`where T : class`) is promoted
+            // to `T?` when its return is null-tainted, exactly like a concrete
+            // reference return. For such a `T`, `T?` is an unambiguous nullable
+            // reference (the generated locals already use `var x T? = …`), and
+            // the promotion leaves `Cast[T]`/`typeof(T)`/`T()` NAME positions
+            // untouched. Unconstrained type parameters are excluded automatically:
+            // their `IsReferenceType` is false, so the guard above already
+            // returned. (Method-return-of-`T` was the residual blocking
+            // Oahu.Foundation's `DeserializeJsonFile[T]() T { … return nil }`.)
             return ObliviousNullabilityAnalyzer.IsTainted(this.context.Compilation, symbol)
                 ? MakeNullable(type)
                 : type;
+        }
+
+        // Issue #914 (oblivious sink): promote the ELEMENT types of a tuple return
+        // to `T?` for every position whose returned tuple-expression element is a
+        // promoted-nullable value. A method returning `(string Dir, string Path)`
+        // whose body does `return (dir, file)` — where `dir`/`file` are promoted
+        // `string?` locals — must render `(string?, string?)`, otherwise the
+        // `(string?, string?) -> (string, string)` return is rejected (GS0155).
+        // Gated to an oblivious compilation so a nullable-enabled project stays
+        // byte-identical; only reference-typed, non-nullable elements are eligible
+        // (mirroring the scalar-return and declaration-site guards).
+        private GTypeReference PromoteTupleReturnIfTainted(
+            GTypeReference mapped,
+            ITypeSymbol returnType,
+            SyntaxNode node)
+        {
+            if (!this.IsObliviousCompilation()
+                || mapped is not TupleTypeReference tuple
+                || returnType is not INamedTypeSymbol { IsTupleType: true } tupleType
+                || tupleType.TupleElements.Length != tuple.ElementTypes.Count)
+            {
+                return mapped;
+            }
+
+            List<TupleExpressionSyntax> returnedTuples = this.EnumerateMemberReturnExpressions(node)
+                .Select(UnwrapParenthesized)
+                .OfType<TupleExpressionSyntax>()
+                .Where(t => t.Arguments.Count == tuple.ElementTypes.Count)
+                .ToList();
+
+            if (returnedTuples.Count == 0)
+            {
+                return mapped;
+            }
+
+            var elements = new List<GTypeReference>(tuple.ElementTypes.Count);
+            bool changed = false;
+            for (int i = 0; i < tuple.ElementTypes.Count; i++)
+            {
+                GTypeReference element = tuple.ElementTypes[i];
+                IFieldSymbol elementField = tupleType.TupleElements[i];
+                if (!element.IsNullable
+                    && elementField.Type is { IsReferenceType: true }
+                    && elementField.Type.NullableAnnotation != NullableAnnotation.Annotated
+                    && returnedTuples.Any(t => this.IsNullablePromotedValue(t.Arguments[i].Expression)))
+                {
+                    element = MakeNullable(element);
+                    changed = true;
+                }
+
+                elements.Add(element);
+            }
+
+            return changed
+                ? new TupleTypeReference(elements) { IsNullable = tuple.IsNullable }
+                : mapped;
+        }
+
+        // Issue #914: the `return`-position value expressions that belong to a
+        // method/accessor <paramref name="node"/> itself — its arrow expression
+        // body and every `return` statement not nested inside a lambda / local
+        // function (whose returns have their own contract). Used to inspect the
+        // returned tuple shapes for per-element nullable promotion.
+        private IEnumerable<ExpressionSyntax> EnumerateMemberReturnExpressions(SyntaxNode node)
+        {
+            ExpressionSyntax arrowBody = node switch
+            {
+                MethodDeclarationSyntax method => method.ExpressionBody?.Expression,
+                AccessorDeclarationSyntax accessor => accessor.ExpressionBody?.Expression,
+                _ => null,
+            };
+            if (arrowBody != null)
+            {
+                yield return arrowBody;
+            }
+
+            SyntaxNode body = node switch
+            {
+                MethodDeclarationSyntax method => method.Body,
+                AccessorDeclarationSyntax accessor => accessor.Body,
+                _ => null,
+            };
+            if (body == null)
+            {
+                yield break;
+            }
+
+            foreach (SyntaxNode descendant in body.DescendantNodes(
+                n => n is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax)))
+            {
+                if (descendant is ReturnStatementSyntax { Expression: { } returned })
+                {
+                    yield return returned;
+                }
+            }
+        }
+
+        private static ExpressionSyntax UnwrapParenthesized(ExpressionSyntax expression)
+        {
+            while (expression is ParenthesizedExpressionSyntax paren)
+            {
+                expression = paren.Expression;
+            }
+
+            return expression;
+        }
+
+        // Issue #914: whether <paramref name="expression"/> yields a
+        // promoted-nullable value in an oblivious compilation — either a
+        // syntactically nullable form (`?.` / `??` / ternary, via
+        // <see cref="IsNullableInitializer"/>, which also consults declared BCL
+        // annotations) OR a field / property / local / parameter the whole-program
+        // taint analysis promoted to `T?`, OR a method / local function whose
+        // return the analysis proved null-tainted. Shared by the tuple-return
+        // element promotion.
+        private bool IsNullablePromotedValue(ExpressionSyntax expression)
+        {
+            if (expression == null)
+            {
+                return false;
+            }
+
+            if (this.IsNullableInitializer(expression))
+            {
+                return true;
+            }
+
+            ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
+            return symbol switch
+            {
+                IFieldSymbol or IPropertySymbol or ILocalSymbol or IParameterSymbol =>
+                    this.IsPromotedToNullableReference(symbol),
+                IMethodSymbol method =>
+                    ObliviousNullabilityAnalyzer.IsTainted(this.context.Compilation, method),
+                _ => false,
+            };
+        }
+
+        // Issue #914 (oblivious sink): promote the arrow (delegate) parameter
+        // positions of <paramref name="symbol"/>'s type to `T?` for every position
+        // that receives a null / promoted-nullable argument at an invocation of the
+        // parameter inside its own method. A delegate parameter carries no
+        // nullability in oblivious metadata, so a call like `sendOrPost(o => …,
+        // null)` is the only evidence that the delegate's second position is really
+        // `object?`; without it the `nil -> object` argument is rejected (GS0155).
+        // Gated to an oblivious compilation; only reference-typed, non-nullable
+        // arrow positions are eligible.
+        private GTypeReference PromoteDelegateParameterInvokedWithNull(
+            GTypeReference type,
+            IParameterSymbol symbol)
+        {
+            if (!this.IsObliviousCompilation()
+                || type is not ArrowTypeReference arrow
+                || symbol.Type is not INamedTypeSymbol { TypeKind: TypeKind.Delegate } delegateType
+                || delegateType.DelegateInvokeMethod is not { } invoke
+                || invoke.Parameters.Length != arrow.ParameterTypes.Count)
+            {
+                return type;
+            }
+
+            SyntaxNode methodSyntax = symbol.ContainingSymbol?
+                .DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+            if (methodSyntax == null)
+            {
+                return type;
+            }
+
+            var nullablePositions = new HashSet<int>();
+            foreach (InvocationExpressionSyntax invocation in methodSyntax
+                .DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (!SymbolEqualityComparer.Default.Equals(
+                        this.context.GetSymbolInfo(invocation.Expression).Symbol, symbol))
+                {
+                    continue;
+                }
+
+                ArgumentListSyntax argumentList = invocation.ArgumentList;
+                for (int i = 0; i < argumentList.Arguments.Count && i < arrow.ParameterTypes.Count; i++)
+                {
+                    ExpressionSyntax argument = argumentList.Arguments[i].Expression;
+                    if (IsNullOrDefaultLiteral(argument) || this.IsNullablePromotedValue(argument))
+                    {
+                        nullablePositions.Add(i);
+                    }
+                }
+            }
+
+            if (nullablePositions.Count == 0)
+            {
+                return type;
+            }
+
+            var parameterTypes = new List<GTypeReference>(arrow.ParameterTypes.Count);
+            bool changed = false;
+            for (int i = 0; i < arrow.ParameterTypes.Count; i++)
+            {
+                GTypeReference parameterType = arrow.ParameterTypes[i];
+                ITypeSymbol invokeParameterType = invoke.Parameters[i].Type;
+                if (nullablePositions.Contains(i)
+                    && !parameterType.IsNullable
+                    && invokeParameterType is { IsReferenceType: true }
+                    && invokeParameterType.NullableAnnotation != NullableAnnotation.Annotated)
+                {
+                    parameterType = MakeNullable(parameterType);
+                    changed = true;
+                }
+
+                parameterTypes.Add(parameterType);
+            }
+
+            return changed
+                ? new ArrowTypeReference(parameterTypes, arrow.ReturnTypes, arrow.IsAsync) { IsNullable = arrow.IsNullable }
+                : type;
+        }
+
+        // Issue #914: whether <paramref name="expression"/> is a bare `null` /
+        // `null!` literal or a `default` / `default(T)` expression — the direct
+        // null-argument forms used to detect a null flowing into a delegate
+        // parameter position.
+        private static bool IsNullOrDefaultLiteral(ExpressionSyntax expression)
+        {
+            return expression switch
+            {
+                LiteralExpressionSyntax { RawKind: (int)SyntaxKind.NullLiteralExpression } => true,
+                LiteralExpressionSyntax { RawKind: (int)SyntaxKind.DefaultLiteralExpression } => true,
+                DefaultExpressionSyntax => true,
+                PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } suppress =>
+                    IsNullOrDefaultLiteral(suppress.Operand),
+                ParenthesizedExpressionSyntax paren => IsNullOrDefaultLiteral(paren.Expression),
+                _ => false,
+            };
         }
 
         // Issue #1072 (field/property initializer form): when a field or property is
@@ -9961,11 +10225,18 @@ public sealed class CSharpToGSharpTranslator
             // null-taint analysis proved this symbol null-tainted. This is the
             // ONLY behavioral change for oblivious code — for a nullable-enabled
             // compilation `IsTainted` short-circuits to false, so every existing
-            // path stays byte-identical. Type parameters are excluded: promoting
-            // a `where T : class` declaration to `T?` would break `Cast[T]`/
-            // `typeof(T)` name positions.
-            if (declared is not ITypeParameterSymbol
-                && ObliviousNullabilityAnalyzer.IsTainted(this.context.Compilation, symbol))
+            // path stays byte-identical.
+            //
+            // Issue #914 (oblivious deferred-return-promotion): a REFERENCE-
+            // constrained type parameter (`where T : class`) is eligible too. The
+            // top-of-method guard already required `declared.IsReferenceType`, so
+            // an UNCONSTRAINED `T` (whose `IsReferenceType` is false, and for whom
+            // `T?` would mean `Nullable<T>`) never reaches here. For a class-
+            // constrained `T`, `T?` is an unambiguous nullable reference — the
+            // generated `var settings T? = …` locals already rely on it — and
+            // `Cast[T]`/`typeof(T)`/`T()` NAME positions are unaffected because
+            // they reference `T`, not the promoted symbol.
+            if (ObliviousNullabilityAnalyzer.IsTainted(this.context.Compilation, symbol))
             {
                 return true;
             }
@@ -12993,6 +13264,44 @@ public sealed class CSharpToGSharpTranslator
                     extTypeArgs);
             }
 
+            // A SOURCE-defined extension method called in STATIC (unreduced) form
+            // `Owner.M<T>(recv, args)` — as opposed to the instance form
+            // `recv.M<T>(args)` — must be rewritten to the G# receiver-clause call
+            // `recv.M[T](args)`. cs2gs lifts every non-enum source extension method
+            // of a `static class` to a top-level receiver-clause `func (recv R) M[…](…)`
+            // (ADR-0115 §B.19), which gsc invokes ONLY through the receiver form; the
+            // static-form call site (`JsonSerialization.FromJsonFile<T>(path)`) would
+            // otherwise resolve to a non-existent static member (GS0158). The reduced
+            // instance form already binds directly, so it is excluded via
+            // `MethodKind.ReducedExtension`. Scoped to source-defined, non-enum
+            // extensions to avoid rewriting BCL static-form calls (enum receivers
+            // take the positional path above).
+            if (invocation.Expression is MemberAccessExpressionSyntax staticExtMember
+                && staticExtMember.Expression is TypeSyntax or IdentifierNameSyntax or MemberAccessExpressionSyntax
+                && this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol
+                    { IsExtensionMethod: true, MethodKind: not MethodKind.ReducedExtension } staticExt
+                && staticExt.Parameters.Length >= 1
+                && !(staticExt.ReducedFrom ?? staticExt).DeclaringSyntaxReferences.IsDefaultOrEmpty
+                && (staticExt.Parameters[0].Type?.TypeKind ?? TypeKind.Unknown) != TypeKind.Enum
+                && this.context.SemanticModel.GetSymbolInfo(staticExtMember.Expression).Symbol is not (IParameterSymbol or ILocalSymbol or IFieldSymbol or IPropertySymbol)
+                && invocation.ArgumentList.Arguments.Count >= 1)
+            {
+                GExpression staticExtReceiver =
+                    this.TranslateExpression(invocation.ArgumentList.Arguments[0].Expression);
+                var staticExtRest = this.TranslateArguments(
+                    SyntaxFactory.SeparatedList(invocation.ArgumentList.Arguments.Skip(1)));
+                IReadOnlyList<GTypeReference> staticExtTypeArgs =
+                    staticExtMember.Name is GenericNameSyntax staticExtGeneric
+                        ? this.MapTypeArguments(staticExtGeneric)
+                        : null;
+                return new InvocationExpression(
+                    new MemberAccessExpression(
+                        staticExtReceiver,
+                        SanitizeIdentifier((staticExt.ReducedFrom ?? staticExt).Name)),
+                    staticExtRest,
+                    staticExtTypeArgs);
+            }
+
             // A generic call `Foo<T>(...)` carries its type arguments on the name;
             // lift them onto the G# bracket-type-argument form `Foo[T](...)`.
             if (invocation.Expression is GenericNameSyntax generic)
@@ -14527,7 +14836,29 @@ public sealed class CSharpToGSharpTranslator
                 ? this.typeMapper.Map(targetSymbol, this.context, cast.Type.GetLocation())
                 : new NamedTypeReference(cast.Type.ToString());
 
-            return new ConversionExpression(targetType, this.TranslateExpression(cast.Expression));
+            GExpression operand = this.TranslateExpression(cast.Expression);
+
+            // Issue #914 (oblivious sink): an oblivious promoted-`T?` operand cast
+            // to a NON-NULL reference target (e.g. `(IEnumerable)o` where `o` is a
+            // promoted `object?`) is rejected by gsc — its `IEnumerable(o)`
+            // conversion requires a non-null operand (GS0155). C# performs the
+            // reference cast on the (possibly null) value and throws only on the
+            // subsequent non-null use (e.g. `foreach`), so asserting the operand
+            // `!!` here both compiles and preserves the throw-on-null semantics —
+            // the same mechanism the receiver / foreach-iterable null-forgiveness
+            // pass uses. Gated to oblivious; a `(object)`/`(object?)` reference
+            // upcast is already dropped above, and an already-`!` operand is not
+            // re-asserted.
+            if (this.IsObliviousCompilation()
+                && targetSymbol is { IsReferenceType: true }
+                && targetSymbol.NullableAnnotation != NullableAnnotation.Annotated
+                && cast.Expression is not PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
+                && this.IsNullablePromotedValue(cast.Expression))
+            {
+                operand = new NonNullAssertionExpression(operand);
+            }
+
+            return new ConversionExpression(targetType, operand);
         }
 
         private GExpression TranslateWith(WithExpressionSyntax with)
@@ -14795,7 +15126,19 @@ public sealed class CSharpToGSharpTranslator
                     : null;
             }
 
-            return this.typeMapper.Map(returnType, this.context, location);
+            // Issue #914 (oblivious sink): promote a LOCAL FUNCTION's (or
+            // lambda's) mapped return type to `T?` when the whole-program taint
+            // analysis proved its RETURN null-tainted — exactly like a top-level
+            // method return (see MapReturnType/PromoteReturnIfTainted). The
+            // analyzer seeds return taint for local functions and lambdas, so a
+            // `static Version TryParse(string s) { … return succ ? version :
+            // null; }` local function whose body yields `Version?` renders
+            // `func (s string) Version?`, avoiding a `Version? -> Version` return
+            // rejection (GS0155). No-op for a nullable-enabled compilation.
+            return this.PromoteReturnIfTainted(
+                this.typeMapper.Map(returnType, this.context, location),
+                symbol,
+                returnType);
         }
 
         private Parameter MapLambdaParameter(ParameterSyntax parameter)
