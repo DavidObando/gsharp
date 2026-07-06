@@ -350,6 +350,70 @@ public sealed record BoundBinaryOperator
         => new BoundBinaryOperator(SyntaxKind.QuestionQuestionToken, BoundBinaryOperatorKind.NullCoalesce, leftType, rightType, resultType);
 
     /// <summary>
+    /// Issue #2188: builds a reference-equality (<c>==</c> / <c>!=</c>) operator
+    /// over two reference-type operands (nullable or not) — e.g. <c>object?</c>
+    /// versus a reference-constrained <c>T?</c>. Both operands compare by
+    /// reference identity, yielding <c>bool</c>. This is bound only as a final
+    /// fallback (after built-in, user-defined, and CLR operator resolution) so a
+    /// user-declared <c>operator ==</c> on a reference type always wins.
+    /// </summary>
+    /// <param name="syntaxKind">The <c>==</c> or <c>!=</c> token.</param>
+    /// <param name="leftType">The left operand type.</param>
+    /// <param name="rightType">The right operand type.</param>
+    /// <returns>The reference-equality operator.</returns>
+    internal static BoundBinaryOperator MakeReferenceEquality(SyntaxKind syntaxKind, TypeSymbol leftType, TypeSymbol rightType)
+    {
+        var kind = syntaxKind == SyntaxKind.EqualsEqualsToken
+            ? BoundBinaryOperatorKind.Equals
+            : BoundBinaryOperatorKind.NotEquals;
+        return new BoundBinaryOperator(syntaxKind, kind, leftType, rightType, TypeSymbol.Bool);
+    }
+
+    /// <summary>
+    /// Issue #2188: true when <paramref name="type"/> participates in reference
+    /// equality — a reference type (in nullable or non-nullable form) or a
+    /// reference-constrained type parameter. A nullable wrapper is unwrapped
+    /// first; the underlying is reference-comparable when it is an interface, a
+    /// delegate / function / sequence reference, a user class, a
+    /// reference-constrained type parameter (<c>[T class …]</c> or a class-base
+    /// constraint), or any CLR-backed non-value, non-pointer type (e.g.
+    /// <c>object</c>, <c>string</c>, imported classes/interfaces). Value types,
+    /// unconstrained and <c>struct</c>-constrained type parameters (whose
+    /// <c>T?</c> erases to <c>Nullable&lt;T&gt;</c>) are excluded.
+    /// </summary>
+    /// <param name="type">The operand type to classify.</param>
+    /// <returns><see langword="true"/> when the type participates in reference equality.</returns>
+    internal static bool IsReferenceEqualityOperand(TypeSymbol type)
+    {
+        var underlying = type is NullableTypeSymbol nullable ? nullable.UnderlyingType : type;
+        if (underlying == null)
+        {
+            return false;
+        }
+
+        if (underlying is TypeParameterSymbol tp)
+        {
+            return tp.HasReferenceTypeConstraint || tp.ClassConstraint != null;
+        }
+
+        if (underlying is InterfaceSymbol
+            || underlying is DelegateTypeSymbol
+            || underlying is FunctionTypeSymbol
+            || underlying is SequenceTypeSymbol
+            || underlying is AsyncSequenceTypeSymbol)
+        {
+            return true;
+        }
+
+        if (underlying is StructSymbol structSymbol)
+        {
+            return structSymbol.IsClass;
+        }
+
+        return underlying.ClrType is { } clr && !clr.IsValueType && !clr.IsPointer && !clr.IsByRef;
+    }
+
+    /// <summary>
     /// PR N-4: returns true for operator kinds that have a lifted
     /// counterpart per C# §7.3.7 — arithmetic, bitwise, equality, and
     /// ordering. Logical short-circuit (&amp;&amp;, ||), null-coalesce, and

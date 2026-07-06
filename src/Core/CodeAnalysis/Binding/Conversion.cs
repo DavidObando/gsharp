@@ -1853,6 +1853,23 @@ public sealed class Conversion
             return true;
         }
 
+        // Issue #2188: a reference-constrained type parameter (`[T class …]`,
+        // i.e. `HasReferenceTypeConstraint`, or a class-base constraint such as
+        // `[T Box]`) is PROVABLY a reference type. It therefore participates in
+        // the reference-conversion arms exactly like any other reference type:
+        // `T -> object`/`T? -> object?`, `T -> Base`/`T? -> Base?`, and
+        // `T -> IFace`/`T? -> IFace?` for any interface in its constraint set.
+        // The type parameter carries no `ClrType` during binding (it is an open
+        // VAR/MVAR), so the CLR-backing check below cannot recognise it — this
+        // arm supplies the missing classification. Unconstrained and
+        // value-type-constrained parameters are intentionally excluded (their
+        // `T?` erases to `Nullable<T>`, a value type), so they keep their
+        // value-type conversion rules.
+        if (IsReferenceConstrainedTypeParameter(type))
+        {
+            return true;
+        }
+
         // Imported / CLR-backed types are reference-like when the CLR backing
         // is a class or interface (not a value type, pointer, or by-ref). User
         // value structs carry a null ClrType during binding and fall through.
@@ -1863,6 +1880,17 @@ public sealed class Conversion
 
         return false;
     }
+
+    /// <summary>
+    /// Issue #2188: true when <paramref name="type"/> is a type parameter that
+    /// is provably a reference type — it carries an explicit reference-type
+    /// (<c>class</c>) constraint or a base-class constraint. Such a parameter
+    /// behaves as a reference type for conversion and equality purposes in both
+    /// its nullable (<c>T?</c>) and non-nullable (<c>T</c>) forms.
+    /// </summary>
+    private static bool IsReferenceConstrainedTypeParameter(TypeSymbol type)
+        => type is TypeParameterSymbol tp
+            && (tp.HasReferenceTypeConstraint || tp.ClassConstraint != null);
 
     private static bool IsInterfaceLikeType(TypeSymbol type)
     {

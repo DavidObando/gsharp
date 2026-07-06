@@ -1391,6 +1391,29 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(syntax);
             }
 
+            // Issue #2188: reference equality (`==` / `!=`) between two reference
+            // types the built-in table's homogeneous arms did not cover — e.g. a
+            // nullable reference (`object?`, `string?`, `T?`), a base/interface
+            // reference, or a reference-constrained type parameter (`[T class …]`)
+            // against another reference. Both operands compare by reference
+            // identity, exactly as `object == object` does. This is tried LAST —
+            // after built-in, user-defined, and CLR `op_*` resolution — so a
+            // user-declared `operator ==` on a reference type always takes
+            // precedence. Value-type operands (whose `T?` erases to
+            // `Nullable<T>`) are excluded, so an unconstrained or
+            // `struct`-constrained `T?` still reports GS0129.
+            if ((syntax.OperatorToken.Kind == SyntaxKind.EqualsEqualsToken
+                    || syntax.OperatorToken.Kind == SyntaxKind.BangEqualsToken)
+                && BoundBinaryOperator.IsReferenceEqualityOperand(boundLeft.Type)
+                && BoundBinaryOperator.IsReferenceEqualityOperand(boundRight.Type))
+            {
+                var referenceOperator = BoundBinaryOperator.MakeReferenceEquality(
+                    syntax.OperatorToken.Kind,
+                    boundLeft.Type,
+                    boundRight.Type);
+                return new BoundBinaryExpression(null, boundLeft, referenceOperator, boundRight, binderCtx.IsCheckedContext);
+            }
+
             Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, boundLeft.Type, boundRight.Type);
             return new BoundErrorExpression(null);
         }
