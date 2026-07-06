@@ -3055,15 +3055,33 @@ internal sealed partial class ExpressionBinder
                 // type from the delegate target yields `() -> Stream` directly so
                 // the call resolves and the produced delegate is created over a
                 // method whose return already matches the parameter.
-                if (!delegateTargetCandidatesComputed)
-                {
-                    delegateTargetCandidatesComputed = true;
-                    delegateTargetCandidateParams = CollectDelegateTargetCandidateParameterLists(receiver, classSymbol, methodName);
-                }
-
+                //
+                // Issue #2193: but if a same-named user extension function has a
+                // function-typed parameter at this position, the CLR candidate
+                // set is not authoritative — target-typing the lambda to a CLR
+                // delegate (e.g. the void `SendOrPostCallback` of
+                // `SynchronizationContext.Send`) would erase the lambda's return
+                // type and break inference of the extension's result type
+                // parameter (GS0151). Bind the lambda with its natural type so
+                // both the CLR instance method and the user extension can compete
+                // (delegate-reshaping conversions still make it applicable to a
+                // concrete CLR delegate parameter when that path is chosen).
                 var argName = argumentNames.IsDefault ? null : argumentNames[argSlot];
-                boundArguments.Add(BindCallArgumentWithDelegateTargetTyping(
-                    argument, delegateTargetCandidateParams, sourceArgIndex: argSlot, argName: argName, paramOffset: 0));
+                if (UserExtensionHasFunctionTypedParameterAt(receiver, methodName, argSlot))
+                {
+                    boundArguments.Add(BindExpression(inner));
+                }
+                else
+                {
+                    if (!delegateTargetCandidatesComputed)
+                    {
+                        delegateTargetCandidatesComputed = true;
+                        delegateTargetCandidateParams = CollectDelegateTargetCandidateParameterLists(receiver, classSymbol, methodName);
+                    }
+
+                    boundArguments.Add(BindCallArgumentWithDelegateTargetTyping(
+                        argument, delegateTargetCandidateParams, sourceArgIndex: argSlot, argName: argName, paramOffset: 0));
+                }
             }
             else
             {
@@ -3608,6 +3626,24 @@ internal sealed partial class ExpressionBinder
                 switch (resolution.Outcome)
                 {
                     case OverloadResolution.ResolutionOutcome.Resolved:
+                        // Issue #2193: a CLR/imported instance method that shares a
+                        // name with a user extension function must not automatically
+                        // win overload resolution when it is only applicable through
+                        // a lossy delegate-reshaping conversion (e.g. a G# function
+                        // value `(T) -> TResult` discarding its result to satisfy a
+                        // named void delegate parameter like
+                        // `SynchronizationContext.Send(SendOrPostCallback, object)`)
+                        // while an in-scope user extension is a strictly better
+                        // (identity/standard) match. Merge the user-extension
+                        // candidate set into the decision and prefer the extension
+                        // when it is strictly better; instance methods that are a
+                        // good (non-reshaping) match still win unconditionally.
+                        if (receiver != null
+                            && TryPreferBetterExtensionOverClrInstanceMethod(receiver, methodName, resolution.Best, argTypes, arguments, ce, argumentNames, out var betterExtensionCall))
+                        {
+                            return betterExtensionCall;
+                        }
+
                         // Issue #977: now that the overload is chosen, re-bind
                         // any inline `out var`/`out let`/`out _` placeholders
                         // against the resolved by-ref parameter so the new
@@ -3718,6 +3754,227 @@ internal sealed partial class ExpressionBinder
 
         Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
         return new BoundErrorExpression(null);
+    }
+
+    /// <summary>
+    /// Issue #2193: returns <see langword="true"/> when a user-defined extension
+    /// function for the <c>(receiver, name)</c> pair declares a function-typed
+    /// (arrow / delegate) parameter at the given user-argument position. The
+    /// extension's synthetic receiver occupies <c>Parameters[0]</c>, so user
+    /// argument <paramref name="argSlot"/> aligns with <c>Parameters[argSlot + 1]</c>.
+    /// Used to suppress CLR-derived lambda target-typing that would otherwise
+    /// erase the lambda's return type and break the extension's type-argument
+    /// inference.
+    /// </summary>
+    private bool UserExtensionHasFunctionTypedParameterAt(BoundExpression receiver, string methodName, int argSlot)
+    {
+        if (receiver?.Type == null)
+        {
+            return false;
+        }
+
+        var extCandidates = scope.TryLookupExtensionFunctions(receiver.Type, methodName);
+        if (extCandidates.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        var paramIndex = argSlot + 1;
+        foreach (var candidate in extCandidates)
+        {
+            if (candidate != null
+                && paramIndex < candidate.Parameters.Length
+                && candidate.Parameters[paramIndex].Type is FunctionTypeSymbol)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #2193: overload-resolution tie-break that merges the user-defined
+    /// extension-function candidate set for <c>(receiver type, name)</c> into a
+    /// resolved CLR/imported instance-method call and prefers the extension when
+    /// it is a strictly better match.
+    /// <para>
+    /// The defect: a same-named BCL instance method can be <em>applicable</em> to
+    /// a call only through a lossy delegate-reshaping conversion — e.g. a G#
+    /// function value <c>(T) -&gt; TResult</c> discarding its result to satisfy the
+    /// named void delegate parameter of
+    /// <c>SynchronizationContext.Send(SendOrPostCallback, object)</c>. Because the
+    /// CLR-instance path commits as soon as it resolves, the user extension
+    /// <c>Send[T, TResult]((T) -&gt; TResult, T) TResult</c> — an exact match — never
+    /// competed, so the call bound to the <c>void</c> member (GS0124 / GS0151).
+    /// </para>
+    /// <para>
+    /// The fix is deliberately conservative so it does not disturb normal
+    /// instance-method resolution: the extension is only preferred when (a) the
+    /// resolved instance method's <em>worst</em> argument conversion is a
+    /// delegate-reshaping conversion (rank ≥
+    /// <see cref="OverloadResolution.ImplicitConversionKind.LambdaToVoidDelegate"/>),
+    /// and (b) some applicable user extension matches the same arguments with a
+    /// strictly better worst-case conversion. An instance method that matches by
+    /// identity / standard implicit conversion always wins, so a genuine member
+    /// that is the better match is never shadowed.
+    /// </para>
+    /// </summary>
+    private bool TryPreferBetterExtensionOverClrInstanceMethod(
+        BoundExpression receiver,
+        string methodName,
+        MethodInfo clrBest,
+        Type[] argTypes,
+        ImmutableArray<BoundExpression> arguments,
+        CallExpressionSyntax ce,
+        ImmutableArray<string> argumentNames,
+        out BoundExpression result)
+    {
+        result = null;
+        if (receiver?.Type == null || clrBest == null || argTypes == null)
+        {
+            return false;
+        }
+
+        var extCandidates = scope.TryLookupExtensionFunctions(receiver.Type, methodName);
+        if (extCandidates.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        // Only intervene when the CLR instance method is applicable solely via a
+        // lossy delegate-reshaping conversion; a good (identity/standard implicit)
+        // instance match is never overridden.
+        var clrWorst = ComputeClrCandidateWorstConversionRank(clrBest, argTypes);
+        if (!IsDelegateReshapingConversion(clrWorst))
+        {
+            return false;
+        }
+
+        // The extension must be a strictly better match than the instance method.
+        var extWorst = ComputeBestApplicableExtensionWorstConversionRank(extCandidates, argTypes);
+        if (extWorst == OverloadResolution.ImplicitConversionKind.None
+            || (int)extWorst >= (int)clrWorst)
+        {
+            return false;
+        }
+
+        if (TryBindExtensionFunctionOverload(receiver, methodName, arguments, ce, argumentNames, out var extResult)
+            && extResult is not BoundErrorExpression)
+        {
+            result = extResult;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #2193: a delegate-reshaping implicit conversion (rank ≥
+    /// <see cref="OverloadResolution.ImplicitConversionKind.LambdaToVoidDelegate"/>
+    /// and ≤
+    /// <see cref="OverloadResolution.ImplicitConversionKind.DelegateReturnNumericWidening"/>)
+    /// reshapes a G# function value to satisfy a differently-shaped or
+    /// differently-named CLR delegate parameter (discarding a return value,
+    /// widening/covarying a return type, or retargeting to a named delegate).
+    /// These are the "worst"-ranked conversions and are the loose applicability
+    /// that lets a same-named BCL instance method shadow an exact user extension.
+    /// </summary>
+    private static bool IsDelegateReshapingConversion(OverloadResolution.ImplicitConversionKind kind)
+    {
+        return kind is OverloadResolution.ImplicitConversionKind.LambdaToVoidDelegate
+            or OverloadResolution.ImplicitConversionKind.DelegateReturnCovariance
+            or OverloadResolution.ImplicitConversionKind.DelegateStructuralMatch
+            or OverloadResolution.ImplicitConversionKind.DelegateReturnNumericWidening;
+    }
+
+    /// <summary>
+    /// Issue #2193: classifies each supplied argument against the corresponding
+    /// parameter of a resolved CLR candidate and returns the <em>worst</em>
+    /// (highest-ordinal) implicit-conversion rank across all arguments. Returns
+    /// <see cref="OverloadResolution.ImplicitConversionKind.None"/> when the
+    /// arities do not line up positionally (the candidate matched in an expanded
+    /// / named / defaulted form this cheap check cannot reason about, so the
+    /// tie-break is skipped and the instance method keeps winning).
+    /// </summary>
+    private static OverloadResolution.ImplicitConversionKind ComputeClrCandidateWorstConversionRank(MethodInfo candidate, Type[] argTypes)
+    {
+        var parameters = candidate.GetParameters();
+        if (parameters.Length != argTypes.Length)
+        {
+            return OverloadResolution.ImplicitConversionKind.None;
+        }
+
+        var worst = OverloadResolution.ImplicitConversionKind.Identity;
+        for (var i = 0; i < argTypes.Length; i++)
+        {
+            var kind = OverloadResolution.ClassifyImplicit(parameters[i].ParameterType, argTypes[i]);
+            if (kind == OverloadResolution.ImplicitConversionKind.None)
+            {
+                return OverloadResolution.ImplicitConversionKind.None;
+            }
+
+            if ((int)kind > (int)worst)
+            {
+                worst = kind;
+            }
+        }
+
+        return worst;
+    }
+
+    /// <summary>
+    /// Issue #2193: across every user extension overload for the
+    /// <c>(receiver, name)</c> pair, computes each applicable overload's worst
+    /// argument-conversion rank (using the same CLR-type projection that produced
+    /// <paramref name="argTypes"/>) and returns the <em>best</em> (lowest-ordinal)
+    /// worst-rank. The extension's synthetic receiver slot lives in
+    /// <c>Parameters[0]</c>, so user arguments align against <c>Parameters[1..]</c>.
+    /// Returns <see cref="OverloadResolution.ImplicitConversionKind.None"/> when
+    /// no overload lines up positionally with the arguments.
+    /// </summary>
+    private OverloadResolution.ImplicitConversionKind ComputeBestApplicableExtensionWorstConversionRank(
+        ImmutableArray<FunctionSymbol> extCandidates,
+        Type[] argTypes)
+    {
+        var best = OverloadResolution.ImplicitConversionKind.None;
+        foreach (var candidate in extCandidates)
+        {
+            if (candidate == null || candidate.Parameters.Length != argTypes.Length + 1)
+            {
+                continue;
+            }
+
+            var worst = OverloadResolution.ImplicitConversionKind.Identity;
+            var applicable = true;
+            for (var i = 0; i < argTypes.Length; i++)
+            {
+                var paramClr = GetEffectiveArgumentClrTypeForOverloadResolution(candidate.Parameters[i + 1].Type);
+                var kind = OverloadResolution.ClassifyImplicit(paramClr, argTypes[i]);
+                if (kind == OverloadResolution.ImplicitConversionKind.None)
+                {
+                    applicable = false;
+                    break;
+                }
+
+                if ((int)kind > (int)worst)
+                {
+                    worst = kind;
+                }
+            }
+
+            if (!applicable)
+            {
+                continue;
+            }
+
+            if (best == OverloadResolution.ImplicitConversionKind.None || (int)worst < (int)best)
+            {
+                best = worst;
+            }
+        }
+
+        return best;
     }
 
     /// <summary>
