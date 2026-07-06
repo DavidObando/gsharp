@@ -8,6 +8,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Cs2Gs.Translator\Cs2Gs.Translator.csproj" />
     <ProjectReference Include="..\Cs2Gs.CodeModel\Cs2Gs.CodeModel.csproj" />
+    <ProjectReference Include="..\..\..\src\Core\Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

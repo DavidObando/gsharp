@@ -21,6 +21,11 @@ public sealed class DiscoveredProject
     /// <param name="referenceSourcePath">Absolute path to the <c>.rsp</c> the references were parsed from, or <c>null</c> when none was found.</param>
     /// <param name="assemblyName">The project's effective <c>AssemblyName</c> (i.e. the basename of the output DLL). Used by cross-project navigation to map an imported symbol's declaring assembly back to the owning project.</param>
     /// <param name="targetFramework">The project's target framework moniker (e.g. <c>net10.0</c>), parsed from the <c>.gsproj</c>; may be <c>null</c> when undeclared or unparseable.</param>
+    /// <param name="rootNamespace">
+    /// The project's effective <c>RootNamespace</c> (ADR-0142, issue #2200), used
+    /// as the base namespace when generating a <c>.resx</c>'s codebehind class.
+    /// Defaults to <see cref="AssemblyName"/> when undeclared, mirroring MSBuild.
+    /// </param>
     public DiscoveredProject(
         string projectFilePath,
         IReadOnlyList<string> sourceFiles,
@@ -28,7 +33,8 @@ public sealed class DiscoveredProject
         IReadOnlyList<string> references = null,
         string referenceSourcePath = null,
         string assemblyName = null,
-        string targetFramework = null)
+        string targetFramework = null,
+        string rootNamespace = null)
     {
         ProjectFilePath = projectFilePath;
         SourceFiles = sourceFiles;
@@ -37,6 +43,7 @@ public sealed class DiscoveredProject
         ReferenceSourcePath = referenceSourcePath;
         AssemblyName = assemblyName;
         TargetFramework = targetFramework;
+        RootNamespace = rootNamespace;
     }
 
     /// <summary>
@@ -89,4 +96,13 @@ public sealed class DiscoveredProject
     /// Test Explorer so test groups can be labelled <c>&lt;project&gt; (&lt;tfm&gt;)</c>.
     /// </summary>
     public string TargetFramework { get; }
+
+    /// <summary>
+    /// Gets the project's effective <c>RootNamespace</c> (ADR-0142, issue #2200) —
+    /// the base namespace the resx codebehind generator prefixes with the resx's
+    /// folder path relative to the project root. Falls back to
+    /// <see cref="AssemblyName"/> when the <c>.gsproj</c> declares no
+    /// <c>&lt;RootNamespace&gt;</c>, matching MSBuild's own default.
+    /// </summary>
+    public string RootNamespace { get; }
 }

@@ -60,6 +60,7 @@ public static class ProjectDiscovery
         var (references, referenceSourcePath) = DiscoverReferences(projectFilePath, projectDir);
         var assemblyName = ResolveAssemblyName(projectFilePath);
         var targetFramework = ResolveTargetFramework(projectFilePath);
+        var rootNamespace = ResolveRootNamespace(projectFilePath, assemblyName);
 
         return new DiscoveredProject(
             Path.GetFullPath(projectFilePath),
@@ -68,7 +69,8 @@ public static class ProjectDiscovery
             references,
             referenceSourcePath,
             assemblyName,
-            targetFramework);
+            targetFramework,
+            rootNamespace);
     }
 
     /// <summary>
@@ -211,6 +213,39 @@ public static class ProjectDiscovery
         }
 
         return string.Empty;
+    }
+
+    /// <summary>
+    /// Resolves the project's effective <c>RootNamespace</c> — used by the resx
+    /// codebehind generator (ADR-0142, issue #2200) to compute the default
+    /// namespace for a <c>Resources.Designer.gs</c> file, matching MSBuild's own
+    /// <c>RootNamespace</c> default (falling back to <paramref name="assemblyName"/>,
+    /// which itself defaults to the project file's base name).
+    /// </summary>
+    /// <param name="projectFilePath">Absolute path to the <c>.gsproj</c>.</param>
+    /// <param name="assemblyName">
+    /// The project's already-resolved <see cref="DiscoveredProject.AssemblyName"/>,
+    /// used as the fallback when no <c>&lt;RootNamespace&gt;</c> is declared.
+    /// </param>
+    /// <returns>The effective root namespace; never <c>null</c>.</returns>
+    internal static string ResolveRootNamespace(string projectFilePath, string assemblyName)
+    {
+        try
+        {
+            var doc = XDocument.Load(projectFilePath);
+            var explicitNamespace = doc.Descendants()
+                .FirstOrDefault(e => e.Name.LocalName == "RootNamespace")?.Value;
+            if (!string.IsNullOrWhiteSpace(explicitNamespace))
+            {
+                return explicitNamespace.Trim();
+            }
+        }
+        catch (Exception)
+        {
+            // Fall through to the AssemblyName-derived default below.
+        }
+
+        return assemblyName ?? Path.GetFileNameWithoutExtension(projectFilePath);
     }
 
     /// <summary>

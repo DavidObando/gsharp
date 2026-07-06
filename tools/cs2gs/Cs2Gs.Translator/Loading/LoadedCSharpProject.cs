@@ -25,14 +25,34 @@ public sealed class LoadedCSharpProject
     /// <param name="compilation">The bound C# compilation.</param>
     /// <param name="documents">The per-file syntax tree + semantic model pairs.</param>
     /// <param name="loadDiagnostics">The compile diagnostics surfaced while loading.</param>
+    /// <param name="projectDirectory">
+    /// The directory containing the project file, or <see langword="null"/> for an
+    /// in-memory-loaded project (<see cref="CSharpProjectLoader.LoadInMemory"/>).
+    /// </param>
+    /// <param name="rootNamespace">
+    /// The project's effective root/default namespace (issue #2200), used to compute
+    /// the namespace of a generated resx codebehind file; empty for an in-memory-loaded
+    /// project.
+    /// </param>
+    /// <param name="resxFiles">
+    /// The absolute paths of the <c>.resx</c> files discovered under
+    /// <paramref name="projectDirectory"/> (issue #2200), excluding the project's own
+    /// <c>obj</c>/<c>bin</c> output directories.
+    /// </param>
     public LoadedCSharpProject(
         CSharpCompilation compilation,
         IReadOnlyList<LoadedDocument> documents,
-        IReadOnlyList<Diagnostic> loadDiagnostics)
+        IReadOnlyList<Diagnostic> loadDiagnostics,
+        string projectDirectory = null,
+        string rootNamespace = null,
+        IReadOnlyList<string> resxFiles = null)
     {
         this.Compilation = compilation;
         this.Documents = documents;
         this.LoadDiagnostics = loadDiagnostics;
+        this.ProjectDirectory = projectDirectory;
+        this.RootNamespace = rootNamespace ?? string.Empty;
+        this.ResxFiles = resxFiles ?? ImmutableArray<string>.Empty;
     }
 
     /// <summary>Gets the bound C# compilation.</summary>
@@ -43,6 +63,31 @@ public sealed class LoadedCSharpProject
 
     /// <summary>Gets the compile diagnostics surfaced while loading.</summary>
     public IReadOnlyList<Diagnostic> LoadDiagnostics { get; }
+
+    /// <summary>
+    /// Gets the directory containing the project file, or <see langword="null"/>
+    /// for an in-memory-loaded project.
+    /// </summary>
+    public string ProjectDirectory { get; }
+
+    /// <summary>
+    /// Gets the project's effective root/default namespace (Roslyn's
+    /// <c>Project.DefaultNamespace</c>, which reflects MSBuild's
+    /// <c>&lt;RootNamespace&gt;</c>, falling back to the assembly/project file
+    /// name) — issue #2200. Empty for an in-memory-loaded project.
+    /// </summary>
+    public string RootNamespace { get; }
+
+    /// <summary>
+    /// Gets the absolute paths of the <c>.resx</c> files discovered under
+    /// <see cref="ProjectDirectory"/> (issue #2200), excluding the project's own
+    /// <c>obj</c>/<c>bin</c> output directories. Each drives a generated
+    /// <c>*.Designer.gs</c> codebehind via
+    /// <see cref="GSharp.Core.Resx.ResxCodeGenerator"/> instead of translating a
+    /// hand-authored <c>*.Designer.cs</c> (which is skipped as generated source;
+    /// see <see cref="CSharpProjectLoader"/>'s auto-generated-header check).
+    /// </summary>
+    public IReadOnlyList<string> ResxFiles { get; }
 
     /// <summary>
     /// Gets the subset of <see cref="LoadDiagnostics"/> with
