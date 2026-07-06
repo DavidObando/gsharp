@@ -270,9 +270,15 @@ internal sealed partial class ExpressionBinder
         // Drop the trivial bottom / null-sentinel types — they convert to any
         // reference target and never constrain the common type. Issue #1151:
         // remember whether a `nil` arm was present so a value-type common type
-        // can be lifted to its nullable form below.
+        // can be lifted to its nullable form below. Issue #2202: a `T?` arm is
+        // unwrapped to its underlying `T` before candidate enumeration below —
+        // e.g. a `Component?` / `Book?` arm pair must unify via `Component`'s /
+        // `Book`'s shared `IBookCommon` interface exactly as the non-nullable
+        // pair would — and the nullable annotation is re-applied to whatever
+        // common type is found afterward.
         var significant = new List<TypeSymbol>(armTypes.Count);
         var hasNullArm = false;
+        var hasNullableArm = false;
         foreach (var t in armTypes)
         {
             if (t == TypeSymbol.Null)
@@ -281,7 +287,15 @@ internal sealed partial class ExpressionBinder
             }
             else if (t != TypeSymbol.Never)
             {
-                significant.Add(t);
+                if (t is NullableTypeSymbol nullableArm)
+                {
+                    hasNullableArm = true;
+                    significant.Add(nullableArm.UnderlyingType);
+                }
+                else
+                {
+                    significant.Add(t);
+                }
             }
         }
 
@@ -325,6 +339,14 @@ internal sealed partial class ExpressionBinder
         if (common != null && hasNullArm)
         {
             common = LiftForNilArm(common);
+        }
+
+        // Issue #2202: when at least one arm was itself a nullable `T?`, the
+        // unified result must stay nullable too, mirroring the two-arm
+        // `UnionArmNullability` conditional-expression behavior.
+        if (common != null && hasNullableArm && common is not NullableTypeSymbol)
+        {
+            common = NullableTypeSymbol.Get(common);
         }
 
         return common;
