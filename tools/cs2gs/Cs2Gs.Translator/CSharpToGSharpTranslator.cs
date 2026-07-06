@@ -13046,6 +13046,24 @@ public sealed class CSharpToGSharpTranslator
                 return true;
             }
 
+            // Issue #2202: a call (or property/field read) whose result comes from
+            // an EXTERNAL (metadata) member compiled without a nullable context is
+            // oblivious — Roslyn reports its reference-type return/type as
+            // `NullableAnnotation.None` — and gsc maps every such oblivious
+            // external reference type to `T?` (see ClrNullability.cs). When such a
+            // value appears as a return/expression-body result in an oblivious
+            // compilation, gsc will require `T?` but the C# source assigned no
+            // nullability (oblivious); assert `!!` to bridge the gap. This mirrors
+            // the RECEIVER-position handling in ReceiverIsNullableReferenceFieldOrProperty
+            // (issue #2113) but for VALUE positions (return statements, expression
+            // bodies). Restricted to oblivious compilations so nullable-enabled
+            // projects — whose external refs carry real annotations — are untouched.
+            if (this.IsObliviousCompilation()
+                && IsObliviousExternalNullableMember(this.context.GetSymbolInfo(recv).Symbol))
+            {
+                return true;
+            }
+
             // Flow analysis must have proven the receiver non-null at this site.
             if (this.context.GetTypeInfo(recv).Nullability.FlowState != NullableFlowState.NotNull)
             {
