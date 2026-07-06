@@ -1730,6 +1730,19 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #2165: an UNCONSTRAINED type-parameter operand (e.g. `x T`
+        // narrowed to a tested interface `IInit`) sits on the stack as a bare
+        // `!!T` slot, not an ObjRef — `castclass`/`unbox.any` both require an
+        // ObjRef and would fail ilverify (`StackObjRef`). Box the type parameter
+        // first (a no-op for reference-constrained T, matching the operand
+        // boxing already applied by `EmitIsExpression`) so the following
+        // reference/value cast operates on a boxed reference.
+        if (declared is TypeParameterSymbol)
+        {
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.GetElementTypeToken(declared));
+        }
+
         if (ReflectionMetadataEmitter.IsValueTypeSymbol(narrowed)
             || (narrowed.ClrType != null && narrowed.ClrType.IsValueType))
         {
