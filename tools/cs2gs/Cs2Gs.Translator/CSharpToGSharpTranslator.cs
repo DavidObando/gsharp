@@ -2138,6 +2138,20 @@ public sealed class CSharpToGSharpTranslator
             {
                 (string Name, ITypeSymbol Type, bool IsProperty) target = paramToTarget[param];
                 GTypeReference type = this.typeMapper.Map(target.Type, this.context, param.Locations.FirstOrDefault());
+
+                // Issue #914 (oblivious sink): a T2-lifted primary-constructor
+                // parameter must receive the SAME oblivious-nullability promotion
+                // as an ordinary parameter (MapParameter) — otherwise a reference
+                // (incl. function-typed) parameter that is null-conditionally used
+                // (`report?(…)`) or receives a promoted-nullable argument at a
+                // `base(...)`/`this(...)` call site keeps its non-nullable header
+                // type, so the lifted primary ctor's arity/signature no longer
+                // matches the promoted argument a derived ctor forwards (GS0214).
+                // Both helpers no-op for a nullable-enabled compilation and are
+                // already guarded to reference types, so value-type params are
+                // untouched.
+                type = this.PromoteIfUsedAsNullable(type, param);
+                type = this.PromoteDelegateParameterInvokedWithNull(type, param);
                 GExpression liftedDefault = this.BuildOptionalParameterDefault(param, type, node);
                 primaryParameters.Add(new Parameter(SanitizeIdentifier(target.Name), type, defaultValue: liftedDefault));
                 if (target.IsProperty)
