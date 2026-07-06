@@ -358,6 +358,10 @@ public sealed class LspServer
                 {
                     this.HandleSourceFileChange(filePath, change.Type);
                 }
+                else if (filePath.EndsWith(".resx", StringComparison.OrdinalIgnoreCase))
+                {
+                    this.HandleResxFileChange(filePath, change.Type);
+                }
             }
 
             // External file/project changes can alter diagnostics in open documents.
@@ -1452,6 +1456,7 @@ public sealed class LspServer
                     project.ProjectReferences = discovered.ProjectReferences;
                     project.ReferenceSourcePath = discovered.ReferenceSourcePath;
                     project.References = discovered.References;
+                    project.RootNamespace = discovered.RootNamespace;
                     foreach (var source in discovered.SourceFiles)
                     {
                         project.AddFileFromDisk(source);
@@ -1469,6 +1474,7 @@ public sealed class LspServer
                     existing.ProjectReferences = rediscovered.ProjectReferences;
                     existing.ReferenceSourcePath = rediscovered.ReferenceSourcePath;
                     existing.References = rediscovered.References;
+                    existing.RootNamespace = rediscovered.RootNamespace;
                     foreach (var source in rediscovered.SourceFiles)
                     {
                         if (!existing.ContainsFile(source))
@@ -1519,6 +1525,50 @@ public sealed class LspServer
                 }
 
                 break;
+        }
+    }
+
+    /// <summary>
+    /// Regenerates a <c>.resx</c>'s strongly-typed codebehind class
+    /// (ADR-0142, issue #2200) whenever the resx is created or saved within a
+    /// gsproj's scope, mirroring Visual Studio's "run custom tool on save".
+    /// Delegates to the shared <see cref="GSharp.Core.Resx.ResxCodeGenerator"/>
+    /// — the same generator <c>cs2gs</c> calls during migration — so the two
+    /// integrations can never drift. The generated
+    /// <c>{ResxBaseName}.Designer.gs</c> is written next to the resx and
+    /// registered into the owning project like any other source file; a
+    /// malformed resx (bad XML) is swallowed so a single bad file never takes
+    /// down the watched-files handler for the rest of the batch. Deleting a
+    /// <c>.resx</c> deliberately leaves its last-generated designer file on
+    /// disk (matching Visual Studio, which never deletes
+    /// <c>Resources.Designer.cs</c> when the <c>.resx</c> is removed).
+    /// </summary>
+    private void HandleResxFileChange(string filePath, FileChangeType changeType)
+    {
+        if (changeType == FileChangeType.Deleted)
+        {
+            return;
+        }
+
+        var project = this.FindOwningProject(filePath);
+        if (project == null)
+        {
+            return;
+        }
+
+        try
+        {
+            string rootNamespace = project.RootNamespace ?? project.AssemblyName ?? string.Empty;
+            string generated = GSharp.Core.Resx.ResxCodeGenerator.GenerateFromFile(filePath, project.ProjectDirectory, rootNamespace);
+            string designerPath = GSharp.Core.Resx.ResxCodeGenerator.GetDesignerFilePath(filePath);
+            File.WriteAllText(designerPath, generated);
+
+            project.AddFileFromDisk(designerPath);
+            this.workspaceState.RegisterFile(designerPath, project);
+        }
+        catch (Exception ex)
+        {
+            LogHandlerException(nameof(HandleResxFileChange), ex);
         }
     }
 

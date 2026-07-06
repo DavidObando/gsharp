@@ -186,12 +186,14 @@ export class ServerManager {
       const traceChannel = vscode.window.createOutputChannel('GSharp LSP Trace');
       this.context.subscriptions.push(traceChannel);
 
-      // Watch .gs and .gsproj files so the server's workspace model (owning-project
-      // lookup, symbol/diagnostic caches) stays in sync with creates/deletes/renames
-      // and project-reference edits. vscode-languageclient registers this watcher
-      // client-side (LanguageClient.hookFileEvents), independent of dynamicRegistration,
+      // Watch .gs, .gsproj, and .resx files so the server's workspace model
+      // (owning-project lookup, symbol/diagnostic caches) stays in sync with
+      // creates/deletes/renames and project-reference edits, and so saving a
+      // .resx regenerates its Resources.Designer.gs codebehind (ADR-0142,
+      // issue #2200). vscode-languageclient registers this watcher client-side
+      // (LanguageClient.hookFileEvents), independent of dynamicRegistration,
       // so it works even though GSharpLanguageClient strips dynamicRegistration below.
-      const fileWatcher = vscode.workspace.createFileSystemWatcher('**/*.{gs,gsproj}');
+      const fileWatcher = vscode.workspace.createFileSystemWatcher('**/*.{gs,gsproj,resx}');
       this.context.subscriptions.push(fileWatcher);
 
       const clientOptions: LanguageClientOptions = {

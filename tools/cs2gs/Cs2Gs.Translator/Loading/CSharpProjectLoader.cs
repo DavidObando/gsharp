@@ -322,7 +322,64 @@ public static class CSharpProjectLoader
         IReadOnlyList<LoadedDocument> documents = BuildDocuments(csharpCompilation, projectDirectory, seedDiagnostics);
         seedDiagnostics.AddRange(SignificantDiagnostics(csharpCompilation));
 
-        return new LoadedCSharpProject(csharpCompilation, documents, seedDiagnostics);
+        string rootNamespace = ResolveRootNamespace(project);
+        IReadOnlyList<string> resxFiles = DiscoverResxFiles(projectDirectory);
+
+        return new LoadedCSharpProject(csharpCompilation, documents, seedDiagnostics, projectDirectory, rootNamespace, resxFiles);
+    }
+
+    /// <summary>
+    /// Resolves a project's effective root/default namespace (issue #2200): Roslyn's
+    /// <see cref="Project.DefaultNamespace"/> reflects MSBuild's
+    /// <c>&lt;RootNamespace&gt;</c> for an SDK-style C# project; when unset (older
+    /// non-SDK projects, or the property genuinely absent) MSBuild itself defaults
+    /// <c>RootNamespace</c> to the assembly name, so falling back to
+    /// <see cref="Project.AssemblyName"/> and finally the project file's base name
+    /// mirrors that same default.
+    /// </summary>
+    private static string ResolveRootNamespace(Project project)
+    {
+        if (!string.IsNullOrEmpty(project.DefaultNamespace))
+        {
+            return project.DefaultNamespace;
+        }
+
+        if (!string.IsNullOrEmpty(project.AssemblyName))
+        {
+            return project.AssemblyName;
+        }
+
+        return Path.GetFileNameWithoutExtension(project.FilePath) ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Finds every <c>.resx</c> file under <paramref name="projectDirectory"/>
+    /// (issue #2200), mirroring the .NET SDK's implicit default-item globbing for
+    /// <c>EmbeddedResource</c> items — Roslyn's <see cref="Project"/> does not
+    /// surface <c>.resx</c> files itself, since they are an MSBuild
+    /// <c>EmbeddedResource</c> item rather than an <c>AdditionalFiles</c>/document.
+    /// Files under the project's own <c>obj</c>/<c>bin</c> output directories are
+    /// excluded (generated/copied artifacts, not source).
+    /// </summary>
+    private static IReadOnlyList<string> DiscoverResxFiles(string projectDirectory)
+    {
+        if (string.IsNullOrEmpty(projectDirectory) || !Directory.Exists(projectDirectory))
+        {
+            return ImmutableArray<string>.Empty;
+        }
+
+        string objPrefix = Path.Combine(projectDirectory, "obj").Replace('\\', '/').TrimEnd('/') + "/";
+        string binPrefix = Path.Combine(projectDirectory, "bin").Replace('\\', '/').TrimEnd('/') + "/";
+
+        return Directory.EnumerateFiles(projectDirectory, "*.resx", SearchOption.AllDirectories)
+            .Where(path =>
+            {
+                string normalized = path.Replace('\\', '/');
+                return !normalized.StartsWith(objPrefix, StringComparison.OrdinalIgnoreCase) &&
+                    !normalized.StartsWith(binPrefix, StringComparison.OrdinalIgnoreCase);
+            })
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToImmutableArray();
     }
 
     private static IReadOnlyList<LoadedDocument> BuildDocuments(

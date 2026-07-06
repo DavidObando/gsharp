@@ -72,6 +72,15 @@ public class ProjectState
     public string AssemblyName { get; set; }
 
     /// <summary>
+    /// Gets or sets the project's effective <c>RootNamespace</c> (ADR-0142,
+    /// issue #2200), parsed from the <c>.gsproj</c> by <see cref="ProjectDiscovery"/>
+    /// (falling back to <see cref="AssemblyName"/> when undeclared, matching
+    /// MSBuild). Used as the base namespace when the language server regenerates
+    /// a <c>.resx</c>'s codebehind class on save.
+    /// </summary>
+    public string RootNamespace { get; set; }
+
+    /// <summary>
     /// Gets or sets the project's target framework moniker (e.g. <c>net10.0</c>),
     /// parsed from the <c>.gsproj</c> by <see cref="ProjectDiscovery"/>. Surfaced to
     /// the VS Code Test Explorer so discovered tests can be grouped under a
