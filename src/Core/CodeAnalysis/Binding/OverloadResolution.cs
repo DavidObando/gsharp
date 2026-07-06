@@ -192,6 +192,23 @@ internal static class OverloadResolution
     }
 
     /// <summary>
+    /// Issue #2172: the shape of an OPEN generic delegate parameter's return
+    /// type, used to prefer <c>Func&lt;Task&lt;TResult&gt;&gt;</c> over
+    /// <c>Func&lt;TResult&gt;</c> for a task-returning lambda argument.
+    /// </summary>
+    private enum TaskLambdaDelegateShape
+    {
+        /// <summary>Neither a bare type parameter nor a Task-shaped return.</summary>
+        Other,
+
+        /// <summary>The delegate return type is a bare method type parameter (<c>Func&lt;TResult&gt;</c>).</summary>
+        BareTypeParameter,
+
+        /// <summary>The delegate return type is <c>Task</c>/<c>Task&lt;...&gt;</c> (<c>Func&lt;Task&lt;TResult&gt;&gt;</c>).</summary>
+        TaskShaped,
+    }
+
+    /// <summary>
     /// Gets or sets the optional hook invoked when no built-in implicit
     /// conversion exists. Returns <see langword="true"/> when the caller has
     /// a user-defined <c>op_Implicit</c> method that converts the source type
@@ -2938,11 +2955,217 @@ internal static class OverloadResolution
             }
         }
 
+        // Phase 2f — issue #2172: when an argument is a task-returning lambda
+        // (its natural delegate type returns Task/Task<T>), prefer the candidate
+        // whose OPEN delegate parameter is shaped Func<Task<TResult>> (binding
+        // the whole task to a Task-typed delegate result) over one shaped
+        // Func<TResult> (binding the whole task to a bare method type parameter).
+        // Both close to the same Func<Task<X>> after inference — e.g.
+        // Task.Run<TResult>(Func<TResult>) with TResult = Task<X> versus
+        // Task.Run<TResult>(Func<Task<TResult>>) with TResult = X — so neither
+        // dominates on conversion kind and the earlier tie-breaks cannot choose.
+        // This mirrors C#'s preference for the task-returning delegate overload
+        // for an async/task-returning lambda argument. Generalised: it fires for
+        // ANY overload set differing by Func<X> vs Func<Task<X>> at a slot whose
+        // argument is a task-returning delegate, not just Task.Run.
+        if (pool.Count > 1)
+        {
+            var preferred = PreferTaskShapedDelegateForTaskLambda(pool, argTypes);
+            if (preferred.Count >= 1 && preferred.Count < pool.Count)
+            {
+                pool = preferred;
+            }
+
+            if (pool.Count == 1)
+            {
+                return Result<T>.Single(pool[0].Method, BuildMappingArray(pool[0].Mapping, argumentNames), pool[0].IsExpanded);
+            }
+        }
+
         // If nothing dominated above, report the surviving pool as ambiguous.
         var ambiguous = pool
             .Select(c => c.Method)
             .ToImmutableArray();
         return Result<T>.AmbiguousResult(ambiguous);
+    }
+
+    /// <summary>
+    /// Issue #2172: narrows <paramref name="pool"/> to prefer, for each argument
+    /// slot whose argument is a task-returning delegate (a lambda whose natural
+    /// return type is <c>Task</c>/<c>Task&lt;T&gt;</c>), the candidates whose
+    /// OPEN delegate parameter at that slot is shaped <c>Func&lt;Task&lt;TResult&gt;&gt;</c>
+    /// over those shaped <c>Func&lt;TResult&gt;</c>. Only narrows when the pool
+    /// genuinely splits into both shapes at such a slot, so non-task-lambda calls
+    /// and single-shape overload sets are unaffected. Returns the (possibly
+    /// unchanged) surviving list.
+    /// </summary>
+    private static List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> PreferTaskShapedDelegateForTaskLambda<T>(
+        List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> pool,
+        IReadOnlyList<Type> argTypes)
+        where T : MethodBase
+    {
+        if (argTypes == null || argTypes.Count == 0)
+        {
+            return pool;
+        }
+
+        var current = pool;
+        for (var argIndex = 0; argIndex < argTypes.Count; argIndex++)
+        {
+            if (current.Count <= 1)
+            {
+                break;
+            }
+
+            // The argument must itself be a task-returning delegate value
+            // (an async / task-returning lambda's natural Func<...> type).
+            if (!IsTaskReturningDelegate(argTypes[argIndex]))
+            {
+                continue;
+            }
+
+            var taskShaped = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)>(current.Count);
+            var bareTypeParam = false;
+            foreach (var c in current)
+            {
+                switch (ClassifyOpenDelegateReturnShape(c.Method, c.Mapping, argIndex))
+                {
+                    case TaskLambdaDelegateShape.TaskShaped:
+                        taskShaped.Add(c);
+                        break;
+                    case TaskLambdaDelegateShape.BareTypeParameter:
+                        bareTypeParam = true;
+                        break;
+                    default:
+                        // Neither shape — keep it eligible so an unrelated
+                        // sibling overload is never silently dropped.
+                        taskShaped.Add(c);
+                        break;
+                }
+            }
+
+            // Only narrow when the split is a genuine Func<Task<X>> vs Func<X>
+            // discrimination (at least one of each) — otherwise leave the pool
+            // untouched.
+            if (bareTypeParam && taskShaped.Count >= 1 && taskShaped.Count < current.Count)
+            {
+                current = taskShaped;
+            }
+        }
+
+        return current;
+    }
+
+    /// <summary>
+    /// Issue #2172: classifies the OPEN (generic-definition) delegate parameter
+    /// bound to argument <paramref name="argIndex"/> as either
+    /// <see cref="TaskLambdaDelegateShape.TaskShaped"/> (its delegate return type
+    /// is <c>Task</c>/<c>Task&lt;...&gt;</c>, i.e. <c>Func&lt;Task&lt;TResult&gt;&gt;</c>),
+    /// <see cref="TaskLambdaDelegateShape.BareTypeParameter"/> (its delegate
+    /// return type is a bare method type parameter, i.e. <c>Func&lt;TResult&gt;</c>),
+    /// or <see cref="TaskLambdaDelegateShape.Other"/>.
+    /// </summary>
+    private static TaskLambdaDelegateShape ClassifyOpenDelegateReturnShape<T>(T method, int[] mapping, int argIndex)
+        where T : MethodBase
+    {
+        var paramIndex = mapping != null && argIndex < mapping.Length ? mapping[argIndex] : argIndex;
+        if (paramIndex < 0)
+        {
+            return TaskLambdaDelegateShape.Other;
+        }
+
+        MethodBase openMethod = method;
+        if (method is MethodInfo mi && mi.IsGenericMethod && !mi.IsGenericMethodDefinition)
+        {
+            try
+            {
+                openMethod = mi.GetGenericMethodDefinition();
+            }
+            catch (Exception)
+            {
+                return TaskLambdaDelegateShape.Other;
+            }
+        }
+
+        ParameterInfo[] parameters;
+        try
+        {
+            parameters = openMethod.GetParameters();
+        }
+        catch (Exception)
+        {
+            return TaskLambdaDelegateShape.Other;
+        }
+
+        if (paramIndex >= parameters.Length)
+        {
+            return TaskLambdaDelegateShape.Other;
+        }
+
+        var openParamType = parameters[paramIndex].ParameterType;
+        if (openParamType == null || openParamType.IsByRef)
+        {
+            return TaskLambdaDelegateShape.Other;
+        }
+
+        if (!TryGetDelegateSignature(openParamType, out _, out var openReturn) || openReturn == null)
+        {
+            return TaskLambdaDelegateShape.Other;
+        }
+
+        if (IsTaskType(openReturn))
+        {
+            return TaskLambdaDelegateShape.TaskShaped;
+        }
+
+        if (openReturn.IsGenericParameter)
+        {
+            return TaskLambdaDelegateShape.BareTypeParameter;
+        }
+
+        return TaskLambdaDelegateShape.Other;
+    }
+
+    /// <summary>
+    /// Issue #2172: whether <paramref name="type"/> is a delegate type whose
+    /// return type is <c>Task</c>/<c>Task&lt;T&gt;</c> (the natural type of an
+    /// async / task-returning lambda argument).
+    /// </summary>
+    private static bool IsTaskReturningDelegate(Type type)
+    {
+        if (type == null || !ClrTypeUtilities.IsDelegateType(type))
+        {
+            return false;
+        }
+
+        return TryGetDelegateSignature(type, out _, out var returnType)
+            && IsTaskType(returnType);
+    }
+
+    /// <summary>
+    /// Issue #2172: whether <paramref name="type"/> is <c>System.Threading.Tasks.Task</c>
+    /// or <c>Task&lt;T&gt;</c> (or the <c>ValueTask</c> equivalents), compared by
+    /// name so it works across reflection contexts and for constructed types
+    /// closed over open generic parameters (whose <see cref="Type.FullName"/> is
+    /// <see langword="null"/>).
+    /// </summary>
+    private static bool IsTaskType(Type type)
+    {
+        if (type == null)
+        {
+            return false;
+        }
+
+        if (!string.Equals(type.Namespace, "System.Threading.Tasks", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var name = type.Name;
+        return string.Equals(name, "Task", StringComparison.Ordinal)
+            || string.Equals(name, "Task`1", StringComparison.Ordinal)
+            || string.Equals(name, "ValueTask", StringComparison.Ordinal)
+            || string.Equals(name, "ValueTask`1", StringComparison.Ordinal);
     }
 
     private static bool IsGenericMethod(MethodBase method)

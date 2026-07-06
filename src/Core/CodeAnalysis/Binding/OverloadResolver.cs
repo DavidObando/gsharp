@@ -1212,6 +1212,23 @@ internal sealed class OverloadResolver
             }
         }
 
+        // Phase 2e — issue #2172: when an argument is a task-returning lambda
+        // (its natural function type returns Task/Task<T>), prefer a candidate
+        // whose delegate parameter is shaped `(...) -> Task[TResult]` (binding
+        // the whole task to a Task-typed delegate result) over one shaped
+        // `(...) -> TResult` (binding the whole task to a bare method type
+        // parameter). Both close to the same `(...) -> Task[X]` after inference,
+        // so neither dominates on conversion kind and the earlier tie-breaks
+        // cannot choose. Mirrors C#'s preference for the task-returning delegate
+        // overload for an async/task-returning lambda argument, and the parallel
+        // rule in OverloadResolution.RankApplicable for imported (BCL) overloads.
+        // Generalised: fires for ANY user overload set differing by `(...) -> X`
+        // vs `(...) -> Task[X]` at a task-returning-lambda argument slot.
+        if (pool.Count > 1)
+        {
+            pool = PreferTaskShapedDelegateForTaskLambda(pool, boundArguments);
+        }
+
         if (pool.Count == 1)
         {
             return pool[0].Candidate;
@@ -1219,6 +1236,103 @@ internal sealed class OverloadResolver
 
         ambiguous = true;
         return null;
+    }
+
+    /// <summary>
+    /// Issue #2172: narrows <paramref name="pool"/> to prefer, for each argument
+    /// slot whose argument is a task-returning lambda (its function type returns
+    /// <c>Task</c>/<c>Task&lt;T&gt;</c>), the candidates whose OPEN delegate
+    /// parameter at that slot is shaped <c>(...) -&gt; Task[TResult]</c> over
+    /// those shaped <c>(...) -&gt; TResult</c>. Only narrows when the pool
+    /// genuinely splits into both shapes at such a slot, so non-task-lambda calls
+    /// and single-shape overload sets are unaffected.
+    /// </summary>
+    private static List<UserCandidateRankData> PreferTaskShapedDelegateForTaskLambda(
+        List<UserCandidateRankData> pool,
+        ImmutableArray<BoundExpression>.Builder boundArguments)
+    {
+        var current = pool;
+        for (var argIndex = 0; argIndex < boundArguments.Count; argIndex++)
+        {
+            if (current.Count <= 1)
+            {
+                break;
+            }
+
+            // The argument must itself be a task-returning function value (an
+            // async / task-returning lambda's natural function type).
+            if (!(boundArguments[argIndex]?.Type is FunctionTypeSymbol argFn)
+                || !IsTaskReturnTypeSymbol(argFn.ReturnType))
+            {
+                continue;
+            }
+
+            var taskShaped = new List<UserCandidateRankData>(current.Count);
+            var bareTypeParam = false;
+            foreach (var w in current)
+            {
+                var openParam = argIndex < w.ParamTypes.Length ? w.ParamTypes[argIndex] : null;
+                if (openParam is FunctionTypeSymbol paramFn)
+                {
+                    if (IsTaskReturnTypeSymbol(paramFn.ReturnType))
+                    {
+                        taskShaped.Add(w);
+                        continue;
+                    }
+
+                    if (paramFn.ReturnType is TypeParameterSymbol)
+                    {
+                        bareTypeParam = true;
+                        continue;
+                    }
+                }
+
+                // Neither shape — keep it eligible so an unrelated sibling
+                // overload is never silently dropped.
+                taskShaped.Add(w);
+            }
+
+            if (bareTypeParam && taskShaped.Count >= 1 && taskShaped.Count < current.Count)
+            {
+                current = taskShaped;
+            }
+        }
+
+        return current;
+    }
+
+    /// <summary>
+    /// Issue #2172: whether <paramref name="type"/> is
+    /// <c>System.Threading.Tasks.Task</c>/<c>Task&lt;T&gt;</c> (or the
+    /// <c>ValueTask</c> equivalents). Detected via the erased CLR type so it
+    /// also matches an open construction like <c>Task[T]</c> (whose closed CLR
+    /// form is <c>Task&lt;object&gt;</c>).
+    /// </summary>
+    private static bool IsTaskReturnTypeSymbol(TypeSymbol type)
+    {
+        var clr = type?.ClrType;
+        if (clr == null)
+        {
+            return false;
+        }
+
+        if (clr.IsSameAs(typeof(System.Threading.Tasks.Task))
+            || clr.IsSameAs(typeof(System.Threading.Tasks.ValueTask)))
+        {
+            return true;
+        }
+
+        if (clr.IsGenericType)
+        {
+            var definition = clr.GetGenericTypeDefinition();
+            if (definition.IsSameAs(typeof(System.Threading.Tasks.Task<>))
+                || definition.IsSameAs(typeof(System.Threading.Tasks.ValueTask<>)))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
