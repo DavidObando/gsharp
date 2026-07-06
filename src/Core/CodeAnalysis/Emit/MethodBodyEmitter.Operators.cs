@@ -702,6 +702,36 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #2188: reference equality (`==` / `!=`) where at least one
+        // operand is an open type parameter or its nullable form (`T`, `T?`)
+        // and the other side is another reference type (`object`, `object?`,
+        // an interface, a user class, `T`, `T?`). The homogeneous `object ==
+        // object` / bare `T == T` arms above do not own this mixed shape, and
+        // the generic `Ceq` tail cannot compare an opaque VAR/MVAR stack slot
+        // against a managed reference (ilverify rejects it — see the #831 note
+        // above). Box each type-parameter-shaped operand first (`box !!T`,
+        // which the JIT elides for a reference `T` and which yields a genuine
+        // reference for `T?`), leaving already-reference operands untouched,
+        // then compare the two references with `ceq`. This mirrors, for the
+        // nullable / type-parameter cases, the reference-identity semantics the
+        // `object == object` arm gets for free.
+        if ((b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals)
+            && (RefEqOperandNeedsBox(b.Left.Type) || RefEqOperandNeedsBox(b.Right.Type))
+            && BoundBinaryOperator.IsReferenceEqualityOperand(b.Left.Type)
+            && BoundBinaryOperator.IsReferenceEqualityOperand(b.Right.Type))
+        {
+            this.EmitReferenceEqualityOperand(b.Left);
+            this.EmitReferenceEqualityOperand(b.Right);
+            this.il.OpCode(ILOpCode.Ceq);
+            if (b.Op.Kind == BoundBinaryOperatorKind.NotEquals)
+            {
+                this.il.LoadConstantI4(0);
+                this.il.OpCode(ILOpCode.Ceq);
+            }
+
+            return;
+        }
+
         // Short-circuit evaluation for logical `&&` and `||`: the right
         // operand must not be evaluated when the left operand already
         // determines the result. Emit a dup + conditional branch so the
@@ -871,6 +901,30 @@ internal sealed partial class MethodBodyEmitter
         this.EmitExpression(operand);
         this.il.OpCode(ILOpCode.Box);
         this.il.Token(this.outer.GetElementTypeToken(operand.Type));
+    }
+
+    // Issue #2188: true when a reference-equality operand is an open type
+    // parameter (`T`) or its nullable form (`T?`) and therefore must be boxed
+    // to a genuine object reference before `ceq` — the verifier cannot compare
+    // an opaque VAR/MVAR stack slot against a managed reference. Already-
+    // reference operands (`object`, `object?`, interfaces, user classes) leave
+    // a reference on the stack and need no box.
+    private static bool RefEqOperandNeedsBox(TypeSymbol type)
+        => type is TypeParameterSymbol
+            || (type is NullableTypeSymbol nullable && nullable.UnderlyingType is TypeParameterSymbol);
+
+    // Issue #2188: pushes a reference-equality operand as an object reference,
+    // boxing an open type-parameter operand (`box !!T`, a JIT no-op for a
+    // reference `T`, and the reference-producing box for `T?`) and leaving
+    // already-reference operands unboxed.
+    private void EmitReferenceEqualityOperand(BoundExpression operand)
+    {
+        this.EmitExpression(operand);
+        if (RefEqOperandNeedsBox(operand.Type))
+        {
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.GetElementTypeToken(operand.Type));
+        }
     }
 
     private void EmitEqualityNegationIfNeeded(BoundBinaryOperatorKind kind)
