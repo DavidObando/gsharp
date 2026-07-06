@@ -226,7 +226,20 @@ internal static class ObliviousNullabilityAnalyzer
         // a parameter that ever receives null becomes `T?` too. This keeps a
         // pass-through call `Callee(maybeNull)` from demanding a non-null
         // parameter (GS0154) once `maybeNull` is promoted.
-        if (node is InvocationExpressionSyntax or ObjectCreationExpressionSyntax)
+        //
+        // Issue #914 (oblivious sink): a constructor initializer delegation
+        // (`: this(...)` / `: base(...)`) is an argument-passing call site too.
+        // A convenience initializer that forwards its own (possibly promoted)
+        // parameters to the designated initializer — e.g. `LogMessage(string
+        // context, string message) : this(DateTime.Now, threadId, context,
+        // message)` where `context`/`message` are themselves promoted `string?`
+        // — must promote the designated initializer's matching parameters, else
+        // the delegating call demands a non-null value (GS0154). Roslyn models a
+        // constructor initializer as an `IInvocationOperation`, so it flows
+        // through the same argument→parameter edge collection.
+        if (node is InvocationExpressionSyntax
+            or ObjectCreationExpressionSyntax
+            or ConstructorInitializerSyntax)
         {
             CollectArgumentEdges(node, model, tainted, edges);
         }
