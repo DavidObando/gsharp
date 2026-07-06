@@ -476,9 +476,10 @@ internal sealed class ReflectionMetadataEmitter
     /// <param name="kickoff">The async kickoff method.</param>
     private void RegisterStateMachineEnclosingGenerics(StructSymbol smStruct, FunctionSymbol kickoff)
     {
-        var classTPs = kickoff?.ReceiverType is StructSymbol receiver
-            ? (receiver.Definition ?? receiver).TypeParameters
-            : ImmutableArray<TypeParameterSymbol>.Empty;
+        var receiverDef = kickoff?.ReceiverType is StructSymbol receiver
+            ? (receiver.Definition ?? receiver)
+            : null;
+        var classTPs = receiverDef?.TypeParameters ?? ImmutableArray<TypeParameterSymbol>.Empty;
         var methodTPs = kickoff == null || kickoff.TypeParameters.IsDefaultOrEmpty
             ? ImmutableArray<TypeParameterSymbol>.Empty
             : kickoff.TypeParameters;
@@ -508,6 +509,28 @@ internal sealed class ReflectionMetadataEmitter
         {
             remap[src] = ordinal;
             ordinal++;
+        }
+
+        // Issue #2180: when the async state machine nests inside a synthesized
+        // closure that was itself reified over an enclosing generic method /
+        // type (`RunG[T]`'s `T`), the receiver's own type parameters (`T`
+        // cloned onto the closure) are 1:1 with the ORIGINAL enclosing
+        // parameters recorded on ReifiedFromTypeParameters. The MoveNext body
+        // still references those originals — e.g. the capture-box type argument
+        // `<>__Box_val_1[T]` carries `RunG`'s `T`, not the closure's clone — so
+        // without an entry keyed by the original parameter, EncodeTypeSymbol
+        // falls through to `MVar(idx)` (a method type-variable with no slot in
+        // MoveNext), producing malformed metadata (BadImageFormatException at
+        // runtime). Map each original enclosing parameter to the SM class slot
+        // its clone occupies. Real user receivers have an empty reified list,
+        // so this is a no-op there.
+        var reifiedFrom = receiverDef?.ReifiedFromTypeParameters ?? ImmutableArray<TypeParameterSymbol>.Empty;
+        if (!reifiedFrom.IsDefaultOrEmpty && reifiedFrom.Length == classTPs.Length)
+        {
+            for (var i = 0; i < reifiedFrom.Length; i++)
+            {
+                remap[reifiedFrom[i]] = i;
+            }
         }
 
         smStruct.SetTypeParameters(smTPs);
