@@ -358,6 +358,12 @@ public static class ClrNullability
     {
         var baseSymbol = TypeSymbol.FromClrType(clrType);
 
+        // Issue #2176: pointers are not reference types — never nullable-wrap on import.
+        if (clrType.IsPointer || baseSymbol is PointerTypeSymbol or FunctionPointerTypeSymbol)
+        {
+            return baseSymbol;
+        }
+
         if (clrType.IsValueType)
         {
             // Value types carry no reference-nullability byte for themselves.
@@ -398,6 +404,18 @@ public static class ClrNullability
         }
 
         if (clrType == null || clrType.IsValueType)
+        {
+            return baseSymbol;
+        }
+
+        // Issue #2176 (Refs #914, ADR-0122): unmanaged pointers (`T*` / `void*`,
+        // ELEMENT_TYPE_PTR) are NOT reference types and must never be wrapped in a
+        // nullable reference annotation on import. The oblivious-nullable promotion
+        // applies only to genuine reference types — mirror the source-side
+        // `IsPromotedToNullableReference` gate (`declared is { IsReferenceType: true }`)
+        // which structurally excludes pointers. This covers every imported member
+        // position (return, parameter, field, property, indexer) that flows through here.
+        if (clrType.IsPointer || baseSymbol is PointerTypeSymbol or FunctionPointerTypeSymbol)
         {
             return baseSymbol;
         }
