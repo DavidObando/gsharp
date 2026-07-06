@@ -4494,11 +4494,143 @@ internal sealed class OverloadResolver
             }
         }
 
+        // Issue #2185: a bare field/property callee (`hn(value)` after an
+        // `if hn == nil { return }` guard) records its null-guard narrowing under
+        // the stable member access path (`this.hn`), not the bare variable symbol.
+        // Look that path up too, so a smart-cast-narrowed nullable function-typed
+        // field is recognised as callable exactly like a narrowed local. Only
+        // nullable-typed implicit members can carry such a narrowing, and the
+        // guard avoids invoking the diagnostic-emitting member-load path for any
+        // other symbol shape.
+        var isNarrowableImplicitMember = variable.Type is NullableTypeSymbol
+            && (variable is ImplicitFieldVariableSymbol
+                || (variable is ImplicitPropertyVariableSymbol prop && prop.Property.HasGetter));
+        if (isNarrowableImplicitMember
+            && TryBuildImplicitMemberLoad(variable, default, out var memberLoad)
+            && memberLoad is not BoundErrorExpression
+            && SmartCastStability.TryGetStablePath(memberLoad) is AccessPath memberPath
+            && memberPath.HasMembers)
+        {
+            for (var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i--)
+            {
+                if (binderCtx.NarrowedVariables[i].TryGetValue(memberPath, out var narrowedMember))
+                {
+                    return narrowedMember;
+                }
+            }
+        }
+
         return null;
+    }
+
+    /// <summary>
+    /// Issue #2185: binds an <em>indirect</em> invocation <c>callee(args)</c> whose
+    /// <see cref="CallExpressionSyntax.Callee"/> is an arbitrary expression (a parenthesized
+    /// expression, a null-forgiveness <c>expr!!</c>, a curried <c>f()</c>, an indexer read, ...).
+    /// The callee is bound as an ordinary expression — so smart-cast narrowing and null-forgiveness
+    /// already produce its non-null (function) type — and the call is accepted whenever that bound
+    /// type is a G# <see cref="FunctionTypeSymbol"/>, a user-declared <see cref="DelegateTypeSymbol"/>,
+    /// or a CLR delegate. Any other callee type reports GS0131 ("is not a function").
+    /// </summary>
+    private BoundExpression BindIndirectCallExpression(CallExpressionSyntax syntax)
+    {
+        var callee = bindExpression(syntax.Callee);
+        if (callee is BoundErrorExpression)
+        {
+            return callee;
+        }
+
+        // The verbatim source spelling of the callee (`(value)`, `handler!!`, ...)
+        // used in diagnostics — SyntaxNode.ToString() pretty-prints the whole tree.
+        var calleeName = syntax.Callee.SyntaxTree.Text.ToString(syntax.Callee.Span);
+
+        // Named args have no meaning without preserved parameter names.
+        if (!TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames))
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        if (!argumentNames.IsDefault)
+        {
+            Diagnostics.ReportNamedArgumentParameterNotFound(syntax.Callee.Location, calleeName, FirstNamedArgumentName(argumentNames));
+            return new BoundErrorExpression(null);
+        }
+
+        var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
+        var deferredArrowLambdaIndices = new HashSet<int>();
+        for (var i = 0; i < syntax.Arguments.Count; i++)
+        {
+            var argSyntax = UnwrapNamedArgumentValue(syntax.Arguments[i]);
+            if (bindLambdaWithTarget != null && IsUntypedArrowLambda(argSyntax))
+            {
+                // Defer: TryBindFunctionTypeArguments re-binds the lambda once the
+                // callee's parameter delegate shape is known (mirrors the direct path).
+                deferredArrowLambdaIndices.Add(i);
+                boundArguments.Add(new BoundErrorExpression(argSyntax));
+            }
+            else
+            {
+                boundArguments.Add(BindOverloadArgumentValue(argSyntax));
+            }
+        }
+
+        if (deferredArrowLambdaIndices.Count == 0)
+        {
+            foreach (var boundArgument in boundArguments)
+            {
+                if (boundArgument is BoundErrorExpression)
+                {
+                    return new BoundErrorExpression(null);
+                }
+            }
+        }
+
+        if (callee.Type is FunctionTypeSymbol fnType)
+        {
+            if (!TryBindFunctionTypeArguments(calleeName, fnType, syntax, boundArguments.ToImmutable(), out var convertedArgs))
+            {
+                return new BoundErrorExpression(null);
+            }
+
+            return new BoundIndirectCallExpression(syntax, callee, fnType, convertedArgs);
+        }
+
+        if (callee.Type is DelegateTypeSymbol delegateSym)
+        {
+            if (!TryBindFunctionTypeArguments(calleeName, delegateSym.EquivalentFunctionType, syntax, boundArguments.ToImmutable(), out var convertedDelegateArgs))
+            {
+                return new BoundErrorExpression(null);
+            }
+
+            return new BoundIndirectCallExpression(syntax, callee, delegateSym.EquivalentFunctionType, convertedDelegateArgs);
+        }
+
+        // A value whose CLR type is a delegate (e.g. `Func[int32, int32]`) is
+        // callable through its `Invoke` method, mirroring the direct-call path.
+        if (callee.Type?.ClrType is System.Type calleeClrType && ClrTypeUtilities.IsDelegateType(calleeClrType))
+        {
+            if (tryBindInheritedClrInstanceCall(callee, calleeClrType, "Invoke", boundArguments.ToImmutable(), syntax, out var invokeCall, null, default, argumentNames))
+            {
+                return invokeCall;
+            }
+        }
+
+        Diagnostics.ReportNotAFunction(syntax.Callee.Location, calleeName);
+        return new BoundErrorExpression(null);
     }
 
     public BoundExpression BindCallExpression(CallExpressionSyntax syntax)
     {
+        // Issue #2185: an indirect invocation whose callee is an arbitrary
+        // function-typed expression (`(expr)(args)`, `expr!!(args)`, a curried
+        // `f()(x)`, ...). The parser tags these with a non-null Callee (there is
+        // no identifier to resolve), so dispatch on the bound callee expression's
+        // (narrowed / null-forgiven) type rather than any syntactic callee shape.
+        if (syntax.Callee != null)
+        {
+            return BindIndirectCallExpression(syntax);
+        }
+
         // ADR-0065 §2: a bare `init(args)` call inside a constructor body is
         // a self-delegation to a sibling constructor on the same class. This
         // is the only legal use of `init` as a callable identifier. Recognise

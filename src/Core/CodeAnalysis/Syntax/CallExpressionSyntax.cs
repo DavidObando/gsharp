@@ -72,6 +72,41 @@ public sealed class CallExpressionSyntax : ExpressionSyntax
         CloseParenthesisToken = closeParenthesisToken;
     }
 
+    /// <summary>Initializes a new instance of the <see cref="CallExpressionSyntax"/> class for an
+    /// <em>indirect</em> invocation whose callee is an arbitrary function-typed expression
+    /// (issue #2185): <c>(expr)(args)</c>, <c>expr!!(args)</c>, and any other postfix
+    /// <c>callee(args)</c> where <paramref name="callee"/> is not a bare identifier / member-access
+    /// name. The synthetic <see cref="Identifier"/> is an empty token positioned at the callee so
+    /// span computation stays monotonic; the binder dispatches on <see cref="Callee"/> being
+    /// non-<see langword="null"/> before any identifier-based resolution.</summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="callee">The expression evaluated to obtain the function value to invoke.</param>
+    /// <param name="openParenthesisToken">The open parenthesis token.</param>
+    /// <param name="arguments">The arguments.</param>
+    /// <param name="closeParenthesisToken">The close parenthesis token.</param>
+    public CallExpressionSyntax(
+        SyntaxTree syntaxTree,
+        ExpressionSyntax callee,
+        SyntaxToken openParenthesisToken,
+        SeparatedSyntaxList<ExpressionSyntax> arguments,
+        SyntaxToken closeParenthesisToken)
+        : base(syntaxTree)
+    {
+        Callee = callee;
+        Identifier = new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, callee.Span.Start, string.Empty, null);
+        NullableQuestionToken = null;
+        TypeArgumentList = null;
+        OpenParenthesisToken = openParenthesisToken;
+        Arguments = arguments;
+        CloseParenthesisToken = closeParenthesisToken;
+    }
+
+    /// <summary>Gets the callee expression for an indirect invocation (issue #2185), or
+    /// <see langword="null"/> for the ordinary identifier / member-access call forms. When
+    /// non-<see langword="null"/> the call target is the value produced by evaluating this
+    /// expression, which must have a function (or delegate) type.</summary>
+    public ExpressionSyntax Callee { get; }
+
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.CallExpression;
 
