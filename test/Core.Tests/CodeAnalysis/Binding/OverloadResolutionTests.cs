@@ -6,6 +6,7 @@ using System;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Symbols;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -392,6 +393,54 @@ public class OverloadResolutionTests
         var result = OverloadResolution.Resolve(new[] { first, second }, argTypes);
         Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         return result.Best;
+    }
+
+    [Fact]
+    public void Resolve_TaskReturningLambda_PrefersFuncOfTaskOverload()
+    {
+        // Issue #2172: a task-returning lambda argument (natural type
+        // Func<Task<object>>) is applicable to BOTH Run(Func<TResult>)
+        // (TResult = Task<object>) and Run(Func<Task<TResult>>)
+        // (TResult = object) as identity conversions. The betterness rule must
+        // pick the Func<Task<TResult>> overload so the whole task binds to
+        // Task<TResult>, matching C#'s preference for the task-returning
+        // delegate overload for an async lambda.
+        var funcTResult = typeof(Fixture).GetMethod(nameof(Fixture.Run_FuncTResult), BindingFlags.Public | BindingFlags.Static);
+        var funcTaskTResult = typeof(Fixture).GetMethod(nameof(Fixture.Run_FuncTaskTResult), BindingFlags.Public | BindingFlags.Static);
+        var argType = typeof(System.Func<System.Threading.Tasks.Task<object>>);
+
+        // Candidate order must not matter — both orderings resolve to the
+        // Func<Task<TResult>> overload without ambiguity.
+        var forward = OverloadResolution.Resolve(new[] { funcTResult, funcTaskTResult }, new[] { argType });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, forward.Outcome);
+        Assert.Equal(nameof(Fixture.Run_FuncTaskTResult), forward.Best.Name);
+
+        var reverse = OverloadResolution.Resolve(new[] { funcTaskTResult, funcTResult }, new[] { argType });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, reverse.Outcome);
+        Assert.Equal(nameof(Fixture.Run_FuncTaskTResult), reverse.Best.Name);
+
+        // The winning overload closes over TResult = object, so its return type
+        // is Task<object>, NOT Task<Task<object>>.
+        var closedReturn = forward.Best.ReturnType;
+        Assert.True(closedReturn.IsGenericType);
+        Assert.True(closedReturn.GetGenericTypeDefinition().IsSameAs(typeof(System.Threading.Tasks.Task<>)));
+        Assert.Equal(typeof(object), closedReturn.GetGenericArguments()[0]);
+    }
+
+    [Fact]
+    public void Resolve_NonTaskLambda_KeepsFuncOfTResultOverload()
+    {
+        // Guard: a NON-task-returning lambda argument (natural type
+        // Func<object>) must NOT be pulled onto the Func<Task<TResult>>
+        // overload — only the Func<TResult> overload applies, so the new
+        // betterness rule must leave this case untouched.
+        var funcTResult = typeof(Fixture).GetMethod(nameof(Fixture.Run_FuncTResult), BindingFlags.Public | BindingFlags.Static);
+        var funcTaskTResult = typeof(Fixture).GetMethod(nameof(Fixture.Run_FuncTaskTResult), BindingFlags.Public | BindingFlags.Static);
+        var argType = typeof(System.Func<object>);
+
+        var result = OverloadResolution.Resolve(new[] { funcTResult, funcTaskTResult }, new[] { argType });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(nameof(Fixture.Run_FuncTResult), result.Best.Name);
     }
 
     [Fact]
@@ -889,6 +938,15 @@ public class OverloadResolutionTests
         public static void F_FormattableString(System.FormattableString fs) { _ = fs; }
 
         public static void F_IFormattable(System.IFormattable f) { _ = f; }
+
+        // Issue #2172: mirrors the Task.Run overload pair — a Func<TResult> form
+        // and a Func<Task<TResult>> form. For a task-returning lambda argument
+        // (natural type Func<Task<object>>) the Func<Task<TResult>> form must
+        // win (TResult = object → returns Task<object>), not the Func<TResult>
+        // form (TResult = Task<object> → returns Task<Task<object>>).
+        public static System.Threading.Tasks.Task<TResult> Run_FuncTResult<TResult>(System.Func<TResult> function) => System.Threading.Tasks.Task.Run(function);
+
+        public static System.Threading.Tasks.Task<TResult> Run_FuncTaskTResult<TResult>(System.Func<System.Threading.Tasks.Task<TResult>> function) => System.Threading.Tasks.Task.Run(function);
     }
 
     /// <summary>
