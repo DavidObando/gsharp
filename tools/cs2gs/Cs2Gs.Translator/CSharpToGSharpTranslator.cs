@@ -14849,7 +14849,19 @@ public sealed class CSharpToGSharpTranslator
                     : null;
             }
 
-            return this.typeMapper.Map(returnType, this.context, location);
+            // Issue #914 (oblivious sink): promote a LOCAL FUNCTION's (or
+            // lambda's) mapped return type to `T?` when the whole-program taint
+            // analysis proved its RETURN null-tainted — exactly like a top-level
+            // method return (see MapReturnType/PromoteReturnIfTainted). The
+            // analyzer seeds return taint for local functions and lambdas, so a
+            // `static Version TryParse(string s) { … return succ ? version :
+            // null; }` local function whose body yields `Version?` renders
+            // `func (s string) Version?`, avoiding a `Version? -> Version` return
+            // rejection (GS0155). No-op for a nullable-enabled compilation.
+            return this.PromoteReturnIfTainted(
+                this.typeMapper.Map(returnType, this.context, location),
+                symbol,
+                returnType);
         }
 
         private Parameter MapLambdaParameter(ParameterSyntax parameter)
