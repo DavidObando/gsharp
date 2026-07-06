@@ -7122,13 +7122,20 @@ internal sealed class DeclarationBinder
     /// to issue #2010: bare simple names collided across namespaces
     /// (<c>Foo.IBar</c> vs <c>Baz.IBar</c>); qualifying by package name (G#'s
     /// analogue of a C# namespace) plus any containing-type nesting fixes it.
+    /// Issue #2181: the generic-arity/type-argument suffix (e.g. the
+    /// <c>[T, TResult]</c> a constructed generic interface carries in its
+    /// <c>Name</c>) is stripped so the result matches the
+    /// cs2gs-side mangle, which formats the interface component with
+    /// <c>SymbolDisplayGenericsOptions.None</c> (simple name only, no type
+    /// parameters) — otherwise a class's mangled explicit implementation of a
+    /// generic interface method never name-matches its slot.
     /// </summary>
     private static string QualifyInterfaceName(InterfaceSymbol iface)
     {
         var parts = new List<string>();
         for (TypeSymbol current = iface; current != null; current = GetContainingType(current))
         {
-            parts.Insert(0, current.Name);
+            parts.Insert(0, StripGenericSuffix(current.Name));
         }
 
         if (!string.IsNullOrEmpty(iface.PackageName))
@@ -7141,6 +7148,24 @@ internal sealed class DeclarationBinder
         }
 
         return string.Join("_", parts);
+    }
+
+    /// <summary>
+    /// Issue #2181: returns <paramref name="name"/> with any trailing generic
+    /// type-parameter / type-argument suffix removed — a constructed or open
+    /// generic type's <c>Name</c> is formatted as
+    /// <c>Simple[Arg1, Arg2]</c>, and only the simple leading identifier
+    /// participates in the mangled explicit-interface-implementation name.
+    /// </summary>
+    private static string StripGenericSuffix(string name)
+    {
+        if (string.IsNullOrEmpty(name))
+        {
+            return name;
+        }
+
+        var bracket = name.IndexOf('[', System.StringComparison.Ordinal);
+        return bracket < 0 ? name : name.Substring(0, bracket);
     }
 
     private static TypeSymbol GetContainingType(TypeSymbol type) => type switch
