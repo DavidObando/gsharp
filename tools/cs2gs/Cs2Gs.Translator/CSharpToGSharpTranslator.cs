@@ -4579,6 +4579,15 @@ public sealed class CSharpToGSharpTranslator
                 // ref-return (`func F(...) ref T`, issue #490/ADR-0060).
                 GTypeReference mapped = this.typeMapper.Map(returnType, this.context, node.ReturnType.GetLocation());
 
+                // Issue #914 (oblivious sink): a TUPLE return whose returned tuple
+                // expression carries a promoted-nullable element (e.g. `return
+                // (dir, file)` where `dir`/`file` are promoted `string?` locals)
+                // is promoted per-element to `(string?, string?)`, otherwise the
+                // `(string?, string?) -> (string, string)` return is rejected
+                // (GS0155). Applied before the scalar promotion below (which is a
+                // no-op for a tuple value type).
+                mapped = this.PromoteTupleReturnIfTainted(mapped, returnType, node);
+
                 // Issue #2113: promote the return type to `T?` when the
                 // whole-program taint analysis proved this method's RETURN
                 // null-tainted (an oblivious compilation with a `return null` /
@@ -9834,6 +9843,142 @@ public sealed class CSharpToGSharpTranslator
             return ObliviousNullabilityAnalyzer.IsTainted(this.context.Compilation, symbol)
                 ? MakeNullable(type)
                 : type;
+        }
+
+        // Issue #914 (oblivious sink): promote the ELEMENT types of a tuple return
+        // to `T?` for every position whose returned tuple-expression element is a
+        // promoted-nullable value. A method returning `(string Dir, string Path)`
+        // whose body does `return (dir, file)` — where `dir`/`file` are promoted
+        // `string?` locals — must render `(string?, string?)`, otherwise the
+        // `(string?, string?) -> (string, string)` return is rejected (GS0155).
+        // Gated to an oblivious compilation so a nullable-enabled project stays
+        // byte-identical; only reference-typed, non-nullable elements are eligible
+        // (mirroring the scalar-return and declaration-site guards).
+        private GTypeReference PromoteTupleReturnIfTainted(
+            GTypeReference mapped,
+            ITypeSymbol returnType,
+            SyntaxNode node)
+        {
+            if (!this.IsObliviousCompilation()
+                || mapped is not TupleTypeReference tuple
+                || returnType is not INamedTypeSymbol { IsTupleType: true } tupleType
+                || tupleType.TupleElements.Length != tuple.ElementTypes.Count)
+            {
+                return mapped;
+            }
+
+            List<TupleExpressionSyntax> returnedTuples = this.EnumerateMemberReturnExpressions(node)
+                .Select(UnwrapParenthesized)
+                .OfType<TupleExpressionSyntax>()
+                .Where(t => t.Arguments.Count == tuple.ElementTypes.Count)
+                .ToList();
+
+            if (returnedTuples.Count == 0)
+            {
+                return mapped;
+            }
+
+            var elements = new List<GTypeReference>(tuple.ElementTypes.Count);
+            bool changed = false;
+            for (int i = 0; i < tuple.ElementTypes.Count; i++)
+            {
+                GTypeReference element = tuple.ElementTypes[i];
+                IFieldSymbol elementField = tupleType.TupleElements[i];
+                if (!element.IsNullable
+                    && elementField.Type is { IsReferenceType: true }
+                    && elementField.Type.NullableAnnotation != NullableAnnotation.Annotated
+                    && returnedTuples.Any(t => this.IsNullablePromotedValue(t.Arguments[i].Expression)))
+                {
+                    element = MakeNullable(element);
+                    changed = true;
+                }
+
+                elements.Add(element);
+            }
+
+            return changed
+                ? new TupleTypeReference(elements) { IsNullable = tuple.IsNullable }
+                : mapped;
+        }
+
+        // Issue #914: the `return`-position value expressions that belong to a
+        // method/accessor <paramref name="node"/> itself — its arrow expression
+        // body and every `return` statement not nested inside a lambda / local
+        // function (whose returns have their own contract). Used to inspect the
+        // returned tuple shapes for per-element nullable promotion.
+        private IEnumerable<ExpressionSyntax> EnumerateMemberReturnExpressions(SyntaxNode node)
+        {
+            ExpressionSyntax arrowBody = node switch
+            {
+                MethodDeclarationSyntax method => method.ExpressionBody?.Expression,
+                AccessorDeclarationSyntax accessor => accessor.ExpressionBody?.Expression,
+                _ => null,
+            };
+            if (arrowBody != null)
+            {
+                yield return arrowBody;
+            }
+
+            SyntaxNode body = node switch
+            {
+                MethodDeclarationSyntax method => method.Body,
+                AccessorDeclarationSyntax accessor => accessor.Body,
+                _ => null,
+            };
+            if (body == null)
+            {
+                yield break;
+            }
+
+            foreach (SyntaxNode descendant in body.DescendantNodes(
+                n => n is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax)))
+            {
+                if (descendant is ReturnStatementSyntax { Expression: { } returned })
+                {
+                    yield return returned;
+                }
+            }
+        }
+
+        private static ExpressionSyntax UnwrapParenthesized(ExpressionSyntax expression)
+        {
+            while (expression is ParenthesizedExpressionSyntax paren)
+            {
+                expression = paren.Expression;
+            }
+
+            return expression;
+        }
+
+        // Issue #914: whether <paramref name="expression"/> yields a
+        // promoted-nullable value in an oblivious compilation — either a
+        // syntactically nullable form (`?.` / `??` / ternary, via
+        // <see cref="IsNullableInitializer"/>, which also consults declared BCL
+        // annotations) OR a field / property / local / parameter the whole-program
+        // taint analysis promoted to `T?`, OR a method / local function whose
+        // return the analysis proved null-tainted. Shared by the tuple-return
+        // element promotion.
+        private bool IsNullablePromotedValue(ExpressionSyntax expression)
+        {
+            if (expression == null)
+            {
+                return false;
+            }
+
+            if (this.IsNullableInitializer(expression))
+            {
+                return true;
+            }
+
+            ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
+            return symbol switch
+            {
+                IFieldSymbol or IPropertySymbol or ILocalSymbol or IParameterSymbol =>
+                    this.IsPromotedToNullableReference(symbol),
+                IMethodSymbol method =>
+                    ObliviousNullabilityAnalyzer.IsTainted(this.context.Compilation, method),
+                _ => false,
+            };
         }
 
         // Issue #1072 (field/property initializer form): when a field or property is
