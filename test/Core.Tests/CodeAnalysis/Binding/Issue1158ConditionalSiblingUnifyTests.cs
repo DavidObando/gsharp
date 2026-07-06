@@ -305,6 +305,54 @@ let r = b ? s : nil
         Assert.Equal(TypeSymbol.String, nullable.UnderlyingType);
     }
 
+    [Fact]
+    public void NoTarget_IfExpression_NullableCommonInterfaceArms_InfersNullableIShape()
+    {
+        // Issue #2202: both arms are NULLABLE-wrapped siblings (Sq?/Ci?) that
+        // share only the interface IShape. Before the fix, EnumerateSupertypeCandidates
+        // never unwrapped the NullableTypeSymbol arms, so the base/interface walk
+        // never found IShape and the conditional reported GS0263. The common type
+        // must be computed on the unwrapped types (Sq/Ci -> IShape) and then
+        // re-wrapped nullable since both arms were nullable.
+        var scope = BindGlobalScope(Hierarchy + @"
+let b = true
+let x Sq? = Sq()
+let y Ci? = Ci()
+let r = if b { x } else { y }
+");
+
+        Assert.Empty(scope.Diagnostics);
+        var nullable = Assert.IsType<NullableTypeSymbol>(scope.Variables.Single(v => v.Name == "r").Type);
+        Assert.Equal("IShape", nullable.UnderlyingType.Name);
+    }
+
+    [Fact]
+    public void NoTarget_Ternary_NullableCommonInterfaceArms_InfersNullableIShape()
+    {
+        var scope = BindGlobalScope(Hierarchy + @"
+let b = true
+let x Sq? = Sq()
+let y Ci? = Ci()
+let r = b ? x : y
+");
+
+        Assert.Empty(scope.Diagnostics);
+        var nullable = Assert.IsType<NullableTypeSymbol>(scope.Variables.Single(v => v.Name == "r").Type);
+        Assert.Equal("IShape", nullable.UnderlyingType.Name);
+    }
+
+    [Fact]
+    public void TargetTyped_LetNullableIShape_NullableCommonInterfaceArms_NoDiagnostics()
+    {
+        var diagnostics = Bind(Hierarchy + @"
+func H(b bool, x Sq?, y Ci?) {
+    let r IShape? = if b { x } else { y }
+}
+");
+
+        Assert.Empty(diagnostics);
+    }
+
     private static ImmutableArray<Diagnostic> Bind(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

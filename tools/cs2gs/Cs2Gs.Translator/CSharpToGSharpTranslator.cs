@@ -13022,6 +13022,48 @@ public sealed class CSharpToGSharpTranslator
                 return true;
             }
 
+            // Issue #2202: `if (F == null) {…} else { …F… }` / `F == null ? … : …F…`
+            // (and the negated forms) narrow `F` to non-null on the guarded
+            // branch — same syntactic-guard rationale as the lazy-init case
+            // above, for a plain null-check guard instead of a lazy-init one.
+            if (this.IsNullGuardNarrowedFieldUse(recv))
+            {
+                return true;
+            }
+
+            // Issue #2202: a nullable-tainted field/property read in an UNGUARDED
+            // arm of a conditional/switch expression, when that conditional is the
+            // (possibly parenthesized) body of a property/method whose return type
+            // was deliberately kept non-null by the oblivious analyzer's
+            // property-contract / forwarding-exclusion guardrail (#1354 / #2167),
+            // AND a sibling arm in the same conditional IS narrowed by a null-check
+            // guard. The original C# accepted this implicitly (oblivious, no
+            // enforcement); cs2gs keeps the declared return non-null and the sibling
+            // is already forgiven, so forgiving this arm too is the minimal
+            // assertion needed to compile the property without regressing safety.
+            if (this.IsUnguardedSiblingOfNullGuardedArmInReturnPreservingBody(recv))
+            {
+                return true;
+            }
+
+            // Issue #2202: a call (or property/field read) whose result comes from
+            // an EXTERNAL (metadata) member compiled without a nullable context is
+            // oblivious — Roslyn reports its reference-type return/type as
+            // `NullableAnnotation.None` — and gsc maps every such oblivious
+            // external reference type to `T?` (see ClrNullability.cs). When such a
+            // value appears as a return/expression-body result in an oblivious
+            // compilation, gsc will require `T?` but the C# source assigned no
+            // nullability (oblivious); assert `!!` to bridge the gap. This mirrors
+            // the RECEIVER-position handling in ReceiverIsNullableReferenceFieldOrProperty
+            // (issue #2113) but for VALUE positions (return statements, expression
+            // bodies). Restricted to oblivious compilations so nullable-enabled
+            // projects — whose external refs carry real annotations — are untouched.
+            if (this.IsObliviousCompilation()
+                && IsObliviousExternalNullableMember(this.context.GetSymbolInfo(recv).Symbol))
+            {
+                return true;
+            }
+
             // Flow analysis must have proven the receiver non-null at this site.
             if (this.context.GetTypeInfo(recv).Nullability.FlowState != NullableFlowState.NotNull)
             {
@@ -13074,13 +13116,27 @@ public sealed class CSharpToGSharpTranslator
         // syntactic because the migrated corpus compiles nullable-oblivious.
         private bool IsLazyInitGuardedFieldUse(ExpressionSyntax recv)
         {
-            // Only a bare/qualified field or property read is a candidate. A read
-            // that is itself the LHS of an assignment, the operand of a null
-            // comparison, or a `nameof` argument is handled by other paths and is
-            // never a value read that a lazy guard makes non-null.
-            ISymbol symbol = this.context.GetSymbolInfo(recv).Symbol;
+            if (!this.TryGetEmittedNullableFieldOrProperty(recv, out ISymbol symbol))
+            {
+                return false;
+            }
+
+            return this.IsDominatedByLazyInitGuard(recv, symbol);
+        }
+
+        // Issue #2202: shared prerequisite for the lazy-init-guard and
+        // null-check-guard `!!` heuristics below — <paramref name="recv"/> must
+        // be a bare/qualified read of a field or property that G# actually
+        // emits as `T?` (declared nullable, or promoted to nullable by the
+        // oblivious taint analysis). A read that is itself the LHS of an
+        // assignment, the operand of a null comparison, or a `nameof` argument
+        // is handled by other paths and is never a value read a guard narrows.
+        private bool TryGetEmittedNullableFieldOrProperty(ExpressionSyntax recv, out ISymbol symbol)
+        {
+            symbol = this.context.GetSymbolInfo(recv).Symbol;
             if (symbol is not (IFieldSymbol or IPropertySymbol))
             {
+                symbol = null;
                 return false;
             }
 
@@ -13097,6 +13153,7 @@ public sealed class CSharpToGSharpTranslator
 
             if (declared is not { IsReferenceType: true })
             {
+                symbol = null;
                 return false;
             }
 
@@ -13104,10 +13161,11 @@ public sealed class CSharpToGSharpTranslator
                 || this.IsPromotedToNullableReference(symbol);
             if (!emittedNullable)
             {
+                symbol = null;
                 return false;
             }
 
-            return this.IsDominatedByLazyInitGuard(recv, symbol);
+            return true;
         }
 
         // Walks outward from the statement containing <paramref name="use"/> to
@@ -13203,6 +13261,370 @@ public sealed class CSharpToGSharpTranslator
                 default:
                     return false;
             }
+        }
+
+        // `F != null` / `null != F` / `F is not null` — the negation of
+        // <see cref="IsNullCheckOf"/>, where `F` binds to <paramref name="symbol"/>.
+        private bool IsNonNullCheckOf(ExpressionSyntax condition, ISymbol symbol)
+        {
+            condition = StripParentheses(condition);
+
+            switch (condition)
+            {
+                case BinaryExpressionSyntax binary
+                    when binary.IsKind(SyntaxKind.NotEqualsExpression):
+                    return (IsNullLiteral(binary.Right) && this.BindsTo(binary.Left, symbol))
+                        || (IsNullLiteral(binary.Left) && this.BindsTo(binary.Right, symbol));
+
+                case IsPatternExpressionSyntax isPattern
+                    when this.BindsTo(isPattern.Expression, symbol):
+                    return IsNullConstantPattern(isPattern.Pattern)
+                        && isPattern.Pattern is UnaryPatternSyntax;
+
+                default:
+                    return false;
+            }
+        }
+
+        // Issue #2202: true when <paramref name="use"/> reads a nullable
+        // (`T?`) field/property from within the branch of an enclosing
+        // `if (F == null) {…} else { …F… }` / `if (F != null) { …F… }` statement
+        // or `F == null ? … : …F…` / `F != null ? …F… : …` conditional expression
+        // whose condition directly null-checks that same field/property — so
+        // `F` is provably non-null on that branch, and gsc (by design,
+        // Kotlin-style) never smart-casts fields/properties across the guard.
+        // The migrated corpus is nullable-oblivious, so Roslyn's own flow state
+        // is empty and the flow-based check below never proves this; the guard
+        // is instead detected from SYNTAX, mirroring
+        // <see cref="IsLazyInitGuardedFieldUse"/>.
+        private bool IsNullGuardNarrowedFieldUse(ExpressionSyntax use)
+        {
+            if (!this.TryGetEmittedNullableFieldOrProperty(use, out ISymbol symbol))
+            {
+                return false;
+            }
+
+            for (SyntaxNode node = use; node != null; node = node.Parent)
+            {
+                switch (node.Parent)
+                {
+                    // An `else` branch's statement is nested one level deeper
+                    // than the `if` itself — its direct parent is the
+                    // `ElseClauseSyntax`, not the `IfStatementSyntax`.
+                    case ElseClauseSyntax elseClause
+                        when elseClause.Parent is IfStatementSyntax ifStatement
+                            && node == elseClause.Statement
+                            && this.IsNullCheckOf(ifStatement.Condition, symbol):
+                        return true;
+
+                    case IfStatementSyntax ifStatement
+                        when node == ifStatement.Statement
+                            && this.IsNonNullCheckOf(ifStatement.Condition, symbol):
+                        return true;
+
+                    case ConditionalExpressionSyntax ternary
+                        when node == ternary.WhenFalse
+                            && this.IsNullCheckOf(ternary.Condition, symbol):
+                        return true;
+
+                    case ConditionalExpressionSyntax ternary
+                        when node == ternary.WhenTrue
+                            && this.IsNonNullCheckOf(ternary.Condition, symbol):
+                        return true;
+                }
+
+                // Stop at the enclosing accessor / method / local-function /
+                // lambda / arrow-body boundary: a guard cannot narrow a use
+                // across a member boundary.
+                if (node is AccessorDeclarationSyntax
+                    or BaseMethodDeclarationSyntax
+                    or LocalFunctionStatementSyntax
+                    or AnonymousFunctionExpressionSyntax
+                    or ArrowExpressionClauseSyntax)
+                {
+                    break;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Issue #2202: true when <paramref name="use"/> reads a nullable-tainted
+        /// field/property as an UNGUARDED arm of a conditional/switch expression
+        /// whose enclosing property/method return type was deliberately preserved
+        /// non-null (the oblivious-analyzer's property-contract / forwarding-
+        /// exclusion guardrail, issues #1354 / #2167), AND at least one sibling arm
+        /// in the same conditional is provably null-guarded (via
+        /// <see cref="IsNullGuardNarrowedFieldUse"/>).
+        /// </summary>
+        /// <remarks>
+        /// Scoping constraints that prevent this from becoming a blanket forgiveness:
+        /// <list type="bullet">
+        ///   <item>Oblivious compilation only (nullable-enabled projects untouched).</item>
+        ///   <item><paramref name="use"/> must be a field/property emitted <c>T?</c>.</item>
+        ///   <item>The conditional must be the (possibly parenthesized / return-wrapped)
+        ///     entire body of the enclosing property/method.</item>
+        ///   <item>The enclosing property/method's return type must NOT be promoted to
+        ///     nullable — only the deliberate "return kept non-null" pattern qualifies.</item>
+        ///   <item>A sibling arm must already be narrowed by a null-check guard — so
+        ///     this rule fires only in the specific forwarding-two-nullable-properties
+        ///     pattern where one is already proven safe and the other is trusted by
+        ///     the original C# (oblivious) code.</item>
+        /// </list>
+        /// </remarks>
+        private bool IsUnguardedSiblingOfNullGuardedArmInReturnPreservingBody(ExpressionSyntax use)
+        {
+            if (!this.IsObliviousCompilation())
+            {
+                return false;
+            }
+
+            if (!this.TryGetEmittedNullableFieldOrProperty(use, out _))
+            {
+                return false;
+            }
+
+            // Walk upward (stripping parentheses) to find the enclosing
+            // ConditionalExpressionSyntax or SwitchExpressionSyntax whose arm
+            // this use belongs to, and confirm that the use IS an arm (not the
+            // condition / governing expression).
+            (ExpressionSyntax conditional, ExpressionSyntax[] siblingArms) =
+                this.FindEnclosingConditionalAndSiblings(use);
+            if (conditional == null)
+            {
+                return false;
+            }
+
+            // At least one sibling arm must be narrowed by a null-check guard
+            // (i.e., it would get `!!` from `IsNullGuardNarrowedFieldUse`). This
+            // ensures we only fire for the two-property-forwarding pattern where
+            // one arm is already proven safe — not an arbitrary unguarded value.
+            bool anySiblingGuarded = false;
+            foreach (ExpressionSyntax sibling in siblingArms)
+            {
+                ExpressionSyntax stripped = StripParentheses(sibling);
+                if (this.TryGetEmittedNullableFieldOrProperty(stripped, out ISymbol siblingSymbol)
+                    && this.IsSiblingArmNullGuarded(stripped, siblingSymbol, conditional))
+                {
+                    anySiblingGuarded = true;
+                    break;
+                }
+            }
+
+            if (!anySiblingGuarded)
+            {
+                return false;
+            }
+
+            // The conditional must be the (possibly parenthesized / return-wrapped)
+            // entire body of an enclosing property or method, and that member's
+            // return type must NOT be promoted to nullable by the oblivious
+            // analyzer (i.e., it was deliberately kept non-null).
+            return this.IsBodyOfReturnPreservingMember(conditional);
+        }
+
+        // Walks outward from <paramref name="use"/> through parentheses to find
+        // the nearest enclosing ConditionalExpressionSyntax or
+        // SwitchExpressionSyntax whose arm the use belongs to. Returns the
+        // conditional and the sibling arms (all arms EXCEPT the one containing
+        // <paramref name="use"/>). Returns (null, null) if not found.
+        private (ExpressionSyntax Conditional, ExpressionSyntax[] Siblings)
+            FindEnclosingConditionalAndSiblings(ExpressionSyntax use)
+        {
+            for (SyntaxNode node = use; node != null; node = node.Parent)
+            {
+                switch (node.Parent)
+                {
+                    case ConditionalExpressionSyntax ternary:
+                        if (node == ternary.WhenTrue || IsDescendantOfArmViaParens(use, ternary.WhenTrue))
+                        {
+                            return (ternary, new[] { ternary.WhenFalse });
+                        }
+
+                        if (node == ternary.WhenFalse || IsDescendantOfArmViaParens(use, ternary.WhenFalse))
+                        {
+                            return (ternary, new[] { ternary.WhenTrue });
+                        }
+
+                        // The use is in the condition, not an arm.
+                        return (null, null);
+
+                    case SwitchExpressionSyntax switchExpr:
+                        var siblings = new List<ExpressionSyntax>();
+                        bool found = false;
+                        foreach (SwitchExpressionArmSyntax arm in switchExpr.Arms)
+                        {
+                            if (arm.Expression == node || IsDescendantOfArmViaParens(use, arm.Expression))
+                            {
+                                found = true;
+                            }
+                            else
+                            {
+                                siblings.Add(arm.Expression);
+                            }
+                        }
+
+                        return found ? (switchExpr, siblings.ToArray()) : (null, null);
+                }
+
+                // Stop at member boundary.
+                if (node is AccessorDeclarationSyntax
+                    or BaseMethodDeclarationSyntax
+                    or LocalFunctionStatementSyntax
+                    or AnonymousFunctionExpressionSyntax
+                    or ArrowExpressionClauseSyntax)
+                {
+                    break;
+                }
+            }
+
+            return (null, null);
+        }
+
+        // True when <paramref name="descendant"/> is nested inside
+        // <paramref name="arm"/> through parenthesized expressions only.
+        private static bool IsDescendantOfArmViaParens(SyntaxNode descendant, ExpressionSyntax arm)
+        {
+            for (SyntaxNode node = descendant; node != null; node = node.Parent)
+            {
+                if (node == arm)
+                {
+                    return true;
+                }
+
+                if (node.Parent is not ParenthesizedExpressionSyntax && node != descendant)
+                {
+                    return false;
+                }
+            }
+
+            return false;
+        }
+
+        // True when <paramref name="armExpr"/> (a field/property read in a sibling
+        // arm) is narrowed by the null-check guard in the enclosing
+        // <paramref name="conditional"/>. Mirrors the specific-case logic of
+        // <see cref="IsNullGuardNarrowedFieldUse"/> but checks against a known
+        // conditional rather than walking upward.
+        private bool IsSiblingArmNullGuarded(
+            ExpressionSyntax armExpr,
+            ISymbol symbol,
+            ExpressionSyntax conditional)
+        {
+            if (conditional is ConditionalExpressionSyntax ternary)
+            {
+                // WhenFalse position guarded by `X == null ? … : X` / `X is null ? … : X`
+                if (armExpr == StripParentheses(ternary.WhenFalse)
+                    && this.IsNullCheckOf(ternary.Condition, symbol))
+                {
+                    return true;
+                }
+
+                // WhenTrue position guarded by `X != null ? X : …` / `X is not null ? X : …`
+                if (armExpr == StripParentheses(ternary.WhenTrue)
+                    && this.IsNonNullCheckOf(ternary.Condition, symbol))
+                {
+                    return true;
+                }
+            }
+
+            // Switch expressions do not have a single condition narrowing a
+            // specific arm in the same way; leave unsupported for now.
+            return false;
+        }
+
+        // True when <paramref name="conditional"/> is the (possibly parenthesized
+        // / return-wrapped) entire body of a property or method whose declared
+        // return type was NOT promoted to nullable by the oblivious-nullability
+        // analyzer — i.e., the analyzer deliberately preserved it non-null.
+        private bool IsBodyOfReturnPreservingMember(ExpressionSyntax conditional)
+        {
+            // Walk up through parentheses and a single return statement to reach
+            // the enclosing arrow-body / accessor / method boundary.
+            SyntaxNode node = conditional;
+            while (node.Parent is ParenthesizedExpressionSyntax)
+            {
+                node = node.Parent;
+            }
+
+            ISymbol enclosingMember = null;
+
+            // Case 1: arrow-expression body `=> expr`
+            if (node.Parent is ArrowExpressionClauseSyntax arrow)
+            {
+                enclosingMember = arrow.Parent switch
+                {
+                    PropertyDeclarationSyntax p => this.context.GetDeclaredSymbol(p),
+                    IndexerDeclarationSyntax i => this.context.GetDeclaredSymbol(i),
+                    MethodDeclarationSyntax m => this.context.GetDeclaredSymbol(m),
+                    AccessorDeclarationSyntax acc
+                        when acc.Parent?.Parent is BasePropertyDeclarationSyntax bp
+                        => this.context.GetDeclaredSymbol(bp),
+                    _ => null,
+                };
+            }
+            else if (node.Parent is ReturnStatementSyntax ret)
+            {
+                // Case 2: `return expr;` inside a block-bodied getter/method —
+                // walk up from the return statement to the enclosing member.
+                enclosingMember = this.FindEnclosingPropertyOrMethodSymbol(ret);
+            }
+
+            if (enclosingMember == null)
+            {
+                return false;
+            }
+
+            // The member's return type must be reference-typed and NOT promoted
+            // to nullable — confirming the analyzer deliberately kept it non-null.
+            ITypeSymbol returnType = enclosingMember switch
+            {
+                IPropertySymbol p => p.Type,
+                IMethodSymbol m => m.ReturnType,
+                _ => null,
+            };
+
+            if (returnType is not { IsReferenceType: true })
+            {
+                return false;
+            }
+
+            if (returnType.NullableAnnotation == NullableAnnotation.Annotated)
+            {
+                return false;
+            }
+
+            // If the oblivious analyzer DID promote this member to nullable,
+            // the return type is already `T?` and forgiving the arm is unnecessary
+            // (and would be wrong — the caller expects nullable).
+            return !ObliviousNullabilityAnalyzer.IsTainted(this.context.Compilation, enclosingMember);
+        }
+
+        // Walks up from a return statement to find the enclosing property (via a
+        // `get` accessor) or method symbol. Stops at nested scope boundaries
+        // (lambdas, local functions). Returns null if not found.
+        private ISymbol FindEnclosingPropertyOrMethodSymbol(ReturnStatementSyntax ret)
+        {
+            for (SyntaxNode walk = ret.Parent; walk != null; walk = walk.Parent)
+            {
+                switch (walk)
+                {
+                    case AccessorDeclarationSyntax acc
+                        when acc.IsKind(SyntaxKind.GetAccessorDeclaration)
+                            && acc.Parent?.Parent is BasePropertyDeclarationSyntax bp:
+                        return this.context.GetDeclaredSymbol(bp);
+
+                    case MethodDeclarationSyntax m:
+                        return this.context.GetDeclaredSymbol(m);
+
+                    case LocalFunctionStatementSyntax:
+                    case AnonymousFunctionExpressionSyntax:
+                        return null;
+                }
+            }
+
+            return null;
         }
 
         // True when <paramref name="body"/> (a lazy-init guard's then-branch)

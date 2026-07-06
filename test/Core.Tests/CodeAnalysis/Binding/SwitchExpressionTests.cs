@@ -144,6 +144,26 @@ func Pick(s string) IShape {
     }
 
     [Fact]
+    public void SwitchExpression_NullableSiblingArms_ResultTypeIsNullableCommonInterface()
+    {
+        // Issue #2202: both arms are nullable-wrapped siblings (Sq?/Ci?) sharing
+        // only the interface IShape; the best common type must unify the
+        // unwrapped types to IShape and re-wrap it nullable.
+        var scope = BindGlobalScope(ShapeHierarchy + @"
+let sq Sq? = Sq()
+let ci Ci? = Ci()
+let box = switch ""x"" {
+    case ""a"": sq
+    default: ci
+}
+");
+
+        Assert.Empty(scope.Diagnostics);
+        var nullable = Assert.IsType<NullableTypeSymbol>(scope.Variables.Single(v => v.Name == "box").Type);
+        Assert.Equal("IShape", nullable.UnderlyingType.Name);
+    }
+
+    [Fact]
     public void SwitchExpression_TargetTypedLocal_Compiles()
     {
         // Issue #1112: an explicitly-typed local supplies the target type the
