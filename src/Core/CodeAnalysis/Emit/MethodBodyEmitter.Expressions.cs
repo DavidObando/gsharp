@@ -1737,10 +1737,19 @@ internal sealed partial class MethodBodyEmitter
         // first (a no-op for reference-constrained T, matching the operand
         // boxing already applied by `EmitIsExpression`) so the following
         // reference/value cast operates on a boxed reference.
+        // Issue #2171: a NULLABLE type-parameter operand (`x T?`) has the same
+        // bare-slot representation over its underlying type parameter, so box
+        // the underlying type parameter in that case too.
         if (declared is TypeParameterSymbol)
         {
             this.il.OpCode(ILOpCode.Box);
             this.il.Token(this.outer.GetElementTypeToken(declared));
+        }
+        else if (declared is NullableTypeSymbol declaredNullable
+            && declaredNullable.UnderlyingType is TypeParameterSymbol underlyingTypeParameter)
+        {
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.GetElementTypeToken(underlyingTypeParameter));
         }
 
         if (ReflectionMetadataEmitter.IsValueTypeSymbol(narrowed)

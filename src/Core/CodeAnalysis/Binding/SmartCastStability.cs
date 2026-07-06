@@ -290,10 +290,18 @@ internal static class SmartCastStability
         // operands. Excluded: a widening to a base interface the declared type
         // already satisfies (declared → candidate), which would only hide the
         // declared type's own members without adding any.
+        // Issue #2171: a NULLABLE type-parameter (`T?`) or nullable interface
+        // (`IShape?`) operand behaves identically for this rule — the nullable
+        // wrapper does not change which interfaces the runtime value may
+        // implement — so strip it before applying the type-parameter/interface
+        // test.
+        var declaredCore = declared is NullableTypeSymbol declaredNullableCore
+            ? declaredNullableCore.UnderlyingType
+            : declared;
         if (IsInterfaceType(candidate)
-            && (declared is TypeParameterSymbol || IsInterfaceType(declared)))
+            && (declaredCore is TypeParameterSymbol || IsInterfaceType(declaredCore)))
         {
-            var toCandidate = Conversion.Classify(declared, candidate);
+            var toCandidate = Conversion.Classify(declaredCore, candidate);
             if (!(toCandidate.Exists && toCandidate.IsImplicit))
             {
                 return true;
