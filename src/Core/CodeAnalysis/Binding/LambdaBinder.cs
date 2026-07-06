@@ -843,21 +843,46 @@ internal sealed class LambdaBinder
             ? TypeSymbol.Void
             : GetAdapterSlotType(literal.Function.Type, targetFunctionType.ReturnType);
 
+        // Issue #2180: an async literal carries a DUAL return shape — the
+        // FunctionSymbol's result type is the UNWRAPPED value (`T`), while its
+        // observable delegate return is the `Task[T]` wrapper. The erasure
+        // above collapses that to a single slot and, for a type-parameter
+        // result, erases it to `object` (the target delegate return `Task[T]`
+        // contains `T`). That erasure produces an async state machine whose
+        // builder / SetResult are `AsyncTaskMethodBuilder[object]` and forces a
+        // bogus `(Task[T])(object)` reference-cast at the call site — correct
+        // for reference `T` but a silent miscompile for a value-type `T`
+        // (the boxed result is reinterpreted, not unboxed). A generic closure
+        // reifies per instantiation exactly like the SYNC generic-lambda path,
+        // so keep the async result symbolic: the FunctionSymbol result stays
+        // the unwrapped `T` (threaded into the SM as `Var(idx)`), while the
+        // delegate observable return keeps the `Task[T]` wrapper.
+        var adapterResultType = adapterReturnType;
+        var adapterDelegateReturnType = adapterReturnType;
+        if (literal.Function.IsAsync
+            && targetFunctionType.ReturnType != TypeSymbol.Void
+            && literal.Function.Type != null
+            && TypeSymbol.ContainsTypeParameter(targetFunctionType.ReturnType))
+        {
+            adapterResultType = literal.Function.Type;
+            adapterDelegateReturnType = targetFunctionType.ReturnType;
+        }
+
         // ADR-0102 follow-up / issue #818: preserve the target's variadic
         // flag shape through the erased adapter so call-site dispatch keeps
         // its pack / pass-through semantics.
         var adapterFunctionType = FunctionTypeSymbol.Get(
             adapterParameters.Select(p => p.Type).ToImmutableArray(),
             targetFunctionType.IsVariadic,
-            adapterReturnType);
+            adapterDelegateReturnType);
         var adapterFunction = new FunctionSymbol(
             $"<lambda_erased{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
             adapterParameters.ToImmutable(),
-            adapterReturnType,
+            adapterResultType,
             package: literal.Function.Package);
         adapterFunction.IsAsync = literal.Function.IsAsync;
 
-        var body = (BoundBlockStatement)new ErasedFunctionLiteralAdapterRewriter(replacementMap, adapterReturnType)
+        var body = (BoundBlockStatement)new ErasedFunctionLiteralAdapterRewriter(replacementMap, adapterResultType)
             .RewriteStatement(literal.Body);
 
         return new BoundFunctionLiteralExpression(
