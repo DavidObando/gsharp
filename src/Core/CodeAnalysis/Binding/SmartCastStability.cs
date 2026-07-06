@@ -236,9 +236,79 @@ internal static class SmartCastStability
         return true;
     }
 
+    /// <summary>
+    /// Decides whether an <c>is</c>-type-test of an operand whose static type is
+    /// <paramref name="declared"/> against <paramref name="candidate"/> should
+    /// smart-cast (narrow) the operand to <paramref name="candidate"/> in the
+    /// then-branch. Shared by the statement (<c>if x is T</c>) and short-circuit
+    /// (<c>x is T &amp;&amp; …</c>) narrowing classifiers so both agree.
+    /// <para>
+    /// <paramref name="candidate"/> must already have any nullable wrapper
+    /// stripped by the caller.
+    /// </para>
+    /// </summary>
+    /// <param name="declared">The operand's declared (static) type.</param>
+    /// <param name="candidate">The tested type (nullable wrapper stripped).</param>
+    /// <returns><see langword="true"/> when the test narrows the operand to <paramref name="candidate"/>.</returns>
+    public static bool IsTypeTestNarrowing(TypeSymbol declared, TypeSymbol candidate)
+    {
+        if (candidate == null || candidate == TypeSymbol.Error)
+        {
+            return false;
+        }
+
+        if (declared == candidate)
+        {
+            return false;
+        }
+
+        // Stripping the nullable wrapper alone counts as narrowing
+        // (`string? → string`).
+        if (declared is NullableTypeSymbol declaredNullable && declaredNullable.UnderlyingType == candidate)
+        {
+            return true;
+        }
+
+        // Issue #1636: a candidate distinct from the declared type is a genuine
+        // subtype narrowing when it implicitly converts to the declared type
+        // (candidate → declared): every candidate value is already usable as
+        // declared. `Conversion.Classify` encodes the full class/interface/
+        // base-type lattice (class → base class, class → implemented interface,
+        // interface → base interface, struct → interface, etc.).
+        var toDeclared = Conversion.Classify(candidate, declared);
+        if (toDeclared.Exists && toDeclared.IsImplicit)
+        {
+            return true;
+        }
+
+        // Issue #2165: when the operand's static type is a TYPE PARAMETER or an
+        // INTERFACE, the runtime value may implement additional, statically-
+        // unrelated interfaces. Testing such an operand against an interface is
+        // therefore meaningful, so narrow to the tested interface even though it
+        // does not implicitly convert back to the declared type — matching the
+        // Kotlin-parity behaviour already applied to `object`/concrete-class
+        // operands. Excluded: a widening to a base interface the declared type
+        // already satisfies (declared → candidate), which would only hide the
+        // declared type's own members without adding any.
+        if (IsInterfaceType(candidate)
+            && (declared is TypeParameterSymbol || IsInterfaceType(declared)))
+        {
+            var toCandidate = Conversion.Classify(declared, candidate);
+            if (!(toCandidate.Exists && toCandidate.IsImplicit))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool IsAcceptableBareVariable(VariableSymbol variable, bool restrictToLocalsAndParams)
     {
         // ParameterSymbol derives from LocalVariableSymbol and is covered here.
         return !restrictToLocalsAndParams || variable is LocalVariableSymbol;
     }
+
+    private static bool IsInterfaceType(TypeSymbol type)
+        => type is InterfaceSymbol || (type?.ClrType is System.Type clr && clr.IsInterface);
 }

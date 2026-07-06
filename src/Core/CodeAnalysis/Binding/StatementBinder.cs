@@ -2376,40 +2376,11 @@ internal sealed class StatementBinder
 
     private static bool IsStrictlyNarrower(TypeSymbol declared, TypeSymbol candidate)
     {
-        if (candidate == null || candidate == TypeSymbol.Error)
-        {
-            return false;
-        }
-
-        if (declared == candidate)
-        {
-            return false;
-        }
-
-        // Stripping the nullable wrapper alone counts as narrowing
-        // (`string? → string`).
-        if (declared is NullableTypeSymbol declaredNullable && declaredNullable.UnderlyingType == candidate)
-        {
-            return true;
-        }
-
-        // Issue #1636: a candidate distinct from the declared type is only a
-        // genuine narrowing if it is actually a subtype of the declared type
-        // (candidate implicitly converts to declared — every candidate value
-        // is already usable as declared). `Conversion.Classify` already
-        // encodes the full class/interface/base-type lattice (class → base
-        // class, class → implemented interface, interface → base interface,
-        // struct → interface, etc.), so reuse it instead of re-deriving the
-        // subtype relation here.
-        //
-        // A supertype/interface/unrelated candidate (e.g. `Circle is
-        // IDrawable`, `string is object`) does NOT implicitly convert back to
-        // the (narrower) declared type — that's a widening or unrelated test,
-        // and replacing the declared type with it would hide members the
-        // declared type actually has (C# keeps the declared type in that
-        // case).
-        var conversion = Conversion.Classify(candidate, declared);
-        return conversion.Exists && conversion.IsImplicit;
+        // Shared with the short-circuit (`x is T && …`) classifier in
+        // ExpressionBinder so `if`-statement and `&&` narrowing agree. Handles
+        // the subtype lattice (issue #1636) and the type-parameter/interface
+        // operand tested against an interface (issue #2165).
+        return SmartCastStability.IsTypeTestNarrowing(declared, candidate);
     }
 
     private (Dictionary<AccessPath, TypeSymbol> NonNil, Dictionary<AccessPath, TypeSymbol> Nil) TryClassifyNilGuard(BoundExpression condition)

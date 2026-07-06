@@ -808,14 +808,11 @@ internal sealed partial class ExpressionBinder
                         return (null, null);
                     }
 
-                    // Issue #1636: mirror StatementBinder.IsStrictlyNarrower —
-                    // only install the narrowing when the candidate is
-                    // actually a subtype of the declared type (candidate
-                    // implicitly converts to declared). A supertype/interface/
-                    // unrelated candidate is a widening or unrelated test and
-                    // must not replace the declared type.
-                    var conversion = Conversion.Classify(targetType, declaredType);
-                    if (!conversion.Exists || !conversion.IsImplicit)
+                    // Issue #1636 / #2165: reuse the shared classifier so the
+                    // short-circuit (`x is T && …`) narrowing agrees with the
+                    // `if`-statement narrowing — including the type-parameter/
+                    // interface operand tested against an interface (#2165).
+                    if (!SmartCastStability.IsTypeTestNarrowing(declaredType, targetType))
                     {
                         return (null, null);
                     }
