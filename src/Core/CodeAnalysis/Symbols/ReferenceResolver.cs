@@ -31,7 +31,7 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// When the resolver is constructed with explicit reference paths
 /// (<see cref="WithReferences"/>), those paths are loaded into a
 /// <see cref="MetadataLoadContext"/>. The <see cref="Type"/> instances
-/// returned by <see cref="TryResolveType"/> then carry the target framework's
+/// returned by <see cref="TryResolveType(string, out System.Type)"/> then carry the target framework's
 /// assembly identities (e.g. <c>System.Console, Version=8.0.0.0</c> when
 /// the reference paths point at the net8.0 reference pack). Without this
 /// indirection, the emitter would write type references bound to the gsc
@@ -487,57 +487,45 @@ public sealed class ReferenceResolver : IDisposable
     /// <param name="fullName">The fully-qualified type name (e.g. <c>System.Console</c>).</param>
     /// <param name="type">The resolved <see cref="Type"/>, if found.</param>
     /// <returns><c>true</c> if a matching type was found; otherwise <c>false</c>.</returns>
+    /// <remarks>
+    /// This user-facing overload enforces external visibility: a metadata type
+    /// resolves by name only when it is accessible to the compilation (mirroring
+    /// C# accessibility). Compiler infrastructure (the emitter and lowering)
+    /// resolves well-known types by exact name — including non-externally-visible
+    /// attributes such as <c>NullableAttribute</c>/<c>IsReadOnlyAttribute</c> — and
+    /// must use the <see cref="TryResolveType(string, bool, out Type)"/> overload
+    /// with <c>requireExternalVisibility: false</c> to bypass the gate.
+    /// </remarks>
     public bool TryResolveType(string fullName, out Type type)
+        => TryResolveType(fullName, requireExternalVisibility: true, out type);
+
+    /// <summary>
+    /// Tries to resolve a fully-qualified type name across the referenced
+    /// assemblies, optionally enforcing external visibility.
+    /// </summary>
+    /// <param name="fullName">The fully-qualified type name.</param>
+    /// <param name="requireExternalVisibility">
+    /// When <c>true</c> (the default for user-facing binding), a non-externally-
+    /// visible type does not satisfy the request. When <c>false</c>, infrastructure
+    /// callers may resolve internal well-known types by exact name.
+    /// </param>
+    /// <param name="type">The resolved <see cref="Type"/>, if found.</param>
+    /// <returns><c>true</c> if a matching type was found; otherwise <c>false</c>.</returns>
+    public bool TryResolveType(string fullName, bool requireExternalVisibility, out Type type)
     {
         type = null;
-        if (string.IsNullOrEmpty(fullName))
+        if (!TryResolveTypeRaw(fullName, out var resolved))
         {
             return false;
         }
 
-        if (resolveCache.TryGetValue(fullName, out var cached))
+        if (requireExternalVisibility && !IsExternallyResolvable(resolved))
         {
-            if (ReferenceEquals(cached, MissTypeSentinel))
-            {
-                return false;
-            }
-
-            type = cached;
-            return true;
-        }
-
-        // ADR-0107: warm path. When a metadata index has been adopted, resolve
-        // by consulting the persisted name -> assembly map and materialising the
-        // Type lazily, rather than building (and scanning) the eager
-        // typeNameIndex. The keyset equals the cold path's, so a name absent here
-        // is a genuine miss; a present name is materialised with an
-        // order-preserving scan fallback so first-writer-wins is honoured even if
-        // the recorded declaring assembly cannot satisfy GetType.
-        if (warmNameIndex != null)
-        {
-            if (warmNameIndex.TryGetValue(fullName, out var assemblyIndex)
-                && TryMaterializeWarmType(fullName, assemblyIndex, out var warm)
-                && IsExternallyResolvable(warm))
-            {
-                resolveCache.TryAdd(fullName, warm);
-                type = warm;
-                return true;
-            }
-
-            resolveCache.TryAdd(fullName, MissTypeSentinel);
             return false;
         }
 
-        if (typeNameIndex.Value.TryGetValue(fullName, out var indexed)
-            && IsExternallyResolvable(indexed))
-        {
-            resolveCache.TryAdd(fullName, indexed);
-            type = indexed;
-            return true;
-        }
-
-        resolveCache.TryAdd(fullName, MissTypeSentinel);
-        return false;
+        type = resolved;
+        return true;
     }
 
     /// <summary>
@@ -585,7 +573,7 @@ public sealed class ReferenceResolver : IDisposable
     /// reference set (its <see cref="MetadataLoadContext"/> when one is in
     /// play). This is required before calling
     /// <see cref="Type.MakeGenericType(Type[])"/> on an open generic obtained
-    /// from <see cref="TryResolveType"/>: <c>MakeGenericType</c> demands that
+    /// from <see cref="TryResolveType(string, out System.Type)"/>: <c>MakeGenericType</c> demands that
     /// every type argument was loaded by the SAME context as the generic
     /// definition, otherwise it throws
     /// <see cref="ArgumentException"/> ("was not loaded by the
@@ -758,7 +746,7 @@ public sealed class ReferenceResolver : IDisposable
 
     /// <summary>
     /// ADR-0107: adopts a previously-built <see cref="ReferenceMetadataIndex"/>
-    /// as this resolver's warm type-name index, so <see cref="TryResolveType"/>
+    /// as this resolver's warm type-name index, so <see cref="TryResolveType(string, out System.Type)"/>
     /// skips the eager metadata enumeration. The index is accepted only when its
     /// recorded assembly identities match this resolver's freshly-loaded
     /// assemblies <em>exactly</em> (same count, same
@@ -789,6 +777,60 @@ public sealed class ReferenceResolver : IDisposable
 
         warmNameIndex = index.ToNameIndex();
         return true;
+    }
+
+    // Raw resolution shared by the public/internal TryResolveType overloads: it
+    // performs the reference-set name lookup (warm/cold index + cache) without
+    // applying the external-visibility gate, which the callers layer on top.
+    private bool TryResolveTypeRaw(string fullName, out Type type)
+    {
+        type = null;
+        if (string.IsNullOrEmpty(fullName))
+        {
+            return false;
+        }
+
+        if (resolveCache.TryGetValue(fullName, out var cached))
+        {
+            if (ReferenceEquals(cached, MissTypeSentinel))
+            {
+                return false;
+            }
+
+            type = cached;
+            return true;
+        }
+
+        // ADR-0107: warm path. When a metadata index has been adopted, resolve
+        // by consulting the persisted name -> assembly map and materialising the
+        // Type lazily, rather than building (and scanning) the eager
+        // typeNameIndex. The keyset equals the cold path's, so a name absent here
+        // is a genuine miss; a present name is materialised with an
+        // order-preserving scan fallback so first-writer-wins is honoured even if
+        // the recorded declaring assembly cannot satisfy GetType.
+        if (warmNameIndex != null)
+        {
+            if (warmNameIndex.TryGetValue(fullName, out var assemblyIndex)
+                && TryMaterializeWarmType(fullName, assemblyIndex, out var warm))
+            {
+                resolveCache.TryAdd(fullName, warm);
+                type = warm;
+                return true;
+            }
+
+            resolveCache.TryAdd(fullName, MissTypeSentinel);
+            return false;
+        }
+
+        if (typeNameIndex.Value.TryGetValue(fullName, out var indexed))
+        {
+            resolveCache.TryAdd(fullName, indexed);
+            type = indexed;
+            return true;
+        }
+
+        resolveCache.TryAdd(fullName, MissTypeSentinel);
+        return false;
     }
 
     // Issue: an `internal` (non-externally-visible) type declared by a

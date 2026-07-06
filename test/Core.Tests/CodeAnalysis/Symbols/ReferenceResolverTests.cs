@@ -80,6 +80,44 @@ public class ReferenceResolverTests
     }
 
     [Fact]
+    public void TryResolveType_WithoutExternalVisibility_Resolves_Internal_Type_By_Name()
+    {
+        // The emitter/lowering infrastructure resolves well-known types by exact
+        // name — including compiler-internal attributes such as NullableAttribute
+        // / IsReadOnlyAttribute — and must be able to bypass the accessibility
+        // gate that guards user-written type references. Regression guard: a too-
+        // aggressive gate dropped these lookups, silently stripping nullable /
+        // readonly metadata from emitted assemblies.
+        var asm = typeof(System.Diagnostics.DiagnosticSource).Assembly;
+        var path = asm.Location;
+        Assert.False(string.IsNullOrEmpty(path));
+
+        var internalType = asm
+            .GetTypes()
+            .FirstOrDefault(t => t.IsNotPublic && !t.IsNested && t.FullName is not null);
+        Assert.NotNull(internalType);
+
+        var resolver = ReferenceResolver.WithReferences(new[] { path });
+
+        // Gated (user-facing) path: internal type is unreachable by name.
+        Assert.False(resolver.TryResolveType(internalType.FullName, out _));
+
+        // Ungated (infrastructure) path: the same internal type resolves.
+        Assert.True(resolver.TryResolveType(
+            internalType.FullName,
+            requireExternalVisibility: false,
+            out var resolved));
+        Assert.NotNull(resolved);
+        Assert.Equal(internalType.FullName, resolved.FullName);
+
+        // The bypass overload still resolves externally visible types.
+        Assert.True(resolver.TryResolveType(
+            typeof(System.Diagnostics.DiagnosticSource).FullName,
+            requireExternalVisibility: false,
+            out _));
+    }
+
+    [Fact]
     public void WithReferences_Tolerates_Null_Or_Missing_Paths()
     {
         var resolver = ReferenceResolver.WithReferences(new[]

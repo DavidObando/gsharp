@@ -309,7 +309,7 @@ internal sealed class WellKnownReferences
     /// <returns>The TypeRef entity handle, or <see langword="default"/> if the type can't be resolved.</returns>
     public EntityHandle GetIsReadOnlyAttributeTypeRef()
     {
-        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.IsReadOnlyAttribute", out var resolved)
+        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.IsReadOnlyAttribute", requireExternalVisibility: false, out var resolved)
             ? resolved
             : typeof(System.Runtime.CompilerServices.IsReadOnlyAttribute);
         return this.getTypeReference(attrType);
@@ -326,7 +326,7 @@ internal sealed class WellKnownReferences
     /// <returns>The TypeRef entity handle.</returns>
     public EntityHandle GetIsExternalInitTypeRef()
     {
-        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.IsExternalInit", out var resolved)
+        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.IsExternalInit", requireExternalVisibility: false, out var resolved)
             ? resolved
             : typeof(System.Runtime.CompilerServices.IsExternalInit);
         return this.getTypeReference(attrType);
@@ -339,7 +339,7 @@ internal sealed class WellKnownReferences
             return this.isReadOnlyAttributeCtorRef.Value;
         }
 
-        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.IsReadOnlyAttribute", out var resolved)
+        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.IsReadOnlyAttribute", requireExternalVisibility: false, out var resolved)
             ? resolved
             : typeof(System.Runtime.CompilerServices.IsReadOnlyAttribute);
         var attrTypeRef = this.getTypeReference(attrType);
@@ -371,7 +371,7 @@ internal sealed class WellKnownReferences
             return this.paramArrayAttributeCtorRef.Value;
         }
 
-        var attrType = this.emitCtx.References.TryResolveType("System.ParamArrayAttribute", out var resolved)
+        var attrType = this.emitCtx.References.TryResolveType("System.ParamArrayAttribute", requireExternalVisibility: false, out var resolved)
             ? resolved
             : typeof(System.ParamArrayAttribute);
         var attrTypeRef = this.getTypeReference(attrType);
@@ -394,7 +394,7 @@ internal sealed class WellKnownReferences
             return this.isByRefLikeAttributeCtorRef.Value;
         }
 
-        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.IsByRefLikeAttribute", out var resolved)
+        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.IsByRefLikeAttribute", requireExternalVisibility: false, out var resolved)
             ? resolved
             : typeof(System.Runtime.CompilerServices.IsByRefLikeAttribute);
         var attrTypeRef = this.getTypeReference(attrType);
@@ -430,7 +430,7 @@ internal sealed class WellKnownReferences
             return this.extensionAttributeCtorRef.Value;
         }
 
-        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.ExtensionAttribute", out var resolved)
+        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.ExtensionAttribute", requireExternalVisibility: false, out var resolved)
             ? resolved
             : typeof(System.Runtime.CompilerServices.ExtensionAttribute);
         if (attrType == null)
@@ -465,7 +465,7 @@ internal sealed class WellKnownReferences
             return this.compilerGeneratedAttributeCtorRef.Value;
         }
 
-        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.CompilerGeneratedAttribute", out var resolved)
+        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.CompilerGeneratedAttribute", requireExternalVisibility: false, out var resolved)
             ? resolved
             : typeof(System.Runtime.CompilerServices.CompilerGeneratedAttribute);
         var attrTypeRef = this.getTypeReference(attrType);
@@ -495,7 +495,7 @@ internal sealed class WellKnownReferences
             return this.unsafeValueTypeAttributeCtorRef.Value;
         }
 
-        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.UnsafeValueTypeAttribute", out var resolved)
+        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.UnsafeValueTypeAttribute", requireExternalVisibility: false, out var resolved)
             ? resolved
             : typeof(System.Runtime.CompilerServices.UnsafeValueTypeAttribute);
         var attrTypeRef = this.getTypeReference(attrType);
@@ -524,7 +524,7 @@ internal sealed class WellKnownReferences
             return this.fixedBufferAttributeCtorRef.Value;
         }
 
-        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.FixedBufferAttribute", out var resolved)
+        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.FixedBufferAttribute", requireExternalVisibility: false, out var resolved)
             ? resolved
             : typeof(System.Runtime.CompilerServices.FixedBufferAttribute);
         var attrTypeRef = this.getTypeReference(attrType);
@@ -569,7 +569,7 @@ internal sealed class WellKnownReferences
             return this.nullableAttributeByteCtorRef.Value;
         }
 
-        if (!this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.NullableAttribute", out var attrType))
+        if (!this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.NullableAttribute", requireExternalVisibility: false, out var attrType))
         {
             return default;
         }
@@ -604,7 +604,7 @@ internal sealed class WellKnownReferences
             return this.nullableAttributeByteArrayCtorRef.Value;
         }
 
-        if (!this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.NullableAttribute", out var attrType))
+        if (!this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.NullableAttribute", requireExternalVisibility: false, out var attrType))
         {
             return default;
         }
@@ -640,7 +640,7 @@ internal sealed class WellKnownReferences
             return this.nullableContextAttributeByteCtorRef.Value;
         }
 
-        if (!this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.NullableContextAttribute", out var attrType))
+        if (!this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.NullableContextAttribute", requireExternalVisibility: false, out var attrType))
         {
             return default;
         }
@@ -665,7 +665,7 @@ internal sealed class WellKnownReferences
             return this.obsoleteAttributeStringBoolCtorRef.Value;
         }
 
-        var obsoleteType = this.emitCtx.References.TryResolveType("System.ObsoleteAttribute", out var obsoleteResolved)
+        var obsoleteType = this.emitCtx.References.TryResolveType("System.ObsoleteAttribute", requireExternalVisibility: false, out var obsoleteResolved)
             ? obsoleteResolved
             : typeof(System.ObsoleteAttribute);
         var obsoleteTypeRef = this.getTypeReference(obsoleteType);
@@ -689,7 +689,7 @@ internal sealed class WellKnownReferences
     {
         if (!this.systemAttributeTypeRef.HasValue)
         {
-            var t = this.emitCtx.References.TryResolveType("System.Attribute", out var resolved)
+            var t = this.emitCtx.References.TryResolveType("System.Attribute", requireExternalVisibility: false, out var resolved)
                 ? resolved
                 : typeof(System.Attribute);
             this.systemAttributeTypeRef = this.getTypeReference(t);
@@ -725,7 +725,7 @@ internal sealed class WellKnownReferences
             return this.nullRefExceptionCtorRef;
         }
 
-        var nreType = this.emitCtx.References.TryResolveType("System.NullReferenceException", out var resolved)
+        var nreType = this.emitCtx.References.TryResolveType("System.NullReferenceException", requireExternalVisibility: false, out var resolved)
             ? resolved
             : typeof(NullReferenceException);
         var nreTypeRef = this.getTypeReference(nreType);

@@ -3437,7 +3437,7 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     private void EmitReferenceAssemblyAttribute(AssemblyDefinitionHandle assemblyHandle)
     {
-        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.ReferenceAssemblyAttribute", out var resolved)
+        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.ReferenceAssemblyAttribute", requireExternalVisibility: false, out var resolved)
             ? resolved
             : throw new InvalidOperationException(
                 "Reference assembly emit requires System.Runtime.CompilerServices.ReferenceAssemblyAttribute to be resolvable from the supplied references.");
@@ -3603,7 +3603,7 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     private void EmitDebuggableAttribute(AssemblyDefinitionHandle assemblyHandle)
     {
-        var attrType = this.emitCtx.References.TryResolveType("System.Diagnostics.DebuggableAttribute", out var resolved)
+        var attrType = this.emitCtx.References.TryResolveType("System.Diagnostics.DebuggableAttribute", requireExternalVisibility: false, out var resolved)
             ? resolved
             : typeof(System.Diagnostics.DebuggableAttribute);
         var attrTypeRef = this.GetTypeReference(attrType);
@@ -6317,7 +6317,7 @@ internal sealed class ReflectionMetadataEmitter
 
     private Type ResolveCoreType(string fullName, Type fallback)
     {
-        if (this.emitCtx.References.TryResolveType(fullName, out var t))
+        if (this.emitCtx.References.TryResolveType(fullName, requireExternalVisibility: false, out var t))
         {
             return t;
         }
@@ -11264,7 +11264,7 @@ internal sealed class ReflectionMetadataEmitter
         if (hostDelegate.IsConstructedGenericType)
         {
             var openName = hostDelegate.GetGenericTypeDefinition().FullName;
-            if (openName != null && this.emitCtx.References.TryResolveType(openName, out var openRef))
+            if (openName != null && this.emitCtx.References.TryResolveType(openName, requireExternalVisibility: false, out var openRef))
             {
                 var hostArgs = hostDelegate.GetGenericArguments();
                 var refArgs = new Type[hostArgs.Length];
@@ -11662,7 +11662,7 @@ internal sealed class ReflectionMetadataEmitter
             return null;
         }
 
-        if (this.emitCtx.References.TryResolveType(hostType.FullName ?? hostType.Name, out var mapped))
+        if (this.emitCtx.References.TryResolveType(hostType.FullName ?? hostType.Name, requireExternalVisibility: false, out var mapped))
         {
             return mapped;
         }

@@ -96,7 +96,7 @@ internal sealed class CustomAttributeEncoder
     /// </summary>
     public void EmitStringAttribute(EntityHandle parent, string typeName, Type fallbackType, string value)
     {
-        var attrType = this.emitCtx.References.TryResolveType(typeName, out var resolved)
+        var attrType = this.emitCtx.References.TryResolveType(typeName, requireExternalVisibility: false, out var resolved)
             ? resolved
             : fallbackType;
         var attrTypeRef = this.getTypeReference(attrType);
@@ -123,7 +123,7 @@ internal sealed class CustomAttributeEncoder
 
     public void EmitStringPairAttribute(EntityHandle parent, string typeName, Type fallbackType, string firstValue, string secondValue)
     {
-        var attrType = this.emitCtx.References.TryResolveType(typeName, out var resolved)
+        var attrType = this.emitCtx.References.TryResolveType(typeName, requireExternalVisibility: false, out var resolved)
             ? resolved
             : fallbackType;
         var attrTypeRef = this.getTypeReference(attrType);
@@ -495,7 +495,7 @@ internal sealed class CustomAttributeEncoder
             return;
         }
 
-        if (!this.emitCtx.References.TryResolveType(clrType.FullName, out var resolved))
+        if (!this.emitCtx.References.TryResolveType(clrType.FullName, requireExternalVisibility: false, out var resolved))
         {
             resolved = clrType;
         }

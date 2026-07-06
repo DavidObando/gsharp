@@ -56,7 +56,7 @@ public static class NullableLifting
             return false;
         }
 
-        if (!references.TryResolveType("System.Nullable`1", out var nullableOpen) || nullableOpen == null)
+        if (!references.TryResolveType("System.Nullable`1", requireExternalVisibility: false, out var nullableOpen) || nullableOpen == null)
         {
             return false;
         }
