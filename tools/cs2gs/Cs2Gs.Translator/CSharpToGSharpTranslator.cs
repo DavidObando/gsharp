@@ -10537,6 +10537,11 @@ public sealed class CSharpToGSharpTranslator
                         return enumExtResult;
                     }
 
+                    if (this.TryTranslateNullConditionalDelegateInvoke(conditionalAccess, out GExpression delegateInvokeResult))
+                    {
+                        return delegateInvokeResult;
+                    }
+
                     return new ConditionalAccessExpression(
                         this.TranslateExpression(conditionalAccess.Expression),
                         this.TranslateExpression(conditionalAccess.WhenNotNull));
@@ -13503,6 +13508,57 @@ public sealed class CSharpToGSharpTranslator
 
             result = new ParenthesizedExpression(
                 new IfExpression(guard, call, new IdentifierExpression("nil")));
+            return true;
+        }
+
+        // Issue #914 (oblivious sink): a null-conditional delegate/event invoke
+        // `recv?.Invoke(args)` whose receiver is a NON-simple expression (a call,
+        // parenthesized, or `??` expression) has no direct G# spelling —
+        // `recv?(args)` parses `recv` ending in `)`/`]` as a ternary condition
+        // (GS0155), and gsc cannot resolve the `.Invoke` MEMBER on a function
+        // whose type mentions a type parameter (`(T) -> R`, GS0159). The only
+        // form gsc accepts is the direct null-conditional call on a *local*, so
+        // spill the receiver into a single-evaluation `let` and invoke that:
+        // `recv?.Invoke(a)` → `let __spillN = recv` + `__spillN?(a)`. Requires an
+        // active spill seam (an arrow/statement body) to host the `let`; without
+        // one, defer to the existing `.Invoke` path, which is already correct for
+        // the non-type-parameter receiver shapes that reach here seam-less.
+        private bool TryTranslateNullConditionalDelegateInvoke(
+            ConditionalAccessExpressionSyntax conditionalAccess,
+            out GExpression result)
+        {
+            result = null;
+
+            if (this.pendingSpillPrologue == null
+                || conditionalAccess.WhenNotNull is not InvocationExpressionSyntax invocation
+                || invocation.Expression is not MemberBindingExpressionSyntax binding
+                || binding.Name.Identifier.Text != "Invoke")
+            {
+                return false;
+            }
+
+            if (this.context.GetSymbolInfo(invocation).Symbol
+                is not IMethodSymbol { MethodKind: MethodKind.DelegateInvoke })
+            {
+                return false;
+            }
+
+            // A simple identifier/member/`this` receiver already lowers to the
+            // direct `recv?(args)` form via TryGetDelegateInvokeReceiver — leave
+            // it untouched so the common case stays spill-free and byte-identical.
+            if (conditionalAccess.Expression is IdentifierNameSyntax
+                or MemberAccessExpressionSyntax
+                or ThisExpressionSyntax)
+            {
+                return false;
+            }
+
+            GExpression receiver = this.SpillOperand(
+                this.TranslateExpression(conditionalAccess.Expression));
+            var invokeArguments = this.TranslateArguments(invocation.ArgumentList.Arguments);
+            result = new ConditionalAccessExpression(
+                receiver,
+                new InvocationExpression(new ConditionalReceiverExpression(), invokeArguments, null));
             return true;
         }
 
