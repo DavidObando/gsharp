@@ -7586,6 +7586,44 @@ public class Parser
                 var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
                 current = new IndexExpressionSyntax(syntaxTree, current, openBracket, index, closeBracket);
             }
+            else if (Current.Kind == SyntaxKind.OpenParenthesisToken
+                && !IsCurrentOnNewLineAfter(current))
+            {
+                // Issue #2185: a same-line `(args)` following an arbitrary
+                // postfix expression is an *indirect* invocation of that
+                // expression's (function-typed) value — e.g. `(h)(value)`,
+                // `handler!!(value)`, or a curried `f()(x)`. Bare-identifier and
+                // `.member` callees never reach here (their `(args)` is consumed
+                // by ParseNameOrCallExpression), so this handles exactly the
+                // non-name callee shapes. The newline guard preserves the
+                // pre-existing reading of a parenthesised expression on the next
+                // line as a separate statement (G# is otherwise
+                // newline-insensitive, but a leading-`(` continuation is never
+                // written). The binder validates the callee is function-typed.
+                var openParen = NextToken();
+
+                var savedInvokeSuppress = suppressTrailingObjectInitializer;
+                suppressTrailingObjectInitializer = 0;
+                var savedInvokeStructLiteral = suppressStructLiteral;
+                suppressStructLiteral = 0;
+                var savedInvokeRange = suppressRangeOperator;
+                suppressRangeOperator = 0;
+                SeparatedSyntaxList<ExpressionSyntax> arguments;
+                try
+                {
+                    arguments = ParseArguments();
+                }
+                finally
+                {
+                    suppressTrailingObjectInitializer = savedInvokeSuppress;
+                    suppressStructLiteral = savedInvokeStructLiteral;
+                    suppressRangeOperator = savedInvokeRange;
+                }
+
+                var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+                arguments = MaybeAppendTrailingLambda(arguments);
+                current = new CallExpressionSyntax(syntaxTree, current, openParen, arguments, closeParen);
+            }
             else
             {
                 break;
