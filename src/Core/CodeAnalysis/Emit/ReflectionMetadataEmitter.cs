@@ -11781,15 +11781,25 @@ internal sealed class ReflectionMetadataEmitter
             EntityHandle? slotHandle = null;
             foreach (var iface in structSymbol.Interfaces)
             {
-                var defIface = iface.Definition ?? iface;
-                if (defIface.Methods.IsDefaultOrEmpty || !defIface.Methods.Contains(ifaceMember))
+                // Issue #2181: for a constructed generic interface, the linked
+                // `ExplicitInterfaceMember` is the SUBSTITUTED method surfaced
+                // on the constructed instance (`iface.Methods`), not the open
+                // definition's slot — so match against the constructed
+                // instance's methods here, then map back to the open slot for
+                // the MethodDef / MemberRef token resolution (the open slot is
+                // what `MethodHandles` and `ResolveUserInterfaceInstanceMethodToken`
+                // are keyed by). For a non-generic interface `iface.Methods` is
+                // the definition's own table and the map is an identity, so the
+                // pre-existing behavior is unchanged.
+                if (iface.Methods.IsDefaultOrEmpty || !iface.Methods.Contains(ifaceMember))
                 {
                     continue;
                 }
 
+                var openSlot = ResolveOpenInterfaceInstanceMethod(iface, ifaceMember);
                 slotHandle = IsUserGenericInterfaceReference(iface)
-                    ? this.ResolveUserInterfaceInstanceMethodToken(iface, ifaceMember)
-                    : this.cache.MethodHandles.TryGetValue(ifaceMember, out var slotDefHandle)
+                    ? this.ResolveUserInterfaceInstanceMethodToken(iface, openSlot)
+                    : this.cache.MethodHandles.TryGetValue(openSlot, out var slotDefHandle)
                         ? slotDefHandle
                         : (EntityHandle?)null;
                 break;
@@ -11881,6 +11891,45 @@ internal sealed class ReflectionMetadataEmitter
     /// interface is not a constructed instance, or when no open counterpart is
     /// found.
     /// </summary>
+    /// <summary>
+    /// Issue #2181: maps a (possibly substituted) instance method slot on a
+    /// constructed generic interface back to its open declaration on the
+    /// interface definition — the counterpart of
+    /// <see cref="ResolveOpenInterfaceStaticMethod"/> for the (non-static)
+    /// <see cref="InterfaceSymbol.Methods"/> table. Positional match first
+    /// (the constructed instance's <c>Methods</c> mirror the definition's
+    /// order), with a name/arity fallback; returns <paramref name="slot"/>
+    /// unchanged when the interface is a plain definition (identity map).
+    /// </summary>
+    private static FunctionSymbol ResolveOpenInterfaceInstanceMethod(InterfaceSymbol iface, FunctionSymbol slot)
+    {
+        var def = iface.Definition ?? iface;
+        if (ReferenceEquals(def, iface))
+        {
+            return slot;
+        }
+
+        var constructedMethods = iface.Methods;
+        var defMethods = def.Methods;
+        for (var i = 0; i < constructedMethods.Length; i++)
+        {
+            if (ReferenceEquals(constructedMethods[i], slot) && i < defMethods.Length)
+            {
+                return defMethods[i];
+            }
+        }
+
+        foreach (var m in defMethods)
+        {
+            if (m.Name == slot.Name && m.Parameters.Length == slot.Parameters.Length)
+            {
+                return m;
+            }
+        }
+
+        return slot;
+    }
+
     private static FunctionSymbol ResolveOpenInterfaceStaticMethod(InterfaceSymbol iface, FunctionSymbol slot)
     {
         var def = iface.Definition ?? iface;
