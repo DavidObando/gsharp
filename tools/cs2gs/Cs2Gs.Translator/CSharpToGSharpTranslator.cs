@@ -12647,6 +12647,20 @@ public sealed class CSharpToGSharpTranslator
                 return false;
             }
 
+            // Issue #2164: the classic lazy-singleton pattern initializes a
+            // nullable static/instance field (or auto-property) under a null
+            // guard (`if (F == null) { F = new(); } ... return F;` / `F ??= …;`),
+            // so `F` is provably non-null at every use dominated by the guard.
+            // gsc (by design, Kotlin-style) smart-casts only LOCALS, never
+            // fields/properties, so the guarded read `T? -> T` is rejected
+            // (GS0155). The migrated corpus is nullable-OBLIVIOUS, so Roslyn's
+            // flow state is empty and the flow-based path below never fires;
+            // detect the guard from SYNTAX and assert `F!!` instead.
+            if (this.IsLazyInitGuardedFieldUse(recv))
+            {
+                return true;
+            }
+
             // Flow analysis must have proven the receiver non-null at this site.
             if (this.context.GetTypeInfo(recv).Nullability.FlowState != NullableFlowState.NotNull)
             {
@@ -12690,6 +12704,182 @@ public sealed class CSharpToGSharpTranslator
             // too, so its flow-proven uses need the same assertion for consistency.
             return declared.NullableAnnotation == NullableAnnotation.Annotated
                 || this.IsPromotedToNullableReference(symbol);
+        }
+
+        // Issue #2164: true when <paramref name="recv"/> reads a nullable
+        // (`T?`) field/property that is lazily initialized under a dominating
+        // null guard, so it is provably non-null here and needs an explicit
+        // `!!` (gsc never smart-casts fields/properties). The decision is purely
+        // syntactic because the migrated corpus compiles nullable-oblivious.
+        private bool IsLazyInitGuardedFieldUse(ExpressionSyntax recv)
+        {
+            // Only a bare/qualified field or property read is a candidate. A read
+            // that is itself the LHS of an assignment, the operand of a null
+            // comparison, or a `nameof` argument is handled by other paths and is
+            // never a value read that a lazy guard makes non-null.
+            ISymbol symbol = this.context.GetSymbolInfo(recv).Symbol;
+            if (symbol is not (IFieldSymbol or IPropertySymbol))
+            {
+                return false;
+            }
+
+            // The field/property must be emitted `T?` in G# — either declared
+            // nullable or promoted to nullable by this translator (the taint
+            // analysis / #1072 null-usage rules). Otherwise there is no `T? -> T`
+            // to forgive and asserting `!!` on a non-null value is wrong.
+            ITypeSymbol declared = symbol switch
+            {
+                IFieldSymbol field => field.Type,
+                IPropertySymbol property => property.Type,
+                _ => null,
+            };
+
+            if (declared is not { IsReferenceType: true })
+            {
+                return false;
+            }
+
+            bool emittedNullable = declared.NullableAnnotation == NullableAnnotation.Annotated
+                || this.IsPromotedToNullableReference(symbol);
+            if (!emittedNullable)
+            {
+                return false;
+            }
+
+            return this.IsDominatedByLazyInitGuard(recv, symbol);
+        }
+
+        // Walks outward from the statement containing <paramref name="use"/> to
+        // the enclosing accessor/method boundary, looking for a preceding
+        // statement (in the same block or an enclosing one, e.g. a `lock` body)
+        // that lazily initializes <paramref name="symbol"/> to a non-null value.
+        // Because a lazy-init guard leaves `symbol` non-null on BOTH the taken
+        // and skipped paths, every later use it dominates is non-null.
+        private bool IsDominatedByLazyInitGuard(ExpressionSyntax use, ISymbol symbol)
+        {
+            StatementSyntax useStatement = use.FirstAncestorOrSelf<StatementSyntax>();
+            if (useStatement == null)
+            {
+                return false;
+            }
+
+            for (SyntaxNode node = useStatement; node != null; node = node.Parent)
+            {
+                if (node.Parent is BlockSyntax block)
+                {
+                    foreach (StatementSyntax statement in block.Statements)
+                    {
+                        if (statement == node)
+                        {
+                            break;
+                        }
+
+                        if (this.IsLazyInitGuardStatement(statement, symbol))
+                        {
+                            return true;
+                        }
+                    }
+                }
+
+                // Stop at the enclosing accessor / method / local-function body:
+                // dominance across a member boundary is not analyzed here.
+                if (node is AccessorDeclarationSyntax
+                    or BaseMethodDeclarationSyntax
+                    or LocalFunctionStatementSyntax
+                    or AnonymousFunctionExpressionSyntax
+                    or ArrowExpressionClauseSyntax)
+                {
+                    break;
+                }
+            }
+
+            return false;
+        }
+
+        // True when <paramref name="statement"/> is one of the lazy-init guard
+        // shapes that leaves <paramref name="symbol"/> non-null afterwards:
+        //   • `if (F == null) { F = expr; }` / `if (F is null) { F = expr; }`
+        //   • `F ??= expr;`
+        // (`expr` must not itself be a `null` literal). Lock-wrapped variants are
+        // covered because the enclosing walk descends into the `lock` body block.
+        private bool IsLazyInitGuardStatement(StatementSyntax statement, ISymbol symbol)
+        {
+            switch (statement)
+            {
+                case IfStatementSyntax ifStatement
+                    when this.IsNullCheckOf(ifStatement.Condition, symbol):
+                    return this.AssignsSymbolNonNull(ifStatement.Statement, symbol);
+
+                case ExpressionStatementSyntax { Expression: AssignmentExpressionSyntax coalesce }
+                    when coalesce.IsKind(SyntaxKind.CoalesceAssignmentExpression)
+                    && this.BindsTo(coalesce.Left, symbol)
+                    && !IsNullOrSuppressedNull(coalesce.Right):
+                    return true;
+
+                default:
+                    return false;
+            }
+        }
+
+        // `F == null` / `null == F` / `F is null` (the null-path condition of a
+        // lazy-init guard), where `F` binds to <paramref name="symbol"/>.
+        private bool IsNullCheckOf(ExpressionSyntax condition, ISymbol symbol)
+        {
+            condition = StripParentheses(condition);
+
+            switch (condition)
+            {
+                case BinaryExpressionSyntax binary
+                    when binary.IsKind(SyntaxKind.EqualsExpression):
+                    return (IsNullLiteral(binary.Right) && this.BindsTo(binary.Left, symbol))
+                        || (IsNullLiteral(binary.Left) && this.BindsTo(binary.Right, symbol));
+
+                case IsPatternExpressionSyntax isPattern
+                    when this.BindsTo(isPattern.Expression, symbol):
+                    return IsNullConstantPattern(isPattern.Pattern)
+                        && isPattern.Pattern is not UnaryPatternSyntax;
+
+                default:
+                    return false;
+            }
+        }
+
+        // True when <paramref name="body"/> (a lazy-init guard's then-branch)
+        // contains an assignment of a non-null value to <paramref name="symbol"/>.
+        private bool AssignsSymbolNonNull(StatementSyntax body, ISymbol symbol)
+        {
+            if (body == null)
+            {
+                return false;
+            }
+
+            foreach (AssignmentExpressionSyntax assignment in
+                body.DescendantNodesAndSelf().OfType<AssignmentExpressionSyntax>())
+            {
+                if (!assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                    && !assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression))
+                {
+                    continue;
+                }
+
+                if (this.BindsTo(assignment.Left, symbol)
+                    && !IsNullOrSuppressedNull(assignment.Right))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static ExpressionSyntax StripParentheses(ExpressionSyntax expression)
+        {
+            while (expression is ParenthesizedExpressionSyntax paren)
+            {
+                expression = paren.Expression;
+            }
+
+            return expression;
         }
 
         private GExpression TranslateInvocation(InvocationExpressionSyntax invocation)
