@@ -9816,12 +9816,21 @@ public sealed class CSharpToGSharpTranslator
                 || type.IsNullable
                 || symbol == null
                 || returnType is not { IsReferenceType: true }
-                || returnType is ITypeParameterSymbol
                 || returnType.NullableAnnotation == NullableAnnotation.Annotated)
             {
                 return type;
             }
 
+            // Issue #914 (oblivious deferred-return-promotion): a REFERENCE-
+            // constrained type-parameter return (`where T : class`) is promoted
+            // to `T?` when its return is null-tainted, exactly like a concrete
+            // reference return. For such a `T`, `T?` is an unambiguous nullable
+            // reference (the generated locals already use `var x T? = …`), and
+            // the promotion leaves `Cast[T]`/`typeof(T)`/`T()` NAME positions
+            // untouched. Unconstrained type parameters are excluded automatically:
+            // their `IsReferenceType` is false, so the guard above already
+            // returned. (Method-return-of-`T` was the residual blocking
+            // Oahu.Foundation's `DeserializeJsonFile[T]() T { … return nil }`.)
             return ObliviousNullabilityAnalyzer.IsTainted(this.context.Compilation, symbol)
                 ? MakeNullable(type)
                 : type;
@@ -9961,11 +9970,18 @@ public sealed class CSharpToGSharpTranslator
             // null-taint analysis proved this symbol null-tainted. This is the
             // ONLY behavioral change for oblivious code — for a nullable-enabled
             // compilation `IsTainted` short-circuits to false, so every existing
-            // path stays byte-identical. Type parameters are excluded: promoting
-            // a `where T : class` declaration to `T?` would break `Cast[T]`/
-            // `typeof(T)` name positions.
-            if (declared is not ITypeParameterSymbol
-                && ObliviousNullabilityAnalyzer.IsTainted(this.context.Compilation, symbol))
+            // path stays byte-identical.
+            //
+            // Issue #914 (oblivious deferred-return-promotion): a REFERENCE-
+            // constrained type parameter (`where T : class`) is eligible too. The
+            // top-of-method guard already required `declared.IsReferenceType`, so
+            // an UNCONSTRAINED `T` (whose `IsReferenceType` is false, and for whom
+            // `T?` would mean `Nullable<T>`) never reaches here. For a class-
+            // constrained `T`, `T?` is an unambiguous nullable reference — the
+            // generated `var settings T? = …` locals already rely on it — and
+            // `Cast[T]`/`typeof(T)`/`T()` NAME positions are unaffected because
+            // they reference `T`, not the promoted symbol.
+            if (ObliviousNullabilityAnalyzer.IsTainted(this.context.Compilation, symbol))
             {
                 return true;
             }
