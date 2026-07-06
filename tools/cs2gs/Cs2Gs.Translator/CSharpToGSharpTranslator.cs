@@ -4450,6 +4450,20 @@ public sealed class CSharpToGSharpTranslator
                 type = this.PromoteIfUsedAsNullable(type, symbol);
             }
 
+            // Issue #914 (oblivious sink): a DELEGATE-typed parameter that is
+            // invoked inside its method with a null (or promoted-nullable)
+            // argument at some position must render that arrow-parameter position
+            // as `T?` — e.g. `SendOrPost(Action<SendOrPostCallback, object>
+            // sendOrPost, …)` whose body does `sendOrPost(o => …, null)` needs the
+            // second arrow parameter to be `object?`, otherwise the `nil -> object`
+            // call argument is rejected (GS0155). The delegate's own invoke
+            // signature carries no nullability in oblivious metadata, so the
+            // evidence is the null argument flowing to it at the call site.
+            if (!variadic)
+            {
+                type = this.PromoteDelegateParameterInvokedWithNull(type, symbol);
+            }
+
             GExpression defaultValue = this.BuildOptionalParameterDefault(symbol, type, fallbackNode);
 
             // Issue #1913: a parameter's own attributes (e.g. `[Note] int x`) live on
@@ -9977,6 +9991,102 @@ public sealed class CSharpToGSharpTranslator
                     this.IsPromotedToNullableReference(symbol),
                 IMethodSymbol method =>
                     ObliviousNullabilityAnalyzer.IsTainted(this.context.Compilation, method),
+                _ => false,
+            };
+        }
+
+        // Issue #914 (oblivious sink): promote the arrow (delegate) parameter
+        // positions of <paramref name="symbol"/>'s type to `T?` for every position
+        // that receives a null / promoted-nullable argument at an invocation of the
+        // parameter inside its own method. A delegate parameter carries no
+        // nullability in oblivious metadata, so a call like `sendOrPost(o => …,
+        // null)` is the only evidence that the delegate's second position is really
+        // `object?`; without it the `nil -> object` argument is rejected (GS0155).
+        // Gated to an oblivious compilation; only reference-typed, non-nullable
+        // arrow positions are eligible.
+        private GTypeReference PromoteDelegateParameterInvokedWithNull(
+            GTypeReference type,
+            IParameterSymbol symbol)
+        {
+            if (!this.IsObliviousCompilation()
+                || type is not ArrowTypeReference arrow
+                || symbol.Type is not INamedTypeSymbol { TypeKind: TypeKind.Delegate } delegateType
+                || delegateType.DelegateInvokeMethod is not { } invoke
+                || invoke.Parameters.Length != arrow.ParameterTypes.Count)
+            {
+                return type;
+            }
+
+            SyntaxNode methodSyntax = symbol.ContainingSymbol?
+                .DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+            if (methodSyntax == null)
+            {
+                return type;
+            }
+
+            var nullablePositions = new HashSet<int>();
+            foreach (InvocationExpressionSyntax invocation in methodSyntax
+                .DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (!SymbolEqualityComparer.Default.Equals(
+                        this.context.GetSymbolInfo(invocation.Expression).Symbol, symbol))
+                {
+                    continue;
+                }
+
+                ArgumentListSyntax argumentList = invocation.ArgumentList;
+                for (int i = 0; i < argumentList.Arguments.Count && i < arrow.ParameterTypes.Count; i++)
+                {
+                    ExpressionSyntax argument = argumentList.Arguments[i].Expression;
+                    if (IsNullOrDefaultLiteral(argument) || this.IsNullablePromotedValue(argument))
+                    {
+                        nullablePositions.Add(i);
+                    }
+                }
+            }
+
+            if (nullablePositions.Count == 0)
+            {
+                return type;
+            }
+
+            var parameterTypes = new List<GTypeReference>(arrow.ParameterTypes.Count);
+            bool changed = false;
+            for (int i = 0; i < arrow.ParameterTypes.Count; i++)
+            {
+                GTypeReference parameterType = arrow.ParameterTypes[i];
+                ITypeSymbol invokeParameterType = invoke.Parameters[i].Type;
+                if (nullablePositions.Contains(i)
+                    && !parameterType.IsNullable
+                    && invokeParameterType is { IsReferenceType: true }
+                    && invokeParameterType.NullableAnnotation != NullableAnnotation.Annotated)
+                {
+                    parameterType = MakeNullable(parameterType);
+                    changed = true;
+                }
+
+                parameterTypes.Add(parameterType);
+            }
+
+            return changed
+                ? new ArrowTypeReference(parameterTypes, arrow.ReturnTypes, arrow.IsAsync) { IsNullable = arrow.IsNullable }
+                : type;
+        }
+
+        // Issue #914: whether <paramref name="expression"/> is a bare `null` /
+        // `null!` literal or a `default` / `default(T)` expression — the direct
+        // null-argument forms used to detect a null flowing into a delegate
+        // parameter position.
+        private static bool IsNullOrDefaultLiteral(ExpressionSyntax expression)
+        {
+            return expression switch
+            {
+                LiteralExpressionSyntax { RawKind: (int)SyntaxKind.NullLiteralExpression } => true,
+                LiteralExpressionSyntax { RawKind: (int)SyntaxKind.DefaultLiteralExpression } => true,
+                DefaultExpressionSyntax => true,
+                PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } suppress =>
+                    IsNullOrDefaultLiteral(suppress.Operand),
+                ParenthesizedExpressionSyntax paren => IsNullOrDefaultLiteral(paren.Expression),
                 _ => false,
             };
         }
