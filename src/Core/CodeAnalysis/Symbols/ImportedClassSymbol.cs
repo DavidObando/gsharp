@@ -332,7 +332,8 @@ public sealed class ImportedClassSymbol : Symbol
             ComputeInterpolatedStringArgFlags(callExpression, arguments.Length),
             argumentNames,
             closed => MemberLookup.BuildSymbolicMethodTypeArgs(closed, typeArgSymbols, symbolicArgVector),
-            supplementaryInterfaceCheck: supplementaryInterfaceCheck);
+            supplementaryInterfaceCheck: supplementaryInterfaceCheck,
+            constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(arguments));
 
         switch (result.Outcome)
         {
