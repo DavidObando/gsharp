@@ -14726,7 +14726,29 @@ public sealed class CSharpToGSharpTranslator
                 ? this.typeMapper.Map(targetSymbol, this.context, cast.Type.GetLocation())
                 : new NamedTypeReference(cast.Type.ToString());
 
-            return new ConversionExpression(targetType, this.TranslateExpression(cast.Expression));
+            GExpression operand = this.TranslateExpression(cast.Expression);
+
+            // Issue #914 (oblivious sink): an oblivious promoted-`T?` operand cast
+            // to a NON-NULL reference target (e.g. `(IEnumerable)o` where `o` is a
+            // promoted `object?`) is rejected by gsc — its `IEnumerable(o)`
+            // conversion requires a non-null operand (GS0155). C# performs the
+            // reference cast on the (possibly null) value and throws only on the
+            // subsequent non-null use (e.g. `foreach`), so asserting the operand
+            // `!!` here both compiles and preserves the throw-on-null semantics —
+            // the same mechanism the receiver / foreach-iterable null-forgiveness
+            // pass uses. Gated to oblivious; a `(object)`/`(object?)` reference
+            // upcast is already dropped above, and an already-`!` operand is not
+            // re-asserted.
+            if (this.IsObliviousCompilation()
+                && targetSymbol is { IsReferenceType: true }
+                && targetSymbol.NullableAnnotation != NullableAnnotation.Annotated
+                && cast.Expression is not PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
+                && this.IsNullablePromotedValue(cast.Expression))
+            {
+                operand = new NonNullAssertionExpression(operand);
+            }
+
+            return new ConversionExpression(targetType, operand);
         }
 
         private GExpression TranslateWith(WithExpressionSyntax with)
