@@ -351,11 +351,27 @@ internal sealed partial class ExpressionBinder
     /// <param name="left">The bound left operand.</param>
     /// <param name="right">The bound right operand.</param>
     /// <returns>The lowered bound expression, or <see langword="null"/>.</returns>
-    private BoundExpression TryBindPointerBinaryExpression(BinaryExpressionSyntax syntax, BoundExpression left, BoundExpression right)
+    private BoundExpression TryBindPointerBinaryExpression(BinaryExpressionSyntax syntax, BoundExpression left, BoundExpression right) =>
+        TryBindPointerBinaryOperation(syntax.OperatorToken.Kind, syntax.OperatorToken.Location, left, right);
+
+    /// <summary>
+    /// ADR-0122 / issue #1014: lowers a pointer arithmetic or comparison
+    /// operation given the base operator token kind (not tied to a
+    /// <see cref="BinaryExpressionSyntax"/>), so that both the binary form
+    /// <c>p + i</c> and the compound-assignment form <c>p += i</c> (issue
+    /// #2175) share the SAME pointer lowering. Returns <see langword="null"/>
+    /// when the operator/operand shape is not a supported pointer operation.
+    /// </summary>
+    /// <param name="operatorKind">The base binary operator token kind.</param>
+    /// <param name="operatorLocation">The source location used for diagnostics.</param>
+    /// <param name="left">The bound left operand.</param>
+    /// <param name="right">The bound right operand.</param>
+    /// <returns>The lowered bound expression, or <see langword="null"/>.</returns>
+    private BoundExpression TryBindPointerBinaryOperation(SyntaxKind operatorKind, TextLocation operatorLocation, BoundExpression left, BoundExpression right)
     {
         var leftPtr = left.Type as PointerTypeSymbol;
         var rightPtr = right.Type as PointerTypeSymbol;
-        switch (syntax.OperatorToken.Kind)
+        switch (operatorKind)
         {
             case SyntaxKind.PlusToken:
                 // ADR-0122 §3 / issue #1033: a `*void` pointer has no element
@@ -363,7 +379,7 @@ internal sealed partial class ExpressionBinder
                 // GS0403 (cast to a typed pointer `*T` first).
                 if (TypeSymbol.IsVoidPointer(left.Type) || TypeSymbol.IsVoidPointer(right.Type))
                 {
-                    Diagnostics.ReportVoidPointerOperationNotAllowed(syntax.OperatorToken.Location, "perform arithmetic on");
+                    Diagnostics.ReportVoidPointerOperationNotAllowed(operatorLocation, "perform arithmetic on");
                     return new BoundErrorExpression(null);
                 }
 
@@ -385,7 +401,7 @@ internal sealed partial class ExpressionBinder
                 // size, so a `*void` operand is rejected (GS0403).
                 if (TypeSymbol.IsVoidPointer(left.Type) || TypeSymbol.IsVoidPointer(right.Type))
                 {
-                    Diagnostics.ReportVoidPointerOperationNotAllowed(syntax.OperatorToken.Location, "perform arithmetic on");
+                    Diagnostics.ReportVoidPointerOperationNotAllowed(operatorLocation, "perform arithmetic on");
                     return new BoundErrorExpression(null);
                 }
 
@@ -412,7 +428,7 @@ internal sealed partial class ExpressionBinder
             case SyntaxKind.LessOrEqualsToken:
             case SyntaxKind.GreaterToken:
             case SyntaxKind.GreaterOrEqualsToken:
-                return LowerPointerComparison(syntax.OperatorToken.Kind, left, right);
+                return LowerPointerComparison(operatorKind, left, right);
 
             default:
                 return null;

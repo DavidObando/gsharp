@@ -846,6 +846,23 @@ internal sealed partial class ExpressionBinder
     {
         var left = leftRead;
         var right = boundRhs;
+
+        // ADR-0122 §5 / issue #2175: a compound assignment `p op= i` where the
+        // target is an unmanaged pointer (`*T`) is `p = p op i`, so reuse the
+        // SAME pointer binary-operator lowering that `p + i` / `p - i` uses
+        // (scaled native-int arithmetic), instead of failing to find a built-in
+        // `+=`/`-=` operator (GS0129). This generalizes to every legal pointee
+        // type, both `+=` and `-=`, and any integer RHS the binary path accepts;
+        // a `*void` target is rejected exactly as the binary path rejects it.
+        if (left.Type is PointerTypeSymbol)
+        {
+            var pointerResult = TryBindPointerBinaryOperation(baseOperatorKind, rhsLocation, left, right);
+            if (pointerResult != null)
+            {
+                return pointerResult;
+            }
+        }
+
         var op = BindBinaryOperatorWithNumericAdaptation(baseOperatorKind, ref left, ref right, rhsLocation, rhsLocation);
         if (op != null)
         {
