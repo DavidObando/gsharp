@@ -670,6 +670,18 @@ internal static class ObliviousNullabilityAnalyzer
 
                 break;
 
+            // `x switch { ... }`: any arm's result value may flow through.
+            case SwitchExpressionSyntax switchExpression:
+                foreach (SwitchExpressionArmSyntax arm in switchExpression.Arms)
+                {
+                    foreach (ISymbol source in ResolveSources(arm.Expression, model, scope))
+                    {
+                        yield return source;
+                    }
+                }
+
+                break;
+
             case CastExpressionSyntax cast:
                 foreach (ISymbol source in ResolveSources(cast.Expression, model, scope))
                 {
@@ -788,6 +800,20 @@ internal static class ObliviousNullabilityAnalyzer
             case ConditionalExpressionSyntax ternary:
                 return IsDirectlyNullable(ternary.WhenTrue, model)
                     || IsDirectlyNullable(ternary.WhenFalse, model);
+
+            // `x switch { ... }`: nullable iff any arm's result is (e.g. a
+            // `_ => null` / `_ => default` fallback arm, or an arm forwarding
+            // an already-nullable value).
+            case SwitchExpressionSyntax switchExpression:
+                foreach (SwitchExpressionArmSyntax arm in switchExpression.Arms)
+                {
+                    if (IsDirectlyNullable(arm.Expression, model))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
         }
 
         // Flow nullability when the context happens to be enabled (inert in a
