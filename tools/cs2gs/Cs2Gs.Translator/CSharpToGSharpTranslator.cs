@@ -507,7 +507,7 @@ public sealed class CSharpToGSharpTranslator
             "as", "async", "await", "break", "case", "catch", "chan", "class", "const",
             "continue", "default", "defer", "do", "else", "enum", "false", "fallthrough",
             "finally", "for", "func", "go", "goto", "guard", "if", "import", "interface",
-            "internal", "is", "let", "map", "nil", "open", "operator", "override",
+            "internal", "is", "let", "lock", "map", "nil", "open", "operator", "override",
             "package", "private", "protected", "public", "range", "return", "scope",
             "sealed", "select", "sequence", "struct", "switch", "throw", "true", "try",
             "type", "using", "var", "while",

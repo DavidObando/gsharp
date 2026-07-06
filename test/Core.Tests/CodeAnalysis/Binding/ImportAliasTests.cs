@@ -52,6 +52,20 @@ public class ImportAliasTests
         Assert.Empty(diagnostics);
     }
 
+    /// <summary>
+    /// A C# <c>using R = Some.Type;</c> alias whose target is a *type* (not a
+    /// namespace) must let a bare <c>R.StaticMember</c> resolve to that type's
+    /// static member. The alias target itself names the type, and the accessor's
+    /// right part is a static member of it — so the member access binds without a
+    /// "cannot find type R" error.
+    /// </summary>
+    [Fact]
+    public void Aliased_Type_Resolves_Static_Member_Access()
+    {
+        var diagnostics = Bind("import R = System.Console\n\nfunc F() {\n R.WriteLine(\"hi\")\n }\n");
+        Assert.Empty(diagnostics);
+    }
+
     private static ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Bind(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

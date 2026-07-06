@@ -1544,6 +1544,20 @@ internal sealed partial class ExpressionBinder
 
         var currentPath = import.Target;
         var currentRight = rightPart;
+
+        // A type alias (`import R = System.Console`) names a type outright: the
+        // import target itself resolves as a type, and the accessor's right part
+        // is a *static member* of it (`R.WriteLine`, `R.EncryptedFileExt`) rather
+        // than a further namespace/type segment. Resolve the target as a type
+        // first and leave the right part unconsumed so the caller binds it as the
+        // member access on the aliased type. (A plain namespace import target does
+        // not resolve as a type, so the segment-walk below still owns that case.)
+        if (scope.References.TryResolveType(currentPath, out var aliasTargetType))
+        {
+            importedClass = new ImportedClassSymbol(aliasTargetType, rightPart, references: scope.References);
+            return true;
+        }
+
         while (true)
         {
             NameExpressionSyntax typeNameSyntax;
