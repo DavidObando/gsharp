@@ -2138,6 +2138,20 @@ public sealed class CSharpToGSharpTranslator
             {
                 (string Name, ITypeSymbol Type, bool IsProperty) target = paramToTarget[param];
                 GTypeReference type = this.typeMapper.Map(target.Type, this.context, param.Locations.FirstOrDefault());
+
+                // Issue #914 (oblivious sink): a T2-lifted primary-constructor
+                // parameter must receive the SAME oblivious-nullability promotion
+                // as an ordinary parameter (MapParameter) — otherwise a reference
+                // (incl. function-typed) parameter that is null-conditionally used
+                // (`report?(…)`) or receives a promoted-nullable argument at a
+                // `base(...)`/`this(...)` call site keeps its non-nullable header
+                // type, so the lifted primary ctor's arity/signature no longer
+                // matches the promoted argument a derived ctor forwards (GS0214).
+                // Both helpers no-op for a nullable-enabled compilation and are
+                // already guarded to reference types, so value-type params are
+                // untouched.
+                type = this.PromoteIfUsedAsNullable(type, param);
+                type = this.PromoteDelegateParameterInvokedWithNull(type, param);
                 GExpression liftedDefault = this.BuildOptionalParameterDefault(param, type, node);
                 primaryParameters.Add(new Parameter(SanitizeIdentifier(target.Name), type, defaultValue: liftedDefault));
                 if (target.IsProperty)
@@ -5835,6 +5849,36 @@ public sealed class CSharpToGSharpTranslator
             return this.context.GetTypeInfo(assignment.Left).Type?.TypeKind == TypeKind.Delegate;
         }
 
+        // Issue #914 (oblivious sink): a CLR event subscription `e += handler` /
+        // `e -= handler` whose right-hand side is an oblivious-promoted nullable
+        // function value (e.g. a `DataReceivedEventHandler eventHandler = null`
+        // parameter that promotes to `((object, DataReceivedEventArgs) -> void)?`)
+        // assigns a `T?` into the event's NAMED delegate type. gsc imports that
+        // delegate target as a non-nullable reference — even when the C# BCL event
+        // is annotated `DataReceivedEventHandler?`, the metadata annotation is not
+        // carried onto the arrow type gsc converts through — so the extra `?` on
+        // the promoted RHS is rejected (GS0155). Forgive it at the sink with `!!`,
+        // exactly like every other promoted-nullable-into-non-nullable sink
+        // (return/argument/tuple). Gated to a promoted RHS, so a nullable-enabled
+        // compilation (nothing is promoted) and every non-promoted RHS are
+        // byte-identical.
+        private GExpression ForgiveEventSubscriptionRhs(
+            AssignmentExpressionSyntax assignment, GExpression translatedRhs)
+        {
+            if ((!assignment.IsKind(SyntaxKind.AddAssignmentExpression)
+                    && !assignment.IsKind(SyntaxKind.SubtractAssignmentExpression))
+                || translatedRhs is NonNullAssertionExpression
+                || this.context.GetSymbolInfo(assignment.Left).Symbol is not IEventSymbol eventSymbol
+                || eventSymbol.Type is not { IsReferenceType: true })
+            {
+                return translatedRhs;
+            }
+
+            return this.IsNullablePromotedValue(assignment.Right)
+                ? new NonNullAssertionExpression(translatedRhs)
+                : translatedRhs;
+        }
+
         // For a compound numeric assignment `x OP= y` (`+= -= *= /= %= &= |= ^=`),
         // G# requires the RHS to share the LHS's numeric type; a mismatched RHS is
         // coerced to the LHS type via the conversion-call form (e.g. `x += int64(y)`).
@@ -6801,6 +6845,7 @@ public sealed class CSharpToGSharpTranslator
                         this.TranslateExpression(assignment.Right));
                     assignRhs = this.CoerceCompoundAssignmentRhs(assignment, assignRhs);
                     assignRhs = this.CoercePointerConversion(assignment.Right, assignRhs);
+                    assignRhs = this.ForgiveEventSubscriptionRhs(assignment, assignRhs);
                     return new AssignmentStatement(
                         this.TranslateAssignmentTarget(assignment.Left),
                         assignRhs,
@@ -10523,6 +10568,11 @@ public sealed class CSharpToGSharpTranslator
                         return enumExtResult;
                     }
 
+                    if (this.TryTranslateNullConditionalDelegateInvoke(conditionalAccess, out GExpression delegateInvokeResult))
+                    {
+                        return delegateInvokeResult;
+                    }
+
                     return new ConditionalAccessExpression(
                         this.TranslateExpression(conditionalAccess.Expression),
                         this.TranslateExpression(conditionalAccess.WhenNotNull));
@@ -13492,6 +13542,57 @@ public sealed class CSharpToGSharpTranslator
             return true;
         }
 
+        // Issue #914 (oblivious sink): a null-conditional delegate/event invoke
+        // `recv?.Invoke(args)` whose receiver is a NON-simple expression (a call,
+        // parenthesized, or `??` expression) has no direct G# spelling —
+        // `recv?(args)` parses `recv` ending in `)`/`]` as a ternary condition
+        // (GS0155), and gsc cannot resolve the `.Invoke` MEMBER on a function
+        // whose type mentions a type parameter (`(T) -> R`, GS0159). The only
+        // form gsc accepts is the direct null-conditional call on a *local*, so
+        // spill the receiver into a single-evaluation `let` and invoke that:
+        // `recv?.Invoke(a)` → `let __spillN = recv` + `__spillN?(a)`. Requires an
+        // active spill seam (an arrow/statement body) to host the `let`; without
+        // one, defer to the existing `.Invoke` path, which is already correct for
+        // the non-type-parameter receiver shapes that reach here seam-less.
+        private bool TryTranslateNullConditionalDelegateInvoke(
+            ConditionalAccessExpressionSyntax conditionalAccess,
+            out GExpression result)
+        {
+            result = null;
+
+            if (this.pendingSpillPrologue == null
+                || conditionalAccess.WhenNotNull is not InvocationExpressionSyntax invocation
+                || invocation.Expression is not MemberBindingExpressionSyntax binding
+                || binding.Name.Identifier.Text != "Invoke")
+            {
+                return false;
+            }
+
+            if (this.context.GetSymbolInfo(invocation).Symbol
+                is not IMethodSymbol { MethodKind: MethodKind.DelegateInvoke })
+            {
+                return false;
+            }
+
+            // A simple identifier/member/`this` receiver already lowers to the
+            // direct `recv?(args)` form via TryGetDelegateInvokeReceiver — leave
+            // it untouched so the common case stays spill-free and byte-identical.
+            if (conditionalAccess.Expression is IdentifierNameSyntax
+                or MemberAccessExpressionSyntax
+                or ThisExpressionSyntax)
+            {
+                return false;
+            }
+
+            GExpression receiver = this.SpillOperand(
+                this.TranslateExpression(conditionalAccess.Expression));
+            var invokeArguments = this.TranslateArguments(invocation.ArgumentList.Arguments);
+            result = new ConditionalAccessExpression(
+                receiver,
+                new InvocationExpression(new ConditionalReceiverExpression(), invokeArguments, null));
+            return true;
+        }
+
         /// <summary>
         /// Issue #1879: resolves the real declaring static class for a C# 14
         /// extension-block member. Roslyn declares such a member on a synthetic
@@ -14856,6 +14957,23 @@ public sealed class CSharpToGSharpTranslator
                 && this.IsNullablePromotedValue(cast.Expression))
             {
                 operand = new NonNullAssertionExpression(operand);
+            }
+
+            // Issue #914: a CLR REFERENCE conversion `(T)expr` (a downcast such as
+            // `(IEnumerable)o`, or a cross-cast between reference types) has no
+            // conversion-call form in G# — gsc's `T(expr)` is the value/numeric/
+            // string-conversion form and rejects a reference cast (GS0155/GS0130
+            // "IEnumerable(o)" / "List[int32](o)"). The reference downcast form is
+            // `expr as T`, which yields `T?`; the surrounding null-forgiveness pass
+            // (receiver / foreach-iterable / return / argument) re-asserts `!!`
+            // wherever the context needs the non-null `T`, preserving the C# hard
+            // cast's throw-on-misuse. Boxing/unboxing and user-defined conversions
+            // are NOT reference conversions and keep the conversion-call form.
+            if (targetSymbol is { IsReferenceType: true }
+                && sourceSymbol != null
+                && this.context.Compilation.ClassifyConversion(sourceSymbol, targetSymbol).IsReference)
+            {
+                return new BinaryExpression(operand, "as", new TypeExpression(targetType));
             }
 
             return new ConversionExpression(targetType, operand);
