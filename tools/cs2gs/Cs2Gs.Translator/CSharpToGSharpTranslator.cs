@@ -5277,7 +5277,9 @@ public sealed class CSharpToGSharpTranslator
                         }
                     }
 
-                    returnPrologue.Add(new ReturnStatement(returnValue, isRef: ret.Expression is RefExpressionSyntax));
+                    returnPrologue.Add(new ReturnStatement(
+                        this.CoercePointerConversion(ret.Expression, returnValue),
+                        isRef: ret.Expression is RefExpressionSyntax));
                     return returnPrologue;
                 }
 
@@ -5421,9 +5423,11 @@ public sealed class CSharpToGSharpTranslator
 
                     try
                     {
-                        initializer = this.CoerceConstantToUnsigned(
+                        initializer = this.CoercePointerConversion(
                             declarator.Initializer.Value,
-                            this.TranslateExpression(declarator.Initializer.Value));
+                            this.CoerceConstantToUnsigned(
+                                declarator.Initializer.Value,
+                                this.TranslateExpression(declarator.Initializer.Value)));
                     }
                     finally
                     {
@@ -6272,6 +6276,41 @@ public sealed class CSharpToGSharpTranslator
                 new BinaryExpression(expression, "as", new TypeExpression(target)));
         }
 
+        // Wraps a translated expression in an explicit G# pointer conversion-call
+        // (`*void(expr)`, `*uint8(expr)`, ...) when C# performed an IMPLICIT
+        // pointer→pointer conversion at this position. In C# a pointer→pointer
+        // conversion between DIFFERENT pointee types (`byte* → void*`,
+        // `void* → byte*`, `int* → void*`, ...) is implicit, but per ADR-0122 §6
+        // G# requires it to be spelled explicitly as the conversion-call
+        // `*<TargetPointee>(expr)`; the bare operand is rejected with GS0156
+        // ("An explicit conversion exists"). Applied at argument, assignment,
+        // return, and local-initializer positions (issue #914).
+        //
+        // No wrap is emitted when the pointee types are identical (no conversion
+        // is needed) — this also naturally covers an already-explicit C# cast
+        // `(void*)x` bound to a `void*` target (source == converted == `void*`),
+        // which cs2gs already renders as `*void(x)`, avoiding a double wrap. The
+        // full target pointer type is mapped through the standard type mapper so
+        // the pointee (`void`, `uint8`, `int32`, ...) is spelled with G# names.
+        private GExpression CoercePointerConversion(ExpressionSyntax expression, GExpression translated)
+        {
+            if (expression == null)
+            {
+                return translated;
+            }
+
+            TypeInfo info = this.context.GetTypeInfo(expression);
+            if (info.Type is IPointerTypeSymbol source &&
+                info.ConvertedType is IPointerTypeSymbol target &&
+                !SymbolEqualityComparer.Default.Equals(source.PointedAtType, target.PointedAtType))
+            {
+                GTypeReference targetRef = this.typeMapper.Map(target, this.context, expression.GetLocation());
+                return new ConversionExpression(targetRef, translated);
+            }
+
+            return translated;
+        }
+
         // Reports whether `type` is a value type that is not `System.Nullable<T>`,
         // i.e. a target for which G#'s `as` operator is invalid (GS0270) and the
         // conversion-call form must be used instead.
@@ -6738,6 +6777,7 @@ public sealed class CSharpToGSharpTranslator
                         assignment.Right,
                         this.TranslateExpression(assignment.Right));
                     assignRhs = this.CoerceCompoundAssignmentRhs(assignment, assignRhs);
+                    assignRhs = this.CoercePointerConversion(assignment.Right, assignRhs);
                     return new AssignmentStatement(
                         this.TranslateAssignmentTarget(assignment.Left),
                         assignRhs,
@@ -13723,9 +13763,11 @@ public sealed class CSharpToGSharpTranslator
             // CoerceNumericArgumentToConverted (issue #1281) emits the bare operand
             // when gsc accepts the conversion on its own and keeps the explicit
             // `T(x)` wrap only where gsc still needs it.
-            return this.CoerceNumericArgumentToConverted(
-                argument,
-                this.TranslateExpression(argument.Expression));
+            return this.CoercePointerConversion(
+                argument.Expression,
+                this.CoerceNumericArgumentToConverted(
+                    argument,
+                    this.TranslateExpression(argument.Expression)));
         }
 
         // Coerce an argument expression to the numeric type C# implicitly converted
