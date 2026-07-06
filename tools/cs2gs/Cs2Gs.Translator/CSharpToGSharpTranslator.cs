@@ -14959,6 +14959,23 @@ public sealed class CSharpToGSharpTranslator
                 operand = new NonNullAssertionExpression(operand);
             }
 
+            // Issue #914: a CLR REFERENCE conversion `(T)expr` (a downcast such as
+            // `(IEnumerable)o`, or a cross-cast between reference types) has no
+            // conversion-call form in G# — gsc's `T(expr)` is the value/numeric/
+            // string-conversion form and rejects a reference cast (GS0155/GS0130
+            // "IEnumerable(o)" / "List[int32](o)"). The reference downcast form is
+            // `expr as T`, which yields `T?`; the surrounding null-forgiveness pass
+            // (receiver / foreach-iterable / return / argument) re-asserts `!!`
+            // wherever the context needs the non-null `T`, preserving the C# hard
+            // cast's throw-on-misuse. Boxing/unboxing and user-defined conversions
+            // are NOT reference conversions and keep the conversion-call form.
+            if (targetSymbol is { IsReferenceType: true }
+                && sourceSymbol != null
+                && this.context.Compilation.ClassifyConversion(sourceSymbol, targetSymbol).IsReference)
+            {
+                return new BinaryExpression(operand, "as", new TypeExpression(targetType));
+            }
+
             return new ConversionExpression(targetType, operand);
         }
 
