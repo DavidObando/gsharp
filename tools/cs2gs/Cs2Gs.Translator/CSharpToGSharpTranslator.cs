@@ -5849,6 +5849,36 @@ public sealed class CSharpToGSharpTranslator
             return this.context.GetTypeInfo(assignment.Left).Type?.TypeKind == TypeKind.Delegate;
         }
 
+        // Issue #914 (oblivious sink): a CLR event subscription `e += handler` /
+        // `e -= handler` whose right-hand side is an oblivious-promoted nullable
+        // function value (e.g. a `DataReceivedEventHandler eventHandler = null`
+        // parameter that promotes to `((object, DataReceivedEventArgs) -> void)?`)
+        // assigns a `T?` into the event's NAMED delegate type. gsc imports that
+        // delegate target as a non-nullable reference — even when the C# BCL event
+        // is annotated `DataReceivedEventHandler?`, the metadata annotation is not
+        // carried onto the arrow type gsc converts through — so the extra `?` on
+        // the promoted RHS is rejected (GS0155). Forgive it at the sink with `!!`,
+        // exactly like every other promoted-nullable-into-non-nullable sink
+        // (return/argument/tuple). Gated to a promoted RHS, so a nullable-enabled
+        // compilation (nothing is promoted) and every non-promoted RHS are
+        // byte-identical.
+        private GExpression ForgiveEventSubscriptionRhs(
+            AssignmentExpressionSyntax assignment, GExpression translatedRhs)
+        {
+            if ((!assignment.IsKind(SyntaxKind.AddAssignmentExpression)
+                    && !assignment.IsKind(SyntaxKind.SubtractAssignmentExpression))
+                || translatedRhs is NonNullAssertionExpression
+                || this.context.GetSymbolInfo(assignment.Left).Symbol is not IEventSymbol eventSymbol
+                || eventSymbol.Type is not { IsReferenceType: true })
+            {
+                return translatedRhs;
+            }
+
+            return this.IsNullablePromotedValue(assignment.Right)
+                ? new NonNullAssertionExpression(translatedRhs)
+                : translatedRhs;
+        }
+
         // For a compound numeric assignment `x OP= y` (`+= -= *= /= %= &= |= ^=`),
         // G# requires the RHS to share the LHS's numeric type; a mismatched RHS is
         // coerced to the LHS type via the conversion-call form (e.g. `x += int64(y)`).
@@ -6815,6 +6845,7 @@ public sealed class CSharpToGSharpTranslator
                         this.TranslateExpression(assignment.Right));
                     assignRhs = this.CoerceCompoundAssignmentRhs(assignment, assignRhs);
                     assignRhs = this.CoercePointerConversion(assignment.Right, assignRhs);
+                    assignRhs = this.ForgiveEventSubscriptionRhs(assignment, assignRhs);
                     return new AssignmentStatement(
                         this.TranslateAssignmentTarget(assignment.Left),
                         assignRhs,
