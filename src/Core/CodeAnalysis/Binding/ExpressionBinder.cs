@@ -1051,13 +1051,37 @@ internal sealed partial class ExpressionBinder
     private static bool TryGetTaskElementType(TypeSymbol type, out TypeSymbol element)
     {
         element = null;
+
+        // Issue #2195: for an imported generic awaitable (e.g. `Task[T]`,
+        // `ValueTask[T]`) recover the awaited ELEMENT type from the SYMBOLIC
+        // type argument rather than the awaiter's CLR `GetResult()` return
+        // type. A same-compilation user type or an open type parameter is
+        // erased to `object` in the awaitable's CLR type, so the CLR fallback
+        // below would surface `object` — collapsing e.g. `Task.Run`'s inferred
+        // `TResult` to `object` when inferred from an async-lambda body. Locate
+        // which of the awaitable's own type parameters its `GetResult()`
+        // surfaces (a `!n` declared on the open awaitable), then project that
+        // position out of the symbolic `TypeArguments`. This generalizes the
+        // former `Task`1`-only fast path to every generic awaitable whose
+        // `GetResult()` returns its own type parameter (covers `Task[T]` and
+        // `ValueTask[T]` without special-casing either).
         if (type is ImportedTypeSymbol importedTask
             && !importedTask.TypeArguments.IsDefaultOrEmpty
-            && importedTask.TypeArguments.Length == 1
-            && importedTask.OpenDefinition?.FullName == "System.Threading.Tasks.Task`1")
+            && importedTask.ClrType is System.Type importedTaskClr
+            && importedTaskClr.IsGenericType
+            && !importedTaskClr.IsGenericTypeDefinition)
         {
-            element = importedTask.TypeArguments[0];
-            return true;
+            var openDef = importedTaskClr.GetGenericTypeDefinition();
+            var openShape = AwaitableShape.Resolve(openDef);
+            if (openShape?.ResultType is System.Type openResult
+                && openResult.IsGenericParameter
+                && ClrTypeUtilities.IsSameAs(openResult.DeclaringType, openDef)
+                && openResult.GenericParameterPosition >= 0
+                && openResult.GenericParameterPosition < importedTask.TypeArguments.Length)
+            {
+                element = importedTask.TypeArguments[openResult.GenericParameterPosition];
+                return true;
+            }
         }
 
         var clr = type?.ClrType;

@@ -729,7 +729,17 @@ public static class MoveNextBodyRewriter
                 {
                     // Value-type awaitables require a managed pointer (byref) for the
                     // instance GetAwaiter() call. Spill to a temp local and take address.
-                    var awaitableTypeSymbol = TypeSymbol.FromClrType(awaitableClrType);
+                    // Issue #2195: use the operand's SYMBOLIC type (e.g.
+                    // `ValueTask[Box]` / `ValueTask[T]`) for the spill temp rather
+                    // than its erased CLR type (`ValueTask<object>`). The symbolic
+                    // type argument is erased to `object` for a same-compilation
+                    // user type or an open type parameter; typing the temp with the
+                    // erased shape produced unverifiable IL (a `ValueTask<Box>`
+                    // value stored into a `ValueTask<object>` slot) that also failed
+                    // to load (`BadImageFormatException`) inside a generic async
+                    // lambda closure. The reference-type awaitable path below
+                    // already threads the symbolic operand type through unchanged.
+                    var awaitableTypeSymbol = awaitExpr.Expression?.Type ?? TypeSymbol.FromClrType(awaitableClrType);
                     var tempLocal = new LocalVariableSymbol(
                         "<>awaitable_" + resumePoint.State, isReadOnly: false, awaitableTypeSymbol);
                     ctx.allLocals.Add(tempLocal);
