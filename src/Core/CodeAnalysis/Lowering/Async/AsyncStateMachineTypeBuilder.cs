@@ -214,7 +214,7 @@ public static class AsyncStateMachineTypeBuilder
 
         if (kickoff.Type == TypeSymbol.Void)
         {
-            return references.TryResolveType(wrapperName, out var taskType) ? taskType : null;
+            return references.TryResolveType(wrapperName, requireExternalVisibility: false, out var taskType) ? taskType : null;
         }
 
         // Issue #530: for a nullable value type (e.g. `int32?`), the CLR type
@@ -225,7 +225,7 @@ public static class AsyncStateMachineTypeBuilder
         if (kickoff.Type is NullableTypeSymbol nullable
             && nullable.UnderlyingType?.ClrType is { IsValueType: true } innerVt)
         {
-            if (!references.TryResolveType("System.Nullable`1", out var nullableOpen) || nullableOpen == null)
+            if (!references.TryResolveType("System.Nullable`1", requireExternalVisibility: false, out var nullableOpen) || nullableOpen == null)
             {
                 return null;
             }
@@ -275,7 +275,7 @@ public static class AsyncStateMachineTypeBuilder
             }
         }
 
-        return references.TryResolveType(wrapperOpenName, out var open)
+        return references.TryResolveType(wrapperOpenName, requireExternalVisibility: false, out var open)
             ? open.MakeGenericType(inner)
             : null;
     }

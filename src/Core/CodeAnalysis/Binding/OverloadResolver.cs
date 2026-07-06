@@ -143,6 +143,7 @@ internal sealed class OverloadResolver
     private readonly Func<FunctionSymbol> getCurrentFunction;
     private readonly Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression> bindLambdaWithTarget;
     private readonly Func<StructSymbol, CallExpressionSyntax, BoundExpression> bindUserTypeStaticCall;
+    private readonly Func<System.Type, CallExpressionSyntax, BoundExpression> bindImportedClrStaticCall;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="OverloadResolver"/>
@@ -237,6 +238,10 @@ internal sealed class OverloadResolver
     /// resolved struct/class, used by the unqualified implicit-<c>this</c> path
     /// when unified instance+static overload resolution selects a static sibling.
     /// May be <see langword="null"/>.</param>
+    /// <param name="bindImportedClrStaticCall">ADR-0134 (extended): callback that
+    /// finalizes an unqualified call as a qualified static call against a
+    /// referenced-assembly CLR type brought into scope by a type import
+    /// (C# <c>using static System.Math</c>). May be <see langword="null"/>.</param>
     public OverloadResolver(
         BinderContext binderCtx,
         MemberLookup memberLookup,
@@ -266,7 +271,8 @@ internal sealed class OverloadResolver
         Func<TypeParameterSymbol, string> describeConstraint,
         Func<FunctionSymbol> getCurrentFunction,
         Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression> bindLambdaWithTarget = null,
-        Func<StructSymbol, CallExpressionSyntax, BoundExpression> bindUserTypeStaticCall = null)
+        Func<StructSymbol, CallExpressionSyntax, BoundExpression> bindUserTypeStaticCall = null,
+        Func<System.Type, CallExpressionSyntax, BoundExpression> bindImportedClrStaticCall = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
         this.memberLookup = memberLookup ?? throw new ArgumentNullException(nameof(memberLookup));
@@ -297,6 +303,31 @@ internal sealed class OverloadResolver
         this.getCurrentFunction = getCurrentFunction ?? throw new ArgumentNullException(nameof(getCurrentFunction));
         this.bindLambdaWithTarget = bindLambdaWithTarget;
         this.bindUserTypeStaticCall = bindUserTypeStaticCall;
+        this.bindImportedClrStaticCall = bindImportedClrStaticCall;
+    }
+
+    /// <summary>
+    /// Whether the referenced-assembly CLR <paramref name="type"/> declares a
+    /// <c>public static</c> method named <paramref name="name"/> — used to select
+    /// a static-import candidate for an unqualified call (ADR-0134, extended to
+    /// imported CLR types).
+    /// </summary>
+    private static bool ClrTypeExposesStaticMethod(System.Type type, string name)
+    {
+        if (type == null)
+        {
+            return false;
+        }
+
+        foreach (var m in ClrTypeUtilities.SafeGetMethods(type, System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public))
+        {
+            if (string.Equals(m.Name, name, System.StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private DiagnosticBag Diagnostics => binderCtx.Diagnostics;
@@ -5042,6 +5073,47 @@ internal sealed class OverloadResolver
                     if (matchedStaticImport != null)
                     {
                         return bindUserTypeStaticCall(matchedStaticImport, syntax);
+                    }
+                }
+
+                // ADR-0134 (extended): an unqualified call may also resolve to a
+                // `public static` method of a referenced-assembly CLR type brought
+                // into scope by a type import (`import System.Math` from C#'s
+                // `using static System.Math`). Consulted only when no
+                // same-compilation source class matched above; the imported
+                // qualified static-call binder (`Type.method(args)`) provides full
+                // optional/variadic/generic fidelity.
+                if (bindImportedClrStaticCall != null)
+                {
+                    System.Type matchedClrStaticImport = null;
+                    var ambiguousClrStaticImport = false;
+                    foreach (var clrType in Scope.EnumerateStaticImportClrTypes())
+                    {
+                        if (!ClrTypeExposesStaticMethod(clrType, syntax.Identifier.Text))
+                        {
+                            continue;
+                        }
+
+                        if (matchedClrStaticImport == null)
+                        {
+                            matchedClrStaticImport = clrType;
+                        }
+                        else if (!ClrTypeUtilities.IsSameAs(matchedClrStaticImport, clrType))
+                        {
+                            ambiguousClrStaticImport = true;
+                            break;
+                        }
+                    }
+
+                    if (ambiguousClrStaticImport)
+                    {
+                        Diagnostics.ReportAmbiguousImportedStaticMember(syntax.Identifier.Location, syntax.Identifier.Text);
+                        return new BoundErrorExpression(null);
+                    }
+
+                    if (matchedClrStaticImport != null)
+                    {
+                        return bindImportedClrStaticCall(matchedClrStaticImport, syntax);
                     }
                 }
 

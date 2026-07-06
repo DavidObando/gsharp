@@ -135,6 +135,44 @@ class C {
         Assert.Empty(diagnostics);
     }
 
+    [Fact]
+    public void ImportedStaticMethodLiteralAdaptsToNarrowerParam_BindsWithoutDiagnostics()
+    {
+        // System.Buffer.SetByte(Array, int, byte) is a single-overload STATIC
+        // imported method whose last parameter is `byte`. A bare in-range int
+        // literal (255) must adapt via constant-narrowing on the static-call
+        // path (ImportedClassSymbol.TryLookupFunction), which previously omitted
+        // the check and rejected the literal with GS0159.
+        var source = @"
+package p
+import System
+class C {
+    func W(a []uint8) {
+        Buffer.SetByte(a, 0, 255)
+    }
+}
+";
+        Assert.Empty(EmitDiagnostics(source));
+    }
+
+    [Fact]
+    public void ImportedStaticMethodOutOfRangeLiteral_StillReportsDiagnostic()
+    {
+        // 999 does not fit `byte`, so the constant-narrowing adaptation fails and
+        // the static call remains unresolved — the rule must not silently accept
+        // out-of-range constants.
+        var source = @"
+package p
+import System
+class C {
+    func W(a []uint8) {
+        Buffer.SetByte(a, 0, 999)
+    }
+}
+";
+        Assert.NotEmpty(EmitDiagnostics(source));
+    }
+
     private static IReadOnlyList<Diagnostic> EmitDiagnostics(string source)
     {
         var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(source)));

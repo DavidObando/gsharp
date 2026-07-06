@@ -13352,6 +13352,44 @@ public sealed class CSharpToGSharpTranslator
                     staticExtTypeArgs);
             }
 
+            // A SOURCE-defined extension method called through its BARE name
+            // (`ApplicableState(book.Conversion)`) — the unqualified static form a
+            // sibling member inside the declaring `static class` uses — must be
+            // rewritten to the G# receiver-clause call `book.Conversion.ApplicableState()`
+            // for the same reason as the `Owner.M(recv, args)` static form above:
+            // cs2gs lifts every non-enum source extension method to a top-level
+            // receiver-clause `func (recv R) M[…](…)` (ADR-0115 §B.19), which gsc
+            // invokes ONLY through the receiver form. Without this the bare call
+            // falls through to the sibling-static-call branch below and is qualified
+            // as `EntityExtensions.ApplicableState(...)`, but the lifted extension
+            // leaves no `EntityExtensions` type behind (GS0157). The reduced instance
+            // form already binds directly (`MethodKind.ReducedExtension` excluded),
+            // and enum receivers keep the positional `Owner.M(x)` helper form.
+            if (invocation.Expression is SimpleNameSyntax bareExtName
+                && bareExtName is IdentifierNameSyntax or GenericNameSyntax
+                && this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol
+                    { IsExtensionMethod: true, MethodKind: not MethodKind.ReducedExtension } bareExt
+                && bareExt.Parameters.Length >= 1
+                && !(bareExt.ReducedFrom ?? bareExt).DeclaringSyntaxReferences.IsDefaultOrEmpty
+                && (bareExt.Parameters[0].Type?.TypeKind ?? TypeKind.Unknown) != TypeKind.Enum
+                && invocation.ArgumentList.Arguments.Count >= 1)
+            {
+                GExpression bareExtReceiver =
+                    this.TranslateExpression(invocation.ArgumentList.Arguments[0].Expression);
+                var bareExtRest = this.TranslateArguments(
+                    SyntaxFactory.SeparatedList(invocation.ArgumentList.Arguments.Skip(1)));
+                IReadOnlyList<GTypeReference> bareExtTypeArgs =
+                    bareExtName is GenericNameSyntax bareExtGeneric
+                        ? this.MapTypeArguments(bareExtGeneric)
+                        : null;
+                return new InvocationExpression(
+                    new MemberAccessExpression(
+                        bareExtReceiver,
+                        SanitizeIdentifier((bareExt.ReducedFrom ?? bareExt).Name)),
+                    bareExtRest,
+                    bareExtTypeArgs);
+            }
+
             // A generic call `Foo<T>(...)` carries its type arguments on the name;
             // lift them onto the G# bracket-type-argument form `Foo[T](...)`.
             if (invocation.Expression is GenericNameSyntax generic)

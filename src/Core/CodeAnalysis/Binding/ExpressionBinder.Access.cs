@@ -2682,6 +2682,84 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
+        // ADR-0134 (extended): fall back to referenced-assembly CLR types brought
+        // into scope by a type import (`import System.Math` from C#'s
+        // `using static System.Math`). Only consulted when no same-compilation
+        // source class exposed the member above.
+        System.Type clrMatch = null;
+        var clrAmbiguous = false;
+        foreach (var clrType in scope.EnumerateStaticImportClrTypes())
+        {
+            if (!ClrTypeExposesStaticMember(clrType, name))
+            {
+                continue;
+            }
+
+            if (clrMatch == null)
+            {
+                clrMatch = clrType;
+            }
+            else if (!ClrTypeUtilities.IsSameAs(clrMatch, clrType))
+            {
+                clrAmbiguous = true;
+                break;
+            }
+        }
+
+        if (clrAmbiguous)
+        {
+            Diagnostics.ReportAmbiguousImportedStaticMember(syntax.IdentifierToken.Location, name);
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
+        if (clrMatch != null)
+        {
+            var classSymbol = new ImportedClassSymbol(clrMatch, syntax, references: scope.References);
+            result = BindAccessorStep(receiver: null, classSymbol, syntax);
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether the referenced-assembly CLR <paramref name="type"/> declares a
+    /// <c>public static</c> field, property, or method named <paramref name="name"/>
+    /// — the imported-CLR analogue of <see cref="ImportedTypeExposesStaticMember"/>.
+    /// </summary>
+    private static bool ClrTypeExposesStaticMember(System.Type type, string name)
+    {
+        if (type == null)
+        {
+            return false;
+        }
+
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public;
+        foreach (var m in ClrTypeUtilities.SafeGetMethods(type, flags))
+        {
+            if (string.Equals(m.Name, name, System.StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        foreach (var p in ClrTypeUtilities.SafeGetProperties(type, flags))
+        {
+            if (string.Equals(p.Name, name, System.StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        foreach (var f in ClrTypeUtilities.SafeGetFields(type, flags))
+        {
+            if (string.Equals(f.Name, name, System.StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 

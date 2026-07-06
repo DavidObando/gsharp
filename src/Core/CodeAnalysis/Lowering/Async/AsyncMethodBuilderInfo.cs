@@ -192,7 +192,7 @@ public sealed class AsyncMethodBuilderInfo
         {
             if (resolver != null)
             {
-                if (resolver.TryResolveType(fullName, out var t) && t != null)
+                if (resolver.TryResolveType(fullName, requireExternalVisibility: false, out var t) && t != null)
                 {
                     return t;
                 }
