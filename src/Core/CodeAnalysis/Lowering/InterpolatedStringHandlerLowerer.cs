@@ -113,6 +113,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
         {
             Imports = program.Imports,
             FriendAssemblies = program.FriendAssemblies,
+            AssemblyAttributes = program.AssemblyAttributes,
         };
 
         return result;

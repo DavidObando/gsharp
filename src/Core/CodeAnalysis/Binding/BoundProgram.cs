@@ -269,4 +269,14 @@ public sealed class BoundProgram
     /// row per entry.
     /// </summary>
     public ImmutableArray<string> FriendAssemblies { get; internal set; } = ImmutableArray<string>.Empty;
+
+    /// <summary>
+    /// Gets every file-level <c>@assembly:</c> annotation (issue #2237)
+    /// EXCEPT <c>InternalsVisibleTo</c> (see <see cref="FriendAssemblies"/>).
+    /// Populated from <see cref="BoundGlobalScope.AssemblyAttributes"/>; the
+    /// emitter writes one real <c>CustomAttribute</c> row per entry via the
+    /// same generic <c>CustomAttributeEncoder.EmitBoundAttribute</c> path
+    /// used for every other declaration-level attribute.
+    /// </summary>
+    public ImmutableArray<BoundAttribute> AssemblyAttributes { get; internal set; } = ImmutableArray<BoundAttribute>.Empty;
 }

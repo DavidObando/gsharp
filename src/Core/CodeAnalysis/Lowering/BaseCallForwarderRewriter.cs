@@ -131,6 +131,7 @@ public static class BaseCallForwarderRewriter
         {
             Imports = program.Imports,
             FriendAssemblies = program.FriendAssemblies,
+            AssemblyAttributes = program.AssemblyAttributes,
         };
     }
 

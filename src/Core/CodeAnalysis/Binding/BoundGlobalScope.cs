@@ -292,6 +292,16 @@ public sealed class BoundGlobalScope
     public ImmutableArray<string> FriendAssemblies { get; internal set; } = ImmutableArray<string>.Empty;
 
     /// <summary>
+    /// Gets every file-level <c>@assembly:</c> annotation (issue #2237)
+    /// EXCEPT <c>InternalsVisibleTo</c> (see <see cref="FriendAssemblies"/>),
+    /// bound through the general attribute binder so any C#-parity assembly
+    /// attribute (<c>AssemblyVersionAttribute</c>,
+    /// <c>AssemblyMetadataAttribute</c>, a same-compilation user attribute,
+    /// ...) becomes a real assembly-level <c>CustomAttribute</c> row.
+    /// </summary>
+    public ImmutableArray<BoundAttribute> AssemblyAttributes { get; internal set; } = ImmutableArray<BoundAttribute>.Empty;
+
+    /// <summary>
     /// Returns every import visible across the whole <see cref="Previous"/>
     /// chain, oldest submission first (issue #2101). This is the cumulative
     /// view that <see cref="Imports"/> itself used to provide directly —
