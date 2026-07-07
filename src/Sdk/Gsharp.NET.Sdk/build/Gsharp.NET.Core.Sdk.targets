@@ -1,6 +1,7 @@
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
 
   <UsingTask AssemblyFile="$(GsharpToolFullPath)" TaskName="Gsharp.NET.Sdk.Tools.BuildTask" />
+  <UsingTask AssemblyFile="$(GsharpToolFullPath)" TaskName="Gsharp.NET.Sdk.Tools.GsgenTask" />
 
   <PropertyGroup>
     <CoreCompileDependsOn>_ComputeNonExistentFileProperty</CoreCompileDependsOn>
@@ -69,6 +70,120 @@
     <ItemGroup>
       <FileWrites Include="$(_GsharpCoreCompileInputsCacheFile)" />
     </ItemGroup>
+  </Target>
+
+  <!-- ADR-0145 §E/§F: source-generator (gsgen) integration.
+
+       Three cooperating targets run before CoreCompile:
+         1. _GsharpResolveAnalyzers      - resolve the C# analyzer/generator set.
+         2. _GsharpRunSourceGenerators   - run gsgen (incremental).
+         3. _GsharpIncludeGeneratedCompile - fold the generated .g.gs into @(Compile)
+                                             (always runs, even when (2) was up to date). -->
+
+  <!-- (1) Because the SDK sets <Language>Gsharp</Language>, NuGet's normal
+       ResolvePackageAssets never selects C# analyzer assets (it filters analyzer
+       folders by ProjectLanguage). Re-invoke the SAME task a second time with
+       ProjectLanguage=C# and our CompilerApiVersion, into a DISTINCT cache file,
+       capturing only its Analyzers output. Then union in any user @(Analyzer)
+       items. If the resulting set is empty, the generator run is skipped (fast
+       path via the Condition on _GsharpRunSourceGenerators). -->
+  <Target Name="_GsharpResolveAnalyzers"
+          DependsOnTargets="ResolvePackageAssets"
+          Condition=" '$(GsharpRunSourceGenerators)' != 'false' ">
+    <ResolvePackageAssets
+        ProjectAssetsFile="$(ProjectAssetsFile)"
+        ProjectAssetsCacheFile="$(ProjectAssetsCacheFile).gsgen"
+        ProjectPath="$(MSBuildProjectFullPath)"
+        ProjectLanguage="C#"
+        CompilerApiVersion="$(GsharpCompilerApiVersion)"
+        EmitAssetsLogMessages="$(EmitAssetsLogMessages)"
+        TargetFramework="$(TargetFramework)"
+        RuntimeIdentifier="$(RuntimeIdentifier)"
+        PlatformLibraryName="$(MicrosoftNETPlatformLibrary)"
+        RuntimeFrameworks="@(RuntimeFramework)"
+        IsSelfContained="$(SelfContained)"
+        MarkPackageReferencesAsExternallyResolved="$(MarkPackageReferencesAsExternallyResolved)"
+        DisablePackageAssetsCache="$(DisablePackageAssetsCache)"
+        DisableFrameworkAssemblies="$(DisableLockFileFrameworks)"
+        CopyLocalRuntimeTargetAssets="$(CopyLocalRuntimeTargetAssets)"
+        DisableTransitiveProjectReferences="$(DisableTransitiveProjectReferences)"
+        DisableTransitiveFrameworkReferences="$(DisableTransitiveFrameworkReferences)"
+        DotNetAppHostExecutableNameWithoutExtension="$(_DotNetAppHostExecutableNameWithoutExtension)"
+        ShimRuntimeIdentifiers="@(_PackAsToolShimRuntimeIdentifiers)"
+        EnsureRuntimePackageDependencies="$(EnsureRuntimePackageDependencies)"
+        VerifyMatchingImplicitPackageVersion="$(VerifyMatchingImplicitPackageVersion)"
+        ExpectedPlatformPackages="@(ExpectedPlatformPackages)"
+        SatelliteResourceLanguages="$(SatelliteResourceLanguages)"
+        DesignTimeBuild="$(DesignTimeBuild)"
+        PackageReferences="@(PackageReference)"
+        DefaultImplicitPackages="$(DefaultImplicitPackages)"
+        ContinueOnError="true">
+      <Output TaskParameter="Analyzers" ItemName="GsharpAnalyzer" />
+    </ResolvePackageAssets>
+
+    <!-- Union in analyzers the user added directly (rare for .gsproj, but honor
+         the standard @(Analyzer) item group like csc does). -->
+    <ItemGroup>
+      <GsharpAnalyzer Include="@(Analyzer)" />
+    </ItemGroup>
+
+    <Message Importance="Low" Text="gsgen: resolved analyzers: @(GsharpAnalyzer)" />
+  </Target>
+
+  <!-- (2) Run gsgen over the user's .gs (BEFORE generated files are added to
+       @(Compile)), the resolved reference closure, and the resolved analyzers.
+       Incremental: re-runs only when a source/analyzer/reference/project file is
+       newer than the manifest. -->
+  <Target Name="_GsharpRunSourceGenerators"
+          BeforeTargets="CoreCompile"
+          DependsOnTargets="_GsharpResolveAnalyzers;ResolveReferences"
+          Condition=" '$(GsharpRunSourceGenerators)' != 'false' "
+          Inputs="@(Compile);@(GsharpAnalyzer);@(ReferencePathWithRefAssemblies);$(MSBuildAllProjects)"
+          Outputs="$(IntermediateOutputPath)gsgen\gsgen.manifest">
+    <!-- The analyzer-empty fast path is gated on the TASK, not the target's
+         Condition: a target whose Condition is false never runs its
+         DependsOnTargets, so gating the target on '@(GsharpAnalyzer)' would
+         prevent _GsharpResolveAnalyzers (which POPULATES that item) from ever
+         running — a chicken-and-egg deadlock. Keep the target unconditional and
+         let _GsharpResolveAnalyzers run first, then skip the actual gsgen launch
+         when it resolved nothing. -->
+    <GsgenTask
+        Condition=" '@(GsharpAnalyzer)' != '' "
+        GsgenToolFullPath="$(GsgenToolFullPath)"
+        Compile="@(Compile)"
+        References="@(ReferencePathWithRefAssemblies)"
+        Analyzers="@(GsharpAnalyzer)"
+        OutputDir="$(IntermediateOutputPath)gsgen\"
+        ManifestPath="$(IntermediateOutputPath)gsgen\gsgen.manifest"
+        ResponseFilePath="$(IntermediateOutputPath)$(TargetName).gsgen.rsp"
+        RootNamespace="$(RootNamespace)"
+        BasePath="$(MSBuildProjectDirectory)" />
+  </Target>
+
+  <!-- (3) Fold the generated parts into @(Compile). This target has NO
+       Inputs/Outputs so it ALWAYS runs before CoreCompile — even when (2) was
+       skipped as up to date — reading the manifest gsgen wrote (this run or a
+       prior one) and adding each listed .g.gs to @(Compile) so CoreCompile's
+       Inputs="@(Compile)" picks them up. -->
+  <Target Name="_GsharpIncludeGeneratedCompile"
+          BeforeTargets="CoreCompile"
+          DependsOnTargets="_GsharpRunSourceGenerators"
+          Condition=" '$(GsharpRunSourceGenerators)' != 'false' and Exists('$(IntermediateOutputPath)gsgen\gsgen.manifest') ">
+    <ReadLinesFromFile File="$(IntermediateOutputPath)gsgen\gsgen.manifest">
+      <Output TaskParameter="Lines" ItemName="_GsharpGeneratedGsFile" />
+    </ReadLinesFromFile>
+
+    <ItemGroup>
+      <Compile Include="@(_GsharpGeneratedGsFile)" Condition=" '@(_GsharpGeneratedGsFile)' != '' " />
+
+      <!-- Track generated outputs (parts + manifest) so Clean removes them and
+           incremental build sees them. -->
+      <FileWrites Include="@(_GsharpGeneratedGsFile)" Condition=" '@(_GsharpGeneratedGsFile)' != '' " />
+      <FileWrites Include="$(IntermediateOutputPath)gsgen\gsgen.manifest" />
+      <FileWrites Include="$(IntermediateOutputPath)$(TargetName).gsgen.rsp" Condition="Exists('$(IntermediateOutputPath)$(TargetName).gsgen.rsp')" />
+    </ItemGroup>
+
+    <Message Importance="Low" Text="gsgen: added generated sources to Compile: @(_GsharpGeneratedGsFile)" />
   </Target>
 
   <Target Name="CoreCompile"
