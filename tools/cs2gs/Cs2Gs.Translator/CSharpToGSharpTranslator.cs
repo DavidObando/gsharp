@@ -61,6 +61,32 @@ public sealed class CSharpToGSharpTranslator
     // every document translated from the same compilation.
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>>> PartialTypePartsCache = new();
 
+    // ADR-0145 (§C/§D): opt-in "preserve partial parts" mode. In the DEFAULT
+    // (false) cs2gs-migration mode, all C# `partial` parts of a type are MERGED
+    // into ONE non-partial G# type, emitted once (issue #1910). The
+    // source-generator host needs the OPPOSITE: back-translate each generated C#
+    // `partial` declaration into a STANDALONE G# `partial` part (no cross-part
+    // merge) so a generated part augments the user's own G# type (ADR-0144).
+    // When true: partial parts are never merged (each declaration translates
+    // using only its own members) and a C# `partial` modifier is carried onto
+    // the emitted `TypeDeclaration` as `isPartial`.
+    private readonly bool preservePartialParts;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="CSharpToGSharpTranslator"/> class.
+    /// </summary>
+    /// <param name="preservePartialParts">
+    /// When <see langword="false"/> (default), C# <c>partial</c> parts of a type
+    /// are merged into one non-partial G# type (issue #1910 cs2gs-migration
+    /// behavior). When <see langword="true"/> (ADR-0145 generator host), each
+    /// <c>partial</c> declaration is translated as a standalone G# <c>partial</c>
+    /// part with no cross-part merge.
+    /// </param>
+    public CSharpToGSharpTranslator(bool preservePartialParts = false)
+    {
+        this.preservePartialParts = preservePartialParts;
+    }
+
     /// <summary>
     /// Translates a loaded C# document into a G# <see cref="CompilationUnit"/>,
     /// recording any unsupported constructs on a fresh context. Use
@@ -102,8 +128,13 @@ public sealed class CSharpToGSharpTranslator
         // `using` directives of every non-primary part whose primary part is
         // declared in THIS tree, so the merged output's import block covers
         // every name the merged-in bodies rely on.
+        // ADR-0145 preserve mode: each part is a standalone declaration, so it
+        // must NOT pull in sibling parts' `using` directives — its own imports
+        // are all it needs (there is no cross-part member merge to resolve).
         IEnumerable<Microsoft.CodeAnalysis.SyntaxTree> extraUsingTrees =
-            CollectExtraUsingTrees(root, partialTypeParts);
+            this.preservePartialParts
+                ? Enumerable.Empty<Microsoft.CodeAnalysis.SyntaxTree>()
+                : CollectExtraUsingTrees(root, partialTypeParts);
         IReadOnlyList<ImportDirective> imports = this.TranslateImports(root, extraUsingTrees, context);
 
         HashSet<INamedTypeSymbol> openBases = GetOrCollectSubclassedBaseTypes(context.Compilation);
@@ -120,7 +151,7 @@ public sealed class CSharpToGSharpTranslator
         IMethodSymbol entryPoint = context.Compilation.GetEntryPoint(default);
         INamedTypeSymbol entryType = entryPoint?.ContainingType;
 
-        var visitor = new DeclarationVisitor(context, new CSharpTypeMapper(), openBases, staticUsingTargets, entryPoint, partialTypeParts);
+        var visitor = new DeclarationVisitor(context, new CSharpTypeMapper(), openBases, staticUsingTargets, entryPoint, partialTypeParts, this.preservePartialParts);
 
         var members = new List<GNode>();
         var trailingStatements = new List<GNode>();
@@ -493,6 +524,12 @@ public sealed class CSharpToGSharpTranslator
         // declaration; every other part's members are merged into it.
         private readonly Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts;
 
+        // ADR-0145 (§C/§D): when true, `partial` parts are NOT merged — every
+        // part is emitted as its own standalone G# `partial` declaration (using
+        // only its own members), so a generated part augments the user's real G#
+        // type (ADR-0144). See `CSharpToGSharpTranslator.preservePartialParts`.
+        private readonly bool preservePartialParts;
+
         // Issue #1201 / ADR-0134: the types targeted by `using static X` in this
         // document. A bare reference to one of their static members is left
         // UNQUALIFIED (gsc resolves it through `import X`), unlike a sibling
@@ -772,13 +809,15 @@ public sealed class CSharpToGSharpTranslator
             HashSet<INamedTypeSymbol> subclassedBases,
             HashSet<INamedTypeSymbol> staticUsingTargets,
             IMethodSymbol entryPoint,
-            Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts)
+            Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts,
+            bool preservePartialParts = false)
         {
             this.context = context;
             this.typeMapper = typeMapper;
             this.subclassedBases = subclassedBases;
             this.staticUsingTargets = staticUsingTargets ?? new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
             this.partialTypeParts = partialTypeParts ?? new Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>>(SymbolEqualityComparer.Default);
+            this.preservePartialParts = preservePartialParts;
 
             // `entryPoint` is threaded in by the caller (`TranslateDocument`)
             // instead of being recomputed here: `Compilation.GetEntryPoint`
@@ -1555,8 +1594,12 @@ public sealed class CSharpToGSharpTranslator
             // part's members so the type is declared exactly once (GS0102 was
             // the two-full-declarations symptom). A non-primary part therefore
             // contributes nothing of its own here.
+            // ADR-0145 preserve mode bypasses partial merging entirely: `otherParts`
+            // stays null, so no non-primary part is skipped and no other part's
+            // members are pulled in below — every `partial` declaration is emitted
+            // standalone (using only its own `node.Members`).
             List<TypeDeclarationSyntax> otherParts = null;
-            if (symbol != null && this.partialTypeParts.TryGetValue(symbol, out List<TypeDeclarationSyntax> parts))
+            if (!this.preservePartialParts && symbol != null && this.partialTypeParts.TryGetValue(symbol, out List<TypeDeclarationSyntax> parts))
             {
                 bool isPrimaryPart = parts[0].SyntaxTree == node.SyntaxTree && parts[0].Span == node.Span;
                 if (!isPrimaryPart)
@@ -1900,6 +1943,14 @@ public sealed class CSharpToGSharpTranslator
             bool isUnsafe = node.Modifiers.Any(SyntaxKind.UnsafeKeyword) ||
                 (otherParts != null && otherParts.Any(p => p.Modifiers.Any(SyntaxKind.UnsafeKeyword)));
 
+            // ADR-0145 (§C/§D): only in preserve mode does a C# `partial` modifier
+            // survive onto the G# type — each part is emitted as a standalone
+            // `partial` part that augments the user's type (ADR-0144). Default
+            // cs2gs-migration mode always merges parts into ONE non-partial type,
+            // so `isPartial` stays false there (unchanged issue #1910 output).
+            bool isPartial = this.preservePartialParts &&
+                node.Modifiers.Any(m => m.IsKind(SyntaxKind.PartialKeyword));
+
             return new TypeDeclaration(
                 kind.Value,
                 SanitizeIdentifier(node.Identifier.Text),
@@ -1913,7 +1964,8 @@ public sealed class CSharpToGSharpTranslator
                 isOpen: isOpen || wasAbstract,
                 isAbstract: false,
                 attributes: this.MapAttributes(mergedAttributeLists),
-                isUnsafe: isUnsafe);
+                isUnsafe: isUnsafe,
+                isPartial: isPartial);
         }
 
         /// <summary>
