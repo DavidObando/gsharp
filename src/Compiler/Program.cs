@@ -549,21 +549,21 @@ public class Program
         var rspLines = new List<string>();
         foreach (var gs in parsed.SourceFiles)
         {
-            rspLines.Add($"/gs:{Path.GetFullPath(gs)}");
+            rspLines.Add($"/gs:\"{Path.GetFullPath(gs)}\"");
         }
 
         foreach (var r in parsed.References)
         {
-            rspLines.Add($"/r:{r}");
+            rspLines.Add($"/r:\"{r}\"");
         }
 
         foreach (var a in parsed.AnalyzerPaths)
         {
-            rspLines.Add($"/analyzer:{a}");
+            rspLines.Add($"/analyzer:\"{a}\"");
         }
 
-        rspLines.Add($"/out:{outDir}");
-        rspLines.Add($"/manifest:{manifestPath}");
+        rspLines.Add($"/out:\"{outDir}\"");
+        rspLines.Add($"/manifest:\"{manifestPath}\"");
         File.WriteAllLines(rspPath, rspLines, Encoding.UTF8);
 
         var psi = new ProcessStartInfo("dotnet", $"\"{gsgenPath}\" @\"{rspPath}\"")
@@ -586,9 +586,31 @@ public class Program
 
         using (proc)
         {
-            var stdout = proc.StandardOutput.ReadToEnd();
-            var stderr = proc.StandardError.ReadToEnd();
-            proc.WaitForExit();
+            // Read stdout/stderr concurrently with waiting for exit: reading
+            // them sequentially (ReadToEnd, then ReadToEnd, then WaitForExit)
+            // deadlocks if gsgen fills the other pipe's OS buffer first.
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+            var stderrTask = proc.StandardError.ReadToEndAsync();
+
+            const int gsgenTimeoutMs = 5 * 60 * 1000;
+            if (!proc.WaitForExit(gsgenTimeoutMs))
+            {
+                try
+                {
+                    proc.Kill(entireProcessTree: true);
+                }
+                catch (InvalidOperationException)
+                {
+                    // Process already exited between the timeout check and Kill.
+                }
+
+                Console.Error.WriteLine(
+                    $"gsc: error GS9999: gsgen timed out after {gsgenTimeoutMs / 1000}s while running source generators.");
+                return false;
+            }
+
+            var stdout = stdoutTask.GetAwaiter().GetResult();
+            var stderr = stderrTask.GetAwaiter().GetResult();
 
             if (!string.IsNullOrEmpty(stdout))
             {

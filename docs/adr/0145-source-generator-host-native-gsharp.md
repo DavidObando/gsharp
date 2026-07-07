@@ -241,10 +241,10 @@ are supplied, gsc — still Roslyn-free itself, per ADR-0027 — spawns `gsgen` 
 a sibling process (mirroring exactly what `GsgenTask` does: a `.gsgen.rsp` +
 `dotnet gsgen.dll @rsp`), waits for it to write its `.g.gs` set, and folds that
 output into the same compilation as the user's own `.gs` files. An optional
-`/gsgentool:<path>` pins the `gsgen.dll` to invoke (falls back to a sibling
-`gsgen.dll`/`gsgen` next to the running `gsc.dll`, then a `PATH` lookup); this
-matters for a dev-tree layout where `gsc.dll` and `gsgen.dll` are not sibling
-build outputs, unlike the packaged SDK layout under `tools/`. `/analyzer:` is
+`/gsgentool:<path>` pins the `gsgen.dll` to invoke (falls back to
+`../gsgen/gsgen.dll` relative to the running `gsc.dll`'s directory — no `PATH`
+lookup); this matters for a dev-tree layout where `gsc.dll` and `gsgen.dll` are
+not sibling build outputs, unlike the packaged SDK layout under `tools/`. `/analyzer:` is
 gsc's only new input; **resolving** which analyzers apply (§E's `ProjectLanguage=C#`
 NuGet dance) is still the caller's job — the caller passes already-resolved
 paths, gsc's job is only "spawn gsgen against these, then compile the result."

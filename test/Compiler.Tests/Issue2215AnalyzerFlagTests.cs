@@ -144,6 +144,67 @@ public class Issue2215AnalyzerFlagTests
         }
     }
 
+    /// <summary>
+    /// Regression test for the PR #2221 rubber-duck review's blocking finding:
+    /// gsc wrote unquoted paths into gsgen's <c>.gsgen.rsp</c>, so a source
+    /// file, analyzer, or output directory under a path containing a space
+    /// (e.g. Windows <c>C:\Users\John Smith\...</c>) got split into two bogus
+    /// tokens by gsgen's <c>TokenizeResponseFileLine</c> whitespace splitter,
+    /// failing with "unknown flag"/"file not found". This must fail before the
+    /// rsp-quoting fix and pass after.
+    /// </summary>
+    [Fact]
+    public void Analyzer_EndToEnd_PathsWithSpaces_GeneratorMemberReachesCompiledAssembly()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "gsc test " + Guid.NewGuid());
+        Directory.CreateDirectory(tempDir);
+        var sample = Path.Combine(tempDir, "Foo Bar.gs");
+        File.WriteAllText(sample, "package MyLib\n\n@Obsolete\npartial class Foo {\n}\n");
+        var outPath = Path.Combine(tempDir, "My Lib.dll");
+
+        using var outWriter = new StringWriter();
+        using var errWriter = new StringWriter();
+        var prevOut = Console.Out;
+        var prevErr = Console.Error;
+        Console.SetOut(outWriter);
+        Console.SetError(errWriter);
+        int exit;
+        try
+        {
+            exit = Program.Main(new[]
+            {
+                sample,
+                "/analyzer:" + GeneratorDllFactory.ValueWithSpace,
+                "/gsgentool:" + GsgenToolPath,
+                "/target:library",
+                "/out:" + outPath,
+            });
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+            Console.SetError(prevErr);
+        }
+
+        Assert.True(exit == 0, $"gsc failed:\nstdout:\n{outWriter}\nstderr:\n{errWriter}");
+        Assert.True(File.Exists(outPath));
+
+        var assembly = Assembly.Load(File.ReadAllBytes(outPath));
+        var foo = assembly.GetTypes().Single(t => t.Name == "Foo");
+
+        // Only present if gsgen actually ran (paths tokenized correctly) and
+        // its output was folded back into this compilation.
+        Assert.NotNull(foo.GetProperty("Greeting"));
+
+        try
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+    }
+
     private static string WriteTempGs(string source)
     {
         var path = Path.Combine(Path.GetTempPath(), $"gsc_analyzer_test_{Guid.NewGuid():N}.gs");
@@ -161,11 +222,18 @@ public class Issue2215AnalyzerFlagTests
     /// </summary>
     private static class GeneratorDllFactory
     {
-        private static readonly Lazy<string> Lazy = new(Compile);
+        private static readonly Lazy<string> Lazy = new(() => Compile("gsc_analyzer_gen_"));
+
+        // Same generator, compiled under a temp directory whose name contains
+        // a space — reproduces issue #2221's rsp-quoting bug (gsgen's
+        // tokenizer split gsc's unquoted /analyzer: path on the space).
+        private static readonly Lazy<string> LazyWithSpace = new(() => Compile("gsc analyzer gen "));
 
         public static string Value => Lazy.Value;
 
-        private static string Compile()
+        public static string ValueWithSpace => LazyWithSpace.Value;
+
+        private static string Compile(string tempDirPrefix)
         {
             const string Source = @"
 using System.Text;
@@ -229,7 +297,7 @@ namespace GscAnalyzerFlagTestGenerators
                 references,
                 new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
-            var dir = Directory.CreateTempSubdirectory("gsc_analyzer_gen_").FullName;
+            var dir = Directory.CreateTempSubdirectory(tempDirPrefix).FullName;
             var path = Path.Combine(dir, "GscAnalyzerFlagTestGenerators.dll");
 
             using (var stream = File.Create(path))
