@@ -93,6 +93,35 @@ public sealed class TranslateStage : IMigrationStage
                 }
             }
 
+            // Issue #2215: only the app's OWN analyzer/generator references
+            // (not a referenced sibling project's) drive gsc's /analyzer: —
+            // a sibling's generators already ran in that sibling's own
+            // migration run, so re-running them here would just duplicate
+            // (or, worse, collide with) output that belongs to the sibling.
+            if (!isReferencedProject)
+            {
+                foreach (string analyzerPath in currentProject.AnalyzerReferencePaths)
+                {
+                    context.AnalyzerReferencePaths.Add(analyzerPath);
+                }
+            }
+
+            // Issue #2215: a project with analyzer references may have had a
+            // generator-produced partial part excluded from `Documents` (it is
+            // recognized as generated, per `CSharpProjectLoader.
+            // IsGeneratedSource`, so BuildDocuments never translates it on its
+            // own) — so the translator must (a) keep the merged type `partial`
+            // (gsc's own gsgen run adds the missing part back) and (b) NOT
+            // merge that excluded part's members in here too (that would just
+            // duplicate what gsgen produces, causing a GS0102 collision). Every
+            // project with no analyzer references gets the exact prior
+            // (unfiltered, non-partial-marking) translator behavior.
+            bool hasAnalyzerReferences = currentProject.AnalyzerReferencePaths.Count > 0;
+            List<string> retainedFilePaths = hasAnalyzerReferences
+                ? currentProject.Documents.Select(d => d.FilePath).ToList()
+                : null;
+            var translator = new CSharpToGSharpTranslator(markMergedTypePartial: hasAnalyzerReferences, retainedFilePaths: retainedFilePaths);
+
             foreach (LoadedDocument document in currentProject.Documents)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -102,7 +131,7 @@ public sealed class TranslateStage : IMigrationStage
                     document.SemanticModel,
                     document.FilePath);
 
-                CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, translationContext);
+                CompilationUnit unit = translator.TranslateDocument(document, translationContext);
                 string printed = GSharpPrinter.Print(unit);
 
                 string gsFileName = EmittedFileNaming.UniqueGsFileName(document.FilePath, usedGsFileNames);

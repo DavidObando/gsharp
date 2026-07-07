@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -77,8 +78,25 @@ public class Program
 
         try
         {
-            var syntaxTrees = new List<SyntaxTree>(parsed.SourceFiles.Count);
-            foreach (var path in parsed.SourceFiles)
+            // Issue #2215: when /analyzer: paths are supplied, spawn gsgen (a
+            // sibling process — ADR-0027 keeps Roslyn out of gsc) to run the
+            // project's source generators and fold the generated .gs into this
+            // same compilation. Zero analyzers (the overwhelmingly common case)
+            // is a true no-op: no process spawned, no extra I/O.
+            var allSourceFiles = parsed.SourceFiles;
+            if (parsed.AnalyzerPaths.Count > 0)
+            {
+                if (!TryRunGsgen(parsed, out var generatedGsFiles))
+                {
+                    return Error;
+                }
+
+                allSourceFiles = new List<string>(parsed.SourceFiles);
+                allSourceFiles.AddRange(generatedGsFiles);
+            }
+
+            var syntaxTrees = new List<SyntaxTree>(allSourceFiles.Count);
+            foreach (var path in allSourceFiles)
             {
                 if (!File.Exists(path))
                 {
@@ -495,6 +513,157 @@ public class Program
         File.WriteAllText(configPath, json);
     }
 
+    /// <summary>
+    /// Issue #2215: runs <c>gsgen</c> as a sibling process (ADR-0027 — Roslyn
+    /// never links into gsc) over the caller's already-resolved <c>/analyzer:</c>
+    /// paths, so any gsc invocation (SDK build, cs2gs, tests, direct compiles)
+    /// gets generator output uniformly. gsgen's own diagnostics are already
+    /// formatted in gsc's canonical header line, so stdout/stderr are relayed
+    /// through unchanged.
+    /// </summary>
+    /// <param name="parsed">The parsed command line (source files, references, analyzer paths).</param>
+    /// <param name="generatedGsFiles">The generated <c>.g.gs</c> paths from gsgen's manifest, on success.</param>
+    /// <returns><see langword="true"/> on success; <see langword="false"/> if gsgen could not be launched or exited non-zero.</returns>
+    private static bool TryRunGsgen(CommandLineArgs parsed, out List<string> generatedGsFiles)
+    {
+        generatedGsFiles = new List<string>();
+
+        var gsgenPath = ResolveGsgenToolPath(parsed);
+        if (!File.Exists(gsgenPath))
+        {
+            Console.Error.WriteLine(
+                $"gsc: error GS9999: /analyzer was supplied but gsgen was not found at '{gsgenPath}'. Pass /gsgentool:<path> to override.");
+            return false;
+        }
+
+        // ponytail: a one-shot temp workspace; not cleaned up afterwards (the
+        // generated .g.gs files must outlive this method to be loaded as syntax
+        // trees below). Left for the OS temp reaper — gsc's invocations of gsgen
+        // are rare (only with /analyzer:) so this is not worth the bookkeeping
+        // of a deferred delete after the syntax trees are read into memory.
+        var workDir = Directory.CreateTempSubdirectory("gsc-gsgen-").FullName;
+        var outDir = Path.Combine(workDir, "out");
+        var manifestPath = Path.Combine(workDir, "manifest.txt");
+        var rspPath = Path.Combine(workDir, "gsgen.rsp");
+
+        var rspLines = new List<string>();
+        foreach (var gs in parsed.SourceFiles)
+        {
+            rspLines.Add($"/gs:\"{Path.GetFullPath(gs)}\"");
+        }
+
+        foreach (var r in parsed.References)
+        {
+            rspLines.Add($"/r:\"{r}\"");
+        }
+
+        foreach (var a in parsed.AnalyzerPaths)
+        {
+            rspLines.Add($"/analyzer:\"{a}\"");
+        }
+
+        rspLines.Add($"/out:\"{outDir}\"");
+        rspLines.Add($"/manifest:\"{manifestPath}\"");
+        File.WriteAllLines(rspPath, rspLines, Encoding.UTF8);
+
+        var psi = new ProcessStartInfo("dotnet", $"\"{gsgenPath}\" @\"{rspPath}\"")
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+
+        Process proc;
+        try
+        {
+            proc = Process.Start(psi);
+        }
+        catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception)
+        {
+            Console.Error.WriteLine($"gsc: error GS9999: failed to launch gsgen ('{gsgenPath}'): {ex.Message}");
+            return false;
+        }
+
+        using (proc)
+        {
+            // Read stdout/stderr concurrently with waiting for exit: reading
+            // them sequentially (ReadToEnd, then ReadToEnd, then WaitForExit)
+            // deadlocks if gsgen fills the other pipe's OS buffer first.
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+            var stderrTask = proc.StandardError.ReadToEndAsync();
+
+            const int gsgenTimeoutMs = 5 * 60 * 1000;
+            if (!proc.WaitForExit(gsgenTimeoutMs))
+            {
+                try
+                {
+                    proc.Kill(entireProcessTree: true);
+                }
+                catch (InvalidOperationException)
+                {
+                    // Process already exited between the timeout check and Kill.
+                }
+
+                Console.Error.WriteLine(
+                    $"gsc: error GS9999: gsgen timed out after {gsgenTimeoutMs / 1000}s while running source generators.");
+                return false;
+            }
+
+            var stdout = stdoutTask.GetAwaiter().GetResult();
+            var stderr = stderrTask.GetAwaiter().GetResult();
+
+            if (!string.IsNullOrEmpty(stdout))
+            {
+                Console.Out.Write(stdout);
+            }
+
+            if (!string.IsNullOrEmpty(stderr))
+            {
+                Console.Error.Write(stderr);
+            }
+
+            if (proc.ExitCode != 0)
+            {
+                if (string.IsNullOrWhiteSpace(stdout) && string.IsNullOrWhiteSpace(stderr))
+                {
+                    Console.Error.WriteLine(
+                        $"gsc: error GS9999: gsgen exited with code {proc.ExitCode} while running source generators.");
+                }
+
+                return false;
+            }
+        }
+
+        if (File.Exists(manifestPath))
+        {
+            foreach (var line in File.ReadAllLines(manifestPath))
+            {
+                var trimmed = line.Trim();
+                if (trimmed.Length > 0)
+                {
+                    generatedGsFiles.Add(trimmed);
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Resolves the gsgen.dll path: the explicit /gsgentool: override when
+    /// supplied, else the packaged-SDK sibling convention
+    /// (tools/compiler/gsc.dll + tools/gsgen/gsgen.dll under a shared tools/).
+    /// </summary>
+    private static string ResolveGsgenToolPath(CommandLineArgs parsed)
+    {
+        if (!string.IsNullOrEmpty(parsed.GsgenToolPath))
+        {
+            return parsed.GsgenToolPath;
+        }
+
+        return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "gsgen", "gsgen.dll"));
+    }
+
     private static (string Name, string Version) ResolveFrameworkMoniker(string tfm)
     {
         // Crude TFM → runtime framework mapping good enough for net8/9/10.
@@ -524,6 +693,8 @@ public class Program
           /target:exe|library|lib|dll   Output type (default: exe).
           /targetframework:<tfm>        Target framework moniker (alias: /tfm:<tfm>).
           /r:<file>, /reference:<file>  Reference an assembly.
+          /analyzer:<file>              Analyzer/generator assembly; runs gsgen before compiling (repeatable).
+          /gsgentool:<file>             Override the resolved path to gsgen.dll (default: sibling of gsc.dll).
           /lib:<path>                   Accepted for csc compatibility (currently a no-op).
           /implicitimports[+|-]         Enable/disable implicit System import (alias: /implicit-imports).
           /noimplicitimports            Disable implicit System import (alias: /no-implicit-imports).
@@ -601,6 +772,26 @@ public class Program
                         // Loaded into the binder's ReferenceResolver so imports can resolve types
                         // declared in user-supplied assemblies in addition to the BCL.
                         result.References.Add(value);
+                        break;
+
+                    case "analyzer":
+                        // Issue #2215: an already-resolved generator/analyzer assembly path.
+                        // Repeatable, like /reference. Presence triggers a gsgen sub-process
+                        // run (ADR-0145) before compilation; gsc does no analyzer discovery
+                        // of its own.
+                        if (string.IsNullOrEmpty(value))
+                        {
+                            throw new CommandLineException("/analyzer requires a path: /analyzer:<file>.");
+                        }
+
+                        result.AnalyzerPaths.Add(value);
+                        break;
+
+                    case "gsgentool":
+                        // Overrides the resolved path to gsgen.dll. Optional: defaults to the
+                        // sibling tools/gsgen/gsgen.dll next to gsc.dll (the packaged SDK
+                        // layout). Mainly useful for tests and non-packaged (cs2gs) callers.
+                        result.GsgenToolPath = value;
                         break;
 
                     case "implicitimports":
@@ -927,6 +1118,12 @@ public class Program
         public List<string> SourceFiles { get; } = new();
 
         public List<string> References { get; } = new();
+
+        /// <summary>Gets the analyzer/generator assembly paths (from /analyzer:&lt;path&gt;). Non-empty triggers a gsgen run (issue #2215).</summary>
+        public List<string> AnalyzerPaths { get; } = new();
+
+        /// <summary>Gets or sets an explicit override for the resolved gsgen.dll path (from /gsgentool:&lt;path&gt;).</summary>
+        public string GsgenToolPath { get; set; }
 
         public string OutputPath { get; set; }
 

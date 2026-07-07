@@ -94,7 +94,16 @@ public sealed class MigrationPipeline
                 "Could not resolve gsc.dll. Build GSharp.sln or pass --gsc <path>.");
         }
 
-        var gsc = new GscInvoker(gscPath);
+        // Issue #2215: best-effort — an app with no analyzer references never
+        // touches this path (gsc's own /analyzer: fast path is a no-op), so a
+        // missing gsgen.dll here is not fatal; it only matters for apps whose
+        // project references generators.
+        string gsgenPath = GscInvoker.ResolveGsgenTool(
+            this.options.GsgenPath,
+            this.options.Config,
+            Directory.GetCurrentDirectory());
+
+        var gsc = new GscInvoker(gscPath, gsgenPath);
         string gscVersion = gsc.GetVersion();
 
         DateTime nowUtc = DateTime.UtcNow;

@@ -72,6 +72,26 @@ public sealed class CSharpToGSharpTranslator
     // the emitted `TypeDeclaration` as `isPartial`.
     private readonly bool preservePartialParts;
 
+    // Issue #2215: cs2gs's own merge (the `!preservePartialParts` path above)
+    // still happens, but the MERGED result keeps a `partial` modifier when the
+    // C# source itself was `partial` — so gsc's own `/analyzer:`-triggered
+    // gsgen run can later add a real, additional generated `partial` part
+    // (ADR-0145) that merges into this type instead of colliding with it
+    // (GS0475/GS0102). Set by the caller only for a project that actually has
+    // analyzer references; every other translation is byte-for-byte unchanged.
+    private readonly bool markMergedTypePartial;
+
+    // Issue #2215: when set, restricts the "other partial parts to merge in"
+    // set (`CollectPartialTypeParts`, built from `INamedTypeSymbol.
+    // DeclaringSyntaxReferences` across the WHOLE compilation) to only the
+    // documents the caller actually kept for translation. Without this, a
+    // generator-produced partial part that `CSharpProjectLoader.BuildDocuments`
+    // correctly excludes as generated (so it is NOT translated on its own)
+    // still gets its members silently merged into the primary part here —
+    // duplicating what gsc's own `/analyzer:`-triggered gsgen run later adds
+    // (GS0102). Null (default) preserves the exact prior no-filter behavior.
+    private readonly HashSet<string> retainedFilePaths;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="CSharpToGSharpTranslator"/> class.
     /// </summary>
@@ -82,9 +102,31 @@ public sealed class CSharpToGSharpTranslator
     /// <c>partial</c> declaration is translated as a standalone G# <c>partial</c>
     /// part with no cross-part merge.
     /// </param>
-    public CSharpToGSharpTranslator(bool preservePartialParts = false)
+    /// <param name="markMergedTypePartial">
+    /// When <see langword="true"/>, the merged type produced by the default
+    /// (<paramref name="preservePartialParts"/> <see langword="false"/>) path
+    /// keeps a G# <c>partial</c> modifier if the C# source declared the type
+    /// <c>partial</c> (issue #2215: the project has analyzer/generator
+    /// references, so gsc's own gsgen run will add another real partial part
+    /// afterward). Ignored when <paramref name="preservePartialParts"/> is
+    /// <see langword="true"/> (that mode already always carries the modifier).
+    /// </param>
+    /// <param name="retainedFilePaths">
+    /// The caller's own file set considered eligible for translation (issue
+    /// #2215). When supplied, a partial type's OTHER declaring parts that fall
+    /// outside this set (i.e. excluded as generated) are not merged in. Pass
+    /// <see langword="null"/> (default) to keep every part regardless of file.
+    /// </param>
+    public CSharpToGSharpTranslator(
+        bool preservePartialParts = false,
+        bool markMergedTypePartial = false,
+        IReadOnlyCollection<string> retainedFilePaths = null)
     {
         this.preservePartialParts = preservePartialParts;
+        this.markMergedTypePartial = markMergedTypePartial;
+        this.retainedFilePaths = retainedFilePaths is null
+            ? null
+            : new HashSet<string>(retainedFilePaths, StringComparer.Ordinal);
     }
 
     /// <summary>
@@ -117,6 +159,10 @@ public sealed class CSharpToGSharpTranslator
 
         Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts =
             GetOrCollectPartialTypeParts(context.Compilation);
+        if (this.retainedFilePaths != null)
+        {
+            partialTypeParts = FilterPartialTypeParts(partialTypeParts, this.retainedFilePaths);
+        }
 
         string package = this.ResolvePackage(root, context);
 
@@ -152,7 +198,7 @@ public sealed class CSharpToGSharpTranslator
         INamedTypeSymbol entryType = entryPoint?.ContainingType;
 
         var typeMapper = new CSharpTypeMapper();
-        var visitor = new DeclarationVisitor(context, typeMapper, openBases, staticUsingTargets, entryPoint, partialTypeParts, this.preservePartialParts);
+        var visitor = new DeclarationVisitor(context, typeMapper, openBases, staticUsingTargets, entryPoint, partialTypeParts, this.preservePartialParts, this.markMergedTypePartial);
 
         var members = new List<GNode>();
         var trailingStatements = new List<GNode>();
@@ -289,6 +335,32 @@ public sealed class CSharpToGSharpTranslator
             if (parts.Count > 1)
             {
                 result[type] = parts;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Issue #2215: re-derives the raw (cached, whole-compilation) partial-parts
+    /// map to only the caller's own retained (translatable) files, dropping a
+    /// type entirely once it has one or zero remaining parts (it is then no
+    /// longer "partial" from the caller's point of view — its excluded part,
+    /// e.g. generator output, is not this caller's concern).
+    /// </summary>
+    private static Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> FilterPartialTypeParts(
+        Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> raw,
+        HashSet<string> retainedFilePaths)
+    {
+        var result = new Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>>(SymbolEqualityComparer.Default);
+        foreach (KeyValuePair<INamedTypeSymbol, List<TypeDeclarationSyntax>> entry in raw)
+        {
+            List<TypeDeclarationSyntax> kept = entry.Value
+                .Where(p => retainedFilePaths.Contains(p.SyntaxTree.FilePath))
+                .ToList();
+            if (kept.Count > 1)
+            {
+                result[entry.Key] = kept;
             }
         }
 
@@ -550,6 +622,9 @@ public sealed class CSharpToGSharpTranslator
         // only its own members), so a generated part augments the user's real G#
         // type (ADR-0144). See `CSharpToGSharpTranslator.preservePartialParts`.
         private readonly bool preservePartialParts;
+
+        // Issue #2215: see `CSharpToGSharpTranslator.markMergedTypePartial`.
+        private readonly bool markMergedTypePartial;
 
         // Issue #1201 / ADR-0134: the types targeted by `using static X` in this
         // document. A bare reference to one of their static members is left
@@ -831,7 +906,8 @@ public sealed class CSharpToGSharpTranslator
             HashSet<INamedTypeSymbol> staticUsingTargets,
             IMethodSymbol entryPoint,
             Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts,
-            bool preservePartialParts = false)
+            bool preservePartialParts = false,
+            bool markMergedTypePartial = false)
         {
             this.context = context;
             this.typeMapper = typeMapper;
@@ -839,6 +915,7 @@ public sealed class CSharpToGSharpTranslator
             this.staticUsingTargets = staticUsingTargets ?? new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
             this.partialTypeParts = partialTypeParts ?? new Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>>(SymbolEqualityComparer.Default);
             this.preservePartialParts = preservePartialParts;
+            this.markMergedTypePartial = markMergedTypePartial;
 
             // `entryPoint` is threaded in by the caller (`TranslateDocument`)
             // instead of being recomputed here: `Compilation.GetEntryPoint`
@@ -1968,9 +2045,13 @@ public sealed class CSharpToGSharpTranslator
             // survive onto the G# type — each part is emitted as a standalone
             // `partial` part that augments the user's type (ADR-0144). Default
             // cs2gs-migration mode always merges parts into ONE non-partial type,
-            // so `isPartial` stays false there (unchanged issue #1910 output).
-            bool isPartial = this.preservePartialParts &&
-                node.Modifiers.Any(m => m.IsKind(SyntaxKind.PartialKeyword));
+            // so `isPartial` stays false there (unchanged issue #1910 output) —
+            // UNLESS the project has analyzer references (issue #2215:
+            // `markMergedTypePartial`), in which case the merged type still
+            // keeps `partial` so gsc's own gsgen-produced part can merge into it.
+            bool sourceWasPartial = node.Modifiers.Any(m => m.IsKind(SyntaxKind.PartialKeyword)) ||
+                (otherParts != null && otherParts.Any(p => p.Modifiers.Any(m => m.IsKind(SyntaxKind.PartialKeyword))));
+            bool isPartial = sourceWasPartial && (this.preservePartialParts || this.markMergedTypePartial);
 
             return new TypeDeclaration(
                 kind.Value,
