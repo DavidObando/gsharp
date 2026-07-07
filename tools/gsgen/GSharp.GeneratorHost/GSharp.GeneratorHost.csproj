@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <RootNamespace>GSharp.GeneratorHost</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.6.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\Core\Core.csproj" />
+    <ProjectReference Include="..\..\cs2gs\Cs2Gs.Translator\Cs2Gs.Translator.csproj" />
+    <ProjectReference Include="..\..\cs2gs\Cs2Gs.CodeModel\Cs2Gs.CodeModel.csproj" />
+  </ItemGroup>
+
+</Project>
