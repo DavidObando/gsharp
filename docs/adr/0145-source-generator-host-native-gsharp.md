@@ -341,6 +341,33 @@ gsc consumes the emitted `.g.gs`):
   `retainedFilePaths` and `markMergedTypePartial` — needed to avoid duplicating
   a generator's output), verified via `test/Compiler.Tests/Issue2215AnalyzerFlagTests.cs`
   and `tools/cs2gs/Cs2Gs.Tests/Issue2215AnalyzerReferenceTests.cs`.
+- **`AdditionalText` + `AnalyzerConfigOptions` forwarding** (§C, issue #2223) —
+  file/options-driven generators (Avalonia's XAML name generator that
+  materializes `InitializeComponent` from `.axaml`, the archetype) now receive
+  their non-source inputs and MSBuild options. `GeneratorRunner`/
+  `GeneratorHostRunner` pass an `AdditionalText` set and an
+  `AnalyzerConfigOptionsProvider` (`HostAdditionalText` +
+  `HostAnalyzerConfigOptionsProvider`, surfacing per-file
+  `build_metadata.AdditionalFiles.*` — e.g. `SourceItemGroup=AvaloniaXaml` — and
+  project-wide `build_property.*`) to `CSharpGeneratorDriver.Create`. Plumbed
+  through the `gsgen` CLI (`/additionalfile:<path[;key=value]>`,
+  `/globaloption:<key>=<value>`), gsc's forwarding of the same flags into its
+  `SpawnGsgen` response file, the SDK's `GsgenTask`/targets (forwarding
+  `@(AdditionalFiles)` + a `build_property.*` global-option set), and the cs2gs
+  migrate path (`CSharpProjectLoader` discovers `@(AdditionalFiles)` + `.axaml`;
+  `TranslateStage`/`CompileStage`/`GscInvoker` forward them). Generator-agnostic:
+  Avalonia is merely the first consumer. Verified via
+  `tools/gsgen/GSharp.GeneratorHost.Tests/AdditionalTextGeneratorTests.cs` and
+  `GsgenArgsAdditionalFilesTests.cs`.
+- **Avalonia runtime XAML (`CompileAvaloniaXaml`)** — the post-compile IL-rewrite
+  task that makes compiled XAML load at runtime needs *no* new host/SDK code: the
+  G# SDK imports `Microsoft.NET.Sdk` and its `CoreCompile` emits the assembly at
+  the standard `$(IntermediateOutputPath)$(TargetName)$(TargetExt)`
+  (`@(IntermediateAssembly)`) path, so Avalonia's package targets — which hook the
+  standard `AfterCompile`/`AfterTargets="CoreCompile"` chain and operate on the
+  emitted PE + `@(AvaloniaResource)` items via Mono.Cecil — run against gsc's
+  output exactly as they would against csc's. Requires validation against the
+  real Oahu Avalonia corpus.
 
 Follow-ups (not in the initial delivery):
 
