@@ -958,8 +958,17 @@ internal sealed class LambdaBinder
             // constructed generic like `Box[U]`) through the same symbolic
             // Task<T> construction so the call-site observable return type
             // stays `Task[U]` instead of silently dropping the Task wrapper.
-            if ((element is StructSymbol or InterfaceSymbol or EnumSymbol
-                || (element is NullableTypeSymbol nullableUserVt && nullableUserVt.UnderlyingType is StructSymbol or InterfaceSymbol or EnumSymbol)
+            // Issue #2232: a tuple type `(..., UserType, ...)` whose CLR backing
+            // is null because at least one element is a still-in-flight user
+            // type (`TupleTypeSymbol.BuildClrType` returns null unless every
+            // element resolves to a CLR type) must likewise route through the
+            // symbolic Task<T> construction. Otherwise an `async func F() (bool,
+            // UserType)` silently drops its Task wrapper here, so `await F()`
+            // sees the bare tuple and fails with GS0133 "cannot be awaited"
+            // (cascading GS0125 on any deconstructed bindings). A nullable
+            // tuple (`(bool, UserType)?`) is handled the same way.
+            if ((element is StructSymbol or InterfaceSymbol or EnumSymbol or TupleTypeSymbol
+                || (element is NullableTypeSymbol nullableUserVt && nullableUserVt.UnderlyingType is StructSymbol or InterfaceSymbol or EnumSymbol or TupleTypeSymbol)
                 || TypeSymbol.ContainsTypeParameter(element))
                 && Scope.References.TryResolveType(wrapperOpenName, out var symbolicTaskOpen))
             {
