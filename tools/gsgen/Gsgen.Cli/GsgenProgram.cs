@@ -80,6 +80,7 @@ public static class GsgenProgram
 
             parsed.ValidateGsFilesExist();
             parsed.ValidateCsFilesExist();
+            parsed.ValidateAdditionalFilesExist();
 
             var generatedGsFiles = new List<(string HintName, string GSharpSource)>();
             GeneratorHostResult result = null;
@@ -128,7 +129,16 @@ public static class GsgenProgram
 
         var compilation = new Compilation(resolver, syntaxTrees);
 
-        return GeneratorHostRunner.RunFromAnalyzerPaths(compilation, metadataRefs, parsed.AnalyzerPaths);
+        // Issue #2223: forward the project's non-source inputs (.axaml) and the
+        // MSBuild options file/options-driven generators (e.g. Avalonia) read.
+        IReadOnlyList<AdditionalText> additionalTexts = parsed.AdditionalFiles
+            .Select(spec => (AdditionalText)new HostAdditionalText(spec.Path, spec.Metadata))
+            .ToList();
+
+        var optionsProvider = new HostAnalyzerConfigOptionsProvider(parsed.GlobalOptions);
+
+        return GeneratorHostRunner.RunFromAnalyzerPaths(
+            compilation, metadataRefs, parsed.AnalyzerPaths, additionalTexts, optionsProvider);
     }
 
     /// <summary>

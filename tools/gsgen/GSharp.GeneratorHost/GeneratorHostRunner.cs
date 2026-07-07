@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
 using Compilation = GSharp.Core.CodeAnalysis.Compilation.Compilation;
 
 namespace GSharp.GeneratorHost;
@@ -24,15 +25,19 @@ public static class GeneratorHostRunner
     /// <param name="gsCompilation">The bound G# compilation to project and generate against.</param>
     /// <param name="references">The metadata references the C# stub/generated code binds against.</param>
     /// <param name="generators">The incremental generators to run.</param>
+    /// <param name="additionalTexts">Non-source inputs forwarded to generators as <see cref="AdditionalText"/> (issue #2223).</param>
+    /// <param name="optionsProvider">The MSBuild-derived generator options, or <see langword="null"/> for none.</param>
     /// <returns>The aggregate host result.</returns>
     public static GeneratorHostResult Run(
         Compilation gsCompilation,
         IReadOnlyList<MetadataReference> references,
-        IReadOnlyList<IIncrementalGenerator> generators)
+        IReadOnlyList<IIncrementalGenerator> generators,
+        IReadOnlyList<AdditionalText> additionalTexts = null,
+        AnalyzerConfigOptionsProvider optionsProvider = null)
     {
         ArgumentNullException.ThrowIfNull(generators);
         string stub = ProjectStub(gsCompilation, out IReadOnlyList<string> fallbacks);
-        GeneratorRunResult runResult = GeneratorRunner.Run(stub, references, generators);
+        GeneratorRunResult runResult = GeneratorRunner.Run(stub, references, generators, additionalTexts, optionsProvider);
         return Assemble(stub, runResult, references, fallbacks);
     }
 
@@ -43,15 +48,19 @@ public static class GeneratorHostRunner
     /// <param name="gsCompilation">The bound G# compilation to project and generate against.</param>
     /// <param name="references">The metadata references the C# stub/generated code binds against.</param>
     /// <param name="analyzerAssemblyPaths">The analyzer/generator assembly paths.</param>
+    /// <param name="additionalTexts">Non-source inputs forwarded to generators as <see cref="AdditionalText"/> (issue #2223).</param>
+    /// <param name="optionsProvider">The MSBuild-derived generator options, or <see langword="null"/> for none.</param>
     /// <returns>The aggregate host result.</returns>
     public static GeneratorHostResult RunFromAnalyzerPaths(
         Compilation gsCompilation,
         IReadOnlyList<MetadataReference> references,
-        IReadOnlyList<string> analyzerAssemblyPaths)
+        IReadOnlyList<string> analyzerAssemblyPaths,
+        IReadOnlyList<AdditionalText> additionalTexts = null,
+        AnalyzerConfigOptionsProvider optionsProvider = null)
     {
         ArgumentNullException.ThrowIfNull(analyzerAssemblyPaths);
         string stub = ProjectStub(gsCompilation, out IReadOnlyList<string> fallbacks);
-        GeneratorRunResult runResult = GeneratorRunner.RunFromAnalyzerPaths(stub, references, analyzerAssemblyPaths);
+        GeneratorRunResult runResult = GeneratorRunner.RunFromAnalyzerPaths(stub, references, analyzerAssemblyPaths, additionalTexts, optionsProvider);
         return Assemble(stub, runResult, references, fallbacks);
     }
 
