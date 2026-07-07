@@ -491,6 +491,19 @@ public static class IncrementalGlobalScopeReuse
             {
                 return true;
             }
+
+            // ADR-0144: a `partial` type's symbol is bound from ONE synthetic
+            // declaration that PartialTypeMerger builds by merging every part
+            // (across files) during the full bind. The body-only positional
+            // re-point maps this file's raw declarations onto reused symbols, so
+            // a raw partial part cannot be re-pointed onto the merged symbol
+            // soundly (and the sibling parts in other files are not represented
+            // here). Fall back to a full rebuild for any file containing a
+            // partial part.
+            if (node is StructDeclarationSyntax { IsPartial: true } or InterfaceDeclarationSyntax { IsPartial: true })
+            {
+                return true;
+            }
         }
 
         return false;

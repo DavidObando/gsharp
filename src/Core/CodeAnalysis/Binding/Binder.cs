@@ -743,8 +743,10 @@ public sealed class Binder
             binder.declarations.BindDelegateDeclaration(delegateSyntax, owningPackage);
         }
 
-        var interfaceDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
-                                               .OfType<InterfaceDeclarationSyntax>();
+        var interfaceDeclarations = PartialTypeMerger.MergeInterfaces(
+            syntaxTrees.SelectMany(st => st.Root.Members).OfType<InterfaceDeclarationSyntax>(),
+            packageByTree,
+            binder.Diagnostics);
 
         // Phase 3 exit: register interface type aliases up front so structs
         // declared in subsequent passes can implement them, *and* defer the
@@ -778,8 +780,10 @@ public sealed class Binder
         // user struct or class declared later in the same compilation —
         // e.g. a `class` whose field type is a `struct` declared below it —
         // mirroring the two-phase scheme already used for interfaces above.
-        var structDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
-                                            .OfType<StructDeclarationSyntax>();
+        var structDeclarations = PartialTypeMerger.MergeStructs(
+            syntaxTrees.SelectMany(st => st.Root.Members).OfType<StructDeclarationSyntax>(),
+            packageByTree,
+            binder.Diagnostics);
         var declaredStructs = new List<(StructDeclarationSyntax Syntax, StructSymbol Symbol)>();
         foreach (var structSyntax in structDeclarations)
         {

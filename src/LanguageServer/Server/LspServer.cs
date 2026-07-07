@@ -379,11 +379,11 @@ public sealed class LspServer
             cancellationToken);
 
     [JsonRpcMethod("textDocument/definition", UseSingleObjectParameterDeserialization = true)]
-    public Task<Location> DefinitionAsync(DefinitionParams request, CancellationToken cancellationToken = default)
+    public Task<Location[]> DefinitionAsync(DefinitionParams request, CancellationToken cancellationToken = default)
         => this.ReadDocumentAsync(
             request.TextDocument,
-            (content, ct) => DefinitionComputer.ComputeDefinition(request.TextDocument.Uri, content, request.Position, ct),
-            null,
+            (content, ct) => DefinitionComputer.ComputeDefinitions(request.TextDocument.Uri, content, request.Position, ct).ToArray(),
+            Array.Empty<Location>(),
             cancellationToken);
 
     [JsonRpcMethod("textDocument/references", UseSingleObjectParameterDeserialization = true)]

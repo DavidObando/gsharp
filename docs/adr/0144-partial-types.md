@@ -1,6 +1,6 @@
 # ADR-0144: partial types (`partial` on class / struct / interface)
 
-- **Status**: Proposed
+- **Status**: Accepted (implemented)
 - **Date**: 2026-07-06
 - **Phase**: Phase 9 — language surface completeness
 - **Related**: ADR-0078 (aggregate declaration heads), ADR-0053 (`shared { }` static members), ADR-0140 (`shared { init { … } }`), ADR-0066 (deterministic top-level ordering), ADR-0105 (incremental rebind), ADR-0027 (bespoke compiler), ADR-0143 (cs2gs generator handling — companion), ADR-0145 (native generator host — companion), issue [#2201](https://github.com/DavidObando/gsharp/issues/2201)
@@ -149,20 +149,55 @@ order within each part — so metadata is byte-stable regardless of how MSBuild
 orders `@(Compile)` (which matters when generated `.g.gs` files under `obj/` join
 the compilation).
 
-### E. Binder mechanics
+### E. Binder mechanics — syntax-level merge (as built)
 
-A pre-pass in `BindGlobalScope`, before shell declaration (and recursively for
-nested types), groups declarations and validates heads (§B/§C via a new
-`PartialTypeGrouper`), then declares **one** shell from the primary part.
-Phase-2 body binding runs **once per part** against the shared symbol, with
-installers gaining accumulate semantics on the second-and-later parts (append
-rather than replace) and cross-part duplicate detection seeded from the members
-already installed on the symbol. `StructSymbol`/`InterfaceSymbol` gain a
-primary-first `Declarations` array; merged flags (effective openness, unioned
-interfaces) are computed at shell creation. The base clause is bound from the
-part that carries it; the primary-constructor part is the only one whose
-parameters bind; `shared init` statements concatenate across parts in part order
-(extending ADR-0140's same-part rule).
+A pre-pass in `BindGlobalScope`, before shell declaration, merges each group of
+`partial` parts into **one synthetic declaration node** and hands that single
+node to the existing two-phase pipeline. `PartialTypeMerger.MergeStructs` /
+`MergeInterfaces` (`src/Core/CodeAnalysis/Binding/PartialTypeMerger.cs`) group
+the raw declarations by `(package, name)`, order the parts deterministically
+(§D), validate head consistency (§B/§C, emitting `GS0475`–`GS0483`), and build a
+single `StructDeclarationSyntax`/`InterfaceDeclarationSyntax` whose:
+
+- members (`Fields`, `Properties`, `Events`, `Methods`, `Constructors`,
+  `NestedTypes`, interface `StaticFields`) are **concatenated** across parts in
+  part order;
+- base classes / implemented interfaces are **unioned** (de-duplicated by dotted
+  name), the base-constructor-argument part and primary-constructor part are the
+  single part that supplies them, `deinit` is the single part that declares one;
+- modifiers are composed per the §C rules (`open`/`sealed` unioned,
+  accessibility/`data`/`inline`/`ref` validated, annotations unioned);
+- `shared { }` blocks from every part are merged into one `SharedBlockSyntax`
+  (static members concatenated, `init` blocks concatenated in part order,
+  preserving ADR-0140 ordering);
+- `SyntaxTree`, identifier, and brace tokens are the **primary part's** (so the
+  type's own location and `packageByTree` lookup resolve to a real tree, and the
+  emitter's sequence-point/`.cctor` anchor is the primary part).
+
+`Binder.BindGlobalScope` then runs `DeclareStructShell` → `BindStructDeclarationBody`
+(and the interface equivalents) **once** on the merged node, exactly as for a
+lone declaration. The wiring is two one-line substitutions — the raw
+`structDeclarations`/`interfaceDeclarations` enumerables are replaced by the
+merged lists. **Nothing else changes**: the ~2 000-line body binder, every
+`Set*` installer, `StructSymbol`/`InterfaceSymbol`, and the emitter are
+untouched, because one merged node yields one shell, one symbol, and one TypeDef.
+Cross-part member collisions (e.g. a field name declared in two parts) surface
+through the body binder's existing duplicate detection (`GS0102`), since all
+parts' members now live in one node.
+
+This merge-the-syntax design was chosen over binding each part into a shared
+symbol with accumulating installers (the higher-blast-radius alternative) because
+two invariants make it sound: G# **imports are compilation-global** (`BindGlobalScope`
+binds every tree's `ImportSyntax` into one shared scope), so a member body merged
+from another file still resolves its type names; and G# **syntax nodes carry no
+`Parent` reference**, so composing child nodes drawn from different parts/files
+under one synthetic parent is safe — each child keeps its own `SyntaxTree`, so
+diagnostics still point at the correct file and span.
+
+**Nested partial types** are handled by the same merger recursively: when it
+builds (or passes through) a type node, it merges the partial nested types in
+that node's `NestedTypes` list, to any depth — so `partial class Outer`
+contributing `partial class Inner` from two files yields a single merged `Inner`.
 
 ### F. Partial methods and properties are out of scope
 
@@ -174,14 +209,18 @@ add source-level partial members if a native scenario demands them.
 
 ### G. Tooling
 
-- **Go-to-definition** on a partial type returns **all** part locations
-  (`textDocument/definition` widens to `Location[]`, which LSP permits).
+- **Go-to-definition** on a partial type returns **all** part locations. The
+  merged node retains its source parts (`StructDeclarationSyntax.PartialParts` /
+  `InterfaceDeclarationSyntax.PartialParts`, empty for a non-merged declaration),
+  the definition computer maps each to its identifier location, and
+  `textDocument/definition` returns an array (LSP permits `Location | Location[]`).
 - **Document symbols** stay per-file — each file shows its own part; already
-  computed from syntax, so no change.
-- **Incremental rebind** (ADR-0105): a body-only edit in one part repoints only
-  that part's syntax on the shared symbol (`IncrementalGlobalScopeReuse` +
-  `StructSymbol.RepointDeclaration` learn to match by `SyntaxTree`); any head
-  edit falls back to full rebind, as signature edits already do.
+  computed from raw per-file syntax, so no change.
+- **Incremental rebind** (ADR-0105): the body-only fast path cannot re-point a
+  synthetic merged node from a single edited file, so any file containing a
+  `partial` part **falls back to a full rebuild** (guarded in
+  `IncrementalGlobalScopeReuse.ContainsUnsupportedConstruct`). Correct, and the
+  full bind is already fast; a future optimization could re-point per-part.
 - **cs2gs code model**: `Cs2Gs.CodeModel.TypeDeclaration` gains `IsPartial` and
   `GSharpPrinter` renders `partial` before the kind keyword — required so
   ADR-0145 can *emit* partial parts and so cs2gs can later emit parts directly.
@@ -204,10 +243,14 @@ single `.cctor`.
   preserving file structure round-trip; ADR-0143 notes this.
 - Neutral: no new reserved word — `partial` stays a valid identifier everywhere
   outside an aggregate head.
-- Negative: the body-binding path (`BindStructDeclarationBodyCore`) must become
-  accumulation-safe; several installers assume replace semantics and are the main
-  regression surface. The single-`Location` definition response becomes
-  `Location[]`, a small protocol-visible change clients must tolerate.
+- Neutral: the syntax-level merge keeps the body binder, installers, symbols, and
+  emitter untouched, so the regression surface is confined to the merger pre-pass
+  and the diagnostics — the full Core and LanguageServer test suites pass
+  unchanged. The single-`Location` definition response becomes `Location[]`, a
+  small protocol-visible change clients must tolerate.
+- Negative: the merger rebuilds a synthetic declaration node per partial group;
+  the body-only incremental fast path is forgone for files containing partial
+  parts (full rebuild instead — always correct).
 - Constraint: stricter than C# on `data`/`inline`/`ref` (must-repeat),
   deliberately relaxable later.
 
@@ -223,3 +266,12 @@ single `.cctor`.
   back into the user's `.gs` files or a shadow copy). Rejected: mutating user
   files breaks diffs and incrementality, and shadow-compiling whole files
   reintroduces the #1910 merge complexity inside every build.
+- **Bind each part into a shared symbol with accumulating installers** (the
+  originally-sketched §E). Rejected during implementation in favor of the
+  syntax-level merge: it would require converting every replace-style `Set*`
+  installer in the ~2 000-line body binder to accumulate, seeding cross-part
+  duplicate detection, and making base-class / primary-constructor / type-param
+  binding "set once" across parts — a large, error-prone surface. The syntax
+  merge confines all partial logic to one pre-pass and leaves the binder,
+  installers, symbols, and emitter untouched. It is sound only because imports
+  are compilation-global and syntax nodes have no `Parent` (see §E).

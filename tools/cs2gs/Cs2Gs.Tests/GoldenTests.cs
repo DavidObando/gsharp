@@ -913,6 +913,66 @@ public class GoldenTests
         Assert.True(result.Success, "Round-trip errors:\n" + string.Join("\n", result.Errors));
     }
 
+    /// <summary>ADR-0144 §G: a <c>partial</c> class/struct/interface renders the
+    /// <c>partial</c> modifier immediately before the aggregate keyword.</summary>
+    [Theory]
+    [InlineData(TypeDeclarationKind.Class, "partial class Foo {")]
+    [InlineData(TypeDeclarationKind.Struct, "partial struct Foo {")]
+    [InlineData(TypeDeclarationKind.Interface, "partial interface Foo {")]
+    public void GTooling_PartialRendersBeforeKindKeyword(TypeDeclarationKind kind, string expected)
+    {
+        var cls = new TypeDeclaration(kind, "Foo", isPartial: true);
+        var unit = new CompilationUnit("Demo", members: Nodes(cls));
+
+        var printed = GSharpPrinter.Print(unit);
+
+        Assert.Contains(expected, printed);
+    }
+
+    /// <summary>ADR-0144 §G: <c>partial</c> follows <c>open</c> in canonical
+    /// order (<c>open partial class</c>).</summary>
+    [Fact]
+    public void GTooling_OpenPartialClassOrder()
+    {
+        var cls = new TypeDeclaration(TypeDeclarationKind.Class, "Foo", isOpen: true, isPartial: true);
+        var unit = new CompilationUnit("Demo", members: Nodes(cls));
+
+        var printed = GSharpPrinter.Print(unit);
+
+        Assert.Contains("open partial class Foo {", printed);
+    }
+
+    /// <summary>ADR-0144 §G: accessibility, <c>open</c> and <c>partial</c> render
+    /// in canonical order (<c>public open partial class</c>).</summary>
+    [Fact]
+    public void GTooling_PublicOpenPartialClassOrder()
+    {
+        var cls = new TypeDeclaration(
+            TypeDeclarationKind.Class,
+            "Foo",
+            visibility: Visibility.Public,
+            isOpen: true,
+            isPartial: true);
+        var unit = new CompilationUnit("Demo", members: Nodes(cls));
+
+        var printed = GSharpPrinter.Print(unit);
+
+        Assert.Contains("public open partial class Foo {", printed);
+    }
+
+    /// <summary>ADR-0144 §G: <c>partial</c> follows <c>sealed</c> and precedes the
+    /// kind keyword (<c>sealed partial class</c>).</summary>
+    [Fact]
+    public void GTooling_SealedPartialClassOrder()
+    {
+        var cls = new TypeDeclaration(TypeDeclarationKind.Class, "Foo", isSealed: true, isPartial: true);
+        var unit = new CompilationUnit("Demo", members: Nodes(cls));
+
+        var printed = GSharpPrinter.Print(unit);
+
+        Assert.Contains("sealed partial class Foo {", printed);
+    }
+
     private static void AssertGolden(string expected, CompilationUnit unit)
     {
         var printed = GSharpPrinter.Print(unit);

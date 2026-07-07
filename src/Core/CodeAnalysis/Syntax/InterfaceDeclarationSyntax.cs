@@ -18,6 +18,7 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
     private SyntaxToken baseColonToken;
     private SeparatedSyntaxList<TypeClauseSyntax> baseTypeClauses = new SeparatedSyntaxList<TypeClauseSyntax>(ImmutableArray<SyntaxNode>.Empty);
     private ImmutableArray<FieldDeclarationSyntax> staticFields = ImmutableArray<FieldDeclarationSyntax>.Empty;
+    private SyntaxToken partialModifier;
 
     /// <summary>Initializes a new instance of the <see cref="InterfaceDeclarationSyntax"/> class.</summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
@@ -231,6 +232,36 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets a value indicating whether this interface declares one or more base interfaces (issue #1006).</summary>
     public bool HasBaseInterfaces => BaseColonToken != null;
+
+    /// <summary>
+    /// Gets or sets the optional <c>partial</c> contextual modifier (ADR-0144 /
+    /// issue #2201) on the interface declaration (<c>partial interface</c>).
+    /// When non-null this declaration is one part of an interface that may be
+    /// split across multiple declarations in the same package. Assigned by the
+    /// parser; <c>null</c> otherwise.
+    /// </summary>
+    public SyntaxToken PartialModifier
+    {
+        get => partialModifier;
+        set
+        {
+            partialModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
+
+    /// <summary>Gets a value indicating whether this interface was declared <c>partial</c> (ADR-0144 / issue #2201).</summary>
+    public bool IsPartial => PartialModifier != null;
+
+    /// <summary>
+    /// Gets or sets the identifier locations of every part of a merged
+    /// <c>partial</c> interface (ADR-0144). Populated only on the synthetic node
+    /// <c>PartialTypeMerger</c> produces; empty on an ordinary declaration. Drives
+    /// go-to-definition returning all part locations. Its element type
+    /// (<see cref="Text.TextLocation"/>) is not a syntax node, so it is invisible
+    /// to <see cref="SyntaxNode.GetChildren"/> and does not affect this node's span.
+    /// </summary>
+    public ImmutableArray<Text.TextLocation> PartialPartLocations { get; set; } = ImmutableArray<Text.TextLocation>.Empty;
 
     /// <summary>
     /// Gets or sets the static field declarations (<c>var</c> / <c>let</c> /

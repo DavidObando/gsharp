@@ -56,7 +56,8 @@ public class LspServerMemberFeatureTests
             // 1) go-to-definition on the implicit-this property usage `Width`.
             var def = await server.DefinitionAsync(new DefinitionParams { TextDocument = id, Position = LanguageServerTestHelpers.PositionOf(v2, "Width", 1) });
             Assert.NotNull(def);
-            Assert.Equal(3, def.Range.Start.Line); // `prop Width` declaration
+            var defLocation = Assert.Single(def);
+            Assert.Equal(3, defLocation.Range.Start.Line); // `prop Width` declaration
 
             // 2) reference code lens is produced for the file.
             var lenses = await server.CodeLensAsync(new CodeLensParams { TextDocument = id });

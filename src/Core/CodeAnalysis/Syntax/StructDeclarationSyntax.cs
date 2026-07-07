@@ -16,6 +16,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     // never served afterwards.
     private SeparatedSyntaxList<TypeClauseSyntax> baseTypeClauses = new SeparatedSyntaxList<TypeClauseSyntax>(ImmutableArray<SyntaxNode>.Empty);
     private SyntaxToken unsafeModifier;
+    private SyntaxToken partialModifier;
     private TypeParameterListSyntax typeParameterList;
     private SyntaxToken refModifier;
     private SharedBlockSyntax sharedBlock;
@@ -458,6 +459,38 @@ public sealed class StructDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets a value indicating whether this aggregate was declared <c>unsafe</c> (ADR-0122 / issue #1014).</summary>
     public bool IsUnsafe => UnsafeModifier != null;
+
+    /// <summary>
+    /// Gets or sets the optional <c>partial</c> contextual modifier (ADR-0144 /
+    /// issue #2201) on the aggregate declaration (<c>partial class</c> /
+    /// <c>partial struct</c>). When non-null this declaration is one part of a
+    /// type that may be split across multiple declarations in the same package.
+    /// Assigned by the parser; <c>null</c> otherwise. Rejected on <c>enum</c>
+    /// (GS0484).
+    /// </summary>
+    public SyntaxToken PartialModifier
+    {
+        get => partialModifier;
+        set
+        {
+            partialModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
+
+    /// <summary>Gets a value indicating whether this aggregate was declared <c>partial</c> (ADR-0144 / issue #2201).</summary>
+    public bool IsPartial => PartialModifier != null;
+
+    /// <summary>
+    /// Gets or sets the identifier locations of every part of a merged
+    /// <c>partial</c> type (ADR-0144). Populated only on the synthetic node
+    /// <c>PartialTypeMerger</c> produces; empty on an ordinary (un-merged)
+    /// declaration. Used by the language server so go-to-definition on a partial
+    /// type returns all part locations. Its element type (<see cref="Text.TextLocation"/>)
+    /// is not a syntax node, so it is intentionally invisible to
+    /// <see cref="SyntaxNode.GetChildren"/> and does not affect this node's span.
+    /// </summary>
+    public ImmutableArray<Text.TextLocation> PartialPartLocations { get; set; } = ImmutableArray<Text.TextLocation>.Empty;
 
     /// <summary>Gets a value indicating whether this aggregate was declared with the <c>class</c> keyword (Phase 3.B.3) rather than <c>struct</c>.</summary>
     public bool IsClass => StructKeyword?.Kind == SyntaxKind.ClassKeyword;

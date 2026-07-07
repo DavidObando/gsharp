@@ -54,6 +54,29 @@ public class DefinitionHandlerTests
     }
 
     [Fact]
+    public void ComputeDefinitions_PartialType_ReturnsAllPartLocations()
+    {
+        // ADR-0144: go-to-definition on a partial type returns every part's
+        // location. Two `partial class Point` parts on lines 0 and 3.
+        const string source =
+            "partial class Point {\n    var x int32 = 0\n}\npartial class Point {\n    func Get() int32 { return x }\n}\nlet p = Point()\n";
+        var content = LanguageServerTestHelpers.Content(source);
+        var uri = DocumentUri.From("file:///def.gs");
+
+        // Cursor on the `Point` type name in the `Point()` construction.
+        var locations = DefinitionComputer.ComputeDefinitions(uri, content, LanguageServerTestHelpers.PositionOf(source, "Point", 2));
+
+        Assert.Equal(2, locations.Count);
+        Assert.Contains(locations, l => l.Range.Start.Line == 0);
+        Assert.Contains(locations, l => l.Range.Start.Line == 3);
+
+        // The single-Location convenience overload returns the first part.
+        var single = DefinitionComputer.ComputeDefinition(uri, content, LanguageServerTestHelpers.PositionOf(source, "Point", 2));
+        Assert.NotNull(single);
+        Assert.Equal(0, single.Range.Start.Line);
+    }
+
+    [Fact]
     public void ComputeDefinition_ReturnsNullForUnknownToken()
     {
         const string source = "let x = 42\n";
