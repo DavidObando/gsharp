@@ -604,9 +604,14 @@ public sealed class CSharpTypeMapper
                 continue;
             }
 
+            // `named` may be a CONSTRUCTED generic (e.g. `Box<Label>`), while
+            // `GetTypeMembers` always yields the unbound generic definition
+            // (`Box<T>`). Comparing them directly makes every reference to a
+            // constructed generic type look like a homonym of itself — compare
+            // original definitions so `Box<Label>` correctly matches `Box<T>`.
             foreach (INamedTypeSymbol candidate in candidateNamespace.GetTypeMembers(named.Name))
             {
-                if (!SymbolEqualityComparer.Default.Equals(candidate, named))
+                if (!SymbolEqualityComparer.Default.Equals(candidate.OriginalDefinition, named.OriginalDefinition))
                 {
                     return true;
                 }
