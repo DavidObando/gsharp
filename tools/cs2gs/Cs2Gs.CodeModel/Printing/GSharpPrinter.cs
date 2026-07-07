@@ -1310,6 +1310,14 @@ public static class GSharpPrinter
             sb.Append("abstract ");
         }
 
+        if (declaration.IsPartial)
+        {
+            // ADR-0144 §G: the `partial` modifier is placed after
+            // `open`/`sealed`, immediately before the aggregate keyword
+            // (e.g. `public open partial class Foo`).
+            sb.Append("partial ");
+        }
+
         sb.Append(RenderKindKeyword(declaration.Kind));
         sb.Append(' ');
         sb.Append(declaration.Name);

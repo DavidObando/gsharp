@@ -1119,6 +1119,23 @@ public static class DefinitionComputer
 {
     public static Location ComputeDefinition(DocumentUri uri, DocumentContent content, Position position, CancellationToken ct = default)
     {
+        var all = ComputeDefinitions(uri, content, position, ct);
+        return all.Count > 0 ? all[0] : null;
+    }
+
+    /// <summary>
+    /// Like <see cref="ComputeDefinition"/> but returns <em>every</em> declaration
+    /// location. For a <c>partial</c> type (ADR-0144) this is one location per
+    /// part (across files); for every other symbol it is a single-element list
+    /// (or empty). The <c>textDocument/definition</c> handler returns this array.
+    /// </summary>
+    /// <param name="uri">The URI of the document the request originated from (fallback when a target has no file path).</param>
+    /// <param name="content">The document content and its owning project/workspace.</param>
+    /// <param name="position">The cursor position whose symbol is being resolved.</param>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>Every declaration location for the resolved symbol; empty when none resolves.</returns>
+    public static IReadOnlyList<Location> ComputeDefinitions(DocumentUri uri, DocumentContent content, Position position, CancellationToken ct = default)
+    {
         var compilation = content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
         var offset = SemanticLookup.ToOffset(content, position);
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
@@ -1129,16 +1146,24 @@ public static class DefinitionComputer
         // first, then portable-PDB navigation. See CrossAssemblyDefinitionResolver.
         if (TryResolveImportedSymbol(symbol, workspace, out var crossLocation))
         {
-            return crossLocation;
+            return new[] { crossLocation };
         }
 
         if (symbol != null)
         {
+            // ADR-0144: a partial type resolves to a synthetic merged declaration
+            // that records every part's identifier location. Return them all.
+            var partLocations = GetPartialTypeLocations(symbol, uri);
+            if (partLocations != null)
+            {
+                return partLocations;
+            }
+
             var declarationToken = FindDeclarationToken(compilation, symbol, ct);
             if (declarationToken != null)
             {
                 var targetUri = GetDocumentUri(declarationToken, uri);
-                return new Location { Uri = targetUri, Range = SemanticLookup.ToRange(declarationToken) };
+                return new[] { new Location { Uri = targetUri, Range = SemanticLookup.ToRange(declarationToken) } };
             }
         }
 
@@ -1152,17 +1177,46 @@ public static class DefinitionComputer
             if (ImportedClrMemberResolver.TryResolveClrType(content.SyntaxTree, compilation, token, out var clrType)
                 && CrossAssemblyDefinitionResolver.TryResolveType(workspace, clrType, out var typeLocation))
             {
-                return typeLocation;
+                return new[] { typeLocation };
             }
 
             if (ImportedClrMemberResolver.TryResolveClrMember(content.SyntaxTree, compilation, token, out var clrMember)
                 && TryResolveClrMember(workspace, clrMember, out var memberLocation))
             {
-                return memberLocation;
+                return new[] { memberLocation };
             }
         }
 
-        return null;
+        return Array.Empty<Location>();
+    }
+
+    /// <summary>
+    /// Returns one <see cref="Location"/> per part of a merged <c>partial</c> type
+    /// (ADR-0144), or <see langword="null"/> when <paramref name="symbol"/> is not
+    /// a multi-part partial struct/interface (so the caller falls through to the
+    /// ordinary single-declaration path).
+    /// </summary>
+    private static IReadOnlyList<Location> GetPartialTypeLocations(Symbol symbol, DocumentUri fallback)
+    {
+        var partLocations = symbol switch
+        {
+            StructSymbol s => s.Declaration?.PartialPartLocations ?? ImmutableArray<TextLocation>.Empty,
+            InterfaceSymbol i => i.Declaration?.PartialPartLocations ?? ImmutableArray<TextLocation>.Empty,
+            _ => ImmutableArray<TextLocation>.Empty,
+        };
+
+        if (partLocations.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        return partLocations
+            .Select(loc => new Location
+            {
+                Uri = !string.IsNullOrEmpty(loc.FileName) ? DocumentUri.FromFileSystemPath(loc.FileName) : fallback,
+                Range = SemanticLookup.ToRange(loc.Text, loc.Span),
+            })
+            .ToArray();
     }
 
     private static bool TryResolveImportedSymbol(Symbol symbol, WorkspaceState workspace, out Location location)

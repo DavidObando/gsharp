@@ -83,6 +83,49 @@ public class IncrementalGlobalScopeReuseTests
     }
 
     /// <summary>
+    /// ADR-0144: a file containing a <c>partial</c> type is never eligible for
+    /// the body-only fast path, even for an otherwise body-only edit — the
+    /// type's symbol is bound from a synthetic merged declaration spanning every
+    /// part, which a single-file positional re-point cannot reproduce. The edit
+    /// must fall back to a full rebuild (<see cref="IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit"/>
+    /// returns <see langword="false"/>).
+    /// </summary>
+    [Fact]
+    public void PartialType_BodyOnlyEdit_FallsBackToFullRebuild()
+    {
+        var fileA = Parse("A.gs", """
+            package P
+            partial class Widget {
+                func Value() int {
+                    return 1
+                }
+            }
+            """);
+        var fileB = Parse("B.gs", """
+            package P
+            partial class Widget {
+                func Other() int {
+                    return 2
+                }
+            }
+            """);
+
+        var scope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(fileA, fileB));
+
+        // Body-only edit to A.gs: only the returned literal changes.
+        var editedA = Parse("A.gs", """
+            package P
+            partial class Widget {
+                func Value() int {
+                    return 100
+                }
+            }
+            """);
+
+        Assert.False(IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(scope, fileA, editedA));
+    }
+
+    /// <summary>
     /// The fast path is bit-for-bit identical to a full rebuild on the edited
     /// trees: same emitted IL and same diagnostics. This is the load-bearing
     /// determinism guarantee — the cache/reuse must never change output. The

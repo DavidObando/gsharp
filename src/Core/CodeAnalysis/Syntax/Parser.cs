@@ -681,7 +681,7 @@ public class Parser
             // ADR-0122 / issue #1202: `unsafe` composes with the other class
             // modifiers (in any order), establishing an unsafe context for the
             // whole aggregate. Treat it like the other contextual modifiers.
-            if (k.Kind == SyntaxKind.IdentifierToken && (k.Text == "data" || k.Text == "inline" || k.Text == "ref" || k.Text == "unsafe"))
+            if (k.Kind == SyntaxKind.IdentifierToken && (k.Text == "data" || k.Text == "inline" || k.Text == "ref" || k.Text == "unsafe" || k.Text == "partial"))
             {
                 // Bail out if the same contextual modifier appears twice — we are
                 // not in a declaration head; let the legacy / statement parser
@@ -728,6 +728,7 @@ public class Parser
         SyntaxToken inlineKeyword = null;
         SyntaxToken refModifier = null;
         SyntaxToken unsafeModifier = null;
+        SyntaxToken partialModifier = null;
 
         // Collect modifiers in any order. Re-issuing of a modifier is reported
         // as an unexpected token but parsing continues for recovery.
@@ -799,6 +800,20 @@ public class Parser
                 }
 
                 refModifier = NextToken();
+                continue;
+            }
+
+            // ADR-0144 / issue #2201: `partial` is a contextual modifier that
+            // composes with the other aggregate modifiers in any order. It is
+            // valid on class/struct/interface (rejected on enum below).
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "partial")
+            {
+                if (partialModifier != null)
+                {
+                    Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.ClassKeyword);
+                }
+
+                partialModifier = NextToken();
                 continue;
             }
 
@@ -896,6 +911,11 @@ public class Parser
                     Diagnostics.ReportUnexpectedToken(unsafeModifier.Location, SyntaxKind.IdentifierToken, SyntaxKind.EnumKeyword);
                 }
 
+                if (partialModifier != null)
+                {
+                    Diagnostics.ReportPartialNotValidOnKind(partialModifier.Location, "enum");
+                }
+
                 break;
 
             case SyntaxKind.InterfaceKeyword:
@@ -948,7 +968,9 @@ public class Parser
 
         if (aggregateKind == SyntaxKind.InterfaceKeyword)
         {
-            return ParseInterfaceDeclarationNew(accessibilityModifier, sealedModifier, aggregateKeyword, identifier, typeParameterList);
+            var interfaceDecl = ParseInterfaceDeclarationNew(accessibilityModifier, sealedModifier, aggregateKeyword, identifier, typeParameterList);
+            interfaceDecl.PartialModifier = partialModifier;
+            return interfaceDecl;
         }
 
         // class / struct path.
@@ -963,6 +985,7 @@ public class Parser
             structDecl.TypeParameterList = typeParameterList;
             structDecl.RefModifier = refModifier;
             structDecl.UnsafeModifier = unsafeModifier;
+            structDecl.PartialModifier = partialModifier;
             return structDecl;
         }
         finally

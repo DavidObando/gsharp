@@ -4506,6 +4506,162 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// ADR-0144 / issue #2201: GS0484 — the <c>partial</c> contextual modifier
+    /// was applied to an aggregate kind that cannot be partial. Only
+    /// <c>class</c>, <c>struct</c>, and <c>interface</c> declarations may be
+    /// partial; <c>enum</c> is rejected at parse time.
+    /// </summary>
+    /// <param name="location">The source location of the offending <c>partial</c> modifier.</param>
+    /// <param name="kind">The rejected aggregate kind spelling (e.g. <c>enum</c>).</param>
+    public void ReportPartialNotValidOnKind(TextLocation location, string kind)
+    {
+        Report(
+            location,
+            "GS0484",
+            $"'partial' is not valid on '{kind}'; only 'class', 'struct', and 'interface' declarations can be partial.",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0144 / issue #2201: GS0475 — a declaration in a partial-type group
+    /// lacks the <c>partial</c> modifier while another declaration of the same
+    /// type carries it (the analog of C# CS0260).
+    /// </summary>
+    /// <param name="location">The source location of the non-partial declaration's identifier.</param>
+    /// <param name="name">The type name.</param>
+    public void ReportPartialModifierMissing(TextLocation location, string name)
+    {
+        Report(
+            location,
+            "GS0475",
+            $"Missing 'partial' modifier on declaration of type '{name}'; another partial declaration of this type exists.",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0144 / issue #2201: GS0476 — the parts of a partial type disagree on
+    /// aggregate kind (<c>class</c> vs <c>struct</c> vs <c>interface</c>).
+    /// </summary>
+    /// <param name="location">The source location of the mismatched declaration's identifier.</param>
+    /// <param name="name">The type name.</param>
+    public void ReportPartialKindMismatch(TextLocation location, string name)
+    {
+        Report(
+            location,
+            "GS0476",
+            $"Partial declarations of '{name}' must all be the same aggregate kind ('class', 'struct', or 'interface').",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0144 / issue #2201: GS0477 — two parts of a partial type state
+    /// different accessibility modifiers.
+    /// </summary>
+    /// <param name="location">The source location of the conflicting accessibility modifier.</param>
+    /// <param name="name">The type name.</param>
+    public void ReportPartialAccessibilityConflict(TextLocation location, string name)
+    {
+        Report(
+            location,
+            "GS0477",
+            $"Partial declarations of '{name}' have conflicting accessibility modifiers.",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0144 / issue #2201: GS0478 — one part of a partial type is <c>open</c>
+    /// and another is <c>sealed</c>.
+    /// </summary>
+    /// <param name="location">The source location of the conflicting declaration's identifier.</param>
+    /// <param name="name">The type name.</param>
+    public void ReportPartialOpenSealedConflict(TextLocation location, string name)
+    {
+        Report(
+            location,
+            "GS0478",
+            $"Partial declarations of '{name}' have conflicting 'open'/'sealed' modifiers.",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0144 / issue #2201: GS0479 — a <c>data</c>/<c>inline</c>/<c>ref</c>
+    /// modifier that changes how each part's body binds appears on some but not
+    /// all parts of a partial type.
+    /// </summary>
+    /// <param name="location">The source location of the part missing the modifier.</param>
+    /// <param name="modifier">The modifier spelling (<c>data</c>, <c>inline</c>, or <c>ref</c>).</param>
+    /// <param name="name">The type name.</param>
+    public void ReportPartialModifierMustMatchAllParts(TextLocation location, string modifier, string name)
+    {
+        Report(
+            location,
+            "GS0479",
+            $"The '{modifier}' modifier must appear on every partial declaration of '{name}'.",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0144 / issue #2201: GS0480 — the parts of a partial type declare
+    /// differing type-parameter lists (names, arity, order, or constraints).
+    /// </summary>
+    /// <param name="location">The source location of the mismatched declaration's identifier.</param>
+    /// <param name="name">The type name.</param>
+    public void ReportPartialTypeParameterMismatch(TextLocation location, string name)
+    {
+        Report(
+            location,
+            "GS0480",
+            $"Partial declarations of '{name}' must have identical type parameter lists (including names and constraints).",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0144 / issue #2201: GS0481 — the parts of a partial type have
+    /// conflicting base clauses (differing base class, or base-constructor
+    /// arguments on more than one part).
+    /// </summary>
+    /// <param name="location">The source location of the conflicting declaration's identifier.</param>
+    /// <param name="name">The type name.</param>
+    public void ReportPartialBaseClauseConflict(TextLocation location, string name)
+    {
+        Report(
+            location,
+            "GS0481",
+            $"Partial declarations of '{name}' have conflicting base clauses; only one part may supply base-constructor arguments and any repeated base class must match.",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0144 / issue #2201: GS0482 — more than one part of a partial type
+    /// declares a primary constructor.
+    /// </summary>
+    /// <param name="location">The source location of the offending declaration's identifier.</param>
+    /// <param name="name">The type name.</param>
+    public void ReportPartialMultiplePrimaryConstructors(TextLocation location, string name)
+    {
+        Report(
+            location,
+            "GS0482",
+            $"Only one partial declaration of '{name}' may declare a primary constructor.",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0144 / issue #2201: GS0483 — more than one part of a partial type
+    /// declares a <c>deinit</c>.
+    /// </summary>
+    /// <param name="location">The source location of the offending <c>deinit</c>.</param>
+    /// <param name="name">The type name.</param>
+    public void ReportPartialMultipleDeinit(TextLocation location, string name)
+    {
+        Report(
+            location,
+            "GS0483",
+            $"Partial declarations of '{name}' declare more than one 'deinit'.",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
     /// Issue #1336: GS0415 — a <c>sizeof(T)</c> expression names a type that is
     /// not an unmanaged type. <c>sizeof</c> measures the unmanaged byte size of
     /// its operand, so the operand must be a blittable primitive, an enum, a

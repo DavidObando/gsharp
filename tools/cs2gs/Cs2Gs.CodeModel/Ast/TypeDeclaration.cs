@@ -32,6 +32,7 @@ public sealed class TypeDeclaration : GMember
     /// <param name="isOpen">Whether the type is <c>open</c> for subclassing.</param>
     /// <param name="isSealed">Whether the type is a <c>sealed</c> closed hierarchy.</param>
     /// <param name="isAbstract">Whether the type is <c>abstract</c>.</param>
+    /// <param name="isPartial">Whether the type is <c>partial</c> (ADR-0144 §G).</param>
     /// <param name="hasBody">Whether to render a body block (false emits the bodyless primary-ctor form).</param>
     /// <param name="attributes">The type attributes.</param>
     /// <param name="isUnsafe">Whether the type is <c>unsafe</c> (its body is an unsafe context).</param>
@@ -48,6 +49,7 @@ public sealed class TypeDeclaration : GMember
         bool isOpen = false,
         bool isSealed = false,
         bool isAbstract = false,
+        bool isPartial = false,
         bool hasBody = true,
         IReadOnlyList<AttributeUse> attributes = null,
         bool isUnsafe = false)
@@ -64,6 +66,7 @@ public sealed class TypeDeclaration : GMember
         IsOpen = isOpen;
         IsSealed = isSealed;
         IsAbstract = isAbstract;
+        IsPartial = isPartial;
         HasBody = hasBody;
         Attributes = attributes ?? new List<AttributeUse>();
         IsUnsafe = isUnsafe;
@@ -108,6 +111,9 @@ public sealed class TypeDeclaration : GMember
 
     /// <summary>Gets a value indicating whether the type is <c>abstract</c>.</summary>
     public bool IsAbstract { get; }
+
+    /// <summary>Gets a value indicating whether the type is <c>partial</c> (ADR-0144 §G).</summary>
+    public bool IsPartial { get; }
 
     /// <summary>Gets a value indicating whether to render a body block.</summary>
     public bool HasBody { get; }
