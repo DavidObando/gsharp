@@ -241,10 +241,16 @@ gsc consumes the emitted `.g.gs`):
 Follow-ups (not in the initial delivery):
 
 - **Back-translation fidelity for CommunityToolkit.Mvvm** — its generated code
-  currently trips genuine cs2gs/gsc gaps (unqualified/inherited member resolution
-  `GS0157`/`GS0130`, an attribute-argument constant `GS0202`). These are the §H
-  fidelity boundary, tracked as ADR-0138 triage items; generators whose output
-  gsc can already compile (verified via the host's end-to-end test) work fully.
+  currently trips genuine cs2gs/gsc gaps, filed as: gsc static access through a
+  fully-qualified generic type (`GS0157`,
+  [#2209](https://github.com/DavidObando/gsharp/issues/2209)); gsc unqualified
+  call to a method inherited from an imported base (`GS0130`,
+  [#2210](https://github.com/DavidObando/gsharp/issues/2210)); cs2gs
+  back-translation emitting short type/enum names without imports
+  (`GS0113`/`GS0157`/`GS0202`,
+  [#2211](https://github.com/DavidObando/gsharp/issues/2211)). These are the §H
+  fidelity boundary; generators whose output gsc can already compile (verified
+  via the host's end-to-end test) work fully.
 - **Live in-editor regeneration** — the out-of-proc `gsgen serve` sidecar that
   re-runs generators on keystroke (§G). The delivered LS slice covers post-build
   visibility; `serve` mode is deferred.
