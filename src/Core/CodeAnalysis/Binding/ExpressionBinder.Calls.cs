@@ -3450,8 +3450,14 @@ internal sealed partial class ExpressionBinder
             // to typeof(object) so those resolve. TryBindInheritedClrInstanceCall
             // returns false for any name Object does not define, so unknown
             // methods still report GS0159 below.
+            // Issue #2210: use the transitive walk (issue #1582) rather than
+            // only `inheritedDerived`'s own ImportedBaseType, so a metadata
+            // base reached through one or more intermediate G#-defined base
+            // classes (`class C : B` where `B : SomeImportedBase`) still
+            // surfaces its inherited methods, matching how field/property
+            // access already walks the chain.
             if (receiver != null && receiver.Type is StructSymbol inheritedDerived
-                && (inheritedDerived.ImportedBaseType?.ClrType ?? typeof(object)) is System.Type inheritedBaseClr
+                && (GetInheritedClrBaseType(inheritedDerived) ?? typeof(object)) is System.Type inheritedBaseClr
                 && TryBindInheritedClrInstanceCall(receiver, inheritedBaseClr, methodName, arguments, ce, out var inheritedCall, explicitTypeArgs, typeArgSymbols, argumentNames))
             {
                 return inheritedCall;
@@ -4382,7 +4388,25 @@ internal sealed partial class ExpressionBinder
     {
         result = null;
 
-        var candidates = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(importedBaseClr, methodName);
+        // Issue #2210: start from the public (+ self-interface DIM) candidates
+        // this helper has always resolved, then union in any `protected` /
+        // `protected internal` instance methods reachable from a derived G#
+        // type. Only public members were considered before, so a call like
+        // `OnPropertyChanged(...)` inherited from an imported
+        // `protected` base method (e.g. CommunityToolkit.Mvvm's
+        // ObservableObject) fell through to GS0130/GS0159 even though the
+        // member is legally callable from the derived class. Reuses the same
+        // accessibility filter (public/Family/FamilyOrAssembly) already
+        // applied to `base.Method(...)` calls (issue #1260).
+        var candidates = new List<MethodInfo>(MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(importedBaseClr, methodName));
+        foreach (var protectedCandidate in CollectBaseClrMethodCandidates(importedBaseClr, methodName))
+        {
+            if (!MemberLookup.HasSameSignature(candidates, protectedCandidate))
+            {
+                candidates.Add(protectedCandidate);
+            }
+        }
+
         if (candidates.Count == 0)
         {
             return false;

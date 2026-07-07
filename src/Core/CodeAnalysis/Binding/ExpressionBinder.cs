@@ -1451,7 +1451,7 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     /// <param name="structSymbol">The user class to resolve the inherited CLR base for.</param>
     /// <returns>The inherited CLR base type, or <see langword="null"/> when there is none.</returns>
-    private static Type GetInheritedClrBaseType(StructSymbol structSymbol)
+    internal static Type GetInheritedClrBaseType(StructSymbol structSymbol)
     {
         for (var c = structSymbol; c != null; c = c.BaseClass)
         {
