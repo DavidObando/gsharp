@@ -8,6 +8,13 @@
 
   <ItemGroup>
     <ProjectReference Include="@(GsharpCompiler)" />
+    <!-- Issue #2215: only this test project needs a real gsgen.dll build output
+         (to resolve via /gsgentool:) plus Roslyn (to compile a fixture
+         generator DLL for the /analyzer: end-to-end test). gsc itself
+         (Compiler.csproj) still has zero Microsoft.CodeAnalysis reference —
+         ADR-0027 is unaffected. -->
+    <ProjectReference Include="..\..\tools\gsgen\Gsgen.Cli\Gsgen.Cli.csproj" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.6.0" />
   </ItemGroup>
 
 </Project>

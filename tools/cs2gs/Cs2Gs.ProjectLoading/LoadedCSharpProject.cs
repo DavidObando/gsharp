@@ -39,13 +39,20 @@ public sealed class LoadedCSharpProject
     /// <paramref name="projectDirectory"/> (issue #2200), excluding the project's own
     /// <c>obj</c>/<c>bin</c> output directories.
     /// </param>
+    /// <param name="analyzerReferencePaths">
+    /// The on-disk analyzer/generator assembly paths the project references
+    /// (issue #2215), forwarded by the Compile stage to gsc's <c>/analyzer:</c>
+    /// flag so generator output reaches the cs2gs-compiled assembly the same
+    /// way a real build would produce it.
+    /// </param>
     public LoadedCSharpProject(
         CSharpCompilation compilation,
         IReadOnlyList<LoadedDocument> documents,
         IReadOnlyList<Diagnostic> loadDiagnostics,
         string projectDirectory = null,
         string rootNamespace = null,
-        IReadOnlyList<string> resxFiles = null)
+        IReadOnlyList<string> resxFiles = null,
+        IReadOnlyList<string> analyzerReferencePaths = null)
     {
         this.Compilation = compilation;
         this.Documents = documents;
@@ -53,6 +60,7 @@ public sealed class LoadedCSharpProject
         this.ProjectDirectory = projectDirectory;
         this.RootNamespace = rootNamespace ?? string.Empty;
         this.ResxFiles = resxFiles ?? ImmutableArray<string>.Empty;
+        this.AnalyzerReferencePaths = analyzerReferencePaths ?? ImmutableArray<string>.Empty;
     }
 
     /// <summary>Gets the bound C# compilation.</summary>
@@ -88,6 +96,12 @@ public sealed class LoadedCSharpProject
     /// see <see cref="CSharpProjectLoader"/>'s auto-generated-header check).
     /// </summary>
     public IReadOnlyList<string> ResxFiles { get; }
+
+    /// <summary>
+    /// Gets the on-disk analyzer/generator assembly paths the project
+    /// references (issue #2215) — empty for an in-memory-loaded project.
+    /// </summary>
+    public IReadOnlyList<string> AnalyzerReferencePaths { get; }
 
     /// <summary>
     /// Gets the subset of <see cref="LoadDiagnostics"/> with

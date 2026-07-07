@@ -30,13 +30,25 @@ public sealed class GscInvoker
     /// Initializes a new instance of the <see cref="GscInvoker"/> class.
     /// </summary>
     /// <param name="gscPath">The resolved absolute path to <c>gsc.dll</c>.</param>
-    public GscInvoker(string gscPath)
+    /// <param name="gsgenPath">
+    /// Issue #2215: the resolved absolute path to <c>gsgen.dll</c>, forwarded
+    /// to gsc via <c>/gsgentool:</c> whenever an analyzer path is also passed
+    /// to <see cref="Compile"/>. <see langword="null"/> lets gsc fall back to
+    /// its own packaged-sibling-tools default (only valid once packaged; in a
+    /// dev tree gsc.dll and gsgen.dll are not siblings, so callers running
+    /// against a dev build should resolve and pass this explicitly).
+    /// </param>
+    public GscInvoker(string gscPath, string gsgenPath = null)
     {
         this.GscPath = gscPath ?? throw new ArgumentNullException(nameof(gscPath));
+        this.GsgenPath = gsgenPath;
     }
 
     /// <summary>Gets the resolved <c>gsc.dll</c> path.</summary>
     public string GscPath { get; }
+
+    /// <summary>Gets the resolved <c>gsgen.dll</c> path, or <see langword="null"/> to use gsc's own default.</summary>
+    public string GsgenPath { get; }
 
     /// <summary>
     /// Resolves the <c>gsc.dll</c> to use: the explicit override when supplied,
@@ -47,34 +59,24 @@ public sealed class GscInvoker
     /// <param name="config">The build configuration to probe (e.g. <c>Release</c>).</param>
     /// <param name="startDirectory">The directory to begin the upward walk from.</param>
     /// <returns>The resolved path, or <see langword="null"/> if none was found.</returns>
-    public static string Resolve(string explicitPath, string config, string startDirectory)
-    {
-        if (!string.IsNullOrEmpty(explicitPath))
-        {
-            return File.Exists(explicitPath) ? Path.GetFullPath(explicitPath) : null;
-        }
+    public static string Resolve(string explicitPath, string config, string startDirectory) =>
+        ResolveSiblingTool(explicitPath, config, startDirectory, "Compiler", "gsc.dll");
 
-        var configs = string.IsNullOrEmpty(config)
-            ? new[] { "Release", "Debug" }
-            : new[] { config, "Release", "Debug" };
-
-        var dir = new DirectoryInfo(startDirectory);
-        while (dir is not null)
-        {
-            foreach (string cfg in configs)
-            {
-                string candidate = Path.Combine(dir.FullName, "out", "bin", cfg, "Compiler", "gsc.dll");
-                if (File.Exists(candidate))
-                {
-                    return candidate;
-                }
-            }
-
-            dir = dir.Parent;
-        }
-
-        return null;
-    }
+    /// <summary>
+    /// Issue #2215: resolves the <c>gsgen.dll</c> to use, the same way
+    /// <see cref="Resolve"/> resolves gsc — the explicit override when
+    /// supplied, otherwise the first <c>out/bin/&lt;Config&gt;/Gsgen.Cli/gsgen.dll</c>
+    /// found by walking up from <paramref name="startDirectory"/>. In a dev
+    /// tree, gsc.dll and gsgen.dll do NOT live in sibling directories (unlike
+    /// the packaged SDK NuGet), so cs2gs must resolve this explicitly and pass
+    /// it via <c>/gsgentool:</c> for <c>/analyzer:</c> to work outside a packaged install.
+    /// </summary>
+    /// <param name="explicitPath">The <c>--gsgen</c> override, or <see langword="null"/>.</param>
+    /// <param name="config">The build configuration to probe (e.g. <c>Release</c>).</param>
+    /// <param name="startDirectory">The directory to begin the upward walk from.</param>
+    /// <returns>The resolved path, or <see langword="null"/> if none was found.</returns>
+    public static string ResolveGsgenTool(string explicitPath, string config, string startDirectory) =>
+        ResolveSiblingTool(explicitPath, config, startDirectory, "Gsgen.Cli", "gsgen.dll");
 
     /// <summary>
     /// Derives a human-readable <c>gscVersion</c> from the compiler assembly:
@@ -113,12 +115,20 @@ public sealed class GscInvoker
     /// <param name="outputPath">The output assembly path.</param>
     /// <param name="target">The output kind (exe or library).</param>
     /// <param name="references">The assemblies to pass via <c>/reference:</c>.</param>
+    /// <param name="analyzerPaths">
+    /// Issue #2215: analyzer/generator assembly paths to pass via gsc's
+    /// <c>/analyzer:</c> flag. When non-empty, gsc spawns <c>gsgen</c> itself
+    /// (ADR-0027 — Roslyn never links into gsc) and folds its generated
+    /// <c>.gs</c> into this same compile, so the pipeline's compiled assembly
+    /// carries generator output the way a real MSBuild build would.
+    /// </param>
     /// <returns>The exit code, combined output, and parsed diagnostics.</returns>
     public GscResult Compile(
         IReadOnlyList<string> gsFiles,
         string outputPath,
         TargetKind target,
-        IReadOnlyList<string> references)
+        IReadOnlyList<string> references,
+        IReadOnlyList<string> analyzerPaths = null)
     {
         var args = new List<string>
         {
@@ -132,6 +142,19 @@ public sealed class GscInvoker
             foreach (string reference in references)
             {
                 args.Add("/reference:" + reference);
+            }
+        }
+
+        if (analyzerPaths is not null && analyzerPaths.Count > 0)
+        {
+            foreach (string analyzerPath in analyzerPaths)
+            {
+                args.Add("/analyzer:" + analyzerPath);
+            }
+
+            if (!string.IsNullOrEmpty(this.GsgenPath))
+            {
+                args.Add("/gsgentool:" + this.GsgenPath);
             }
         }
 
@@ -173,6 +196,36 @@ public sealed class GscInvoker
         }
 
         return diagnostics;
+    }
+
+    private static string ResolveSiblingTool(
+        string explicitPath, string config, string startDirectory, string projectDirName, string dllName)
+    {
+        if (!string.IsNullOrEmpty(explicitPath))
+        {
+            return File.Exists(explicitPath) ? Path.GetFullPath(explicitPath) : null;
+        }
+
+        var configs = string.IsNullOrEmpty(config)
+            ? new[] { "Release", "Debug" }
+            : new[] { config, "Release", "Debug" };
+
+        var dir = new DirectoryInfo(startDirectory);
+        while (dir is not null)
+        {
+            foreach (string cfg in configs)
+            {
+                string candidate = Path.Combine(dir.FullName, "out", "bin", cfg, projectDirName, dllName);
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            dir = dir.Parent;
+        }
+
+        return null;
     }
 }
 

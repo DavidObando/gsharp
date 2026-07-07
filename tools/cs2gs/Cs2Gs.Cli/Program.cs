@@ -419,6 +419,9 @@ internal static class Program
                     case "--gsc":
                         options.GscPath = NextValue(args, ref i, arg);
                         break;
+                    case "--gsgen":
+                        options.GsgenPath = NextValue(args, ref i, arg);
+                        break;
                     case "--out":
                         options.OutputRoot = NextValue(args, ref i, arg);
                         break;
@@ -577,6 +580,7 @@ internal static class Program
         Console.WriteLine("  --corpus <dir>    Corpus root (default: tools/cs2gs/corpus).");
         Console.WriteLine("  --app <id>        Migrate only this app (repeatable, e.g. corpus/L1-Console).");
         Console.WriteLine("  --gsc <path>      Override gsc.dll (default: out/bin/<Config>/Compiler/gsc.dll).");
+        Console.WriteLine("  --gsgen <path>    Override gsgen.dll (default: out/bin/<Config>/Gsgen.Cli/gsgen.dll); issue #2215.");
         Console.WriteLine("  --out <dir>       Runs root for artifacts (default: ./cs2gs-runs).");
         Console.WriteLine("  --config <name>   Build config used to find gsc (default: Release).");
         Console.WriteLine("  --baseline <file> Gate on the gap ledger (tools/cs2gs/triage/gaps.json): fail only on");

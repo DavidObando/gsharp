@@ -305,6 +305,16 @@ public sealed class ReferenceResolver : IDisposable
     }
 
     /// <summary>
+    /// Issue #2215: the gsc host's trusted-platform (BCL) assembly paths, exposed
+    /// so sibling tools (e.g. gsgen's C# stub compilation) can apply the same
+    /// "explicit paths win, host BCL is a fallback for anything not named" policy
+    /// this resolver uses internally, instead of silently compiling against zero
+    /// references when the caller supplies none.
+    /// </summary>
+    /// <returns>The host's trusted-platform assembly paths.</returns>
+    public static IReadOnlyList<string> HostTrustedPlatformAssemblyPaths() => GetHostTrustedPlatformAssemblies().ToArray();
+
+    /// <summary>
     /// Gets a resolver that searches only the assemblies referenced by file
     /// path. The supplied paths are loaded into an isolated
     /// <see cref="MetadataLoadContext"/> so callers see types whose

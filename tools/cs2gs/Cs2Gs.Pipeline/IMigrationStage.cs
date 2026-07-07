@@ -89,6 +89,16 @@ public sealed class StageExecutionContext
     public List<string> ExternalReferencePaths { get; } = new List<string>();
 
     /// <summary>
+    /// Gets the absolute paths of the app's own analyzer/generator assemblies,
+    /// captured by the Translate stage from the Roslyn project's
+    /// <c>AnalyzerReferences</c> (issue #2215). The Compile stage forwards
+    /// these to gsc's <c>/analyzer:</c> flag so gsc spawns <c>gsgen</c> and
+    /// folds generator output into the same compile a real MSBuild build of
+    /// this project would produce.
+    /// </summary>
+    public List<string> AnalyzerReferencePaths { get; } = new List<string>();
+
+    /// <summary>
     /// Gets or sets the absolute path of the assembly emitted by the Compile
     /// stage, published for the IL-verify stage to read (ADR-0115 §C). It is
     /// <see langword="null"/> until a green stage-2 compile has run.

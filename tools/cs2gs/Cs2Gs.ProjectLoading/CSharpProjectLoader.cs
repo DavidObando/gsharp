@@ -324,9 +324,25 @@ public static class CSharpProjectLoader
 
         string rootNamespace = ResolveRootNamespace(project);
         IReadOnlyList<string> resxFiles = DiscoverResxFiles(projectDirectory);
+        IReadOnlyList<string> analyzerReferencePaths = ResolveAnalyzerReferencePaths(project);
 
-        return new LoadedCSharpProject(csharpCompilation, documents, seedDiagnostics, projectDirectory, rootNamespace, resxFiles);
+        return new LoadedCSharpProject(csharpCompilation, documents, seedDiagnostics, projectDirectory, rootNamespace, resxFiles, analyzerReferencePaths);
     }
+
+    /// <summary>
+    /// Issue #2215: the on-disk analyzer/generator assembly paths the project
+    /// references (its <c>&lt;Analyzer&gt;</c> items, resolved by MSBuild), so
+    /// the Compile stage can forward them to gsc's <c>/analyzer:</c> flag and
+    /// get the same generator output a real build of this project would
+    /// produce. Only file-backed references resolve to a path; an in-memory or
+    /// otherwise non-file analyzer reference is skipped.
+    /// </summary>
+    private static IReadOnlyList<string> ResolveAnalyzerReferencePaths(Project project) =>
+        project.AnalyzerReferences
+            .OfType<Microsoft.CodeAnalysis.Diagnostics.AnalyzerFileReference>()
+            .Select(a => a.FullPath)
+            .Where(p => !string.IsNullOrEmpty(p) && File.Exists(p))
+            .ToList();
 
     /// <summary>
     /// Resolves a project's effective root/default namespace (issue #2200): Roslyn's

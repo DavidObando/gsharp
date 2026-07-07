@@ -19,6 +19,15 @@ public sealed class PipelineOptions
     public string GscPath { get; set; }
 
     /// <summary>
+    /// Gets or sets the explicit <c>gsgen.dll</c> path (issue #2215), forwarded
+    /// to gsc via <c>/gsgentool:</c> whenever an app has analyzer references.
+    /// When <see langword="null"/> the pipeline discovers
+    /// <c>out/bin/&lt;Config&gt;/Gsgen.Cli/gsgen.dll</c> the same way it
+    /// discovers <see cref="GscPath"/>.
+    /// </summary>
+    public string GsgenPath { get; set; }
+
+    /// <summary>
     /// Gets or sets the runs-root directory under which each run writes a
     /// <c>&lt;runId&gt;/</c> subdirectory holding the emitted G#, triage
     /// artifacts, and the run summary JSON.

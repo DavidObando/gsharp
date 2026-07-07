@@ -134,12 +134,31 @@ public static class GsgenProgram
     /// <summary>
     /// The metadata references the host's C# stub/generated/foreign code binds
     /// against. Filter to files that exist so <c>CreateFromFile</c> never throws.
+    /// Issue #2215: augmented with the host's own trusted-platform (BCL)
+    /// assemblies as a fallback for any name the caller didn't enumerate — the
+    /// same "explicit wins, host BCL fills gaps" policy <see cref="GsReferenceResolver.WithReferences"/>
+    /// already applies for G# symbol binding. Without this, a caller that omits
+    /// <c>/r:</c> (e.g. gsc's minimal <c>/analyzer:</c> path) would hand the C#
+    /// stub compilation zero references, leaving even <c>System.Obsolete</c>
+    /// unresolved and every attribute-driven generator predicate a silent no-op.
     /// </summary>
-    private static IReadOnlyList<MetadataReference> BuildMetadataReferences(IReadOnlyList<string> referencePaths) =>
-        referencePaths
-            .Where(File.Exists)
-            .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))
-            .ToList();
+    private static IReadOnlyList<MetadataReference> BuildMetadataReferences(IReadOnlyList<string> referencePaths)
+    {
+        var explicitPaths = referencePaths.Where(File.Exists).ToArray();
+        var seenFileNames = new HashSet<string>(
+            explicitPaths.Select(Path.GetFileName), StringComparer.OrdinalIgnoreCase);
+
+        var all = new List<string>(explicitPaths);
+        foreach (var host in GsReferenceResolver.HostTrustedPlatformAssemblyPaths())
+        {
+            if (seenFileNames.Add(Path.GetFileName(host)))
+            {
+                all.Add(host);
+            }
+        }
+
+        return all.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p)).ToList();
+    }
 
     /// <summary>
     /// Issue #2214 / ADR-0145 extension: translates each "foreign" <c>.cs</c>
