@@ -3450,9 +3450,22 @@ internal sealed partial class ExpressionBinder
             // to typeof(object) so those resolve. TryBindInheritedClrInstanceCall
             // returns false for any name Object does not define, so unknown
             // methods still report GS0159 below.
+            // Issue #2210: use the transitive walk (issue #1582) rather than
+            // only `inheritedDerived`'s own ImportedBaseType, so a metadata
+            // base reached through one or more intermediate G#-defined base
+            // classes (`class C : B` where `B : SomeImportedBase`) still
+            // surfaces its inherited methods, matching how field/property
+            // access already walks the chain.
+            // Issue #2218 follow-up: only surface `protected`/`protected
+            // internal` inherited members when `receiver` IS the current
+            // implicit/explicit `this` — this path (BindAccessorCall) also
+            // handles an arbitrary qualified `receiver.Method(...)` call, so
+            // without this check protected inherited members would be
+            // callable through any receiver expression, leaking accessibility.
+            var allowProtectedInherited = IsCurrentThisReceiver(receiver);
             if (receiver != null && receiver.Type is StructSymbol inheritedDerived
-                && (inheritedDerived.ImportedBaseType?.ClrType ?? typeof(object)) is System.Type inheritedBaseClr
-                && TryBindInheritedClrInstanceCall(receiver, inheritedBaseClr, methodName, arguments, ce, out var inheritedCall, explicitTypeArgs, typeArgSymbols, argumentNames))
+                && (GetInheritedClrBaseType(inheritedDerived) ?? typeof(object)) is System.Type inheritedBaseClr
+                && TryBindInheritedClrInstanceCall(receiver, inheritedBaseClr, methodName, arguments, ce, out var inheritedCall, explicitTypeArgs, typeArgSymbols, argumentNames, allowProtectedInherited: allowProtectedInherited))
             {
                 return inheritedCall;
             }
@@ -3464,6 +3477,7 @@ internal sealed partial class ExpressionBinder
             // Resolve against typeof(System.Enum); SafeGetMethods walks the base
             // types so all inherited members are found, and the helper returns
             // false for any name Enum/Object does not define (still GS0159).
+            // Enum members are all public, so protected admission stays off here.
             if (receiver != null && receiver.Type is EnumSymbol
                 && TryBindInheritedClrInstanceCall(receiver, typeof(System.Enum), methodName, arguments, ce, out var enumInheritedCall, explicitTypeArgs, typeArgSymbols, argumentNames, mapEnumArgumentsToBaseClr: true))
             {
@@ -4378,17 +4392,42 @@ internal sealed partial class ExpressionBinder
         System.Type[] explicitTypeArgs = null,
         ImmutableArray<TypeSymbol> typeArgSymbols = default,
         ImmutableArray<string> argumentNames = default,
-        bool mapEnumArgumentsToBaseClr = false)
+        bool mapEnumArgumentsToBaseClr = false,
+        bool allowProtectedInherited = false)
     {
         result = null;
 
-        var candidates = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(importedBaseClr, methodName);
+        // Issue #2210: start from the public (+ self-interface DIM) candidates
+        // this helper has always resolved, then union in any `protected` /
+        // `protected internal` instance methods reachable from a derived G#
+        // type — so a call like `OnPropertyChanged(...)` inherited from an
+        // imported `protected` base method (e.g. CommunityToolkit.Mvvm's
+        // ObservableObject) can resolve. Reuses the same accessibility filter
+        // (public/Family/FamilyOrAssembly) already applied to
+        // `base.Method(...)` calls (issue #1260).
+        // Issue #2218 follow-up: this helper is shared by the general
+        // qualified-accessor call path (any `receiver.Method(...)`, not just
+        // `this.`/implicit-this), so a resolved `protected` candidate is only
+        // actually usable when `allowProtectedInherited` is set by the
+        // caller (i.e. it already verified `receiver` IS the current
+        // implicit/explicit `this`). Otherwise `TryResolveAndBindClrInstanceCall`
+        // below rejects the resolved protected candidate with a GS0379
+        // accessibility diagnostic instead of silently binding it.
+        var candidates = new List<MethodInfo>(MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(importedBaseClr, methodName));
+        foreach (var protectedCandidate in CollectBaseClrMethodCandidates(importedBaseClr, methodName))
+        {
+            if (!MemberLookup.HasSameSignature(candidates, protectedCandidate))
+            {
+                candidates.Add(protectedCandidate);
+            }
+        }
+
         if (candidates.Count == 0)
         {
             return false;
         }
 
-        return TryResolveAndBindClrInstanceCall(receiver, candidates, importedBaseClr, methodName, arguments, ce, out result, explicitTypeArgs, typeArgSymbols, argumentNames, mapEnumArgumentsToBaseClr);
+        return TryResolveAndBindClrInstanceCall(receiver, candidates, importedBaseClr, methodName, arguments, ce, out result, explicitTypeArgs, typeArgSymbols, argumentNames, mapEnumArgumentsToBaseClr, allowProtectedInherited: allowProtectedInherited);
     }
 
     /// <summary>
@@ -4475,6 +4514,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="mapEnumArgumentsToBaseClr">When <see langword="true"/>, enum-typed arguments resolve as the inherited base CLR type (<c>System.Enum</c>) instead of their erased underlying primitive, so members such as <c>HasFlag(System.Enum)</c> match.</param>
     /// <param name="nonVirtualBaseCall">Issue #1260: when <see langword="true"/>, the resolved call is a <c>base.M(...)</c> access into an imported/BCL base and is flagged so the emitter writes a non-virtual <c>call</c>; an <c>abstract</c> best match is reported as GS0413.</param>
     /// <param name="baseMemberLocation">Issue #1260: the location of the member identifier for the GS0413 abstract-base diagnostic (used only when <paramref name="nonVirtualBaseCall"/> is set).</param>
+    /// <param name="allowProtectedInherited">Issue #2218 follow-up: when <see langword="false"/>, a resolved <c>protected</c>/<c>protected internal</c> candidate is rejected with a GS0379 accessibility diagnostic instead of being bound. Defaults to <see langword="true"/> for the <c>base.M(...)</c> and user-interface imported-base callers, which never surface a protected candidate they aren't entitled to call.</param>
     /// <returns>True when the call resolved (or reported a precise ambiguity).</returns>
     private bool TryResolveAndBindClrInstanceCall(
         BoundExpression receiver,
@@ -4489,7 +4529,8 @@ internal sealed partial class ExpressionBinder
         ImmutableArray<string> argumentNames,
         bool mapEnumArgumentsToBaseClr = false,
         bool nonVirtualBaseCall = false,
-        TextLocation? baseMemberLocation = null)
+        TextLocation? baseMemberLocation = null,
+        bool allowProtectedInherited = true)
     {
         result = null;
 
@@ -4551,6 +4592,25 @@ internal sealed partial class ExpressionBinder
                 if (nonVirtualBaseCall && resolution.Best.IsAbstract)
                 {
                     Diagnostics.ReportBaseClassCallAbstractMember(baseMemberLocation ?? ce.Location, importedBaseClr?.Name ?? "object", methodName);
+                    result = new BoundErrorExpression(null);
+                    return true;
+                }
+
+                // Issue #2218 follow-up: the candidate set unioned in by
+                // TryBindInheritedClrInstanceCall (issue #2210) may include a
+                // `protected`/`protected internal` member reachable only via
+                // `base.M(...)` (always legitimate — see nonVirtualBaseCall)
+                // or the current implicit/explicit `this` (only when the
+                // caller passed `allowProtectedInherited: true`). Any other
+                // qualified `receiver.Method(...)` call resolving to such a
+                // member is an accessibility violation: report the same GS0379
+                // diagnostic G# already uses for a protected member accessed
+                // from outside its declaring/derived type, instead of
+                // silently binding it.
+                if (!allowProtectedInherited && !nonVirtualBaseCall
+                    && !resolution.Best.IsPublic && (resolution.Best.IsFamily || resolution.Best.IsFamilyOrAssembly))
+                {
+                    Diagnostics.ReportProtectedMemberInaccessible(ce.Identifier.Location, methodName, ClrTypeDisplayName(resolution.Best.DeclaringType ?? importedBaseClr));
                     result = new BoundErrorExpression(null);
                     return true;
                 }

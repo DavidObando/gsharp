@@ -95,7 +95,8 @@ internal sealed class OverloadResolver
         out BoundExpression result,
         Type[] explicitTypeArgs,
         ImmutableArray<TypeSymbol> typeArgSymbols,
-        ImmutableArray<string> argumentNames);
+        ImmutableArray<string> argumentNames,
+        bool allowProtectedInherited = false);
 
     /// <summary>
     /// Custom delegate type for the <c>TryGetFunctionLiteral</c>
@@ -4918,9 +4919,15 @@ internal sealed class OverloadResolver
                 // (or the explicit imported base if present); the helper returns
                 // false for any name Object does not define, so the GS0130 path
                 // below still fires for genuinely undefined functions.
-                var implicitBaseClr = implicitReceiverStruct.ImportedBaseType?.ClrType ?? typeof(object);
+                // Issue #2210: walk the transitive G# base-class chain (issue
+                // #1582's helper) rather than only `implicitReceiverStruct`'s
+                // own ImportedBaseType, so an unqualified call to a method
+                // inherited from a metadata base reached through one or more
+                // G#-defined base classes resolves — matching the qualified
+                // `this.Method(...)` path and G#-defined-base behavior.
+                var implicitBaseClr = ExpressionBinder.GetInheritedClrBaseType(implicitReceiverStruct) ?? typeof(object);
                 var implicitReceiverExpr = new BoundVariableExpression(null, effThis);
-                if (tryBindInheritedClrInstanceCall(implicitReceiverExpr, implicitBaseClr, syntax.Identifier.Text, boundArguments.ToImmutable(), syntax, out var implicitInheritedCall, null, default, argumentNames))
+                if (tryBindInheritedClrInstanceCall(implicitReceiverExpr, implicitBaseClr, syntax.Identifier.Text, boundArguments.ToImmutable(), syntax, out var implicitInheritedCall, null, default, argumentNames, allowProtectedInherited: true))
                 {
                     return implicitInheritedCall;
                 }
