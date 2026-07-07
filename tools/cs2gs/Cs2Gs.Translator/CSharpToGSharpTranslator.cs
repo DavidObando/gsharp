@@ -151,7 +151,8 @@ public sealed class CSharpToGSharpTranslator
         IMethodSymbol entryPoint = context.Compilation.GetEntryPoint(default);
         INamedTypeSymbol entryType = entryPoint?.ContainingType;
 
-        var visitor = new DeclarationVisitor(context, new CSharpTypeMapper(), openBases, staticUsingTargets, entryPoint, partialTypeParts, this.preservePartialParts);
+        var typeMapper = new CSharpTypeMapper();
+        var visitor = new DeclarationVisitor(context, typeMapper, openBases, staticUsingTargets, entryPoint, partialTypeParts, this.preservePartialParts);
 
         var members = new List<GNode>();
         var trailingStatements = new List<GNode>();
@@ -184,7 +185,27 @@ public sealed class CSharpToGSharpTranslator
         // entry runs with all package types and funcs already in scope.
         members.AddRange(trailingStatements);
 
-        return new CompilationUnit(package, imports, members);
+        // Issue #2211: a Roslyn source generator (and other fully-qualified,
+        // no-`using` C# input) can reference a BCL/external type by its
+        // fully-qualified name with no matching `using` directive. The type
+        // mapper still shortens such a reference to its bare name (§B.7/§B.12
+        // qualification rules), so without a corresponding `import` the
+        // shortened name is unresolvable in the emitted G# (GS0113/GS0157).
+        // Synthesize the missing imports here, once every member is
+        // translated (so every shortened reference has been recorded) —
+        // skipping the file's own package (needs no import) and any namespace
+        // an explicit `using` already covers.
+        var allImports = imports is List<ImportDirective> list ? list : imports.ToList();
+        var alreadyImported = new HashSet<string>(allImports.Select(i => i.Name));
+        foreach (string ns in typeMapper.ShortenedNamespaces.OrderBy(n => n, System.StringComparer.Ordinal))
+        {
+            if (ns != package && alreadyImported.Add(ns))
+            {
+                allImports.Add(new ImportDirective(ns));
+            }
+        }
+
+        return new CompilationUnit(package, allImports, members);
     }
 
     // Forwards to the canonical identifier sanitizer implemented on the nested
