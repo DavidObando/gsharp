@@ -36,18 +36,24 @@ public static class GeneratorRunner
     /// <param name="stubCSharp">The declaration-only C# stub source.</param>
     /// <param name="references">The metadata references the stub compiles against.</param>
     /// <param name="generators">The incremental generators to run.</param>
+    /// <param name="additionalTexts">Non-source inputs forwarded to generators as <see cref="AdditionalText"/> (issue #2223).</param>
+    /// <param name="optionsProvider">The MSBuild-derived generator options, or <see langword="null"/> for none.</param>
     /// <returns>The aggregate generator run result.</returns>
     public static GeneratorRunResult Run(
         string stubCSharp,
         IReadOnlyList<MetadataReference> references,
-        IReadOnlyList<IIncrementalGenerator> generators)
+        IReadOnlyList<IIncrementalGenerator> generators,
+        IReadOnlyList<AdditionalText> additionalTexts = null,
+        AnalyzerConfigOptionsProvider optionsProvider = null)
     {
         ArgumentNullException.ThrowIfNull(generators);
         return RunCore(
             stubCSharp,
             references,
             generators.Select(g => g.AsSourceGenerator()).ToList(),
-            new List<GeneratorFailure>());
+            new List<GeneratorFailure>(),
+            additionalTexts,
+            optionsProvider);
     }
 
     /// <summary>
@@ -58,11 +64,15 @@ public static class GeneratorRunner
     /// <param name="stubCSharp">The declaration-only C# stub source.</param>
     /// <param name="references">The metadata references the stub compiles against.</param>
     /// <param name="analyzerAssemblyPaths">The analyzer/generator assembly paths.</param>
+    /// <param name="additionalTexts">Non-source inputs forwarded to generators as <see cref="AdditionalText"/> (issue #2223).</param>
+    /// <param name="optionsProvider">The MSBuild-derived generator options, or <see langword="null"/> for none.</param>
     /// <returns>The aggregate generator run result.</returns>
     public static GeneratorRunResult RunFromAnalyzerPaths(
         string stubCSharp,
         IReadOnlyList<MetadataReference> references,
-        IReadOnlyList<string> analyzerAssemblyPaths)
+        IReadOnlyList<string> analyzerAssemblyPaths,
+        IReadOnlyList<AdditionalText> additionalTexts = null,
+        AnalyzerConfigOptionsProvider optionsProvider = null)
     {
         ArgumentNullException.ThrowIfNull(analyzerAssemblyPaths);
 
@@ -82,17 +92,16 @@ public static class GeneratorRunner
             }
         }
 
-        // TODO(ADR-0145): forward AdditionalText / AnalyzerConfigOptionsProvider
-        // to the driver once the production host needs generators that consume
-        // them. The in-test / declaration-driven path does not require them.
-        return RunCore(stubCSharp, references, generators, failures);
+        return RunCore(stubCSharp, references, generators, failures, additionalTexts, optionsProvider);
     }
 
     private static GeneratorRunResult RunCore(
         string stubCSharp,
         IReadOnlyList<MetadataReference> references,
         IReadOnlyList<ISourceGenerator> generators,
-        List<GeneratorFailure> failures)
+        List<GeneratorFailure> failures,
+        IReadOnlyList<AdditionalText> additionalTexts = null,
+        AnalyzerConfigOptionsProvider optionsProvider = null)
     {
         ArgumentNullException.ThrowIfNull(stubCSharp);
         ArgumentNullException.ThrowIfNull(references);
@@ -118,7 +127,14 @@ public static class GeneratorRunner
                 failures);
         }
 
-        GeneratorDriver driver = CSharpGeneratorDriver.Create(generators);
+        // ADR-0145 §C / issue #2223: forward the project's non-source inputs
+        // (e.g. Avalonia .axaml) and their MSBuild options so file/options-driven
+        // generators can find and process them.
+        GeneratorDriver driver = CSharpGeneratorDriver.Create(
+            generators,
+            additionalTexts: additionalTexts?.ToImmutableArray() ?? ImmutableArray<AdditionalText>.Empty,
+            parseOptions: (CSharpParseOptions)stubTree.Options,
+            optionsProvider: optionsProvider);
 
         // RunGenerators never surfaces a generator's own exception; it is
         // captured on the per-generator GeneratorRunResult.Exception instead.

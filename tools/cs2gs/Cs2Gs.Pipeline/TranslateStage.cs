@@ -104,6 +104,36 @@ public sealed class TranslateStage : IMigrationStage
                 {
                     context.AnalyzerReferencePaths.Add(analyzerPath);
                 }
+
+                // Issue #2223: forward the app's non-source generator inputs
+                // (.axaml) and project options so gsc's gsgen run materializes
+                // file-driven generator output (e.g. Avalonia's InitializeComponent).
+                foreach (string additionalFile in currentProject.AdditionalFiles)
+                {
+                    string spec = additionalFile;
+                    string ext = Path.GetExtension(additionalFile);
+                    if (ext.Equals(".axaml", StringComparison.OrdinalIgnoreCase) ||
+                        ext.Equals(".xaml", StringComparison.OrdinalIgnoreCase) ||
+                        ext.Equals(".paml", StringComparison.OrdinalIgnoreCase))
+                    {
+                        spec += ";SourceItemGroup=AvaloniaXaml";
+                    }
+
+                    context.AdditionalGeneratorFiles.Add(spec);
+                }
+
+                if (context.AdditionalGeneratorFiles.Count > 0)
+                {
+                    if (!string.IsNullOrEmpty(currentProject.RootNamespace))
+                    {
+                        context.GeneratorGlobalOptions.Add("RootNamespace=" + currentProject.RootNamespace);
+                    }
+
+                    if (!string.IsNullOrEmpty(currentProject.ProjectDirectory))
+                    {
+                        context.GeneratorGlobalOptions.Add("ProjectDir=" + currentProject.ProjectDirectory);
+                    }
+                }
             }
 
             // Issue #2215: a project with analyzer references may have had a

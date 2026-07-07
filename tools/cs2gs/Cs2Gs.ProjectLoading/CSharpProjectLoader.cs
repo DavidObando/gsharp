@@ -324,9 +324,73 @@ public static class CSharpProjectLoader
 
         string rootNamespace = ResolveRootNamespace(project);
         IReadOnlyList<string> resxFiles = DiscoverResxFiles(projectDirectory);
+        IReadOnlyList<string> additionalFiles = DiscoverAdditionalFiles(project, projectDirectory);
         IReadOnlyList<string> analyzerReferencePaths = ResolveAnalyzerReferencePaths(project);
 
-        return new LoadedCSharpProject(csharpCompilation, documents, seedDiagnostics, projectDirectory, rootNamespace, resxFiles, analyzerReferencePaths);
+        return new LoadedCSharpProject(csharpCompilation, documents, seedDiagnostics, projectDirectory, rootNamespace, resxFiles, analyzerReferencePaths, additionalFiles);
+    }
+
+    /// <summary>
+    /// Issue #2223: the non-source generator inputs the project exposes to
+    /// Roslyn analyzers/generators — the MSBuild <c>@(AdditionalFiles)</c> set
+    /// (Roslyn <see cref="Project.AdditionalDocuments"/>, which Avalonia's
+    /// targets populate with each <c>.axaml</c>), unioned with an explicit
+    /// <c>*.axaml</c> glob under the project directory as a fallback for a
+    /// workspace load that did not surface them. Files under the project's own
+    /// <c>obj</c>/<c>bin</c> are excluded (generated/copied artifacts).
+    /// </summary>
+    private static IReadOnlyList<string> DiscoverAdditionalFiles(Project project, string projectDirectory)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<string>();
+
+        void Add(string path)
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            {
+                return;
+            }
+
+            string full = Path.GetFullPath(path);
+            if (IsUnderObjOrBin(full, projectDirectory))
+            {
+                return;
+            }
+
+            if (seen.Add(full))
+            {
+                result.Add(full);
+            }
+        }
+
+        foreach (TextDocument additional in project.AdditionalDocuments)
+        {
+            Add(additional.FilePath);
+        }
+
+        if (!string.IsNullOrEmpty(projectDirectory) && Directory.Exists(projectDirectory))
+        {
+            foreach (string axaml in Directory.EnumerateFiles(projectDirectory, "*.axaml", SearchOption.AllDirectories))
+            {
+                Add(axaml);
+            }
+        }
+
+        return result.OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static bool IsUnderObjOrBin(string fullPath, string projectDirectory)
+    {
+        if (string.IsNullOrEmpty(projectDirectory))
+        {
+            return false;
+        }
+
+        string objPrefix = Path.Combine(projectDirectory, "obj").Replace('\\', '/').TrimEnd('/') + "/";
+        string binPrefix = Path.Combine(projectDirectory, "bin").Replace('\\', '/').TrimEnd('/') + "/";
+        string normalized = fullPath.Replace('\\', '/');
+        return normalized.StartsWith(objPrefix, StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith(binPrefix, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

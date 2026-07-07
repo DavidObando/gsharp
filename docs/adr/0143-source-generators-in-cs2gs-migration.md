@@ -78,6 +78,23 @@ largely does:
   reproduce the members. (This is exactly the loop ADR-0145's end-to-end test
   proves for `@ObservableProperty`.)
 
+**File/options-driven generators (Avalonia `.axaml`, issue #2223).** Some
+generators consume non-source inputs rather than attributes — Avalonia's XAML
+name generator reads each `.axaml` (a Roslyn `AdditionalText`) and, guided by
+`build_property.AvaloniaNameGeneratorBehavior` +
+`build_metadata.AdditionalFiles.SourceItemGroup=AvaloniaXaml`, generates the
+partial `InitializeComponent()` and named-control fields into the `.axaml.cs`
+code-behind. These reproduce through the same gsgen path once gsgen forwards
+`AdditionalText` + `AnalyzerConfigOptions` (ADR-0145 §C, issue #2223). cs2gs
+keeps the trigger intact by (a) discovering the project's `@(AdditionalFiles)` +
+`.axaml` (`CSharpProjectLoader`), (b) forwarding them — tagged
+`SourceItemGroup=AvaloniaXaml` — plus `RootNamespace`/`ProjectDir` options to the
+Compile stage's gsc invocation, and (c) marking the code-behind `partial` (the
+project's analyzer references already trigger `markMergedTypePartial`). The
+runtime side (Avalonia's `CompileAvaloniaXaml` IL-rewrite) is a language-agnostic
+post-compile MSBuild task that hooks the standard `AfterCompile` chain and needs
+no G# changes.
+
 **Pipeline requirement.** The cs2gs Compile stage shells out to gsc directly
 (`GscInvoker`, not the SDK), so gsgen does not run there today and the stage
 would still see missing symbols. The Compile stage must run gsgen before gsc —

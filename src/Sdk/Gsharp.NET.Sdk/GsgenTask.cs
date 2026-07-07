@@ -67,6 +67,22 @@ public class GsgenTask : Microsoft.Build.Utilities.Task, ICancelableTask
     /// <summary>Gets or sets the analyzer/generator assembly paths (forwarded via /analyzer:).</summary>
     public ITaskItem[] Analyzers { get; set; } = Array.Empty<ITaskItem>();
 
+    /// <summary>
+    /// Gets or sets the additional (non-source) files (issue #2223) forwarded to
+    /// generators via /additionalfile:. Each item's <c>SourceItemGroup</c>,
+    /// <c>TargetPath</c> and <c>ManifestResourceName</c> metadata (when present)
+    /// are appended as <c>;key=value</c> pairs so a file/options-driven generator
+    /// (e.g. Avalonia's XAML name generator) recognizes them.
+    /// </summary>
+    public ITaskItem[] AdditionalFiles { get; set; } = Array.Empty<ITaskItem>();
+
+    /// <summary>
+    /// Gets or sets the project-wide generator options (issue #2223) forwarded
+    /// via /globaloption: as <c>build_property.*</c>. Each item's ItemSpec is the
+    /// option name and its <c>Value</c> metadata the option value.
+    /// </summary>
+    public ITaskItem[] GlobalOptions { get; set; } = Array.Empty<ITaskItem>();
+
     /// <summary>Gets or sets the output directory for the generated .g.gs files (/out:).</summary>
     [Required]
     public string OutputDir { get; set; }
@@ -118,6 +134,26 @@ public class GsgenTask : Microsoft.Build.Utilities.Task, ICancelableTask
         foreach (var c in this.ForeignCompile)
         {
             args.Add(BuildTask.QuoteIfNeeded($"/csfile:{c.ItemSpec}"));
+        }
+
+        foreach (var af in this.AdditionalFiles)
+        {
+            var spec = af.ItemSpec;
+            foreach (var name in new[] { "SourceItemGroup", "TargetPath", "ManifestResourceName" })
+            {
+                var meta = af.GetMetadata(name);
+                if (!string.IsNullOrEmpty(meta))
+                {
+                    spec += $";{name}={meta}";
+                }
+            }
+
+            args.Add(BuildTask.QuoteIfNeeded($"/additionalfile:{spec}"));
+        }
+
+        foreach (var go in this.GlobalOptions)
+        {
+            args.Add(BuildTask.QuoteIfNeeded($"/globaloption:{go.ItemSpec}={go.GetMetadata("Value")}"));
         }
 
         args.Add(BuildTask.QuoteIfNeeded($"/out:{this.OutputDir}"));
