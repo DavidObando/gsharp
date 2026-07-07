@@ -249,6 +249,73 @@ public static class ProjectDiscovery
     }
 
     /// <summary>
+    /// Discovers generator-produced G# source parts under the project's intermediate
+    /// output directory. The SDK writes source-generator output to
+    /// <c>$(IntermediateOutputPath)gsgen/*.g.gs</c> (e.g. <c>obj/Debug/net10.0/gsgen/</c>)
+    /// and injects it into <c>@(Compile)</c>; because the language server's normal
+    /// <c>**/*.gs</c> glob excludes <c>obj/</c>, these generated parts would otherwise be
+    /// invisible. This scans the project's <c>obj/</c> tree for <c>*.g.gs</c> files that
+    /// sit under a <c>gsgen</c> segment so generated members resolve in the editor after a
+    /// build (ADR-0145 §G). The language server never runs the generator itself here — live
+    /// in-editor regeneration is a separate increment.
+    /// </summary>
+    /// <param name="projectDir">The project directory to scan.</param>
+    /// <returns>Absolute paths of generated G# source parts; empty when none exist.</returns>
+    internal static IReadOnlyList<string> DiscoverGeneratedSourceFiles(string projectDir)
+    {
+        if (string.IsNullOrEmpty(projectDir))
+        {
+            return Array.Empty<string>();
+        }
+
+        var objDir = Path.Combine(projectDir, "obj");
+        if (!Directory.Exists(objDir))
+        {
+            return Array.Empty<string>();
+        }
+
+        string[] candidates;
+        try
+        {
+            candidates = Directory.GetFiles(objDir, "*.g.gs", SearchOption.AllDirectories);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return Array.Empty<string>();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Array.Empty<string>();
+        }
+
+        return candidates
+            .Where(IsGeneratedSourcePath)
+            .Select(Path.GetFullPath)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Returns whether <paramref name="filePath"/> is a generator-produced G# source
+    /// part — a <c>*.g.gs</c> file living under a <c>gsgen</c> directory segment
+    /// (ADR-0145 §G). Used by both project discovery and the watched-file handler so the
+    /// language server treats these <c>obj/</c>-resident parts as real source even though
+    /// the rest of <c>obj/</c> is excluded.
+    /// </summary>
+    /// <param name="filePath">Absolute or relative path to test.</param>
+    /// <returns><c>true</c> when the path is a gsgen-produced <c>*.g.gs</c> part.</returns>
+    internal static bool IsGeneratedSourcePath(string filePath)
+    {
+        if (string.IsNullOrEmpty(filePath) ||
+            !filePath.EndsWith(".g.gs", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var parts = filePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return parts.Any(p => string.Equals(p, "gsgen", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
     /// Discovers all <c>.gs</c> source files for a project directory using the
     /// SDK default glob pattern (<c>**/*.gs</c>), excluding common output directories.
     /// </summary>
@@ -262,18 +329,44 @@ public static class ProjectDiscovery
             return Array.Empty<string>();
         }
 
-        // Check if EnableDefaultCompileItems is explicitly disabled
+        List<string> sources;
         if (IsDefaultCompileItemsDisabled(projectFilePath))
         {
-            // When default items are disabled, look for explicit <Compile> items
-            return GetExplicitCompileItems(projectFilePath, projectDir);
+            // When default items are disabled, look for explicit <Compile> items.
+            sources = GetExplicitCompileItems(projectFilePath, projectDir).ToList();
+        }
+        else
+        {
+            // Default: glob **/*.gs, excluding bin/obj directories.
+            sources = Directory.GetFiles(projectDir, "*.gs", SearchOption.AllDirectories)
+                .Where(f => !IsInExcludedDirectory(f, projectDir))
+                .Select(Path.GetFullPath)
+                .ToList();
         }
 
-        // Default: glob **/*.gs, excluding bin/obj directories
-        return Directory.GetFiles(projectDir, "*.gs", SearchOption.AllDirectories)
-            .Where(f => !IsInExcludedDirectory(f, projectDir))
-            .Select(Path.GetFullPath)
-            .ToList();
+        // ADR-0145 §G (v1 slice): the SDK's `_GsharpRunSourceGenerators` target writes
+        // generator output to `$(IntermediateOutputPath)gsgen/*.g.gs` (typically
+        // `obj/Debug/net10.0/gsgen/`) and injects it into @(Compile). The globs above
+        // deliberately exclude `obj/`, so those generated parts would never be seen by
+        // the language server and their members would show as unresolved in the editor
+        // even after a successful build. Re-add the gsgen output here (and ONLY the
+        // gsgen output — the rest of obj/ stays excluded) so generated members resolve
+        // post-build. Deduplicated so an explicit <Compile> that already names a
+        // generated part is not added twice.
+        var generated = DiscoverGeneratedSourceFiles(projectDir);
+        if (generated.Count > 0)
+        {
+            var seen = new HashSet<string>(sources, StringComparer.OrdinalIgnoreCase);
+            foreach (var g in generated)
+            {
+                if (seen.Add(g))
+                {
+                    sources.Add(g);
+                }
+            }
+        }
+
+        return sources;
     }
 
     /// <summary>

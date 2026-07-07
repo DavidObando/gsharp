@@ -109,6 +109,33 @@
             Visible="false" />
     </ItemGroup>
   </Target>
+  <!-- ADR-0145 §E/§F: publish the gsgen source-generator host (and its full
+       closure — GeneratorHost + cs2gs translator + Core) into a staging dir and
+       pack everything under tools/gsgen/. Mirrors PackGsharpCompiler. The publish
+       closure is large today (it drags in MSBuildWorkspace via the translator);
+       a follow-up will trim it via a project split. -->
+  <Target Name="PackGsgen" BeforeTargets="_GetPackageFiles">
+    <PropertyGroup>
+      <_GsgenPublishDir>$(IntermediateOutputPath)gsgen-publish\</_GsgenPublishDir>
+      <_GsgenStagingOutDir>$(IntermediateOutputPath)gsgen-staging\bin\</_GsgenStagingOutDir>
+    </PropertyGroup>
+    <RemoveDir Directories="$(_GsgenPublishDir)" Condition="Exists('$(_GsgenPublishDir)')" />
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\..\..\tools\gsgen\Gsgen.Cli\Gsgen.Cli.csproj"
+             Targets="Publish"
+             Properties="Configuration=$(Configuration);TargetFramework=$(GsharpCompilerPackageTargetFramework);PublishDir=$(_GsgenPublishDir);BaseOutputPath=$(_GsgenStagingOutDir);SelfContained=false;PublishReadyToRun=false;PublishSingleFile=false" />
+    <ItemGroup>
+      <_GsgenPayload Include="$(_GsgenPublishDir)**\*" />
+    </ItemGroup>
+    <Error Condition="'@(_GsgenPayload)' == ''"
+           Text="gsgen publish output is empty under '$(_GsgenPublishDir)'." />
+    <ItemGroup>
+      <None Include="@(_GsgenPayload)"
+            Pack="true"
+            PackagePath="tools\gsgen\"
+            Visible="false" />
+    </ItemGroup>
+  </Target>
+
   <!-- Pack the Gsharp.Extensions assembly under tools/extensions/ (ADR-0082 /
        issue #722). This is a *real* G# / .NET assembly bundled with the SDK
        NuGet; its presence in tools/extensions/ — combined with the

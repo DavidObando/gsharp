@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <RootNamespace>GSharp.GeneratorHost.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="@(CoverletCollectorPackageReference)" />
+    <PackageReference Include="@(MicrosoftNetTestSdkPackageReference)" />
+    <PackageReference Include="@(XunitPackageReference)" />
+    <PackageReference Include="@(XunitRunnerVisualStudioPackageReference)" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.6.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\GSharp.GeneratorHost\GSharp.GeneratorHost.csproj" />
+    <ProjectReference Include="..\..\cs2gs\Cs2Gs.ProjectLoading\Cs2Gs.ProjectLoading.csproj" />
+    <ProjectReference Include="..\Gsgen.Cli\Gsgen.Cli.csproj" />
+    <ProjectReference Include="..\..\..\src\Core\Core.csproj" />
+  </ItemGroup>
+
+</Project>

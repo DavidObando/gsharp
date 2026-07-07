@@ -10,6 +10,26 @@
     <GsharpToolFullPath Condition=" '$(GsharpToolFullPath)'=='' ">$(MSBuildThisFileDirectory)..\tools\task\Gsharp.NET.Sdk.dll</GsharpToolFullPath>
     <GsharpCompilerFullPath Condition=" '$(GsharpCompilerFullPath)'=='' ">$(MSBuildThisFileDirectory)..\tools\compiler\gsc.dll</GsharpCompilerFullPath>
 
+    <!-- ADR-0145 §E/§F: the gsgen source-generator host. In a packed
+         Gsharp.NET.Sdk NuGet it sits alongside this .props under
+         ../tools/gsgen/, next to task/ and compiler/. -->
+    <GsgenToolFullPath Condition=" '$(GsgenToolFullPath)'=='' ">$(MSBuildThisFileDirectory)..\tools\gsgen\gsgen.dll</GsgenToolFullPath>
+
+    <!-- Selects the analyzers/dotnet/roslynX.Y/cs/ asset folder NuGet's
+         ResolvePackageAssets picks when we re-resolve C# analyzers for gsgen
+         (see _GsharpResolveAnalyzers). Because the SDK sets Language=Gsharp,
+         the normal ResolvePackageAssets run never selects C# analyzer assets,
+         so we re-invoke it with ProjectLanguage=C# + this CompilerApiVersion.
+         roslyn4.8 is a safe, widely-shipped floor: most generator packages ship
+         a roslyn4.x asset folder <= 4.8, and the gsgen host (Microsoft.CodeAnalysis
+         5.6.0) forward-loads those 4.x analyzers via assembly unification.
+         NOTE: this may need bumping if a package only ships higher roslynX.Y
+         folders; the gsgen e2e validates the resolved set. -->
+    <GsharpCompilerApiVersion Condition=" '$(GsharpCompilerApiVersion)'=='' ">roslyn4.8</GsharpCompilerApiVersion>
+
+    <!-- Master switch to skip the gsgen source-generator pass entirely. -->
+    <GsharpRunSourceGenerators Condition=" '$(GsharpRunSourceGenerators)'=='' ">true</GsharpRunSourceGenerators>
+
     <!-- ADR-0082 / issue #722. The Gsharp.Extensions assembly ships inside this
          SDK NuGet under tools/extensions/. We auto-reference it from every
          consumer .gsproj so an `import Gsharp.Extensions.Go` (this PR),

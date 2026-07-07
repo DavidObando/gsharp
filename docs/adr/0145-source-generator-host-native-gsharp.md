@@ -1,6 +1,6 @@
 # ADR-0145: Roslyn source-generator host for native G# projects (`gsgen`)
 
-- **Status**: Proposed
+- **Status**: Accepted (implemented — build-time; see Implementation status)
 - **Date**: 2026-07-06
 - **Phase**: Phase 9 — ecosystem interop
 - **Related**: ADR-0027 (no Roslyn in the compiler; Roslyn in sibling tools), ADR-0115 (cs2gs translator — reused core), ADR-0142 (resx generator — LS wiring precedent), ADR-0092 (`@LibraryImport`), ADR-0143 (cs2gs generator handling — companion), ADR-0144 (partial types — hard dependency), issues [#2201](https://github.com/DavidObando/gsharp/issues/2201)
@@ -210,6 +210,50 @@ bound scope; outputs are byte-identical run to run and written only when
 changed. In `serve` mode the `GeneratorDriver` is retained between runs so
 Roslyn's incremental caching applies when per-file stub trees are unchanged
 (stubs are rendered per file to preserve this).
+
+## Implementation status
+
+Delivered (build-time path proven end-to-end with a real `dotnet build` — a
+`.gsproj` referencing CommunityToolkit.Mvvm resolves the generator, runs it, and
+gsc consumes the emitted `.g.gs`):
+
+- **Engine** — `tools/gsgen/GSharp.GeneratorHost`: `GsToCSharpTypeSpeller` +
+  `GsStubRenderer`/`GsToCSharpProjection` (§B), `GeneratorRunner` driving
+  `CSharpGeneratorDriver` with crash isolation and an `AnalyzerFileReference`
+  loader (§H), `GeneratedDocTranslator` back-translation, and the
+  `GeneratorHostRunner` facade. The reused translator gained a
+  `preservePartialParts` mode so each generated part becomes a standalone G#
+  `partial` part, plus partial-**method** elision (ADR-0143 §D) for hook methods
+  G# cannot express.
+- **`gsgen` CLI** (§A) — `tools/gsgen/Gsgen.Cli` (`gsgen @file.rsp`), diagnostics
+  in gsc's line format.
+- **SDK wiring** (§E/§F) — `GsgenTask`, `_GsharpResolveAnalyzers` (the
+  `ResolvePackageAssets` re-invocation with `ProjectLanguage=C#` +
+  `$(GsharpCompilerApiVersion)` — the fix that makes a `.gsproj`'s generators
+  resolve at all), `_GsharpRunSourceGenerators` before `CoreCompile`, and
+  `PackGsgen` packaging under `tools/gsgen/`.
+- **Translator split** (§C) — `Cs2Gs.ProjectLoading` extracted so the shipped
+  tool doesn't carry MSBuildWorkspace/Build.Locator.
+- **Language server** (§G, partial) — generated `obj/**/gsgen/*.g.gs` are
+  surfaced to the LS compilation and watched, so generated members resolve in the
+  editor after a build.
+
+Follow-ups (not in the initial delivery):
+
+- **Back-translation fidelity for CommunityToolkit.Mvvm** — its generated code
+  currently trips genuine cs2gs/gsc gaps, filed as: gsc static access through a
+  fully-qualified generic type (`GS0157`,
+  [#2209](https://github.com/DavidObando/gsharp/issues/2209)); gsc unqualified
+  call to a method inherited from an imported base (`GS0130`,
+  [#2210](https://github.com/DavidObando/gsharp/issues/2210)); cs2gs
+  back-translation emitting short type/enum names without imports
+  (`GS0113`/`GS0157`/`GS0202`,
+  [#2211](https://github.com/DavidObando/gsharp/issues/2211)). These are the §H
+  fidelity boundary; generators whose output gsc can already compile (verified
+  via the host's end-to-end test) work fully.
+- **Live in-editor regeneration** — the out-of-proc `gsgen serve` sidecar that
+  re-runs generators on keystroke (§G). The delivered LS slice covers post-build
+  visibility; `serve` mode is deferred.
 
 ## Consequences
 
