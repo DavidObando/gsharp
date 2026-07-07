@@ -39,11 +39,31 @@ public sealed class CSharpTypeMapper
     public const string UnsupportedPlaceholderType = "object";
 
     /// <summary>
+    /// Issue #2211: every namespace this mapper has shortened a type reference
+    /// into (via <see cref="QualifiedTypeName"/>), collected so the translator
+    /// can synthesize a matching <c>import</c> for a namespace with no
+    /// corresponding <c>using</c> directive in the source file — the shape
+    /// Roslyn source generators emit (fully-qualified references, no
+    /// <c>using</c>s at all). Without this, a short-named reference to a type
+    /// whose namespace has no <c>using</c> directive round-trips to unresolvable
+    /// G# (GS0113/GS0157). The translator filters out the file's own package
+    /// and any namespace already covered by an explicit <c>using</c> before
+    /// emitting the rest as synthesized imports.
+    /// </summary>
+    private readonly HashSet<string> shortenedNamespaces = new();
+
+    /// <summary>
     /// Issue #1174: cached per-compilation census of source-declared type simple
     /// names (built lazily on first use), used to decide whether a source nested
     /// type's simple name is ambiguous and must be emitted in qualified form.
     /// </summary>
     private Dictionary<string, int> sourceSimpleNameCounts;
+
+    /// <summary>
+    /// Gets every namespace shortened into a bare/qualified-nested type name by
+    /// this mapper so far (see <see cref="shortenedNamespaces"/>).
+    /// </summary>
+    public IReadOnlyCollection<string> ShortenedNamespaces => this.shortenedNamespaces;
 
     /// <summary>
     /// Maps a Roslyn type symbol to its canonical G# type reference, recording
@@ -457,6 +477,7 @@ public sealed class CSharpTypeMapper
     {
         if (named.ContainingType == null)
         {
+            this.TrackShortenedNamespace(named);
             return CSharpToGSharpTranslator.SanitizeIdentifier(named.Name);
         }
 
@@ -468,12 +489,31 @@ public sealed class CSharpTypeMapper
         }
 
         var parts = new List<string>();
+        INamedTypeSymbol outermost = named;
         for (INamedTypeSymbol current = named; current != null; current = current.ContainingType)
         {
             parts.Insert(0, CSharpToGSharpTranslator.SanitizeIdentifier(current.Name));
+            outermost = current;
         }
 
+        this.TrackShortenedNamespace(outermost);
         return string.Join(".", parts);
+    }
+
+    /// <summary>
+    /// Issue #2211: records <paramref name="outermostType"/>'s namespace as one
+    /// this mapper shortened a reference into, so the translator can synthesize
+    /// a matching <c>import</c> when no <c>using</c> directive already covers it
+    /// (see <see cref="shortenedNamespaces"/>). The global namespace (no
+    /// namespace at all) needs no import and is skipped.
+    /// </summary>
+    /// <param name="outermostType">The outermost containing type of the reference (itself, if not nested).</param>
+    private void TrackShortenedNamespace(INamedTypeSymbol outermostType)
+    {
+        if (outermostType.ContainingNamespace is { IsGlobalNamespace: false } ns)
+        {
+            this.shortenedNamespaces.Add(ns.ToDisplayString());
+        }
     }
 
     /// <summary>
