@@ -12772,26 +12772,31 @@ public sealed class CSharpToGSharpTranslator
 
         /// <summary>
         /// Translates a C# anonymous object creation (<c>new { A = 1, B = 2 }</c>)
-        /// to a G# anonymous-class literal (<c>interface { A = 1, B = 2 }</c>,
-        /// issue #2224). gsc synthesizes a real backing type per distinct
-        /// member-name+type shape (structural typing, unified like Roslyn's
-        /// anonymous-type cache), so member names are preserved — a later
-        /// <c>x.A</c> access stays <c>x.A</c>, unlike the earlier positional-tuple
-        /// lowering this replaces (issue #1934), which dropped names and also
-        /// made anonymous-typed values illegal inside expression-tree lambdas
-        /// (GS0473) because tuple literals are restricted there.
+        /// to a G# anonymous-class literal (<c>object { let A int32 = 1, let B
+        /// int32 = 2 }</c>, issue #2224). gsc synthesizes a real backing type
+        /// per distinct member-name+type shape (structural typing, unified
+        /// like Roslyn's anonymous-type cache), so member names are preserved
+        /// — a later <c>x.A</c> access stays <c>x.A</c>, unlike the earlier
+        /// positional-tuple lowering this replaces (issue #1934), which
+        /// dropped names and also made anonymous-typed values illegal inside
+        /// expression-tree lambdas (GS0473) because tuple literals are
+        /// restricted there. Each member's type annotation is the C#
+        /// compiler's own inferred anonymous-type property type, written out
+        /// explicitly — G# (unlike C#) has no type inference at this syntax
+        /// position.
         /// </summary>
         private GExpression TranslateAnonymousObjectCreation(AnonymousObjectCreationExpressionSyntax anonymous)
         {
             this.context.Report(new TranslationDiagnostic(
                 nameof(SyntaxKind.AnonymousObjectCreationExpression),
-                "anonymous object creation 'new { ... }' maps to a G# anonymous-class literal 'interface { ... }' (issue #2224); gsc synthesizes a real backing type per distinct member shape, preserving named-member access.",
+                "anonymous object creation 'new { ... }' maps to a G# anonymous-class literal 'object { let ... }' (issue #2224); gsc synthesizes a real backing type per distinct member shape, preserving named-member access.",
                 anonymous.GetLocation(),
                 TranslationSeverity.Info));
 
             var members = anonymous.Initializers
-                .Select(i => new FieldInitializer(
+                .Select(i => new AnonymousClassMemberInitializer(
                     AnonymousMemberName(i),
+                    this.ResolveExpressionType(i.Expression) ?? new NamedTypeReference("object"),
                     this.TranslateExpression(i.Expression)))
                 .ToList();
 
@@ -12935,7 +12940,7 @@ public sealed class CSharpToGSharpTranslator
             // Issue #2224 (was #1934): an anonymous-typed receiver (`new { ... }`)
             // is a C# reference type, so the flow-based passes below would wrap
             // it in a G# `!!` non-null assertion. But the receiver lowers to a
-            // G# anonymous-class literal (`interface { ... }`), which is a
+            // G# anonymous-class literal (`object { let ... }`), which is a
             // synthesized value type (data struct) on the G# side — `!!` on it
             // is both meaningless and hits a gsc IL-emission gap
             // (StackUnexpected) for value-type receivers. Skip forgiveness for
@@ -12979,7 +12984,7 @@ public sealed class CSharpToGSharpTranslator
             }
 
             // Issue #2224: an anonymous-typed value (`new { A = 1, B = 2 }`) now
-            // lowers to a G# anonymous-class literal (`interface { A = 1, B = 2 }`)
+            // lowers to a G# anonymous-class literal (`object { let A int32 = 1, let B int32 = 2 }`)
             // that preserves real member names — no rewrite needed; `x.A` stays
             // `x.A` on the G# side, exactly like the C# anonymous-type property.
             return new MemberAccessExpression(target, SanitizeIdentifier(memberName), isArrow);

@@ -18,8 +18,9 @@ namespace Cs2Gs.Tests;
 /// <c>x.Item1</c>) and — critically for EF Core migrations — made the value
 /// illegal inside expression-tree lambdas (GS0473, tuple literals are
 /// restricted there). It now lowers to a first-class G# anonymous-class
-/// literal, <c>interface { A = 1 }</c>, which preserves member names and is
-/// legal inside expression trees, exactly like C#'s <c>new { ... }</c> is.
+/// literal, <c>object { let A int32 = 1 }</c>, which preserves member names
+/// and is legal inside expression trees, exactly like C#'s <c>new { ... }</c>
+/// is.
 /// </summary>
 public class Issue2224AnonymousObjectCreationTests
 {
@@ -38,7 +39,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("return interface { A = 1 }", printed);
+        Assert.Contains("return object { let A int32 = 1 }", printed);
     }
 
     [Fact]
@@ -58,7 +59,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("interface { A = 1, B = \"two\" }", printed);
+        Assert.Contains("object { let A int32 = 1, let B string = \"two\" }", printed);
         Assert.Contains("pair.A", printed);
         Assert.Contains("pair.B", printed);
         Assert.DoesNotContain("Item1", printed);
@@ -90,7 +91,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("interface { A = 1, B = \"two\" }", printed);
+        Assert.Contains("object { let A int32 = 1, let B string = \"two\" }", printed);
         Assert.Contains("pair.A", printed);
         Assert.Contains("pair.B", printed);
         Assert.DoesNotContain("pair!!", printed);
@@ -121,7 +122,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("interface { id = id, Id = row.Id }", printed);
+        Assert.Contains("object { let id int32 = id, let Id int32 = row.Id }", printed);
     }
 
     private static string TranslateUnit(string source)

@@ -1035,7 +1035,7 @@ public sealed class Binder
             ? boundAssemblyAttributes
             : previous.AssemblyAttributes.AddRange(boundAssemblyAttributes);
 
-        // Issue #2224: anonymous-class literals (`interface { ... }`) bound
+        // Issue #2224: anonymous-class literals (`object { let ... }`) bound
         // anywhere during this pass — top-level statements included —
         // synthesize their backing StructSymbol into binder.scope's shared
         // AnonymousTypeCache (see BoundScope.GetAnonymousTypeCache). Snapshot

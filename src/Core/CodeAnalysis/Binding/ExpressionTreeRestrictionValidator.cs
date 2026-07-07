@@ -333,7 +333,7 @@ internal static class ExpressionTreeRestrictionValidator
                 return;
 
             case BoundStructLiteralExpression structLiteral:
-                // Issue #2224: anonymous-class literals (`interface { ... }`)
+                // Issue #2224: anonymous-class literals (`object { let ... }`)
                 // are bound as BoundStructLiteralExpression (reusing the
                 // existing struct-literal bound node), and — unlike tuple
                 // literals — are legal inside expression-tree lambdas, same

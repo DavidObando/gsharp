@@ -102,6 +102,7 @@ PointerTypeReference
 TupleTypeReference
 
 [GNode (other)]
+AnonymousClassMemberInitializer
 AttributeArgument
 AttributeUse
 CatchClause

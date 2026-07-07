@@ -12,7 +12,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <summary>
 /// Per-compile-pass cache of synthesized anonymous-class types (issue #2224,
 /// per the repo owner's design comment on that issue). Mirrors Roslyn's
-/// anonymous-type cache: two anonymous-class literals (<c>interface { ... }</c>)
+/// anonymous-type cache: two anonymous-class literals (<c>object { let ... }</c>)
 /// with the same member names, in the same order, and the same member types
 /// unify to the SAME synthesized <see cref="StructSymbol"/> within one
 /// compile pass, so their instances share a single synthesized backing type

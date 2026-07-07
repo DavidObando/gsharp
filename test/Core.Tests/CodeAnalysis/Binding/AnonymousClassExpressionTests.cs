@@ -14,7 +14,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Issue #2224: anonymous-class literal expression <c>interface { Name = "Foo" }</c>.
+/// Issue #2224: anonymous-class literal expression <c>object { let Name string = "Foo" }</c>.
 /// </summary>
 public class AnonymousClassExpressionTests
 {
@@ -22,7 +22,7 @@ public class AnonymousClassExpressionTests
     public void AnonymousClass_MemberAccess_ReturnsAssignedValue()
     {
         var source = @"
-var x = interface { Name = ""Foo"", Age = 42 }
+var x = object { let Name string = ""Foo"", let Age int32 = 42 }
 x.Name
 ";
         var result = Evaluate(source);
@@ -34,8 +34,8 @@ x.Name
     public void AnonymousClass_SameShape_UnifiesToOneSynthesizedType()
     {
         var source = @"
-var a = interface { Id = 1, Alias = ""x"" }
-var b = interface { Id = 2, Alias = ""y"" }
+var a = object { let Id int32 = 1, let Alias string = ""x"" }
+var b = object { let Id int32 = 2, let Alias string = ""y"" }
 1
 ";
         var tree = SyntaxTree.Parse(SourceText.From(source));
@@ -54,8 +54,8 @@ var b = interface { Id = 2, Alias = ""y"" }
     public void AnonymousClass_DifferentShape_ProducesDifferentTypes()
     {
         var source = @"
-var a = interface { Id = 1 }
-var b = interface { Id = 1, Alias = ""x"" }
+var a = object { let Id int32 = 1 }
+var b = object { let Id int32 = 1, let Alias string = ""x"" }
 1
 ";
         var tree = SyntaxTree.Parse(SourceText.From(source));
@@ -72,8 +72,8 @@ var b = interface { Id = 1, Alias = ""x"" }
     public void AnonymousClass_StructuralEquality_MatchesByValue()
     {
         var source = @"
-var a = interface { Id = 1, Alias = ""x"" }
-var b = interface { Id = 1, Alias = ""x"" }
+var a = object { let Id int32 = 1, let Alias string = ""x"" }
+var b = object { let Id int32 = 1, let Alias string = ""x"" }
 a == b
 ";
         var result = Evaluate(source);
@@ -85,7 +85,7 @@ a == b
     public void AnonymousClass_ToString_ListsMembers()
     {
         var source = @"
-var a = interface { Id = 1, Alias = ""x"" }
+var a = object { let Id int32 = 1, let Alias string = ""x"" }
 a.ToString()
 ";
         var result = Evaluate(source);
@@ -99,7 +99,7 @@ a.ToString()
     {
         var source = @"
 func project(id int32, alias string) string {
-    var f = (i int32, a string) -> interface { Id = i, Alias = a }
+    var f = (i int32, a string) -> object { let Id int32 = i, let Alias string = a }
     var r = f(id, alias)
     return r.Alias
 }
@@ -130,7 +130,7 @@ class Row {
     var Alias string
 }
 
-let expr Expression[Func[Row, object]] = (r Row) -> interface { Id = r.Id, Alias = r.Alias }
+let expr Expression[Func[Row, object]] = (r Row) -> object { let Id int32 = r.Id, let Alias string = r.Alias }
 ");
 
         Assert.DoesNotContain(diagnostics, d => d.Id == "GS0473");

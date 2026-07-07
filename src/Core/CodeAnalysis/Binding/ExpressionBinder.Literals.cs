@@ -727,14 +727,19 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// Binds an anonymous-class literal <c>interface { Name = "Foo", ... }</c>
+    /// Binds an anonymous-class literal <c>object { let Name string = "Foo", ... }</c>
     /// (issue #2224). Unlike <see cref="BindStructLiteralExpression(StructLiteralExpressionSyntax)"/>,
     /// there is no named type to resolve: each distinct ordered
     /// (member-name, member-type) shape gets its own compiler-synthesized
     /// backing <see cref="StructSymbol"/>, cached per compile pass (see
     /// <see cref="AnonymousTypeCache"/>) so two literals with the same shape
     /// share one synthesized type — mirroring how Roslyn unifies
-    /// <c>new { ... }</c> anonymous types within one C# compilation.
+    /// <c>new { ... }</c> anonymous types within one C# compilation. Unlike
+    /// C#, each member's type is written explicitly rather than inferred from
+    /// its initializer expression; the annotated type is checked against the
+    /// initializer exactly like an ordinary <c>let x Type = expr</c>
+    /// declaration's type clause (<see cref="StatementBinder.BindVariableDeclaration(VariableDeclarationSyntax)"/>),
+    /// so implicit conversions and nullable annotations apply the same way.
     /// </summary>
     /// <param name="syntax">The anonymous-class-literal syntax.</param>
     private BoundExpression BindAnonymousClassExpression(AnonymousClassExpressionSyntax syntax)
@@ -753,10 +758,19 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
+            var memberType = bindTypeClause(member.TypeClause);
             var value = BindExpression(member.Value);
             if (value is BoundErrorExpression)
             {
                 hadError = true;
+            }
+            else if (memberType != null)
+            {
+                value = conversions.BindConversion(member.Value.Location, value, memberType);
+                if (value is BoundErrorExpression)
+                {
+                    hadError = true;
+                }
             }
 
             memberNames.Add(name);

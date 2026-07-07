@@ -692,7 +692,7 @@ public static class SymbolDisplay
 
     /// <summary>
     /// Issue #2224: identifies a <see cref="StructSymbol"/> synthesized by
-    /// <c>AnonymousTypeCache</c> for an <c>interface { ... }</c>
+    /// <c>AnonymousTypeCache</c> for an <c>object { let ... }</c>
     /// anonymous-class literal, as opposed to an ordinary user-declared
     /// struct/class. Anonymous types are unnameable in source (Roslyn's own
     /// synthesized anonymous types use the equivalent <c>&lt;&gt;f__AnonymousType</c>

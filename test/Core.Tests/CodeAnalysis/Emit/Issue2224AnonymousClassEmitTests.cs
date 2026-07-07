@@ -16,7 +16,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 
 /// <summary>
-/// Issue #2224: end-to-end emission of the <c>interface { ... }</c>
+/// Issue #2224: end-to-end emission of the <c>object { let ... }</c>
 /// anonymous-class-literal expression. The synthesized backing type reuses
 /// the existing <c>data class</c> emission pipeline (ADR-0029) verbatim —
 /// this test exercises that a real CLR TypeDef is produced, member access
@@ -34,7 +34,7 @@ public class Issue2224AnonymousClassEmitTests
 
             import System
 
-            var x = interface { Name = "Foo", Age = 42 }
+            var x = object { let Name string = "Foo", let Age int32 = 42 }
             Console.WriteLine(x.Name)
             Console.WriteLine(x.Age.ToString())
             """;
@@ -56,9 +56,9 @@ public class Issue2224AnonymousClassEmitTests
 
             import System
 
-            var a = interface { Id = 1, Alias = "x" }
-            var b = interface { Id = 1, Alias = "x" }
-            var c = interface { Id = 2, Alias = "x" }
+            var a = object { let Id int32 = 1, let Alias string = "x" }
+            var b = object { let Id int32 = 1, let Alias string = "x" }
+            var c = object { let Id int32 = 2, let Alias string = "x" }
             Console.WriteLine((a == b).ToString())
             Console.WriteLine((a == c).ToString())
             Console.WriteLine(a.GetHashCode() == b.GetHashCode())

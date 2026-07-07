@@ -1,4 +1,4 @@
-# ADR-0146: Anonymous-class-literal expression (`interface { ... }`)
+# ADR-0146: Anonymous-class-literal expression (`object { let ... = ... }`)
 
 - **Status**: Accepted
 - **Date**: 2026-XX-XX
@@ -12,25 +12,31 @@ cs2gs previously lowered a C# anonymous object creation (`new { A = x, B = y }`)
 1. **Tuple literals are illegal inside G# expression-tree lambdas** (GS0473, ADR-0141), while C# anonymous types are legal there. Any C# code using `new { ... }` inside a `Expression<Func<...>>`-typed lambda — the canonical case being EF Core's `HasKey(x => new { x.Id, x.Alias })` / `HasIndex(...)` fluent configuration — became illegal G# after translation, even though the source C# compiled fine.
 2. **The lowering lost named-member structure.** `x.Id` became `x.Item1`; this is semantically wrong for any code that depends on the real member name (EF Core's key/index selectors inspect the projected member names via the expression tree, not just positional shape).
 
-The repo owner's explicit design direction (issue comment) was: give G# a first-class anonymous-class-literal expression, `interface { Name = "Foo", Age = 42 }`, reusing the `interface` keyword in expression position (G# already uses `interface` as a type-declaration keyword; the two uses are unambiguous by lookahead — see Decision). gsc must synthesize a real backing type per distinct member shape (name + type, order-sensitive), unifying identical shapes within one compile pass — the same "structural type identity, real synthesized CLR type" model Roslyn uses for its own `<>f__AnonymousType0<...>` types.
+The repo owner's explicit design direction was: give G# a first-class anonymous-class-literal expression. An earlier revision of this ADR reused the `interface` keyword (`interface { Name = "Foo", Age = 42 }`), matching C#'s member-inference-free `Name = expr` shape. The repo owner subsequently overrode that design: the final syntax uses the `object` keyword, and each member is an explicit `let`-style binding with a **mandatory** type annotation — `object { let Name string = "Foo", let Age int32 = 42 }` — because G# (unlike C#) has no initializer-expression type inference at this position, so the member's type must be written out rather than inferred.
+
+gsc must synthesize a real backing type per distinct member shape (name + type, order-sensitive), unifying identical shapes within one compile pass — the same "structural type identity, real synthesized CLR type" model Roslyn uses for its own `<>f__AnonymousType0<...>` types.
 
 ## Decision
 
 ### Syntax
 
-`interface { Name1 = expr1, Name2 = expr2, ... }` is a primary expression. Disambiguation from the existing type-declaration form (`interface Name { ... }`) is by one-token lookahead: a type declaration always requires an identifier immediately after `interface`; `interface` directly followed by `{` is unambiguously the anonymous-class-literal form. No further context is needed.
+`object { let Name1 Type1 = expr1, let Name2 Type2 = expr2, ... }` is a primary expression. `object` is a contextual identifier (also used as the universal reference-type name, e.g. `var x object = ...`); it is recognized as the lead-in to this literal only in the precise `object {` shape — `object` directly followed by `{` cannot begin any other construct (there is no user-declarable type named `object` to collide with a struct-literal `object { ... }`), so one-token lookahead is unambiguous. Every other position (a bare `object` type name, `object` as an ordinary identifier, etc.) continues to lex and parse exactly as before.
 
-New syntax nodes: `AnonymousClassExpressionSyntax` (the literal) and `AnonymousClassMemberInitializerSyntax` (`Name = value`, modeled on the existing `FieldInitializerSyntax` but using `=` instead of `:`).
+Each member clause, `let Name Type = expr`, mirrors an ordinary `let`-bound local declaration's grammar (see `VariableDeclarationSyntax`) but with a mandatory type clause (an ordinary `let` may omit or infer its type; here there is no initializer-driven inference, so the type must always be written).
+
+New syntax nodes: `AnonymousClassExpressionSyntax` (the literal) and `AnonymousClassMemberInitializerSyntax` (`let Name Type = value`).
 
 ### Binding: reuse of `data class` (ADR-0029), not a new type-symbol kind
 
 Rather than introducing a new `TypeSymbol`/`BoundNodeKind` pair, an anonymous-class literal is bound as a **synthesized `StructSymbol`** with `IsData = true`, `IsClass = false` (a value type — see Deviations below), and public readonly fields matching each member, reusing the **existing** `BoundStructLiteralExpression` / `BoundNodeKind.StructLiteralExpression` bound node. This means the entire ADR-0029 synthesized-member pipeline (`Equals`/`GetHashCode`/`ToString`/`Deconstruct`/`op_Equality`, driven off `StructSymbol.Fields`) and the emitter's `Program.Structs`/`IsData`-gated TypeDef/field/ctor planning apply with **zero emitter code changes**.
 
+Each member's annotated type is bound via the same type-clause binder used for `let`/`var` declarations (`Binder.BindTypeClause`), and the initializer expression is converted to it via the ordinary conversion pipeline (`ConversionClassifier.BindConversion`) — identical to how `StatementBinder.BindVariableDeclaration` checks a `let x Type = expr` declaration's optional type clause against its initializer. This means implicit numeric widening, nullable-reference annotations, and every other conversion rule that applies to a `let` declaration's type clause apply identically to an anonymous-class member's type annotation. The synthesized `StructSymbol`'s field type is the **annotated** type (not the initializer's natural type), matching `let`'s own "declared type wins" behavior.
+
 `AnonymousTypeCache` (`internal sealed class`, `GSharp.Core.CodeAnalysis.Binding`) is a per-compile-pass cache keyed by the ordered `(name, type-identity)` shape (via the existing `FunctionTypeSymbol.AppendIdentityKey` helper, already used for tuple/function-type identity). `GetOrCreate` synthesizes a `StructSymbol` named `<>AnonymousType{n}` (Roslyn-style, `Declaration: null`) on first use of a shape and returns the cached one on subsequent uses of the *same* shape within the pass — this is the "unify identical shapes" requirement.
 
 The cache lives on `BoundScope` (`GetAnonymousTypeCache()`, walking to the scope chain's root), so every `Binder` sharing one root scope shares one cache. Because `Binder.BindGlobalScope` and `Binder.BindProgram` are two separate passes, each deriving its own scope chain from the same `BoundGlobalScope`, `BoundProgram.Structs` is the union of: `globalScope.Structs` (user-declared) + `globalScope.AnonymousTypes` (captured at the end of `BindGlobalScope`) + the `BindProgram`-phase cache's symbols (captured at the end of `BindProgram`). See Deviations for the known limitation this union introduces.
 
-### `interface { ... }` inside expression-tree lambdas (the actual GS0473 fix)
+### `object { ... }` inside expression-tree lambdas (the actual GS0473 fix)
 
 `ExpressionTreeRestrictionValidator` (ADR-0141) previously had no allow-case for `BoundStructLiteralExpression`, so it fell through its default catch-all and reported GS0473 for *any* struct literal inside an expression-tree lambda — including our new anonymous-class literal. A case validating each member initializer's value expression (mirroring the existing object-initializer allowance) was added; struct/anonymous-class literals are now legal inside expression trees, matching C#'s treatment of both `new { ... }` and object-initializer expressions.
 
@@ -38,7 +44,7 @@ The cache lives on `BoundScope` (`GetAnonymousTypeCache()`, walking to the scope
 
 ### cs2gs translator
 
-`TranslateAnonymousObjectCreation` now emits an `AnonymousClassLiteralExpression` G# code-model node (`interface { Name = value, ... }`) instead of a `TupleLiteralExpression`. Member names follow C#'s own anonymous-type name-inference rule: the explicit `Name = expr` form uses `Name` directly; otherwise the name is inferred from the source expression (a bare identifier, or the last segment of a member access — e.g. `new { x.Id }` names the member `Id`).
+`TranslateAnonymousObjectCreation` now emits an `AnonymousClassLiteralExpression` G# code-model node (`object { let Name Type = value, ... }`) instead of a `TupleLiteralExpression`. Member names follow C#'s own anonymous-type name-inference rule: the explicit `Name = expr` form uses `Name` directly; otherwise the name is inferred from the source expression (a bare identifier, or the last segment of a member access — e.g. `new { x.Id }` names the member `Id`). Each member's G# type annotation is the C# compiler's own inferred type for that anonymous-type property (resolved via the semantic model and mapped through the existing CLR-type-to-G#-type mapper), written out explicitly since G# requires it at this syntax position.
 
 Because member names are now preserved, the previous `TranslateMemberAccess` rewrite of a named anonymous-type member access to a positional `.ItemN` (added for the tuple lowering) is removed — `x.Id` now stays `x.Id`. The existing "skip `!!` non-null-forgiveness for anonymous-type receivers" rule (the receiver is a G# value type and can never be null) is retained, updated only in wording (anonymous-class literal, not tuple).
 
@@ -61,8 +67,10 @@ Positive:
 - Fixes the reported EF Core migration scenario: `HasKey`/`HasIndex`/`CreateTable` shape selectors translated from C# no longer hit GS0473, and named-member access (`x.Id`) is preserved end-to-end.
 - Zero emitter changes: the entire feature rides on ADR-0029's existing synthesized-member contract and the emitter's existing `Program.Structs`/`IsData` planning.
 - Structural unification within a compile pass matches the issue's explicit ask and Roslyn's own anonymous-type caching model.
+- The mandatory type annotation on each member reuses the exact same type-clause binding and conversion path as an ordinary `let x Type = expr` declaration, so the feature stays consistent with the rest of the language's typing rules (implicit conversions, nullable annotations) with no bespoke logic.
 
 Negative / follow-ups:
 
 - The two deviations above (fields not properties; value type not reference type) are real semantic differences from C# anonymous types. If they surface as real interop problems, `DataStructSynthesizer` would need a reference-type (`IsClass: true`) synthesis path, which is out of scope for this change.
 - Identical anonymous shapes appearing in both the `BindGlobalScope` and `BindProgram` binding passes (top-level statements vs. function/method bodies) currently unify separately (two distinct but individually-correct synthesized types) rather than as one — a narrow, documented limitation, not the EF Core scenario (which lives entirely inside method bodies).
+- Requiring an explicit type on every member is more verbose than C#'s inferred `new { ... }`; this is a deliberate repo-owner design decision (G# has no type inference at this syntax position), not an oversight.

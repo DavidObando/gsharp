@@ -7486,13 +7486,16 @@ public class Parser
                 // unsafe code via the parenthesised form `(x) -> body`.
                 return ParseSingleIdentifierLambdaExpression();
 
-            case SyntaxKind.InterfaceKeyword when Peek(1).Kind == SyntaxKind.OpenBraceToken:
-                // Issue #2224: `interface { Name = value, ... }` is an
-                // anonymous-class literal expression. Unambiguous: the
-                // type-declaration use of `interface` always requires an
-                // identifier immediately after the keyword (`interface Name
-                // { ... }`), so `interface` directly followed by `{` can only
-                // be this expression-position literal.
+            case SyntaxKind.IdentifierToken
+                when Current.Text == "object" && Peek(1).Kind == SyntaxKind.OpenBraceToken:
+                // Issue #2224 (redesigned): `object { let Name Type = value,
+                // ... }` is an anonymous-class literal expression. `object` is
+                // a contextual identifier (used elsewhere as the universal
+                // reference-type name, e.g. `var x object = ...`), recognized
+                // as this literal's lead-in only in the precise `object {`
+                // shape — every other position (a bare `object` type name,
+                // `object` as an ordinary variable name, etc.) continues to
+                // lex and parse exactly as before.
                 return ParsePostfixChain(ParseAnonymousClassExpression());
 
             case SyntaxKind.SwitchKeyword:
@@ -8309,15 +8312,16 @@ public class Parser
 
     private ExpressionSyntax ParseAnonymousClassExpression()
     {
-        // Issue #2224: `interface { Name = value, ... }` anonymous-class
-        // literal. Mirrors ParseMapCreationExpression's shape but with
-        // `Name = value` members (matching C#'s `new { Name = value }`)
-        // instead of `key: value` map entries.
-        var interfaceKeyword = MatchToken(SyntaxKind.InterfaceKeyword);
+        // Issue #2224 (redesigned): `object { let Name Type = value, ... }`
+        // anonymous-class literal. Mirrors ParseMapCreationExpression's shape
+        // but with `let Name Type = value` members (each an explicit,
+        // mandatory type-annotated `let` binding) instead of `key: value` map
+        // entries.
+        var objectKeyword = NextToken();
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
         var members = ParseAnonymousClassMembers();
         var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
-        return new AnonymousClassExpressionSyntax(syntaxTree, interfaceKeyword, openBrace, members, closeBrace);
+        return new AnonymousClassExpressionSyntax(syntaxTree, objectKeyword, openBrace, members, closeBrace);
     }
 
     private SeparatedSyntaxList<AnonymousClassMemberInitializerSyntax> ParseAnonymousClassMembers()
@@ -8328,10 +8332,12 @@ public class Parser
                Current.Kind != SyntaxKind.CloseBraceToken &&
                Current.Kind != SyntaxKind.EndOfFileToken)
         {
+            var letKeyword = MatchToken(SyntaxKind.LetKeyword);
             var identifier = MatchToken(SyntaxKind.IdentifierToken);
+            var typeClause = ParseTypeClause();
             var equals = MatchToken(SyntaxKind.EqualsToken);
             var value = ParseExpression();
-            nodesAndSeparators.Add(new AnonymousClassMemberInitializerSyntax(syntaxTree, identifier, equals, value));
+            nodesAndSeparators.Add(new AnonymousClassMemberInitializerSyntax(syntaxTree, letKeyword, identifier, typeClause, equals, value));
 
             if (Current.Kind == SyntaxKind.CommaToken)
             {

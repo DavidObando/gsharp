@@ -610,7 +610,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
     }
 
     // Issue #2224: struct/anonymous-class literals (`Name { X = 1 }` and the
-    // new `interface { Name = "Foo" }` anonymous-class form) lower to
+    // new `object { let Name string = "Foo" }` anonymous-class form) lower to
     // `Expression.New(ctor, args)` exactly like BuildUserConstructorExpression
     // does for `Name(1)` calls — the synthesized primary constructor's
     // parameter order always matches Initializers order (both are built

@@ -9,7 +9,7 @@ using Xunit;
 namespace GSharp.LanguageServer.Tests;
 
 /// <summary>
-/// Issue #2224: hover and completion for the new <c>interface { ... }</c>
+/// Issue #2224: hover and completion for the new <c>object { let ... }</c>
 /// anonymous-class-literal expression. gsc synthesizes a real
 /// <c>StructSymbol</c> per distinct member shape, so hovering a variable bound
 /// to a literal, or a member access off it, and completing members after a
@@ -23,7 +23,7 @@ public class Issue2224AnonymousClassHoverCompletionTests
     public void ComputeHover_OnAnonymousClassVariable_ShowsSynthesizedShape()
     {
         const string source = "func main() {\n"
-            + "    var x = interface { Name = \"Foo\", Age = 42 }\n"
+            + "    var x = object { let Name string = \"Foo\", let Age int32 = 42 }\n"
             + "}\n";
         var content = LanguageServerTestHelpers.Content(source);
 
@@ -41,7 +41,7 @@ public class Issue2224AnonymousClassHoverCompletionTests
     public void ComputeHover_OnAnonymousClassMemberAccess_ResolvesMemberType()
     {
         const string source = "func main() {\n"
-            + "    var x = interface { Name = \"Foo\", Age = 42 }\n"
+            + "    var x = object { let Name string = \"Foo\", let Age int32 = 42 }\n"
             + "    var n = x.Name\n"
             + "}\n";
         var content = LanguageServerTestHelpers.Content(source);
@@ -56,7 +56,7 @@ public class Issue2224AnonymousClassHoverCompletionTests
     public void ComputeCompletions_AfterDotOnAnonymousClassValue_OffersMembers()
     {
         const string source = "func main() {\n"
-            + "    var x = interface { Name = \"Foo\", Age = 42 }\n"
+            + "    var x = object { let Name string = \"Foo\", let Age int32 = 42 }\n"
             + "    x.\n"
             + "}\n";
         var content = LanguageServerTestHelpers.Content(source);
@@ -72,7 +72,7 @@ public class Issue2224AnonymousClassHoverCompletionTests
     public void ComputeCompletions_AfterDotOnAnonymousClassValue_DoesNotOfferGlobalKeywords()
     {
         const string source = "func main() {\n"
-            + "    var x = interface { Name = \"Foo\", Age = 42 }\n"
+            + "    var x = object { let Name string = \"Foo\", let Age int32 = 42 }\n"
             + "    x.\n"
             + "}\n";
         var content = LanguageServerTestHelpers.Content(source);
