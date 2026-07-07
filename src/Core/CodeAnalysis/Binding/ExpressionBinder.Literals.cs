@@ -791,13 +791,19 @@ internal sealed partial class ExpressionBinder
         var packageName = this.function?.Package?.Name ?? string.Empty;
         var anonymousType = scope.GetAnonymousTypeCache().GetOrCreate(shape, packageName);
 
-        var inits = ImmutableArray.CreateBuilder<BoundFieldInitializer>(anonymousType.Fields.Length);
-        for (var i = 0; i < anonymousType.Fields.Length; i++)
-        {
-            inits.Add(new BoundFieldInitializer(anonymousType.Fields[i], memberValues[i]));
-        }
-
-        return new BoundStructLiteralExpression(syntax, anonymousType, inits.MoveToImmutable());
+        // Rubber-duck follow-up to issue #2224: an anonymous-class literal's
+        // members are get-only auto-properties with no public field/setter
+        // (see AnonymousTypeCache), so it must be compiled as a primary
+        // constructor call (`<>AnonymousTypeN(v1, v2, ...)`) — exactly like
+        // C#'s `new { ... }` lowers to a constructor call, never a
+        // field/property initializer — rather than a struct/class composite
+        // literal (BoundStructLiteralExpression's initobj+stfld / setter-call
+        // emission requires a public field or settable property, neither of
+        // which this type has). This also lets the already-proven primary
+        // constructor call and expression-tree lowering paths (used by e.g.
+        // `data struct Wrapper[T](Value T)`) handle emission with no
+        // additional emitter code path.
+        return new BoundConstructorCallExpression(syntax, anonymousType, memberValues.MoveToImmutable());
     }
 
     private BoundExpression BindStructLiteralExpression(StructLiteralExpressionSyntax syntax)

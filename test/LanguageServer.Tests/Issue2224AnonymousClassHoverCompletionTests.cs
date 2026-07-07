@@ -64,8 +64,11 @@ public class Issue2224AnonymousClassHoverCompletionTests
         var caret = After(source, "    x.");
         var items = CompletionComputer.ComputeCompletions(content, caret);
 
-        Assert.Contains(items, i => i.Label == "Name" && i.Kind == CompletionItemKind.Field);
-        Assert.Contains(items, i => i.Label == "Age" && i.Kind == CompletionItemKind.Field);
+        // Rubber-duck follow-up to issue #2224: anonymous-class-literal
+        // members are get-only auto-properties (PropertyInfo), not plain
+        // fields — see AnonymousTypeCache — so completions report Property.
+        Assert.Contains(items, i => i.Label == "Name" && i.Kind == CompletionItemKind.Property);
+        Assert.Contains(items, i => i.Label == "Age" && i.Kind == CompletionItemKind.Property);
     }
 
     [Fact]

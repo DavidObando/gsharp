@@ -5,6 +5,7 @@
 #pragma warning disable SA1202 // 'public' members should come before 'private' members (organized by feature: inline-struct group then data-struct group, each followed by its own private helpers)
 
 using System;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Reflection;
 using System.Reflection.Metadata;
@@ -127,6 +128,40 @@ internal sealed class DataStructSynthesizer
         this.resolveUserTypeToken = resolveUserTypeToken ?? throw new ArgumentNullException(nameof(resolveUserTypeToken));
         this.resolveUserFieldToken = resolveUserFieldToken ?? throw new ArgumentNullException(nameof(resolveUserFieldToken));
         this.resolveUserMethodRef = resolveUserMethodRef ?? throw new ArgumentNullException(nameof(resolveUserMethodRef));
+    }
+
+    /// <summary>
+    /// Rubber-duck follow-up to issue #2224: the ordered list of backing
+    /// <see cref="FieldSymbol"/>s the Equals/GetHashCode/ToString/Deconstruct
+    /// synthesis below should read/compare. A user-declared data struct
+    /// (ADR-0029) always has plain public <see cref="StructSymbol.Fields"/>
+    /// (auto-properties are rejected on data structs by the binder — see
+    /// <c>Diagnostics.ReportAutoPropertyInDataStruct</c>); an anonymous-class
+    /// literal's synthesized type (<see cref="Binding.AnonymousTypeCache"/>)
+    /// instead has get-only auto-<see cref="StructSymbol.Properties"/> with no
+    /// plain fields, so its members are their <see cref="PropertySymbol.BackingField"/>s.
+    /// These two shapes are mutually exclusive today, so checking
+    /// <see cref="StructSymbol.Fields"/> first is unambiguous.
+    /// </summary>
+    private static ImmutableArray<FieldSymbol> GetSynthesisFields(StructSymbol structSym)
+    {
+        if (!structSym.Fields.IsDefaultOrEmpty)
+        {
+            return structSym.Fields;
+        }
+
+        if (structSym.Properties.IsDefaultOrEmpty)
+        {
+            return ImmutableArray<FieldSymbol>.Empty;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<FieldSymbol>(structSym.Properties.Length);
+        foreach (var property in structSym.Properties)
+        {
+            builder.Add(property.BackingField);
+        }
+
+        return builder.MoveToImmutable();
     }
 
     public void EmitInlineStructSynthesizedMembers(StructSymbol structSym)
@@ -392,10 +427,12 @@ internal sealed class DataStructSynthesizer
     /// <param name="structSym">The data-struct symbol to emit members for.</param>
     public void EmitDataStructSynthesizedMembers(StructSymbol structSym)
     {
-        // ADR-0029: data structs must have at least one field. This is
-        // enforced by the binder; assert here so the emit IL stays simple.
+        // ADR-0029: data structs must have at least one field (or, for a
+        // synthesized anonymous-class type, at least one property — see
+        // GetSynthesisFields). This is enforced by the binder; assert here so
+        // the emit IL stays simple.
         Debug.Assert(
-            !structSym.Fields.IsDefaultOrEmpty,
+            !GetSynthesisFields(structSym).IsDefaultOrEmpty,
             "Data structs must have at least one field; the binder should have rejected an empty data struct.");
 
         var typeDef = this.resolveUserTypeToken(structSym);
@@ -406,6 +443,78 @@ internal sealed class DataStructSynthesizer
         this.cache.DataStructOpEqualityHandles[structSym] = this.EmitDataStructEqualityOperator(structSym, isInequality: false);
         this.EmitDataStructEqualityOperator(structSym, isInequality: true);
         this.EmitDataStructDeconstruct(structSym);
+
+        // Rubber-duck follow-up to issue #2224: an anonymous-class literal's
+        // synthesized type has no plain fields (only get-only auto-properties
+        // — see Binding.AnonymousTypeCache), so its primary-ctor "call" sugar
+        // can't be routed through BoundStructLiteralExpression's
+        // field-initializer emission like an ordinary `data struct Foo(x
+        // int32)` does — that one keeps Fields non-empty and OverloadResolver
+        // routes its call syntax to a struct literal instead, so it never
+        // needs a real .ctor row (see the comment near
+        // `!classType.IsClass` there). An anonymous-class literal is instead
+        // bound directly as a BoundConstructorCallExpression (see
+        // ExpressionBinder.BindAnonymousClassExpression), which needs a real
+        // newobj-callable instance constructor — both for ordinary compiled
+        // code and for ExpressionTreeLowerer.BuildUserConstructorExpression's
+        // runtime `Type.GetConstructor` lookup.
+        if (structSym.Fields.IsDefaultOrEmpty && structSym.HasPrimaryConstructor)
+        {
+            this.cache.ClassPrimaryCtorHandles[structSym] = this.EmitDataStructPrimaryConstructor(structSym);
+        }
+    }
+
+    /// <summary>
+    /// Rubber-duck follow-up to issue #2224: emits the primary instance
+    /// constructor for an anonymous-class literal's synthesized backing type
+    /// — <c>ldarg.0; ldarg.N; stfld &lt;backing field N&gt;</c> per primary-ctor
+    /// parameter, in declaration order, then <c>ret</c>. No base-ctor call is
+    /// emitted: like every other value-type instance constructor in this
+    /// emitter (see <c>EmitInlineStructConstructor</c>), a struct ctor never
+    /// chains to <c>System.ValueType::.ctor</c> in IL.
+    /// </summary>
+    private MethodDefinitionHandle EmitDataStructPrimaryConstructor(StructSymbol structSym)
+    {
+        var parameters = structSym.PrimaryConstructorParameters;
+        var fields = GetSynthesisFields(structSym);
+
+        int bodyOffset = -1;
+        if (!this.emitCtx.MetadataOnly)
+        {
+            var il = new InstructionEncoder(new BlobBuilder());
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                var fieldHandle = this.resolveUserFieldToken(structSym, fields[i]);
+                il.LoadArgument(0);
+                il.LoadArgument(i + 1);
+                il.OpCode(ILOpCode.Stfld);
+                il.Token(fieldHandle);
+            }
+
+            il.OpCode(ILOpCode.Ret);
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
+        }
+
+        var sig = new BlobBuilder();
+        new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                parameters.Length,
+                r => r.Void(),
+                ps =>
+                {
+                    foreach (var param in parameters)
+                    {
+                        this.encodeTypeSymbol(ps.AddParameter().Type(), param.Type);
+                    }
+                });
+
+        return this.emitCtx.Metadata.AddMethodDefinition(
+            attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
+            bodyOffset: bodyOffset,
+            parameterList: this.nextParameterHandle());
     }
 
     /// <summary>
@@ -473,7 +582,7 @@ internal sealed class DataStructSynthesizer
         if (!this.emitCtx.MetadataOnly)
         {
             var retFalse = il.DefineLabel();
-            foreach (var field in structSym.Fields)
+            foreach (var field in GetSynthesisFields(structSym))
             {
                 var fieldHandle = this.resolveUserFieldToken(structSym, field);
                 il.LoadArgument(0);
@@ -522,7 +631,7 @@ internal sealed class DataStructSynthesizer
             !structSym.IsClass,
             "EmitDataStructGetHashCode precondition violated: data struct must be a value type.");
 
-        var fields = structSym.Fields;
+        var fields = GetSynthesisFields(structSym);
         bool useFold = fields.Length > 8;
 
         var il = new InstructionEncoder(new BlobBuilder());
@@ -605,7 +714,7 @@ internal sealed class DataStructSynthesizer
             !structSym.IsClass,
             "EmitDataStructToString precondition violated: data struct must be a value type.");
 
-        var fields = structSym.Fields;
+        var fields = GetSynthesisFields(structSym);
         int pieceCount = (2 * fields.Length) + 1;
 
         var il = new InstructionEncoder(new BlobBuilder());
@@ -686,7 +795,7 @@ internal sealed class DataStructSynthesizer
         if (!this.emitCtx.MetadataOnly)
         {
             var retFalse = il.DefineLabel();
-            foreach (var field in structSym.Fields)
+            foreach (var field in GetSynthesisFields(structSym))
             {
                 var fieldHandle = this.resolveUserFieldToken(structSym, field);
                 il.LoadArgumentAddress(0);
@@ -737,7 +846,7 @@ internal sealed class DataStructSynthesizer
     /// </summary>
     private void EmitDataStructDeconstruct(StructSymbol structSym)
     {
-        var fields = structSym.Fields;
+        var fields = GetSynthesisFields(structSym);
         var il = new InstructionEncoder(new BlobBuilder());
         if (!this.emitCtx.MetadataOnly)
         {

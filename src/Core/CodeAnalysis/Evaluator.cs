@@ -14,6 +14,7 @@ using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using Emit = GSharp.Core.CodeAnalysis.Emit;
 
 namespace GSharp.Core.CodeAnalysis;
 
@@ -1737,6 +1738,19 @@ public sealed class Evaluator
         return TryGetGlobal(v, out var gv) ? gv : null;
     }
 
+    // Rubber-duck follow-up to issue #2224: an anonymous-class literal's
+    // primary-ctor parameter matches a get-only auto-property, not a plain
+    // field (see AnonymousTypeCache), so its runtime storage in StructValue
+    // lives under the property's backing-field name, not the property name
+    // itself. Ordinary classes/data-structs keep Fields non-empty and this
+    // resolves to the same name unchanged.
+    private static string PrimaryCtorStorageFieldName(StructSymbol type, string paramName)
+    {
+        return Emit.ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(type, paramName, out var field)
+            ? field.Name
+            : paramName;
+    }
+
     private object EvaluateConstructorCallExpression(BoundConstructorCallExpression node)
     {
         var sv = new StructValue(node.StructType);
@@ -1772,7 +1786,7 @@ public sealed class Evaluator
                 var primaryParams = node.StructType.PrimaryConstructorParameters;
                 for (var i = 0; i < primaryParams.Length; i++)
                 {
-                    sv.Fields[primaryParams[i].Name] = EvaluateExpression(node.Arguments[i]);
+                    sv.Fields[PrimaryCtorStorageFieldName(node.StructType, primaryParams[i].Name)] = EvaluateExpression(node.Arguments[i]);
                 }
 
                 // Forward an explicit class-level base initializer if present
@@ -1784,7 +1798,7 @@ public sealed class Evaluator
                     var frame = new ConcurrentDictionary<VariableSymbol, object>();
                     for (var i = 0; i < primaryParams.Length; i++)
                     {
-                        frame[primaryParams[i]] = sv.Fields[primaryParams[i].Name];
+                        frame[primaryParams[i]] = sv.Fields[PrimaryCtorStorageFieldName(node.StructType, primaryParams[i].Name)];
                     }
 
                     using (PushFrame(frame))
@@ -1792,7 +1806,7 @@ public sealed class Evaluator
                         var baseParams = gsBase.PrimaryConstructorParameters;
                         for (var i = 0; i < baseParams.Length && i < baseInitOnStruct.Arguments.Length; i++)
                         {
-                            sv.Fields[baseParams[i].Name] = EvaluateExpression(baseInitOnStruct.Arguments[i]);
+                            sv.Fields[PrimaryCtorStorageFieldName(gsBase, baseParams[i].Name)] = EvaluateExpression(baseInitOnStruct.Arguments[i]);
                         }
                     }
                 }
@@ -1823,7 +1837,7 @@ public sealed class Evaluator
                     var baseParams = ctorGsharpBase.PrimaryConstructorParameters;
                     for (var i = 0; i < baseParams.Length && i < ctorBaseInit.Arguments.Length; i++)
                     {
-                        sv.Fields[baseParams[i].Name] = EvaluateExpression(ctorBaseInit.Arguments[i]);
+                        sv.Fields[PrimaryCtorStorageFieldName(ctorGsharpBase, baseParams[i].Name)] = EvaluateExpression(ctorBaseInit.Arguments[i]);
                     }
                 }
 
@@ -1839,7 +1853,7 @@ public sealed class Evaluator
         var parameters = node.StructType.PrimaryConstructorParameters;
         for (var i = 0; i < parameters.Length; i++)
         {
-            sv.Fields[parameters[i].Name] = EvaluateExpression(node.Arguments[i]);
+            sv.Fields[PrimaryCtorStorageFieldName(node.StructType, parameters[i].Name)] = EvaluateExpression(node.Arguments[i]);
         }
 
         // Issue #306: forward an explicit base-constructor initializer to a GSharp
@@ -1853,7 +1867,7 @@ public sealed class Evaluator
             var frame = new ConcurrentDictionary<VariableSymbol, object>();
             for (var i = 0; i < parameters.Length; i++)
             {
-                frame[parameters[i]] = sv.Fields[parameters[i].Name];
+                frame[parameters[i]] = sv.Fields[PrimaryCtorStorageFieldName(node.StructType, parameters[i].Name)];
             }
 
             using (PushFrame(frame))
@@ -1863,7 +1877,7 @@ public sealed class Evaluator
                     var baseParams = gsharpBase.PrimaryConstructorParameters;
                     for (var i = 0; i < baseParams.Length && i < baseInit.Arguments.Length; i++)
                     {
-                        sv.Fields[baseParams[i].Name] = EvaluateExpression(baseInit.Arguments[i]);
+                        sv.Fields[PrimaryCtorStorageFieldName(gsharpBase, baseParams[i].Name)] = EvaluateExpression(baseInit.Arguments[i]);
                     }
                 }
 

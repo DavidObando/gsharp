@@ -44,23 +44,39 @@ internal sealed class AnonymousTypeCache
             return existing;
         }
 
-        var fields = ImmutableArray.CreateBuilder<FieldSymbol>(members.Count);
+        var properties = ImmutableArray.CreateBuilder<PropertySymbol>(members.Count);
         var ctorParams = ImmutableArray.CreateBuilder<ParameterSymbol>(members.Count);
         foreach (var (name, type) in members)
         {
-            // Immutable, get-only members (ADR-2224 / C# anonymous-type
-            // parity): a public readonly field. This reuses the existing
-            // `data struct` synthesized-member pipeline (Equals/GetHashCode/
-            // ToString/Deconstruct, ADR-0029) verbatim — that pipeline is
-            // driven entirely by StructSymbol.Fields, so no emitter changes
-            // are needed for equality/ToString semantics. `isClass: false`
-            // (value type) is used deliberately: DataStructSynthesizer's
-            // Equals/GetHashCode emission assumes value-type struct
-            // (unbox-based field access) and does not yet support
-            // reference-type `data class` (see its `!structSym.IsClass`
-            // asserts) — a documented deviation from C#'s reference-type
-            // anonymous types.
-            fields.Add(new FieldSymbol(name, type, Accessibility.Public, isReadOnly: true));
+            // Get-only auto-property (C# anonymous-type parity, issue #2224
+            // rubber-duck follow-up): a private readonly backing field plus a
+            // public get-only property wrapping it — mirroring the real IL
+            // shape of a C# anonymous type (and required so EF Core's
+            // reflection-based model building, which filters for
+            // PropertyInfo, recognizes the synthesized member; see
+            // ExpressionTreeLowerer.BuildUserConstructorExpression's 3-arg
+            // Expression.New(ctor, args, members) using these PropertySymbols).
+            // The synthesized primary constructor assigns the backing field
+            // directly (ReflectionMetadataEmitter.EmitClassPrimaryConstructorBodyBytes
+            // / TypeDefEmitter.EmitClassPrimaryConstructor fall back to a
+            // property's BackingField when no same-named field exists), and
+            // DataStructSynthesizer's Equals/GetHashCode/ToString/Deconstruct
+            // (ADR-0029) read the backing fields via
+            // DataStructSynthesizer.GetSynthesisFields.
+            var backingField = new FieldSymbol($"<{name}>k__BackingField", type, Accessibility.Private, isReadOnly: true);
+            var property = new PropertySymbol(
+                name,
+                type,
+                Accessibility.Public,
+                hasGetter: true,
+                hasSetter: false,
+                isAutoProperty: true,
+                isVirtual: false,
+                isOverride: false)
+            {
+                BackingField = backingField,
+            };
+            properties.Add(property);
             ctorParams.Add(new ParameterSymbol(name, type));
         }
 
@@ -69,7 +85,7 @@ internal sealed class AnonymousTypeCache
         var typeName = $"<>AnonymousType{counter++}";
         var symbol = new StructSymbol(
             typeName,
-            fields.MoveToImmutable(),
+            ImmutableArray<FieldSymbol>.Empty,
             Accessibility.Public,
             declaration: null,
             packageName: packageName ?? string.Empty,
@@ -77,6 +93,7 @@ internal sealed class AnonymousTypeCache
             isInline: false,
             isClass: false,
             primaryConstructorParameters: ctorParams.MoveToImmutable());
+        symbol.SetProperties(properties.MoveToImmutable());
 
         byShape[key] = symbol;
         symbols.Add(symbol);

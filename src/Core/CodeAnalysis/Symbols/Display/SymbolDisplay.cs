@@ -681,8 +681,10 @@ public static class SymbolDisplay
                 // no separate declaration a user could hover to see its shape
                 // (it has no source location — `Declaration` is null), so
                 // render its member shape inline exactly like the
-                // TupleTypeSymbol case above does for tuples.
-                return $"{{ {string.Join(", ", aggregate.Fields.Select(f => $"{f.Name}: {FormatType(f.Type)}"))} }}";
+                // TupleTypeSymbol case above does for tuples. Rubber-duck
+                // follow-up: members are get-only auto-properties, not plain
+                // fields (see AnonymousTypeCache), so render Properties here.
+                return $"{{ {string.Join(", ", aggregate.Properties.Select(p => $"{p.Name}: {FormatType(p.Type)}"))} }}";
             case ImportedTypeSymbol imported:
                 return FormatImportedType(imported);
             default:

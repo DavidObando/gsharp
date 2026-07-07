@@ -333,15 +333,15 @@ internal static class ExpressionTreeRestrictionValidator
                 return;
 
             case BoundStructLiteralExpression structLiteral:
-                // Issue #2224: anonymous-class literals (`object { let ... }`)
-                // are bound as BoundStructLiteralExpression (reusing the
-                // existing struct-literal bound node), and — unlike tuple
-                // literals — are legal inside expression-tree lambdas, same
-                // as C#'s `new { ... }` anonymous objects. General
-                // user-declared struct literals are allowed here too, for
+                // User-declared struct/class composite literals (`Point{X:
+                // 1, Y: 2}`) are legal inside expression-tree lambdas, for
                 // the same reason object initializers are (see
                 // TryValidateObjectInitializer below): only the member
-                // value expressions need validating.
+                // value expressions need validating. (Issue #2224:
+                // anonymous-class literals — `object { let ... }` — are
+                // bound as BoundConstructorCallExpression instead, validated
+                // above, since their get-only-auto-property shape compiles
+                // to a primary-constructor call, same as C#'s `new { ... }`.)
                 foreach (var initializer in structLiteral.Initializers)
                 {
                     ValidateExpression(initializer.Value, diagnostics);

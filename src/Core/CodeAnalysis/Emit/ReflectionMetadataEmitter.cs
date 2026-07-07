@@ -1785,6 +1785,22 @@ internal sealed class ReflectionMetadataEmitter
                 // rows: Equals(object), Equals(Name), GetHashCode, ToString,
                 // op_Equality, op_Inequality, Deconstruct.
                 methodRow += 7;
+
+                // Rubber-duck follow-up to issue #2224: an anonymous-class
+                // literal's synthesized type has no plain fields (only
+                // get-only auto-properties — see AnonymousTypeCache), so its
+                // primary-ctor "call" sugar can't route through
+                // BoundStructLiteralExpression's field-initializer emission
+                // like an ordinary `data struct Foo(x int32)` does (that one
+                // keeps Fields non-empty and never needs a real .ctor row —
+                // see the OverloadResolver comment near
+                // `!classType.IsClass`). It needs one extra reserved row for
+                // a real newobj-callable instance constructor, emitted by
+                // DataStructSynthesizer.EmitDataStructSynthesizedMembers.
+                if (s.Fields.IsDefaultOrEmpty && s.HasPrimaryConstructor)
+                {
+                    classPrimaryCtorRows[s] = methodRow++;
+                }
             }
 
             foreach (var m in s.Methods)
@@ -4260,7 +4276,7 @@ internal sealed class ReflectionMetadataEmitter
         for (var i = 0; i < parameters.Length; i++)
         {
             var param = parameters[i];
-            if (!classSym.TryGetField(param.Name, out var field))
+            if (!ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(classSym, param.Name, out var field))
             {
                 throw new InvalidOperationException($"Class '{classSym.Name}' has no field for primary ctor parameter '{param.Name}'.");
             }
@@ -4334,6 +4350,18 @@ internal sealed class ReflectionMetadataEmitter
 
         foreach (var property in classSym.Properties)
         {
+            // Rubber-duck follow-up to issue #2224: a property whose name
+            // matches a primary-ctor parameter (e.g. an anonymous-class
+            // literal's synthesized get-only auto-properties) is already
+            // assigned its real value by the primary ctor's param→field
+            // stfld (see TryGetPrimaryCtorTargetField) — the string-default
+            // fallback must not run for it, or it would clobber that value
+            // with "".
+            if (primaryParamFieldNames?.Contains(property.Name) == true)
+            {
+                continue;
+            }
+
             if (property.IsAutoProperty && property.BackingField != null && property.Type == TypeSymbol.String)
             {
                 return true;
@@ -4445,6 +4473,18 @@ internal sealed class ReflectionMetadataEmitter
         // computes an unset property's value via DefaultValue(property.Type).
         foreach (var property in classSym.Properties)
         {
+            // Rubber-duck follow-up to issue #2224: skip a property whose
+            // name matches a primary-ctor parameter (e.g. an anonymous-class
+            // literal's synthesized get-only auto-properties) — its backing
+            // field is already assigned the real argument value by the
+            // primary ctor's param→field stfld (TryGetPrimaryCtorTargetField),
+            // emitted before these statements run; defaulting it here would
+            // clobber that value with "".
+            if (primaryParamFieldNames?.Contains(property.Name) == true)
+            {
+                continue;
+            }
+
             if (property.IsAutoProperty && property.BackingField != null && property.Type == TypeSymbol.String)
             {
                 var defaultExpr = new BoundLiteralExpression(null, string.Empty, TypeSymbol.String); // Issue #1714: storage default site, not the `default` expression.
@@ -4567,7 +4607,7 @@ internal sealed class ReflectionMetadataEmitter
         for (var i = 0; i < parameters.Length; i++)
         {
             var param = parameters[i];
-            if (!classSym.TryGetField(param.Name, out var field))
+            if (!ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(classSym, param.Name, out var field))
             {
                 throw new InvalidOperationException($"Class '{classSym.Name}' has no field for primary ctor parameter '{param.Name}'.");
             }
@@ -7322,6 +7362,36 @@ internal sealed class ReflectionMetadataEmitter
     private readonly Dictionary<DelegateTypeSymbol, EntityHandle> userDelegateTypeSpecCache = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<DelegateTypeSymbol, EntityHandle> userDelegateCtorRefCache = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<DelegateTypeSymbol, EntityHandle> userDelegateInvokeRefCache = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
+    /// Rubber-duck follow-up to issue #2224: resolves the field a primary
+    /// constructor parameter named <paramref name="name"/> assigns into.
+    /// Normally this is a same-named plain field (<see cref="StructSymbol.TryGetField"/>);
+    /// an anonymous-class literal's synthesized type
+    /// (<see cref="Binding.AnonymousTypeCache"/>) has no plain fields at all —
+    /// only get-only auto-properties — so its primary-ctor parameters instead
+    /// resolve to the same-named property's <see cref="PropertySymbol.BackingField"/>.
+    /// </summary>
+    /// <param name="type">The declaring type.</param>
+    /// <param name="name">The primary-ctor parameter (and target member) name.</param>
+    /// <param name="field">The resolved backing field on success.</param>
+    /// <returns><see langword="true"/> if a field or auto-property backing field was found.</returns>
+    internal static bool TryGetPrimaryCtorTargetField(StructSymbol type, string name, out FieldSymbol field)
+    {
+        if (type.TryGetField(name, out field))
+        {
+            return true;
+        }
+
+        if (TypeMemberModel.TryGetProperty(type, name, out var property) && property.BackingField != null)
+        {
+            field = property.BackingField;
+            return true;
+        }
+
+        field = null;
+        return false;
+    }
 
     /// <summary>
     /// ADR-0087 §3 R3: returns <see langword="true"/> when
