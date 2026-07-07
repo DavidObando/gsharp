@@ -172,11 +172,170 @@ namespace Consumer
 
         // `First.ChapterInfo` is ambiguous with the metadata `Second.ChapterInfo`
         // reachable through the file's own `using Second;` — both the return
-        // type and the constructor call must be qualified.
-        Assert.Contains("First.ChapterInfo", printed);
+        // type (`func Make(): First.ChapterInfo`) and the constructor call
+        // (`new First.ChapterInfo()`) must be qualified. A single occurrence
+        // wouldn't prove that; assert both usages so this doesn't quietly
+        // regress to only qualifying one of them.
+        Assert.Equal(2, CountOccurrences(printed, "First.ChapterInfo"));
+        Assert.DoesNotContain(" ChapterInfo(", printed);
 
         RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
         Assert.True(roundTrip.Success, string.Join(Environment.NewLine, roundTrip.Errors));
+    }
+
+    /// <summary>
+    /// Issue #2222 ordering blindspot: namespace <c>First</c> is reached via
+    /// an explicit <c>using</c>, but the colliding namespace <c>Second</c> is
+    /// reached ONLY via full qualification (<c>new Second.ChapterInfo()</c>),
+    /// with NO <c>using Second;</c> anywhere in the file. Because
+    /// <c>Second</c>'s namespace only enters scope as a synthesized `import`
+    /// (added after the whole file is visited), an EARLIER bare reference to
+    /// `ChapterInfo` from `First` must still be qualified — it cannot rely on
+    /// the `using Second;` that doesn't exist to detect the collision.
+    /// </summary>
+    [Fact]
+    public void SourceHomonym_ReachedOnlyViaFullQualification_StillQualifiesEarlierBareReference()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("First.cs", @"
+namespace First
+{
+    public class ChapterInfo
+    {
+        public int RuntimeLengthSec;
+    }
+}
+"),
+            ("Second.cs", @"
+namespace Second
+{
+    public class ChapterInfo
+    {
+        public string Asin;
+    }
+}
+"),
+            ("Caller.cs", @"
+using First;
+
+namespace Consumer
+{
+    public class Caller
+    {
+        public void Use()
+        {
+            // Bare reference to First.ChapterInfo, processed BEFORE the
+            // Second.ChapterInfo reference below. No `using Second;` exists
+            // anywhere in this file — Second is reached only by full
+            // qualification.
+            var chapterInfo = new First.ChapterInfo();
+            var other = new Second.ChapterInfo();
+            System.Console.WriteLine(chapterInfo.RuntimeLengthSec);
+            System.Console.WriteLine(other.Asin);
+        }
+    }
+}
+"),
+        });
+
+        Assert.True(
+            project.BoundWithoutErrors,
+            "Inline C# source should bind with no errors: " +
+                string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = project.Documents.Single(d => d.FilePath.EndsWith("Caller.cs", StringComparison.Ordinal));
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        string printed = GSharpPrinter.Print(unit);
+
+        // The EARLIER reference (First.ChapterInfo) must be qualified even
+        // though, at the point it's processed, no explicit `using Second;`
+        // exists yet to reveal the collision.
+        Assert.Contains("First.ChapterInfo()", printed);
+        Assert.Contains("Second.ChapterInfo()", printed);
+        Assert.DoesNotContain(" ChapterInfo(", printed);
+
+        RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
+        Assert.True(roundTrip.Success, string.Join(Environment.NewLine, roundTrip.Errors));
+    }
+
+    /// <summary>
+    /// Issue #2222 low-severity fix: a `using global::Foo.Bar;` directive
+    /// must be recognized the same as `using Foo.Bar;` — the `global::`
+    /// alias-qualifier prefix must be stripped before the namespace name is
+    /// parsed/split, or the homonym scan silently fails to match.
+    /// </summary>
+    [Fact]
+    public void SourceHomonym_ViaGlobalQualifiedUsing_IsEmittedQualified()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("First.cs", @"
+namespace First
+{
+    public class ChapterInfo
+    {
+        public int RuntimeLengthSec;
+    }
+}
+"),
+            ("Second.cs", @"
+namespace Second
+{
+    public class ChapterInfo
+    {
+        public string Asin;
+    }
+}
+"),
+            ("Caller.cs", @"
+using global::First;
+using global::Second;
+
+namespace Consumer
+{
+    public class Caller
+    {
+        public void Use()
+        {
+            var chapterInfo = new First.ChapterInfo();
+            var other = new Second.ChapterInfo();
+            System.Console.WriteLine(chapterInfo.RuntimeLengthSec);
+            System.Console.WriteLine(other.Asin);
+        }
+    }
+}
+"),
+        });
+
+        Assert.True(
+            project.BoundWithoutErrors,
+            "Inline C# source should bind with no errors: " +
+                string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = project.Documents.Single(d => d.FilePath.EndsWith("Caller.cs", StringComparison.Ordinal));
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        string printed = GSharpPrinter.Print(unit);
+
+        Assert.Contains("First.ChapterInfo()", printed);
+        Assert.Contains("Second.ChapterInfo()", printed);
+        Assert.DoesNotContain(" ChapterInfo(", printed);
+
+        RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
+        Assert.True(roundTrip.Success, string.Join(Environment.NewLine, roundTrip.Errors));
+    }
+
+    private static int CountOccurrences(string haystack, string needle)
+    {
+        int count = 0;
+        for (int index = haystack.IndexOf(needle, StringComparison.Ordinal); index >= 0; index = haystack.IndexOf(needle, index + needle.Length, StringComparison.Ordinal))
+        {
+            count++;
+        }
+
+        return count;
     }
 
     private static MetadataReference CompileLibrary(string libSource, string assemblyName)

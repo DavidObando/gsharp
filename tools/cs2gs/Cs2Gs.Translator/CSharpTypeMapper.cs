@@ -222,6 +222,21 @@ public sealed class CSharpTypeMapper
             && (named.Name == "Index" || named.Name == "Range");
 
     /// <summary>
+    /// Issue #2222: strips a leading `global::` alias-qualifier from a
+    /// dotted namespace/type name (e.g. <c>using global::Foo.Bar;</c> yields
+    /// <c>directive.Name.ToString()</c> == <c>"global::Foo.Bar"</c>).
+    /// Splitting that text by <c>.</c> without stripping the prefix first
+    /// silently fails to match any real namespace segment. Shared with
+    /// <see cref="CSharpToGSharpTranslator.TranslateImports"/> so the
+    /// synthesized `import` list and the homonym scan agree on the same
+    /// name.
+    /// </summary>
+    /// <param name="name">The dotted namespace/type name text, possibly `global::`-prefixed.</param>
+    /// <returns><paramref name="name"/> with any leading `global::` removed.</returns>
+    internal static string StripGlobalPrefix(string name) =>
+        name.StartsWith("global::", System.StringComparison.Ordinal) ? name.Substring("global::".Length) : name;
+
+    /// <summary>
     /// Issue #1906: maps a C# function-pointer type (<c>delegate*&lt;...&gt;</c>)
     /// to a G# function-pointer type. A plain <c>delegate*&lt;T, R&gt;</c> or an
     /// explicit <c>delegate* managed&lt;T, R&gt;</c> is the <b>default</b>
@@ -605,9 +620,29 @@ public sealed class CSharpTypeMapper
     /// Issue #2222: the namespace names in scope for the file backing <see
     /// cref="TranslationContext.SemanticModel"/> — every `using` directive
     /// (skipping aliased/`using static` ones, which do not bring a type's bare
-    /// simple name into scope the same way) plus the file's own declared
-    /// namespace. Cached per mapper instance: one mapper translates one file,
-    /// so the import set never changes across calls.
+    /// simple name into scope the same way), the file's own declared
+    /// namespace, AND the namespace of every top-level type referenced
+    /// anywhere in the file, even one reached only via full qualification
+    /// with no matching `using`.
+    /// <para>
+    /// That last part fixes an ordering blindspot: <see
+    /// cref="TrackShortenedNamespace"/> records EVERY top-level-type
+    /// reference's namespace (not just qualified ones), and
+    /// <c>CSharpToGSharpTranslator.Translate</c> synthesizes a matching
+    /// `import` for any such namespace not already covered by an explicit
+    /// `using`, once the WHOLE file has been visited. So a namespace reached
+    /// only via full qualification (e.g. `new Oahu.Audible.Json.ChapterInfo()`
+    /// with no `using Oahu.Audible.Json;`) still ends up in scope in the final
+    /// G# output. But references are qualified in a single forward pass — an
+    /// EARLIER reference (e.g. bare `book.ChapterInfo`) cannot see that a
+    /// LATER reference's namespace will land in scope this way, so it would
+    /// wrongly stay bare and become ambiguous. Pre-scanning the whole file's
+    /// type references up front (this method) makes the ambiguity check see
+    /// the same namespace set the file will actually end up importing,
+    /// regardless of visit order.
+    /// </para>
+    /// Cached per mapper instance: one mapper translates one file, so the
+    /// import set never changes across calls.
     /// </summary>
     private HashSet<string> GetImportedNamespaceNames(TranslationContext context)
     {
@@ -628,12 +663,41 @@ public sealed class CSharpTypeMapper
                     continue;
                 }
 
-                names.Add(directive.Name.ToString());
+                names.Add(StripGlobalPrefix(directive.Name.ToString()));
             }
 
             foreach (BaseNamespaceDeclarationSyntax nsDecl in root.DescendantNodes().OfType<BaseNamespaceDeclarationSyntax>())
             {
-                names.Add(nsDecl.Name.ToString());
+                names.Add(StripGlobalPrefix(nsDecl.Name.ToString()));
+            }
+
+            // Pre-scan every name/member-access node for a bound top-level-type
+            // symbol, so a namespace reached only via full qualification (no
+            // `using`) is already visible to the FIRST reference processed,
+            // not just references processed after the synth-import-triggering
+            // one (see the ordering note above).
+            foreach (SyntaxNode node in root.DescendantNodes())
+            {
+                if (node is not (NameSyntax or MemberAccessExpressionSyntax))
+                {
+                    continue;
+                }
+
+                if (context.SemanticModel.GetSymbolInfo(node).Symbol is not INamedTypeSymbol candidate)
+                {
+                    continue;
+                }
+
+                INamedTypeSymbol outermost = candidate;
+                while (outermost.ContainingType != null)
+                {
+                    outermost = outermost.ContainingType;
+                }
+
+                if (outermost.ContainingNamespace is { IsGlobalNamespace: false } ns)
+                {
+                    names.Add(ns.ToDisplayString());
+                }
             }
         }
 
@@ -644,7 +708,7 @@ public sealed class CSharpTypeMapper
     private static INamespaceSymbol ResolveNamespace(Compilation compilation, string dottedName)
     {
         INamespaceSymbol current = compilation.GlobalNamespace;
-        foreach (string part in dottedName.Split('.'))
+        foreach (string part in StripGlobalPrefix(dottedName).Split('.'))
         {
             current = current.GetNamespaceMembers().FirstOrDefault(n => n.Name == part);
             if (current is null)
