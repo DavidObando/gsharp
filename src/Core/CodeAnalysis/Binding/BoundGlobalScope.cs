@@ -302,6 +302,17 @@ public sealed class BoundGlobalScope
     public ImmutableArray<BoundAttribute> AssemblyAttributes { get; internal set; } = ImmutableArray<BoundAttribute>.Empty;
 
     /// <summary>
+    /// Gets or sets every anonymous-class type (issue #2224) synthesized
+    /// while binding this compilation's top-level statements and (once
+    /// <c>Binder.BindProgram</c> runs) its function/method bodies.
+    /// <c>Binder.BindProgram</c> unions this set into the emitted
+    /// <c>BoundProgram.Structs</c> so every synthesized shape gets a real
+    /// TypeDef, regardless of which phase's bind pass first encountered its
+    /// shape.
+    /// </summary>
+    internal ImmutableArray<StructSymbol> AnonymousTypes { get; set; } = ImmutableArray<StructSymbol>.Empty;
+
+    /// <summary>
     /// Returns every import visible across the whole <see cref="Previous"/>
     /// chain, oldest submission first (issue #2101). This is the cumulative
     /// view that <see cref="Imports"/> itself used to provide directly —

@@ -1035,6 +1035,15 @@ public sealed class Binder
             ? boundAssemblyAttributes
             : previous.AssemblyAttributes.AddRange(boundAssemblyAttributes);
 
+        // Issue #2224: anonymous-class literals (`interface { ... }`) bound
+        // anywhere during this pass — top-level statements included —
+        // synthesize their backing StructSymbol into binder.scope's shared
+        // AnonymousTypeCache (see BoundScope.GetAnonymousTypeCache). Snapshot
+        // it here so BindProgram can union it into BoundProgram.Structs even
+        // though function/method bodies (bound later, in BindProgram) use a
+        // freshly-derived scope chain with its own cache instance.
+        result.AnonymousTypes = binder.scope.GetAnonymousTypeCache().Symbols.ToImmutableArray();
+
         // Issue #1929/#1953: collect producer-declared friend assemblies
         // (`@assembly:InternalsVisibleTo("...")`) so the emitter can write
         // real InternalsVisibleToAttribute rows. Diagnostics for malformed
@@ -1052,6 +1061,7 @@ public sealed class Binder
                 PreprocessorSymbols = result.PreprocessorSymbols,
                 FriendAssemblies = result.FriendAssemblies,
                 AssemblyAttributes = result.AssemblyAttributes,
+                AnonymousTypes = result.AnonymousTypes,
             };
         }
 
@@ -1559,7 +1569,21 @@ public sealed class Binder
             .Where(g => !g.Name.StartsWith("<>"))
             .ToImmutableArray();
 
-        return new BoundProgram(globalScope.Package, globalScope.Packages, diagnostics.ToImmutable(), functionBodies.ToImmutable(), globalScope.EntryPoint, statement, globalScope.Structs, globalScope.Interfaces, globalScope.Enums, globals, globalScope.Delegates)
+        // Issue #2224: union the anonymous-class types synthesized while
+        // binding top-level statements (globalScope.AnonymousTypes) with
+        // those synthesized while binding function/method bodies just above
+        // (parentScope's own AnonymousTypeCache — a fresh scope chain
+        // derived from globalScope, so it has its own cache instance) into
+        // BoundProgram.Structs. Everything downstream (TypeDef planning,
+        // field rows, the data-class Equals/GetHashCode/ToString/ctor
+        // synthesizer) drives entirely off BoundProgram.Structs, so no
+        // further emitter changes are needed to give each synthesized shape
+        // a real CLR type.
+        var allStructs = globalScope.Structs
+            .AddRange(globalScope.AnonymousTypes)
+            .AddRange(parentScope.GetAnonymousTypeCache().Symbols);
+
+        return new BoundProgram(globalScope.Package, globalScope.Packages, diagnostics.ToImmutable(), functionBodies.ToImmutable(), globalScope.EntryPoint, statement, allStructs, globalScope.Interfaces, globalScope.Enums, globals, globalScope.Delegates)
         {
             Imports = globalScope.GetCumulativeImports(),
             FriendAssemblies = globalScope.FriendAssemblies,

@@ -327,6 +327,8 @@ internal sealed partial class ExpressionBinder
                 return BindCompoundIndexAssignmentExpression((CompoundIndexAssignmentExpressionSyntax)syntax);
             case SyntaxKind.StructLiteralExpression:
                 return BindStructLiteralExpression((StructLiteralExpressionSyntax)syntax);
+            case SyntaxKind.AnonymousClassExpression:
+                return BindAnonymousClassExpression((AnonymousClassExpressionSyntax)syntax);
             case SyntaxKind.TupleLiteralExpression:
                 return BindTupleLiteralExpression((TupleLiteralExpressionSyntax)syntax);
             case SyntaxKind.FunctionLiteralExpression:

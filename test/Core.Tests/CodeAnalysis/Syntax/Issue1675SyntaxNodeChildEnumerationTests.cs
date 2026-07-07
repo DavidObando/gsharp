@@ -79,6 +79,9 @@ public class Issue1675SyntaxNodeChildEnumerationTests
         // annotation use-site targets
         "package p\nimport System\n@field:Obsolete\nvar counter = 0\nfunc F(@param:NotNull x int32) {\n}\n",
 
+        // issue #2224: interface { ... } anonymous-class-literal expression
+        "package p\nfunc F() {\n  var x = interface { Name = \"Foo\", Age = 42 }\n}\n",
+
         // type alias
         "package p\ntype MyInt = int32\n",
 

@@ -11,6 +11,8 @@ AmpersandHatToken
 AmpersandToken
 Annotation
 AnnotationTarget
+AnonymousClassExpression
+AnonymousClassMemberInitializer
 ArrayCreationExpression
 AsExpression
 AsKeyword

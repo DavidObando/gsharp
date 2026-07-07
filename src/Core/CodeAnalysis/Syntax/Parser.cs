@@ -7486,6 +7486,15 @@ public class Parser
                 // unsafe code via the parenthesised form `(x) -> body`.
                 return ParseSingleIdentifierLambdaExpression();
 
+            case SyntaxKind.InterfaceKeyword when Peek(1).Kind == SyntaxKind.OpenBraceToken:
+                // Issue #2224: `interface { Name = value, ... }` is an
+                // anonymous-class literal expression. Unambiguous: the
+                // type-declaration use of `interface` always requires an
+                // identifier immediately after the keyword (`interface Name
+                // { ... }`), so `interface` directly followed by `{` can only
+                // be this expression-position literal.
+                return ParsePostfixChain(ParseAnonymousClassExpression());
+
             case SyntaxKind.SwitchKeyword:
                 return ParsePostfixChain(ParseSwitchExpression());
 
@@ -8296,6 +8305,45 @@ public class Parser
         }
 
         return new SeparatedSyntaxList<MapEntrySyntax>(nodesAndSeparators.ToImmutable());
+    }
+
+    private ExpressionSyntax ParseAnonymousClassExpression()
+    {
+        // Issue #2224: `interface { Name = value, ... }` anonymous-class
+        // literal. Mirrors ParseMapCreationExpression's shape but with
+        // `Name = value` members (matching C#'s `new { Name = value }`)
+        // instead of `key: value` map entries.
+        var interfaceKeyword = MatchToken(SyntaxKind.InterfaceKeyword);
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+        var members = ParseAnonymousClassMembers();
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        return new AnonymousClassExpressionSyntax(syntaxTree, interfaceKeyword, openBrace, members, closeBrace);
+    }
+
+    private SeparatedSyntaxList<AnonymousClassMemberInitializerSyntax> ParseAnonymousClassMembers()
+    {
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        var parseNext = Current.Kind != SyntaxKind.CloseBraceToken;
+        while (parseNext &&
+               Current.Kind != SyntaxKind.CloseBraceToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var identifier = MatchToken(SyntaxKind.IdentifierToken);
+            var equals = MatchToken(SyntaxKind.EqualsToken);
+            var value = ParseExpression();
+            nodesAndSeparators.Add(new AnonymousClassMemberInitializerSyntax(syntaxTree, identifier, equals, value));
+
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            }
+            else
+            {
+                parseNext = false;
+            }
+        }
+
+        return new SeparatedSyntaxList<AnonymousClassMemberInitializerSyntax>(nodesAndSeparators.ToImmutable());
     }
 
     private ExpressionSyntax ParseArrayCreationExpression()

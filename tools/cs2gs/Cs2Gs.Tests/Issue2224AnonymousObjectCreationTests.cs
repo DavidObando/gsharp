@@ -1,4 +1,4 @@
-// <copyright file="Issue1934AnonymousObjectCreationTests.cs" company="GSharp">
+// <copyright file="Issue2224AnonymousObjectCreationTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -12,19 +12,19 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Regression tests for issue #1934: a C# anonymous object creation
-/// (<c>new { A = 1 }</c>) previously had no G# mapping and hit the
-/// "no canonical G# form yet" placeholder. G# has no anonymous types, but an
-/// anonymous object's shape is exactly its ordered member list, which is the
-/// same shape a G# tuple has (ADR-0115 §B.4, already used for C# named
-/// tuples) — so the anonymous object lowers to a positional tuple literal,
-/// and a named member access on it lowers to the matching positional
-/// <c>.ItemN</c>.
+/// Regression tests for issue #2224: a C# anonymous object creation
+/// (<c>new { A = 1 }</c>) previously lowered to a positional G# tuple literal
+/// (issue #1934), which dropped member names (<c>x.A</c> rewritten to
+/// <c>x.Item1</c>) and — critically for EF Core migrations — made the value
+/// illegal inside expression-tree lambdas (GS0473, tuple literals are
+/// restricted there). It now lowers to a first-class G# anonymous-class
+/// literal, <c>interface { A = 1 }</c>, which preserves member names and is
+/// legal inside expression trees, exactly like C#'s <c>new { ... }</c> is.
 /// </summary>
-public class Issue1934AnonymousObjectCreationTests
+public class Issue2224AnonymousObjectCreationTests
 {
     [Fact]
-    public void AnonymousObjectCreation_SingleMember_LowersToTupleLiteral()
+    public void AnonymousObjectCreation_SingleMember_LowersToAnonymousClassLiteral()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -38,11 +38,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("return (1)", printed);
+        Assert.Contains("return interface { A = 1 }", printed);
     }
 
     [Fact]
-    public void AnonymousObjectCreation_MultipleMembers_LowersToTupleLiteralAndPositionalAccess()
+    public void AnonymousObjectCreation_MultipleMembers_LowersToAnonymousClassLiteralAndPreservesMemberNames()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -58,9 +58,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("(1, \"two\")", printed);
-        Assert.Contains("pair.Item1", printed);
-        Assert.Contains("pair.Item2", printed);
+        Assert.Contains("interface { A = 1, B = \"two\" }", printed);
+        Assert.Contains("pair.A", printed);
+        Assert.Contains("pair.B", printed);
+        Assert.DoesNotContain("Item1", printed);
+        Assert.DoesNotContain("Item2", printed);
     }
 
     [Fact]
@@ -69,9 +71,10 @@ namespace Demo
         // Regression test: under `#nullable enable`, an anonymous-typed local
         // is a flow-proven-non-null C# reference type, which the general
         // member-access path would wrap in a G# `!!` non-null assertion. The
-        // receiver lowers to a G# tuple literal (a value type that can never
-        // be null), so `!!` on it is both meaningless and hits a gsc
-        // IL-emission gap (StackUnexpected) for value-type receivers.
+        // receiver lowers to a G# anonymous-class literal (a synthesized
+        // value type that can never be null), so `!!` on it is both
+        // meaningless and hits a gsc IL-emission gap (StackUnexpected) for
+        // value-type receivers.
         string printed = TranslateUnit(@"
 #nullable enable
 namespace Demo
@@ -87,10 +90,38 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("(1, \"two\")", printed);
-        Assert.Contains("pair.Item1", printed);
-        Assert.Contains("pair.Item2", printed);
+        Assert.Contains("interface { A = 1, B = \"two\" }", printed);
+        Assert.Contains("pair.A", printed);
+        Assert.Contains("pair.B", printed);
         Assert.DoesNotContain("pair!!", printed);
+    }
+
+    [Fact]
+    public void AnonymousObjectCreation_MemberNameInference_UsesSourceIdentifier()
+    {
+        // C# infers the projected member name from a bare identifier or the
+        // last segment of a member access when no `Name =` is given
+        // (`new { x.Id }` names the member `Id`) — the same rule the anonymous
+        // class literal's member name must follow.
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public sealed class Row
+    {
+        public int Id;
+    }
+
+    public sealed class C
+    {
+        public object M(Row row)
+        {
+            int id = row.Id;
+            return new { id, row.Id };
+        }
+    }
+}");
+
+        Assert.Contains("interface { id = id, Id = row.Id }", printed);
     }
 
     private static string TranslateUnit(string source)

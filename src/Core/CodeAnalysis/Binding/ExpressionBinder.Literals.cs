@@ -726,6 +726,66 @@ internal sealed partial class ExpressionBinder
         return new BoundBinaryExpression(null, left, op, right);
     }
 
+    /// <summary>
+    /// Binds an anonymous-class literal <c>interface { Name = "Foo", ... }</c>
+    /// (issue #2224). Unlike <see cref="BindStructLiteralExpression(StructLiteralExpressionSyntax)"/>,
+    /// there is no named type to resolve: each distinct ordered
+    /// (member-name, member-type) shape gets its own compiler-synthesized
+    /// backing <see cref="StructSymbol"/>, cached per compile pass (see
+    /// <see cref="AnonymousTypeCache"/>) so two literals with the same shape
+    /// share one synthesized type — mirroring how Roslyn unifies
+    /// <c>new { ... }</c> anonymous types within one C# compilation.
+    /// </summary>
+    /// <param name="syntax">The anonymous-class-literal syntax.</param>
+    private BoundExpression BindAnonymousClassExpression(AnonymousClassExpressionSyntax syntax)
+    {
+        var seenNames = new HashSet<string>();
+        var memberNames = ImmutableArray.CreateBuilder<string>(syntax.Members.Count);
+        var memberValues = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Members.Count);
+        var hadError = false;
+        foreach (var member in syntax.Members)
+        {
+            var name = member.Identifier.Text;
+            if (!seenNames.Add(name))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(member.Identifier.Location, name);
+                hadError = true;
+                continue;
+            }
+
+            var value = BindExpression(member.Value);
+            if (value is BoundErrorExpression)
+            {
+                hadError = true;
+            }
+
+            memberNames.Add(name);
+            memberValues.Add(value);
+        }
+
+        if (hadError || memberNames.Count == 0)
+        {
+            return new BoundErrorExpression(syntax);
+        }
+
+        var shape = new (string Name, TypeSymbol Type)[memberNames.Count];
+        for (var i = 0; i < memberNames.Count; i++)
+        {
+            shape[i] = (memberNames[i], memberValues[i].Type);
+        }
+
+        var packageName = this.function?.Package?.Name ?? string.Empty;
+        var anonymousType = scope.GetAnonymousTypeCache().GetOrCreate(shape, packageName);
+
+        var inits = ImmutableArray.CreateBuilder<BoundFieldInitializer>(anonymousType.Fields.Length);
+        for (var i = 0; i < anonymousType.Fields.Length; i++)
+        {
+            inits.Add(new BoundFieldInitializer(anonymousType.Fields[i], memberValues[i]));
+        }
+
+        return new BoundStructLiteralExpression(syntax, anonymousType, inits.MoveToImmutable());
+    }
+
     private BoundExpression BindStructLiteralExpression(StructLiteralExpressionSyntax syntax)
         => BindStructLiteralExpression(syntax, resolvedDefinition: null);
 

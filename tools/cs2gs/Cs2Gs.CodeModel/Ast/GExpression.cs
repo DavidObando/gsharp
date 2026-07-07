@@ -299,6 +299,29 @@ public sealed class ObjectCreationInitializerExpression : GExpression
 }
 
 /// <summary>
+/// An anonymous-class literal <c>interface { Name = value, ... }</c>
+/// (issue #2224). Translates a C# anonymous object creation
+/// <c>new { Name = value, ... }</c> — gsc synthesizes a real backing type per
+/// distinct member shape (structural typing, like Roslyn's anonymous types),
+/// so, unlike a positional tuple, named-member access (<c>x.Name</c>) is
+/// preserved and the literal is legal inside expression-tree lambdas.
+/// </summary>
+public sealed class AnonymousClassLiteralExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="AnonymousClassLiteralExpression"/> class.
+    /// </summary>
+    /// <param name="members">The member name/value initializers, in declaration order.</param>
+    public AnonymousClassLiteralExpression(IReadOnlyList<FieldInitializer> members)
+    {
+        Members = members ?? new List<FieldInitializer>();
+    }
+
+    /// <summary>Gets the member name/value initializers, in declaration order.</summary>
+    public IReadOnlyList<FieldInitializer> Members { get; }
+}
+
+/// <summary>
 /// A single element of a <see cref="CollectionInitializerExpression"/>:
 /// a bare element, a <c>key: value</c> pair, or an <c>[key] = value</c>
 /// indexer entry (ADR-0117).

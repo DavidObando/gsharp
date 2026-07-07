@@ -332,6 +332,23 @@ internal static class ExpressionTreeRestrictionValidator
                 diagnostics.ReportExpressionTreeUnsupported(LocationOf(expression.Syntax), "a method group");
                 return;
 
+            case BoundStructLiteralExpression structLiteral:
+                // Issue #2224: anonymous-class literals (`interface { ... }`)
+                // are bound as BoundStructLiteralExpression (reusing the
+                // existing struct-literal bound node), and — unlike tuple
+                // literals — are legal inside expression-tree lambdas, same
+                // as C#'s `new { ... }` anonymous objects. General
+                // user-declared struct literals are allowed here too, for
+                // the same reason object initializers are (see
+                // TryValidateObjectInitializer below): only the member
+                // value expressions need validating.
+                foreach (var initializer in structLiteral.Initializers)
+                {
+                    ValidateExpression(initializer.Value, diagnostics);
+                }
+
+                return;
+
             case BoundBlockExpression block:
                 if (TryValidateObjectInitializer(block, diagnostics))
                 {

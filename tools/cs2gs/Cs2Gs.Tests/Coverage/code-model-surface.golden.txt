@@ -3,6 +3,7 @@
 # type, then replace this golden with the generated `.actual` file.
 
 [GExpression]
+AnonymousClassLiteralExpression
 ArrayAllocationExpression
 ArrayLiteralExpression
 AwaitExpression

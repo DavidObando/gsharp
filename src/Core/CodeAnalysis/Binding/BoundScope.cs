@@ -25,6 +25,15 @@ public sealed class BoundScope
     private ImmutableArray<string>.Builder typeAliasKeys;
     private ImmutableArray<FunctionSymbol>.Builder extensionFunctions;
 
+    // Issue #2224: lazily created only on the root scope of whatever chain
+    // this scope belongs to. Every Binder in a single BindGlobalScope/
+    // BindProgram pass shares the same root-scope chain (it's threaded in as
+    // "parent"/"parentScope"), so anonymous-class literals bound anywhere in
+    // that pass — top-level statements, function bodies, method bodies,
+    // lambdas — unify against one shape cache, mirroring Roslyn's
+    // per-compilation anonymous-type cache.
+    private AnonymousTypeCache anonymousTypeCache;
+
     // Issue #1680: name-keyed index over extensionFunctions. Extension lookup is a
     // per-call-site hot path run for every member call that doesn't resolve as an
     // instance member, so a flat per-scope list forced an O(callsites x extensions)
@@ -1031,6 +1040,15 @@ public sealed class BoundScope
     /// <returns>The named delegate types in declaration order.</returns>
     public ImmutableArray<DelegateTypeSymbol> GetDeclaredDelegates()
         => GetDeclaredTypeSymbols<DelegateTypeSymbol>();
+
+    /// <summary>
+    /// Gets the per-compile-pass anonymous-class-literal type cache (issue
+    /// #2224), walking to the root of this scope's chain so every scope in
+    /// one bind pass shares the same cache instance.
+    /// </summary>
+    /// <returns>The shared <see cref="AnonymousTypeCache"/> for this scope's chain.</returns>
+    internal AnonymousTypeCache GetAnonymousTypeCache()
+        => Parent != null ? Parent.GetAnonymousTypeCache() : anonymousTypeCache ??= new AnonymousTypeCache();
 
     /// <summary>
     /// Adds a brand-new type-alias key, not previously visible anywhere in the
