@@ -529,7 +529,12 @@ public sealed class CSharpToGSharpTranslator
                 continue;
             }
 
-            string name = namespaceOrType.ToString();
+            // Issue #2222: strip a `global::` alias-qualifier prefix before
+            // recording the import name — `using global::Foo.Bar;` must
+            // become `import Foo.Bar`, not the unparseable `import
+            // global::Foo.Bar` (G#'s import syntax has no alias-qualifier
+            // form).
+            string name = CSharpTypeMapper.StripGlobalPrefix(namespaceOrType.ToString());
 
             if (!directive.StaticKeyword.IsKind(SyntaxKind.None))
             {

@@ -10,6 +10,8 @@ using System.Runtime.InteropServices;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.Translator.Coverage;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Cs2Gs.Translator;
 
@@ -58,6 +60,16 @@ public sealed class CSharpTypeMapper
     /// type's simple name is ambiguous and must be emitted in qualified form.
     /// </summary>
     private Dictionary<string, int> sourceSimpleNameCounts;
+
+    /// <summary>
+    /// Issue #2222: the current file's imported namespace names (`using`
+    /// directives plus its own declared namespace), cached lazily since every
+    /// top-level-type reference in a file shares the same import set. Used to
+    /// detect a same-simple-name collision reachable via THIS file's imports,
+    /// including one that lives in a referenced assembly (a translated sibling
+    /// project) rather than in source.
+    /// </summary>
+    private HashSet<string> importedNamespaceNames;
 
     /// <summary>
     /// Gets every namespace shortened into a bare/qualified-nested type name by
@@ -208,6 +220,21 @@ public sealed class CSharpTypeMapper
     internal static bool IsSystemIndexOrRange(ITypeSymbol type) =>
         type is INamedTypeSymbol { ContainingNamespace.Name: "System", ContainingNamespace.ContainingNamespace.IsGlobalNamespace: true } named
             && (named.Name == "Index" || named.Name == "Range");
+
+    /// <summary>
+    /// Issue #2222: strips a leading `global::` alias-qualifier from a
+    /// dotted namespace/type name (e.g. <c>using global::Foo.Bar;</c> yields
+    /// <c>directive.Name.ToString()</c> == <c>"global::Foo.Bar"</c>).
+    /// Splitting that text by <c>.</c> without stripping the prefix first
+    /// silently fails to match any real namespace segment. Shared with
+    /// <see cref="CSharpToGSharpTranslator.TranslateImports"/> so the
+    /// synthesized `import` list and the homonym scan agree on the same
+    /// name.
+    /// </summary>
+    /// <param name="name">The dotted namespace/type name text, possibly `global::`-prefixed.</param>
+    /// <returns><paramref name="name"/> with any leading `global::` removed.</returns>
+    internal static string StripGlobalPrefix(string name) =>
+        name.StartsWith("global::", System.StringComparison.Ordinal) ? name.Substring("global::".Length) : name;
 
     /// <summary>
     /// Issue #1906: maps a C# function-pointer type (<c>delegate*&lt;...&gt;</c>)
@@ -478,7 +505,36 @@ public sealed class CSharpTypeMapper
         if (named.ContainingType == null)
         {
             this.TrackShortenedNamespace(named);
-            return CSharpToGSharpTranslator.SanitizeIdentifier(named.Name);
+            string simpleName = CSharpToGSharpTranslator.SanitizeIdentifier(named.Name);
+
+            // Issue #2222: a bare top-level type name is ambiguous in G#'s flat
+            // import scope when another top-level type of the SAME simple name
+            // is reachable through this file's imports (a source homonym
+            // anywhere in the compilation, per #1174's conservative census, OR a
+            // distinct type of the same name sitting in one of the file's
+            // actually-imported namespaces — including a referenced assembly,
+            // i.e. a translated sibling project surfaced as a metadata
+            // reference). Qualify with the namespace in that case so gsc binds
+            // the reference to the right type instead of whichever homonym
+            // happens to resolve first.
+            //
+            // The imported-namespace scan is gated on `named` itself being
+            // SOURCE-declared: a pure-BCL/metadata reference (e.g. `List<T>`)
+            // must never trip it — the runtime ships the same forwarded type
+            // across several referenced assemblies (facade + implementation),
+            // which otherwise looks like a spurious homonym and would qualify
+            // every common framework type. Only a type this project actually
+            // AUTHORS can be the accidental collision the issue describes.
+            bool ambiguous = this.HasSourceHomonym(named, context)
+                || (named.Locations.Any(l => l.IsInSource) && this.HasImportedNamespaceHomonym(named, context));
+            if (!ambiguous)
+            {
+                return simpleName;
+            }
+
+            return named.ContainingNamespace is { IsGlobalNamespace: false } containingNs
+                ? $"{containingNs.ToDisplayString()}.{simpleName}"
+                : simpleName;
         }
 
         // A source nested type only needs qualifying when its simple name is
@@ -526,6 +582,147 @@ public sealed class CSharpTypeMapper
     {
         this.sourceSimpleNameCounts ??= BuildSourceSimpleNameCounts(context.Compilation);
         return this.sourceSimpleNameCounts.TryGetValue(named.Name, out var count) && count > 1;
+    }
+
+    /// <summary>
+    /// Issue #2222: whether a DIFFERENT top-level type sharing <paramref
+    /// name="named"/>'s simple name is reachable through one of the current
+    /// file's imported namespaces (its `using` directives plus its own
+    /// declared namespace). Unlike <see cref="HasSourceHomonym"/>'s
+    /// compilation-wide source-only census, this walks only the namespaces
+    /// this file actually imports — cheap even when a referenced assembly
+    /// (e.g. a translated sibling project) is huge — and covers a homonym
+    /// declared in metadata rather than source.
+    /// </summary>
+    private bool HasImportedNamespaceHomonym(INamedTypeSymbol named, TranslationContext context)
+    {
+        foreach (string namespaceName in this.GetImportedNamespaceNames(context))
+        {
+            INamespaceSymbol candidateNamespace = ResolveNamespace(context.Compilation, namespaceName);
+            if (candidateNamespace is null)
+            {
+                continue;
+            }
+
+            // `named` may be a CONSTRUCTED generic (e.g. `Box<Label>`), while
+            // `GetTypeMembers` always yields the unbound generic definition
+            // (`Box<T>`). Comparing them directly makes every reference to a
+            // constructed generic type look like a homonym of itself — compare
+            // original definitions so `Box<Label>` correctly matches `Box<T>`.
+            foreach (INamedTypeSymbol candidate in candidateNamespace.GetTypeMembers(named.Name))
+            {
+                if (!SymbolEqualityComparer.Default.Equals(candidate.OriginalDefinition, named.OriginalDefinition))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #2222: the namespace names in scope for the file backing <see
+    /// cref="TranslationContext.SemanticModel"/> — every `using` directive
+    /// (skipping aliased/`using static` ones, which do not bring a type's bare
+    /// simple name into scope the same way), the file's own declared
+    /// namespace, AND the namespace of every top-level type referenced
+    /// anywhere in the file, even one reached only via full qualification
+    /// with no matching `using`.
+    /// <para>
+    /// That last part fixes an ordering blindspot: <see
+    /// cref="TrackShortenedNamespace"/> records EVERY top-level-type
+    /// reference's namespace (not just qualified ones), and
+    /// <c>CSharpToGSharpTranslator.Translate</c> synthesizes a matching
+    /// `import` for any such namespace not already covered by an explicit
+    /// `using`, once the WHOLE file has been visited. So a namespace reached
+    /// only via full qualification (e.g. `new Oahu.Audible.Json.ChapterInfo()`
+    /// with no `using Oahu.Audible.Json;`) still ends up in scope in the final
+    /// G# output. But references are qualified in a single forward pass — an
+    /// EARLIER reference (e.g. bare `book.ChapterInfo`) cannot see that a
+    /// LATER reference's namespace will land in scope this way, so it would
+    /// wrongly stay bare and become ambiguous. Pre-scanning the whole file's
+    /// type references up front (this method) makes the ambiguity check see
+    /// the same namespace set the file will actually end up importing,
+    /// regardless of visit order.
+    /// </para>
+    /// Cached per mapper instance: one mapper translates one file, so the
+    /// import set never changes across calls.
+    /// </summary>
+    private HashSet<string> GetImportedNamespaceNames(TranslationContext context)
+    {
+        if (this.importedNamespaceNames != null)
+        {
+            return this.importedNamespaceNames;
+        }
+
+        var names = new HashSet<string>();
+        if (context.SemanticModel.SyntaxTree.GetRoot() is CompilationUnitSyntax root)
+        {
+            IEnumerable<UsingDirectiveSyntax> usings = root.Usings
+                .Concat(root.DescendantNodes().OfType<BaseNamespaceDeclarationSyntax>().SelectMany(n => n.Usings));
+            foreach (UsingDirectiveSyntax directive in usings)
+            {
+                if (directive.Alias != null || !directive.StaticKeyword.IsKind(SyntaxKind.None) || directive.Name is null)
+                {
+                    continue;
+                }
+
+                names.Add(StripGlobalPrefix(directive.Name.ToString()));
+            }
+
+            foreach (BaseNamespaceDeclarationSyntax nsDecl in root.DescendantNodes().OfType<BaseNamespaceDeclarationSyntax>())
+            {
+                names.Add(StripGlobalPrefix(nsDecl.Name.ToString()));
+            }
+
+            // Pre-scan every name/member-access node for a bound top-level-type
+            // symbol, so a namespace reached only via full qualification (no
+            // `using`) is already visible to the FIRST reference processed,
+            // not just references processed after the synth-import-triggering
+            // one (see the ordering note above).
+            foreach (SyntaxNode node in root.DescendantNodes())
+            {
+                if (node is not (NameSyntax or MemberAccessExpressionSyntax))
+                {
+                    continue;
+                }
+
+                if (context.SemanticModel.GetSymbolInfo(node).Symbol is not INamedTypeSymbol candidate)
+                {
+                    continue;
+                }
+
+                INamedTypeSymbol outermost = candidate;
+                while (outermost.ContainingType != null)
+                {
+                    outermost = outermost.ContainingType;
+                }
+
+                if (outermost.ContainingNamespace is { IsGlobalNamespace: false } ns)
+                {
+                    names.Add(ns.ToDisplayString());
+                }
+            }
+        }
+
+        this.importedNamespaceNames = names;
+        return names;
+    }
+
+    private static INamespaceSymbol ResolveNamespace(Compilation compilation, string dottedName)
+    {
+        INamespaceSymbol current = compilation.GlobalNamespace;
+        foreach (string part in StripGlobalPrefix(dottedName).Split('.'))
+        {
+            current = current.GetNamespaceMembers().FirstOrDefault(n => n.Name == part);
+            if (current is null)
+            {
+                return null;
+            }
+        }
+
+        return current;
     }
 
     private static Dictionary<string, int> BuildSourceSimpleNameCounts(Compilation compilation)
