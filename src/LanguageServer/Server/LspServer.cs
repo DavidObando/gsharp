@@ -354,6 +354,14 @@ public sealed class LspServer
                 {
                     this.HandleProjectFileChange(filePath, change.Type);
                 }
+                else if (ProjectDiscovery.IsGeneratedSourcePath(filePath))
+                {
+                    // ADR-0145 §G: generator output (obj/.../gsgen/*.g.gs) is real source
+                    // for resolution but lives under obj/. It ends with ".gs", so it must be
+                    // checked BEFORE the ".gs" branch below, and routed to a dedicated handler
+                    // that reloads the regenerated part from disk.
+                    this.HandleGeneratedSourceFileChange(filePath, change.Type);
+                }
                 else if (filePath.EndsWith(".gs", StringComparison.OrdinalIgnoreCase))
                 {
                     this.HandleSourceFileChange(filePath, change.Type);
@@ -1510,6 +1518,50 @@ public sealed class LspServer
                 var project = this.FindOwningProject(filePath);
                 if (project != null)
                 {
+                    project.AddFileFromDisk(filePath);
+                    this.workspaceState.RegisterFile(filePath, project);
+                }
+
+                break;
+
+            case FileChangeType.Deleted:
+                var owning = this.workspaceState.GetProjectForFile(filePath);
+                if (owning != null)
+                {
+                    owning.RemoveFile(filePath);
+                    this.workspaceState.UnregisterFile(filePath);
+                }
+
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Keeps a generator-produced G# source part (ADR-0145 §G) in sync with the owning
+    /// project when a build creates, rewrites, or removes it. The SDK writes these under
+    /// <c>$(IntermediateOutputPath)gsgen/*.g.gs</c>;
+    /// <see cref="ProjectDiscovery.DiscoverGeneratedSourceFiles"/> seeds them at project
+    /// discovery, and this handler refreshes them afterwards so generated members become
+    /// visible in the editor once a build has run. Unlike an open <c>.gs</c> document, a
+    /// generated part is never edited in the editor, so a <see cref="FileChangeType.Changed"/>
+    /// event re-reads the regenerated content from disk (which invalidates the compilation
+    /// and refreshes the affected project's source set). The language server never runs the
+    /// generator itself.
+    /// </summary>
+    // TODO(ADR-0145 §G): live in-editor regeneration (re-running gsgen as an out-of-proc
+    // sidecar on each keystroke) is a separate increment; this slice only surfaces generated
+    // members after a build.
+    private void HandleGeneratedSourceFileChange(string filePath, FileChangeType changeType)
+    {
+        switch (changeType)
+        {
+            case FileChangeType.Created:
+            case FileChangeType.Changed:
+                var project = this.FindOwningProject(filePath);
+                if (project != null)
+                {
+                    // AddFileFromDisk re-reads and re-parses, replacing any prior tree and
+                    // invalidating the compilation so regenerated members take effect.
                     project.AddFileFromDisk(filePath);
                     this.workspaceState.RegisterFile(filePath, project);
                 }

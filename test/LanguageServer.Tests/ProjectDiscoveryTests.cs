@@ -306,6 +306,63 @@ public class ProjectDiscoveryTests
         }
     }
 
+    [Fact]
+    public void DiscoverProject_IncludesGeneratedGsgenParts_ExcludesOtherObjFiles()
+    {
+        // ADR-0145 §G: generator output lands under obj/.../gsgen/*.g.gs and is injected
+        // into @(Compile). The LS must surface those parts (so generated members resolve)
+        // while still excluding every other obj/ artifact.
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var projPath = Path.Combine(tempDir, "Sample.gsproj");
+            File.WriteAllText(projPath, "<Project Sdk=\"Gsharp.NET.Sdk\"></Project>");
+
+            // A normal user source file at the project root.
+            var userSource = Path.Combine(tempDir, "Program.gs");
+            File.WriteAllText(userSource, "let x = 1\n");
+
+            var gsgenDir = Path.Combine(tempDir, "obj", "Debug", "net10.0", "gsgen");
+            Directory.CreateDirectory(gsgenDir);
+            var generated = Path.Combine(gsgenDir, "Foo.g.gs");
+            File.WriteAllText(generated, "partial class Foo {}\n");
+
+            // Non-gsgen obj artifacts that must stay excluded: a C# file, a generated C#
+            // file, and a plain .gs file that is NOT under a gsgen segment.
+            var objDir = Path.Combine(tempDir, "obj", "Debug", "net10.0");
+            File.WriteAllText(Path.Combine(objDir, "Foo.cs"), "class Foo {}\n");
+            File.WriteAllText(Path.Combine(objDir, "other.g.cs"), "class Other {}\n");
+            File.WriteAllText(Path.Combine(objDir, "Stray.gs"), "let y = 2\n");
+
+            var project = ProjectDiscovery.DiscoverProject(projPath);
+
+            Assert.NotNull(project);
+            Assert.Contains(project.SourceFiles, f => string.Equals(f, Path.GetFullPath(userSource), StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(project.SourceFiles, f => string.Equals(f, Path.GetFullPath(generated), StringComparison.OrdinalIgnoreCase));
+
+            // Nothing else from obj/ is included.
+            Assert.DoesNotContain(project.SourceFiles, f => f.EndsWith("Foo.cs", StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(project.SourceFiles, f => f.EndsWith("other.g.cs", StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(project.SourceFiles, f => f.EndsWith("Stray.gs", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); }
+            catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void IsGeneratedSourcePath_MatchesOnlyGsgenGsParts()
+    {
+        Assert.True(ProjectDiscovery.IsGeneratedSourcePath(Path.Combine("obj", "Debug", "net10.0", "gsgen", "Foo.g.gs")));
+        Assert.False(ProjectDiscovery.IsGeneratedSourcePath(Path.Combine("obj", "Debug", "net10.0", "Foo.g.gs")));
+        Assert.False(ProjectDiscovery.IsGeneratedSourcePath(Path.Combine("obj", "Debug", "net10.0", "gsgen", "Foo.g.cs")));
+        Assert.False(ProjectDiscovery.IsGeneratedSourcePath(Path.Combine("src", "gsgen", "Program.gs")));
+        Assert.False(ProjectDiscovery.IsGeneratedSourcePath(null));
+    }
+
     private static string FindSamplesDir()
     {
         var dir = Directory.GetCurrentDirectory();
