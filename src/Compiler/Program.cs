@@ -562,6 +562,18 @@ public class Program
             rspLines.Add($"/analyzer:\"{a}\"");
         }
 
+        // Issue #2223: forward non-source generator inputs (.axaml) and project
+        // options (build_property.*) so file/options-driven generators run.
+        foreach (var af in parsed.AdditionalFiles)
+        {
+            rspLines.Add($"/additionalfile:\"{af}\"");
+        }
+
+        foreach (var go in parsed.GlobalOptions)
+        {
+            rspLines.Add($"/globaloption:\"{go}\"");
+        }
+
         rspLines.Add($"/out:\"{outDir}\"");
         rspLines.Add($"/manifest:\"{manifestPath}\"");
         File.WriteAllLines(rspPath, rspLines, Encoding.UTF8);
@@ -706,6 +718,8 @@ public class Program
           /sourcelink:<file>            Source Link JSON file.
           /deterministic[+|-]           Enable/disable deterministic emit.
           /embed[+|-]                   Embed all primary sources in the PDB.
+          /additionalfile:<file>        Non-source generator input (e.g. Avalonia .axaml); forwarded to gsgen (repeatable).
+          /globaloption:<key>=<value>   Project-wide generator option (build_property.*); forwarded to gsgen (repeatable).
           /log:<file>                   Write compiler diagnostic log to file.
           /?, /help                     Show this help message.
         """);
@@ -785,6 +799,29 @@ public class Program
                         }
 
                         result.AnalyzerPaths.Add(value);
+                        break;
+
+                    case "additionalfile":
+                        // Issue #2223: a non-source input (e.g. Avalonia .axaml)
+                        // forwarded verbatim to gsgen as a Roslyn AdditionalText.
+                        // Repeatable. Value may carry `;key=value` metadata pairs.
+                        if (string.IsNullOrWhiteSpace(value))
+                        {
+                            throw new CommandLineException("/additionalfile requires a path: /additionalfile:<file>.");
+                        }
+
+                        result.AdditionalFiles.Add(value);
+                        break;
+
+                    case "globaloption":
+                        // Issue #2223: a project-wide generator option (build_property.*)
+                        // forwarded verbatim to gsgen. Repeatable. Value is `key=value`.
+                        if (string.IsNullOrWhiteSpace(value))
+                        {
+                            throw new CommandLineException("/globaloption requires a key=value: /globaloption:<key>=<value>.");
+                        }
+
+                        result.GlobalOptions.Add(value);
                         break;
 
                     case "gsgentool":
@@ -1121,6 +1158,12 @@ public class Program
 
         /// <summary>Gets the analyzer/generator assembly paths (from /analyzer:&lt;path&gt;). Non-empty triggers a gsgen run (issue #2215).</summary>
         public List<string> AnalyzerPaths { get; } = new();
+
+        /// <summary>Gets the raw additional-file specs (from /additionalfile:&lt;path[;key=value]&gt;) forwarded to gsgen (issue #2223).</summary>
+        public List<string> AdditionalFiles { get; } = new();
+
+        /// <summary>Gets the raw generator global options (from /globaloption:&lt;key=value&gt;) forwarded to gsgen (issue #2223).</summary>
+        public List<string> GlobalOptions { get; } = new();
 
         /// <summary>Gets or sets an explicit override for the resolved gsgen.dll path (from /gsgentool:&lt;path&gt;).</summary>
         public string GsgenToolPath { get; set; }

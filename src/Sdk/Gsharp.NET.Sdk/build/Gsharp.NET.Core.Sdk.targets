@@ -153,15 +153,37 @@
     <Message Condition=" '@(_GsharpForeignCompile)' != '' " Importance="Low" Text="gsgen: found stray C# Compile item(s) to translate: @(_GsharpForeignCompile)" />
   </Target>
 
+  <!-- Issue #2223: project-wide generator options forwarded to gsgen as
+       build_property.* AnalyzerConfigOptions. A file/options-driven generator
+       (e.g. Avalonia's XAML name generator) reads these. Only the concrete
+       properties known to matter are forwarded; a generator's own default
+       applies for any it does not find. -->
+  <Target Name="_GsharpCollectGeneratorOptions">
+    <ItemGroup>
+      <_GsharpGeneratorGlobalOption Include="RootNamespace" Condition=" '$(RootNamespace)' != '' ">
+        <Value>$(RootNamespace)</Value>
+      </_GsharpGeneratorGlobalOption>
+      <_GsharpGeneratorGlobalOption Include="ProjectDir">
+        <Value>$(MSBuildProjectDirectory)</Value>
+      </_GsharpGeneratorGlobalOption>
+      <_GsharpGeneratorGlobalOption Include="AvaloniaNameGeneratorBehavior" Condition=" '$(AvaloniaNameGeneratorBehavior)' != '' ">
+        <Value>$(AvaloniaNameGeneratorBehavior)</Value>
+      </_GsharpGeneratorGlobalOption>
+      <_GsharpGeneratorGlobalOption Include="AvaloniaNameGeneratorViewFileNamingStrategy" Condition=" '$(AvaloniaNameGeneratorViewFileNamingStrategy)' != '' ">
+        <Value>$(AvaloniaNameGeneratorViewFileNamingStrategy)</Value>
+      </_GsharpGeneratorGlobalOption>
+    </ItemGroup>
+  </Target>
+
   <!-- (2) Run gsgen over the user's .gs (BEFORE generated files are added to
        @(Compile)), the resolved reference closure, and the resolved analyzers.
        Incremental: re-runs only when a source/analyzer/reference/project file is
        newer than the manifest. -->
   <Target Name="_GsharpRunSourceGenerators"
           BeforeTargets="CoreCompile"
-          DependsOnTargets="_GsharpPartitionForeignCompile;_GsharpResolveAnalyzers;ResolveReferences"
+          DependsOnTargets="_GsharpPartitionForeignCompile;_GsharpResolveAnalyzers;_GsharpCollectGeneratorOptions;ResolveReferences"
           Condition=" '$(GsharpRunSourceGenerators)' != 'false' "
-          Inputs="@(Compile);@(_GsharpForeignCompile);@(GsharpAnalyzer);@(ReferencePathWithRefAssemblies);$(MSBuildAllProjects)"
+          Inputs="@(Compile);@(_GsharpForeignCompile);@(AdditionalFiles);@(GsharpAnalyzer);@(ReferencePathWithRefAssemblies);$(MSBuildAllProjects)"
           Outputs="$(IntermediateOutputPath)gsgen\gsgen.manifest">
     <!-- The analyzer-empty fast path is gated on the TASK, not the target's
          Condition: a target whose Condition is false never runs its
@@ -177,12 +199,15 @@
         ForeignCompile="@(_GsharpForeignCompile)"
         References="@(ReferencePathWithRefAssemblies)"
         Analyzers="@(GsharpAnalyzer)"
+        AdditionalFiles="@(AdditionalFiles)"
+        GlobalOptions="@(_GsharpGeneratorGlobalOption)"
         OutputDir="$(IntermediateOutputPath)gsgen\"
         ManifestPath="$(IntermediateOutputPath)gsgen\gsgen.manifest"
         ResponseFilePath="$(IntermediateOutputPath)$(TargetName).gsgen.rsp"
         RootNamespace="$(RootNamespace)"
         BasePath="$(MSBuildProjectDirectory)" />
   </Target>
+
 
   <!-- (3) Fold the generated parts into @(Compile). This target has NO
        Inputs/Outputs so it ALWAYS runs before CoreCompile — even when (2) was
