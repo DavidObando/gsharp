@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <RootNamespace>GSharp.Gsgen.Cli</RootNamespace>
+    <!-- Shipped as gsgen.dll so the Gsharp.NET.Sdk can invoke `dotnet gsgen.dll`
+         as a separate process (ADR-0145 §A/§F), matching the gsc convention. -->
+    <AssemblyName>gsgen</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\GSharp.GeneratorHost\GSharp.GeneratorHost.csproj" />
+  </ItemGroup>
+
+</Project>

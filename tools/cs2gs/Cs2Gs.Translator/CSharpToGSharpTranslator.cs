@@ -2450,6 +2450,17 @@ public sealed class CSharpToGSharpTranslator
                         break;
                     }
 
+                    // ADR-0143 §D rule 3 (defensive): C# 13 partial properties
+                    // have no G# surface, exactly like partial methods. Skip a
+                    // partial-property DEFINITION node: an implemented property's
+                    // defining part is dropped in favor of its implementation
+                    // part (which translates normally), and an unimplemented
+                    // partial-property definition is elided outright.
+                    if (this.context.GetDeclaredSymbol(property) is IPropertySymbol { IsPartialDefinition: true })
+                    {
+                        break;
+                    }
+
                     // Issue #1190: a static auto-property with an inline initializer
                     // maps to a static backing field in the `shared { }` block, since
                     // a static G# `prop` cannot carry an `init` accessor (GS0374) and
@@ -3030,6 +3041,30 @@ public sealed class CSharpToGSharpTranslator
         {
             var symbol = this.context.GetDeclaredSymbol(node) as IMethodSymbol;
             bool isStatic = symbol != null && symbol.IsStatic;
+
+            // ADR-0143 §D: G# has no partial methods, so a C# `partial`
+            // method-DEFINITION node never yields a G# member.
+            //
+            //   * Unimplemented partial method (`IsPartialDefinition` with a
+            //     null `PartialImplementationPart`): the whole method is elided
+            //     — no member here, and its call sites are dropped by the
+            //     statement visitor (see IsElidedPartialMethodInvocation).
+            //   * Implemented partial method (a defining + implementing pair):
+            //     only the implementation part translates. The defining part
+            //     (`IsPartialDefinition` with a non-null
+            //     `PartialImplementationPart`) is skipped here; the
+            //     implementation part (`IsPartialDefinition == false`,
+            //     `PartialDefinitionPart != null`) falls through and translates
+            //     normally, so the member is emitted exactly once.
+            //
+            // This holds in BOTH translation modes and correctly handles the
+            // issue #1910 partial-TYPE merge, whose merged member list may
+            // contain both the defining and implementing method nodes: the
+            // defining node is filtered out by this single guard.
+            if (symbol != null && symbol.IsPartialDefinition)
+            {
+                return (null, false);
+            }
 
             // Issue #1911 / #2010: C# `string IGreeter.Greet() { ... }` (explicit
             // interface implementation) has no direct G# surface syntax (ADR-0091
@@ -5263,6 +5298,17 @@ public sealed class CSharpToGSharpTranslator
                         isAwait: !local.AwaitKeyword.IsKind(SyntaxKind.None));
 
                 case ExpressionStatementSyntax expressionStatement:
+                    // ADR-0143 §D rule 1: an expression statement whose
+                    // invocation binds to an ELIDED unimplemented partial method
+                    // is dropped. A deletable C# partial method is necessarily
+                    // `void` with no `out` parameters and is only ever invoked in
+                    // statement position (MVVM's `OnFooChanged(...)`), so dropping
+                    // the whole statement is safe and complete.
+                    if (this.IsElidedPartialMethodInvocation(expressionStatement.Expression))
+                    {
+                        return System.Array.Empty<GStatement>();
+                    }
+
                     return this.TranslateExpressionStatements(expressionStatement.Expression);
 
                 case BreakStatementSyntax:
@@ -6864,6 +6910,33 @@ public sealed class CSharpToGSharpTranslator
             BlockStatement bodyBlock = this.TranslateStatementAsBlock(node.Statement);
             statements.AddRange(bodyBlock.Statements);
             return new BlockStatement(statements);
+        }
+
+        /// <summary>
+        /// ADR-0143 §D: whether <paramref name="expression"/> is an invocation
+        /// that binds to an ELIDED unimplemented C# partial method — a partial
+        /// method DEFINITION with no implementation part. Such a call produces no
+        /// runtime effect in C# and has no G# member to target (the declaration
+        /// was elided in <see cref="TranslateMethod"/>), so the enclosing
+        /// expression statement is dropped.
+        /// </summary>
+        private bool IsElidedPartialMethodInvocation(ExpressionSyntax expression)
+        {
+            if (expression is not InvocationExpressionSyntax invocation)
+            {
+                return false;
+            }
+
+            // The bound target may resolve to either the defining or the
+            // implementing part; normalize to the definition and check whether it
+            // is an unimplemented partial definition.
+            if (this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method)
+            {
+                return false;
+            }
+
+            IMethodSymbol definition = method.PartialDefinitionPart ?? method;
+            return definition.IsPartialDefinition && definition.PartialImplementationPart == null;
         }
 
         private GStatement TranslateExpressionStatement(ExpressionSyntax expression)
