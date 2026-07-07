@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\GSharp.GeneratorHost\GSharp.GeneratorHost.csproj" />
+    <ProjectReference Include="..\..\cs2gs\Cs2Gs.ProjectLoading\Cs2Gs.ProjectLoading.csproj" />
     <ProjectReference Include="..\Gsgen.Cli\Gsgen.Cli.csproj" />
     <ProjectReference Include="..\..\..\src\Core\Core.csproj" />
   </ItemGroup>
