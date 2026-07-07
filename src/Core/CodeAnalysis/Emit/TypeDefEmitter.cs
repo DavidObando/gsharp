@@ -1391,7 +1391,7 @@ internal sealed class TypeDefEmitter
                 for (var i = 0; i < parameters.Length; i++)
                 {
                     var param = parameters[i];
-                    if (!classSym.TryGetField(param.Name, out var field))
+                    if (!ReflectionMetadataEmitter.TryGetPrimaryCtorTargetField(classSym, param.Name, out var field))
                     {
                         throw new InvalidOperationException($"Class '{classSym.Name}' has no field for primary ctor parameter '{param.Name}'.");
                     }

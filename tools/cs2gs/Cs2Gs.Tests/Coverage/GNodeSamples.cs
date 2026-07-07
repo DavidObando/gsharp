@@ -71,6 +71,10 @@ public static class GNodeSamples
             [typeof(ObjectCreationInitializerExpression)] = () => Expr(new ObjectCreationInitializerExpression(
                 new InvocationExpression(Id("Foo"), List<GExpression>(Int("1"))),
                 List(new FieldInitializer("Bar", Int("2"))))),
+            [typeof(AnonymousClassMemberInitializer)] = () => Expr(new AnonymousClassLiteralExpression(
+                List(new AnonymousClassMemberInitializer("Bar", Type("int32"), Int("2"))))),
+            [typeof(AnonymousClassLiteralExpression)] = () => Expr(new AnonymousClassLiteralExpression(
+                List(new AnonymousClassMemberInitializer("Bar", Type("int32"), Int("2"))))),
             [typeof(CollectionInitializerElement)] = CollectionInitializerSample,
             [typeof(CollectionInitializerExpression)] = CollectionInitializerSample,
             [typeof(ArrayLiteralExpression)] = () => Expr(new ArrayLiteralExpression(Type("int32"), List<GExpression>(Int("1"), Int("2")))),

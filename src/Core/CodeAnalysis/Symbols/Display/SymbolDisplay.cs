@@ -676,12 +676,36 @@ public static class SymbolDisplay
                 return $"map[{FormatType(map.KeyType)},{FormatType(map.ValueType)}]";
             case TupleTypeSymbol tuple:
                 return $"({string.Join(", ", tuple.ElementTypes.Select(FormatType))})";
+            case StructSymbol aggregate when IsAnonymousClassType(aggregate):
+                // Issue #2224: an anonymous-class literal's synthesized type has
+                // no separate declaration a user could hover to see its shape
+                // (it has no source location — `Declaration` is null), so
+                // render its member shape inline exactly like the
+                // TupleTypeSymbol case above does for tuples. Rubber-duck
+                // follow-up: members are get-only auto-properties, not plain
+                // fields (see AnonymousTypeCache), so render Properties here.
+                return $"{{ {string.Join(", ", aggregate.Properties.Select(p => $"{p.Name}: {FormatType(p.Type)}"))} }}";
             case ImportedTypeSymbol imported:
                 return FormatImportedType(imported);
             default:
                 return type.Name;
         }
     }
+
+    /// <summary>
+    /// Issue #2224: identifies a <see cref="StructSymbol"/> synthesized by
+    /// <c>AnonymousTypeCache</c> for an <c>object { let ... }</c>
+    /// anonymous-class literal, as opposed to an ordinary user-declared
+    /// struct/class. Anonymous types are unnameable in source (Roslyn's own
+    /// synthesized anonymous types use the equivalent <c>&lt;&gt;f__AnonymousType</c>
+    /// naming convention for the same reason) — matching the synthesized
+    /// name prefix is the cheapest reliable signal without threading a new
+    /// flag through every <see cref="StructSymbol"/> constructor overload.
+    /// </summary>
+    /// <param name="type">The struct symbol to check.</param>
+    /// <returns><see langword="true"/> if <paramref name="type"/> is a synthesized anonymous-class type.</returns>
+    private static bool IsAnonymousClassType(StructSymbol type)
+        => type.Declaration == null && type.Name.StartsWith("<>AnonymousType", StringComparison.Ordinal);
 
     /// <summary>
     /// Renders a <see cref="FunctionTypeSymbol"/> in its canonical arrow shape

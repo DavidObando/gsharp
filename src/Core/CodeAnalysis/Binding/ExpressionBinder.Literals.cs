@@ -726,6 +726,86 @@ internal sealed partial class ExpressionBinder
         return new BoundBinaryExpression(null, left, op, right);
     }
 
+    /// <summary>
+    /// Binds an anonymous-class literal <c>object { let Name string = "Foo", ... }</c>
+    /// (issue #2224). Unlike <see cref="BindStructLiteralExpression(StructLiteralExpressionSyntax)"/>,
+    /// there is no named type to resolve: each distinct ordered
+    /// (member-name, member-type) shape gets its own compiler-synthesized
+    /// backing <see cref="StructSymbol"/>, cached per compile pass (see
+    /// <see cref="AnonymousTypeCache"/>) so two literals with the same shape
+    /// share one synthesized type — mirroring how Roslyn unifies
+    /// <c>new { ... }</c> anonymous types within one C# compilation. Unlike
+    /// C#, each member's type is written explicitly rather than inferred from
+    /// its initializer expression; the annotated type is checked against the
+    /// initializer exactly like an ordinary <c>let x Type = expr</c>
+    /// declaration's type clause (<see cref="StatementBinder.BindVariableDeclaration(VariableDeclarationSyntax)"/>),
+    /// so implicit conversions and nullable annotations apply the same way.
+    /// </summary>
+    /// <param name="syntax">The anonymous-class-literal syntax.</param>
+    private BoundExpression BindAnonymousClassExpression(AnonymousClassExpressionSyntax syntax)
+    {
+        var seenNames = new HashSet<string>();
+        var memberNames = ImmutableArray.CreateBuilder<string>(syntax.Members.Count);
+        var memberValues = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Members.Count);
+        var hadError = false;
+        foreach (var member in syntax.Members)
+        {
+            var name = member.Identifier.Text;
+            if (!seenNames.Add(name))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(member.Identifier.Location, name);
+                hadError = true;
+                continue;
+            }
+
+            var memberType = bindTypeClause(member.TypeClause);
+            var value = BindExpression(member.Value);
+            if (value is BoundErrorExpression)
+            {
+                hadError = true;
+            }
+            else if (memberType != null)
+            {
+                value = conversions.BindConversion(member.Value.Location, value, memberType);
+                if (value is BoundErrorExpression)
+                {
+                    hadError = true;
+                }
+            }
+
+            memberNames.Add(name);
+            memberValues.Add(value);
+        }
+
+        if (hadError || memberNames.Count == 0)
+        {
+            return new BoundErrorExpression(syntax);
+        }
+
+        var shape = new (string Name, TypeSymbol Type)[memberNames.Count];
+        for (var i = 0; i < memberNames.Count; i++)
+        {
+            shape[i] = (memberNames[i], memberValues[i].Type);
+        }
+
+        var packageName = this.function?.Package?.Name ?? string.Empty;
+        var anonymousType = scope.GetAnonymousTypeCache().GetOrCreate(shape, packageName);
+
+        // Rubber-duck follow-up to issue #2224: an anonymous-class literal's
+        // members are get-only auto-properties with no public field/setter
+        // (see AnonymousTypeCache), so it must be compiled as a primary
+        // constructor call (`<>AnonymousTypeN(v1, v2, ...)`) — exactly like
+        // C#'s `new { ... }` lowers to a constructor call, never a
+        // field/property initializer — rather than a struct/class composite
+        // literal (BoundStructLiteralExpression's initobj+stfld / setter-call
+        // emission requires a public field or settable property, neither of
+        // which this type has). This also lets the already-proven primary
+        // constructor call and expression-tree lowering paths (used by e.g.
+        // `data struct Wrapper[T](Value T)`) handle emission with no
+        // additional emitter code path.
+        return new BoundConstructorCallExpression(syntax, anonymousType, memberValues.MoveToImmutable());
+    }
+
     private BoundExpression BindStructLiteralExpression(StructLiteralExpressionSyntax syntax)
         => BindStructLiteralExpression(syntax, resolvedDefinition: null);
 

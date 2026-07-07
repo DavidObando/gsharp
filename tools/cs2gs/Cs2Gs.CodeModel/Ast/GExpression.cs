@@ -299,6 +299,65 @@ public sealed class ObjectCreationInitializerExpression : GExpression
 }
 
 /// <summary>
+/// A single member of an <see cref="AnonymousClassLiteralExpression"/>:
+/// <c>let Name Type = value</c> (issue #2224, redesigned to the
+/// <c>object { let ... }</c> syntax). Unlike a plain <see cref="FieldInitializer"/>,
+/// this carries a mandatory type — G# requires an explicit type annotation on
+/// each anonymous-class member since (unlike C#) there is no
+/// initializer-expression type inference at this syntax position.
+/// </summary>
+public sealed class AnonymousClassMemberInitializer : GNode
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="AnonymousClassMemberInitializer"/> class.
+    /// </summary>
+    /// <param name="name">The member name.</param>
+    /// <param name="type">The member's explicit type annotation.</param>
+    /// <param name="value">The member value.</param>
+    public AnonymousClassMemberInitializer(string name, GTypeReference type, GExpression value)
+    {
+        Name = name;
+        Type = type;
+        Value = value;
+    }
+
+    /// <summary>Gets the member name.</summary>
+    public string Name { get; }
+
+    /// <summary>Gets the member's explicit type annotation.</summary>
+    public GTypeReference Type { get; }
+
+    /// <summary>Gets the member value.</summary>
+    public GExpression Value { get; }
+}
+
+/// <summary>
+/// An anonymous-class literal <c>object { let Name Type = value, ... }</c>
+/// (issue #2224). Translates a C# anonymous object creation
+/// <c>new { Name = value, ... }</c> — gsc synthesizes a real backing type per
+/// distinct member shape (structural typing, like Roslyn's anonymous types),
+/// so, unlike a positional tuple, named-member access (<c>x.Name</c>) is
+/// preserved and the literal is legal inside expression-tree lambdas. Each
+/// member carries an explicit type annotation (the C# compiler's own inferred
+/// anonymous-type property type), since G# has no type inference at this
+/// syntax position.
+/// </summary>
+public sealed class AnonymousClassLiteralExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="AnonymousClassLiteralExpression"/> class.
+    /// </summary>
+    /// <param name="members">The member name/type/value initializers, in declaration order.</param>
+    public AnonymousClassLiteralExpression(IReadOnlyList<AnonymousClassMemberInitializer> members)
+    {
+        Members = members ?? new List<AnonymousClassMemberInitializer>();
+    }
+
+    /// <summary>Gets the member name/value initializers, in declaration order.</summary>
+    public IReadOnlyList<AnonymousClassMemberInitializer> Members { get; }
+}
+
+/// <summary>
 /// A single element of a <see cref="CollectionInitializerExpression"/>:
 /// a bare element, a <c>key: value</c> pair, or an <c>[key] = value</c>
 /// indexer entry (ADR-0117).

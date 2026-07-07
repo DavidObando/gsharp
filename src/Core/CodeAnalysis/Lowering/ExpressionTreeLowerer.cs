@@ -141,6 +141,12 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         nameof(System.Linq.Expressions.Expression.New),
         typeof(ConstructorInfo),
         typeof(System.Linq.Expressions.Expression[]));
+    private static readonly MethodInfo ExpressionNewCtorMembersMethod = GetRequiredMethod(
+        typeof(System.Linq.Expressions.Expression),
+        nameof(System.Linq.Expressions.Expression.New),
+        typeof(ConstructorInfo),
+        typeof(IEnumerable<System.Linq.Expressions.Expression>),
+        typeof(IEnumerable<MemberInfo>));
     private static readonly MethodInfo ExpressionMemberInitMethod = GetRequiredMethod(
         typeof(System.Linq.Expressions.Expression),
         nameof(System.Linq.Expressions.Expression.MemberInit),
@@ -379,6 +385,8 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 return BuildClrUnaryOperatorExpression(clrUnary, parameterMap);
             case BoundFunctionLiteralExpression nestedDelegateLiteral:
                 return BuildRuntimeConstant(nestedDelegateLiteral, nestedDelegateLiteral.Type);
+            case BoundStructLiteralExpression structLiteral:
+                return this.BuildStructLiteralExpression(structLiteral, parameterMap);
             case BoundBlockExpression block when this.TryBuildObjectInitializerExpression(block, parameterMap, out var objectInitializer):
                 return objectInitializer;
             default:
@@ -607,6 +615,51 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 BuildExpressionArray(elements)));
     }
 
+    // Issue #2224: struct/anonymous-class literals (`Name { X = 1 }` and the
+    // new `object { let Name string = "Foo" }` anonymous-class form) lower to
+    // `Expression.New(ctor, args)` exactly like BuildUserConstructorExpression
+    // does for `Name(1)` calls — the synthesized primary constructor's
+    // parameter order always matches Initializers order (both are built
+    // directly off StructSymbol.Fields), so initializer values can be used
+    // as constructor arguments positionally.
+    private BoundExpression BuildStructLiteralExpression(
+        BoundStructLiteralExpression structLiteral,
+        Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap)
+    {
+        if (structLiteral.Initializers.IsDefaultOrEmpty || structLiteral.Initializers.Length == 0)
+        {
+            return new BoundClrStaticCallExpression(
+                structLiteral.Syntax,
+                ExpressionNewTypeMethod,
+                TypeSymbol.FromClrType(typeof(System.Linq.Expressions.NewExpression)),
+                ImmutableArray.Create<BoundExpression>(CreateTypeOf(structLiteral.StructType)));
+        }
+
+        var argValues = ImmutableArray.CreateBuilder<BoundExpression>(structLiteral.Initializers.Length);
+        var argTypes = ImmutableArray.CreateBuilder<TypeSymbol>(structLiteral.Initializers.Length);
+        foreach (var initializer in structLiteral.Initializers)
+        {
+            argValues.Add(initializer.Value);
+            argTypes.Add(initializer.Value.Type);
+        }
+
+        var argValuesImmutable = argValues.MoveToImmutable();
+        var ctorInfo = new BoundImportedInstanceCallExpression(
+            structLiteral.Syntax,
+            CreateTypeOf(structLiteral.StructType),
+            TypeGetConstructorMethod,
+            ReflectionConstructorInfoTypeSymbol,
+            ImmutableArray.Create<BoundExpression>(BuildTypeArray(argTypes.MoveToImmutable())));
+
+        return new BoundClrStaticCallExpression(
+            structLiteral.Syntax,
+            ExpressionNewCtorMethod,
+            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.NewExpression)),
+            ImmutableArray.Create<BoundExpression>(
+                ctorInfo,
+                BuildExpressionArray(TranslateArguments(argValuesImmutable, GetArgumentTypes(argValuesImmutable), parameterMap))));
+    }
+
     private BoundExpression BuildUserConstructorExpression(
         BoundConstructorCallExpression constructor,
         Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap)
@@ -626,6 +679,29 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             TypeGetConstructorMethod,
             ReflectionConstructorInfoTypeSymbol,
             ImmutableArray.Create<BoundExpression>(BuildTypeArray(GetArgumentTypes(constructor.Arguments))));
+
+        // Rubber-duck follow-up to issue #2224: an anonymous-class literal's
+        // synthesized type (Binding.AnonymousTypeCache) has no plain fields —
+        // only get-only auto-properties, one per primary-ctor parameter, in
+        // the same order as constructor.Arguments. Roslyn always emits the
+        // 3-arg `Expression.New(ctor, args, members)` overload for a real C#
+        // anonymous type so consumers like EF Core's model builder
+        // (`NewExpression.Members`) can recognize which member each ctor
+        // argument initializes; mirror that here. Ordinary class/data-struct
+        // constructor calls keep Fields non-empty and are unaffected — they
+        // keep using the 2-arg overload below.
+        if (constructor.StructType.Fields.IsDefaultOrEmpty && !constructor.StructType.Properties.IsDefaultOrEmpty)
+        {
+            var membersArray = BuildMemberInfoArray(constructor.StructType, constructor.StructType.PrimaryConstructorParameters);
+            return new BoundClrStaticCallExpression(
+                constructor.Syntax,
+                ExpressionNewCtorMembersMethod,
+                TypeSymbol.FromClrType(typeof(System.Linq.Expressions.NewExpression)),
+                ImmutableArray.Create<BoundExpression>(
+                    ctorInfo,
+                    BuildExpressionArray(TranslateArguments(constructor.Arguments, GetArgumentTypes(constructor.Arguments), parameterMap)),
+                    membersArray));
+        }
 
         return new BoundClrStaticCallExpression(
             constructor.Syntax,
@@ -1071,6 +1147,23 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return new BoundArrayCreationExpression(
             null,
             ArrayTypeSymbol.Get(SystemTypeSymbol, elements.Count),
+            elements.ToImmutable());
+    }
+
+    // Rubber-duck follow-up to issue #2224: builds the `MemberInfo[]` array
+    // for the 3-arg `Expression.New(ctor, args, members)` overload, one
+    // PropertyInfo lookup per primary-ctor parameter (in argument order).
+    private static BoundExpression BuildMemberInfoArray(TypeSymbol ownerType, ImmutableArray<ParameterSymbol> parameters)
+    {
+        var elements = ImmutableArray.CreateBuilder<BoundExpression>();
+        foreach (var parameter in parameters)
+        {
+            elements.Add(BuildUserPropertyInfoLookup(ownerType, parameter.Name));
+        }
+
+        return new BoundArrayCreationExpression(
+            null,
+            ArrayTypeSymbol.Get(ReflectionMemberInfoTypeSymbol, elements.Count),
             elements.ToImmutable());
     }
 

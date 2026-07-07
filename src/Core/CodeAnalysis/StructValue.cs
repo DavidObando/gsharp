@@ -91,10 +91,10 @@ public sealed class StructValue
             return false;
         }
 
-        foreach (var field in StructType.Fields)
+        foreach (var (_, storageKey) in GetDisplayMembers(StructType))
         {
-            Fields.TryGetValue(field.Name, out var lv);
-            other.Fields.TryGetValue(field.Name, out var rv);
+            Fields.TryGetValue(storageKey, out var lv);
+            other.Fields.TryGetValue(storageKey, out var rv);
             if (!object.Equals(lv, rv))
             {
                 return false;
@@ -109,9 +109,9 @@ public sealed class StructValue
     {
         var hash = default(HashCode);
         hash.Add(StructType);
-        foreach (var field in StructType.Fields)
+        foreach (var (_, storageKey) in GetDisplayMembers(StructType))
         {
-            Fields.TryGetValue(field.Name, out var v);
+            Fields.TryGetValue(storageKey, out var v);
             hash.Add(v);
         }
 
@@ -124,7 +124,7 @@ public sealed class StructValue
         var sb = new StringBuilder();
         sb.Append(StructType.Name).Append('(');
         var first = true;
-        foreach (var field in StructType.Fields)
+        foreach (var (displayName, storageKey) in GetDisplayMembers(StructType))
         {
             if (!first)
             {
@@ -132,12 +132,38 @@ public sealed class StructValue
             }
 
             first = false;
-            Fields.TryGetValue(field.Name, out var v);
-            sb.Append(field.Name).Append('=');
+            Fields.TryGetValue(storageKey, out var v);
+            sb.Append(displayName).Append('=');
             sb.Append(v is null ? "nil" : System.Convert.ToString(v, CultureInfo.InvariantCulture));
         }
 
         sb.Append(')');
         return sb.ToString();
+    }
+
+    // Rubber-duck follow-up to issue #2224: an anonymous-class literal's
+    // synthesized type exposes get-only auto-properties, not plain fields
+    // (see AnonymousTypeCache); its runtime storage in Fields lives under
+    // the property's backing-field name. Ordinary structs/classes keep
+    // Fields non-empty and are unaffected.
+    private static System.Collections.Generic.IEnumerable<(string DisplayName, string StorageKey)> GetDisplayMembers(StructSymbol type)
+    {
+        if (!type.Fields.IsDefaultOrEmpty)
+        {
+            foreach (var field in type.Fields)
+            {
+                yield return (field.Name, field.Name);
+            }
+
+            yield break;
+        }
+
+        foreach (var property in type.Properties)
+        {
+            if (property.IsAutoProperty && property.BackingField != null)
+            {
+                yield return (property.Name, property.BackingField.Name);
+            }
+        }
     }
 }

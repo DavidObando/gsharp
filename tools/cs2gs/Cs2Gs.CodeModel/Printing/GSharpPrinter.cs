@@ -501,6 +501,11 @@ public static class GSharpPrinter
                 var memberInits = string.Join(", ", objectCreation.MemberInitializers.Select(f => $"{f.Name} = {RenderExpression(f.Value, indent)}"));
                 return $"{RenderExpression(objectCreation.Construction, indent)}{{{memberInits}}}";
 
+            case AnonymousClassLiteralExpression anonymousClass:
+                var anonymousMembers = string.Join(", ", anonymousClass.Members.Select(
+                    f => $"let {f.Name} {RenderType(f.Type)} = {RenderExpression(f.Value, indent)}"));
+                return $"object {{ {anonymousMembers} }}";
+
             case CollectionInitializerExpression collection:
                 return RenderCollectionInitializer(collection, indent);
 

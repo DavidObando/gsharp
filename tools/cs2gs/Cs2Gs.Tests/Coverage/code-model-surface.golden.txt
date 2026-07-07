@@ -3,6 +3,7 @@
 # type, then replace this golden with the generated `.actual` file.
 
 [GExpression]
+AnonymousClassLiteralExpression
 ArrayAllocationExpression
 ArrayLiteralExpression
 AwaitExpression
@@ -101,6 +102,7 @@ PointerTypeReference
 TupleTypeReference
 
 [GNode (other)]
+AnonymousClassMemberInitializer
 AttributeArgument
 AttributeUse
 CatchClause

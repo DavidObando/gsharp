@@ -7486,6 +7486,18 @@ public class Parser
                 // unsafe code via the parenthesised form `(x) -> body`.
                 return ParseSingleIdentifierLambdaExpression();
 
+            case SyntaxKind.IdentifierToken
+                when Current.Text == "object" && Peek(1).Kind == SyntaxKind.OpenBraceToken:
+                // Issue #2224 (redesigned): `object { let Name Type = value,
+                // ... }` is an anonymous-class literal expression. `object` is
+                // a contextual identifier (used elsewhere as the universal
+                // reference-type name, e.g. `var x object = ...`), recognized
+                // as this literal's lead-in only in the precise `object {`
+                // shape — every other position (a bare `object` type name,
+                // `object` as an ordinary variable name, etc.) continues to
+                // lex and parse exactly as before.
+                return ParsePostfixChain(ParseAnonymousClassExpression());
+
             case SyntaxKind.SwitchKeyword:
                 return ParsePostfixChain(ParseSwitchExpression());
 
@@ -8296,6 +8308,48 @@ public class Parser
         }
 
         return new SeparatedSyntaxList<MapEntrySyntax>(nodesAndSeparators.ToImmutable());
+    }
+
+    private ExpressionSyntax ParseAnonymousClassExpression()
+    {
+        // Issue #2224 (redesigned): `object { let Name Type = value, ... }`
+        // anonymous-class literal. Mirrors ParseMapCreationExpression's shape
+        // but with `let Name Type = value` members (each an explicit,
+        // mandatory type-annotated `let` binding) instead of `key: value` map
+        // entries.
+        var objectKeyword = NextToken();
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+        var members = ParseAnonymousClassMembers();
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        return new AnonymousClassExpressionSyntax(syntaxTree, objectKeyword, openBrace, members, closeBrace);
+    }
+
+    private SeparatedSyntaxList<AnonymousClassMemberInitializerSyntax> ParseAnonymousClassMembers()
+    {
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        var parseNext = Current.Kind != SyntaxKind.CloseBraceToken;
+        while (parseNext &&
+               Current.Kind != SyntaxKind.CloseBraceToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var letKeyword = MatchToken(SyntaxKind.LetKeyword);
+            var identifier = MatchToken(SyntaxKind.IdentifierToken);
+            var typeClause = ParseTypeClause();
+            var equals = MatchToken(SyntaxKind.EqualsToken);
+            var value = ParseExpression();
+            nodesAndSeparators.Add(new AnonymousClassMemberInitializerSyntax(syntaxTree, letKeyword, identifier, typeClause, equals, value));
+
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            }
+            else
+            {
+                parseNext = false;
+            }
+        }
+
+        return new SeparatedSyntaxList<AnonymousClassMemberInitializerSyntax>(nodesAndSeparators.ToImmutable());
     }
 
     private ExpressionSyntax ParseArrayCreationExpression()

@@ -240,6 +240,10 @@ public enum SyntaxKind
     FieldDeclaration,
     StructLiteralExpression,
     FieldInitializer,
+
+    // Issue #2224: anonymous-class literal expression `object { let Name string = "Foo" }`.
+    AnonymousClassExpression,
+    AnonymousClassMemberInitializer,
     FieldAccessExpression,
     FieldAssignmentExpression,
     TupleLiteralExpression,

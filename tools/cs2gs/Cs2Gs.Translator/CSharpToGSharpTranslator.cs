@@ -12771,25 +12771,63 @@ public sealed class CSharpToGSharpTranslator
         }
 
         /// <summary>
-        /// Translates a C# anonymous object creation (<c>new { A = 1, B = 2 }</c>,
-        /// issue #1934). G# has no anonymous types, but an anonymous object's
-        /// shape is exactly its ordered list of member declarators — the same
-        /// shape a G# tuple literal has (ADR-0115 §B.4's positional
-        /// <c>(a, b, c)</c>, already used for C# named tuples). Member names are
-        /// dropped at construction; a later <c>x.A</c> access is rewritten to the
-        /// positional <c>x.Item1</c> in <see cref="TranslateMemberAccess"/> using
-        /// the anonymous type's property declaration order.
+        /// Translates a C# anonymous object creation (<c>new { A = 1, B = 2 }</c>)
+        /// to a G# anonymous-class literal (<c>object { let A int32 = 1, let B
+        /// int32 = 2 }</c>, issue #2224). gsc synthesizes a real backing type
+        /// per distinct member-name+type shape (structural typing, unified
+        /// like Roslyn's anonymous-type cache), so member names are preserved
+        /// — a later <c>x.A</c> access stays <c>x.A</c>, unlike the earlier
+        /// positional-tuple lowering this replaces (issue #1934), which
+        /// dropped names and also made anonymous-typed values illegal inside
+        /// expression-tree lambdas (GS0473) because tuple literals are
+        /// restricted there. Each member's type annotation is the C#
+        /// compiler's own inferred anonymous-type property type, written out
+        /// explicitly — G# (unlike C#) has no type inference at this syntax
+        /// position.
         /// </summary>
         private GExpression TranslateAnonymousObjectCreation(AnonymousObjectCreationExpressionSyntax anonymous)
         {
             this.context.Report(new TranslationDiagnostic(
                 nameof(SyntaxKind.AnonymousObjectCreationExpression),
-                "anonymous object creation 'new { ... }' maps to a G# positional tuple literal; member names are dropped (ADR-0115 §B.4).",
+                "anonymous object creation 'new { ... }' maps to a G# anonymous-class literal 'object { let ... }' (issue #2224); gsc synthesizes a real backing type per distinct member shape, preserving named-member access.",
                 anonymous.GetLocation(),
                 TranslationSeverity.Info));
 
-            return new TupleLiteralExpression(
-                anonymous.Initializers.Select(i => this.TranslateExpression(i.Expression)).ToList());
+            var members = anonymous.Initializers
+                .Select(i => new AnonymousClassMemberInitializer(
+                    AnonymousMemberName(i),
+                    this.ResolveExpressionType(i.Expression) ?? new NamedTypeReference("object"),
+                    this.TranslateExpression(i.Expression)))
+                .ToList();
+
+            return new AnonymousClassLiteralExpression(members);
+        }
+
+        /// <summary>
+        /// Resolves an anonymous-object member's projected name: the explicit
+        /// <c>Name = expr</c> form carries it directly; otherwise (C# member-name
+        /// inference, e.g. <c>new { x.Id }</c> or <c>new { id }</c>) it is the
+        /// simple identifier of the initializer expression (a bare identifier or
+        /// the last segment of a member access) — the same rule the C# compiler
+        /// uses to name the synthesized anonymous-type property.
+        /// </summary>
+        /// <param name="declarator">The anonymous-object member declarator.</param>
+        /// <returns>The projected member name.</returns>
+        private static string AnonymousMemberName(AnonymousObjectMemberDeclaratorSyntax declarator)
+        {
+            if (declarator.NameEquals != null)
+            {
+                return declarator.NameEquals.Name.Identifier.Text;
+            }
+
+            return declarator.Expression switch
+            {
+                IdentifierNameSyntax id => id.Identifier.Text,
+                MemberAccessExpressionSyntax member => member.Name.Identifier.Text,
+                MemberBindingExpressionSyntax memberBinding => memberBinding.Name.Identifier.Text,
+                _ => throw new InvalidOperationException(
+                    $"anonymous-object member at {declarator.GetLocation()} has no explicit name and no inferable name (expression kind {declarator.Expression.Kind()})."),
+            };
         }
 
         private GExpression TranslateMemberAccess(MemberAccessExpressionSyntax member)
@@ -12899,13 +12937,15 @@ public sealed class CSharpToGSharpTranslator
                 }
             }
 
-            // Issue #1934 follow-up: an anonymous-typed receiver (`new { ... }`)
+            // Issue #2224 (was #1934): an anonymous-typed receiver (`new { ... }`)
             // is a C# reference type, so the flow-based passes below would wrap
             // it in a G# `!!` non-null assertion. But the receiver lowers to a
-            // G# tuple literal, which is a non-nullable value type on the G#
-            // side — `!!` on it is both meaningless and hits a gsc IL-emission
-            // gap (StackUnexpected) for value-type receivers. Skip forgiveness
-            // for anonymous-type receivers; the tuple can never be null.
+            // G# anonymous-class literal (`object { let ... }`), which is a
+            // synthesized value type (data struct) on the G# side — `!!` on it
+            // is both meaningless and hits a gsc IL-emission gap
+            // (StackUnexpected) for value-type receivers. Skip forgiveness for
+            // anonymous-type receivers; the anonymous-class value can never be
+            // null.
             bool receiverIsAnonymousType =
                 this.context.GetTypeInfo(member.Expression).Type is { IsAnonymousType: true };
 
@@ -12943,22 +12983,10 @@ public sealed class CSharpToGSharpTranslator
                 memberName = positional.Name;
             }
 
-            // Issue #1934: an anonymous-typed value (`new { A = 1, B = 2 }`) was
-            // lowered to a positional G# tuple literal, so a later named access
-            // `x.A` must be rewritten to the same positional `x.Item1` the tuple
-            // literal actually has. The anonymous type's declaration order is the
-            // tuple's element order, so the property's ordinal among the
-            // anonymous type's properties gives the 1-based `ItemN` index.
-            if (this.context.GetSymbolInfo(member).Symbol is IPropertySymbol { ContainingType.IsAnonymousType: true } anonProperty)
-            {
-                var anonProperties = anonProperty.ContainingType.GetMembers().OfType<IPropertySymbol>().ToList();
-                int ordinal = anonProperties.IndexOf(anonProperty);
-                if (ordinal >= 0)
-                {
-                    memberName = $"Item{ordinal + 1}";
-                }
-            }
-
+            // Issue #2224: an anonymous-typed value (`new { A = 1, B = 2 }`) now
+            // lowers to a G# anonymous-class literal (`object { let A int32 = 1, let B int32 = 2 }`)
+            // that preserves real member names — no rewrite needed; `x.A` stays
+            // `x.A` on the G# side, exactly like the C# anonymous-type property.
             return new MemberAccessExpression(target, SanitizeIdentifier(memberName), isArrow);
         }
 

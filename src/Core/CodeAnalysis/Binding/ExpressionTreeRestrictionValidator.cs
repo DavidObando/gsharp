@@ -332,6 +332,23 @@ internal static class ExpressionTreeRestrictionValidator
                 diagnostics.ReportExpressionTreeUnsupported(LocationOf(expression.Syntax), "a method group");
                 return;
 
+            case BoundStructLiteralExpression structLiteral:
+                // User-declared struct/class composite literals (`Point{X:
+                // 1, Y: 2}`) are legal inside expression-tree lambdas, for
+                // the same reason object initializers are (see
+                // TryValidateObjectInitializer below): only the member
+                // value expressions need validating. (Issue #2224:
+                // anonymous-class literals — `object { let ... }` — are
+                // bound as BoundConstructorCallExpression instead, validated
+                // above, since their get-only-auto-property shape compiles
+                // to a primary-constructor call, same as C#'s `new { ... }`.)
+                foreach (var initializer in structLiteral.Initializers)
+                {
+                    ValidateExpression(initializer.Value, diagnostics);
+                }
+
+                return;
+
             case BoundBlockExpression block:
                 if (TryValidateObjectInitializer(block, diagnostics))
                 {
