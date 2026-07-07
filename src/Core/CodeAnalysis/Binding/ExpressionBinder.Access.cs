@@ -1592,6 +1592,36 @@ internal sealed partial class ExpressionBinder
 
         while (true)
         {
+            // Issue #2209: `Ns.Sub.Generic[Args].StaticMember` places a generic
+            // instantiation (`Comparer[int32]`, parsed as an `IndexExpressionSyntax`
+            // for a single type argument or a `GenericNameExpressionSyntax` for
+            // multiple/type-shaped arguments) in the middle of the dotted chain,
+            // immediately followed by the static member access. Neither shape is
+            // a plain `NameExpressionSyntax` segment, so without this case the
+            // walk below falls through to `default: return false` at the FIRST
+            // segment, and the caller re-reports the whole chain as an undefined
+            // type starting from its leftmost name. Close the generic type here
+            // (mirroring the non-generic branch just below) and hand the
+            // remaining chain back as the static-member access on the closed type.
+            if (currentRight is AccessorExpressionSyntax genericSegment
+                && TryGetGenericSegmentNameAndArity(genericSegment.LeftPart, out var genericSegmentName, out var genericArity))
+            {
+                var mangledName = currentPath + "." + genericSegmentName + "`" + genericArity;
+                if (scope.References.TryResolveType(mangledName, out var openGenericType)
+                    && TryBindGenericImportSegmentTypeArguments(genericSegment.LeftPart, genericArity, out var segmentTypeArgs)
+                    && TryCloseImportedGenericTypeReceiver(openGenericType, segmentTypeArgs, genericSegment.LeftPart, out var closedGenericImported))
+                {
+                    importedClass = closedGenericImported;
+                    rightPart = genericSegment.RightPart;
+                    return true;
+                }
+
+                // A generic instantiation can never be a further namespace
+                // level, so a failed resolution here ends the walk instead of
+                // falling through to the plain-segment cases below.
+                return false;
+            }
+
             NameExpressionSyntax typeNameSyntax;
             ExpressionSyntax remainder;
             bool hasMoreChain;
@@ -1631,6 +1661,58 @@ internal sealed partial class ExpressionBinder
 
             currentPath = fullTypeName;
             currentRight = remainder;
+        }
+    }
+
+    /// <summary>
+    /// Issue #2209: recognises a generic-instantiation segment
+    /// (<c>Comparer[int32]</c>) in the middle of a fully-qualified dotted
+    /// namespace/type chain and returns its simple type name and arity. The
+    /// parser shapes a single type argument as an <see cref="IndexExpressionSyntax"/>
+    /// (target is the bare type name, e.g. <c>Comparer[int32]</c>) and multiple
+    /// or type-shaped arguments as a <see cref="GenericNameExpressionSyntax"/>
+    /// (e.g. <c>Pair[int32, string]</c>, <c>Box[int32?]</c>).
+    /// </summary>
+    private static bool TryGetGenericSegmentNameAndArity(ExpressionSyntax segment, out string name, out int arity)
+    {
+        switch (segment)
+        {
+            case IndexExpressionSyntax index when !index.IsNullConditional && index.Target is NameExpressionSyntax indexName:
+                name = indexName.IdentifierToken.Text;
+                arity = 1;
+                return true;
+
+            case GenericNameExpressionSyntax generic:
+                name = generic.Identifier.Text;
+                arity = generic.TypeArgumentList.Arguments.Count;
+                return true;
+
+            default:
+                name = null;
+                arity = 0;
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Issue #2209: binds the type-argument(s) of a generic-instantiation
+    /// segment recognised by <see cref="TryGetGenericSegmentNameAndArity"/>,
+    /// dispatching to the matching argument shape (index-expression argument or
+    /// generic-name type-argument list).
+    /// </summary>
+    private bool TryBindGenericImportSegmentTypeArguments(ExpressionSyntax segment, int arity, out ImmutableArray<TypeSymbol> typeArgs)
+    {
+        switch (segment)
+        {
+            case IndexExpressionSyntax index:
+                return TryBindTypeArgumentExpressions(index.Index, out typeArgs) && typeArgs.Length == arity;
+
+            case GenericNameExpressionSyntax generic:
+                return TryBindGenericSegmentArguments(generic, out typeArgs) && typeArgs.Length == arity;
+
+            default:
+                typeArgs = default;
+                return false;
         }
     }
 
