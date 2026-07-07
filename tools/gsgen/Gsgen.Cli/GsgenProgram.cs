@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using GSharp.GeneratorHost;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Text;
 using Compilation = GSharp.Core.CodeAnalysis.Compilation.Compilation;
 using GsReferenceResolver = GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver;
 using GsSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree;
@@ -67,24 +68,41 @@ public static class GsgenProgram
                 stdout.WriteLine($"{SyntheticAnchor}: info GS9207: {note}");
             }
 
-            // Fast path (ADR-0145 §F): with no generators there is nothing to
-            // produce. Emit an empty manifest (so MSBuild's orphan cleanup still
-            // has a fresh, empty owned-file list) and exit immediately.
-            if (parsed.AnalyzerPaths.Count == 0)
+            // Fast path (ADR-0145 §F): with no generators AND no stray C# Compile
+            // items to translate (issue #2214) there is nothing to produce. Emit
+            // an empty manifest (so MSBuild's orphan cleanup still has a fresh,
+            // empty owned-file list) and exit immediately.
+            if (parsed.AnalyzerPaths.Count == 0 && parsed.CsFiles.Count == 0)
             {
                 WriteManifest(parsed.ManifestPath, Array.Empty<string>());
                 return 0;
             }
 
             parsed.ValidateGsFilesExist();
+            parsed.ValidateCsFilesExist();
 
-            GeneratorHostResult result = RunHost(parsed);
+            var generatedGsFiles = new List<(string HintName, string GSharpSource)>();
+            GeneratorHostResult result = null;
 
-            IReadOnlyList<string> written = WriteGeneratedFiles(parsed.OutDir, result.GeneratedGsFiles);
+            if (parsed.AnalyzerPaths.Count > 0)
+            {
+                result = RunHost(parsed);
+                generatedGsFiles.AddRange(result.GeneratedGsFiles);
+            }
+
+            if (parsed.CsFiles.Count > 0)
+            {
+                generatedGsFiles.AddRange(TranslateForeignCSharp(parsed));
+            }
+
+            IReadOnlyList<string> written = WriteGeneratedFiles(parsed.OutDir, generatedGsFiles);
             CleanOrphans(parsed.OutDir, written);
             WriteManifest(parsed.ManifestPath, written);
 
-            EmitDiagnostics(stdout, result);
+            if (result != null)
+            {
+                EmitDiagnostics(stdout, result);
+            }
 
             return 0;
         }
@@ -106,16 +124,50 @@ public static class GsgenProgram
         // (a) the G# reference resolver the Compilation binds imports against.
         GsReferenceResolver resolver = GsReferenceResolver.WithReferences(parsed.References);
 
-        // (b) the metadata references the host's C# stub/generated code binds
-        //     against. Filter to files that exist so CreateFromFile never throws.
-        IReadOnlyList<MetadataReference> metadataRefs = parsed.References
-            .Where(File.Exists)
-            .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))
-            .ToList();
+        IReadOnlyList<MetadataReference> metadataRefs = BuildMetadataReferences(parsed.References);
 
         var compilation = new Compilation(resolver, syntaxTrees);
 
         return GeneratorHostRunner.RunFromAnalyzerPaths(compilation, metadataRefs, parsed.AnalyzerPaths);
+    }
+
+    /// <summary>
+    /// The metadata references the host's C# stub/generated/foreign code binds
+    /// against. Filter to files that exist so <c>CreateFromFile</c> never throws.
+    /// </summary>
+    private static IReadOnlyList<MetadataReference> BuildMetadataReferences(IReadOnlyList<string> referencePaths) =>
+        referencePaths
+            .Where(File.Exists)
+            .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))
+            .ToList();
+
+    /// <summary>
+    /// Issue #2214 / ADR-0145 extension: translates each "foreign" <c>.cs</c>
+    /// file directly to G# using the same translation core gsgen already uses
+    /// for generator output (<see cref="GeneratedDocTranslator"/>) — no C# stub
+    /// or generator run is involved, the file itself is the "generated"
+    /// document. This is what makes a stray <c>Compile</c> item (e.g.
+    /// Nerdbank.GitVersioning's <c>ThisAssembly.cs</c>) consumable by gsc: it is
+    /// translated once here and folded into <c>@(Compile)</c> as an ordinary
+    /// <c>.g.gs</c> by the SDK's existing manifest-fold target.
+    /// </summary>
+    private static IReadOnlyList<(string HintName, string GSharpSource)> TranslateForeignCSharp(GsgenArgs parsed)
+    {
+        IReadOnlyList<MetadataReference> metadataRefs = BuildMetadataReferences(parsed.References);
+
+        var docs = parsed.CsFiles
+            .Select(path => new GeneratedCsDocument(Path.GetFileName(path), SourceText.From(File.ReadAllText(path))))
+            .ToList();
+
+        // No C# stub is needed — the foreign file(s) are bound together against
+        // the project's own reference closure, exactly like generator output.
+        IReadOnlyList<TranslatedGsDocument> translated =
+            GeneratedDocTranslator.Translate(string.Empty, docs, metadataRefs);
+
+        return translated
+            .OrderBy(t => t.HintName, StringComparer.Ordinal)
+            .Select(t => (t.HintName, t.GSharpSource))
+            .ToList();
     }
 
     /// <summary>

@@ -1,0 +1,19 @@
+<Project Sdk="Gsharp.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>ForeignCompile</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Issue #2214: stands in for a stray .cs Compile item a package's own
+         MSBuild target adds to the project — e.g. Nerdbank.GitVersioning's
+         generated ThisAssembly.cs. gsc only understands G#, so the SDK
+         partitions any `.cs` Compile item out of @(Compile), translates it
+         through the same gsgen translation core used for source-generator
+         output, and folds the resulting .g.gs back into @(Compile). -->
+    <Compile Include="ThisAssembly.cs" />
+  </ItemGroup>
+
+</Project>

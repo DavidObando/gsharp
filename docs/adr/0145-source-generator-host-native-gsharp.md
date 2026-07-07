@@ -151,6 +151,24 @@ deletes orphaned outputs from the previous stamp. The generated files are
 injected into `@(Compile)`, which `CoreCompile` picks up because target inputs
 evaluate at execution time.
 
+**Foreign `.cs` `Compile` items (issue [#2214](https://github.com/DavidObando/gsharp/issues/2214)).**
+The same translation core also handles C# files that land in `@(Compile)` by
+means *other* than a source generator — e.g. Nerdbank.GitVersioning's
+generated `ThisAssembly.cs`. A `_GsharpPartitionForeignCompile` step (run via
+`DependsOnTargets` before `_GsharpRunSourceGenerators`, so it sees items added
+by earlier targets such as NBGV's) pulls every `.cs`-extension item out of
+`@(Compile)` into `@(_GsharpForeignCompile)` and forwards it to `GsgenTask` as
+a new `/csfile:` arg. `gsgen` treats each as a standalone "generated" document
+— no C# stub, no generator run — and feeds it straight into the existing
+`GeneratedDocTranslator`, which is otherwise unchanged. The resulting `.g.gs`
+is folded into `@(Compile)` by the same `_GsharpIncludeGeneratedCompile` step
+already used for generator output. This is the generalized alternative called
+for in #2214, applying §C's shared translation core to *any* stray `.cs` file
+rather than adding a narrower gsc-native `ThisAssembly` synthesis path (the
+ADR-0143 §C alternative). Gated by the same `$(GsharpRunSourceGenerators)`
+switch as the rest of gsgen; a no-op — same fast path as zero analyzers — when
+a project has no stray `.cs` items (the common case).
+
 **Process model — separate console tool, not an in-proc MSBuild task.** The task
 assembly is `netstandard2.0` and runs inside MSBuild, where a second
 version-pinned `Microsoft.CodeAnalysis` cannot safely coexist with MSBuild's own
@@ -237,6 +255,11 @@ gsc consumes the emitted `.g.gs`):
 - **Language server** (§G, partial) — generated `obj/**/gsgen/*.g.gs` are
   surfaced to the LS compilation and watched, so generated members resolve in the
   editor after a build.
+- **Foreign `.cs` translation** (§F, issue #2214) — `_GsharpPartitionForeignCompile`,
+  `GsgenTask.ForeignCompile`/`/csfile:`, and `GsgenProgram.TranslateForeignCSharp`
+  route any stray `.cs` `Compile` item (e.g. Nerdbank.GitVersioning's
+  `ThisAssembly.cs`) through the same translator, verified end-to-end via
+  `e2etests/foreign-cs-e2e.sh` against `samples/ForeignCompile`.
 
 Follow-ups (not in the initial delivery):
 
@@ -254,6 +277,14 @@ Follow-ups (not in the initial delivery):
 - **Live in-editor regeneration** — the out-of-proc `gsgen serve` sidecar that
   re-runs generators on keystroke (§G). The delivered LS slice covers post-build
   visibility; `serve` mode is deferred.
+- **Real Nerdbank.GitVersioning wiring** — NBGV's own MSBuild target
+  (`GenerateAssemblyNBGVVersionInfo`) only fires when `$(Language)` is a
+  language it recognizes (`C#`, `VB`, `F#`); a `.gsproj`'s `<Language>Gsharp</Language>`
+  doesn't match, so NBGV emits no `ThisAssembly.cs` at all in a native G#
+  project today — a separate, pre-existing NBGV/SDK gap, not fixed here.
+  #2214's translation mechanism is verified against a synthetic stand-in file
+  (`samples/ForeignCompile/ThisAssembly.cs`) with NBGV's exact shape; making
+  NBGV itself fire for `Language=Gsharp` needs its own follow-up.
 
 ## Consequences
 
