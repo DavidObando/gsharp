@@ -95,7 +95,8 @@ internal sealed class OverloadResolver
         out BoundExpression result,
         Type[] explicitTypeArgs,
         ImmutableArray<TypeSymbol> typeArgSymbols,
-        ImmutableArray<string> argumentNames);
+        ImmutableArray<string> argumentNames,
+        bool allowProtectedInherited = false);
 
     /// <summary>
     /// Custom delegate type for the <c>TryGetFunctionLiteral</c>
@@ -4926,7 +4927,7 @@ internal sealed class OverloadResolver
                 // `this.Method(...)` path and G#-defined-base behavior.
                 var implicitBaseClr = ExpressionBinder.GetInheritedClrBaseType(implicitReceiverStruct) ?? typeof(object);
                 var implicitReceiverExpr = new BoundVariableExpression(null, effThis);
-                if (tryBindInheritedClrInstanceCall(implicitReceiverExpr, implicitBaseClr, syntax.Identifier.Text, boundArguments.ToImmutable(), syntax, out var implicitInheritedCall, null, default, argumentNames))
+                if (tryBindInheritedClrInstanceCall(implicitReceiverExpr, implicitBaseClr, syntax.Identifier.Text, boundArguments.ToImmutable(), syntax, out var implicitInheritedCall, null, default, argumentNames, allowProtectedInherited: true))
                 {
                     return implicitInheritedCall;
                 }

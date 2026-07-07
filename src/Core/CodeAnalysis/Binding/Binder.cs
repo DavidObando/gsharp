@@ -214,7 +214,7 @@ public sealed class Binder
             reportObsoleteUseIfApplicable: ReportObsoleteUseIfApplicable,
             tryBindClrConstructorCall: (syntax, out result) => expressions.TryBindClrConstructorCall(syntax, out result),
             tryBindIntrinsicCall: (syntax, out result) => expressions.TryBindIntrinsicCall(syntax, out result),
-            tryBindInheritedClrInstanceCall: (BoundExpression receiver, Type importedBaseClr, string methodName, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, out BoundExpression result, Type[] explicitTypeArgs, ImmutableArray<TypeSymbol> typeArgSymbols, ImmutableArray<string> argumentNames) => expressions.TryBindInheritedClrInstanceCall(receiver, importedBaseClr, methodName, arguments, ce, out result, explicitTypeArgs, typeArgSymbols, argumentNames),
+            tryBindInheritedClrInstanceCall: (BoundExpression receiver, Type importedBaseClr, string methodName, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, out BoundExpression result, Type[] explicitTypeArgs, ImmutableArray<TypeSymbol> typeArgSymbols, ImmutableArray<string> argumentNames, bool allowProtectedInherited) => expressions.TryBindInheritedClrInstanceCall(receiver, importedBaseClr, methodName, arguments, ce, out result, explicitTypeArgs, typeArgSymbols, argumentNames, allowProtectedInherited: allowProtectedInherited),
             isFormattableStringTargetType: ExpressionBinder.IsFormattableStringTargetType,
             bindInterpolatedStringAsFormattable: (syntax, targetType) => expressions.BindInterpolatedStringAsFormattable(syntax, targetType),
             getRefKindFromModifier: GetRefKindFromModifier,

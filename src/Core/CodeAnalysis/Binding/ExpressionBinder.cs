@@ -152,6 +152,26 @@ internal sealed partial class ExpressionBinder
         return scope.TryLookupSymbol("this") as ParameterSymbol;
     }
 
+    /// <summary>
+    /// Issue #2218 follow-up: reports whether <paramref name="receiver"/> IS
+    /// the current implicit/explicit <c>this</c> (i.e. an unqualified call,
+    /// or an explicit <c>this.Method(...)</c> call) rather than some other
+    /// receiver expression that merely happens to share the enclosing type.
+    /// Used to gate admission of <c>protected</c>/<c>protected internal</c>
+    /// inherited CLR members in <see cref="TryBindInheritedClrInstanceCall"/>:
+    /// that helper is shared by the general qualified-accessor call path
+    /// (any <c>receiver.Method(...)</c>), so without this check a protected
+    /// inherited member would be reachable through an arbitrary receiver,
+    /// leaking accessibility outside the derived class.
+    /// </summary>
+    private bool IsCurrentThisReceiver(BoundExpression receiver)
+    {
+        var effThis = GetEffectiveThisParameter();
+        return effThis != null
+            && receiver is BoundVariableExpression bve
+            && ReferenceEquals(bve.Variable, effThis);
+    }
+
     private BoundExpression BindExpressionWithNarrowing(ExpressionSyntax syntax, Dictionary<AccessPath, TypeSymbol> frame)
     {
         if (frame == null)
