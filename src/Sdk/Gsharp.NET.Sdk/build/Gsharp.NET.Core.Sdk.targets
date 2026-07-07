@@ -74,11 +74,16 @@
 
   <!-- ADR-0145 §E/§F: source-generator (gsgen) integration.
 
-       Three cooperating targets run before CoreCompile:
-         1. _GsharpResolveAnalyzers      - resolve the C# analyzer/generator set.
-         2. _GsharpRunSourceGenerators   - run gsgen (incremental).
-         3. _GsharpIncludeGeneratedCompile - fold the generated .g.gs into @(Compile)
-                                             (always runs, even when (2) was up to date). -->
+       Cooperating targets run before CoreCompile:
+         1. _GsharpResolveAnalyzers        - resolve the C# analyzer/generator set.
+         2. _GsharpPartitionForeignCompile - pull any stray .cs Compile item out
+                                             of @(Compile) (issue #2214).
+         3. _GsharpRunSourceGenerators     - run gsgen (incremental): projects
+                                             generators over the .gs sources AND
+                                             translates any partitioned .cs.
+         4. _GsharpIncludeGeneratedCompile - fold the resulting .g.gs into
+                                             @(Compile) (always runs, even when
+                                             (3) was up to date). -->
 
   <!-- (1) Because the SDK sets <Language>Gsharp</Language>, NuGet's normal
        ResolvePackageAssets never selects C# analyzer assets (it filters analyzer
@@ -130,15 +135,33 @@
     <Message Importance="Low" Text="gsgen: resolved analyzers: @(GsharpAnalyzer)" />
   </Target>
 
+  <!-- Issue #2214 / ADR-0145 extension: partition any stray C# `.cs` Compile
+       item out of @(Compile) before gsc/gsgen ever see it. gsc only understands
+       G# syntax; a raw .cs item — e.g. Nerdbank.GitVersioning's generated
+       `ThisAssembly.cs`, added as an ordinary <Compile> item by NBGV's own
+       MSBuild target — would otherwise be handed to gsc's /gs: exactly like a
+       .gs file and fail to parse. Generalized per issue #2214: ANY `.cs`
+       Compile item is routed through the same gsgen translation pipeline that
+       already back-translates generator output, not just this one known
+       generator's file. -->
+  <Target Name="_GsharpPartitionForeignCompile">
+    <ItemGroup>
+      <_GsharpForeignCompile Include="@(Compile)" Condition=" '%(Extension)' == '.cs' " />
+      <Compile Remove="@(_GsharpForeignCompile)" />
+    </ItemGroup>
+
+    <Message Condition=" '@(_GsharpForeignCompile)' != '' " Importance="Low" Text="gsgen: found stray C# Compile item(s) to translate: @(_GsharpForeignCompile)" />
+  </Target>
+
   <!-- (2) Run gsgen over the user's .gs (BEFORE generated files are added to
        @(Compile)), the resolved reference closure, and the resolved analyzers.
        Incremental: re-runs only when a source/analyzer/reference/project file is
        newer than the manifest. -->
   <Target Name="_GsharpRunSourceGenerators"
           BeforeTargets="CoreCompile"
-          DependsOnTargets="_GsharpResolveAnalyzers;ResolveReferences"
+          DependsOnTargets="_GsharpPartitionForeignCompile;_GsharpResolveAnalyzers;ResolveReferences"
           Condition=" '$(GsharpRunSourceGenerators)' != 'false' "
-          Inputs="@(Compile);@(GsharpAnalyzer);@(ReferencePathWithRefAssemblies);$(MSBuildAllProjects)"
+          Inputs="@(Compile);@(_GsharpForeignCompile);@(GsharpAnalyzer);@(ReferencePathWithRefAssemblies);$(MSBuildAllProjects)"
           Outputs="$(IntermediateOutputPath)gsgen\gsgen.manifest">
     <!-- The analyzer-empty fast path is gated on the TASK, not the target's
          Condition: a target whose Condition is false never runs its
@@ -146,11 +169,12 @@
          prevent _GsharpResolveAnalyzers (which POPULATES that item) from ever
          running — a chicken-and-egg deadlock. Keep the target unconditional and
          let _GsharpResolveAnalyzers run first, then skip the actual gsgen launch
-         when it resolved nothing. -->
+         when it resolved nothing AND there is no stray C# to translate either. -->
     <GsgenTask
-        Condition=" '@(GsharpAnalyzer)' != '' "
+        Condition=" '@(GsharpAnalyzer)' != '' or '@(_GsharpForeignCompile)' != '' "
         GsgenToolFullPath="$(GsgenToolFullPath)"
         Compile="@(Compile)"
+        ForeignCompile="@(_GsharpForeignCompile)"
         References="@(ReferencePathWithRefAssemblies)"
         Analyzers="@(GsharpAnalyzer)"
         OutputDir="$(IntermediateOutputPath)gsgen\"

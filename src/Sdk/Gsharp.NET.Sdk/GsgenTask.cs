@@ -50,6 +50,17 @@ public class GsgenTask : Microsoft.Build.Utilities.Task, ICancelableTask
     /// <summary>Gets or sets the Compile item group (the user's .gs sources).</summary>
     public ITaskItem[] Compile { get; set; } = Array.Empty<ITaskItem>();
 
+    /// <summary>
+    /// Gets or sets "foreign" C# <c>Compile</c> items (issue #2214) — a stray
+    /// <c>.cs</c> file the SDK found in the project's own <c>@(Compile)</c>
+    /// (e.g. Nerdbank.GitVersioning's generated <c>ThisAssembly.cs</c>, added
+    /// as an ordinary <c>Compile</c> item by its own MSBuild target) rather
+    /// than hand-written G#. gsgen translates these directly to G# — no stub
+    /// projection or generator run — and folds the result into <c>@(Compile)</c>
+    /// the same way as generator output.
+    /// </summary>
+    public ITaskItem[] ForeignCompile { get; set; } = Array.Empty<ITaskItem>();
+
     /// <summary>Gets or sets the resolved metadata references (forwarded via /r:).</summary>
     public ITaskItem[] References { get; set; } = Array.Empty<ITaskItem>();
 
@@ -102,6 +113,11 @@ public class GsgenTask : Microsoft.Build.Utilities.Task, ICancelableTask
         foreach (var a in this.Analyzers)
         {
             args.Add(BuildTask.QuoteIfNeeded($"/analyzer:{a.ItemSpec}"));
+        }
+
+        foreach (var c in this.ForeignCompile)
+        {
+            args.Add(BuildTask.QuoteIfNeeded($"/csfile:{c.ItemSpec}"));
         }
 
         args.Add(BuildTask.QuoteIfNeeded($"/out:{this.OutputDir}"));

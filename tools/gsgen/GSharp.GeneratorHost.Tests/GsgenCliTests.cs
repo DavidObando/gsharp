@@ -88,6 +88,7 @@ public class GsgenCliTests : IDisposable
                 "/r:ref1.dll",
                 "/r:ref2.dll",
                 "/analyzer:gen.dll",
+                "/csfile:ThisAssembly.cs",
                 "/out:/tmp/out",
                 "/rootnamespace:My.Ns",
                 "/manifest:/tmp/m.txt",
@@ -98,6 +99,7 @@ public class GsgenCliTests : IDisposable
         Assert.Equal(new[] { "a.gs", "b.gs" }, args.GsFiles);
         Assert.Equal(new[] { "ref1.dll", "ref2.dll" }, args.References);
         Assert.Equal(new[] { "gen.dll" }, args.AnalyzerPaths);
+        Assert.Equal(new[] { "ThisAssembly.cs" }, args.CsFiles);
         Assert.Equal("/tmp/out", args.OutDir);
         Assert.Equal("My.Ns", args.RootNamespace);
         Assert.Equal("/tmp/m.txt", args.ManifestPath);
@@ -188,7 +190,74 @@ public class GsgenCliTests : IDisposable
         Assert.DoesNotContain("   at ", output); // no stack-trace frames
     }
 
+    [Fact]
+    public void ForeignCsFile_NoAnalyzers_IsStillTranslated_AndFolded()
+    {
+        // Issue #2214: a stray .cs Compile item (standing in for Nerdbank.
+        // GitVersioning's generated ThisAssembly.cs) must be translated even
+        // when the project has NO generator packages at all — the common case
+        // the ADR-0145 fast path already optimizes for generators.
+        var outDir = Path.Combine(this.workDir, "gen");
+        var manifest = Path.Combine(this.workDir, "manifest.txt");
+        var gs = this.WriteGs("Foo.gs", "package App\n\nfunc Foo() {\n}\n");
+        var cs = this.WriteCs(
+            "ThisAssembly.cs",
+            @"namespace App
+{
+    internal static class ThisAssembly
+    {
+        internal const string AssemblyFileVersion = ""1.2.3.4"";
+    }
+}
+");
+
+        var args = new List<string> { $"/gs:{gs}", $"/csfile:{cs}", $"/out:{outDir}", $"/manifest:{manifest}" };
+        args.AddRange(RuntimeReferencePaths().Select(p => $"/r:{p}"));
+
+        var stdout = new StringWriter();
+        int exit = GsgenProgram.Run(args.ToArray(), stdout);
+
+        Assert.Equal(0, exit);
+
+        var generated = Directory.EnumerateFiles(outDir, "*.g.gs").ToList();
+        var single = Assert.Single(generated);
+        var content = File.ReadAllText(single);
+        Assert.Contains("ThisAssembly", content);
+        Assert.Contains("AssemblyFileVersion", content);
+        Assert.Contains("1.2.3.4", content);
+
+        var manifestLines = File.ReadAllLines(manifest).Where(l => l.Length > 0).ToList();
+        var manifestEntry = Assert.Single(manifestLines);
+        Assert.Equal(Path.GetFullPath(single), Path.GetFullPath(manifestEntry));
+    }
+
+    [Fact]
+    public void NoAnalyzersNoCsFiles_FastPath_Unaffected()
+    {
+        // Guard: a project with no generators AND no stray .cs (the universal
+        // common case) must still take the zero-cost fast path.
+        var outDir = Path.Combine(this.workDir, "gen");
+        var manifest = Path.Combine(this.workDir, "manifest.txt");
+        var gs = this.WriteGs("Foo.gs", "package App\n\npartial class Foo {\n}\n");
+
+        var stdout = new StringWriter();
+        int exit = GsgenProgram.Run(
+            new[] { $"/gs:{gs}", $"/out:{outDir}", $"/manifest:{manifest}" },
+            stdout);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(string.Empty, File.ReadAllText(manifest));
+        Assert.False(Directory.Exists(outDir) && Directory.EnumerateFiles(outDir, "*.g.gs").Any());
+    }
+
     private string WriteGs(string name, string source)
+    {
+        var path = Path.Combine(this.workDir, name);
+        File.WriteAllText(path, source);
+        return path;
+    }
+
+    private string WriteCs(string name, string source)
     {
         var path = Path.Combine(this.workDir, name);
         File.WriteAllText(path, source);

@@ -26,6 +26,15 @@ public sealed class GsgenArgs
     /// <summary>Gets the analyzer/generator assembly paths (<c>/analyzer:</c>).</summary>
     public List<string> AnalyzerPaths { get; } = new();
 
+    /// <summary>
+    /// Gets the "foreign" C# source files (<c>/csfile:</c>) to translate
+    /// directly to G# (issue #2214 / ADR-0145 extension) — a stray <c>.cs</c>
+    /// <c>Compile</c> item the SDK found in the project (e.g. Nerdbank.
+    /// GitVersioning's generated <c>ThisAssembly.cs</c>), as opposed to the
+    /// <c>.gs</c> sources gsgen projects to a stub and runs generators over.
+    /// </summary>
+    public List<string> CsFiles { get; } = new();
+
     /// <summary>Gets or sets the output directory for generated <c>.g.gs</c> files (<c>/out:</c>). Required.</summary>
     public string OutDir { get; set; }
 
@@ -68,6 +77,10 @@ public sealed class GsgenArgs
             else if (TryMatch(arg, "/analyzer:", out var analyzer))
             {
                 parsed.AnalyzerPaths.Add(analyzer);
+            }
+            else if (TryMatch(arg, "/csfile:", out var csFile))
+            {
+                parsed.CsFiles.Add(csFile);
             }
             else if (TryMatch(arg, "/out:", out var outDir))
             {
@@ -119,6 +132,21 @@ public sealed class GsgenArgs
             if (!File.Exists(path))
             {
                 throw new FileNotFoundException($"G# source file not found: '{path}'.", path);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Verifies each <c>/csfile:</c> file exists on disk, throwing a
+    /// <see cref="FileNotFoundException"/> (surfaced as <c>GS9200</c>) otherwise.
+    /// </summary>
+    public void ValidateCsFilesExist()
+    {
+        foreach (var path in CsFiles)
+        {
+            if (!File.Exists(path))
+            {
+                throw new FileNotFoundException($"C# source file not found: '{path}'.", path);
             }
         }
     }
