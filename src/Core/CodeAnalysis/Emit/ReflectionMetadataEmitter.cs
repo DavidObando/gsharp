@@ -2111,12 +2111,29 @@ internal sealed class ReflectionMetadataEmitter
         // (PlanStructMethods above): the inline-struct ctor always occupies
         // the first of its reserved rows. A `data struct` primary-ctor call
         // is bound as a field-by-field BoundStructLiteralExpression instead
-        // of a ctor call, so it never needs a ClassPrimaryCtorHandles entry.
+        // of a ctor call, so it never needs a ClassPrimaryCtorHandles entry —
+        // EXCEPT for a synthesized anonymous-class-literal's backing type
+        // (rubber-duck follow-up to issue #2224), which has no plain fields
+        // and so needs a real newobj-callable ctor (see the comment near
+        // PlanStructMethods' `classPrimaryCtorRows[s] = methodRow++` above and
+        // DataStructSynthesizer.EmitDataStructSynthesizedMembers). That row is
+        // reserved during planning but the handle is normally only cached
+        // inside EmitDataStructSynthesizedMembers, called from
+        // EmitStructMethodBodies for topStructs — which runs AFTER class
+        // method bodies (topClasses), so a class method that constructs an
+        // anonymous-class literal would resolve against an empty cache. Same
+        // fix as the inline-struct case: pre-register it here from
+        // classPrimaryCtorRows.
         foreach (var s in nonSmStructs)
         {
             if (s.IsInline && structFirstMethodRows.TryGetValue(s, out var inlineCtorRow))
             {
                 this.cache.ClassPrimaryCtorHandles[s] = MetadataTokens.MethodDefinitionHandle(inlineCtorRow);
+            }
+            else if (s.IsData && s.Fields.IsDefaultOrEmpty && s.HasPrimaryConstructor
+                && classPrimaryCtorRows.TryGetValue(s, out var dataPrimaryCtorRow))
+            {
+                this.cache.ClassPrimaryCtorHandles[s] = MetadataTokens.MethodDefinitionHandle(dataPrimaryCtorRow);
             }
         }
 
