@@ -122,13 +122,25 @@ public sealed class GscInvoker
     /// <c>.gs</c> into this same compile, so the pipeline's compiled assembly
     /// carries generator output the way a real MSBuild build would.
     /// </param>
+    /// <param name="additionalFiles">
+    /// Issue #2223: non-source generator inputs (e.g. Avalonia <c>.axaml</c>),
+    /// each optionally suffixed with <c>;key=value</c> metadata, passed via gsc's
+    /// <c>/additionalfile:</c> and forwarded to gsgen as <c>AdditionalText</c>.
+    /// </param>
+    /// <param name="globalOptions">
+    /// Issue #2223: project-wide generator options (<c>key=value</c>) passed via
+    /// gsc's <c>/globaloption:</c> and forwarded to gsgen as
+    /// <c>build_property.*</c>.
+    /// </param>
     /// <returns>The exit code, combined output, and parsed diagnostics.</returns>
     public GscResult Compile(
         IReadOnlyList<string> gsFiles,
         string outputPath,
         TargetKind target,
         IReadOnlyList<string> references,
-        IReadOnlyList<string> analyzerPaths = null)
+        IReadOnlyList<string> analyzerPaths = null,
+        IReadOnlyList<string> additionalFiles = null,
+        IReadOnlyList<string> globalOptions = null)
     {
         var args = new List<string>
         {
@@ -155,6 +167,22 @@ public sealed class GscInvoker
             if (!string.IsNullOrEmpty(this.GsgenPath))
             {
                 args.Add("/gsgentool:" + this.GsgenPath);
+            }
+        }
+
+        if (additionalFiles is not null)
+        {
+            foreach (string additionalFile in additionalFiles)
+            {
+                args.Add("/additionalfile:" + additionalFile);
+            }
+        }
+
+        if (globalOptions is not null)
+        {
+            foreach (string globalOption in globalOptions)
+            {
+                args.Add("/globaloption:" + globalOption);
             }
         }
 

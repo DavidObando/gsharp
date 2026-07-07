@@ -45,6 +45,12 @@ public sealed class LoadedCSharpProject
     /// flag so generator output reaches the cs2gs-compiled assembly the same
     /// way a real build would produce it.
     /// </param>
+    /// <param name="additionalFiles">
+    /// The non-source generator inputs (issue #2223) — the project's
+    /// <c>@(AdditionalFiles)</c> plus discovered <c>.axaml</c> — forwarded to
+    /// gsc/gsgen as Roslyn <c>AdditionalText</c> so file-driven generators (e.g.
+    /// Avalonia's XAML name generator) can materialize their output.
+    /// </param>
     public LoadedCSharpProject(
         CSharpCompilation compilation,
         IReadOnlyList<LoadedDocument> documents,
@@ -52,7 +58,8 @@ public sealed class LoadedCSharpProject
         string projectDirectory = null,
         string rootNamespace = null,
         IReadOnlyList<string> resxFiles = null,
-        IReadOnlyList<string> analyzerReferencePaths = null)
+        IReadOnlyList<string> analyzerReferencePaths = null,
+        IReadOnlyList<string> additionalFiles = null)
     {
         this.Compilation = compilation;
         this.Documents = documents;
@@ -61,6 +68,7 @@ public sealed class LoadedCSharpProject
         this.RootNamespace = rootNamespace ?? string.Empty;
         this.ResxFiles = resxFiles ?? ImmutableArray<string>.Empty;
         this.AnalyzerReferencePaths = analyzerReferencePaths ?? ImmutableArray<string>.Empty;
+        this.AdditionalFiles = additionalFiles ?? ImmutableArray<string>.Empty;
     }
 
     /// <summary>Gets the bound C# compilation.</summary>
@@ -102,6 +110,14 @@ public sealed class LoadedCSharpProject
     /// references (issue #2215) — empty for an in-memory-loaded project.
     /// </summary>
     public IReadOnlyList<string> AnalyzerReferencePaths { get; }
+
+    /// <summary>
+    /// Gets the non-source generator inputs (issue #2223) — the project's
+    /// <c>@(AdditionalFiles)</c> plus discovered <c>.axaml</c> — forwarded to
+    /// gsc/gsgen as Roslyn <c>AdditionalText</c>. Empty for an in-memory-loaded
+    /// project.
+    /// </summary>
+    public IReadOnlyList<string> AdditionalFiles { get; }
 
     /// <summary>
     /// Gets the subset of <see cref="LoadDiagnostics"/> with

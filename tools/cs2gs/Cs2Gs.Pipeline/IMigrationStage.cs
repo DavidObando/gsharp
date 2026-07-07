@@ -99,6 +99,24 @@ public sealed class StageExecutionContext
     public List<string> AnalyzerReferencePaths { get; } = new List<string>();
 
     /// <summary>
+    /// Gets the non-source generator inputs (issue #2223) to forward to gsc's
+    /// <c>/additionalfile:</c> flag — the project's <c>@(AdditionalFiles)</c>
+    /// plus discovered <c>.axaml</c>, each optionally suffixed with
+    /// <c>;key=value</c> metadata (e.g. <c>;SourceItemGroup=AvaloniaXaml</c>) so
+    /// a file/options-driven generator (Avalonia's XAML name generator)
+    /// recognizes them. Populated by the Translate stage from the loaded
+    /// project's additional files.
+    /// </summary>
+    public List<string> AdditionalGeneratorFiles { get; } = new List<string>();
+
+    /// <summary>
+    /// Gets the project-wide generator options (issue #2223) to forward to gsc's
+    /// <c>/globaloption:</c> flag as <c>key=value</c> pairs (surfaced to
+    /// generators as <c>build_property.*</c>). Populated by the Translate stage.
+    /// </summary>
+    public List<string> GeneratorGlobalOptions { get; } = new List<string>();
+
+    /// <summary>
     /// Gets or sets the absolute path of the assembly emitted by the Compile
     /// stage, published for the IL-verify stage to read (ADR-0115 §C). It is
     /// <see langword="null"/> until a green stage-2 compile has run.

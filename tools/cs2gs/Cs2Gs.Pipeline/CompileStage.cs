@@ -48,7 +48,9 @@ public sealed class CompileStage : IMigrationStage
             outputPath,
             context.App.TargetKind,
             BuildReferenceSet(context.App.ReferencedAssemblies, context.ExternalReferencePaths),
-            context.AnalyzerReferencePaths);
+            context.AnalyzerReferencePaths,
+            context.AdditionalGeneratorFiles,
+            context.GeneratorGlobalOptions);
 
         File.WriteAllText(
             Path.Combine(context.AppRunDir, "gsc.compile.log"),
