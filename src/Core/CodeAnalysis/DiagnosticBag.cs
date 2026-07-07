@@ -720,18 +720,6 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
-    /// Reports a file-level <c>@assembly:</c> annotation whose name is not
-    /// <c>InternalsVisibleTo</c> — the only assembly-scoped annotation gsc
-    /// currently understands (issue #1929/#1953 friend-assembly opt-in).
-    /// </summary>
-    /// <param name="location">The source location of the annotation name.</param>
-    /// <param name="name">The unsupported annotation name as written in source.</param>
-    public void ReportUnsupportedAssemblyAnnotation(TextLocation location, string name)
-    {
-        Report(location, "GS0464", $"'@assembly:{name}' is not supported. The only file-level assembly annotation gsc emits today is '@assembly:InternalsVisibleTo(\"OtherAssemblyName\")'.");
-    }
-
-    /// <summary>
     /// Reports an <c>@assembly:InternalsVisibleTo(...)</c> annotation whose
     /// single argument is not a string literal (the friend assembly name must
     /// be a compile-time constant known to gsc without full expression

@@ -3511,9 +3511,19 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     private void EmitAssemblyInteropAttributes(AssemblyDefinitionHandle assemblyHandle)
     {
+        // Issue #2237: emit every user-declared `@assembly:` attribute
+        // (everything except InternalsVisibleTo, which keeps its dedicated
+        // emission below) first, so the built-in synthesized attributes that
+        // follow can detect — and skip — a type the user already declared
+        // explicitly (e.g. an NBGV-style
+        // `@assembly:AssemblyInformationalVersionAttribute(...)`), avoiding a
+        // duplicate, non-repeatable CustomAttribute row.
+        var userDeclaredAttributeTypeNames = this.EmitUserAssemblyAttributes(assemblyHandle);
+
         // 1. AssemblyInformationalVersionAttribute — carries the full NuGet
         // version string including pre-release suffix.
-        if (!string.IsNullOrEmpty(this.emitCtx.AssemblyVersionOverride))
+        if (!string.IsNullOrEmpty(this.emitCtx.AssemblyVersionOverride)
+            && !userDeclaredAttributeTypeNames.Contains("System.Reflection.AssemblyInformationalVersionAttribute"))
         {
             this.customAttrEncoder.EmitStringAttribute(
                 assemblyHandle,
@@ -3535,6 +3545,41 @@ internal sealed class ReflectionMetadataEmitter
         // nullable context as "annotated" so C# consumers see non-null by
         // default for GSharp types (GSharp has no null references).
         this.EmitNullableContextAttribute(assemblyHandle);
+    }
+
+    /// <summary>
+    /// Issue #2237: emits a real <c>CustomAttribute</c> row for every
+    /// file-level <c>@assembly:</c> annotation the binder resolved
+    /// (<see cref="Binding.BoundProgram.AssemblyAttributes"/>) — every
+    /// annotation EXCEPT <c>InternalsVisibleTo</c>, which
+    /// <see cref="EmitFriendAssemblyAttributes"/> already covers. Reuses the
+    /// same generic <see cref="CustomAttributeEncoder.EmitBoundAttribute"/>
+    /// path used for type/method/field-level attributes, so any attribute
+    /// type the compiler can resolve — BCL (<c>AssemblyVersionAttribute</c>,
+    /// <c>AssemblyMetadataAttribute</c>, ...) or a same-compilation
+    /// user-declared attribute type — becomes real assembly metadata,
+    /// achieving parity with C#'s <c>[assembly: ...]</c>.
+    /// </summary>
+    /// <returns>
+    /// The distinct set of emitted attributes' CLR type full names, used by
+    /// <see cref="EmitAssemblyInteropAttributes"/> to avoid emitting a
+    /// duplicate built-in synthesized attribute of the same (non-repeatable)
+    /// type.
+    /// </returns>
+    private ImmutableHashSet<string> EmitUserAssemblyAttributes(AssemblyDefinitionHandle assemblyHandle)
+    {
+        var emitted = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
+        foreach (var attr in this.emitCtx.Program.AssemblyAttributes)
+        {
+            this.customAttrEncoder.EmitBoundAttribute(assemblyHandle, attr);
+            var clrTypeName = attr.AttributeType?.ClrType?.FullName;
+            if (clrTypeName != null)
+            {
+                emitted.Add(clrTypeName);
+            }
+        }
+
+        return emitted.ToImmutable();
     }
 
     private void EmitFriendAssemblyAttributes(AssemblyDefinitionHandle assemblyHandle)

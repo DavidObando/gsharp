@@ -21,16 +21,61 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// declared friendship).
 ///
 /// This intentionally does not go through the general <c>@Attribute</c>
-/// binder (<c>DeclarationBinder.BindAttributes</c>): assembly attributes are
-/// resolved before any type is bound, and the only shape gsc supports today
-/// is a single string-literal argument, so a syntactic read is sufficient
-/// and avoids a much larger "arbitrary assembly-level custom attribute"
-/// binding/emit feature that nothing here needs yet.
+/// binder (<c>DeclarationBinder.BindAttributes</c>): friend-assembly names
+/// must be known as plain strings very early (before internal-visibility
+/// checks against previously-compiled references), so a syntactic,
+/// string-literal-only read is sufficient and keeps that specific opt-in
+/// resolvable without a full expression bind.
+///
+/// Issue #2237: every OTHER <c>@assembly:</c> annotation (i.e. anything that
+/// isn't <c>InternalsVisibleTo</c>) is bound through the general attribute
+/// binder instead — see <see cref="CollectOtherAnnotations"/> and
+/// <c>Binder.BindGlobalScope</c>'s <c>AssemblyAttributes</c> handling — so
+/// arbitrary C#-parity assembly attributes (<c>AssemblyVersionAttribute</c>,
+/// <c>AssemblyMetadataAttribute</c>, a same-compilation user attribute, ...)
+/// become real assembly-level <c>CustomAttribute</c> rows.
 /// </summary>
 internal static class FriendAssemblyDeclarations
 {
     private const string AnnotationName = "InternalsVisibleTo";
     private const string AnnotationNameWithSuffix = "InternalsVisibleToAttribute";
+
+    /// <summary>
+    /// Collects every file-level <c>@assembly:</c> annotation across
+    /// <paramref name="syntaxTrees"/> EXCEPT <c>InternalsVisibleTo</c> (which
+    /// <see cref="Collect"/> already handles via its own syntactic,
+    /// string-literal-only fast path). Used by <c>Binder.BindGlobalScope</c>
+    /// to feed the remaining annotations through the general attribute
+    /// binder (issue #2237).
+    /// </summary>
+    /// <param name="syntaxTrees">The syntax trees making up the compilation.</param>
+    /// <returns>The non-<c>InternalsVisibleTo</c> assembly-level annotations, in source order.</returns>
+    public static ImmutableArray<AnnotationSyntax> CollectOtherAnnotations(ImmutableArray<SyntaxTree> syntaxTrees)
+    {
+        if (syntaxTrees.IsDefaultOrEmpty)
+        {
+            return ImmutableArray<AnnotationSyntax>.Empty;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<AnnotationSyntax>();
+        foreach (var tree in syntaxTrees)
+        {
+            var annotations = tree.Root?.AssemblyAttributes ?? ImmutableArray<AnnotationSyntax>.Empty;
+            foreach (var annotation in annotations)
+            {
+                var name = annotation.GetNameText();
+                if (string.Equals(name, AnnotationName, StringComparison.Ordinal)
+                    || string.Equals(name, AnnotationNameWithSuffix, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                builder.Add(annotation);
+            }
+        }
+
+        return builder.ToImmutable();
+    }
 
     /// <summary>
     /// Collects the distinct friend-assembly names declared via
@@ -59,7 +104,9 @@ internal static class FriendAssemblyDeclarations
                 if (!string.Equals(name, AnnotationName, StringComparison.Ordinal)
                     && !string.Equals(name, AnnotationNameWithSuffix, StringComparison.Ordinal))
                 {
-                    diagnostics?.ReportUnsupportedAssemblyAnnotation(GetNameLocation(annotation), name);
+                    // Issue #2237: no longer unsupported — every other
+                    // `@assembly:` annotation is bound generically by
+                    // `Binder.BindGlobalScope` via `CollectOtherAnnotations`.
                     continue;
                 }
 

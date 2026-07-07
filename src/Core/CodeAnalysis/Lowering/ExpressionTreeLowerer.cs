@@ -228,6 +228,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         {
             Imports = program.Imports,
             FriendAssemblies = program.FriendAssemblies,
+            AssemblyAttributes = program.AssemblyAttributes,
         };
     }
 

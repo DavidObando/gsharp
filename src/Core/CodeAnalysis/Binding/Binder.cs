@@ -76,6 +76,13 @@ public sealed class Binder
     internal static readonly ImmutableHashSet<AttributeTargetKind> VariableDeclarationAllowedTargets =
         ImmutableHashSet.Create(AttributeTargetKind.Field);
 
+    /// <summary>
+    /// Targets permitted on a file-level <c>@assembly:</c> annotation lead-in
+    /// (ADR-0047 §2/§10, issue #2237): only <c>assembly</c>.
+    /// </summary>
+    internal static readonly ImmutableHashSet<AttributeTargetKind> AssemblyDeclarationAllowedTargets =
+        ImmutableHashSet.Create(AttributeTargetKind.Assembly);
+
     // PR-B-1: cross-cutting binder state lives on BinderContext so the
     // upcoming Binder-component extractions (MemberLookup, ConversionClassifier,
     // OverloadResolver, …) can consume it via constructor injection. The
@@ -994,6 +1001,25 @@ public sealed class Binder
             ?? ResolveEntryPointPackage(packageByTree, globalStatements, functions, packagesInOrder);
         var entryPoint = ResolveEntryPoint(binder, functions, structs, globalStatements, syntaxTrees, entryPointPackage, synthesizedEntryPoint);
 
+        // Issue #2237: bind every `@assembly:` annotation EXCEPT
+        // InternalsVisibleTo (which keeps its own early, syntactic
+        // fast path below via FriendAssemblyDeclarations.Collect) through
+        // the SAME general attribute binder used for every other
+        // declaration position, so any attribute type the compiler can
+        // resolve (AssemblyVersionAttribute, AssemblyMetadataAttribute, a
+        // same-compilation user attribute, ...) becomes a real
+        // assembly-level CustomAttribute row — full parity with C#'s
+        // `[assembly: ...]`. Must run before the diagnostics snapshot below
+        // so any reported diagnostics (e.g. "attribute type not found") are
+        // captured.
+        var otherAssemblyAnnotations = FriendAssemblyDeclarations.CollectOtherAnnotations(syntaxTrees);
+        var boundAssemblyAttributes = binder.declarations.BindAttributes(
+            otherAssemblyAnnotations,
+            AttributeTargetKind.Assembly,
+            AssemblyDeclarationAllowedTargets,
+            "assembly declaration",
+            System.AttributeTargets.Assembly);
+
         var diagnostics = binder.Diagnostics.ToImmutableArray();
 
         if (previous != null)
@@ -1005,6 +1031,9 @@ public sealed class Binder
 
         var result = new BoundGlobalScope(previous, entryPointPackage, packagesInOrder.ToImmutable(), diagnostics, imports, functions, variables, typeAliases, structs, interfaces, enums, delegates, entryPoint, statements.ToImmutable());
         result.PreprocessorSymbols = preprocessorSymbols ?? ImmutableHashSet<string>.Empty;
+        result.AssemblyAttributes = previous == null
+            ? boundAssemblyAttributes
+            : previous.AssemblyAttributes.AddRange(boundAssemblyAttributes);
 
         // Issue #1929/#1953: collect producer-declared friend assemblies
         // (`@assembly:InternalsVisibleTo("...")`) so the emitter can write
@@ -1022,6 +1051,7 @@ public sealed class Binder
             {
                 PreprocessorSymbols = result.PreprocessorSymbols,
                 FriendAssemblies = result.FriendAssemblies,
+                AssemblyAttributes = result.AssemblyAttributes,
             };
         }
 
@@ -1533,6 +1563,7 @@ public sealed class Binder
         {
             Imports = globalScope.GetCumulativeImports(),
             FriendAssemblies = globalScope.FriendAssemblies,
+            AssemblyAttributes = globalScope.AssemblyAttributes,
         };
     }
 
