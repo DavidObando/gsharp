@@ -79,8 +79,11 @@ public class SdkLayoutTests
 
         var doc = XDocument.Load(path);
 
-        var usingTask = doc.Descendants(MsbuildNs + "UsingTask").Single();
-        Assert.Equal("Gsharp.NET.Sdk.Tools.BuildTask", (string)usingTask.Attribute("TaskName"));
+        // ADR-0145 added a second UsingTask (GsgenTask) alongside BuildTask,
+        // so select the one this test cares about by TaskName rather than
+        // assuming BuildTask is the only <UsingTask> declared.
+        var usingTask = doc.Descendants(MsbuildNs + "UsingTask")
+            .Single(t => (string)t.Attribute("TaskName") == "Gsharp.NET.Sdk.Tools.BuildTask");
         Assert.Equal("$(GsharpToolFullPath)", (string)usingTask.Attribute("AssemblyFile"));
 
         var coreCompile = doc.Descendants(MsbuildNs + "Target")
