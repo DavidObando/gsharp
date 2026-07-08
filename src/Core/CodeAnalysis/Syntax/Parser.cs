@@ -7487,15 +7487,18 @@ public class Parser
                 return ParseSingleIdentifierLambdaExpression();
 
             case SyntaxKind.IdentifierToken
-                when Current.Text == "object" && Peek(1).Kind == SyntaxKind.OpenBraceToken:
-                // Issue #2224 (redesigned): `object { let Name Type = value,
-                // ... }` is an anonymous-class literal expression. `object` is
-                // a contextual identifier (used elsewhere as the universal
-                // reference-type name, e.g. `var x object = ...`), recognized
-                // as this literal's lead-in only in the precise `object {`
-                // shape — every other position (a bare `object` type name,
-                // `object` as an ordinary variable name, etc.) continues to
-                // lex and parse exactly as before.
+                when IsAnonymousClassLiteralStart():
+                // Issue #2243 (ADR-0146): an anonymous-object literal
+                // expression in one of the redesigned shapes:
+                //   object { let Name = value ... }
+                //   object : IFace { func f() { ... } }
+                //   object : Base(args) { override func f() ... }
+                //   data object { let Name = value ... }
+                // `object` (and the leading `data`) are contextual identifiers
+                // (used elsewhere as the universal reference-type name and the
+                // `data class`/`data struct` modifier), recognized as this
+                // literal's lead-in only in these precise shapes — every other
+                // position continues to lex and parse exactly as before.
                 return ParsePostfixChain(ParseAnonymousClassExpression());
 
             case SyntaxKind.SwitchKeyword:
@@ -8310,46 +8313,213 @@ public class Parser
         return new SeparatedSyntaxList<MapEntrySyntax>(nodesAndSeparators.ToImmutable());
     }
 
-    private ExpressionSyntax ParseAnonymousClassExpression()
+    private bool IsAnonymousClassLiteralStart()
     {
-        // Issue #2224 (redesigned): `object { let Name Type = value, ... }`
-        // anonymous-class literal. Mirrors ParseMapCreationExpression's shape
-        // but with `let Name Type = value` members (each an explicit,
-        // mandatory type-annotated `let` binding) instead of `key: value` map
-        // entries.
-        var objectKeyword = NextToken();
-        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
-        var members = ParseAnonymousClassMembers();
-        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
-        return new AnonymousClassExpressionSyntax(syntaxTree, objectKeyword, openBrace, members, closeBrace);
+        // Detects the lead-in of an anonymous-object literal in any of its
+        // redesigned shapes (ADR-0146 / issue #2243):
+        //   object {            object : Type            (plain / inheriting)
+        //   data object {       data object : Type       (data variant)
+        // `data` and `object` are contextual identifiers, so this recognition
+        // is intentionally narrow — every other position keeps parsing as
+        // before.
+        var offset = 0;
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "data"
+            && Peek(1).Kind == SyntaxKind.IdentifierToken && Peek(1).Text == "object")
+        {
+            offset = 1;
+        }
+
+        if (!(Peek(offset).Kind == SyntaxKind.IdentifierToken && Peek(offset).Text == "object"))
+        {
+            return false;
+        }
+
+        var afterObject = Peek(offset + 1).Kind;
+        return afterObject == SyntaxKind.OpenBraceToken || afterObject == SyntaxKind.ColonToken;
     }
 
-    private SeparatedSyntaxList<AnonymousClassMemberInitializerSyntax> ParseAnonymousClassMembers()
+    private ExpressionSyntax ParseAnonymousClassExpression()
     {
-        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
-        var parseNext = Current.Kind != SyntaxKind.CloseBraceToken;
-        while (parseNext &&
-               Current.Kind != SyntaxKind.CloseBraceToken &&
-               Current.Kind != SyntaxKind.EndOfFileToken)
+        // ADR-0146 / issue #2243: the redesigned, Kotlin-flavoured
+        // anonymous-object literal. Grammar:
+        //   [data] object [: Base[(args)] [, IFace...]] {
+        //       <member>            (newline / semicolon separated)
+        //       ...
+        //   }
+        // where <member> is one of:
+        //   let/var Name [Type] = expr        (field; type optional/inferred)
+        //   [open] [override] func Name(...)  (method)
+        //   event Name Type                   (event)
+        // `init`/`deinit` members are rejected with GS0485.
+        SyntaxToken dataKeyword = null;
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "data")
         {
-            var letKeyword = MatchToken(SyntaxKind.LetKeyword);
-            var identifier = MatchToken(SyntaxKind.IdentifierToken);
-            var typeClause = ParseTypeClause();
-            var equals = MatchToken(SyntaxKind.EqualsToken);
-            var value = ParseExpression();
-            nodesAndSeparators.Add(new AnonymousClassMemberInitializerSyntax(syntaxTree, letKeyword, identifier, typeClause, equals, value));
+            dataKeyword = NextToken();
+        }
 
-            if (Current.Kind == SyntaxKind.CommaToken)
+        var objectKeyword = NextToken();
+
+        // Optional base/interface clause `: Base[(args)] [, IFace, ...]`,
+        // parsed exactly like a class declaration's base clause.
+        SyntaxToken baseColon = null;
+        TypeClauseSyntax baseTypeClause = null;
+        SyntaxToken baseCtorOpenParen = null;
+        var baseCtorArguments = new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty);
+        SyntaxToken baseCtorCloseParen = null;
+        var additionalBaseNodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        if (Current.Kind == SyntaxKind.ColonToken)
+        {
+            baseColon = MatchToken(SyntaxKind.ColonToken);
+            baseTypeClause = ParseTypeClause();
+
+            if (Current.Kind == SyntaxKind.OpenParenthesisToken)
             {
-                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+                baseCtorOpenParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+                baseCtorArguments = ParseArguments();
+                baseCtorCloseParen = MatchToken(SyntaxKind.CloseParenthesisToken);
             }
-            else
+
+            while (Current.Kind == SyntaxKind.CommaToken)
             {
-                parseNext = false;
+                var comma = MatchToken(SyntaxKind.CommaToken);
+                additionalBaseNodesAndSeparators.Add(comma);
+                additionalBaseNodesAndSeparators.Add(ParseTypeClause());
             }
         }
 
-        return new SeparatedSyntaxList<AnonymousClassMemberInitializerSyntax>(nodesAndSeparators.ToImmutable());
+        var additionalBaseTypeClauses = new SeparatedSyntaxList<TypeClauseSyntax>(additionalBaseNodesAndSeparators.ToImmutable());
+
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+        var members = ParseAnonymousClassMembers();
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        return new AnonymousClassExpressionSyntax(
+            syntaxTree,
+            dataKeyword,
+            objectKeyword,
+            baseColon,
+            baseTypeClause,
+            baseCtorOpenParen,
+            baseCtorArguments,
+            baseCtorCloseParen,
+            additionalBaseTypeClauses,
+            openBrace,
+            members,
+            closeBrace);
+    }
+
+    private ImmutableArray<SyntaxNode> ParseAnonymousClassMembers()
+    {
+        // Members are newline/semicolon separated (like ordinary class/struct
+        // bodies), never comma separated. Each sub-parser consumes its own
+        // terminator, so the loop simply repeats until the closing brace.
+        var members = ImmutableArray.CreateBuilder<SyntaxNode>();
+        while (Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            // Members are newline- or semicolon-separated. Newlines are not
+            // tokens (the next member's lead keyword simply follows), so only
+            // explicit semicolon separators need to be consumed here.
+            if (Current.Kind == SyntaxKind.SemicolonToken)
+            {
+                NextToken();
+                continue;
+            }
+
+            var startToken = Current;
+
+            // Optional `open`/`override` modifiers preceding a method.
+            SyntaxToken memberOpenModifier = null;
+            SyntaxToken memberOverrideModifier = null;
+            while (Current.Kind == SyntaxKind.OpenKeyword || Current.Kind == SyntaxKind.OverrideKeyword)
+            {
+                if (Current.Kind == SyntaxKind.OpenKeyword && memberOpenModifier == null)
+                {
+                    memberOpenModifier = NextToken();
+                }
+                else if (Current.Kind == SyntaxKind.OverrideKeyword && memberOverrideModifier == null)
+                {
+                    memberOverrideModifier = NextToken();
+                }
+                else
+                {
+                    Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.FuncKeyword);
+                    NextToken();
+                }
+            }
+
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "init"
+                && (Peek(1).Kind == SyntaxKind.OpenParenthesisToken))
+            {
+                // Reject `init(...)` — anonymous objects have no user ctors.
+                Diagnostics.ReportInitDeinitNotAllowedInAnonymousObject(Current.Location, "init");
+                ParseConstructorDeclaration(accessibilityModifier: null, convenienceModifier: null);
+            }
+            else if (Current.Kind == SyntaxKind.FuncKeyword
+                     && Peek(1).Kind == SyntaxKind.IdentifierToken && Peek(1).Text == "init"
+                     && Peek(2).Kind == SyntaxKind.OpenParenthesisToken)
+            {
+                // Reject `func init(...)`.
+                Diagnostics.ReportInitDeinitNotAllowedInAnonymousObject(Current.Location, "init");
+                NextToken();
+                ParseConstructorDeclaration(accessibilityModifier: null, convenienceModifier: null);
+            }
+            else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "deinit"
+                     && (Peek(1).Kind == SyntaxKind.OpenBraceToken
+                         || Peek(1).Kind == SyntaxKind.OpenParenthesisToken))
+            {
+                // Reject `deinit { ... }`.
+                Diagnostics.ReportInitDeinitNotAllowedInAnonymousObject(Current.Location, "deinit");
+                ParseDeinitDeclaration();
+            }
+            else if (Current.Kind == SyntaxKind.FuncKeyword)
+            {
+                members.Add(ParseFunctionDeclaration(accessibilityModifier: null, memberOpenModifier, memberOverrideModifier));
+            }
+            else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "event")
+            {
+                members.Add(ParseEventDeclaration(accessibilityModifier: null, memberOpenModifier, memberOverrideModifier));
+            }
+            else if (Current.Kind == SyntaxKind.LetKeyword || Current.Kind == SyntaxKind.VarKeyword)
+            {
+                if (memberOpenModifier != null || memberOverrideModifier != null)
+                {
+                    var loc = (memberOpenModifier ?? memberOverrideModifier).Location;
+                    Diagnostics.ReportUnexpectedToken(loc, SyntaxKind.OpenKeyword, SyntaxKind.FuncKeyword);
+                }
+
+                members.Add(ParseAnonymousClassFieldMember());
+            }
+            else
+            {
+                // Unrecognised member start — surface a diagnostic and recover.
+                Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.LetKeyword);
+            }
+
+            if (Current == startToken)
+            {
+                NextToken();
+            }
+        }
+
+        return members.ToImmutable();
+    }
+
+    private AnonymousClassMemberInitializerSyntax ParseAnonymousClassFieldMember()
+    {
+        // `let/var Name [Type] = expr` — the type clause is optional and
+        // inferred from the initializer when omitted, exactly like an ordinary
+        // local `let` declaration.
+        var letOrVarKeyword = NextToken();
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+
+        TypeClauseSyntax typeClause = null;
+        if (Current.Kind != SyntaxKind.EqualsToken)
+        {
+            typeClause = ParseTypeClause();
+        }
+
+        var equals = MatchToken(SyntaxKind.EqualsToken);
+        var value = ParseExpression();
+        return new AnonymousClassMemberInitializerSyntax(syntaxTree, letOrVarKeyword, identifier, typeClause, equals, value);
     }
 
     private ExpressionSyntax ParseArrayCreationExpression()
