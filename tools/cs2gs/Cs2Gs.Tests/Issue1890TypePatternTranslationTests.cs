@@ -97,6 +97,36 @@ namespace Corpus.Issue1890
         AssertRoundTripParses(rendered);
     }
 
+    [Fact]
+    public void SwitchExpression_QualifiedBareTypeArm_LowersToDiscardTypePattern()
+    {
+        // Issue #2258: a fully-qualified bare-type arm (`App.Auth.MfaChallenge =>`)
+        // is parsed by Roslyn as a ConstantPattern over a MemberAccessExpression
+        // (NOT a TypeSyntax), so it must be recognized as a type reference via its
+        // resolved symbol and lowered to `_ is T` — otherwise it renders as a bare
+        // value expression that gsc rejects (GS0157).
+        string rendered = Render(@"
+namespace App.Auth
+{
+    public class Challenge { }
+    public sealed class MfaChallenge : Challenge { }
+
+    public class Holder
+    {
+        public string Describe(Challenge c) => c switch
+        {
+            App.Auth.MfaChallenge => ""mfa"",
+            _ => ""other"",
+        };
+    }
+}
+");
+
+        Assert.Contains("case _ is MfaChallenge:", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("case App.Auth.MfaChallenge:", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
     private static void AssertRoundTripParses(string rendered)
     {
         RoundTripResult result = GSharpRoundTrip.Validate(rendered);
