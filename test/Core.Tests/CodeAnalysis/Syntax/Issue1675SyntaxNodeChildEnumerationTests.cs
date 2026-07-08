@@ -79,8 +79,8 @@ public class Issue1675SyntaxNodeChildEnumerationTests
         // annotation use-site targets
         "package p\nimport System\n@field:Obsolete\nvar counter = 0\nfunc F(@param:NotNull x int32) {\n}\n",
 
-        // issue #2224: object { let ... } anonymous-class-literal expression
-        "package p\nfunc F() {\n  var x = object { let Name string = \"Foo\", let Age int32 = 42 }\n}\n",
+        // issue #2224 / ADR-0146: object { let ... } anonymous-class-literal expression
+        "package p\nfunc F() {\n  var x = object { let Name string = \"Foo\"; let Age int32 = 42 }\n}\n",
 
         // type alias
         "package p\ntype MyInt = int32\n",

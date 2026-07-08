@@ -23,7 +23,7 @@ public class Issue2224AnonymousClassHoverCompletionTests
     public void ComputeHover_OnAnonymousClassVariable_ShowsSynthesizedShape()
     {
         const string source = "func main() {\n"
-            + "    var x = object { let Name string = \"Foo\", let Age int32 = 42 }\n"
+            + "    var x = object { let Name string = \"Foo\"; let Age int32 = 42 }\n"
             + "}\n";
         var content = LanguageServerTestHelpers.Content(source);
 
@@ -41,7 +41,7 @@ public class Issue2224AnonymousClassHoverCompletionTests
     public void ComputeHover_OnAnonymousClassMemberAccess_ResolvesMemberType()
     {
         const string source = "func main() {\n"
-            + "    var x = object { let Name string = \"Foo\", let Age int32 = 42 }\n"
+            + "    var x = object { let Name string = \"Foo\"; let Age int32 = 42 }\n"
             + "    var n = x.Name\n"
             + "}\n";
         var content = LanguageServerTestHelpers.Content(source);
@@ -56,7 +56,7 @@ public class Issue2224AnonymousClassHoverCompletionTests
     public void ComputeCompletions_AfterDotOnAnonymousClassValue_OffersMembers()
     {
         const string source = "func main() {\n"
-            + "    var x = object { let Name string = \"Foo\", let Age int32 = 42 }\n"
+            + "    var x = object { let Name string = \"Foo\"; let Age int32 = 42 }\n"
             + "    x.\n"
             + "}\n";
         var content = LanguageServerTestHelpers.Content(source);
@@ -75,7 +75,7 @@ public class Issue2224AnonymousClassHoverCompletionTests
     public void ComputeCompletions_AfterDotOnAnonymousClassValue_DoesNotOfferGlobalKeywords()
     {
         const string source = "func main() {\n"
-            + "    var x = object { let Name string = \"Foo\", let Age int32 = 42 }\n"
+            + "    var x = object { let Name string = \"Foo\"; let Age int32 = 42 }\n"
             + "    x.\n"
             + "}\n";
         var content = LanguageServerTestHelpers.Content(source);
