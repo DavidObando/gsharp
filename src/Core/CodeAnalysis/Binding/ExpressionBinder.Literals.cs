@@ -727,8 +727,8 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// Binds an anonymous-class literal <c>object { let Name string = "Foo", ... }</c>
-    /// (issue #2224). Unlike <see cref="BindStructLiteralExpression(StructLiteralExpressionSyntax)"/>,
+    /// Binds an anonymous-class literal <c>object { let Name = "Foo"; ... }</c>
+    /// (issue #2224 / ADR-0146). Unlike <see cref="BindStructLiteralExpression(StructLiteralExpressionSyntax)"/>,
     /// there is no named type to resolve: each distinct ordered
     /// (member-name, member-type) shape gets its own compiler-synthesized
     /// backing <see cref="StructSymbol"/>, cached per compile pass (see
@@ -744,12 +744,31 @@ internal sealed partial class ExpressionBinder
     /// <param name="syntax">The anonymous-class-literal syntax.</param>
     private BoundExpression BindAnonymousClassExpression(AnonymousClassExpressionSyntax syntax)
     {
-        var seenNames = new HashSet<string>();
-        var memberNames = ImmutableArray.CreateBuilder<string>(syntax.Members.Count);
-        var memberValues = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Members.Count);
-        var hadError = false;
-        foreach (var member in syntax.Members)
+        // ADR-0146 / issue #2243: a "rich" anonymous object — one carrying a
+        // base/interface clause, methods, or events — was desugared to a
+        // compiler-synthesized backing class by the pre-binding pass
+        // (Binder.SynthesizeRichAnonymousClasses). Bind the literal site to a
+        // parameterless construction of that class; its field initializers and
+        // base-constructor forwarding run in the synthesized constructor.
+        if (IsRichAnonymousObject(syntax))
         {
+            return BindRichAnonymousClassExpression(syntax);
+        }
+
+        var seenNames = new HashSet<string>();
+        var memberNames = ImmutableArray.CreateBuilder<string>(syntax.Members.Length);
+        var memberValues = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Members.Length);
+        var hadError = false;
+        foreach (var memberNode in syntax.Members)
+        {
+            if (!(memberNode is AnonymousClassMemberInitializerSyntax member))
+            {
+                // A method/event in an object with no base clause is still a
+                // rich object and handled above; reaching here means an
+                // unexpected member node — skip defensively.
+                continue;
+            }
+
             var name = member.Identifier.Text;
             if (!seenNames.Add(name))
             {
@@ -758,6 +777,11 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
+            // The member type clause is optional (ADR-0146): when present the
+            // annotated type wins and the initializer is converted to it
+            // (declared-type-wins, like `let x Type = expr`); when absent the
+            // member type is inferred from the initializer expression exactly
+            // like an ordinary `let x = expr` local declaration.
             var memberType = bindTypeClause(member.TypeClause);
             var value = BindExpression(member.Value);
             if (value is BoundErrorExpression)
@@ -789,21 +813,73 @@ internal sealed partial class ExpressionBinder
         }
 
         var packageName = this.function?.Package?.Name ?? string.Empty;
-        var anonymousType = scope.GetAnonymousTypeCache().GetOrCreate(shape, packageName);
+        var anonymousType = scope.GetAnonymousTypeCache().GetOrCreate(shape, packageName, useFields: syntax.IsData);
 
-        // Rubber-duck follow-up to issue #2224: an anonymous-class literal's
-        // members are get-only auto-properties with no public field/setter
-        // (see AnonymousTypeCache), so it must be compiled as a primary
-        // constructor call (`<>AnonymousTypeN(v1, v2, ...)`) — exactly like
-        // C#'s `new { ... }` lowers to a constructor call, never a
-        // field/property initializer — rather than a struct/class composite
-        // literal (BoundStructLiteralExpression's initobj+stfld / setter-call
-        // emission requires a public field or settable property, neither of
-        // which this type has). This also lets the already-proven primary
-        // constructor call and expression-tree lowering paths (used by e.g.
-        // `data struct Wrapper[T](Value T)`) handle emission with no
-        // additional emitter code path.
+        if (syntax.IsData)
+        {
+            // ADR-0146 / issue #2243: a `data object { ... }` synthesizes a
+            // fields-based value type (data-class style). Emit it as a
+            // composite struct literal (initobj + stfld per field) exactly like
+            // an ordinary `data struct Foo(x int32)` literal, so value equality,
+            // ToString, Deconstruct, and `with`-copy all work off the fields.
+            var initializers = ImmutableArray.CreateBuilder<BoundFieldInitializer>(memberValues.Count);
+            var fields = anonymousType.Fields;
+            for (var i = 0; i < memberValues.Count; i++)
+            {
+                initializers.Add(new BoundFieldInitializer(fields[i], memberValues[i]));
+            }
+
+            return new BoundStructLiteralExpression(syntax, anonymousType, initializers.MoveToImmutable());
+        }
+
+        // A plain `object { ... }`'s members are get-only auto-properties with
+        // no public field/setter (see AnonymousTypeCache), so it compiles as a
+        // primary constructor call (`<>AnonymousTypeN(v1, v2, ...)`) — exactly
+        // like C#'s `new { ... }` lowers to a constructor call. This reuses the
+        // proven primary-constructor-call and expression-tree lowering paths
+        // with no additional emitter code.
         return new BoundConstructorCallExpression(syntax, anonymousType, memberValues.MoveToImmutable());
+    }
+
+    /// <summary>
+    /// Determines whether an anonymous-object literal is "rich" — i.e. it
+    /// carries a base/interface clause, a method, or an event — and therefore
+    /// must be lowered through the synthesized-class pipeline rather than the
+    /// field-only <see cref="AnonymousTypeCache"/> synthesis.
+    /// </summary>
+    private static bool IsRichAnonymousObject(AnonymousClassExpressionSyntax syntax)
+    {
+        if (syntax.HasBaseType)
+        {
+            return true;
+        }
+
+        foreach (var member in syntax.Members)
+        {
+            if (member is FunctionDeclarationSyntax || member is EventDeclarationSyntax)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private BoundExpression BindRichAnonymousClassExpression(AnonymousClassExpressionSyntax syntax)
+    {
+        // The desugaring pass records the synthesized backing class for each
+        // rich anonymous-object literal keyed by syntax-node identity. The
+        // literal simply constructs it with no arguments — base-constructor
+        // arguments (spliced verbatim into the synthesized `: Base(args)`
+        // clause) and field initializers execute inside the synthesized ctor.
+        if (scope.GetRichAnonymousClassMap().TryGetValue(syntax, out var classSymbol) && classSymbol != null)
+        {
+            return new BoundConstructorCallExpression(syntax, classSymbol, ImmutableArray<BoundExpression>.Empty);
+        }
+
+        // Defensive: if the desugaring pass produced no symbol (it reported a
+        // diagnostic), surface an error node so binding continues.
+        return new BoundErrorExpression(syntax);
     }
 
     private BoundExpression BindStructLiteralExpression(StructLiteralExpressionSyntax syntax)

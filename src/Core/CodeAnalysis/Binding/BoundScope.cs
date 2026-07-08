@@ -34,6 +34,8 @@ public sealed class BoundScope
     // per-compilation anonymous-type cache.
     private AnonymousTypeCache anonymousTypeCache;
 
+    private Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol> richAnonymousClassMap;
+
     // Issue #1680: name-keyed index over extensionFunctions. Extension lookup is a
     // per-call-site hot path run for every member call that doesn't resolve as an
     // instance member, so a flat per-scope list forced an O(callsites x extensions)
@@ -1049,6 +1051,18 @@ public sealed class BoundScope
     /// <returns>The shared <see cref="AnonymousTypeCache"/> for this scope's chain.</returns>
     internal AnonymousTypeCache GetAnonymousTypeCache()
         => Parent != null ? Parent.GetAnonymousTypeCache() : anonymousTypeCache ??= new AnonymousTypeCache();
+
+    /// <summary>
+    /// Gets the per-compile-pass map from a "rich" anonymous-object literal
+    /// (one carrying a base/interface clause, methods, or events — ADR-0146 /
+    /// issue #2243) to its desugared, compiler-synthesized backing
+    /// <see cref="StructSymbol"/> (a class). Walks to the root of this scope's
+    /// chain so the desugaring pass (which populates it) and the literal-site
+    /// binder (which consumes it) share one instance.
+    /// </summary>
+    /// <returns>The shared rich-anonymous-object map for this scope's chain.</returns>
+    internal Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol> GetRichAnonymousClassMap()
+        => Parent != null ? Parent.GetRichAnonymousClassMap() : richAnonymousClassMap ??= new Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol>();
 
     /// <summary>
     /// Adds a brand-new type-alias key, not previously visible anywhere in the

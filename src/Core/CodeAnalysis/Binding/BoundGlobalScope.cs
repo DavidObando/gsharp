@@ -313,6 +313,18 @@ public sealed class BoundGlobalScope
     internal ImmutableArray<StructSymbol> AnonymousTypes { get; set; } = ImmutableArray<StructSymbol>.Empty;
 
     /// <summary>
+    /// Gets or sets the map from each "rich" anonymous-object literal (one
+    /// carrying a base/interface clause, method, or event — ADR-0146 / issue
+    /// #2243) to its compiler-synthesized backing class. Populated while
+    /// binding the global scope and consumed by <c>Binder.BindProgram</c>
+    /// (which rehydrates it onto the fresh body-binding scope) so a literal
+    /// appearing inside a function or method body binds to the right
+    /// synthesized class.
+    /// </summary>
+    internal Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol> RichAnonymousClassMap { get; set; }
+        = new Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol>();
+
+    /// <summary>
     /// Returns every import visible across the whole <see cref="Previous"/>
     /// chain, oldest submission first (issue #2101). This is the cumulative
     /// view that <see cref="Imports"/> itself used to provide directly —

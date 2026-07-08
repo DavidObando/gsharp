@@ -787,11 +787,30 @@ public sealed class Binder
         // user struct or class declared later in the same compilation —
         // e.g. a `class` whose field type is a `struct` declared below it —
         // mirroring the two-phase scheme already used for interfaces above.
+        //
+        // ADR-0146 / issue #2243: "rich" anonymous-object literals (those
+        // carrying a base/interface clause, methods, or events) are desugared
+        // here into compiler-synthesized top-level class declarations and fed
+        // through the SAME struct/class binding pipeline (shell, body,
+        // interface/override verification, method-body binding, emit) as
+        // user-named classes — no bespoke binder or emitter code path. The
+        // literal site later binds to a parameterless construction of the
+        // synthesized class (see ExpressionBinder.BindRichAnonymousClassExpression).
+        var anonClassCounter = 0;
+        var richAnonymousClasses = new List<(AnonymousClassExpressionSyntax Node, StructDeclarationSyntax Declaration)>();
+        foreach (var tree in syntaxTrees)
+        {
+            CollectRichAnonymousObjectDeclarations(tree.Root, tree, richAnonymousClasses, binder.Diagnostics, ref anonClassCounter);
+        }
+
         var structDeclarations = PartialTypeMerger.MergeStructs(
             syntaxTrees.SelectMany(st => st.Root.Members).OfType<StructDeclarationSyntax>(),
             packageByTree,
-            binder.Diagnostics);
+            binder.Diagnostics)
+            .Concat(richAnonymousClasses.Select(r => r.Declaration))
+            .ToList();
         var declaredStructs = new List<(StructDeclarationSyntax Syntax, StructSymbol Symbol)>();
+        var syntheticDeclToSymbol = new Dictionary<StructDeclarationSyntax, StructSymbol>();
         foreach (var structSyntax in structDeclarations)
         {
             var owningPackage = packageByTree[structSyntax.SyntaxTree];
@@ -800,12 +819,25 @@ public sealed class Binder
             if (structSymbol != null)
             {
                 declaredStructs.Add((structSyntax, structSymbol));
+                syntheticDeclToSymbol[structSyntax] = structSymbol;
 
                 // Issue #1069: declare the type-name shells of any nested types
                 // (recursively) right after the enclosing shell, so a sibling
                 // member signature can forward-reference a nested type by name.
                 // The bodies are bound later in phase 2 (BindNestedTypeBodies).
                 binder.declarations.DeclareNestedTypeShells(structSyntax, structSymbol, owningPackage);
+            }
+        }
+
+        // ADR-0146 / issue #2243: publish the rich anonymous-object literal →
+        // synthesized-class map so the literal-site binder can construct the
+        // right synthesized class. Keyed by the literal's syntax-node identity.
+        var richAnonymousMap = binder.scope.GetRichAnonymousClassMap();
+        foreach (var (node, decl) in richAnonymousClasses)
+        {
+            if (syntheticDeclToSymbol.TryGetValue(decl, out var sym))
+            {
+                richAnonymousMap[node] = sym;
             }
         }
 
@@ -1044,6 +1076,12 @@ public sealed class Binder
         // freshly-derived scope chain with its own cache instance.
         result.AnonymousTypes = binder.scope.GetAnonymousTypeCache().Symbols.ToImmutableArray();
 
+        // ADR-0146 / issue #2243: snapshot the rich anonymous-object literal →
+        // synthesized-class map so BindProgram (which binds function/method
+        // bodies against a freshly-derived scope chain) can rehydrate it and
+        // bind literals appearing inside those bodies.
+        result.RichAnonymousClassMap = binder.scope.GetRichAnonymousClassMap();
+
         // Issue #1929/#1953: collect producer-declared friend assemblies
         // (`@assembly:InternalsVisibleTo("...")`) so the emitter can write
         // real InternalsVisibleToAttribute rows. Diagnostics for malformed
@@ -1062,6 +1100,7 @@ public sealed class Binder
                 FriendAssemblies = result.FriendAssemblies,
                 AssemblyAttributes = result.AssemblyAttributes,
                 AnonymousTypes = result.AnonymousTypes,
+                RichAnonymousClassMap = result.RichAnonymousClassMap,
             };
         }
 
@@ -1133,6 +1172,20 @@ public sealed class Binder
     public static BoundProgram BindProgram(BoundGlobalScope globalScope, ReferenceResolver references, BoundBodyCache cache, ImmutableHashSet<SyntaxTree> dirtyTrees)
     {
         var parentScope = CreateParentScope(globalScope, references, preprocessorSymbols: globalScope?.PreprocessorSymbols);
+
+        // ADR-0146 / issue #2243: rehydrate the rich anonymous-object literal →
+        // synthesized-class map onto this pass's scope chain so a literal
+        // inside a function or method body binds to its synthesized class (the
+        // map was built while binding the global scope, on a scope chain that
+        // is not reused here).
+        if (globalScope?.RichAnonymousClassMap != null && globalScope.RichAnonymousClassMap.Count > 0)
+        {
+            var richMap = parentScope.GetRichAnonymousClassMap();
+            foreach (var kv in globalScope.RichAnonymousClassMap)
+            {
+                richMap[kv.Key] = kv.Value;
+            }
+        }
 
         var functionBodies = ImmutableDictionary.CreateBuilder<FunctionSymbol, BoundBlockStatement>();
         var diagnostics = ImmutableArray.CreateBuilder<Diagnostic>();
@@ -1920,6 +1973,172 @@ public sealed class Binder
     }
 
     /// <summary>
+    /// ADR-0146 / issue #2243: recursively walks a syntax subtree and, for
+    /// every "rich" anonymous-object literal (one carrying a base/interface
+    /// clause, a method, or an event), synthesizes a top-level class
+    /// declaration and records the (literal, declaration) pair.
+    /// </summary>
+    private static void CollectRichAnonymousObjectDeclarations(
+        SyntaxNode node,
+        SyntaxTree tree,
+        List<(AnonymousClassExpressionSyntax Node, StructDeclarationSyntax Declaration)> results,
+        DiagnosticBag diagnostics,
+        ref int counter)
+    {
+        if (node is AnonymousClassExpressionSyntax anon && IsRichAnonymousObject(anon))
+        {
+            var decl = SynthesizeAnonymousClassDeclaration(anon, tree, counter++, diagnostics);
+            results.Add((anon, decl));
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            CollectRichAnonymousObjectDeclarations(child, tree, results, diagnostics, ref counter);
+        }
+    }
+
+    /// <summary>
+    /// Determines whether an anonymous-object literal is "rich" — carries a
+    /// base/interface clause, a method, or an event — and therefore must be
+    /// lowered through the synthesized-class pipeline (ADR-0146).
+    /// </summary>
+    private static bool IsRichAnonymousObject(AnonymousClassExpressionSyntax syntax)
+    {
+        if (syntax.HasBaseType)
+        {
+            return true;
+        }
+
+        foreach (var member in syntax.Members)
+        {
+            if (member is FunctionDeclarationSyntax || member is EventDeclarationSyntax)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// ADR-0146 / issue #2243: synthesizes a top-level <c>class</c> declaration
+    /// backing a rich anonymous-object literal. Field members become public
+    /// class fields (with their initializers), method and event members are
+    /// spliced verbatim, and the base/interface clause (with any
+    /// base-constructor arguments) is forwarded onto the synthesized class.
+    /// Field initializers and base-constructor arguments must be self-contained
+    /// (they cannot reference enclosing locals) — a documented limitation of
+    /// the rich path; the field-only path retains full capture/inference.
+    /// </summary>
+    private static StructDeclarationSyntax SynthesizeAnonymousClassDeclaration(
+        AnonymousClassExpressionSyntax syntax,
+        SyntaxTree tree,
+        int index,
+        DiagnosticBag diagnostics)
+    {
+        var position = syntax.ObjectKeyword.Position;
+        SyntaxToken Tok(SyntaxKind kind, string text) => new SyntaxToken(tree, kind, position, text, null);
+
+        var identifier = Tok(SyntaxKind.IdentifierToken, $"<>AnonClass{index}");
+        var classKeyword = Tok(SyntaxKind.ClassKeyword, "class");
+
+        var fields = ImmutableArray.CreateBuilder<FieldDeclarationSyntax>();
+        var methods = ImmutableArray.CreateBuilder<FunctionDeclarationSyntax>();
+        var events = ImmutableArray.CreateBuilder<EventDeclarationSyntax>();
+        foreach (var member in syntax.Members)
+        {
+            switch (member)
+            {
+                case AnonymousClassMemberInitializerSyntax field:
+                    if (field.TypeClause == null)
+                    {
+                        // The rich path materializes fields as ordinary class
+                        // fields, which require an explicit type. Inferred-type
+                        // fields are only supported on the field-only path.
+                        diagnostics.ReportInferredFieldTypeNotAllowedInRichAnonymousObject(field.Identifier.Location, field.Identifier.Text);
+                        continue;
+                    }
+
+                    fields.Add(new FieldDeclarationSyntax(
+                        tree,
+                        Tok(SyntaxKind.PublicKeyword, "public"),
+                        field.LetOrVarKeyword,
+                        field.Identifier,
+                        field.TypeClause,
+                        field.EqualsToken,
+                        field.Value));
+                    break;
+
+                case FunctionDeclarationSyntax method:
+                    methods.Add(method);
+                    break;
+
+                case EventDeclarationSyntax evt:
+                    events.Add(evt);
+                    break;
+            }
+        }
+
+        // Base/interface clause. Replicates ParseStructDeclaration's handling:
+        // the first base type populates BaseTypeIdentifier, subsequent ones
+        // AdditionalBaseTypeIdentifiers, and the full list is preserved on
+        // BaseTypeClauses.
+        SyntaxToken baseColon = null;
+        SyntaxToken baseTypeIdentifier = null;
+        var additionalBaseIdentifiers = ImmutableArray<SyntaxToken>.Empty;
+        var baseTypeClauses = new SeparatedSyntaxList<TypeClauseSyntax>(ImmutableArray<SyntaxNode>.Empty);
+        if (syntax.HasBaseType && syntax.BaseTypeClause != null)
+        {
+            baseColon = syntax.BaseColonToken;
+            baseTypeIdentifier = syntax.BaseTypeClause.DottedName == null
+                ? null
+                : new SyntaxToken(tree, SyntaxKind.IdentifierToken, syntax.BaseTypeClause.Identifier.Position, syntax.BaseTypeClause.DottedName, null);
+
+            var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+            nodesAndSeparators.Add(syntax.BaseTypeClause);
+            var addlBuilder = ImmutableArray.CreateBuilder<SyntaxToken>();
+            foreach (var addl in syntax.AdditionalBaseTypeClauses)
+            {
+                nodesAndSeparators.Add(new SyntaxToken(tree, SyntaxKind.CommaToken, position, ",", null));
+                nodesAndSeparators.Add(addl);
+                addlBuilder.Add(addl.DottedName == null
+                    ? null
+                    : new SyntaxToken(tree, SyntaxKind.IdentifierToken, addl.Identifier.Position, addl.DottedName, null));
+            }
+
+            additionalBaseIdentifiers = addlBuilder.ToImmutable();
+            baseTypeClauses = new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable());
+        }
+
+        var decl = new StructDeclarationSyntax(
+            tree,
+            accessibilityModifier: null,
+            typeKeyword: null,
+            identifier,
+            dataKeyword: null,
+            inlineKeyword: null,
+            openModifier: null,
+            classKeyword,
+            Tok(SyntaxKind.OpenParenthesisToken, "("),
+            new SeparatedSyntaxList<ParameterSyntax>(ImmutableArray<SyntaxNode>.Empty),
+            Tok(SyntaxKind.CloseParenthesisToken, ")"),
+            baseColon,
+            baseTypeIdentifier,
+            additionalBaseIdentifiers,
+            syntax.OpenBraceToken,
+            fields.ToImmutable(),
+            ImmutableArray<PropertyDeclarationSyntax>.Empty,
+            events.ToImmutable(),
+            methods.ToImmutable(),
+            syntax.CloseBraceToken);
+        decl.BaseTypeClauses = baseTypeClauses;
+        decl.BaseConstructorOpenParenthesisToken = syntax.BaseConstructorOpenParenthesisToken;
+        decl.BaseConstructorArguments = syntax.BaseConstructorArguments;
+        decl.BaseConstructorCloseParenthesisToken = syntax.BaseConstructorCloseParenthesisToken;
+        return decl;
+    }
+
+    /// <summary>
     /// ADR-0066 D2/D3: pre-scans the top-level statements to determine the
     /// synthesized entry point's return type before binding. If any TLS
     /// <c>return</c> carries an expression, the entry point returns
@@ -1994,6 +2213,17 @@ public sealed class Binder
             // ADR-0074 added arrow lambdas (LambdaExpressionSyntax); their
             // block-body `return` statements likewise belong to the lambda's
             // body, not the synthesized `<Main>$`.
+            return;
+        }
+
+        if (node is AnonymousClassExpressionSyntax)
+        {
+            // ADR-0146: a rich anonymous-object literal (`object { ... }`,
+            // `object : Base { ... }`) carries its own method/accessor member
+            // declarations. Their `return`s (and expression-bodied `->`
+            // arrows lowered to returns) belong to those synthesized members,
+            // not to the surrounding `<Main>$`. Stop descent so they don't
+            // flip the entry point's inferred return type away from void.
             return;
         }
 
