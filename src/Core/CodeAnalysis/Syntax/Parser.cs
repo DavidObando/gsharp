@@ -3485,7 +3485,7 @@ public class Parser
         while (true)
         {
             var k = Peek(ahead).Kind;
-            if (k == SyntaxKind.IdentifierToken || k == SyntaxKind.ClassKeyword || k == SyntaxKind.StructKeyword)
+            if (k == SyntaxKind.IdentifierToken || k == SyntaxKind.ClassKeyword || k == SyntaxKind.StructKeyword || k == SyntaxKind.DotToken)
             {
                 // `init` is lexed as an identifier; consume an optional `()` pair
                 // when this identifier is the contextual `init` constraint keyword.
@@ -3498,6 +3498,10 @@ public class Parser
                     continue;
                 }
 
+                // A `.` continues a qualified (dotted) constraint name
+                // (e.g. `[T Namespace.Sub.IFace[T]]`); skip it and the segment
+                // identifier that follows so the balanced `[ ... ]` and the
+                // list-terminating `,`/`]` are examined against the right token.
                 ahead++;
                 continue;
             }
@@ -3586,6 +3590,7 @@ public class Parser
         SyntaxToken openBracket = null;
         SeparatedSyntaxList<TypeClauseSyntax> constraintTypeArgs = default;
         SyntaxToken closeBracket = null;
+        TypeClauseSyntax constraintTypeClause = null;
 
         if (Current.Kind == SyntaxKind.IdentifierToken)
         {
@@ -3595,36 +3600,53 @@ public class Parser
             // any/comparable/interface-name slot.
             if (!IsAdditionalConstraintStart(Current))
             {
-                constraint = NextToken();
-
-                // ADR-0089 / issue #755: a constraint identifier may be followed by
-                // a generic type-argument list (the curiously-recurring pattern
-                // `[T IAdd[T]]` is the canonical generic-math shape required for
-                // static-virtual interface members). Parse `[ TypeClause (, TypeClause)* ]`
-                // when present; the binder constructs the closed interface from the
-                // resulting argument list.
-                if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
+                // A qualified (dotted) constraint name — e.g.
+                // `Namespace.Sub.IFace[T]` — cannot be represented by the single
+                // `constraint` identifier token. Parse the whole thing through the
+                // regular type-clause machinery (which already handles dotted names
+                // and per-segment generic arguments, stopping at the `,`/`]` that
+                // closes the type-parameter list). The first-segment identifier is
+                // retained in `constraint` for `any`/`comparable` dispatch and
+                // error locations. cs2gs emits fully-qualified constraint names, so
+                // this is the common shape for translated generic-math interfaces.
+                if (Peek(1).Kind == SyntaxKind.DotToken)
                 {
-                    openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
-                    var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
-                    var parseNext = true;
-                    while (parseNext &&
-                           Current.Kind != SyntaxKind.CloseSquareBracketToken &&
-                           Current.Kind != SyntaxKind.EndOfFileToken)
-                    {
-                        nodesAndSeparators.Add(ParseTypeClause());
-                        if (Current.Kind == SyntaxKind.CommaToken)
-                        {
-                            nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
-                        }
-                        else
-                        {
-                            parseNext = false;
-                        }
-                    }
+                    constraintTypeClause = ParseTypeClause();
+                    constraint = constraintTypeClause.Identifier;
+                }
+                else
+                {
+                    constraint = NextToken();
 
-                    closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
-                    constraintTypeArgs = new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable());
+                    // ADR-0089 / issue #755: a constraint identifier may be followed by
+                    // a generic type-argument list (the curiously-recurring pattern
+                    // `[T IAdd[T]]` is the canonical generic-math shape required for
+                    // static-virtual interface members). Parse `[ TypeClause (, TypeClause)* ]`
+                    // when present; the binder constructs the closed interface from the
+                    // resulting argument list.
+                    if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
+                    {
+                        openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+                        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+                        var parseNext = true;
+                        while (parseNext &&
+                               Current.Kind != SyntaxKind.CloseSquareBracketToken &&
+                               Current.Kind != SyntaxKind.EndOfFileToken)
+                        {
+                            nodesAndSeparators.Add(ParseTypeClause());
+                            if (Current.Kind == SyntaxKind.CommaToken)
+                            {
+                                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+                            }
+                            else
+                            {
+                                parseNext = false;
+                            }
+                        }
+
+                        closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+                        constraintTypeArgs = new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable());
+                    }
                 }
             }
         }
@@ -3698,7 +3720,7 @@ public class Parser
             }
         }
 
-        return new TypeParameterSyntax(
+        var typeParameter = new TypeParameterSyntax(
             syntaxTree,
             variance,
             identifier,
@@ -3712,6 +3734,13 @@ public class Parser
             initOpenParen,
             initCloseParen,
             unmanagedKw);
+
+        if (constraintTypeClause != null)
+        {
+            typeParameter.ConstraintType = constraintTypeClause;
+        }
+
+        return typeParameter;
     }
 
     /// <summary>

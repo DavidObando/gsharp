@@ -12,6 +12,8 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// </summary>
 public sealed class TypeParameterSyntax : SyntaxNode
 {
+    private TypeClauseSyntax constraintType;
+
     /// <summary>Initializes a new instance of the <see cref="TypeParameterSyntax"/> class.</summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="varianceModifier">Optional <c>in</c>/<c>out</c> variance contextual keyword (ADR-0021); only valid on interface type parameters.</param>
@@ -152,6 +154,25 @@ public sealed class TypeParameterSyntax : SyntaxNode
 
     /// <summary>Gets the optional constraint identifier token (e.g. <c>any</c>, <c>comparable</c>, or a sealed-interface name).</summary>
     public SyntaxToken Constraint { get; }
+
+    /// <summary>
+    /// Gets the optional fully-parsed constraint type clause used when the constraint names a
+    /// <em>qualified</em> (dotted) type — e.g. <c>Oahu.Decrypt.INewSplitCallback[TCallback]</c>.
+    /// When set, <see cref="Constraint"/> still holds the first-segment identifier (for
+    /// <c>any</c>/<c>comparable</c> dispatch and error locations), while this clause carries the
+    /// full dotted name and per-segment generic arguments so the binder resolves it directly
+    /// rather than reconstructing it from <see cref="Constraint"/> + <see cref="ConstraintTypeArguments"/>.
+    /// The parser assigns this after construction, so the setter invalidates any cached span.
+    /// </summary>
+    public TypeClauseSyntax ConstraintType
+    {
+        get => constraintType;
+        internal set
+        {
+            constraintType = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets the optional opening <c>[</c> of the constraint's generic type-argument list (ADR-0089).</summary>
     public SyntaxToken ConstraintTypeArgumentOpenBracketToken { get; }

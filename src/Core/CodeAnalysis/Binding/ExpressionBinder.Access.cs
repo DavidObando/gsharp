@@ -209,6 +209,121 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Binds a same-compilation SOURCE type constructed or referenced through a
+    /// package-qualified name — e.g. <c>Oahu.Decrypt.Mp4Operation(...)</c> or the
+    /// generic <c>Oahu.Decrypt.Mp4Operation[TResult](...)</c>. cs2gs
+    /// fully-qualifies type references, but a G# source type has no CLR type at
+    /// bind time, so <see cref="TryBindQualifiedClrConstructorCall"/> (which only
+    /// resolves reference-set types) cannot see it. G# resolves source types by
+    /// simple name from a flat, cross-package type scope, so a leading
+    /// namespace/package prefix is redundant.
+    /// <para>
+    /// This fires only when every leading segment is a pure namespace/package
+    /// component — none names an in-scope value, a known type, an import alias,
+    /// or an imported class (which would make the chain a static-member access or
+    /// nested-type reference handled elsewhere) — and the terminal is a call or
+    /// struct-literal whose simple name resolves to a user aggregate type. In that
+    /// case the redundant prefix is peeled off and the terminal is bound by simple
+    /// name, matching how the same construction binds when written unqualified.
+    /// </para>
+    /// </summary>
+    /// <param name="syntax">The accessor chain forming the qualified name.</param>
+    /// <param name="result">The bound terminal construction on success.</param>
+    /// <returns>Whether the qualified name bound to a source-type construction.</returns>
+    private bool TryBindQualifiedSourceTypeConstruction(AccessorExpressionSyntax syntax, out BoundExpression result)
+    {
+        result = null;
+
+        if (syntax.IsNullConditional)
+        {
+            return false;
+        }
+
+        // Peel the leading dotted-name segments while each is a bare identifier
+        // that does NOT resolve to a value, a type, an import alias, or an
+        // imported class — i.e. a pure namespace/package component. Stop at the
+        // first segment that is anything else (a generic-name type reference, a
+        // type name, or the terminal construction).
+        ExpressionSyntax current = syntax;
+        var peeledAny = false;
+        while (current is AccessorExpressionSyntax accessor
+               && !accessor.IsNullConditional
+               && accessor.LeftPart is NameExpressionSyntax leftName)
+        {
+            var segment = leftName.IdentifierToken.Text;
+            var isNamespaceSegment = scope.TryLookupSymbol(segment) is not VariableSymbol
+                && !scope.TryLookupTypeAlias(segment, out _)
+                && !scope.TryLookupImport(segment, out _)
+                && !scope.TryLookupImportedClass(segment, declaration: null, out _);
+            if (!isNamespaceSegment)
+            {
+                break;
+            }
+
+            current = accessor.RightPart;
+            peeledAny = true;
+        }
+
+        // Only fire when at least one namespace segment was peeled (so ordinary
+        // static-member access and simple-name construction are untouched) and
+        // the remainder's head names a same-compilation user aggregate source
+        // type — a constructor call `Type(...)`, a struct literal `Type{...}`, or
+        // a static-member access `Type.Member` / `Type[Args].Member`.
+        if (!peeledAny || !RemainderHeadIsSourceType(current))
+        {
+            return false;
+        }
+
+        // Peel the redundant namespace prefix and bind the remainder by simple name.
+        result = BindExpression(current);
+        return true;
+    }
+
+    /// <summary>
+    /// Whether the head of <paramref name="remainder"/> (after peeling a
+    /// namespace prefix) names a same-compilation user aggregate source type:
+    /// a constructor call <c>Type(...)</c>, a struct literal <c>Type{...}</c>,
+    /// or a static-member access rooted at a type name <c>Type.Member</c> /
+    /// generic type reference <c>Type[Args].Member</c>.
+    /// </summary>
+    private bool RemainderHeadIsSourceType(ExpressionSyntax remainder)
+    {
+        string simpleName;
+        int arity;
+        switch (remainder)
+        {
+            case CallExpressionSyntax call when !call.Identifier.IsMissing:
+                simpleName = call.Identifier.Text;
+                arity = call.TypeArgumentList?.Arguments.Count ?? 0;
+                break;
+            case StructLiteralExpressionSyntax literal when !literal.TypeIdentifier.IsMissing:
+                simpleName = literal.TypeIdentifier.Text;
+                arity = literal.TypeArgumentList?.Arguments.Count ?? 0;
+                break;
+            case AccessorExpressionSyntax { LeftPart: GenericNameExpressionSyntax genericHead }:
+                simpleName = genericHead.Identifier.Text;
+                arity = genericHead.TypeArgumentList?.Arguments.Count ?? 0;
+                break;
+            case AccessorExpressionSyntax { LeftPart: NameExpressionSyntax nameHead }:
+                simpleName = nameHead.IdentifierToken.Text;
+                arity = 0;
+                break;
+            case AccessorExpressionSyntax { LeftPart: IndexExpressionSyntax { Target: NameExpressionSyntax indexNameHead } }:
+                // `Type[Args].Member`: a generic type receiver parses as an index
+                // expression (`Mp4Operation[int32]`), not a GenericName, when it
+                // appears as the left part of a member access.
+                simpleName = indexNameHead.IdentifierToken.Text;
+                arity = 0;
+                break;
+            default:
+                return false;
+        }
+
+        return scope.TryLookupTypeAlias(simpleName, arity > 0 ? arity : -1, out var terminalType)
+            && IsUserAggregateType(terminalType);
+    }
+
+    /// <summary>
     /// Resolves a closed CLR type from a fully-qualified dotted name written in
     /// source. Tries the name as written, the name with the leading segment
     /// expanded from a matching import alias/path, and the name prefixed by each
@@ -539,6 +654,21 @@ internal sealed partial class ExpressionBinder
         if (TryBindQualifiedClrConstructorCall(syntax, out var qualifiedCtorCall))
         {
             return qualifiedCtorCall;
+        }
+
+        // A same-compilation SOURCE type constructed/referenced through a
+        // package-qualified name — `Oahu.Decrypt.Mp4Operation(...)`,
+        // `Oahu.Decrypt.Mp4Operation[TResult](...)`. Source types are visible by
+        // simple name across packages, but the qualified path above only resolves
+        // CLR-backed reference types (a source type has no CLR type at bind time).
+        // When the leading segments are a pure namespace/package prefix (none names
+        // a value, type, import, or imported class) and the terminal simple name
+        // is a user aggregate, peel the redundant prefix and bind the terminal by
+        // simple name. cs2gs fully-qualifies constructor calls, so this is the
+        // common translated shape.
+        if (TryBindQualifiedSourceTypeConstruction(syntax, out var qualifiedSourceCtor))
+        {
+            return qualifiedSourceCtor;
         }
 
         // Issue #1069: a nested user type referenced by a qualified name from
