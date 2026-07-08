@@ -5323,11 +5323,12 @@ public sealed class CSharpToGSharpTranslator
         // C# local functions are hoisted (callable before their lexical
         // declaration), but G# renders them as `let name = func(...)` bindings,
         // which are NOT hoisted and cannot be forward-referenced (GS0130/GS0125).
-        // When a local function is called before its declaration within a block,
-        // move its declaration to the top of the block — but only when it is safe
-        // to do so (it must not capture a sibling local declared in the same
-        // block, since G# closures require captured locals to already be in scope
-        // at the binding point).
+        // When a local function is referenced (call, method-group, `+=`/`-=`
+        // subscription, argument, ...) before its declaration within a block,
+        // move its `let` binding to just before that first use — but no earlier
+        // than the last sibling local it captures by closure, since G# `let`
+        // bindings require captured locals to already be in scope at the
+        // binding point (issue #2231).
         private IReadOnlyList<StatementSyntax> HoistCallBeforeDeclLocalFunctions(BlockSyntax block)
         {
             SyntaxList<StatementSyntax> statements = block.Statements;
@@ -5337,7 +5338,8 @@ public sealed class CSharpToGSharpTranslator
                 return statements;
             }
 
-            var toHoist = new List<LocalFunctionStatementSyntax>();
+            // (function, anchor index to insert after; null = front of block)
+            var toHoist = new List<(LocalFunctionStatementSyntax Function, int DeclIndex, int? AnchorIndex)>();
             foreach (LocalFunctionStatementSyntax localFunction in localFunctions)
             {
                 int declIndex = statements.IndexOf(localFunction);
@@ -5346,28 +5348,39 @@ public sealed class CSharpToGSharpTranslator
                     continue;
                 }
 
-                bool usedBeforeDeclaration = false;
-                for (int i = 0; i < declIndex && !usedBeforeDeclaration; i++)
+                int firstUseIndex = -1;
+                for (int i = 0; i < declIndex; i++)
                 {
-                    usedBeforeDeclaration = statements[i]
+                    bool usedHere = statements[i]
                         .DescendantNodes()
                         .OfType<IdentifierNameSyntax>()
                         .Any(id => id.Identifier.Text == localFunction.Identifier.Text
                             && SymbolEqualityComparer.Default.Equals(
                                 this.context.GetSymbolInfo(id).Symbol, funcSymbol));
+                    if (usedHere)
+                    {
+                        firstUseIndex = i;
+                        break;
+                    }
                 }
 
-                if (!usedBeforeDeclaration)
+                if (firstUseIndex < 0)
                 {
+                    // Never referenced ahead of its declaration — leave in place.
                     continue;
                 }
 
-                if (this.CapturesSiblingBlockLocal(localFunction, block))
+                int? barrierIndex = this.SiblingCaptureBarrierIndex(localFunction, block, statements);
+                int anchorIndex = barrierIndex.HasValue ? barrierIndex.Value + 1 : 0;
+                if (anchorIndex > firstUseIndex)
                 {
+                    // The captured sibling local is declared after the first use,
+                    // so there is no valid position for the `let` binding — leave
+                    // it in place (pre-existing, unrelated ordering conflict).
                     continue;
                 }
 
-                toHoist.Add(localFunction);
+                toHoist.Add((localFunction, declIndex, barrierIndex));
             }
 
             if (toHoist.Count == 0)
@@ -5375,25 +5388,34 @@ public sealed class CSharpToGSharpTranslator
                 return statements;
             }
 
-            var reordered = new List<StatementSyntax>(toHoist);
-            foreach (StatementSyntax statement in statements)
+            var hoistSet = new HashSet<StatementSyntax>(toHoist.Select(t => (StatementSyntax)t.Function));
+            var reordered = statements.Where(s => !hoistSet.Contains(s)).ToList();
+
+            // Group by anchor statement (the sibling local's declaring statement,
+            // or the front of the block) and re-insert each group, preserving the
+            // original relative order of the local functions within the group.
+            foreach (var group in toHoist
+                .OrderBy(t => t.DeclIndex)
+                .GroupBy(t => t.AnchorIndex.HasValue ? statements[t.AnchorIndex.Value] : null))
             {
-                if (!toHoist.Contains(statement))
-                {
-                    reordered.Add(statement);
-                }
+                int insertAt = group.Key is null ? 0 : reordered.IndexOf(group.Key) + 1;
+                reordered.InsertRange(insertAt, group.Select(t => (StatementSyntax)t.Function));
             }
 
             return reordered;
         }
 
-        // Returns true when the local function references a local variable that is
-        // declared directly within the given block (a sibling), which would make
-        // hoisting the function to the top of that block unsafe. References to the
-        // enclosing method's parameters, outer-scope locals, or the function's own
-        // locals/parameters are fine — those remain in scope at the top.
-        private bool CapturesSiblingBlockLocal(LocalFunctionStatementSyntax localFunction, BlockSyntax block)
+        // Returns the index (within `statements`) of the last statement that
+        // declares a local variable captured by `localFunction` from the
+        // enclosing block — the `let` binding must not be hoisted above this
+        // point. Returns null when no sibling local is captured (references to
+        // the enclosing method's parameters, outer-scope locals, or the
+        // function's own locals/parameters don't count — those remain in scope
+        // at the front of the block).
+        private int? SiblingCaptureBarrierIndex(
+            LocalFunctionStatementSyntax localFunction, BlockSyntax block, SyntaxList<StatementSyntax> statements)
         {
+            int? barrier = null;
             foreach (IdentifierNameSyntax id in localFunction.DescendantNodes().OfType<IdentifierNameSyntax>())
             {
                 if (this.context.GetSymbolInfo(id).Symbol is not ILocalSymbol local)
@@ -5411,16 +5433,25 @@ public sealed class CSharpToGSharpTranslator
                         continue;
                     }
 
-                    // A local declared (directly or nested) within this block but
-                    // outside the function is a sibling capture — unsafe to hoist.
-                    if (block.Span.Contains(declaration.Span))
+                    // Not a sibling of this block (e.g. an outer-scope local) —
+                    // already in scope wherever the `let` binding lands.
+                    if (!block.Span.Contains(declaration.Span))
                     {
-                        return true;
+                        continue;
+                    }
+
+                    for (int i = 0; i < statements.Count; i++)
+                    {
+                        if (statements[i].Span.Contains(declaration.Span)
+                            && (barrier is null || i > barrier))
+                        {
+                            barrier = i;
+                        }
                     }
                 }
             }
 
-            return false;
+            return barrier;
         }
 
         private IEnumerable<GStatement> TranslateFixedStatement(FixedStatementSyntax node)
