@@ -15,16 +15,16 @@ namespace GSharp.Repl.Themes;
 /// </summary>
 public sealed class Theme
 {
-    public static Theme Current { get; private set; } = Themes.GSharp;
+    public static Theme Current { get; private set; } = Themes.Amber;
 
     public static IReadOnlyList<Theme> Available { get; } = new[]
     {
-        Themes.GSharp,
+        Themes.Amber,
+        Themes.Synthwave,
         Themes.Dark,
         Themes.Light,
         Themes.GithubLight,
         Themes.WarmPaper,
-        Themes.Amber,
     };
 
     public required string Name { get; init; }
@@ -92,7 +92,7 @@ public sealed class Theme
         Current = Available[(i + 1) % Available.Count];
     }
 
-    public static void Reset() => Current = Themes.GSharp;
+    public static void Reset() => Current = Themes.Synthwave;
 
     public static IEnumerable<string> AvailableNames()
     {
@@ -106,9 +106,31 @@ public sealed class Theme
 /// <summary>Built-in theme palettes.</summary>
 public static class Themes
 {
-    public static Theme GSharp { get; } = new()
+    public static Theme Amber { get; } = new()
     {
-        Name = "gsharp",
+        Name = "amber",
+        TextPrimary = new(Color.White),
+        TextSecondary = new(Color.Grey85),
+        TextTertiary = new(Color.Grey50),
+        StatusInfo = new(Color.Gold1),
+        StatusSuccess = new(Color.Green),
+        StatusWarning = new(Color.Gold1),
+        StatusError = new(Color.Red),
+        Brand = new(Color.Orange1),
+        Selected = new(Color.Orange1),
+        BorderNeutral = new(Color.Grey50),
+        CellBackground = new(Color.Grey11),
+        InputBackground = new(Color.Grey19),
+        Keyword = new(Color.Orange1),
+        Number = new(Color.Gold1),
+        StringLit = new(Color.Gold1),
+        Comment = new(Color.Green),
+        Identifier = new(Color.Gold1),
+    };
+
+    public static Theme Synthwave { get; } = new()
+    {
+        Name = "synthwave",
         TextPrimary = new(Color.White),
         TextSecondary = new(Color.Grey85),
         TextTertiary = new(Color.Grey50),
@@ -217,27 +239,5 @@ public static class Themes
         StringLit = new(new Color(140, 90, 30)),
         Comment = new(new Color(140, 116, 89)),
         Identifier = new(new Color(120, 60, 140)),
-    };
-
-    public static Theme Amber { get; } = new()
-    {
-        Name = "amber",
-        TextPrimary = new(Color.White),
-        TextSecondary = new(Color.Grey85),
-        TextTertiary = new(Color.Grey50),
-        StatusInfo = new(Color.Gold1),
-        StatusSuccess = new(Color.Green),
-        StatusWarning = new(Color.Gold1),
-        StatusError = new(Color.Red),
-        Brand = new(Color.Orange1),
-        Selected = new(Color.Orange1),
-        BorderNeutral = new(Color.Grey50),
-        CellBackground = new(Color.Grey11),
-        InputBackground = new(Color.Grey19),
-        Keyword = new(Color.Orange1),
-        Number = new(Color.Gold1),
-        StringLit = new(Color.Gold1),
-        Comment = new(Color.Green),
-        Identifier = new(Color.Gold1),
     };
 }
