@@ -1086,6 +1086,18 @@ internal sealed partial class MethodBodyEmitter
             {
                 ctorHandle = ctorDef;
             }
+            else if (literal.StructType.ClrType != null)
+            {
+                // Issue #2263: an imported `data class` — construct via its real
+                // emitted parameterless `.ctor()` (a `data class` always emits
+                // both a parameterless and a primary constructor), then set each
+                // overridden/copied field below. Mirrors the imported field /
+                // setter resolution branches already gated on ClrType != null.
+                var clrCtor = literal.StructType.ClrType.GetConstructor(Type.EmptyTypes)
+                    ?? throw new InvalidOperationException(
+                        $"Imported data class '{literal.StructType.Name}' has no parameterless constructor.");
+                ctorHandle = this.outer.GetCtorReference(clrCtor);
+            }
             else
             {
                 throw new InvalidOperationException(

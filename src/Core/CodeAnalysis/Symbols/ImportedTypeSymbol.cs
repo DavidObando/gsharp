@@ -139,14 +139,39 @@ public sealed class ImportedTypeSymbol : TypeSymbol
     {
         aggregate = null;
         if (type == null
-            || !type.IsValueType
             || type.IsPrimitive
             || type.IsEnum
             || type.IsGenericParameter
-            || !ImportedAssemblySemantics.TryGetTypeSemantics(type, out var semantics)
-            || !semantics.IsValueType)
+            || type.IsInterface
+            || !ImportedAssemblySemantics.TryGetTypeSemantics(type, out var semantics))
         {
             return false;
+        }
+
+        // Issue #2263: a marked *reference* type is an imported `data class`;
+        // a marked *value* type is a `data struct` (or a primary-ctor struct).
+        // Both build a semantic-aggregate StructSymbol so members, primary
+        // constructors and `with`/copy resolve consistently in EVERY position.
+        // Guard the payload against a value/reference mismatch so a stale
+        // marker can never mis-shape the aggregate.
+        if (type.IsValueType != semantics.IsValueType)
+        {
+            return false;
+        }
+
+        if (!type.IsValueType)
+        {
+            // A plain (non-data) reference class is never marked by the
+            // emitter, so only genuine data classes reach here. Generic data
+            // classes are out of scope: their open definition would otherwise
+            // build a 0-arity aggregate that shadows the real generic type at
+            // construction sites, so they keep importing as an ordinary CLR
+            // class (a `with` on one still reports GS0161 rather than
+            // mis-binding).
+            if (!semantics.IsData || type.IsGenericType || type.IsGenericTypeDefinition)
+            {
+                return false;
+            }
         }
 
         var cacheKey = (type, references?.CurrentAssemblyName ?? string.Empty);
@@ -231,7 +256,7 @@ public sealed class ImportedTypeSymbol : TypeSymbol
             packageName: type.Namespace,
             isData: semantics.IsData,
             isInline: false,
-            isClass: false,
+            isClass: !semantics.IsValueType,
             primaryConstructorParameters: BuildPrimaryConstructorParameters(fieldBuilder.ToImmutable(), propertyBuilder.ToImmutable(), fieldByToken, semantics),
             isOpen: false,
             baseClass: null,

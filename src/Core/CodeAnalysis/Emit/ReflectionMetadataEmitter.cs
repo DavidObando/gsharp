@@ -3656,9 +3656,20 @@ internal sealed class ReflectionMetadataEmitter
     {
         foreach (var type in this.emitCtx.Program.Structs)
         {
-            if (type.IsClass
-                || (!type.IsData && !type.HasPrimaryConstructor)
-                || !this.cache.StructTypeDefs.TryGetValue(type, out var handle))
+            if (!this.cache.StructTypeDefs.TryGetValue(type, out var handle))
+            {
+                continue;
+            }
+
+            // Value types (`data struct`, or any struct with a primary
+            // constructor) always carry the marker. Issue #2263: a `data class`
+            // must ALSO carry it so a cross-assembly consumer can recover its
+            // data semantics and support `with`/copy — but a plain (non-data)
+            // reference class stays unmarked so it keeps importing as an
+            // ordinary CLR class rather than a semantic aggregate.
+            var isDataClass = type.IsClass && type.IsData;
+            if (!isDataClass
+                && (type.IsClass || (!type.IsData && !type.HasPrimaryConstructor)))
             {
                 continue;
             }
@@ -3687,7 +3698,7 @@ internal sealed class ReflectionMetadataEmitter
             var payload = string.Join(
                 "|",
                 MetadataTokens.GetToken(handle).ToString(CultureInfo.InvariantCulture),
-                "struct",
+                type.IsClass ? "class" : "struct",
                 type.IsData ? "1" : "0",
                 string.Join(",", parameterEntries));
             this.customAttrEncoder.EmitStringPairAttribute(
