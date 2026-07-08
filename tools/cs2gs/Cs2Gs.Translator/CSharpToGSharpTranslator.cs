@@ -13092,7 +13092,7 @@ public sealed class CSharpToGSharpTranslator
 
         /// <summary>
         /// Translates a C# anonymous object creation (<c>new { A = 1, B = 2 }</c>)
-        /// to a G# anonymous-class literal (<c>object { let A int32 = 1, let B
+        /// to a G# anonymous-class literal (<c>object { let A int32 = 1; let B
         /// int32 = 2 }</c>, issue #2224). gsc synthesizes a real backing type
         /// per distinct member-name+type shape (structural typing, unified
         /// like Roslyn's anonymous-type cache), so member names are preserved
@@ -13304,7 +13304,7 @@ public sealed class CSharpToGSharpTranslator
             }
 
             // Issue #2224: an anonymous-typed value (`new { A = 1, B = 2 }`) now
-            // lowers to a G# anonymous-class literal (`object { let A int32 = 1, let B int32 = 2 }`)
+            // lowers to a G# anonymous-class literal (`object { let A int32 = 1; let B int32 = 2 }`)
             // that preserves real member names — no rewrite needed; `x.A` stays
             // `x.A` on the G# side, exactly like the C# anonymous-type property.
             return new MemberAccessExpression(target, SanitizeIdentifier(memberName), isArrow);

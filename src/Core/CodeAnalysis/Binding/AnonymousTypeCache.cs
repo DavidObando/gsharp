@@ -35,17 +35,62 @@ internal sealed class AnonymousTypeCache
     /// </summary>
     /// <param name="members">The member names and types, in declaration order.</param>
     /// <param name="packageName">The package the synthesized type is emitted into.</param>
+    /// <param name="useFields">
+    /// When true (a <c>data object</c>) the synthesized type exposes public
+    /// read-only FIELDS (data-class style) so the value-semantics machinery
+    /// (<c>with</c>/copy, Equals/GetHashCode/ToString/Deconstruct) works; when
+    /// false (a plain <c>object</c>) it exposes get-only auto-PROPERTIES so
+    /// reflection-based consumers (EF Core) and cs2gs-originated literals see
+    /// <c>PropertyInfo</c> members.
+    /// </param>
     /// <returns>The (cached) synthesized anonymous-class <see cref="StructSymbol"/>.</returns>
-    public StructSymbol GetOrCreate(IReadOnlyList<(string Name, TypeSymbol Type)> members, string packageName)
+    public StructSymbol GetOrCreate(IReadOnlyList<(string Name, TypeSymbol Type)> members, string packageName, bool useFields)
     {
-        var key = BuildKey(members);
+        var key = (useFields ? "data;" : "plain;") + BuildKey(members);
         if (byShape.TryGetValue(key, out var existing))
         {
             return existing;
         }
 
-        var properties = ImmutableArray.CreateBuilder<PropertySymbol>(members.Count);
+        // Roslyn-style synthesized name; unique per distinct shape within
+        // this cache (one per compile pass).
+        var typeName = $"<>AnonymousType{counter++}";
         var ctorParams = ImmutableArray.CreateBuilder<ParameterSymbol>(members.Count);
+
+        if (useFields)
+        {
+            // ADR-0146 / issue #2243: a `data object { ... }` gets public,
+            // read-only FIELDS (data-class style, ADR-0029). Fields are what
+            // the value-semantics machinery needs: DataStructSynthesizer's
+            // Equals/GetHashCode/ToString/Deconstruct read them directly, and
+            // the `with`/copy lowering (ExpressionBinder.LowerCopyOrWith)
+            // enumerates `StructSymbol.Fields`. The literal is emitted as a
+            // composite struct literal (initobj + stfld) exactly like an
+            // ordinary `data struct Foo(x int32)`.
+            var dataFields = ImmutableArray.CreateBuilder<FieldSymbol>(members.Count);
+            foreach (var (name, type) in members)
+            {
+                dataFields.Add(new FieldSymbol(name, type, Accessibility.Public, isReadOnly: true));
+                ctorParams.Add(new ParameterSymbol(name, type));
+            }
+
+            var dataSymbol = new StructSymbol(
+                typeName,
+                dataFields.MoveToImmutable(),
+                Accessibility.Public,
+                declaration: null,
+                packageName: packageName ?? string.Empty,
+                isData: true,
+                isInline: false,
+                isClass: false,
+                primaryConstructorParameters: ctorParams.MoveToImmutable());
+
+            byShape[key] = dataSymbol;
+            symbols.Add(dataSymbol);
+            return dataSymbol;
+        }
+
+        var properties = ImmutableArray.CreateBuilder<PropertySymbol>(members.Count);
         foreach (var (name, type) in members)
         {
             // Get-only auto-property (C# anonymous-type parity, issue #2224
@@ -80,9 +125,10 @@ internal sealed class AnonymousTypeCache
             ctorParams.Add(new ParameterSymbol(name, type));
         }
 
-        // Roslyn-style synthesized name; unique per distinct shape within
-        // this cache (one per compile pass).
-        var typeName = $"<>AnonymousType{counter++}";
+        // A plain `object { ... }` keeps the proven issue-#2224 shape:
+        // isData:true so the emitter reserves a real newobj-callable primary
+        // constructor row (see ReflectionMetadataEmitter's classPrimaryCtorRows
+        // branch) and the literal compiles to a BoundConstructorCallExpression.
         var symbol = new StructSymbol(
             typeName,
             ImmutableArray<FieldSymbol>.Empty,

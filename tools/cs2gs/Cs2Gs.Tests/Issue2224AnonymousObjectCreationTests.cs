@@ -59,7 +59,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("object { let A int32 = 1, let B string = \"two\" }", printed);
+        Assert.Contains("object { let A int32 = 1; let B string = \"two\" }", printed);
         Assert.Contains("pair.A", printed);
         Assert.Contains("pair.B", printed);
         Assert.DoesNotContain("Item1", printed);
@@ -91,7 +91,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("object { let A int32 = 1, let B string = \"two\" }", printed);
+        Assert.Contains("object { let A int32 = 1; let B string = \"two\" }", printed);
         Assert.Contains("pair.A", printed);
         Assert.Contains("pair.B", printed);
         Assert.DoesNotContain("pair!!", printed);
@@ -122,7 +122,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("object { let id int32 = id, let Id int32 = row.Id }", printed);
+        Assert.Contains("object { let id int32 = id; let Id int32 = row.Id }", printed);
     }
 
     private static string TranslateUnit(string source)

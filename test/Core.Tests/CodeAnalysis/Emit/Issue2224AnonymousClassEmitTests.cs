@@ -34,7 +34,10 @@ public class Issue2224AnonymousClassEmitTests
 
             import System
 
-            var x = object { let Name string = "Foo", let Age int32 = 42 }
+            var x = object {
+                let Name = "Foo"
+                let Age int32 = 42
+            }
             Console.WriteLine(x.Name)
             Console.WriteLine(x.Age.ToString())
             """;
@@ -51,14 +54,15 @@ public class Issue2224AnonymousClassEmitTests
     [Fact]
     public void AnonymousClass_StructuralEquality_MatchesCSharpAnonymousTypeSemantics()
     {
+        // ADR-0146 / issue #2243: value equality is a `data object` feature.
         const string source = """
             package Corpus.Issue2224
 
             import System
 
-            var a = object { let Id int32 = 1, let Alias string = "x" }
-            var b = object { let Id int32 = 1, let Alias string = "x" }
-            var c = object { let Id int32 = 2, let Alias string = "x" }
+            var a = data object { let Id int32 = 1; let Alias = "x" }
+            var b = data object { let Id int32 = 1; let Alias = "x" }
+            var c = data object { let Id int32 = 2; let Alias = "x" }
             Console.WriteLine((a == b).ToString())
             Console.WriteLine((a == c).ToString())
             Console.WriteLine(a.GetHashCode() == b.GetHashCode())

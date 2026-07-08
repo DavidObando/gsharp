@@ -4513,6 +4513,42 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// ADR-0146 / issue #2243: GS0485 — an anonymous-object literal
+    /// (<c>object { ... }</c> / <c>data object { ... }</c>) declared an
+    /// <c>init</c> or <c>deinit</c> member. Anonymous objects support fields,
+    /// methods, and events only; constructors and destructors are not allowed.
+    /// </summary>
+    /// <param name="location">The source location of the offending <c>init</c>/<c>deinit</c> keyword.</param>
+    /// <param name="memberKeyword">The rejected member keyword spelling (<c>init</c> or <c>deinit</c>).</param>
+    public void ReportInitDeinitNotAllowedInAnonymousObject(TextLocation location, string memberKeyword)
+    {
+        Report(
+            location,
+            "GS0485",
+            $"'{memberKeyword}' is not allowed in an anonymous object; anonymous objects support fields, methods, and events only.",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0146 / issue #2243: GS0486 — a field member of a "rich"
+    /// anonymous object (one with a base/interface clause, method, or event)
+    /// omitted its type annotation. Rich anonymous objects materialize fields
+    /// as ordinary class fields, which require an explicit type; type
+    /// inference from the initializer is only available on the field-only
+    /// <c>object { ... }</c> / <c>data object { ... }</c> forms.
+    /// </summary>
+    /// <param name="location">The source location of the offending field name.</param>
+    /// <param name="fieldName">The field member's name.</param>
+    public void ReportInferredFieldTypeNotAllowedInRichAnonymousObject(TextLocation location, string fieldName)
+    {
+        Report(
+            location,
+            "GS0486",
+            $"field '{fieldName}' needs an explicit type here; type inference is only available in an anonymous object without a base type, method, or event.",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
     /// ADR-0144 / issue #2201: GS0475 — a declaration in a partial-type group
     /// lacks the <c>partial</c> modifier while another declaration of the same
     /// type carries it (the analog of C# CS0260).

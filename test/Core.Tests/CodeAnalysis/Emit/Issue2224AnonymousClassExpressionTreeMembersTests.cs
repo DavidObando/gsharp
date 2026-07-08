@@ -38,7 +38,7 @@ import System.Linq.Expressions
 class Row(Id int32, Alias string)
 
 func main() object {
-    let expr Expression[Func[Row, object]] = (r Row) -> object { let Id int32 = r.Id, let Alias string = r.Alias }
+    let expr Expression[Func[Row, object]] = (r Row) -> object { let Id = r.Id; let Alias = r.Alias }
     return expr
 }
 ";
