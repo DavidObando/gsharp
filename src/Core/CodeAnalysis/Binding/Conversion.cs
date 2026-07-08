@@ -365,6 +365,23 @@ public sealed class Conversion
                     }
                 }
 
+                // Issue #2229: lifted boxing — `T? → U?` where `T` is a value
+                // type and `U` is reference-like (e.g. `int32? → object?`) is
+                // implicit whenever the bare `T → U` boxing conversion is
+                // implicit. Unlike the reference-upcast arm above, this DOES
+                // change representation: a `HasValue == false` source becomes an
+                // actual `null` reference and a `HasValue == true` source boxes
+                // its underlying value. `BindConversion` materialises this as a
+                // `BoundConversionExpression` so emit inserts the box.
+                if (fromNullable.UnderlyingType?.ClrType is { IsValueType: true })
+                {
+                    var boxedConversion = Classify(fromNullable.UnderlyingType, toNullable.UnderlyingType);
+                    if (boxedConversion.Exists && boxedConversion.IsImplicit)
+                    {
+                        return Conversion.Implicit;
+                    }
+                }
+
                 return Conversion.None;
             }
 
