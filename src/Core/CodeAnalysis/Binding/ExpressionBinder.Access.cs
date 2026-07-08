@@ -200,12 +200,84 @@ internal sealed partial class ExpressionBinder
         var typeSimpleName = terminalCall.Identifier.Text;
         var namespacePrefix = string.Join(".", segments);
 
-        if (!TryResolveQualifiedClrType(namespacePrefix, typeSimpleName, terminalCall, out var clrType, out var openGenericDef, out var symbolicArgs))
+        if (!TryResolveQualifiedClrType(namespacePrefix, typeSimpleName, terminalCall.TypeArgumentList, out var clrType, out var openGenericDef, out var symbolicArgs))
         {
             return false;
         }
 
         return TryBindClrConstructorFromType(clrType, terminalCall, out result, openGenericDef, symbolicArgs);
+    }
+
+    /// <summary>
+    /// Issue #2258: binds a fully-qualified imported-type object-initializer
+    /// literal written in expression position, e.g.
+    /// <c>System.Text.Json.JsonWriterOptions{ Indented: true }</c>. Such an
+    /// expression parses as an accessor chain whose terminal segment is the
+    /// struct literal (<see cref="StructLiteralExpressionSyntax"/>), so it never
+    /// reaches the simple-name literal path in <see cref="BindStructLiteralExpression(StructLiteralExpressionSyntax)"/>.
+    /// This walks the dotted name the same way <see cref="TryBindQualifiedClrConstructorCall"/>
+    /// does, resolves the closed CLR type via the active references/imports, and
+    /// binds the literal against it — generalizing to any referenced CLR type
+    /// (class or struct) at any namespace depth.
+    /// </summary>
+    /// <param name="syntax">The accessor expression to bind.</param>
+    /// <param name="result">The bound struct-literal expression on success.</param>
+    /// <returns>Whether the accessor was a fully-qualified struct literal that bound successfully.</returns>
+    private bool TryBindQualifiedClrStructLiteral(AccessorExpressionSyntax syntax, out BoundExpression result)
+    {
+        result = null;
+
+        if (syntax.IsNullConditional)
+        {
+            return false;
+        }
+
+        // Flatten the accessor chain into the leading namespace/type segments
+        // and the terminal struct literal. Anything that isn't a pure
+        // dotted-name chain ending in a struct literal is not a qualified
+        // literal.
+        var segments = new List<string>();
+        ExpressionSyntax current = syntax;
+        StructLiteralExpressionSyntax terminalLiteral = null;
+        while (true)
+        {
+            if (current is AccessorExpressionSyntax accessor)
+            {
+                if (accessor.IsNullConditional || !(accessor.LeftPart is NameExpressionSyntax leftName))
+                {
+                    return false;
+                }
+
+                segments.Add(leftName.IdentifierToken.Text);
+                current = accessor.RightPart;
+                continue;
+            }
+
+            if (current is StructLiteralExpressionSyntax literal)
+            {
+                terminalLiteral = literal;
+                break;
+            }
+
+            // A bare trailing name/call is not a struct literal.
+            return false;
+        }
+
+        if (terminalLiteral == null || terminalLiteral.TypeIdentifier.IsMissing)
+        {
+            return false;
+        }
+
+        var typeSimpleName = terminalLiteral.TypeIdentifier.Text;
+        var namespacePrefix = string.Join(".", segments);
+
+        if (!TryResolveQualifiedClrType(namespacePrefix, typeSimpleName, terminalLiteral.TypeArgumentList, out var clrType, out _, out _))
+        {
+            return false;
+        }
+
+        result = BindImportedTypeLiteralExpression(terminalLiteral, clrType);
+        return true;
     }
 
     /// <summary>
@@ -323,12 +395,16 @@ internal sealed partial class ExpressionBinder
     /// Resolves a closed CLR type from a fully-qualified dotted name written in
     /// source. Tries the name as written, the name with the leading segment
     /// expanded from a matching import alias/path, and the name prefixed by each
-    /// active import target. Generic type arguments on <paramref name="terminalCall"/>
+    /// active import target. Generic type arguments on <paramref name="typeArgumentList"/>
     /// are honoured by resolving the mangled open generic and closing it.
     /// </summary>
     /// <param name="namespacePrefix">The dotted segments preceding the type name (may be empty).</param>
-    /// <param name="typeSimpleName">The simple type name (the constructor call identifier).</param>
-    /// <param name="terminalCall">The terminal call, used for generic arity/arguments.</param>
+    /// <param name="typeSimpleName">The simple type name (the constructor call / struct literal identifier).</param>
+    /// <param name="typeArgumentList">
+    /// The terminal's explicit type-argument list (from a constructor call or a
+    /// struct literal), used for generic arity/arguments; <see langword="null"/>
+    /// for a non-generic reference.
+    /// </param>
     /// <param name="clrType">The resolved closed CLR type on success.</param>
     /// <param name="openGenericDefinition">
     /// Issue #671: when one or more type arguments are G# user-defined types
@@ -345,7 +421,7 @@ internal sealed partial class ExpressionBinder
     private bool TryResolveQualifiedClrType(
         string namespacePrefix,
         string typeSimpleName,
-        CallExpressionSyntax terminalCall,
+        TypeArgumentListSyntax typeArgumentList,
         out System.Type clrType,
         out System.Type openGenericDefinition,
         out ImmutableArray<TypeSymbol> symbolicTypeArgs)
@@ -354,7 +430,7 @@ internal sealed partial class ExpressionBinder
         openGenericDefinition = null;
         symbolicTypeArgs = default;
 
-        var arity = terminalCall.TypeArgumentList?.Arguments.Count ?? 0;
+        var arity = typeArgumentList?.Arguments.Count ?? 0;
 
         // Build the candidate dotted prefixes (everything before the simple
         // type name), most specific first.
@@ -411,7 +487,7 @@ internal sealed partial class ExpressionBinder
                     var hasSymbolicArg = false;
                     for (var i = 0; i < arity; i++)
                     {
-                        var ta = bindTypeClause(terminalCall.TypeArgumentList.Arguments[i]);
+                        var ta = bindTypeClause(typeArgumentList.Arguments[i]);
                         if (ta == null)
                         {
                             argsResolved = false;
@@ -479,7 +555,7 @@ internal sealed partial class ExpressionBinder
         // This covers `Outer.Inner()`, `Ns.Outer.Inner()`, and deeply-nested
         // chains like `Outer.Middle.Inner()` where the prefix segments include
         // both namespace and outer-type components.
-        if (TryResolveAsNestedTypeChain(namespacePrefix, typeSimpleName, arity, terminalCall, out clrType))
+        if (TryResolveAsNestedTypeChain(namespacePrefix, typeSimpleName, arity, typeArgumentList, out clrType))
         {
             return true;
         }
@@ -493,7 +569,7 @@ internal sealed partial class ExpressionBinder
     /// find the outer type, then remaining segments and the terminal name are
     /// walked as nested types via <see cref="ReferenceResolver.TryResolveNestedType"/>.
     /// </summary>
-    private bool TryResolveAsNestedTypeChain(string namespacePrefix, string typeSimpleName, int arity, CallExpressionSyntax terminalCall, out System.Type clrType)
+    private bool TryResolveAsNestedTypeChain(string namespacePrefix, string typeSimpleName, int arity, TypeArgumentListSyntax typeArgumentList, out System.Type clrType)
     {
         clrType = null;
         if (string.IsNullOrEmpty(namespacePrefix))
@@ -573,7 +649,7 @@ internal sealed partial class ExpressionBinder
                 var argsResolved = true;
                 for (var i = 0; i < arity; i++)
                 {
-                    var ta = bindTypeClause(terminalCall.TypeArgumentList.Arguments[i]);
+                    var ta = bindTypeClause(typeArgumentList.Arguments[i]);
                     if (ta?.ClrType == null)
                     {
                         argsResolved = false;
@@ -650,6 +726,15 @@ internal sealed partial class ExpressionBinder
         if (TryBindQualifiedClrConstructorCall(syntax, out var qualifiedCtorCall))
         {
             return qualifiedCtorCall;
+        }
+
+        // Issue #2258: a fully-qualified imported-type object-initializer
+        // literal (`System.Text.Json.JsonWriterOptions{ Indented: true }`)
+        // parses as an accessor chain whose terminal segment is the struct
+        // literal, so it never reaches the simple-name literal path below.
+        if (TryBindQualifiedClrStructLiteral(syntax, out var qualifiedClrLiteral))
+        {
+            return qualifiedClrLiteral;
         }
 
         // A same-compilation SOURCE type constructed/referenced through a

@@ -924,14 +924,17 @@ internal sealed partial class ExpressionBinder
             var preferredArity = syntax.TypeArgumentList != null ? syntax.TypeArgumentList.Arguments.Count : -1;
             if (!scope.TryLookupTypeAlias(typeName, preferredArity, out var resolvedType) || !(resolvedType is StructSymbol resolvedStruct))
             {
-                // Issue #1199: a composite literal `T{Field: value}` also targets
-                // an IMPORTED reference-type class (a BCL class such as
-                // `System.Text.Json.JsonSerializerOptions`). These resolve through
-                // the import table — not `TryLookupTypeAlias`, which only surfaces
-                // user-declared types — so route the literal through the same
-                // imported-class lookup that the constructor-call path uses and
-                // lower it to a C#-style object-initializer (construct via the
-                // parameterless ctor, then assign each named member).
+                // Issue #1199 / #2258: a composite literal `T{Field: value}` also
+                // targets an IMPORTED reference-type class (a BCL class such as
+                // `System.Text.Json.JsonSerializerOptions`) or an imported
+                // value-type struct (`System.Text.Json.JsonWriterOptions`). These
+                // resolve through the import table — not `TryLookupTypeAlias`,
+                // which only surfaces user-declared types — so route the literal
+                // through the same imported-class lookup that the
+                // constructor-call path uses and lower it to a C#-style
+                // object-initializer (construct via the parameterless
+                // constructor, or the zero value for a value type with none,
+                // then assign each named member).
                 if (syntax.TypeArgumentList == null
                     && scope.TryLookupImportedClass(typeName, declaration: null, out var importedClass)
                     && importedClass.ClassType is { IsGenericTypeDefinition: false })
@@ -940,14 +943,9 @@ internal sealed partial class ExpressionBinder
                     {
                         structSymbol = importedAggregate;
                     }
-                    else if (!importedClass.ClassType.IsValueType)
-                    {
-                        return BindImportedClassLiteralExpression(syntax, importedClass.ClassType);
-                    }
                     else
                     {
-                        Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, typeName);
-                        return new BoundErrorExpression(null);
+                        return BindImportedTypeLiteralExpression(syntax, importedClass.ClassType);
                     }
                 }
                 else if (structSymbol == null)
@@ -1234,6 +1232,19 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Issue #2258: dispatches a composite literal <c>T{Member: value, ...}</c>
+    /// on an imported CLR type (resolved either by simple name through the
+    /// import table, or by a fully-qualified namespace path via
+    /// <see cref="TryBindQualifiedClrStructLiteral"/>) to the reference-type or
+    /// value-type binder, mirroring the C# object-initializer contract for
+    /// either kind.
+    /// </summary>
+    private BoundExpression BindImportedTypeLiteralExpression(StructLiteralExpressionSyntax syntax, Type clrType)
+        => clrType.IsValueType
+            ? BindImportedValueTypeLiteralExpression(syntax, clrType)
+            : BindImportedClassLiteralExpression(syntax, clrType);
+
+    /// <summary>
     /// Issue #1199: binds a composite literal <c>T{Member: value, ...}</c> on an
     /// IMPORTED reference-type class (e.g. <c>JsonSerializerOptions{WriteIndented:
     /// true}</c>). It lowers to the same shape as the object-initializer suffix
@@ -1271,6 +1282,50 @@ internal sealed partial class ExpressionBinder
             ImmutableArray<BoundExpression>.Empty,
             resultType);
 
+        return BindImportedTypeObjectInitializer(syntax, clrType, resultType, construction);
+    }
+
+    /// <summary>
+    /// Issue #2258: binds a composite literal <c>T{Member: value, ...}</c> on an
+    /// IMPORTED VALUE-TYPE struct (e.g.
+    /// <c>System.Text.Json.JsonWriterOptions{ Indented: true }</c>). Unlike a
+    /// reference type, reflection never synthesizes a public parameterless
+    /// constructor for a plain value type (one only appears when the type
+    /// explicitly declares a C# 10+ parameterless struct constructor), so the
+    /// instance is seeded with its default/zero value (mirroring IL
+    /// <c>initobj</c>) when no explicit parameterless constructor is found. The
+    /// remaining member-assignment lowering is shared with the reference-type
+    /// path; the value-type receiver is written in place through its local slot
+    /// (see <c>EmitClrPropertyAssignment</c>'s addressable-receiver handling), so
+    /// no copy-back step is needed.
+    /// </summary>
+    private BoundExpression BindImportedValueTypeLiteralExpression(StructLiteralExpressionSyntax syntax, Type clrType)
+    {
+        var resultType = TypeSymbol.FromClrType(clrType);
+        var parameterlessCtor = ClrTypeUtilities
+            .SafeGetConstructors(clrType, BindingFlags.Public | BindingFlags.Instance)
+            .FirstOrDefault(c => c.GetParameters().Length == 0);
+        BoundExpression construction = parameterlessCtor != null
+            ? new BoundClrConstructorCallExpression(
+                syntax,
+                clrType,
+                parameterlessCtor,
+                ImmutableArray<BoundExpression>.Empty,
+                resultType)
+            : new BoundDefaultExpression(syntax, resultType);
+
+        return BindImportedTypeObjectInitializer(syntax, clrType, resultType, construction);
+    }
+
+    /// <summary>
+    /// Issue #1199 / #2258: shared object-initializer lowering for an imported
+    /// CLR type composite literal — assigns each named settable property/field
+    /// through a synthetic local seeded with <paramref name="construction"/>
+    /// (a constructor call or a default-value expression), and yields the
+    /// local. Shared by the reference-type and value-type literal binders.
+    /// </summary>
+    private BoundExpression BindImportedTypeObjectInitializer(StructLiteralExpressionSyntax syntax, Type clrType, TypeSymbol resultType, BoundExpression construction)
+    {
         var tempName = "$implit" + System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
         var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, resultType);
         scope.TryDeclareVariable(tempVar);
