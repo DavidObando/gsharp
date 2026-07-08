@@ -6955,8 +6955,26 @@ public sealed class CSharpToGSharpTranslator
                     : this.context.Compilation.GetTypeByMetadataName("System.Exception");
             }
 
+            // Issue #2235 (follow-up to #1724): the first filtered clause whose
+            // later sibling could overlap is where top-to-bottom fall-through
+            // becomes unrepresentable as a per-clause rethrow. Instead of
+            // reporting it as unsupported, merge that clause and every clause
+            // after it (lazy but always-correct boundary — a tighter boundary
+            // would need the same disjointness proof again) into ONE catch that
+            // manually replays C#'s type-then-filter matching in its body.
+            int mergeStartIndex = -1;
+            for (int i = 0; i < node.Catches.Count; i++)
+            {
+                if (node.Catches[i].Filter != null && this.HasOverlappingLaterSibling(catchTypeSymbols, i))
+                {
+                    mergeStartIndex = i;
+                    break;
+                }
+            }
+
+            int loopEnd = mergeStartIndex == -1 ? node.Catches.Count : mergeStartIndex;
             var catches = new List<CatchClause>();
-            for (int catchIndex = 0; catchIndex < node.Catches.Count; catchIndex++)
+            for (int catchIndex = 0; catchIndex < loopEnd; catchIndex++)
             {
                 CatchClauseSyntax catchClause = node.Catches[catchIndex];
                 string variableName = null;
@@ -6992,41 +7010,25 @@ public sealed class CSharpToGSharpTranslator
                     BlockStatement body = this.TranslateBlock(catchClause.Block);
                     if (catchClause.Filter != null)
                     {
-                        if (this.HasOverlappingLaterSibling(catchTypeSymbols, catchIndex))
-                        {
-                            // A later sibling catch could still receive this
-                            // exception when the filter is false (e.g. it is, or
-                            // is a supertype of, this clause's type, or the
-                            // relationship can't be proven disjoint). Rethrow-
-                            // lowering would make the false-filter case escape the
-                            // whole try instead of falling through to that
-                            // sibling, silently diverging from C#. Report instead
-                            // of emitting the wrong control flow (ADR-0115 §B).
-                            string message = "a 'when' filter on a catch clause that has a later sibling catch whose type could "
-                                + "also receive the exception (e.g. a supertype such as 'Exception', or a type not "
-                                + "provably disjoint) has no faithful G# lowering: a false filter must fall through "
-                                + "to that sibling in C#, but G#'s rethrow-lowering would make it escape the whole "
-                                + "try instead (ADR-0115 §B / issue #1724).";
-                            this.context.ReportUnsupported(catchClause, message);
-                        }
-                        else
-                        {
-                            // G# has no native `catch ... when (filter)` (no Filter on
-                            // CatchClauseSyntax/TryStatementSyntax; grammar has no `when`
-                            // on catch). Lower it faithfully: evaluate the filter first and
-                            // rethrow the caught exception when it is false, so the
-                            // exception propagates exactly as it would in C# instead of
-                            // being silently swallowed (issue #1724). Note: unlike a real
-                            // CLR exception filter, this runs after the stack has already
-                            // unwound into the handler.
-                            GExpression filter = this.TranslateExpression(catchClause.Filter.FilterExpression);
-                            var rethrowIfFalse = new IfStatement(
-                                new UnaryExpression("!", filter),
-                                new BlockStatement(new List<GStatement> { new ThrowStatement(new IdentifierExpression(variableName)) }));
-                            var statements = new List<GStatement> { rethrowIfFalse };
-                            statements.AddRange(body.Statements);
-                            body = new BlockStatement(statements, body.IsUnsafe);
-                        }
+                        // No overlapping later sibling here by construction
+                        // (loopEnd stops before mergeStartIndex, the first index
+                        // for which HasOverlappingLaterSibling is true), so
+                        // rethrow-lowering is safe: G# has no native `catch ...
+                        // when (filter)` (no Filter on CatchClauseSyntax/
+                        // TryStatementSyntax; grammar has no `when` on catch).
+                        // Evaluate the filter first and rethrow the caught
+                        // exception when it is false, so the exception
+                        // propagates exactly as it would in C# instead of being
+                        // silently swallowed (issue #1724). Note: unlike a real
+                        // CLR exception filter, this runs after the stack has
+                        // already unwound into the handler.
+                        GExpression filter = this.TranslateExpression(catchClause.Filter.FilterExpression);
+                        var rethrowIfFalse = new IfStatement(
+                            new UnaryExpression("!", filter),
+                            new BlockStatement(new List<GStatement> { new ThrowStatement(new IdentifierExpression(variableName)) }));
+                        var statements = new List<GStatement> { rethrowIfFalse };
+                        statements.AddRange(body.Statements);
+                        body = new BlockStatement(statements, body.IsUnsafe);
                     }
 
                     catches.Add(new CatchClause(variableName, exceptionType, body));
@@ -7037,11 +7039,125 @@ public sealed class CSharpToGSharpTranslator
                 }
             }
 
+            if (mergeStartIndex != -1)
+            {
+                // Issue #2235: `mergeStartIndex..end` all get merged into one
+                // catch that manually replays C#'s top-to-bottom type-then-
+                // filter matching, since no per-clause rethrow lowering can be
+                // faithful once a later sibling could overlap.
+                catches.Add(this.BuildMergedFilteredCatch(node, catchTypeSymbols, mergeStartIndex));
+            }
+
             BlockStatement finallyBlock = node.Finally != null
                 ? this.TranslateBlock(node.Finally.Block)
                 : null;
 
             return new TryStatement(tryBlock, catches, finallyBlock);
+        }
+
+        /// <summary>
+        /// Merges catch clauses <c>[mergeStartIndex, node.Catches.Count)</c> into
+        /// a single G# catch clause that reproduces C#'s top-to-bottom, type-
+        /// then-filter catch matching in its body (issue #2235, follow-up to
+        /// #1724). Needed because a filtered clause with an overlapping later
+        /// sibling has no faithful per-clause rethrow lowering: a false filter
+        /// must fall through to that sibling in C#, not escape the whole
+        /// <c>try</c>. The merged catch is typed at the narrowest type provably
+        /// safe for every merged clause (the last clause's type, when it is a
+        /// supertype of all the others; <c>System.Exception</c> otherwise), and
+        /// its body dispatches on <c>ex is OriginalType</c> (G#'s Kotlin-style
+        /// smart cast narrows <c>ex</c> inside each branch, ADR-0069) plus each
+        /// clause's own filter, in source order, falling through to the next
+        /// clause when a type test or filter fails and rethrowing if none of
+        /// the merged clauses match (should not happen if the merge boundary is
+        /// correct, but is a safe fallback).
+        /// </summary>
+        private CatchClause BuildMergedFilteredCatch(TryStatementSyntax node, ITypeSymbol[] catchTypeSymbols, int mergeStartIndex)
+        {
+            const string sharedBinder = "ex";
+            var sharedBinderExpr = new IdentifierExpression(sharedBinder);
+
+            // Safety-net fallback: unreachable if the merged catch's declared
+            // type is a supertype of every merged clause's type, since then the
+            // last clause's `is` test always succeeds.
+            GStatement dispatch = new ThrowStatement(sharedBinderExpr);
+
+            for (int i = node.Catches.Count - 1; i >= mergeStartIndex; i--)
+            {
+                CatchClauseSyntax clause = node.Catches[i];
+                ITypeSymbol typeSymbol = catchTypeSymbols[i];
+                GTypeReference clauseType = typeSymbol != null
+                    ? this.typeMapper.Map(typeSymbol, this.context, clause.GetLocation())
+                    : new NamedTypeReference("Exception");
+                string originalName = clause.Declaration != null && !string.IsNullOrEmpty(clause.Declaration.Identifier.Text)
+                    ? SanitizeIdentifier(clause.Declaration.Identifier.Text)
+                    : sharedBinder;
+
+                string previousCatch = this.currentCatchVariable;
+                this.currentCatchVariable = originalName;
+                BlockStatement body;
+                GExpression filter = null;
+                try
+                {
+                    body = this.TranslateBlock(clause.Block);
+                    if (clause.Filter != null)
+                    {
+                        filter = this.TranslateExpression(clause.Filter.FilterExpression);
+                    }
+                }
+                finally
+                {
+                    this.currentCatchVariable = previousCatch;
+                }
+
+                // Re-bind this clause's own catch-variable name to the shared
+                // binder (narrowed to this clause's type by the `is` test below)
+                // so the body's references to its original name still resolve.
+                var branchStatements = new List<GStatement>();
+                if (originalName != sharedBinder)
+                {
+                    branchStatements.Add(new LocalDeclarationStatement(BindingKind.Let, originalName, initializer: sharedBinderExpr));
+                }
+
+                GStatement matched = filter != null
+                    ? new IfStatement(filter, body, new BlockStatement(new List<GStatement> { dispatch }))
+                    : (GStatement)body;
+                branchStatements.Add(matched);
+
+                GExpression typeTest = new BinaryExpression(sharedBinderExpr, "is", new TypeExpression(clauseType));
+                dispatch = new IfStatement(typeTest, new BlockStatement(branchStatements), new BlockStatement(new List<GStatement> { dispatch }));
+            }
+
+            GTypeReference mergedType = this.ComputeMergedCatchType(catchTypeSymbols, mergeStartIndex);
+            return new CatchClause(sharedBinder, mergedType, new BlockStatement(new List<GStatement> { dispatch }));
+        }
+
+        /// <summary>
+        /// Picks the merged catch's declared type (issue #2235): the last
+        /// merged clause's type when it is a supertype-or-equal of every
+        /// earlier merged clause's type (so it can safely catch all of them
+        /// without the outer G# catch itself narrowing anything away);
+        /// <c>System.Exception</c> otherwise (always safe, if less precise).
+        /// </summary>
+        private GTypeReference ComputeMergedCatchType(ITypeSymbol[] catchTypeSymbols, int mergeStartIndex)
+        {
+            int lastIndex = catchTypeSymbols.Length - 1;
+            ITypeSymbol lastType = catchTypeSymbols[lastIndex];
+            bool lastIsCommonSupertype = lastType != null;
+            for (int i = mergeStartIndex; lastIsCommonSupertype && i < lastIndex; i++)
+            {
+                if (!DerivesFromOrEquals(catchTypeSymbols[i], lastType))
+                {
+                    lastIsCommonSupertype = false;
+                }
+            }
+
+            if (lastIsCommonSupertype)
+            {
+                return this.typeMapper.Map(lastType, this.context, Location.None);
+            }
+
+            return new NamedTypeReference("Exception");
         }
 
         /// <summary>
