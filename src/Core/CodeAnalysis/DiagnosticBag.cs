@@ -1047,7 +1047,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="type">The actual receiver type.</param>
     public void ReportCopyOrWithNotDataStruct(TextLocation location, TypeSymbol type)
     {
-        var message = $"copy/with requires a data struct receiver, but got '{type}'.";
+        var message = $"copy/with requires a data class or data struct receiver, but got '{type}'.";
         Report(location, "GS0161", message);
     }
 

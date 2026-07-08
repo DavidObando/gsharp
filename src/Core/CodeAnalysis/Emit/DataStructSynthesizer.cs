@@ -526,10 +526,6 @@ internal sealed class DataStructSynthesizer
     /// </summary>
     private void EmitDataStructEqualsObject(StructSymbol structSym, EntityHandle typeDef, MethodDefinitionHandle equalsTypedHandle)
     {
-        Debug.Assert(
-            !structSym.IsClass,
-            "EmitDataStructEqualsObject precondition violated: data struct must be a value type.");
-
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
         if (!this.emitCtx.MetadataOnly)
         {
@@ -540,7 +536,12 @@ internal sealed class DataStructSynthesizer
             il.Branch(ILOpCode.Brfalse, retFalse);
             il.LoadArgument(0);
             il.LoadArgument(1);
-            il.OpCode(ILOpCode.Unbox_any);
+
+            // Issue #2228: `isinst` re-narrows the reference-typed `other`
+            // argument to the data-class type (already validated non-null
+            // above by the `isinst`/`brfalse` pair); a data STRUCT's `other`
+            // is boxed, so it needs `unbox_any` to copy the value back out.
+            il.OpCode(structSym.IsClass ? ILOpCode.Isinst : ILOpCode.Unbox_any);
             il.Token(typeDef);
             il.OpCode(ILOpCode.Call);
             il.Token(this.ResolveEqualsTypedToken(structSym, equalsTypedHandle));
@@ -574,14 +575,20 @@ internal sealed class DataStructSynthesizer
     /// reference it from other synthesized members.</returns>
     private MethodDefinitionHandle EmitDataStructEqualsTyped(StructSymbol structSym)
     {
-        Debug.Assert(
-            !structSym.IsClass,
-            "EmitDataStructEqualsTyped precondition violated: data struct must be a value type.");
-
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
         if (!this.emitCtx.MetadataOnly)
         {
             var retFalse = il.DefineLabel();
+
+            // Issue #2228: a data-class `other` is a reference and may be
+            // null (a data-struct's `other` is a value, never null); a null
+            // `other` is unequal to `this` (record-class semantics).
+            if (structSym.IsClass)
+            {
+                il.LoadArgument(1);
+                il.Branch(ILOpCode.Brfalse, retFalse);
+            }
+
             foreach (var field in GetSynthesisFields(structSym))
             {
                 var fieldHandle = this.resolveUserFieldToken(structSym, field);
@@ -589,7 +596,20 @@ internal sealed class DataStructSynthesizer
                 il.OpCode(ILOpCode.Ldfld);
                 il.Token(fieldHandle);
                 this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
-                il.LoadArgumentAddress(1);
+
+                // Issue #2228: `other` is already a reference for a data
+                // class — `ldfld` reads straight off it. A data struct's
+                // `other` is passed by value, so its field is read off the
+                // argument's address instead.
+                if (structSym.IsClass)
+                {
+                    il.LoadArgument(1);
+                }
+                else
+                {
+                    il.LoadArgumentAddress(1);
+                }
+
                 il.OpCode(ILOpCode.Ldfld);
                 il.Token(fieldHandle);
                 this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
@@ -627,10 +647,6 @@ internal sealed class DataStructSynthesizer
     /// </summary>
     private void EmitDataStructGetHashCode(StructSymbol structSym)
     {
-        Debug.Assert(
-            !structSym.IsClass,
-            "EmitDataStructGetHashCode precondition violated: data struct must be a value type.");
-
         var fields = GetSynthesisFields(structSym);
         bool useFold = fields.Length > 8;
 
@@ -710,10 +726,6 @@ internal sealed class DataStructSynthesizer
     /// </summary>
     private void EmitDataStructToString(StructSymbol structSym)
     {
-        Debug.Assert(
-            !structSym.IsClass,
-            "EmitDataStructToString precondition violated: data struct must be a value type.");
-
         var fields = GetSynthesisFields(structSym);
         int pieceCount = (2 * fields.Length) + 1;
 
@@ -787,22 +799,58 @@ internal sealed class DataStructSynthesizer
     /// <returns>The MethodDef handle of the emitted operator.</returns>
     private MethodDefinitionHandle EmitDataStructEqualityOperator(StructSymbol structSym, bool isInequality)
     {
-        Debug.Assert(
-            !structSym.IsClass,
-            "EmitDataStructEqualityOperator precondition violated: data struct must be a value type.");
-
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
         if (!this.emitCtx.MetadataOnly)
         {
             var retFalse = il.DefineLabel();
+
+            // Issue #2228: both operands of a data-class op_Equality are
+            // references and either may be null (record-class semantics:
+            // null == null is true; null == non-null is false) — a data
+            // struct's operands are values and never null, so this whole
+            // block is struct-N/A.
+            if (structSym.IsClass)
+            {
+                var leftNotNull = il.DefineLabel();
+                var bothNull = il.DefineLabel();
+                il.LoadArgument(0);
+                il.Branch(ILOpCode.Brtrue, leftNotNull);
+                il.LoadArgument(1);
+                il.Branch(ILOpCode.Brfalse, bothNull);
+                il.Branch(ILOpCode.Br, retFalse);
+                il.MarkLabel(bothNull);
+                il.LoadConstantI4(isInequality ? 0 : 1);
+                il.OpCode(ILOpCode.Ret);
+                il.MarkLabel(leftNotNull);
+                il.LoadArgument(1);
+                il.Branch(ILOpCode.Brfalse, retFalse);
+            }
+
             foreach (var field in GetSynthesisFields(structSym))
             {
                 var fieldHandle = this.resolveUserFieldToken(structSym, field);
-                il.LoadArgumentAddress(0);
+                if (structSym.IsClass)
+                {
+                    il.LoadArgument(0);
+                }
+                else
+                {
+                    il.LoadArgumentAddress(0);
+                }
+
                 il.OpCode(ILOpCode.Ldfld);
                 il.Token(fieldHandle);
                 this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
-                il.LoadArgumentAddress(1);
+
+                if (structSym.IsClass)
+                {
+                    il.LoadArgument(1);
+                }
+                else
+                {
+                    il.LoadArgumentAddress(1);
+                }
+
                 il.OpCode(ILOpCode.Ldfld);
                 il.Token(fieldHandle);
                 this.conversionEmitter.EmitBoxIfNeeded(il, field.Type);
