@@ -15077,8 +15077,27 @@ public sealed class CSharpToGSharpTranslator
             int maxOrdinal = resolved.Max(r => r.Parameter.Ordinal);
             IMethodSymbol invokedMethod = resolved[0].Parameter.ContainingSymbol as IMethodSymbol;
 
+            // Issue #2260: `operation.Parameter` (and hence every ordinal in
+            // `resolved`/`invokedMethod.Parameters`) is always resolved against the
+            // UNREDUCED extension-method definition — e.g. `AddBoldColumn(this
+            // Table table, string header, Align align = Align.Left, bool noWrap =
+            // false)` — even when the call is written in reduced/dot form
+            // (`table.AddBoldColumn("Length", noWrap: true)`), where the receiver
+            // is bound implicitly and never appears in `arguments` at all. Without
+            // this adjustment, ordinal 0 (the receiver parameter, which has no
+            // default and is not itself skippable) is mistaken for a skipped
+            // OPTIONAL parameter and the fill fails immediately — before ever
+            // reaching the real skipped parameter (`align`) — silently dropping it
+            // from the emitted call instead of filling it. Any gap between the
+            // unreduced arity and the reduced arity the call was actually bound
+            // through is exactly the receiver's parameter count, so those leading
+            // ordinals must be skipped entirely rather than treated as fillable.
+            int ordinalOffset = invokedMethod != null && invokedForArguments?.ReducedFrom != null
+                ? Math.Max(0, invokedMethod.Parameters.Length - invokedForArguments.Parameters.Length)
+                : 0;
+
             var result = new List<GExpression>();
-            for (int ordinal = 0; ordinal <= maxOrdinal; ordinal++)
+            for (int ordinal = ordinalOffset; ordinal <= maxOrdinal; ordinal++)
             {
                 if (byOrdinal.TryGetValue(ordinal, out ArgumentSyntax explicitArgument))
                 {
