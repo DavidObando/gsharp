@@ -142,6 +142,56 @@ public class Issue2256QualifiedConstraintTests
         Assert.Empty(compilation.BoundProgram.Diagnostics.Where(d => d.IsError));
     }
 
+    [Fact]
+    public void QualifiedSourceType_StaticFieldWrite_OnGenericType_Binds()
+    {
+        // Assignment LHS (write path): `Ns.Type[T].field = value`. The qualified
+        // generic type receiver must be recognized as a static-type receiver
+        // after peeling the redundant package prefix.
+        const string source = """
+            package Oahu.Aux.Diagnostics
+            import System
+
+            class TreeDecomposition[T] {
+                shared {
+                    private var default_ Oahu.Aux.Diagnostics.TreeDecomposition[T]?
+                    prop Instance Oahu.Aux.Diagnostics.TreeDecomposition[T] {
+                        get {
+                            if Oahu.Aux.Diagnostics.TreeDecomposition[T].default_ == nil {
+                                Oahu.Aux.Diagnostics.TreeDecomposition[T].default_ = Oahu.Aux.Diagnostics.TreeDecomposition[T]()
+                            }
+                            return Oahu.Aux.Diagnostics.TreeDecomposition[T].default_!!
+                        }
+                    }
+                }
+            }
+            """;
+
+        var compilation = Compile(source);
+        Assert.Empty(compilation.BoundProgram.Diagnostics.Where(d => d.IsError));
+    }
+
+    [Fact]
+    public void QualifiedSourceType_VoidStaticCall_AsExpressionBody_Binds()
+    {
+        // A `Ns.Type[T].VoidMethod(...)` call in an expression-bodied void member:
+        // peeling the prefix must not prematurely reject the void terminal.
+        const string source = """
+            package P
+            import System
+
+            class TD[T] {
+                shared {
+                    func Write(x int32) -> nil
+                }
+                func Use() -> P.TD[T].Write(3)
+            }
+            """;
+
+        var compilation = Compile(source);
+        Assert.Empty(compilation.BoundProgram.Diagnostics.Where(d => d.IsError));
+    }
+
     private static Compilation Compile(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

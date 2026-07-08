@@ -248,18 +248,9 @@ internal sealed partial class ExpressionBinder
         var peeledAny = false;
         while (current is AccessorExpressionSyntax accessor
                && !accessor.IsNullConditional
-               && accessor.LeftPart is NameExpressionSyntax leftName)
+               && accessor.LeftPart is NameExpressionSyntax leftName
+               && IsNamespacePrefixSegment(leftName.IdentifierToken.Text))
         {
-            var segment = leftName.IdentifierToken.Text;
-            var isNamespaceSegment = scope.TryLookupSymbol(segment) is not VariableSymbol
-                && !scope.TryLookupTypeAlias(segment, out _)
-                && !scope.TryLookupImport(segment, out _)
-                && !scope.TryLookupImportedClass(segment, declaration: null, out _);
-            if (!isNamespaceSegment)
-            {
-                break;
-            }
-
             current = accessor.RightPart;
             peeledAny = true;
         }
@@ -274,8 +265,13 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        // Peel the redundant namespace prefix and bind the remainder by simple name.
-        result = BindExpression(current);
+        // Peel the redundant namespace prefix and bind the remainder by simple
+        // name. Use BindExpressionpublic (not BindExpression) so a void terminal
+        // (a `Ns.Type[Args].VoidMethod(...)` call in an expression-bodied void
+        // member) is not prematurely rejected here — the caller's BindExpression
+        // wrapper applies the correct void-in-value-position check on the
+        // original syntax.
+        result = BindExpressionpublic(current);
         return true;
     }
 
@@ -2732,9 +2728,59 @@ internal sealed partial class ExpressionBinder
                 return TryResolveConstructedGenericTypeReceiver(index, out constructedStruct, out constructedInterface, out constructedImported);
             case GenericNameExpressionSyntax generic:
                 return TryResolveConstructedGenericTypeReceiver(generic, out constructedStruct, out constructedInterface, out constructedImported);
+            case AccessorExpressionSyntax accessorChain when !accessorChain.IsNullConditional:
+                // A package-qualified generic type receiver written by cs2gs,
+                // e.g. `Oahu.Aux.Diagnostics.TreeDecomposition[T].field = v`. The
+                // leading namespace segments are redundant for a source type; peel
+                // them and re-dispatch on the bare constructed-generic terminal.
+                var peeled = PeelNamespacePrefix(accessorChain);
+                if (!ReferenceEquals(peeled, accessorChain)
+                    && peeled is IndexExpressionSyntax or GenericNameExpressionSyntax)
+                {
+                    return TryResolveConstructedGenericTypeReceiver(peeled, out constructedStruct, out constructedInterface, out constructedImported);
+                }
+
+                return false;
             default:
                 return false;
         }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="segment"/> is a pure namespace/package prefix
+    /// component — it does not name an in-scope value, a known type/alias, an
+    /// import alias, or an imported class. cs2gs fully-qualifies type references,
+    /// so a leading run of such segments in front of a same-compilation source
+    /// type is redundant and must be peeled before binding by simple name.
+    /// </summary>
+    /// <param name="segment">The dotted-name segment to classify.</param>
+    /// <returns>Whether the segment is a pure namespace/package prefix.</returns>
+    private bool IsNamespacePrefixSegment(string segment) =>
+        scope.TryLookupSymbol(segment) is not VariableSymbol
+        && !scope.TryLookupTypeAlias(segment, out _)
+        && !scope.TryLookupImport(segment, out _)
+        && !scope.TryLookupImportedClass(segment, declaration: null, out _);
+
+    /// <summary>
+    /// Peels a leading run of pure namespace/package segments off a dotted
+    /// accessor chain, returning the first non-namespace remainder (unchanged
+    /// when the head is not a namespace segment). Used to strip a redundant
+    /// package prefix cs2gs emits in front of a same-compilation source type.
+    /// </summary>
+    /// <param name="expr">The dotted accessor chain to peel.</param>
+    /// <returns>The first non-namespace remainder of the chain.</returns>
+    private ExpressionSyntax PeelNamespacePrefix(ExpressionSyntax expr)
+    {
+        var current = expr;
+        while (current is AccessorExpressionSyntax accessor
+               && !accessor.IsNullConditional
+               && accessor.LeftPart is NameExpressionSyntax leftName
+               && IsNamespacePrefixSegment(leftName.IdentifierToken.Text))
+        {
+            current = accessor.RightPart;
+        }
+
+        return current;
     }
 
     /// <summary>
