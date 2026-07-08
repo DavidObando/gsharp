@@ -1514,6 +1514,16 @@ public sealed class CSharpToGSharpTranslator
                 case float f:
                     return MapSpecialFloatConstant(f, isDouble: false) ??
                         LiteralExpression.Float(f.ToString(CultureInfo.InvariantCulture));
+
+                // Issue #2236: a `decimal` default (e.g. `decimal price = 1.5m`) is
+                // just as much a compile-time constant as `double`/`float` — Roslyn
+                // resolves it via `ExplicitDefaultValue` like any other numeric
+                // default — but this switch had no `decimal` arm, so it fell to the
+                // `default:` branch below, failed `IsIntegral`, and was reported as
+                // "not a simple literal" even though `decimal.ToString` never uses
+                // scientific notation and round-trips cleanly as a float literal.
+                case decimal m:
+                    return LiteralExpression.Float(m.ToString(CultureInfo.InvariantCulture));
                 default:
                     return IsIntegral(value)
                         ? LiteralExpression.Int(System.Convert.ToString(value, CultureInfo.InvariantCulture))
