@@ -42,6 +42,107 @@ public static class NerdbankGitVersioningPolicy
         "(?<pre>Version\\s*=\\s*\")(?<value>[^\"]*)(?<post>\")",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
+    private static readonly Regex PrivateAssetsAttrPattern = new Regex(
+        "PrivateAssets\\s*=\\s*\"(?<value>[^\"]*)\"",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    private static readonly Regex IncludeAssetsAttrPattern = new Regex(
+        "IncludeAssets\\s*=\\s*\"(?<value>[^\"]*)\"",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    /// <summary>
+    /// Scans a single MSBuild file's text for an nbgv <c>PackageReference</c> or
+    /// <c>PackageVersion</c> declaration (issue #2267). Central Package Management
+    /// commonly splits the declaration across two files: a versionless
+    /// <c>&lt;PackageReference Include="Nerdbank.GitVersioning" PrivateAssets="all" /&gt;</c>
+    /// in the consuming project (or a shared <c>Directory.Build.props</c>) and the
+    /// actual <c>&lt;PackageVersion Include="Nerdbank.GitVersioning" Version="..." /&gt;</c>
+    /// in <c>Directory.Packages.props</c> — so this only reports whichever pieces
+    /// this particular file's text contributes; callers combine results across the
+    /// full candidate file set to recover the complete declaration.
+    /// </summary>
+    /// <param name="msbuildXml">The full text of a <c>.csproj</c>/<c>.props</c> file.</param>
+    /// <param name="version">Receives the raw <c>Version</c> attribute value, or <see langword="null"/> when absent.</param>
+    /// <param name="privateAssets">Receives the raw <c>PrivateAssets</c> attribute value, or <see langword="null"/> when absent.</param>
+    /// <param name="includeAssets">Receives the raw <c>IncludeAssets</c> attribute value, or <see langword="null"/> when absent.</param>
+    /// <returns><see langword="true"/> when an nbgv element was found in this file.</returns>
+    public static bool TryFindDeclaration(string msbuildXml, out string version, out string privateAssets, out string includeAssets)
+    {
+        version = null;
+        privateAssets = null;
+        includeAssets = null;
+        if (string.IsNullOrEmpty(msbuildXml))
+        {
+            return false;
+        }
+
+        bool found = false;
+        foreach (Match match in NbgvElementPattern.Matches(msbuildXml))
+        {
+            found = true;
+            string attrs = match.Groups["attrs"].Value;
+
+            Match versionMatch = VersionAttrPattern.Match(attrs);
+            if (versionMatch.Success && version is null)
+            {
+                version = versionMatch.Groups["value"].Value;
+            }
+
+            // PrivateAssets/IncludeAssets are consumer-side attributes: they only
+            // ever appear on a <PackageReference>, never on the CPM <PackageVersion>.
+            if (string.Equals(match.Groups["tag"].Value, "PackageReference", StringComparison.OrdinalIgnoreCase))
+            {
+                if (privateAssets is null)
+                {
+                    Match privateAssetsMatch = PrivateAssetsAttrPattern.Match(attrs);
+                    if (privateAssetsMatch.Success)
+                    {
+                        privateAssets = privateAssetsMatch.Groups["value"].Value;
+                    }
+                }
+
+                if (includeAssets is null)
+                {
+                    Match includeAssetsMatch = IncludeAssetsAttrPattern.Match(attrs);
+                    if (includeAssetsMatch.Success)
+                    {
+                        includeAssets = includeAssetsMatch.Groups["value"].Value;
+                    }
+                }
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// Resolves the concrete nbgv version to declare in a rebuilt/isolated
+    /// project (issue #2267) from a raw declared version that may come from a
+    /// different MSBuild evaluation context (e.g. a CPM
+    /// <c>Directory.Packages.props</c> not present alongside an isolated
+    /// gsproj). A below-floor literal is bumped to <see cref="MinimumGSharpVersion"/>
+    /// (mirrors <see cref="TryGetRequiredBump"/>); an at-or-above-floor literal is
+    /// preserved as-is; anything else (missing, an MSBuild property, a range, or a
+    /// wildcard — none of which resolve outside their original context) falls back
+    /// to <see cref="MinimumGSharpVersion"/>, the lowest version known to work.
+    /// </summary>
+    /// <param name="rawVersion">The raw declared <c>Version</c> attribute value, or <see langword="null"/>.</param>
+    /// <returns>The concrete version to declare.</returns>
+    public static string ResolveEffectiveVersion(string rawVersion)
+    {
+        if (TryGetRequiredBump(rawVersion, out string bumped))
+        {
+            return bumped;
+        }
+
+        if (IsPlainLiteral(rawVersion) && SemVer.TryParse(rawVersion.Trim(), out _))
+        {
+            return rawVersion.Trim();
+        }
+
+        return MinimumGSharpVersion;
+    }
+
     /// <summary>
     /// Determines whether the supplied version string denotes an nbgv version
     /// strictly below <see cref="MinimumGSharpVersion"/> that can be safely
@@ -59,25 +160,15 @@ public static class NerdbankGitVersioningPolicy
     public static bool TryGetRequiredBump(string version, out string bumpedVersion)
     {
         bumpedVersion = null;
-        if (string.IsNullOrWhiteSpace(version))
-        {
-            return false;
-        }
-
-        string trimmed = version.Trim();
 
         // Not a plain literal — an MSBuild property, floating version, or range.
         // We cannot know its resolved value, so leave it as-is.
-        if (trimmed.IndexOf("$(", StringComparison.Ordinal) >= 0 ||
-            trimmed.IndexOf('*') >= 0 ||
-            trimmed.IndexOf('[') >= 0 ||
-            trimmed.IndexOf('(') >= 0 ||
-            trimmed.IndexOf(',') >= 0)
+        if (!IsPlainLiteral(version))
         {
             return false;
         }
 
-        if (!SemVer.TryParse(trimmed, out SemVer current))
+        if (!SemVer.TryParse(version.Trim(), out SemVer current))
         {
             return false;
         }
@@ -141,6 +232,29 @@ public static class NerdbankGitVersioningPolicy
         }
 
         return changed;
+    }
+
+    /// <summary>
+    /// Determines whether <paramref name="version"/> is a plain semantic-version
+    /// literal cs2gs can reason about outside its original MSBuild evaluation
+    /// context — i.e. not an MSBuild property (<c>$(...)</c>), a floating/wildcard
+    /// (<c>*</c>), or a version range (<c>[..]</c>/<c>(..)</c>).
+    /// </summary>
+    /// <param name="version">The raw <c>Version</c> attribute value.</param>
+    /// <returns><see langword="true"/> when the value is a plain literal.</returns>
+    private static bool IsPlainLiteral(string version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+        {
+            return false;
+        }
+
+        string trimmed = version.Trim();
+        return trimmed.IndexOf("$(", StringComparison.Ordinal) < 0 &&
+            trimmed.IndexOf('*') < 0 &&
+            trimmed.IndexOf('[') < 0 &&
+            trimmed.IndexOf('(') < 0 &&
+            trimmed.IndexOf(',') < 0;
     }
 
     /// <summary>

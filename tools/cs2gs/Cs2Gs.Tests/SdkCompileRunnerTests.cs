@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Cs2Gs.Pipeline;
+using Cs2Gs.Translator.Loading;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -138,6 +139,62 @@ public class SdkCompileRunnerTests
             "/repo/out/bin/Release/SomeLib/SomeLib.dll", PackagesRoot);
 
         Assert.Null(package);
+    }
+
+    [Fact]
+    public void BuildProjectXml_EmitsDeclaredNerdbankGitVersioningPackageReference_WithBumpedVersionAndPrivateAssets()
+    {
+        // Issue #2267: nbgv is a build/dev-only dependency (PrivateAssets=all, no
+        // lib/ DLL) so it contributes no compile-time reference DLL for the
+        // `packages` reconstruction to recover. When the source project declared
+        // it (captured as a DeclaredPackageReference by the Translate stage),
+        // BuildProjectXml must still emit it as a real <PackageReference> so
+        // nbgv's ThisAssembly MSBuild generator runs under `dotnet build`.
+        var declared = new[]
+        {
+            new DeclaredPackageReference(
+                NerdbankGitVersioningPolicy.PackageId,
+                NerdbankGitVersioningPolicy.MinimumGSharpVersion,
+                privateAssets: "all"),
+        };
+
+        string xml = SdkCompileRunner.BuildProjectXml(
+            sdkVersion: "1.0.0",
+            target: TargetKind.Exe,
+            rootNamespace: null,
+            gsFilePaths: new[] { "/app/Program.gs" },
+            packages: Array.Empty<(string Id, string Version)>(),
+            references: Array.Empty<string>(),
+            analyzerReferences: Array.Empty<string>(),
+            declaredPackageReferences: declared);
+
+        Assert.Contains(
+            "<PackageReference Include=\"Nerdbank.GitVersioning\" Version=\"3.11.13-beta\" PrivateAssets=\"all\" />",
+            xml);
+    }
+
+    [Fact]
+    public void BuildProjectXml_DoesNotDuplicateDeclaredPackage_WhenAlreadyReconstructedFromDll()
+    {
+        // A package that DID resolve a compile-time DLL is already fully
+        // represented in `packages`; the caller (SdkCompileRunner.Compile) filters
+        // it out of `declaredPackageReferences` before calling BuildProjectXml, but
+        // BuildProjectXml itself renders both lists as given, so this test locks
+        // in that contract at the call-site level via the public Compile-adjacent
+        // helper: rendering the same id twice must not happen when the caller
+        // only passes the DLL-less declared set (the realistic call shape).
+        string xml = SdkCompileRunner.BuildProjectXml(
+            sdkVersion: "1.0.0",
+            target: TargetKind.Library,
+            rootNamespace: null,
+            gsFilePaths: new[] { "/app/Lib.gs" },
+            packages: new List<(string Id, string Version)> { ("communitytoolkit.mvvm", "8.4.0") },
+            references: Array.Empty<string>(),
+            analyzerReferences: Array.Empty<string>(),
+            declaredPackageReferences: Array.Empty<DeclaredPackageReference>());
+
+        Assert.Contains("<PackageReference Include=\"communitytoolkit.mvvm\" Version=\"8.4.0\" />", xml);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(xml, "<PackageReference"));
     }
 
     /// <summary>

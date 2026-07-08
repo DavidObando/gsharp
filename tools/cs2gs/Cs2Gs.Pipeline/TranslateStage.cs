@@ -303,6 +303,13 @@ public sealed class TranslateStage : IMigrationStage
     /// a manifest recording the source path. The original files are never touched
     /// (the corpus tree is read-only); the migrated project can adopt the bumped
     /// file so nbgv produces the G# <c>ThisAssembly</c> source (issue #2225).
+    /// Also resolves, across the same candidate set, the nbgv package's effective
+    /// id/version/<c>PrivateAssets</c>/<c>IncludeAssets</c> declaration and — when
+    /// found — records it on <see cref="StageExecutionContext.BuildOnlyPackageReferences"/>
+    /// so the <c>--via-sdk</c> compile path can re-declare it in the isolated
+    /// gsproj (issue #2267): nbgv is a build/dev-only dependency that contributes
+    /// no compile-time reference DLL, so it would otherwise be silently dropped
+    /// and its <c>ThisAssembly</c> source generator would never run.
     /// </summary>
     private static void EmitNerdbankGitVersioningBumps(StageExecutionContext context)
     {
@@ -332,6 +339,10 @@ public sealed class TranslateStage : IMigrationStage
         string outputDir = null;
         var manifest = new List<string>();
         var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        bool nbgvFound = false;
+        string rawVersion = null;
+        string privateAssets = null;
+        string includeAssets = null;
         foreach (string candidate in candidates)
         {
             string original;
@@ -342,6 +353,19 @@ public sealed class TranslateStage : IMigrationStage
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 continue;
+            }
+
+            // Issue #2267: combine the nbgv declaration across every candidate
+            // file — CPM commonly splits it between a versionless
+            // <PackageReference PrivateAssets="all"> (project/Directory.Build.props)
+            // and the actual <PackageVersion Version="..."> (Directory.Packages.props).
+            if (NerdbankGitVersioningPolicy.TryFindDeclaration(
+                original, out string candidateVersion, out string candidatePrivateAssets, out string candidateIncludeAssets))
+            {
+                nbgvFound = true;
+                rawVersion ??= candidateVersion;
+                privateAssets ??= candidatePrivateAssets;
+                includeAssets ??= candidateIncludeAssets;
             }
 
             if (!NerdbankGitVersioningPolicy.TryBumpProjectXml(original, out string bumped))
@@ -376,6 +400,15 @@ public sealed class TranslateStage : IMigrationStage
                 + "# Each line: <emitted file> <- <original source file>." + Environment.NewLine
                 + string.Join(Environment.NewLine, manifest) + Environment.NewLine;
             File.WriteAllText(Path.Combine(outputDir, "manifest.txt"), manifestText);
+        }
+
+        if (nbgvFound)
+        {
+            context.BuildOnlyPackageReferences.Add(new DeclaredPackageReference(
+                NerdbankGitVersioningPolicy.PackageId,
+                NerdbankGitVersioningPolicy.ResolveEffectiveVersion(rawVersion),
+                privateAssets ?? "all",
+                includeAssets));
         }
     }
 

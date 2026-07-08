@@ -62,6 +62,13 @@ public sealed class SdkCompileRunner
     /// <param name="analyzerPaths">The analyzer/generator assembly paths (issue #2215).</param>
     /// <param name="rootNamespace">The root namespace to set on the project, or <see langword="null"/>.</param>
     /// <param name="config">The build configuration (e.g. <c>Release</c>).</param>
+    /// <param name="declaredPackageReferences">
+    /// The source project's declared build/dev-only <c>PackageReference</c>s
+    /// (issue #2267) — e.g. a version-bumped <c>Nerdbank.GitVersioning</c> — to
+    /// re-declare in the isolated gsproj even though they contribute no
+    /// compile-time reference DLL for <see cref="PartitionReferences"/> to
+    /// recover. May be <see langword="null"/> or empty.
+    /// </param>
     /// <returns>The compile result, or an unavailable result when no local SDK nupkg can be found.</returns>
     public SdkCompileResult Compile(
         string appRunDir,
@@ -70,7 +77,8 @@ public sealed class SdkCompileRunner
         IReadOnlyList<string> referencePaths,
         IReadOnlyList<string> analyzerPaths,
         string rootNamespace,
-        string config)
+        string config,
+        IReadOnlyList<DeclaredPackageReference> declaredPackageReferences = null)
     {
         if (string.IsNullOrEmpty(appRunDir))
         {
@@ -123,6 +131,22 @@ public sealed class SdkCompileRunner
             }
         }
 
+        // Issue #2267: a declared build/dev-only package (nbgv) that also
+        // resolved a compile-time DLL is already covered by `packages` above;
+        // only the ones DLL reconstruction could never see need to be added
+        // here, carrying the PrivateAssets/IncludeAssets metadata `packages`
+        // has no room for.
+        var declaredOnlyPackages = new List<DeclaredPackageReference>();
+        foreach (DeclaredPackageReference declared in declaredPackageReferences ?? Array.Empty<DeclaredPackageReference>())
+        {
+            if (declared is null || string.IsNullOrWhiteSpace(declared.Id) || packageIndex.ContainsKey(declared.Id))
+            {
+                continue;
+            }
+
+            declaredOnlyPackages.Add(declared);
+        }
+
         const string ProjectName = "App";
         string projectPath = Path.Combine(appRunDir, ProjectName + ".gsproj");
         string projectXml = BuildProjectXml(
@@ -132,7 +156,8 @@ public sealed class SdkCompileRunner
             gsFilePaths ?? Array.Empty<string>(),
             packages,
             references,
-            analyzerReferences);
+            analyzerReferences,
+            declaredOnlyPackages);
         File.WriteAllText(projectPath, projectXml);
 
         var args = new List<string> { "build", projectPath, "-c", config ?? "Release" };
@@ -272,6 +297,127 @@ public sealed class SdkCompileRunner
     }
 
     /// <summary>
+    /// Renders the isolated <c>App.gsproj</c> XML text: the SDK-project header,
+    /// build properties, <c>@(Compile)</c> items, <c>@(PackageReference)</c>
+    /// (both the reconstructed-from-DLL set and the declared build/dev-only set,
+    /// issue #2267), <c>@(Reference)</c>, and <c>@(Analyzer)</c> items. Exposed
+    /// <see langword="internal"/> so the package/analyzer item emission is
+    /// unit-testable without a live NuGet cache or a real <c>dotnet build</c>.
+    /// </summary>
+    /// <param name="sdkVersion">The resolved <c>Gsharp.NET.Sdk</c> version.</param>
+    /// <param name="target">The output kind (exe or library).</param>
+    /// <param name="rootNamespace">The root namespace to set on the project, or <see langword="null"/>.</param>
+    /// <param name="gsFilePaths">The absolute paths of the emitted G# files to compile, in compile order.</param>
+    /// <param name="packages">The <c>PackageReference</c> id/version pairs reconstructed from compile-time DLLs.</param>
+    /// <param name="references">The remaining loose/sibling <c>Reference</c> paths.</param>
+    /// <param name="analyzerReferences">The analyzer/generator assembly paths (issue #2215).</param>
+    /// <param name="declaredPackageReferences">
+    /// The source project's declared build/dev-only <c>PackageReference</c>s
+    /// (issue #2267) to re-declare even though they contributed no compile-time
+    /// DLL to <paramref name="packages"/>.
+    /// </param>
+    /// <returns>The full <c>.gsproj</c> XML text.</returns>
+    internal static string BuildProjectXml(
+        string sdkVersion,
+        TargetKind target,
+        string rootNamespace,
+        IReadOnlyList<string> gsFilePaths,
+        IReadOnlyList<(string Id, string Version)> packages,
+        IReadOnlyList<string> references,
+        IReadOnlyList<string> analyzerReferences,
+        IReadOnlyList<DeclaredPackageReference> declaredPackageReferences = null)
+    {
+        declaredPackageReferences ??= Array.Empty<DeclaredPackageReference>();
+        string outputType = target == TargetKind.Exe ? "Exe" : "Library";
+        var sb = new StringBuilder();
+        sb.Append("<Project Sdk=\"").Append(SdkPackageId).Append('/').Append(sdkVersion).Append("\">\n");
+        sb.Append('\n');
+        sb.Append("  <PropertyGroup>\n");
+        sb.Append("    <OutputType>").Append(outputType).Append("</OutputType>\n");
+        sb.Append("    <TargetFramework>net10.0</TargetFramework>\n");
+        sb.Append("    <Nullable>enable</Nullable>\n");
+        sb.Append("    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>\n");
+        sb.Append("    <Deterministic>true</Deterministic>\n");
+        sb.Append("    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>\n");
+        if (!string.IsNullOrEmpty(rootNamespace))
+        {
+            sb.Append("    <RootNamespace>").Append(rootNamespace).Append("</RootNamespace>\n");
+        }
+
+        sb.Append("  </PropertyGroup>\n");
+        sb.Append('\n');
+        sb.Append("  <ItemGroup>\n");
+        foreach (string gsFile in gsFilePaths)
+        {
+            sb.Append("    <Compile Include=\"").Append(gsFile).Append("\" />\n");
+        }
+
+        sb.Append("  </ItemGroup>\n");
+
+        if (packages.Count > 0 || declaredPackageReferences.Count > 0)
+        {
+            sb.Append('\n');
+            sb.Append("  <ItemGroup>\n");
+            foreach ((string id, string version) in packages)
+            {
+                sb.Append("    <PackageReference Include=\"").Append(id)
+                    .Append("\" Version=\"").Append(version).Append("\" />\n");
+            }
+
+            // Issue #2267: build/dev-only packages (e.g. Nerdbank.GitVersioning)
+            // that contributed no compile-time DLL and so are absent from
+            // `packages` above, re-declared here so their MSBuild source
+            // generators still run under `dotnet build`.
+            foreach (DeclaredPackageReference declared in declaredPackageReferences)
+            {
+                sb.Append("    <PackageReference Include=\"").Append(declared.Id)
+                    .Append("\" Version=\"").Append(declared.Version).Append('"');
+                if (!string.IsNullOrEmpty(declared.PrivateAssets))
+                {
+                    sb.Append(" PrivateAssets=\"").Append(declared.PrivateAssets).Append('"');
+                }
+
+                if (!string.IsNullOrEmpty(declared.IncludeAssets))
+                {
+                    sb.Append(" IncludeAssets=\"").Append(declared.IncludeAssets).Append('"');
+                }
+
+                sb.Append(" />\n");
+            }
+
+            sb.Append("  </ItemGroup>\n");
+        }
+
+        if (references.Count > 0)
+        {
+            sb.Append('\n');
+            sb.Append("  <ItemGroup>\n");
+            foreach (string reference in references)
+            {
+                sb.Append("    <Reference Include=\"").Append(Path.GetFullPath(reference)).Append("\" />\n");
+            }
+
+            sb.Append("  </ItemGroup>\n");
+        }
+
+        if (analyzerReferences.Count > 0)
+        {
+            sb.Append('\n');
+            sb.Append("  <ItemGroup>\n");
+            foreach (string analyzerReference in analyzerReferences)
+            {
+                sb.Append("    <Analyzer Include=\"").Append(analyzerReference).Append("\" />\n");
+            }
+
+            sb.Append("  </ItemGroup>\n");
+        }
+
+        sb.Append('\n');
+        sb.Append("</Project>\n");
+        return sb.ToString();
+    }
+
+    /// <summary>
     /// Writes a <c>nuget.config</c> directly into <paramref name="appRunDir"/>
     /// pointing at the repo's <c>.nugs</c> local feed (by absolute path) plus
     /// nuget.org. MSBuild's SDK resolver (which resolves <c>Sdk="Gsharp.NET.Sdk/…"</c>
@@ -358,83 +504,6 @@ public sealed class SdkCompileRunner
         }
 
         return best;
-    }
-
-    private static string BuildProjectXml(
-        string sdkVersion,
-        TargetKind target,
-        string rootNamespace,
-        IReadOnlyList<string> gsFilePaths,
-        IReadOnlyList<(string Id, string Version)> packages,
-        IReadOnlyList<string> references,
-        IReadOnlyList<string> analyzerReferences)
-    {
-        string outputType = target == TargetKind.Exe ? "Exe" : "Library";
-        var sb = new StringBuilder();
-        sb.Append("<Project Sdk=\"").Append(SdkPackageId).Append('/').Append(sdkVersion).Append("\">\n");
-        sb.Append('\n');
-        sb.Append("  <PropertyGroup>\n");
-        sb.Append("    <OutputType>").Append(outputType).Append("</OutputType>\n");
-        sb.Append("    <TargetFramework>net10.0</TargetFramework>\n");
-        sb.Append("    <Nullable>enable</Nullable>\n");
-        sb.Append("    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>\n");
-        sb.Append("    <Deterministic>true</Deterministic>\n");
-        sb.Append("    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>\n");
-        if (!string.IsNullOrEmpty(rootNamespace))
-        {
-            sb.Append("    <RootNamespace>").Append(rootNamespace).Append("</RootNamespace>\n");
-        }
-
-        sb.Append("  </PropertyGroup>\n");
-        sb.Append('\n');
-        sb.Append("  <ItemGroup>\n");
-        foreach (string gsFile in gsFilePaths)
-        {
-            sb.Append("    <Compile Include=\"").Append(gsFile).Append("\" />\n");
-        }
-
-        sb.Append("  </ItemGroup>\n");
-
-        if (packages.Count > 0)
-        {
-            sb.Append('\n');
-            sb.Append("  <ItemGroup>\n");
-            foreach ((string id, string version) in packages)
-            {
-                sb.Append("    <PackageReference Include=\"").Append(id)
-                    .Append("\" Version=\"").Append(version).Append("\" />\n");
-            }
-
-            sb.Append("  </ItemGroup>\n");
-        }
-
-        if (references.Count > 0)
-        {
-            sb.Append('\n');
-            sb.Append("  <ItemGroup>\n");
-            foreach (string reference in references)
-            {
-                sb.Append("    <Reference Include=\"").Append(Path.GetFullPath(reference)).Append("\" />\n");
-            }
-
-            sb.Append("  </ItemGroup>\n");
-        }
-
-        if (analyzerReferences.Count > 0)
-        {
-            sb.Append('\n');
-            sb.Append("  <ItemGroup>\n");
-            foreach (string analyzerReference in analyzerReferences)
-            {
-                sb.Append("    <Analyzer Include=\"").Append(analyzerReference).Append("\" />\n");
-            }
-
-            sb.Append("  </ItemGroup>\n");
-        }
-
-        sb.Append('\n');
-        sb.Append("</Project>\n");
-        return sb.ToString();
     }
 
     private static GscDiagnostic SynthesizeFallbackDiagnostic(ProcessRunResult result, IReadOnlyList<string> gsFilePaths)

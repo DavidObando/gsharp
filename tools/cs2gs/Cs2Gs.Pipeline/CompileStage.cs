@@ -55,7 +55,8 @@ public sealed class CompileStage : IMigrationStage
                 references,
                 context.AnalyzerReferencePaths,
                 rootNamespace: null,
-                context.Options.Config);
+                context.Options.Config,
+                context.BuildOnlyPackageReferences);
 
             if (sdkResult.IsAvailable)
             {
