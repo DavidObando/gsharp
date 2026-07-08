@@ -7381,32 +7381,17 @@ public sealed class CSharpToGSharpTranslator
                 // recursing: the nested arm gets its own temp, which is then
                 // deconstructed by a SECOND `let (...) = temp` statement
                 // (issue #1974) — G#'s grammar only needs a flat name list per
-                // statement, and nothing stops chaining several of them.
+                // statement, and nothing stops chaining several of them. A
+                // non-identifier target (`arr[i]`, `obj.F`, ...) anywhere in the
+                // (possibly nested) target shape is handled by
+                // `LowerTupleAssignment` capturing its receiver/index FIRST
+                // (via `MakeDuplicationSafeTarget`, the same machinery chained
+                // assignment already uses), before the RHS is spilled —
+                // preserving C#'s left-to-right, targets-then-value evaluation
+                // order (issue #2234, generalizing #1895).
                 if (assignment.Left is TupleExpressionSyntax leftTuple)
                 {
-                    if (HasNonIdentifierDeconstructionTarget(leftTuple))
-                    {
-                        // A non-identifier target (`arr[i]`, `obj.F`, ...) anywhere
-                        // in the (possibly nested) target shape. C# evaluates all
-                        // LHS storage references BEFORE the RHS; `LowerTuplePattern`
-                        // spills the RHS first and writes targets afterward,
-                        // reversing that order. For a plain identifier (or a new
-                        // `var`/nested-`var` binding) there is nothing to evaluate
-                        // (no side effect), so the reorder is safe; for anything
-                        // else (element/member access, deref, ...) it can silently
-                        // miscompile if the RHS mutates state the target expression
-                        // reads (issue #1895). Gap loudly instead.
-                        string message = "a non-identifier target ('arr[i]', 'obj.F', ...) in a " +
-                            "deconstruction-assignment has no safe G# lowering yet (issue #1895): " +
-                            "C# evaluates LHS storage references before the right-hand side, but " +
-                            "G#'s lowering must spill the right-hand side first, which would " +
-                            "silently reverse evaluation order for a side-effecting target.";
-                        this.context.ReportUnsupported(assignment, message);
-                    }
-                    else
-                    {
-                        return this.LowerTupleAssignment(leftTuple, assignment.Right);
-                    }
+                    return this.LowerTupleAssignment(leftTuple, assignment.Right);
                 }
             }
 
@@ -7793,26 +7778,15 @@ public sealed class CSharpToGSharpTranslator
             GExpression value;
             if (tupleLink != null)
             {
-                if (HasNonIdentifierDeconstructionTarget(tupleLink))
-                {
-                    // Same evaluation-order hazard as the statement-position gap
-                    // above (issue #1895), reached here via the value-position
-                    // path instead (issue #1974).
-                    string message = "a non-identifier target ('arr[i]', 'obj.F', ...) in a " +
-                        "deconstruction-assignment has no safe G# lowering yet (issue #1895): " +
-                        "C# evaluates LHS storage references before the right-hand side, but " +
-                        "G#'s lowering must spill the right-hand side first, which would " +
-                        "silently reverse evaluation order for a side-effecting target.";
-                    this.context.ReportUnsupported(tupleLink, message);
-                    value = new IdentifierExpression("nil");
-                }
-                else
-                {
-                    (List<GStatement> tupleStatements, GExpression tupleValue) =
-                        this.LowerTupleAssignmentForValue(tupleLink, tupleLinkRight);
-                    statements.AddRange(tupleStatements);
-                    value = tupleValue;
-                }
+                // A non-identifier target (`arr[i]`, `obj.F`, ...) anywhere in the
+                // (possibly nested) target shape is handled by
+                // `LowerTupleAssignmentForValue` capturing its receiver/index
+                // FIRST, before the RHS is spilled (issue #2234, generalizing
+                // #1895/#1974).
+                (List<GStatement> tupleStatements, GExpression tupleValue) =
+                    this.LowerTupleAssignmentForValue(tupleLink, tupleLinkRight);
+                statements.AddRange(tupleStatements);
+                value = tupleValue;
             }
             else
             {
@@ -7948,21 +7922,6 @@ public sealed class CSharpToGSharpTranslator
             return true;
         }
 
-        // Recursively checks every leaf of a (possibly nested) deconstruction
-        // *assignment* target for a non-identifier storage reference (`arr[i]`,
-        // `obj.F`, ...). A nested tuple target or a new `var`/nested-`var`
-        // binding is always safe (no pre-existing storage to evaluate before
-        // the RHS); only an existing-variable write needs to be a bare
-        // identifier (issue #1895/#1974).
-        private static bool HasNonIdentifierDeconstructionTarget(TupleExpressionSyntax tuple) =>
-            tuple.Arguments.Any(a => a.Expression switch
-            {
-                TupleExpressionSyntax nested => HasNonIdentifierDeconstructionTarget(nested),
-                DeclarationExpressionSyntax => false,
-                IdentifierNameSyntax => false,
-                _ => true,
-            });
-
         // Statement-position deconstruction assignment (`(a, b) = (x, y);`):
         // the resulting per-element values are never read back, so discards
         // stay true discards (no temp allocated for them).
@@ -7971,7 +7930,8 @@ public sealed class CSharpToGSharpTranslator
             ExpressionSyntax right)
         {
             var statements = new List<GStatement>();
-            this.LowerTuplePattern(leftTuple, this.TranslateExpression(right), forceRealTemps: false, statements);
+            Dictionary<ExpressionSyntax, GExpression> captured = this.CaptureDeconstructionStorageTargets(leftTuple, statements);
+            this.LowerTuplePattern(leftTuple, this.TranslateExpression(right), forceRealTemps: false, statements, captured);
             return statements;
         }
 
@@ -7986,10 +7946,65 @@ public sealed class CSharpToGSharpTranslator
             ExpressionSyntax right)
         {
             var statements = new List<GStatement>();
-            List<GExpression> values = this.LowerTuplePattern(leftTuple, this.TranslateExpression(right), forceRealTemps: true, statements);
+            Dictionary<ExpressionSyntax, GExpression> captured = this.CaptureDeconstructionStorageTargets(leftTuple, statements);
+            List<GExpression> values = this.LowerTuplePattern(leftTuple, this.TranslateExpression(right), forceRealTemps: true, statements, captured);
             GExpression value = new TupleLiteralExpression(values);
             this.tupleAssignmentValues[leftTuple] = value;
             return (statements, value);
+        }
+
+        // Walks a (possibly nested) deconstruction-assignment target shape
+        // and, for every indexer/member-access (or other existing storage-
+        // location) leaf, spills its receiver/index sub-expression into a
+        // temp via `MakeDuplicationSafeTarget` — the SAME machinery chained
+        // assignment (`a[F()] = b[G()] = c`, issue #1731) already uses —
+        // emitted into `statements` BEFORE anything about the right-hand
+        // side. This preserves C#'s left-to-right, targets-then-value
+        // evaluation order (issue #2234, generalizing #1895/#1974: a plain
+        // identifier or a new `var`/nested-`var` binding has nothing
+        // pre-existing to evaluate, so needs no capture; a nested tuple
+        // target is walked recursively, since its own leaves are storage
+        // locations too). Returns a map from each captured leaf's original
+        // syntax to its now-single-evaluation-safe G# replacement, consulted
+        // by `LowerTuplePattern` when it emits the final per-target
+        // assignment.
+        private Dictionary<ExpressionSyntax, GExpression> CaptureDeconstructionStorageTargets(
+            TupleExpressionSyntax pattern,
+            List<GStatement> statements)
+        {
+            var captured = new Dictionary<ExpressionSyntax, GExpression>();
+            this.CaptureDeconstructionStorageTargets(pattern, statements, captured);
+            return captured;
+        }
+
+        private void CaptureDeconstructionStorageTargets(
+            TupleExpressionSyntax pattern,
+            List<GStatement> statements,
+            Dictionary<ExpressionSyntax, GExpression> captured)
+        {
+            foreach (ArgumentSyntax argument in pattern.Arguments)
+            {
+                ExpressionSyntax targetExpr = argument.Expression;
+                switch (targetExpr)
+                {
+                    case TupleExpressionSyntax nested:
+                        this.CaptureDeconstructionStorageTargets(nested, statements, captured);
+                        break;
+
+                    case IdentifierNameSyntax:
+                    case DeclarationExpressionSyntax:
+                        // No pre-existing storage to evaluate: an identifier is
+                        // already a stable reference, and a declaration
+                        // (`var y`) is a brand-new local.
+                        break;
+
+                    default:
+                        // An existing storage location (`arr[i]`, `obj.F`, ...):
+                        // spill its receiver/index once, now, before the RHS.
+                        captured[targetExpr] = this.MakeDuplicationSafeTarget(this.TranslateExpression(targetExpr), statements);
+                        break;
+                }
+            }
         }
 
         // Core recursive lowering shared by the statement- and
@@ -8004,7 +8019,8 @@ public sealed class CSharpToGSharpTranslator
             TupleExpressionSyntax pattern,
             GExpression rhsValue,
             bool forceRealTemps,
-            List<GStatement> statements)
+            List<GStatement> statements,
+            Dictionary<ExpressionSyntax, GExpression> captured)
         {
             int count = pattern.Arguments.Count;
             var temps = new List<string>(count);
@@ -8053,7 +8069,7 @@ public sealed class CSharpToGSharpTranslator
                     // to flatten every depth into one `let (...)` (issue
                     // #1974). The recursive rhsValue is already a bare temp
                     // read, so no further spill is needed before recursing.
-                    List<GExpression> nestedValues = this.LowerTuplePattern(nestedTuple, tempRead, forceRealTemps, statements);
+                    List<GExpression> nestedValues = this.LowerTuplePattern(nestedTuple, tempRead, forceRealTemps, statements, captured);
                     values.Add(forceRealTemps ? new TupleLiteralExpression(nestedValues) : null);
                     continue;
                 }
@@ -8108,9 +8124,14 @@ public sealed class CSharpToGSharpTranslator
                 // `_ = __decon1;` statement (issue #2099).
                 if (!this.IsDeconstructionDiscard(targetExpr))
                 {
-                    statements.Add(new AssignmentStatement(
-                        this.TranslateExpression(targetExpr),
-                        tempRead));
+                    // A member/element-access target was already captured
+                    // into a duplication-safe replacement BEFORE the RHS was
+                    // spilled above (issue #2234); a plain identifier has no
+                    // entry and translates as-is.
+                    GExpression assignTarget = captured.TryGetValue(targetExpr, out GExpression safeTarget)
+                        ? safeTarget
+                        : this.TranslateExpression(targetExpr);
+                    statements.Add(new AssignmentStatement(assignTarget, tempRead));
                 }
 
                 values.Add(tempRead);
