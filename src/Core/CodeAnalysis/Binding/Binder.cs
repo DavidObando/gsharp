@@ -5600,6 +5600,47 @@ public sealed class Binder
             return TypeSymbol.FromClrType(importedClass.ClassType);
         }
 
+        // Issue #2273: `import R = Namespace.Type` names a TYPE outright (not a
+        // namespace) — a C# `using R = Some.Type;` analog. Unlike a plain
+        // `import Some.Namespace`, whose target is never itself a type, an
+        // ALIAS's target is resolved directly as a type so `R` is usable
+        // anywhere the aliased type's own name would be: here (type-clause
+        // position, e.g. `var x R = ...`), and — via this same method — at
+        // static-member/nested-type use sites that fall back to it. Handles
+        // both an imported CLR type (`import R = System.Math` then `R.PI`) and
+        // a same-compilation SOURCE type declared in another package (the
+        // conventional resx `import R = ...Properties.Resources` pattern),
+        // generalized to any namespace depth.
+        if (scope.TryLookupImport(name, out var aliasImport) && aliasImport.IsAlias)
+        {
+            var aliasTarget = aliasImport.Target;
+
+            if (scope.References.TryResolveType(aliasTarget, out var clrAliasType))
+            {
+                if (ImportedTypeSymbol.TryCreateSemanticAggregate(clrAliasType, scope.References, out var clrAggregate))
+                {
+                    return clrAggregate;
+                }
+
+                return TypeSymbol.FromClrType(clrAliasType);
+            }
+
+            // Source types are visible by simple (possibly nested) name across
+            // packages, but have no reflectable CLR type while binding, so the
+            // resolver above never sees them. Resolve the alias target's final
+            // dotted segment as a source type name instead.
+            var lastDot = aliasTarget.LastIndexOf('.');
+            var aliasSimpleName = lastDot >= 0 ? aliasTarget.Substring(lastDot + 1) : aliasTarget;
+            if (!string.Equals(aliasSimpleName, name, System.StringComparison.Ordinal))
+            {
+                var aliasedSourceType = LookupType(aliasSimpleName, preferredArity);
+                if (aliasedSourceType != null && !ReferenceEquals(aliasedSourceType, TypeSymbol.Error))
+                {
+                    return aliasedSourceType;
+                }
+            }
+        }
+
         return null;
     }
 
