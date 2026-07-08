@@ -1009,6 +1009,42 @@ internal sealed partial class ExpressionBinder
             {
                 classSymbol = typeFromImport;
             }
+            else if (scope.TryLookupImport(name, out var matchedTypeAliasImport)
+                && matchedTypeAliasImport.IsAlias
+                && lookupType(name) is TypeSymbol aliasedType)
+            {
+                // Issue #2273: `import R = Namespace.Type` where the aliased
+                // target is a same-compilation SOURCE type (a class/struct,
+                // enum, or interface declared elsewhere in this compilation —
+                // e.g. the conventional resx `import R = ...Properties.Resources`
+                // pattern) rather than a CLR type. `TryBindImportAccessor` above
+                // only resolves CLR alias targets via the reference resolver, so
+                // a source-type alias falls through to here; `lookupType` (bound
+                // to `Binder.LookupType`) now also resolves an alias's target
+                // through the same import, so it recovers the aliased type
+                // symbol directly.
+                if (aliasedType is EnumSymbol foundAliasEnum)
+                {
+                    enumSymbol = foundAliasEnum;
+                }
+                else if (aliasedType is StructSymbol foundAliasStruct)
+                {
+                    userStructSymbol = foundAliasStruct;
+                }
+                else if (aliasedType is InterfaceSymbol foundAliasInterface)
+                {
+                    userInterfaceSymbol = foundAliasInterface;
+                }
+                else if (aliasedType.ClrType != null)
+                {
+                    classSymbol = new ImportedClassSymbol(aliasedType.ClrType, leftName, references: scope.References);
+                }
+                else
+                {
+                    Diagnostics.ReportUnableToFindType(leftName.Location, name);
+                    return new BoundErrorExpression(null);
+                }
+            }
             else if (scope.TryLookupImportedClass(name, leftName, out var importedClass))
             {
                 classSymbol = importedClass;
