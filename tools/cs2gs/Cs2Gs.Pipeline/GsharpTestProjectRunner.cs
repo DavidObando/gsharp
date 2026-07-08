@@ -297,7 +297,7 @@ public class GsharpTestProjectRunner
         File.Copy(nupkgPath, target, overwrite: true);
     }
 
-    private static string ParseVersion(string fileName)
+    internal static string ParseVersion(string fileName)
     {
         if (!fileName.StartsWith(SdkPackagePrefix, StringComparison.Ordinal) ||
             !fileName.EndsWith(".nupkg", StringComparison.Ordinal))
@@ -308,6 +308,33 @@ public class GsharpTestProjectRunner
         return fileName.Substring(
             SdkPackagePrefix.Length,
             fileName.Length - SdkPackagePrefix.Length - ".nupkg".Length);
+    }
+
+    internal static void WriteIsolationBoundary(string workDir)
+    {
+        // Sever the generated G# project from the repo-shared build the same way
+        // the corpus does (no GitVersioning, StyleCop, or AssemblyName rewrite),
+        // which otherwise breaks for the Gsharp language CodeDomProvider.
+        const string Empty = "<Project>\n</Project>\n";
+        File.WriteAllText(Path.Combine(workDir, "Directory.Build.props"), Empty);
+        File.WriteAllText(Path.Combine(workDir, "Directory.Build.targets"), Empty);
+    }
+
+    internal static string FindRepoRoot()
+    {
+        string dir = Path.GetDirectoryName(typeof(GsharpTestProjectRunner).Assembly.Location);
+        while (!string.IsNullOrEmpty(dir))
+        {
+            if (File.Exists(Path.Combine(dir, "nuget.config")) &&
+                File.Exists(Path.Combine(dir, "GSharp.sln")))
+            {
+                return dir;
+            }
+
+            dir = Path.GetDirectoryName(dir);
+        }
+
+        return Environment.CurrentDirectory;
     }
 
     private static (int[] Numbers, string Suffix) SplitVersion(string version)
@@ -415,16 +442,6 @@ public class GsharpTestProjectRunner
         return sha256.ComputeHash(stream);
     }
 
-    private static void WriteIsolationBoundary(string workDir)
-    {
-        // Sever the generated G# project from the repo-shared build the same way
-        // the corpus does (no GitVersioning, StyleCop, or AssemblyName rewrite),
-        // which otherwise breaks for the Gsharp language CodeDomProvider.
-        const string Empty = "<Project>\n</Project>\n";
-        File.WriteAllText(Path.Combine(workDir, "Directory.Build.props"), Empty);
-        File.WriteAllText(Path.Combine(workDir, "Directory.Build.targets"), Empty);
-    }
-
     private static string LibraryProject(GsharpTestProject project, string sdkVersion) =>
         $"<Project Sdk=\"{SdkPackageId}/{sdkVersion}\">\n" +
         "\n" +
@@ -458,23 +475,6 @@ public class GsharpTestProjectRunner
         "  </ItemGroup>\n" +
         "\n" +
         "</Project>\n";
-
-    private static string FindRepoRoot()
-    {
-        string dir = Path.GetDirectoryName(typeof(GsharpTestProjectRunner).Assembly.Location);
-        while (!string.IsNullOrEmpty(dir))
-        {
-            if (File.Exists(Path.Combine(dir, "nuget.config")) &&
-                File.Exists(Path.Combine(dir, "GSharp.sln")))
-            {
-                return dir;
-            }
-
-            dir = Path.GetDirectoryName(dir);
-        }
-
-        return Environment.CurrentDirectory;
-    }
 
     private (int Exit, string Output) RunDotnet(IReadOnlyList<string> arguments, string workingDirectory)
     {

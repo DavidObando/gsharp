@@ -43,11 +43,42 @@ public sealed class CompileStage : IMigrationStage
         IReadOnlyList<string> gsFiles = OrderForCompilation(context.EmittedFiles)
             .Select(f => f.GsPath)
             .ToList();
+        IReadOnlyList<string> references =
+            BuildReferenceSet(context.App.ReferencedAssemblies, context.ExternalReferencePaths);
+
+        if (context.Options.CompileViaSdk)
+        {
+            SdkCompileResult sdkResult = new SdkCompileRunner().Compile(
+                context.AppRunDir,
+                gsFiles,
+                context.App.TargetKind,
+                references,
+                context.AnalyzerReferencePaths,
+                rootNamespace: null,
+                context.Options.Config);
+
+            if (sdkResult.IsAvailable)
+            {
+                if (sdkResult.Succeeded)
+                {
+                    context.EmittedAssemblyPath = sdkResult.EmittedAssemblyPath;
+                    return Task.FromResult(StageOutcome.Passed());
+                }
+
+                string sdkSyntheticMessage = "dotnet build (--via-sdk) exited with code " + sdkResult.ExitCode +
+                    " and no parseable diagnostic. Output: " + Truncate(sdkResult.Output);
+                return Task.FromResult(BuildFailureOutcome(context, sdkResult.Errors, sdkSyntheticMessage));
+            }
+
+            // Issue #2261: no locally-built Gsharp.NET.Sdk nupkg is available.
+            // Fall back to the gsc-direct path rather than failing the app.
+        }
+
         GscResult result = context.Gsc.Compile(
             gsFiles,
             outputPath,
             context.App.TargetKind,
-            BuildReferenceSet(context.App.ReferencedAssemblies, context.ExternalReferencePaths),
+            references,
             context.AnalyzerReferencePaths,
             context.AdditionalGeneratorFiles,
             context.GeneratorGlobalOptions);
@@ -63,8 +94,20 @@ public sealed class CompileStage : IMigrationStage
             return Task.FromResult(StageOutcome.Passed());
         }
 
+        string syntheticMessage = "gsc exited with code " + result.ExitCode +
+            " and no parseable diagnostic. Output: " + Truncate(result.Output);
+        return Task.FromResult(BuildFailureOutcome(context, result.Errors, syntheticMessage));
+    }
+
+    /// <summary>
+    /// Maps a set of parsed error-severity diagnostics into triage artifacts,
+    /// shared by both the gsc-direct and <c>--via-sdk</c> compile paths.
+    /// </summary>
+    private static StageOutcome BuildFailureOutcome(
+        StageExecutionContext context, IReadOnlyList<GscDiagnostic> errors, string syntheticMessageOnNoDiagnostics)
+    {
         var artifacts = new List<TriageArtifact>();
-        foreach (GscDiagnostic diagnostic in result.Errors)
+        foreach (GscDiagnostic diagnostic in errors)
         {
             EmittedGsFile file = MatchEmittedFile(context.EmittedFiles, diagnostic.File);
 
@@ -81,22 +124,20 @@ public sealed class CompileStage : IMigrationStage
         }
 
         // Every parsed error was in a referenced sibling file: the app's own G#
-        // compiled cleanly. gsc still produced no assembly (the whole
-        // compilation failed), so IL-verify simply has nothing to read.
-        if (artifacts.Count == 0 && result.Errors.Count > 0)
+        // compiled cleanly. The whole compilation still produced no assembly,
+        // so IL-verify simply has nothing to read.
+        if (artifacts.Count == 0 && errors.Count > 0)
         {
-            return Task.FromResult(StageOutcome.Passed());
+            return StageOutcome.Passed();
         }
 
         // Exit was non-zero but no structured GSxxxx error was parsed (e.g. a
         // crash). Capture a synthetic compile-error so the failure is not lost.
         if (artifacts.Count == 0)
         {
-            string message = "gsc exited with code " + result.ExitCode +
-                " and no parseable diagnostic. Output: " + Truncate(result.Output);
             var synthetic = new GscDiagnostic(
                 "GS9999",
-                message,
+                syntheticMessageOnNoDiagnostics,
                 "error",
                 context.EmittedFiles[0].RelativeGsPath,
                 1,
@@ -104,7 +145,7 @@ public sealed class CompileStage : IMigrationStage
             artifacts.Add(context.Triage.CompileError(synthetic, context.EmittedFiles[0]));
         }
 
-        return Task.FromResult(StageOutcome.Failed(artifacts));
+        return StageOutcome.Failed(artifacts);
     }
 
     /// <summary>
