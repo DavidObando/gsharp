@@ -1460,6 +1460,19 @@ internal sealed class MemberLookup
     public static bool HasMatchingMethodForClrSignature(StructSymbol structSymbol, MethodInfo clrMethod)
     {
         var clrParams = clrMethod.GetParameters();
+
+        // Issue #2230: an imported (metadata) interface method may itself be
+        // generic (e.g. `ILogger.BeginScope<TState>(TState state)`). Those
+        // method-own generic parameters need to be matched positionally
+        // against the implementer's method type parameters — the same way
+        // `TryBuildMethodTypeParameterMap` already does for source-declared
+        // interfaces (issue #1007) — because an unbound G# type parameter
+        // carries no `ClrType` and the plain `ClrTypeUtilities.AreSame`
+        // comparison below can never succeed for it.
+        var methodGenericParams = clrMethod.IsGenericMethodDefinition
+            ? clrMethod.GetGenericArguments()
+            : System.Array.Empty<Type>();
+
         foreach (var candidate in structSymbol.GetMethodsIncludingInherited(clrMethod.Name))
         {
             var callable = GetCallableParameters(candidate);
@@ -1468,20 +1481,29 @@ internal sealed class MemberLookup
                 continue;
             }
 
+            var candidateTypeParams = candidate.TypeParameters.IsDefaultOrEmpty
+                ? ImmutableArray<TypeParameterSymbol>.Empty
+                : candidate.TypeParameters;
+            if (methodGenericParams.Length != candidateTypeParams.Length)
+            {
+                // Generic-arity mismatch: not a viable implementor of this
+                // interface method overload (mirrors issue #1007).
+                continue;
+            }
+
             // Issue #1071: an `async func` implementing a CLR interface method
             // declared with an explicit `Task` / `Task[T]` return type has a
             // declared (awaited) return of void / T. Compare the contract's
             // unwrapped awaited result against the candidate's declared type.
-            var candidateReturnClr = NullableLifting.GetEffectiveClrType(candidate.Type);
             if (candidate.IsAsync
                 && AsyncReturnTypeNormalizer.TryUnwrapTaskClrType(clrMethod.ReturnType, out var awaitedReturnClr))
             {
-                if (!ClrTypeUtilities.AreSame(candidateReturnClr, awaitedReturnClr))
+                if (!ClrParamTypeMatchesGenericMethodParam(candidate.Type, awaitedReturnClr, methodGenericParams, candidateTypeParams))
                 {
                     continue;
                 }
             }
-            else if (!ClrTypeUtilities.AreSame(candidateReturnClr, clrMethod.ReturnType))
+            else if (!ClrParamTypeMatchesGenericMethodParam(candidate.Type, clrMethod.ReturnType, methodGenericParams, candidateTypeParams))
             {
                 continue;
             }
@@ -1504,7 +1526,7 @@ internal sealed class MemberLookup
                     }
 
                     var elementType = clrParamType.GetElementType();
-                    if (!ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(gsParam.Type), elementType))
+                    if (!ClrParamTypeMatchesGenericMethodParam(gsParam.Type, elementType, methodGenericParams, candidateTypeParams))
                     {
                         allMatch = false;
                         break;
@@ -1519,7 +1541,7 @@ internal sealed class MemberLookup
                         break;
                     }
 
-                    if (!ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(gsParam.Type), clrParamType))
+                    if (!ClrParamTypeMatchesGenericMethodParam(gsParam.Type, clrParamType, methodGenericParams, candidateTypeParams))
                     {
                         allMatch = false;
                         break;
@@ -2948,6 +2970,95 @@ internal sealed class MemberLookup
             8 => typeof(Func<,,,,,,,,>).MakeGenericType(args),
             _ => null,
         };
+    }
+
+    /// <summary>
+    /// Issue #2230: compares a candidate implementer's parameter/return
+    /// <see cref="TypeSymbol"/> against a CLR contract position that may
+    /// reference an imported (metadata) interface METHOD's own generic
+    /// parameter (e.g. the <c>TState</c> in <c>ILogger.BeginScope&lt;TState&gt;</c>
+    /// / <c>ILogger.Log&lt;TState&gt;</c>), either directly or nested inside a
+    /// constructed delegate type (e.g. <c>Func&lt;TState, Exception, string&gt;</c>).
+    /// Falls back to the existing erased-<c>ClrType</c> comparison
+    /// (<see cref="HasMatchingMethodForClrSignature"/>'s prior behavior) for
+    /// every other position, so ordinary non-generic contract members are
+    /// unaffected.
+    /// </summary>
+    /// <param name="candidate">The implementer's parameter or return type.</param>
+    /// <param name="openType">The corresponding CLR contract type (from the open generic method definition).</param>
+    /// <param name="methodGenericParams">The interface method's own generic-parameter <see cref="Type"/>s, positionally.</param>
+    /// <param name="candidateTypeParams">The implementer method's own type parameters, positionally.</param>
+    /// <returns><see langword="true"/> when the positions match.</returns>
+    private static bool ClrParamTypeMatchesGenericMethodParam(
+        TypeSymbol candidate,
+        Type openType,
+        Type[] methodGenericParams,
+        ImmutableArray<TypeParameterSymbol> candidateTypeParams)
+    {
+        if (candidate == null || openType == null)
+        {
+            return false;
+        }
+
+        // Direct method-type-parameter position (e.g. `TState state`):
+        // match by position against the implementer's own method type
+        // parameter — an unbound G# type parameter has no ClrType, so the
+        // erased comparison below can never succeed for it.
+        if (openType.IsGenericMethodParameter)
+        {
+            var position = Array.IndexOf(methodGenericParams, openType);
+            return position >= 0
+                && position < candidateTypeParams.Length
+                && ReferenceEquals(candidate, candidateTypeParams[position]);
+        }
+
+        // Fast path: no method type parameter involved at or below this
+        // position — the pre-existing erased-ClrType comparison works
+        // (covers the overwhelming majority of contract positions,
+        // including non-generic methods entirely).
+        var effectiveClr = NullableLifting.GetEffectiveClrType(candidate);
+        if (effectiveClr != null && ClrTypeUtilities.AreSame(effectiveClr, openType))
+        {
+            return true;
+        }
+
+        // Slow path: a constructed generic contract position nests the
+        // method's own type parameter (e.g. `Func<TState, Exception, string>`
+        // in `Log<TState>(..., Func<TState, Exception, string> formatter)`),
+        // which erases to a null ClrType (FunctionTypeSymbol.BuildClrType
+        // bails when any parameter has no ClrType). Recurse structurally
+        // through the delegate's `Invoke` shape instead.
+        if (candidate is FunctionTypeSymbol fn && openType.IsConstructedGenericType)
+        {
+            var invoke = openType.GetMethodSafe("Invoke");
+            if (invoke == null)
+            {
+                return false;
+            }
+
+            var invokeParams = invoke.GetParameters();
+            if (invokeParams.Length != fn.ParameterTypes.Length)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < invokeParams.Length; i++)
+            {
+                if (!ClrParamTypeMatchesGenericMethodParam(fn.ParameterTypes[i], invokeParams[i].ParameterType, methodGenericParams, candidateTypeParams))
+                {
+                    return false;
+                }
+            }
+
+            if (invoke.ReturnType.IsSameAs(typeof(void)))
+            {
+                return FunctionTypeSymbol.IsVoidReturn(fn.ReturnType);
+            }
+
+            return ClrParamTypeMatchesGenericMethodParam(fn.ReturnType, invoke.ReturnType, methodGenericParams, candidateTypeParams);
+        }
+
+        return false;
     }
 
     /// <summary>
