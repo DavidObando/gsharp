@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using GSharp.Core.CodeAnalysis;
@@ -213,6 +214,23 @@ func (p Point) Deconstruct() {
 ";
         var result = Evaluate(source);
         Assert.Contains(result.Diagnostics, d => d.Id == "GS0232");
+    }
+
+    [Fact]
+    public void DataClass_ExplicitEqualsObject_ReportsGS0232()
+    {
+        var source = @"
+open data class Point(X int32, Y int32) {
+}
+
+func (p Point) Equals(other any) bool {
+    return false
+}
+0
+";
+        var result = Evaluate(source);
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0232");
+        Assert.Contains("Data class 'Point' synthesizes member 'Equals'", diagnostic.Message, StringComparison.Ordinal);
     }
 
     private static StructSymbol BuildPoint(out Compilation compilation)

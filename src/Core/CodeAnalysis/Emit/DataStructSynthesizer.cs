@@ -628,6 +628,11 @@ internal sealed class DataStructSynthesizer
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
             .Parameters(1, r => r.Type().Boolean(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), structSym));
 
+        // ponytail: `open data class` inheritance exists today, but proper
+        // record-style polymorphic equality needs a bigger follow-up
+        // (base-aware virtual signature + equality contract/base-field fold).
+        // Keep synthesized Equals(Name) as leaf-type equality for now instead
+        // of shipping a half-correct virtual form.
         return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: MethodAttributes.Public | MethodAttributes.HideBySig,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
