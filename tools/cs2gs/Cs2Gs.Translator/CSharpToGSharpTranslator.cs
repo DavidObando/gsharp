@@ -6224,6 +6224,51 @@ public sealed class CSharpToGSharpTranslator
                 : translatedRhs;
         }
 
+        // Issue #2259 (oblivious sink): an ELEMENT-access assignment target
+        // (`arr[i] = …`, a `Dictionary`/user-indexer write, …) whose RHS is a
+        // null-conditional access result (`x?[i]` / `x?.Member`) or any other
+        // promoted-nullable value trips a `T? -> T` GS0156 once gsc's strict
+        // nullability sees the RHS's true `T?` type. A field/property/local/
+        // parameter assignment TARGET is instead widened to `T?` at its own
+        // declaration by the whole-program taint analysis (see
+        // ObliviousNullabilityAnalyzer's SimpleAssignmentExpression edge in
+        // CollectEdges), but an element-access target has no single declaration
+        // to widen — promoting the whole array/collection's element type would
+        // ripple to every other read of it — so the minimal, generalized fix is
+        // a `!!` assertion at the RHS use site instead, exactly like every other
+        // promoted-nullable-into-non-nullable sink (return/argument/tuple/event).
+        // Gated to an oblivious compilation and skipped when the resolved LHS
+        // indexer is itself declared or promoted nullable (nothing to forgive),
+        // so a nullable-enabled compilation and an already-nullable sink are
+        // byte-identical.
+        private GExpression ForgiveElementAccessAssignmentRhs(
+            AssignmentExpressionSyntax assignment, GExpression translatedRhs)
+        {
+            if (!this.IsObliviousCompilation()
+                || !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                || translatedRhs is NonNullAssertionExpression
+                || assignment.Left is not ElementAccessExpressionSyntax
+                || !this.IsNullablePromotedValue(assignment.Right))
+            {
+                return translatedRhs;
+            }
+
+            ITypeSymbol leftType = this.context.GetTypeInfo(assignment.Left).Type;
+            if (leftType is not { IsReferenceType: true }
+                || leftType.NullableAnnotation == NullableAnnotation.Annotated)
+            {
+                return translatedRhs;
+            }
+
+            if (this.context.GetSymbolInfo(assignment.Left).Symbol is IPropertySymbol indexer
+                && this.IsPromotedToNullableReference(indexer))
+            {
+                return translatedRhs;
+            }
+
+            return new NonNullAssertionExpression(translatedRhs);
+        }
+
         // For a compound numeric assignment `x OP= y` (`+= -= *= /= %= &= |= ^=`),
         // G# requires the RHS to share the LHS's numeric type; a mismatched RHS is
         // coerced to the LHS type via the conversion-call form (e.g. `x += int64(y)`).
@@ -7342,6 +7387,7 @@ public sealed class CSharpToGSharpTranslator
                     assignRhs = this.CoerceCompoundAssignmentRhs(assignment, assignRhs);
                     assignRhs = this.CoercePointerConversion(assignment.Right, assignRhs);
                     assignRhs = this.ForgiveEventSubscriptionRhs(assignment, assignRhs);
+                    assignRhs = this.ForgiveElementAccessAssignmentRhs(assignment, assignRhs);
                     return new AssignmentStatement(
                         this.TranslateAssignmentTarget(assignment.Left),
                         assignRhs,
