@@ -286,26 +286,73 @@ let expr Expression[Func[Row, object]] = (r Row) -> object { let Id = r.Id; let 
         Assert.Empty(diagnostics);
     }
 
-    [Fact(Skip = "ADR-0146 Deviation: Kotlin-style visibility narrowing of anonymous-object types crossing a public API boundary is deferred. See docs/adr/0146-anonymous-class-literal.md (Deviations) for the hook point in the inferred-return-type computation.")]
+    [Fact]
     public void PublicApiBoundary_NarrowsToDeclaredSupertypeOrObject()
     {
-        // When implemented: a public/default-visibility function that returns
-        // an `object { ... }` literal with a custom member should expose only
-        // the declared supertype (or `object`), so a caller cannot reach the
-        // custom member through the call — while assigning the same literal to
-        // a local `let` keeps full access.
+        // ADR-0146 Kotlin-style visibility narrowing: a public function that
+        // returns an `object { ... }` literal with a custom member (and no
+        // declared supertype) exposes only the universal top type `object`, so
+        // a caller cannot reach the custom member through the call result...
         var diagnostics = GetDiagnostics(@"
 func make() -> object { let Secret = 42 }
 let v = make()
-v.Secret
+let x = v.Secret
 ");
-        Assert.NotEmpty(diagnostics);
+        Assert.Contains(diagnostics, d => d.Id == "GS0158");
 
+        // ...while assigning the same literal directly to a local `let` keeps
+        // full access to the custom member (this is unaffected by the return-type
+        // narrowing rule — it never applies to local bindings).
         var okDiagnostics = GetDiagnostics(@"
 let v = object { let Secret = 42 }
-v.Secret
+let x = v.Secret
 ");
         Assert.Empty(okDiagnostics);
+    }
+
+    [Fact]
+    public void PublicApiBoundary_WithDeclaredSupertype_NarrowsToThatSupertype()
+    {
+        // A public function returning `object : SomeInterface { ... }` narrows
+        // the call-site's exposed type to SomeInterface: interface members remain
+        // callable, but the anonymous body's own custom member does not.
+        var diagnostics = GetDiagnostics(@"
+interface Greeter { func Greet() string; }
+func make() -> object : Greeter { func Greet() string -> ""hi""; let Secret int32 = 42 }
+let v = make()
+let greeting = v.Greet()
+let x = v.Secret
+");
+        Assert.Empty(diagnostics.Where(d => d.Id != "GS0158"));
+        Assert.Contains(diagnostics, d => d.Id == "GS0158");
+    }
+
+    [Fact]
+    public void PrivateFunction_ReturningAnonymousClassLiteral_RetainsFullAccess()
+    {
+        // A private function is not a public API boundary, so the Kotlin
+        // narrowing rule does not apply: the caller (in the same file) keeps
+        // full access to the anonymous type's own custom member.
+        var diagnostics = GetDiagnostics(@"
+private func make() -> object { func Foo() int32 -> 1; let Secret int32 = 42 }
+let v = make()
+let a = v.Foo()
+let x = v.Secret
+");
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void LocalVariable_BoundDirectlyToAnonymousClassLiteral_RetainsFullAccess()
+    {
+        // Regression guard (ADR-0146): a local `let`/`var` binding of an
+        // anonymous-class literal is never narrowed — it always keeps the
+        // actual synthesized type, full custom-member access included.
+        var diagnostics = GetDiagnostics(@"
+let v = object { let Secret = 42 }
+let x = v.Secret
+");
+        Assert.Empty(diagnostics);
     }
 
     private static System.Collections.Immutable.ImmutableArray<Diagnostic> GetDiagnostics(string source)

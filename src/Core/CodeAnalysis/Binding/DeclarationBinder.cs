@@ -1679,8 +1679,13 @@ internal sealed class DeclarationBinder
                     ValidateVariadicParameterShape(methodSyntax.Parameters);
 
                     var returnType = bindReturnTypeClause(methodSyntax.Type, methodSyntax.IsAsync) ?? TypeSymbol.Void;
-                    returnType = NormalizeAsyncDeclaredReturnType(returnType, methodSyntax.IsAsync, out var returnTypeIsValueTask);
                     var methodAccessibility = resolveAccessibility(methodSyntax.AccessibilityModifier);
+
+                    // ADR-0146 (Kotlin visibility narrowing follow-up): infer/narrow the
+                    // return type when the (omitted-type) body is `-> object { ... }`.
+                    returnType = InferAnonymousClassLiteralReturnType(methodSyntax, returnType, methodAccessibility);
+
+                    returnType = NormalizeAsyncDeclaredReturnType(returnType, methodSyntax.IsAsync, out var returnTypeIsValueTask);
                     var methodParameters = parameters.ToImmutable();
                     var methodReturnRefKind = ValidateReturnRefKind(methodSyntax, returnType);
 
@@ -2513,8 +2518,13 @@ internal sealed class DeclarationBinder
                     ValidateVariadicParameterShape(methodSyntax.Parameters);
 
                     var returnType = bindReturnTypeClause(methodSyntax.Type, methodSyntax.IsAsync) ?? TypeSymbol.Void;
-                    returnType = NormalizeAsyncDeclaredReturnType(returnType, methodSyntax.IsAsync, out var returnTypeIsValueTask);
                     var methodAccessibility = resolveAccessibility(methodSyntax.AccessibilityModifier);
+
+                    // ADR-0146 (Kotlin visibility narrowing follow-up): infer/narrow the
+                    // return type when the (omitted-type) body is `-> object { ... }`.
+                    returnType = InferAnonymousClassLiteralReturnType(methodSyntax, returnType, methodAccessibility);
+
+                    returnType = NormalizeAsyncDeclaredReturnType(returnType, methodSyntax.IsAsync, out var returnTypeIsValueTask);
                     var methodReturnRefKind = ValidateReturnRefKind(methodSyntax, returnType);
 
                     var methodSymbol = new FunctionSymbol(
@@ -6049,6 +6059,10 @@ internal sealed class DeclarationBinder
             // ADR-0041: bind the return type with async-aware alias resolution.
             var type = bindReturnTypeClause(syntax.Type, syntax.IsAsync) ?? TypeSymbol.Void;
 
+            // ADR-0146 (Kotlin visibility narrowing follow-up): infer/narrow the
+            // return type when the (omitted-type) body is `-> object { ... }`.
+            type = InferAnonymousClassLiteralReturnType(syntax, type, resolveAccessibility(syntax.AccessibilityModifier));
+
             // Issue #1918: unwrap an explicit `Task[T]` / `ValueTask[T]` async
             // return-type annotation to its awaited result, remembering which
             // wrapper was requested.
@@ -6846,6 +6860,78 @@ internal sealed class DeclarationBinder
         }
 
         return subst;
+    }
+
+    /// <summary>
+    /// ADR-0146 (Kotlin visibility narrowing follow-up, issue #2243): when a
+    /// function/method's return-type clause is omitted and its (parser-desugared)
+    /// body is exactly <c>return &lt;anonymous-class-literal&gt;</c> — the
+    /// <c>func F() -> object { ... }</c> shape recognized by
+    /// <c>Parser.IsAnonymousClassLiteralStartAfterArrow</c> — the return type must
+    /// be inferred from the literal instead of defaulting to <c>void</c>:
+    /// <list type="bullet">
+    /// <item>Local/private/internal declarations retain the actual synthesized
+    /// anonymous type (full custom-member access), mirroring a <c>let</c>/<c>var</c>
+    /// binding of the same literal.</item>
+    /// <item>Public/protected declarations — a public API boundary — narrow the
+    /// exposed type to the literal's declared supertype (<c>object : Type { ... }</c>)
+    /// or, absent one, to the universal top type <c>object</c>
+    /// (<see cref="TypeSymbol.Object"/>), exactly like Kotlin's anonymous-object
+    /// visibility rule.</item>
+    /// </list>
+    /// Every other omitted-return-type declaration (any shape other than a bare
+    /// arrow-returned anonymous-class literal) is left untouched and still
+    /// resolves to <c>void</c>.
+    /// </summary>
+    private TypeSymbol InferAnonymousClassLiteralReturnType(FunctionDeclarationSyntax syntax, TypeSymbol declaredType, Accessibility accessibility)
+    {
+        if (syntax.Type != null || declaredType != TypeSymbol.Void)
+        {
+            // An explicit return-type clause already narrows for free: the
+            // return statement's expression converts to that declared type, so
+            // a caller only ever sees the declared type's members.
+            return declaredType;
+        }
+
+        if (syntax.Body == null || syntax.Body.Statements.Length != 1
+            || syntax.Body.Statements[0] is not ReturnStatementSyntax { Expression: AnonymousClassExpressionSyntax anon })
+        {
+            return declaredType;
+        }
+
+        var isPublicSurface = accessibility == Accessibility.Public || accessibility == Accessibility.Protected;
+
+        if (isPublicSurface)
+        {
+            if (anon.HasBaseType)
+            {
+                var baseType = bindTypeClause(anon.BaseTypeClause);
+                if (baseType != null && baseType != TypeSymbol.Error)
+                {
+                    return baseType;
+                }
+            }
+
+            return TypeSymbol.Object;
+        }
+
+        // Local/private/internal: retain the actual synthesized anonymous type.
+        // Only "rich" literals (base/interface clause, a method, or an event) are
+        // resolvable here — their synthesized class is already published to
+        // RichAnonymousClassMap by the ADR-0146 desugaring pre-pass that runs
+        // before function/method declarations are bound (see
+        // Binder.BindGlobalScope). A field-only literal's type is synthesized
+        // lazily during body binding, so it is not yet known at this point in
+        // the two-phase pipeline; such a shape falls back to `object` here — a
+        // `let v = object { ... }` local binding (unaffected by this method)
+        // still gets full access to a field-only shape.
+        var isRich = anon.HasBaseType || anon.Members.Any(m => m is FunctionDeclarationSyntax || m is EventDeclarationSyntax);
+        if (isRich && scope.GetRichAnonymousClassMap().TryGetValue(anon, out var richType) && richType != null)
+        {
+            return richType;
+        }
+
+        return TypeSymbol.Object;
     }
 
     private static bool SignaturesMatch(FunctionSymbol baseMethod, ImmutableArray<ParameterSymbol> derivedParams, TypeSymbol derivedReturnType)

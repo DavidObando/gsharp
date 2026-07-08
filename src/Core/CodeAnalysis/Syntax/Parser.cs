@@ -3342,7 +3342,14 @@ public class Parser
             // mirroring C#'s expression-bodied void methods. This single path
             // also covers methods, operators (`func operator + ...`), and
             // user-defined conversion operators (`func operator implicit ...`).
-            body = ParseArrowExpressionBody(asReturn: type != null);
+            //
+            // ADR-0146 (Kotlin visibility narrowing follow-up): `func F() -> object { ... }`
+            // (return-type clause omitted, body is an anonymous-class literal) is the one
+            // shape where an omitted return type is still treated as value-returning — the
+            // binder infers the return type from the literal, narrowing it at a
+            // public/protected boundary per ADR-0146's "Kotlin visibility narrowing" section.
+            // Every other omitted-type arrow body keeps the existing void behavior.
+            body = ParseArrowExpressionBody(asReturn: type != null || IsAnonymousClassLiteralStartAfterArrow());
         }
         else
         {
@@ -8313,7 +8320,17 @@ public class Parser
         return new SeparatedSyntaxList<MapEntrySyntax>(nodesAndSeparators.ToImmutable());
     }
 
-    private bool IsAnonymousClassLiteralStart()
+    // ADR-0146 (Kotlin visibility narrowing follow-up): the same lead-in check as
+    // IsAnonymousClassLiteralStart(), but probed one token past the current
+    // position — used right after consuming a `->` arrow (Current is already the
+    // token following the arrow) to decide whether an omitted return-type
+    // expression-bodied function/method is a value-returning anonymous-class
+    // literal rather than the ordinary void expression-statement shape.
+    private bool IsAnonymousClassLiteralStartAfterArrow() => IsAnonymousClassLiteralStart(baseOffset: 1);
+
+    private bool IsAnonymousClassLiteralStart() => IsAnonymousClassLiteralStart(baseOffset: 0);
+
+    private bool IsAnonymousClassLiteralStart(int baseOffset)
     {
         // Detects the lead-in of an anonymous-object literal in any of its
         // redesigned shapes (ADR-0146 / issue #2243):
@@ -8322,11 +8339,11 @@ public class Parser
         // `data` and `object` are contextual identifiers, so this recognition
         // is intentionally narrow — every other position keeps parsing as
         // before.
-        var offset = 0;
-        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "data"
-            && Peek(1).Kind == SyntaxKind.IdentifierToken && Peek(1).Text == "object")
+        var offset = baseOffset;
+        if (Peek(baseOffset).Kind == SyntaxKind.IdentifierToken && Peek(baseOffset).Text == "data"
+            && Peek(baseOffset + 1).Kind == SyntaxKind.IdentifierToken && Peek(baseOffset + 1).Text == "object")
         {
-            offset = 1;
+            offset = baseOffset + 1;
         }
 
         if (!(Peek(offset).Kind == SyntaxKind.IdentifierToken && Peek(offset).Text == "object"))
