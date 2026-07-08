@@ -66,6 +66,24 @@ var c = a | b
         Assert.Equal((int)'a' | (int)'b', vars["c"]);
     }
 
+    /// <summary>
+    /// Exercises <c>char &amp;^ char</c> (BitClear, lowered to <c>a &amp; ~b</c>),
+    /// the one path that makes the <c>char ch =&gt; (char)~ch</c> unary arm in
+    /// <c>Evaluator.OnesComplement</c> reachable.
+    /// </summary>
+    [Fact]
+    public void CharBitClearChar_PromotesToInt32()
+    {
+        var (eval, vars) = EvaluateWithVariables(@"
+var a char = 'a'
+var b char = 'b'
+var c = a &^ b
+");
+        Assert.Empty(eval.Diagnostics);
+        Assert.IsType<int>(vars["c"]);
+        Assert.Equal((int)'a' & ~(int)'b', vars["c"]);
+    }
+
     [Fact]
     public void CharShiftLeftInt32_PromotesToInt32()
     {
@@ -134,10 +152,14 @@ while i < 4 {{
     }
 
     /// <summary>
-    /// Compiles the exact repro from issue #2227 to IL, loads it, and runs
-    /// it — verifying the emitter (not just the tree-walking evaluator)
-    /// produces the correct `int32` XOR-accumulated result for `char`
-    /// operands sourced from string indexing.
+    /// Compiles the exact repro from issue #2227 to IL, loads it, and calls
+    /// the compiled <c>constantTimeCompare</c> function directly (no
+    /// top-level statements, no <see cref="Console"/> capture) — verifying
+    /// the emitter (not just the tree-walking evaluator) produces the
+    /// correct `int32` XOR-accumulated result for `char` operands sourced
+    /// from string indexing. Asserting on the returned value directly
+    /// avoids the process-global <c>Console.SetOut</c> state that would
+    /// otherwise race with other tests under xUnit's default parallelization.
     /// </summary>
     [Fact]
     public void CompiledAndExecuted_ConstantTimeCompareIdiom_MatchesRuntimeBehavior()
@@ -152,9 +174,6 @@ func constantTimeCompare(a string, b string) int32 {
     }
     return diff
 }
-
-Console.WriteLine(constantTimeCompare(""abcd"", ""abcd""))
-Console.WriteLine(constantTimeCompare(""abcd"", ""abcE""))
 ";
         using var peStream = new MemoryStream();
         var tree = SyntaxTree.Parse(SourceText.From(source));
@@ -170,25 +189,16 @@ Console.WriteLine(constantTimeCompare(""abcd"", ""abcE""))
         {
             var asm = loadContext.LoadFromStream(peStream);
             var programType = asm.GetTypes().First(t => t.Name == "<Program>");
-            var entry = programType.GetMethod(
-                "<Main>$",
+            var constantTimeCompare = programType.GetMethod(
+                "constantTimeCompare",
                 BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-            Assert.NotNull(entry);
+            Assert.NotNull(constantTimeCompare);
 
-            var stdout = Console.Out;
-            var captured = new StringWriter();
-            Console.SetOut(captured);
-            try
-            {
-                entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { Array.Empty<string>() });
-            }
-            finally
-            {
-                Console.SetOut(stdout);
-            }
+            var equal = constantTimeCompare!.Invoke(null, new object[] { "abcd", "abcd" });
+            var differing = constantTimeCompare.Invoke(null, new object[] { "abcd", "abcE" });
 
-            var lines = captured.ToString().Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
-            Assert.Equal(new[] { "0", ('d' ^ 'E').ToString() }, lines);
+            Assert.Equal(0, equal);
+            Assert.Equal('d' ^ 'E', differing);
         }
         finally
         {

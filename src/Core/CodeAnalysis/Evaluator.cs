@@ -3179,7 +3179,9 @@ public sealed class Evaluator
         nuint li => li >> r,
 
         // Issue #2227: char operands of `>>>` promote to int32 (C# §12.4.7);
-        // char is already unsigned so no reinterpretation is needed.
+        // char is already unsigned so no reinterpretation is needed. Signed
+        // `>>` and unsigned `>>>` coincide here because char's range (0-65535)
+        // never sets bit 31, so the promoted int32 is always non-negative.
         char li => (int)li >> r,
         _ => throw new InvalidOperationException($"Unsupported >>> on {l?.GetType()}"),
     };
