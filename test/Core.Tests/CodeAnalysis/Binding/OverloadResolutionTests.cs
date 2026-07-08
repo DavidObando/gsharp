@@ -66,6 +66,22 @@ public class OverloadResolutionTests
     }
 
     [Fact]
+    public void Resolve_CollapsesInterchangeableDuplicateCandidates()
+    {
+        // The full NuGet transitive closure can surface the exact same method
+        // twice (e.g. MemoryExtensions.AsSpan reachable via System.Memory and
+        // via a type-forwarding facade). Such duplicates share an identical
+        // declaring type, name, generic arity, and parameter types, so they
+        // must collapse to a single representative rather than being reported
+        // as a spurious ambiguity.
+        var method = typeof(Fixture).GetMethod(nameof(Fixture.F_Int), BindingFlags.Public | BindingFlags.Static);
+        Assert.NotNull(method);
+        var result = OverloadResolution.Resolve(new[] { method, method }, new[] { typeof(int) });
+        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(nameof(Fixture.F_Int), result.Best.Name);
+    }
+
+    [Fact]
     public void Resolve_TieBreakAppliesPerArgument()
     {
         // (int, int) args; pick F_Long_Long over F_Float_Float for both args.
