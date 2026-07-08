@@ -612,17 +612,28 @@ internal sealed partial class MethodBodyEmitter
         // Phase 3.B.2 / ADR-0029: structural == / != on data-struct
         // values. Box both operands and dispatch through static
         // Object.Equals(object, object) which routes through the
-        // virtual ValueType.Equals override.
+        // virtual ValueType.Equals override. Issue #2228: a data CLASS
+        // operand is already a reference (no boxing needed/legal target —
+        // `box` on a reference type is a verifier-legal no-op per ECMA-335,
+        // but skip it outright since there is nothing to box).
         if (b.Left.Type is StructSymbol ds && ds.IsData && b.Right.Type == ds &&
             (b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals))
         {
             var structTypeDef = this.outer.cache.StructTypeDefs[ds];
             this.EmitExpression(b.Left);
-            this.il.OpCode(ILOpCode.Box);
-            this.il.Token(structTypeDef);
+            if (!ds.IsClass)
+            {
+                this.il.OpCode(ILOpCode.Box);
+                this.il.Token(structTypeDef);
+            }
+
             this.EmitExpression(b.Right);
-            this.il.OpCode(ILOpCode.Box);
-            this.il.Token(structTypeDef);
+            if (!ds.IsClass)
+            {
+                this.il.OpCode(ILOpCode.Box);
+                this.il.Token(structTypeDef);
+            }
+
             this.il.Call(this.outer.wellKnown.GetObjectStaticEqualsReference());
             if (b.Op.Kind == BoundBinaryOperatorKind.NotEquals)
             {

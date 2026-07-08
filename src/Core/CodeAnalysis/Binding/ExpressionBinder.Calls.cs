@@ -37,6 +37,17 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        // Issue #2228: G# unifies `class` and `struct` into one StructSymbol
+        // (IsClass distinguishes reference vs. value semantics), so this check
+        // already accepts a `data class` receiver (IsClass && IsData) exactly
+        // like a `data struct` receiver — no separate ClassSymbol branch is
+        // needed. The clone below (BoundStructLiteralExpression) already
+        // special-cases IsClass at emit time (MethodBodyEmitter.EmitStructLiteral):
+        // `newobj` + per-field/property set for a class, vs. an inline value copy
+        // for a struct — so reference semantics (new heap instance, original left
+        // unchanged, aliasing/identity preserved for untouched members) fall out
+        // for free once cs2gs actually emits a `data class` instead of downgrading
+        // to a plain `class` (the cs2gs-side half of #2228).
         if (!(receiver.Type is StructSymbol structType) || !structType.IsData)
         {
             Diagnostics.ReportCopyOrWithNotDataStruct(diagnosticLocation, receiver.Type);

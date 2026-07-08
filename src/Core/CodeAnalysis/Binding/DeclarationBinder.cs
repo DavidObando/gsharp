@@ -1589,7 +1589,7 @@ internal sealed class DeclarationBinder
 
                 if (structSymbol.IsData && IsDataStructSynthesizedMemberName(methodName))
                 {
-                    Diagnostics.ReportDataStructSynthesizedMemberConflict(methodSyntax.Identifier.Location, structSymbol.Name, methodName);
+                    Diagnostics.ReportDataStructSynthesizedMemberConflict(methodSyntax.Identifier.Location, structSymbol.Name, structSymbol.IsClass, methodName);
                     continue;
                 }
 
@@ -2437,7 +2437,7 @@ internal sealed class DeclarationBinder
                 // on data structs even when declared as shared/static methods.
                 if (structSymbol.IsData && IsDataStructSynthesizedMemberName(methodName))
                 {
-                    Diagnostics.ReportDataStructSynthesizedMemberConflict(methodSyntax.Identifier.Location, structSymbol.Name, methodName);
+                    Diagnostics.ReportDataStructSynthesizedMemberConflict(methodSyntax.Identifier.Location, structSymbol.Name, structSymbol.IsClass, methodName);
                     continue;
                 }
 
@@ -6194,7 +6194,7 @@ internal sealed class DeclarationBinder
 
                 if (methodReceiverStruct.IsData && IsDataStructSynthesizedMemberName(methodName))
                 {
-                    Diagnostics.ReportDataStructSynthesizedMemberConflict(syntax.Identifier.Location, methodReceiverStruct.Name, methodName);
+                    Diagnostics.ReportDataStructSynthesizedMemberConflict(syntax.Identifier.Location, methodReceiverStruct.Name, methodReceiverStruct.IsClass, methodName);
                     return;
                 }
 

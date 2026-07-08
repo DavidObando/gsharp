@@ -1047,7 +1047,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="type">The actual receiver type.</param>
     public void ReportCopyOrWithNotDataStruct(TextLocation location, TypeSymbol type)
     {
-        var message = $"copy/with requires a data struct receiver, but got '{type}'.";
+        var message = $"copy/with requires a data class or data struct receiver, but got '{type}'.";
         Report(location, "GS0161", message);
     }
 
@@ -2381,11 +2381,13 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     /// learnable and predictable.
     /// </summary>
     /// <param name="location">The text location of the member name.</param>
-    /// <param name="typeName">The data struct type name.</param>
+    /// <param name="typeName">The data type name.</param>
+    /// <param name="isClass"><see langword="true"/> when the type is a data class; otherwise a data struct.</param>
     /// <param name="memberName">The synthesized member name.</param>
-    public void ReportDataStructSynthesizedMemberConflict(TextLocation location, string typeName, string memberName)
+    public void ReportDataStructSynthesizedMemberConflict(TextLocation location, string typeName, bool isClass, string memberName)
     {
-        var message = $"Data struct '{typeName}' synthesizes member '{memberName}'; it cannot be declared explicitly.";
+        var kind = isClass ? "class" : "struct";
+        var message = $"Data {kind} '{typeName}' synthesizes member '{memberName}'; it cannot be declared explicitly.";
         Report(location, "GS0232", message);
     }
 

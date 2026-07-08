@@ -1656,6 +1656,18 @@ internal sealed class ReflectionMetadataEmitter
                 classPrimaryCtorRows[c] = methodRow++;
             }
 
+            // Issue #2228: a `data class` synthesizes the same seven
+            // MethodDef rows as a `data struct` (Equals(object),
+            // Equals(Name), GetHashCode, ToString, op_Equality,
+            // op_Inequality, Deconstruct) — see PlanStructMethods' matching
+            // reservation and EmitClassMethodBodies' matching emit call,
+            // which must run in the same relative order (before
+            // user-declared methods) so the MethodDef rows line up.
+            if (c.IsData)
+            {
+                methodRow += 7;
+            }
+
             if (!c.Methods.IsDefaultOrEmpty)
             {
                 foreach (var m in c.Methods)
@@ -2893,6 +2905,19 @@ internal sealed class ReflectionMetadataEmitter
                     var primaryHandle = this.typeDefEmitter.EmitClassPrimaryConstructor(c);
                     this.cache.ClassPrimaryCtorHandles[c] = primaryHandle;
                 }
+            }
+
+            // Issue #2228: emit the seven synthesized members for a `data
+            // class` (Equals(object), Equals(Name), GetHashCode, ToString,
+            // op_Equality, op_Inequality, Deconstruct) BEFORE user-declared
+            // methods, matching PlanClassMethods' reservation order above.
+            // Without this a `data class` silently falls back to reference
+            // identity for `==`/`.Equals`/`GetHashCode` (inherited from
+            // System.Object), which is exactly the ADR-0029 value-equality
+            // contract a data type promises.
+            if (c.IsData)
+            {
+                this.dataStructSynth.EmitDataStructSynthesizedMembers(c);
             }
 
             if (!c.Methods.IsDefaultOrEmpty)

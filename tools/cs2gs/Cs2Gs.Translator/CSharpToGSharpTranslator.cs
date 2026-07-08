@@ -1741,6 +1741,12 @@ public sealed class CSharpToGSharpTranslator
         {
             TypeDeclarationKind? kind = kindValue;
 
+            // Issue #2228: set below when a record's body auto-property data is
+            // successfully lifted to synthetic primary-constructor parameters;
+            // reused after the downgrade decision as the type's `ConstructorLift`
+            // so the member loop skips the now-lifted properties.
+            ConstructorLift autoPropertyLift = ConstructorLift.None;
+
             // A `data class`/`data struct` requires at least one field (GS0104) and
             // derives those fields from positional/primary-constructor parameters,
             // not from auto-properties (GS0189). A fieldless record, or a record
@@ -1759,9 +1765,25 @@ public sealed class CSharpToGSharpTranslator
                     .OfType<ConstructorDeclarationSyntax>()
                     .Any(c => !c.Modifiers.Any(SyntaxKind.StaticKeyword));
 
+                // Issue #2228: a record whose data lives entirely in body
+                // `init`/get-only auto-properties — no positional primary-ctor
+                // parameters, no explicit instance constructor — still has a
+                // canonical `data class`/`data struct` form: lift each such
+                // auto-property into a synthetic primary-constructor parameter
+                // (+ field), exactly like AnalyzeConstructorLift already does for
+                // an explicit parameter-copy constructor. This keeps value
+                // equality / `with` support instead of downgrading to a plain
+                // class/struct (which a `with` expression then cannot target).
+                if (hasAutoPropData && !hasExplicitInstanceCtor && record.ParameterList == null)
+                {
+                    autoPropertyLift = this.AnalyzeAutoPropertyLift(record, symbol);
+                }
+
+                bool lifted = autoPropertyLift != ConstructorLift.None;
+
                 bool downgrade = kind == TypeDeclarationKind.DataClass
-                    ? fieldless || hasAutoPropData
-                    : fieldless || (hasAutoPropData && !hasExplicitInstanceCtor);
+                    ? (fieldless || hasAutoPropData) && !lifted
+                    : fieldless || (hasAutoPropData && !hasExplicitInstanceCtor && !lifted);
 
                 if (downgrade)
                 {
@@ -1811,7 +1833,9 @@ public sealed class CSharpToGSharpTranslator
             // constructor is a simple parameter-to-member copy; non-liftable
             // constructors keep their explicit `init` and assign the `let`
             // fields directly, which is now valid G#.
-            ConstructorLift lift = this.AnalyzeConstructorLift(node, mergedMembers, symbol, kind.Value);
+            ConstructorLift lift = autoPropertyLift != ConstructorLift.None
+                ? autoPropertyLift
+                : this.AnalyzeConstructorLift(node, mergedMembers, symbol, kind.Value);
 
             // Issue #1990: a G# `struct`/`data struct` can NEVER carry an
             // explicit `init(...)` constructor — the parser only accepts it on a
@@ -2085,6 +2109,81 @@ public sealed class CSharpToGSharpTranslator
         /// <c>init</c> constructor is dropped. Anything that does not fit the
         /// pattern leaves the constructor untouched (<see cref="ConstructorLift.None"/>).
         /// </summary>
+        /// <summary>
+        /// Issue #2228: lifts a record's body `init`/get-only auto-property data
+        /// members into synthetic primary-constructor parameters (+ fields), the
+        /// same target shape <see cref="AnalyzeConstructorLift"/> produces for an
+        /// explicit parameter-copy constructor. Applies only when the record has
+        /// no positional primary-constructor parameters and no explicit instance
+        /// constructor to conflict with (checked by the caller) — every eligible
+        /// auto-property becomes one primary-constructor parameter, in
+        /// declaration order, with the property's inline initializer (if any)
+        /// carried over as the parameter's default value. Bails (returns
+        /// <see cref="ConstructorLift.None"/>) if any auto-property participates
+        /// in an interface/override contract (OD-T1): a G# primary-constructor
+        /// parameter is not a property, so lifting it would break the contract
+        /// (GS0187) — the caller then falls back to the plain class/struct
+        /// downgrade.
+        /// </summary>
+        private ConstructorLift AnalyzeAutoPropertyLift(RecordDeclarationSyntax record, INamedTypeSymbol symbol)
+        {
+            if (symbol == null)
+            {
+                return ConstructorLift.None;
+            }
+
+            List<PropertyDeclarationSyntax> eligible = record.Members
+                .OfType<PropertyDeclarationSyntax>()
+                .Where(p =>
+                    !p.Modifiers.Any(SyntaxKind.StaticKeyword) &&
+                    p.ExpressionBody == null &&
+                    p.AccessorList != null &&
+                    p.AccessorList.Accessors.All(a => a.Body == null && a.ExpressionBody == null) &&
+                    p.AccessorList.Accessors.Any(a => a.IsKind(SyntaxKind.GetAccessorDeclaration)))
+                .ToList();
+
+            if (eligible.Count == 0)
+            {
+                return ConstructorLift.None;
+            }
+
+            var primaryParameters = new List<Parameter>();
+            var propertiesAsParams = new HashSet<string>();
+            foreach (PropertyDeclarationSyntax prop in eligible)
+            {
+                if (this.context.GetDeclaredSymbol(prop) is not IPropertySymbol propSymbol ||
+                    IsContractProperty(propSymbol))
+                {
+                    return ConstructorLift.None;
+                }
+
+                GTypeReference type = this.typeMapper.Map(propSymbol.Type, this.context, prop.Identifier.GetLocation());
+                GExpression defaultValue = prop.Initializer != null
+                    ? this.TranslateExpression(prop.Initializer.Value)
+                    : null;
+
+                primaryParameters.Add(new Parameter(SanitizeIdentifier(prop.Identifier.Text), type, defaultValue: defaultValue));
+                propertiesAsParams.Add(prop.Identifier.Text);
+            }
+
+            this.context.Report(new TranslationDiagnostic(
+                nameof(SyntaxKind.RecordDeclaration),
+                $"record '{record.Identifier.Text}' is canonicalized to a 'data class'/'data struct': body auto-property data member(s) {string.Join(", ", propertiesAsParams.OrderBy(n => n))} become primary-constructor parameter fields (now public and mutable) (ADR-0115 §B.3/§B.4, issue #2228).",
+                record.GetLocation(),
+                TranslationSeverity.Info));
+
+            return new ConstructorLift
+            {
+                Constructor = null,
+                DropConstructor = true,
+                PrimaryParameters = primaryParameters,
+                FieldsAsPrimaryParameters = new HashSet<string>(),
+                PropertiesAsPrimaryParameters = propertiesAsParams,
+                FieldInitializers = new Dictionary<string, GExpression>(),
+                ResidualInitStatements = new List<GStatement>(),
+            };
+        }
+
         private ConstructorLift AnalyzeConstructorLift(
             TypeDeclarationSyntax node,
             IReadOnlyList<MemberDeclarationSyntax> members,
