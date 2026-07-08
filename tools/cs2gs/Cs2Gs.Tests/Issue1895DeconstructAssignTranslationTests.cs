@@ -253,14 +253,13 @@ namespace Corpus.Issue1895
     }
 
     [Fact]
-    public void ElementAccessTarget_StaysLoudGap()
+    public void ElementAccessTarget_NowLowersWithoutGap()
     {
-        // `(arr[i], y) = rhs`: C# evaluates `arr`/`i` before `rhs`, but the
-        // lowering must spill `rhs` first, reversing that order. If `rhs`
-        // mutates `arr`/`i` this would silently miscompile, so gap loudly
-        // instead (issue #1895).
-        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
-            new[] { ("Source.cs", @"
+        // `(arr[i], y) = rhs`: issue #2234 generalizes the #1895 lowering to
+        // capture `arr`/`i` into temps BEFORE the RHS is spilled (via
+        // `MakeDuplicationSafeTarget`), preserving C#'s evaluation order —
+        // no more loud gap.
+        string rendered = Render(@"
 namespace Corpus.Issue1895
 {
     public class Holder
@@ -275,24 +274,17 @@ namespace Corpus.Issue1895
         }
     }
 }
-") });
-
-        Assert.True(project.BoundWithoutErrors);
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-        Assert.Contains(
-            context.Diagnostics,
-            d => d.Message.Contains("non-identifier target", StringComparison.Ordinal));
+");
+        AssertRoundTripParses(rendered);
+        Assert.Contains("let (__decon", rendered);
+        Assert.Contains("arr[i]", rendered);
     }
 
     [Fact]
-    public void MemberAccessTarget_StaysLoudGap()
+    public void MemberAccessTarget_NowLowersWithoutGap()
     {
-        // `(obj.F, y) = rhs`: same reversed-evaluation-order hazard as an
-        // element-access target.
-        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
-            new[] { ("Source.cs", @"
+        // `(obj.F, y) = rhs`: same generalization as the element-access case.
+        string rendered = Render(@"
 namespace Corpus.Issue1895
 {
     public class Box
@@ -311,15 +303,10 @@ namespace Corpus.Issue1895
         }
     }
 }
-") });
-
-        Assert.True(project.BoundWithoutErrors);
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-        Assert.Contains(
-            context.Diagnostics,
-            d => d.Message.Contains("non-identifier target", StringComparison.Ordinal));
+");
+        AssertRoundTripParses(rendered);
+        Assert.Contains("let (__decon", rendered);
+        Assert.Contains("obj.F", rendered);
     }
 
     private static void AssertRoundTripParses(string rendered)

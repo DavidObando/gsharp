@@ -184,12 +184,12 @@ namespace Corpus.Issue1974
     }
 
     [Fact]
-    public void NonIdentifierTarget_InExpressionPosition_StaysLoudGap()
+    public void NonIdentifierTarget_InExpressionPosition_NowLowersWithoutGap()
     {
-        // Same evaluation-order hazard as the statement form (issue #1895),
-        // reached here via the value-position hoisting seam instead.
-        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
-            new[] { ("Source.cs", @"
+        // Issue #2234 generalizes the #1895/#1974 lowering to element/member-
+        // access targets reached via the value-position hoisting seam too:
+        // `arr`/`i` are captured into temps before the RHS is spilled.
+        string rendered = Render(@"
 namespace Corpus.Issue1974
 {
     public class Holder
@@ -204,15 +204,9 @@ namespace Corpus.Issue1974
         }
     }
 }
-") });
-
-        Assert.True(project.BoundWithoutErrors);
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-        Assert.Contains(
-            context.Diagnostics,
-            d => d.Message.Contains("non-identifier target", StringComparison.Ordinal));
+");
+        AssertRoundTripParses(rendered);
+        Assert.Contains("arr[i]", rendered);
     }
 
     private static void AssertRoundTripParses(string rendered)
