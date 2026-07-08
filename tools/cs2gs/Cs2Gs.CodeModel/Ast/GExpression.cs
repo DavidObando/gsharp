@@ -332,7 +332,7 @@ public sealed class AnonymousClassMemberInitializer : GNode
 }
 
 /// <summary>
-/// An anonymous-class literal <c>object { let Name Type = value, ... }</c>
+/// An anonymous-class literal <c>object { let Name Type = value; ... }</c>
 /// (issue #2224). Translates a C# anonymous object creation
 /// <c>new { Name = value, ... }</c> — gsc synthesizes a real backing type per
 /// distinct member shape (structural typing, like Roslyn's anonymous types),
