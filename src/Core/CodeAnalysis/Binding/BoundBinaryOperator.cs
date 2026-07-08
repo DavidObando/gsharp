@@ -539,6 +539,17 @@ public sealed record BoundBinaryOperator
         // across types here. Users can write `int(c1) + int(c2)` explicitly.
         AddComparisonOperators(list, TypeSymbol.Char);
 
+        // Issue #2227: unlike the other integral primitives above (which are
+        // closed under their own type per ADR-0044, e.g. `uint8 & uint8 ->
+        // uint8`), `char` has no arithmetic support at all — so a `char &
+        // char -> char` result would be a novel shape rather than an
+        // extension of an existing one. Instead follow C# §12.4.7 binary
+        // numeric promotion exactly: `char`-typed operands of the bitwise
+        // and shift operators promote to `int32`, and the result is
+        // `int32`. The shift count (right operand of `<<`/`>>`/`>>>`) is
+        // always `int32`, matching every other shift operator in this file.
+        AddCharBitwiseAndShiftOperators(list);
+
         // Bool operators (unchanged behaviour, kept here for one source of truth).
         list.Add(new BoundBinaryOperator(SyntaxKind.AmpersandToken, BoundBinaryOperatorKind.BitwiseAnd, TypeSymbol.Bool));
         list.Add(new BoundBinaryOperator(SyntaxKind.AmpersandAmpersandToken, BoundBinaryOperatorKind.LogicalAnd, TypeSymbol.Bool));
@@ -580,6 +591,23 @@ public sealed record BoundBinaryOperator
         list.Add(new BoundBinaryOperator(SyntaxKind.ShiftLeftToken, BoundBinaryOperatorKind.ShiftLeft, t, TypeSymbol.Int32, t));
         list.Add(new BoundBinaryOperator(SyntaxKind.ShiftRightToken, BoundBinaryOperatorKind.ShiftRight, t, TypeSymbol.Int32, t));
         list.Add(new BoundBinaryOperator(SyntaxKind.UnsignedShiftRightToken, BoundBinaryOperatorKind.UnsignedShiftRight, t, TypeSymbol.Int32, t));
+    }
+
+    /// <summary>
+    /// Issue #2227: <c>char &amp; char</c>, <c>char | char</c>, <c>char ^ char</c>,
+    /// <c>char &amp;^ char</c>, <c>char &lt;&lt; int32</c>, <c>char &gt;&gt; int32</c>,
+    /// and <c>char &gt;&gt;&gt; int32</c> all promote to <c>int32</c> per C# §12.4.7
+    /// binary numeric promotion.
+    /// </summary>
+    private static void AddCharBitwiseAndShiftOperators(System.Collections.Generic.List<BoundBinaryOperator> list)
+    {
+        list.Add(new BoundBinaryOperator(SyntaxKind.AmpersandToken, BoundBinaryOperatorKind.BitwiseAnd, TypeSymbol.Char, TypeSymbol.Int32));
+        list.Add(new BoundBinaryOperator(SyntaxKind.PipeToken, BoundBinaryOperatorKind.BitwiseOr, TypeSymbol.Char, TypeSymbol.Int32));
+        list.Add(new BoundBinaryOperator(SyntaxKind.HatToken, BoundBinaryOperatorKind.BitwiseXor, TypeSymbol.Char, TypeSymbol.Int32));
+        list.Add(new BoundBinaryOperator(SyntaxKind.AmpersandHatToken, BoundBinaryOperatorKind.BitClear, TypeSymbol.Char, TypeSymbol.Int32));
+        list.Add(new BoundBinaryOperator(SyntaxKind.ShiftLeftToken, BoundBinaryOperatorKind.ShiftLeft, TypeSymbol.Char, TypeSymbol.Int32, TypeSymbol.Int32));
+        list.Add(new BoundBinaryOperator(SyntaxKind.ShiftRightToken, BoundBinaryOperatorKind.ShiftRight, TypeSymbol.Char, TypeSymbol.Int32, TypeSymbol.Int32));
+        list.Add(new BoundBinaryOperator(SyntaxKind.UnsignedShiftRightToken, BoundBinaryOperatorKind.UnsignedShiftRight, TypeSymbol.Char, TypeSymbol.Int32, TypeSymbol.Int32));
     }
 
     private static void AddComparisonOperators(System.Collections.Generic.List<BoundBinaryOperator> list, TypeSymbol t)

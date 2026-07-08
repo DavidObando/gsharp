@@ -2744,6 +2744,11 @@ public sealed class Evaluator
         ulong ul => ~ul,
         nint ni => ~ni,
         nuint nu => ~nu,
+
+        // Issue #2227: BitClear (&^) on char operands — complement the RHS
+        // before ANDing; kept as char here so NumericAnd's char/char arm
+        // (promoting the final AND to int32) fires.
+        char ch => (char)~ch,
         _ => throw new InvalidOperationException($"Unsupported ~ operand type {v?.GetType()}"),
     };
 
@@ -3066,6 +3071,9 @@ public sealed class Evaluator
         ushort li when r is ushort ri => li & ri,
         nint li when r is nint ri => li & ri,
         nuint li when r is nuint ri => li & ri,
+
+        // Issue #2227: char operands of `&` promote to int32 (C# §12.4.7).
+        char li when r is char ri => (int)li & (int)ri,
         _ => throw new InvalidOperationException($"Unsupported & on {l?.GetType()} and {r?.GetType()}"),
     };
 
@@ -3081,6 +3089,9 @@ public sealed class Evaluator
         ushort li when r is ushort ri => li | ri,
         nint li when r is nint ri => li | ri,
         nuint li when r is nuint ri => li | ri,
+
+        // Issue #2227: char operands of `|` promote to int32 (C# §12.4.7).
+        char li when r is char ri => (int)li | (int)ri,
         _ => throw new InvalidOperationException($"Unsupported | on {l?.GetType()} and {r?.GetType()}"),
     };
 
@@ -3096,6 +3107,9 @@ public sealed class Evaluator
         ushort li when r is ushort ri => li ^ ri,
         nint li when r is nint ri => li ^ ri,
         nuint li when r is nuint ri => li ^ ri,
+
+        // Issue #2227: char operands of `^` promote to int32 (C# §12.4.7).
+        char li when r is char ri => (int)li ^ (int)ri,
         _ => throw new InvalidOperationException($"Unsupported ^ on {l?.GetType()} and {r?.GetType()}"),
     };
 
@@ -3120,6 +3134,9 @@ public sealed class Evaluator
         ushort li => li << r,
         nint li => li << r,
         nuint li => li << r,
+
+        // Issue #2227: char operands of `<<` promote to int32 (C# §12.4.7).
+        char li => (int)li << r,
         _ => throw new InvalidOperationException($"Unsupported << on {l?.GetType()}"),
     };
 
@@ -3135,6 +3152,11 @@ public sealed class Evaluator
         ushort li => li >> r,
         nint li => li >> r,
         nuint li => li >> r,
+
+        // Issue #2227: char operands of `>>` promote to int32 (C# §12.4.7).
+        // `char` is unsigned so there is no sign-extension distinction —
+        // the promoted int32 shift right matches C#'s `>>` on `char`.
+        char li => (int)li >> r,
         _ => throw new InvalidOperationException($"Unsupported >> on {l?.GetType()}"),
     };
 
@@ -3155,6 +3177,10 @@ public sealed class Evaluator
         ushort li => li >> r,
         nint li => unchecked((nint)((nuint)li >> r)),
         nuint li => li >> r,
+
+        // Issue #2227: char operands of `>>>` promote to int32 (C# §12.4.7);
+        // char is already unsigned so no reinterpretation is needed.
+        char li => (int)li >> r,
         _ => throw new InvalidOperationException($"Unsupported >>> on {l?.GetType()}"),
     };
 
