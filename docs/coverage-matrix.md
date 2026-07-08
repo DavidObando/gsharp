@@ -382,6 +382,7 @@ YieldStatement
 
 [BoundBinaryOperator]
 AmpersandAmpersandToken LogicalAnd (bool,bool) -> bool
+AmpersandHatToken BitClear (char,char) -> int32
 AmpersandHatToken BitClear (int16,int16) -> int16
 AmpersandHatToken BitClear (int32,int32) -> int32
 AmpersandHatToken BitClear (int64,int64) -> int64
@@ -393,6 +394,7 @@ AmpersandHatToken BitClear (uint32,uint32) -> uint32
 AmpersandHatToken BitClear (uint64,uint64) -> uint64
 AmpersandHatToken BitClear (uint8,uint8) -> uint8
 AmpersandToken BitwiseAnd (bool,bool) -> bool
+AmpersandToken BitwiseAnd (char,char) -> int32
 AmpersandToken BitwiseAnd (int16,int16) -> int16
 AmpersandToken BitwiseAnd (int32,int32) -> int32
 AmpersandToken BitwiseAnd (int64,int64) -> int64
@@ -466,6 +468,7 @@ GreaterToken Greater (uint32,uint32) -> bool
 GreaterToken Greater (uint64,uint64) -> bool
 GreaterToken Greater (uint8,uint8) -> bool
 HatToken BitwiseXor (bool,bool) -> bool
+HatToken BitwiseXor (char,char) -> int32
 HatToken BitwiseXor (int16,int16) -> int16
 HatToken BitwiseXor (int32,int32) -> int32
 HatToken BitwiseXor (int64,int64) -> int64
@@ -532,6 +535,7 @@ PercentToken Remainder (uint64,uint64) -> uint64
 PercentToken Remainder (uint8,uint8) -> uint8
 PipePipeToken LogicalOr (bool,bool) -> bool
 PipeToken BitwiseOr (bool,bool) -> bool
+PipeToken BitwiseOr (char,char) -> int32
 PipeToken BitwiseOr (int16,int16) -> int16
 PipeToken BitwiseOr (int32,int32) -> int32
 PipeToken BitwiseOr (int64,int64) -> int64
@@ -556,6 +560,7 @@ PlusToken Sum (uint16,uint16) -> uint16
 PlusToken Sum (uint32,uint32) -> uint32
 PlusToken Sum (uint64,uint64) -> uint64
 PlusToken Sum (uint8,uint8) -> uint8
+ShiftLeftToken ShiftLeft (char,int32) -> int32
 ShiftLeftToken ShiftLeft (int16,int32) -> int16
 ShiftLeftToken ShiftLeft (int32,int32) -> int32
 ShiftLeftToken ShiftLeft (int64,int32) -> int64
@@ -566,6 +571,7 @@ ShiftLeftToken ShiftLeft (uint16,int32) -> uint16
 ShiftLeftToken ShiftLeft (uint32,int32) -> uint32
 ShiftLeftToken ShiftLeft (uint64,int32) -> uint64
 ShiftLeftToken ShiftLeft (uint8,int32) -> uint8
+ShiftRightToken ShiftRight (char,int32) -> int32
 ShiftRightToken ShiftRight (int16,int32) -> int16
 ShiftRightToken ShiftRight (int32,int32) -> int32
 ShiftRightToken ShiftRight (int64,int32) -> int64
@@ -602,6 +608,7 @@ StarToken Product (uint16,uint16) -> uint16
 StarToken Product (uint32,uint32) -> uint32
 StarToken Product (uint64,uint64) -> uint64
 StarToken Product (uint8,uint8) -> uint8
+UnsignedShiftRightToken UnsignedShiftRight (char,int32) -> int32
 UnsignedShiftRightToken UnsignedShiftRight (int16,int32) -> int16
 UnsignedShiftRightToken UnsignedShiftRight (int32,int32) -> int32
 UnsignedShiftRightToken UnsignedShiftRight (int64,int32) -> int64
