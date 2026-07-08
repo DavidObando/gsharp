@@ -2977,8 +2977,13 @@ internal sealed class MemberLookup
     /// <see cref="TypeSymbol"/> against a CLR contract position that may
     /// reference an imported (metadata) interface METHOD's own generic
     /// parameter (e.g. the <c>TState</c> in <c>ILogger.BeginScope&lt;TState&gt;</c>
-    /// / <c>ILogger.Log&lt;TState&gt;</c>), either directly or nested inside a
-    /// constructed delegate type (e.g. <c>Func&lt;TState, Exception, string&gt;</c>).
+    /// / <c>ILogger.Log&lt;TState&gt;</c>), either directly or nested inside ANY
+    /// constructed generic shape — a delegate (e.g.
+    /// <c>Func&lt;TState, Exception, string&gt;</c>), an array (<c>TState[]</c>),
+    /// or any other constructed generic type (<c>IEnumerable&lt;TState&gt;</c>,
+    /// <c>IComparer&lt;TState&gt;</c>, <c>Nullable&lt;TState&gt;</c>, a custom
+    /// generic, etc.), at any nesting depth (e.g.
+    /// <c>IEnumerable&lt;IEnumerable&lt;TState&gt;&gt;</c>).
     /// Falls back to the existing erased-<c>ClrType</c> comparison
     /// (<see cref="HasMatchingMethodForClrSignature"/>'s prior behavior) for
     /// every other position, so ordinary non-generic contract members are
@@ -3056,6 +3061,56 @@ internal sealed class MemberLookup
             }
 
             return ClrParamTypeMatchesGenericMethodParam(fn.ReturnType, invoke.ReturnType, methodGenericParams, candidateTypeParams);
+        }
+
+        // Slow path: an array contract position nests the method's own type
+        // parameter (e.g. `TState[]` in `CopyTo<TState>(TState[] items)`).
+        // C#/CLR arrays aren't "generic types" in the reflection sense
+        // (`IsConstructedGenericType` is false), so they need their own
+        // element-wise recursion against the G# array-of-T shapes.
+        if (openType.IsArray)
+        {
+            var openElementType = openType.GetElementType();
+            var candidateElementType = candidate switch
+            {
+                ArrayTypeSymbol arr => arr.ElementType,
+                SliceTypeSymbol slice => slice.ElementType,
+                _ => null,
+            };
+
+            return candidateElementType != null
+                && ClrParamTypeMatchesGenericMethodParam(candidateElementType, openElementType, methodGenericParams, candidateTypeParams);
+        }
+
+        // Slow path: any other constructed generic contract position nests
+        // the method's own type parameter (e.g. `IEnumerable<TState>`,
+        // `IComparer<TState>`, `Nullable<TState>`, or a custom imported/
+        // source generic, at any nesting depth). Recurse positionally
+        // through the CLR open type's generic arguments against the G#
+        // symbol's own symbolic type arguments — the same pattern as the
+        // delegate-Invoke-shape branch above, generalized to any generic
+        // type rather than just delegates.
+        if (openType.IsConstructedGenericType
+            && candidate is ImportedTypeSymbol named
+            && named.OpenDefinition != null
+            && !named.TypeArguments.IsDefaultOrEmpty
+            && ClrTypeUtilities.AreSame(openType.GetGenericTypeDefinition(), named.OpenDefinition))
+        {
+            var openArgs = openType.GetGenericArguments();
+            if (openArgs.Length != named.TypeArguments.Length)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < openArgs.Length; i++)
+            {
+                if (!ClrParamTypeMatchesGenericMethodParam(named.TypeArguments[i], openArgs[i], methodGenericParams, candidateTypeParams))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         return false;
