@@ -1626,6 +1626,38 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        // Issue #2226: C# §12.12 enum equality against the literal `0`. Per
+        // C# §10.2.4, the INTEGER LITERAL `0` (or any constant expression
+        // whose compile-time value is zero, e.g. a folded unary `-0`) is the
+        // one integer value that implicitly converts to ANY enum type
+        // without a cast — servicing the common flags idiom
+        // `(mode & X) != 0`, where the `&` of two same-typed flags produces
+        // an enum-typed result that must then compare against `0`. Any OTHER
+        // integer constant/expression against an enum is still rejected
+        // (GS0129), matching C#: this does not extend to `enum == 1` or
+        // `enum == someIntVariable`.
+        if (boundOperator == null && (operatorKind == SyntaxKind.EqualsEqualsToken || operatorKind == SyntaxKind.BangEqualsToken))
+        {
+            if (EnumOperatorTable.IsEnumType(boundLeft.Type)
+                && !EnumOperatorTable.IsEnumType(boundRight.Type)
+                && TryGetConstantIntegerValue(boundRight, out var rightZero)
+                && rightZero.IsZero
+                && TryAdaptIntegerLiteral(rightZero, EnumOperatorTable.GetUnderlyingType(boundLeft.Type), out var rightZeroValue))
+            {
+                boundRight = new BoundLiteralExpression(boundRight.Syntax, rightZeroValue, boundLeft.Type);
+                boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
+            }
+            else if (EnumOperatorTable.IsEnumType(boundRight.Type)
+                && !EnumOperatorTable.IsEnumType(boundLeft.Type)
+                && TryGetConstantIntegerValue(boundLeft, out var leftZero)
+                && leftZero.IsZero
+                && TryAdaptIntegerLiteral(leftZero, EnumOperatorTable.GetUnderlyingType(boundRight.Type), out var leftZeroValue))
+            {
+                boundLeft = new BoundLiteralExpression(boundLeft.Syntax, leftZeroValue, boundRight.Type);
+                boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
+            }
+        }
+
         // issue #1144: constant integer-literal adaptation (C#-style
         // constant-expression conversion). When exactly one operand is a
         // compile-time constant integer literal and the OTHER operand is a

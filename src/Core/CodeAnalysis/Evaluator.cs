@@ -3781,10 +3781,29 @@ public sealed class Evaluator
     // NaN == NaN is false (and != is true). Route float/double equality
     // through the native operators so NaN stays unordered/unequal
     // everywhere; every other type keeps its normal Equals semantics.
+    //
+    // Issue #2226: the binder's zero-literal enum adaptation boxes the
+    // literal `0` as the enum's raw underlying primitive (an `int32`, say),
+    // NOT an actual CLR enum instance — the emitter's `EmitLiteral` only
+    // knows how to load primitive constants (`ldc.i4` etc.), never a boxed
+    // `System.Enum`. That representation matches how a SOURCE-declared G#
+    // enum value already evaluates in this tree-walking interpreter (as its
+    // raw underlying primitive, see EvaluateNameExpression / enum-member
+    // access), but an IMPORTED CLR enum member (e.g. `ConsoleModifiers.None`)
+    // evaluates to a real boxed `System.Enum` instance. `object.Equals`
+    // between a boxed `System.Enum` and a boxed primitive of the SAME
+    // underlying value is `false` (CLR type mismatch), even though C#
+    // (and the emitter's `ceq`, which compares by underlying bit pattern)
+    // says they are equal. Unwrap either side's `Enum` to its underlying
+    // primitive before falling back to `Equals` so an enum value compares
+    // correctly against ITS OWN underlying-typed zero (or any other
+    // same-typed underlying primitive reaching this path).
     private static bool NumericEquals(object l, object r) => (l, r) switch
     {
         (float lf, float rf) => lf == rf,
         (double ld, double rd) => ld == rd,
+        (Enum le, not Enum) => Equals(Convert.ChangeType(le, Enum.GetUnderlyingType(le.GetType()), System.Globalization.CultureInfo.InvariantCulture), r),
+        (not Enum, Enum re) => Equals(l, Convert.ChangeType(re, Enum.GetUnderlyingType(re.GetType()), System.Globalization.CultureInfo.InvariantCulture)),
         _ => Equals(l, r),
     };
 
