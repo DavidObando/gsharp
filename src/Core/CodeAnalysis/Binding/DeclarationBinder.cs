@@ -6708,7 +6708,11 @@ internal sealed class DeclarationBinder
     /// <param name="symbol">The bare type-parameter symbol to annotate.</param>
     private void ResolveInterfaceConstraint(TypeParameterSyntax p, TypeParameterSymbol symbol)
     {
-        var constraintClause = new TypeClauseSyntax(
+        // A qualified (dotted) constraint name is captured whole by the parser
+        // as a ready-made type clause; bind it directly. Otherwise reconstruct
+        // the clause from the single-identifier constraint token plus its
+        // optional generic-argument list (the `[T IAdd[T]]` shape).
+        var constraintClause = p.ConstraintType ?? new TypeClauseSyntax(
             p.SyntaxTree,
             openBracketToken: null,
             lengthToken: null,

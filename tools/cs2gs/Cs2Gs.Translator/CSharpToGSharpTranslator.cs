@@ -11313,8 +11313,25 @@ public sealed class CSharpToGSharpTranslator
         // that the identifier names a type). Such a pattern is a type test, not an
         // equality, so it must lower to `x is T` rather than `x == T`.
         private bool IsTypeReferencePattern(ExpressionSyntax expression) =>
-            expression is TypeSyntax
-            && this.context.GetSymbolInfo(expression).Symbol is ITypeSymbol;
+            this.context.GetSymbolInfo(expression).Symbol is ITypeSymbol;
+
+        // Maps a pattern expression that refers to a TYPE to its G# type
+        // reference. A bare type name parses as a TypeSyntax (IdentifierName /
+        // generic / array), but a fully-qualified type name (`App.Auth.MfaChallenge`)
+        // parses as a MemberAccessExpressionSyntax — which is NOT a TypeSyntax —
+        // so it is mapped through its resolved type symbol instead (issue #2258).
+        private GTypeReference MapTypeReferenceExpression(ExpressionSyntax expression)
+        {
+            if (expression is TypeSyntax typeSyntax)
+            {
+                return this.MapTypeSyntax(typeSyntax);
+            }
+
+            ITypeSymbol typeSymbol = this.context.GetSymbolInfo(expression).Symbol as ITypeSymbol;
+            return typeSymbol != null
+                ? this.typeMapper.Map(typeSymbol, this.context, expression.GetLocation())
+                : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+        }
 
         private GExpression TranslateIsPattern(IsPatternExpressionSyntax isPattern)
         {
@@ -11414,7 +11431,7 @@ public sealed class CSharpToGSharpTranslator
                     return new BinaryExpression(
                         receiver,
                         "is",
-                        new TypeExpression(this.MapTypeSyntax((TypeSyntax)constant.Expression)));
+                        new TypeExpression(this.MapTypeReferenceExpression(constant.Expression)));
 
                 case ConstantPatternSyntax constant:
                     // `x is 0` / `x is "moov"` / `x is true`. G# `is` only tests a
@@ -11664,7 +11681,7 @@ public sealed class CSharpToGSharpTranslator
                         new ParenthesizedExpression(new BinaryExpression(
                             receiver,
                             "is",
-                            new TypeExpression(this.MapTypeSyntax((TypeSyntax)constant.Expression)))));
+                            new TypeExpression(this.MapTypeReferenceExpression(constant.Expression)))));
 
                 case ConstantPatternSyntax constant:
                     // `x is not 6` → `x != 6` (with numeric retyping to the receiver).
@@ -16908,7 +16925,7 @@ public sealed class CSharpToGSharpTranslator
                 // type test before falling through to the literal-equality case
                 // below.
                 case ConstantPatternSyntax constant when this.IsTypeReferencePattern(constant.Expression):
-                    return new TypePattern("_", this.MapTypeSyntax((TypeSyntax)constant.Expression));
+                    return new TypePattern("_", this.MapTypeReferenceExpression(constant.Expression));
 
                 case ConstantPatternSyntax constant:
                     return new ConstantPattern(this.TranslateExpression(constant.Expression));

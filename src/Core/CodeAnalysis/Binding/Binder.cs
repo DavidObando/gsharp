@@ -3315,7 +3315,13 @@ public sealed class Binder
         // by a single-name `Probe` that happens to exist somewhere.
         for (var outerLen = totalSegments; outerLen >= 1; outerLen--)
         {
-            var clrType = TryResolveOuterPrefix(segmentTexts, outerLen);
+            // When the whole dotted name IS the (generic) type — the trailing
+            // type-argument list belongs to the deepest prefix segment — the
+            // metadata name is arity-mangled (`Ns.IFoo`1`). Pass the target
+            // arity so a namespace-qualified generic user/CLR type resolves
+            // (issue: qualified generic type-name/constraint resolution).
+            var prefixArity = outerLen == totalSegments ? targetArity : 0;
+            var clrType = TryResolveOuterPrefix(segmentTexts, outerLen, prefixArity);
             if (clrType == null)
             {
                 continue;
@@ -3328,6 +3334,37 @@ public sealed class Binder
             if (walked != null)
             {
                 return ConstructIfGeneric(walked, syntax, targetArity);
+            }
+        }
+
+        // Same-compilation package-qualified source type: the qualifier segments
+        // form a package/namespace prefix and the final segment names a source
+        // type declared in this compilation (e.g. `Oahu.Decrypt.INewSplitCallback[T]`
+        // referenced from within package `Oahu.Decrypt`). Source types are visible
+        // by simple name across packages, but the reflection-based prefix walk
+        // above only sees types with a CLR representation, so a source type — which
+        // has none while binding — never resolves through it. Fall back to a
+        // simple-name lookup of the final segment, honoring the trailing arity.
+        // cs2gs fully-qualifies type references (including generic-math
+        // constraints), so this is the common shape for translated code.
+        var lastSegment = segmentTexts[totalSegments - 1];
+        var sourceType = LookupType(lastSegment, targetArity > 0 ? targetArity : -1);
+        if (sourceType != null && !ReferenceEquals(sourceType, TypeSymbol.Error))
+        {
+            if (targetArity == 0)
+            {
+                return sourceType;
+            }
+
+            var constructed = BindAndConstructUserGenericSegment(
+                syntax,
+                sourceType,
+                syntax.TypeArguments,
+                syntax.Identifier.Location,
+                syntax.DottedName);
+            if (constructed != null)
+            {
+                return constructed;
             }
         }
 
@@ -3394,15 +3431,37 @@ public sealed class Binder
     /// prefixes, and the active import set as a namespace prefix for
     /// multi-segment prefixes.
     /// </summary>
-    private Type TryResolveOuterPrefix(string[] segmentTexts, int outerLen)
+    private Type TryResolveOuterPrefix(string[] segmentTexts, int outerLen, int lastSegmentArity = 0)
     {
         if (outerLen == 1)
         {
-            var symbol = LookupType(segmentTexts[0]);
+            var symbol = LookupType(segmentTexts[0], lastSegmentArity > 0 ? lastSegmentArity : -1);
             return symbol?.ClrType;
         }
 
         var prefix = string.Join(".", segmentTexts, 0, outerLen);
+
+        // A generic type's metadata name is arity-mangled (`Ns.IFoo`1`); when
+        // the deepest prefix segment carries the trailing type-argument list,
+        // try the mangled name first so a namespace-qualified generic type
+        // resolves to its open definition (closed later by ConstructIfGeneric).
+        if (lastSegmentArity > 0)
+        {
+            var mangled = prefix + "`" + lastSegmentArity;
+            if (scope.References.TryResolveType(mangled, out var directGeneric))
+            {
+                return directGeneric;
+            }
+
+            foreach (var import in scope.GetDeclaredImports())
+            {
+                if (scope.References.TryResolveType(import.Target + "." + mangled, out var viaImportGeneric))
+                {
+                    return viaImportGeneric;
+                }
+            }
+        }
+
         if (scope.References.TryResolveType(prefix, out var direct))
         {
             return direct;

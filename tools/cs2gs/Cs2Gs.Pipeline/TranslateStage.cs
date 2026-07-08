@@ -284,7 +284,99 @@ public sealed class TranslateStage : IMigrationStage
             }
         }
 
+        // Issue #2225: nbgv only generates the `ThisAssembly` source for the
+        // languages its MSBuild `<Language>` switch supports; G# first shipped in
+        // 3.11.13-beta. If the migrated project references an older nbgv it would
+        // silently drop `ThisAssembly`. Emit a bumped copy of whichever project /
+        // props file pins a below-floor nbgv literal (source is never mutated).
+        EmitNerdbankGitVersioningBumps(context);
+
         return artifacts.Count == 0 ? StageOutcome.Passed() : StageOutcome.Failed(artifacts);
+    }
+
+    /// <summary>
+    /// Scans the app's own <c>.csproj</c> plus every ancestor
+    /// <c>Directory.Packages.props</c>/<c>Directory.Build.props</c> for a literal
+    /// <c>Nerdbank.GitVersioning</c> version below
+    /// <see cref="NerdbankGitVersioningPolicy.MinimumGSharpVersion"/> and, when
+    /// found, writes a bumped copy into <c>&lt;AppRunDir&gt;/nbgv-bump/</c> alongside
+    /// a manifest recording the source path. The original files are never touched
+    /// (the corpus tree is read-only); the migrated project can adopt the bumped
+    /// file so nbgv produces the G# <c>ThisAssembly</c> source (issue #2225).
+    /// </summary>
+    private static void EmitNerdbankGitVersioningBumps(StageExecutionContext context)
+    {
+        var candidates = new List<string>();
+        string projectPath = context.App.ProjectPath;
+        if (!string.IsNullOrEmpty(projectPath) && File.Exists(projectPath))
+        {
+            candidates.Add(projectPath);
+        }
+
+        string dir = Path.GetDirectoryName(projectPath);
+        while (!string.IsNullOrEmpty(dir))
+        {
+            foreach (string name in new[] { "Directory.Packages.props", "Directory.Build.props" })
+            {
+                string candidate = Path.Combine(dir, name);
+                if (File.Exists(candidate))
+                {
+                    candidates.Add(candidate);
+                }
+            }
+
+            DirectoryInfo parent = Directory.GetParent(dir);
+            dir = parent?.FullName;
+        }
+
+        string outputDir = null;
+        var manifest = new List<string>();
+        var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string candidate in candidates)
+        {
+            string original;
+            try
+            {
+                original = File.ReadAllText(candidate);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            if (!NerdbankGitVersioningPolicy.TryBumpProjectXml(original, out string bumped))
+            {
+                continue;
+            }
+
+            if (outputDir is null)
+            {
+                outputDir = Path.Combine(context.AppRunDir, "nbgv-bump");
+                Directory.CreateDirectory(outputDir);
+            }
+
+            string baseName = Path.GetFileName(candidate);
+            string outName = baseName;
+            int suffix = 1;
+            while (!usedNames.Add(outName))
+            {
+                outName = Path.GetFileNameWithoutExtension(baseName) + "." + suffix + Path.GetExtension(baseName);
+                suffix++;
+            }
+
+            File.WriteAllText(Path.Combine(outputDir, outName), bumped);
+            manifest.Add(outName + " <- " + candidate);
+        }
+
+        if (outputDir is not null && manifest.Count > 0)
+        {
+            string manifestText =
+                "# Nerdbank.GitVersioning bumped to " + NerdbankGitVersioningPolicy.MinimumGSharpVersion
+                + " for G# ThisAssembly support (issue #2225)." + Environment.NewLine
+                + "# Each line: <emitted file> <- <original source file>." + Environment.NewLine
+                + string.Join(Environment.NewLine, manifest) + Environment.NewLine;
+            File.WriteAllText(Path.Combine(outputDir, "manifest.txt"), manifestText);
+        }
     }
 
     /// <summary>
