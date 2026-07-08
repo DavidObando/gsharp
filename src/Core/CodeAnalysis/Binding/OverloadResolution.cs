@@ -2982,11 +2982,122 @@ internal static class OverloadResolution
             }
         }
 
+        // Phase 2g — the full NuGet transitive closure can surface the exact
+        // same method more than once: e.g. `MemoryExtensions.AsSpan` reachable
+        // via both `System.Memory` and a type-forwarding facade, or
+        // `ConfigureAwait`/`WithCancellation`/`GetValueOrDefault` reachable via
+        // multiple reference assemblies. Those duplicates are genuinely
+        // interchangeable (identical declaring type, name, generic arity, and
+        // parameter types), so collapse them to a single representative rather
+        // than reporting a spurious ambiguity. Distinct real overloads (e.g.
+        // `Ceiling(Decimal)` vs `Ceiling(Double)`) differ in parameter types
+        // and are never collapsed.
+        if (pool.Count > 1)
+        {
+            var deduped = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)>(pool.Count);
+            foreach (var candidate in pool)
+            {
+                var isDuplicate = false;
+                foreach (var kept in deduped)
+                {
+                    if (AreInterchangeableDuplicates(kept.Method, kept.ParamTypes, candidate.Method, candidate.ParamTypes))
+                    {
+                        isDuplicate = true;
+                        break;
+                    }
+                }
+
+                if (!isDuplicate)
+                {
+                    deduped.Add(candidate);
+                }
+            }
+
+            if (deduped.Count < pool.Count)
+            {
+                pool = deduped;
+            }
+
+            if (pool.Count == 1)
+            {
+                return Result<T>.Single(pool[0].Method, BuildMappingArray(pool[0].Mapping, argumentNames), pool[0].IsExpanded);
+            }
+        }
+
         // If nothing dominated above, report the surviving pool as ambiguous.
         var ambiguous = pool
             .Select(c => c.Method)
             .ToImmutableArray();
         return Result<T>.AmbiguousResult(ambiguous);
+    }
+
+    /// <summary>
+    /// Determines whether two applicable candidates are the same logical method
+    /// surfaced twice through the reference closure (identical declaring type,
+    /// name, generic arity, and resolved parameter types). Such duplicates arise
+    /// from type-forwarding facades / duplicated reference assemblies and are
+    /// interchangeable, so overload resolution collapses them instead of
+    /// reporting a spurious ambiguity. Cross-reflection-context type identity is
+    /// compared with <see cref="ClrTypeUtilities.AreSame(Type, Type)"/>, which
+    /// matches by assembly-agnostic full name.
+    /// </summary>
+    private static bool AreInterchangeableDuplicates(MethodBase a, Type[] aParamTypes, MethodBase b, Type[] bParamTypes)
+    {
+        if (a is null || b is null || aParamTypes is null || bParamTypes is null)
+        {
+            return false;
+        }
+
+        if (!string.Equals(a.Name, b.Name, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!ClrTypeUtilities.AreSame(a.DeclaringType, b.DeclaringType))
+        {
+            return false;
+        }
+
+        if (GetGenericArity(a) != GetGenericArity(b))
+        {
+            return false;
+        }
+
+        if (aParamTypes.Length != bParamTypes.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < aParamTypes.Length; i++)
+        {
+            if (!ClrTypeUtilities.AreSame(aParamTypes[i], bParamTypes[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Returns the generic arity of a method (the number of its generic type
+    /// parameters), or <c>0</c> for a non-generic method.
+    /// </summary>
+    private static int GetGenericArity(MethodBase method)
+    {
+        if (method is null || !method.IsGenericMethod)
+        {
+            return 0;
+        }
+
+        try
+        {
+            return method.GetGenericArguments().Length;
+        }
+        catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+        {
+            return 0;
+        }
     }
 
     /// <summary>
