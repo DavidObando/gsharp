@@ -143,6 +143,51 @@ public class GsgenCliTests : IDisposable
     }
 
     [Fact]
+    public void EndToEnd_RealGeneratorDll_WithRefPackReferences_PrimitiveMemberKeepsCorrectType()
+    {
+        // Regression test (issue #2261 verification): when the CALLER already
+        // supplies a complete REF-assembly closure — as the SDK's GsgenTask
+        // does via @(ReferencePathWithRefAssemblies) for a real --via-sdk
+        // build — BuildMetadataReferences must NOT additionally union in the
+        // host's own IMPL assemblies (e.g. System.Private.CoreLib.dll from
+        // the shared runtime). Mixing a framework's REF assemblies (from the
+        // targeting pack, used here) with its IMPL assembly for the same
+        // well-known types is a classic Roslyn "type exists in both ..."
+        // (CS0433) trap that makes even System.String/System.Object
+        // unresolvable (CS0518), silently degrading every primitive/string-
+        // typed generator-produced member (e.g. CommunityToolkit MVVM's
+        // [ObservableProperty] backing members) to the G# `object`
+        // placeholder. RuntimeReferencePaths() (used by the sibling test
+        // above) is IMPL-only and never reproduced this, which is why this
+        // bug went undetected until a real --via-sdk Oahu.UI migration
+        // surfaced it.
+        IReadOnlyList<string> refPackPaths = RefPackReferencePaths();
+        if (refPackPaths.Count == 0)
+        {
+            return; // Targeting pack not available in this environment; skip defensively.
+        }
+
+        string generatorDll = GeneratorDllFactory.Value;
+
+        var outDir = Path.Combine(this.workDir, "gen");
+        var gs = this.WriteGs("Foo.gs", "package App\n\n@Obsolete\npartial class Foo {\n}\n");
+
+        var args = new List<string> { $"/gs:{gs}", $"/analyzer:{generatorDll}", $"/out:{outDir}" };
+        args.AddRange(refPackPaths.Select(p => $"/r:{p}"));
+
+        var stdout = new StringWriter();
+        int exit = GsgenProgram.Run(args.ToArray(), stdout);
+
+        Assert.Equal(0, exit);
+
+        var generated = Directory.EnumerateFiles(outDir, "*.g.gs").ToList();
+        var single = Assert.Single(generated);
+        var content = File.ReadAllText(single);
+        Assert.Contains("prop Greeting string", content);
+        Assert.DoesNotContain("prop Greeting object", content);
+    }
+
+    [Fact]
     public void OrphanCleanup_DeletesStalePartNotRegenerated()
     {
         string generatorDll = GeneratorDllFactory.Value;
@@ -271,6 +316,46 @@ public class GsgenCliTests : IDisposable
             .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
             .Where(p => p.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && File.Exists(p))
             .ToList();
+    }
+
+    /// <summary>
+    /// Locates the <c>Microsoft.NETCore.App.Ref</c> targeting-pack directory
+    /// alongside the running SDK and returns its REF-assembly DLLs — the same
+    /// kind of reference-assembly-only closure MSBuild resolves into
+    /// <c>@(ReferencePathWithRefAssemblies)</c> for a real SDK-style build,
+    /// deliberately WITHOUT any IMPL assembly (no <c>System.Private.CoreLib.dll</c>
+    /// from the shared runtime). Returns an empty list if the pack cannot be
+    /// found so callers can skip defensively rather than fail on unusual
+    /// installs.
+    /// </summary>
+    private static IReadOnlyList<string> RefPackReferencePaths()
+    {
+        string runtimeDir = System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory();
+        string dotnetRoot = Path.GetFullPath(Path.Combine(runtimeDir, "..", "..", ".."));
+        string packsDir = Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref");
+        if (!Directory.Exists(packsDir))
+        {
+            return Array.Empty<string>();
+        }
+
+        string packVersionDir = Directory.GetDirectories(packsDir)
+            .OrderByDescending(d => d, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+        if (packVersionDir is null)
+        {
+            return Array.Empty<string>();
+        }
+
+        string refRoot = Path.Combine(packVersionDir, "ref");
+        if (!Directory.Exists(refRoot))
+        {
+            return Array.Empty<string>();
+        }
+
+        string refDir = Directory.GetDirectories(refRoot)
+            .OrderByDescending(d => d, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+        return refDir is null ? Array.Empty<string>() : Directory.GetFiles(refDir, "*.dll");
     }
 
     /// <summary>
