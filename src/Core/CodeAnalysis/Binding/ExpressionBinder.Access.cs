@@ -970,6 +970,18 @@ internal sealed partial class ExpressionBinder
                 // member access binds identically to the capitalized form.
                 classSymbol = predefinedClass;
             }
+            else if (rightPart is not NameExpressionSyntax
+                && TryBindFullyQualifiedClrStaticAccess(leftName, ref rightPart, out var fullyQualifiedClrClass))
+            {
+                // Issue #2258: a fully-qualified CLR type reference whose leading
+                // segment is not a registered import — e.g.
+                // `Microsoft.Extensions.Logging.LogLevel.Warning`. cs2gs emits the
+                // full namespace path; walk it to the referenced CLR type and bind
+                // the trailing member as a static access. Gated on the right part
+                // being a further chain (not a bare terminal name) so a genuine
+                // undefined single-segment name still reports GS0157 below.
+                classSymbol = fullyQualifiedClrClass;
+            }
             else
             {
                 Diagnostics.ReportUnableToFindType(leftName.Location, name);
@@ -1701,7 +1713,6 @@ internal sealed partial class ExpressionBinder
         importedClass = null;
 
         var currentPath = import.Target;
-        var currentRight = rightPart;
 
         // A type alias (`import R = System.Console`) names a type outright: the
         // import target itself resolves as a type, and the accessor's right part
@@ -1715,6 +1726,43 @@ internal sealed partial class ExpressionBinder
             importedClass = new ImportedClassSymbol(aliasTargetType, rightPart, references: scope.References);
             return true;
         }
+
+        return TryWalkQualifiedClrTypePath(currentPath, ref rightPart, out importedClass);
+    }
+
+    /// <summary>
+    /// Issue #2258: last-resort fallback for a fully-qualified CLR type reference
+    /// written in expression position whose leading segment is NOT a registered
+    /// import/alias — e.g. <c>Microsoft.Extensions.Logging.LogLevel.Warning</c>
+    /// (CLR enum member) or
+    /// <c>Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance</c>
+    /// (CLR static field). cs2gs fully-qualifies every type reference, so a
+    /// referenced-assembly type accessed by its full namespace path lands here
+    /// when the root namespace segment (<c>Microsoft</c>) matches no import.
+    /// Walks the dotted chain the same way <see cref="TryBindImportAccessor"/>
+    /// does, but starting from the bare leading name as the first namespace
+    /// segment, so any referenced CLR type — regardless of namespace depth —
+    /// resolves and its trailing member binds as a static access.
+    /// </summary>
+    private bool TryBindFullyQualifiedClrStaticAccess(NameExpressionSyntax leftName, ref ExpressionSyntax rightPart, out ImportedClassSymbol importedClass)
+        => TryWalkQualifiedClrTypePath(leftName.IdentifierToken.Text, ref rightPart, out importedClass);
+
+    /// <summary>
+    /// Walks a dotted accessor chain, extending a namespace prefix segment by
+    /// segment until a prefix resolves to a referenced CLR type. On success the
+    /// resolved type is returned as an <see cref="ImportedClassSymbol"/> and
+    /// <paramref name="rightPart"/> is advanced to the remaining (post-type)
+    /// member-access chain. Shared by <see cref="TryBindImportAccessor"/> (which
+    /// starts from a registered import target) and
+    /// <see cref="TryBindFullyQualifiedClrStaticAccess"/> (which starts from a
+    /// bare leading namespace name).
+    /// </summary>
+    private bool TryWalkQualifiedClrTypePath(string startPath, ref ExpressionSyntax rightPart, out ImportedClassSymbol importedClass)
+    {
+        importedClass = null;
+
+        var currentPath = startPath;
+        var currentRight = rightPart;
 
         while (true)
         {

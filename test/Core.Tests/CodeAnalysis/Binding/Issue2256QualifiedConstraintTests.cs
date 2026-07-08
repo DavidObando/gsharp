@@ -192,6 +192,26 @@ public class Issue2256QualifiedConstraintTests
         Assert.Empty(compilation.BoundProgram.Diagnostics.Where(d => d.IsError));
     }
 
+    [Fact]
+    public void QualifiedClrType_DeepNamespace_EnumMemberAccess_Binds()
+    {
+        // Issue #2258: cs2gs fully-qualifies CLR type references. A referenced-
+        // assembly enum accessed by its full namespace path whose ROOT segment is
+        // not the implicitly-imported `System` (here `Microsoft`) must resolve in
+        // expression position and bind the trailing enum member as a static field.
+        // Force-load the assembly so it is part of the host reference set.
+        _ = typeof(GSharp.Core.CodeAnalysis.Syntax.SyntaxKind);
+
+        const string source = """
+            package P
+
+            func Flag() GSharp.Core.CodeAnalysis.Syntax.SyntaxKind -> GSharp.Core.CodeAnalysis.Syntax.SyntaxKind.BadToken
+            """;
+
+        var compilation = Compile(source);
+        Assert.Empty(compilation.BoundProgram.Diagnostics.Where(d => d.IsError));
+    }
+
     private static Compilation Compile(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
