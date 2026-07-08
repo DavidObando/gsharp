@@ -39,4 +39,18 @@ public sealed class PipelineOptions
     /// (<c>Release</c> by default).
     /// </summary>
     public string Config { get; set; } = "Release";
+
+    /// <summary>
+    /// Gets or sets a value indicating whether stage 2 compiles the emitted G#
+    /// via <c>dotnet build</c> against the locally-built <c>Gsharp.NET.Sdk</c>
+    /// instead of invoking <c>gsc</c> directly (issue #2261). The SDK build
+    /// runs Roslyn source generators (e.g. CommunityToolkit.Mvvm's
+    /// <c>[ObservableProperty]</c>/<c>[RelayCommand]</c>) through its gsgen
+    /// MSBuild targets, which the direct-gsc path does not — the dominant
+    /// remaining Oahu-migration blocker. Defaults to
+    /// <see langword="false"/> so a plain migrate run is unchanged; when the
+    /// SDK build is unavailable (no locally-built nupkg), the stage falls back
+    /// to the gsc-direct path rather than failing.
+    /// </summary>
+    public bool CompileViaSdk { get; set; }
 }

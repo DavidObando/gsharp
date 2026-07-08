@@ -8895,7 +8895,16 @@ internal sealed class DeclarationBinder
             return direct;
         }
 
-        if (direct != null)
+        // Issue #2261: C# attribute-name resolution (ECMA-334 §22.3) discards
+        // an exact-name candidate that does not itself derive from
+        // System.Attribute and falls back to the `Attribute`-suffixed
+        // candidate instead of reporting it non-attribute — the two names can
+        // legitimately coexist in the same assembly (e.g. CommunityToolkit.Mvvm
+        // ships both the `RelayCommand` ICommand class and the
+        // `RelayCommandAttribute` marker consumed by its source generator).
+        // Only when the exact-name candidate genuinely derives from Attribute
+        // do we prefer it outright.
+        if (direct != null && IsAttributeType(direct))
         {
             nameIsExact = true;
             return direct;
@@ -8905,6 +8914,16 @@ internal sealed class DeclarationBinder
         {
             nameIsExact = false;
             return suffixed;
+        }
+
+        // Neither resolved candidate derives from System.Attribute (or only the
+        // exact name resolved at all): keep the original "not an attribute
+        // type" diagnostic shape by returning the exact-name candidate when it
+        // exists.
+        if (direct != null)
+        {
+            nameIsExact = true;
+            return direct;
         }
 
         Diagnostics.ReportAttributeTypeNotFound(nameLocation, name);
