@@ -9468,10 +9468,14 @@ public sealed class CSharpToGSharpTranslator
         /// The binder <c>t</c> becomes a real hoisted local that survives past the
         /// <c>if</c> (so later <c>t.Member</c> uses bind to it under G#'s Kotlin-style
         /// smart cast), and a property-path receiver (<c>child.Header</c>) is
-        /// evaluated once into the local. Only applies when the whole condition is a
-        /// negated declaration/recursive type-pattern with a single-variable
-        /// designation over a reference (non-value) target type, where
-        /// <c>as T</c> + nil-guard is valid.
+        /// evaluated once into the local. Applies to a negated declaration/recursive
+        /// type-pattern with a single-variable designation over a reference (or
+        /// nullable value) target type, where <c>as T</c> + nil-guard is valid, AND
+        /// to a bare negated recursive pattern with no type test (<c>is not { } t</c>,
+        /// issue #2233) — there <c>t</c>'s target type is the receiver's own
+        /// (non-null) type, so no <c>as</c> conversion is emitted; the receiver is
+        /// hoisted as-is into the nullable local (a nullable value-type receiver,
+        /// e.g. a <c>DateTimeOffset?</c> field, unwraps to its non-null <c>T</c>).
         /// </summary>
         private bool TryBuildNegatedGuardHoist(
             IfStatementSyntax ifStatement, out IReadOnlyList<GStatement> result)
@@ -9500,6 +9504,14 @@ public sealed class CSharpToGSharpTranslator
                     designation = recursive.Designation;
                     break;
 
+                case RecursivePatternSyntax { Type: null } bareRecursive
+                    when bareRecursive.PropertyPatternClause is null or { Subpatterns.Count: 0 }:
+                    // `is not { } t` — no explicit type test; the target type is
+                    // the receiver's own (non-null) type (issue #2233).
+                    typeSyntax = null;
+                    designation = bareRecursive.Designation;
+                    break;
+
                 default:
                     return false;
             }
@@ -9509,28 +9521,51 @@ public sealed class CSharpToGSharpTranslator
                 return false;
             }
 
-            // The hoisted `as T` + `== nil` guard is only valid when T is a
-            // reference type (or nullable value type); a non-nullable value-type
-            // target keeps the existing then-block binding behaviour.
-            ITypeSymbol targetSymbol = this.context.GetTypeInfo(typeSyntax).Type;
-            if (targetSymbol == null || targetSymbol.IsValueType)
-            {
-                return false;
-            }
-
             string localName = SanitizeIdentifier(single.Identifier.Text);
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
-            GTypeReference targetType = this.MapTypeSyntax(typeSyntax);
+            GExpression hoistInitializer;
+            GTypeReference targetType;
 
-            // `let t T? = receiver as T` — the local is declared nullable so the
+            if (typeSyntax != null)
+            {
+                // The hoisted `as T` + `== nil` guard is only valid when T is a
+                // reference type (or nullable value type); a non-nullable value-type
+                // target keeps the existing then-block binding behaviour.
+                ITypeSymbol targetSymbol = this.context.GetTypeInfo(typeSyntax).Type;
+                if (targetSymbol == null || targetSymbol.IsValueType)
+                {
+                    return false;
+                }
+
+                targetType = this.MapTypeSyntax(typeSyntax);
+                hoistInitializer = new BinaryExpression(receiver, "as", new TypeExpression(targetType));
+            }
+            else
+            {
+                // Bare `{ }` pattern: `t`'s type IS the receiver's own (non-null)
+                // type — no downcast, so no `as` conversion is emitted (which also
+                // sidesteps `as`'s reference-only restriction for a nullable
+                // value-type receiver like `DateTimeOffset?`).
+                ITypeSymbol receiverType = this.context.GetTypeInfo(isPattern.Expression).Type;
+                if (receiverType == null)
+                {
+                    return false;
+                }
+
+                ITypeSymbol nonNullTarget = UnwrapNullable(receiverType);
+                targetType = this.typeMapper.Map(nonNullTarget, this.context, isPattern.Expression.GetLocation());
+                hoistInitializer = receiver;
+            }
+
+            // `let t T? = receiver [as T]` — the local is declared nullable so the
             // `== nil` guard and the subsequent smart cast both type-check, while the
-            // `as` cast keeps its non-nullable reference target (a nullable `as T?`
-            // target is rejected at emit time).
+            // `as` cast (when present) keeps its non-nullable reference target (a
+            // nullable `as T?` target is rejected at emit time).
             var hoist = new LocalDeclarationStatement(
                 BindingKind.Let,
                 localName,
                 MakeNullable(targetType),
-                new BinaryExpression(receiver, "as", new TypeExpression(targetType)));
+                hoistInitializer);
 
             // `if t == nil { <then> }` reproduces the negated guard: when the cast
             // fails the local is nil, so the original then-block runs.
