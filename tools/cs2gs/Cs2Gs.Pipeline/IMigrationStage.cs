@@ -117,6 +117,18 @@ public sealed class StageExecutionContext
     public List<string> GeneratorGlobalOptions { get; } = new List<string>();
 
     /// <summary>
+    /// Gets the source project's declared build/dev-only <c>PackageReference</c>s
+    /// (issue #2267) — e.g. a version-bumped <c>Nerdbank.GitVersioning</c> — that
+    /// must be re-declared into the isolated <c>--via-sdk</c> gsproj because they
+    /// contribute no compile-time reference DLL and so are otherwise silently
+    /// dropped by <see cref="SdkCompileRunner"/>'s DLL-to-package reconstruction.
+    /// Populated by the Translate stage; only consumed by the <c>--via-sdk</c>
+    /// compile path (the gsc-direct path has no notion of <c>PackageReference</c>
+    /// items at all).
+    /// </summary>
+    public List<DeclaredPackageReference> BuildOnlyPackageReferences { get; } = new List<DeclaredPackageReference>();
+
+    /// <summary>
     /// Gets or sets the absolute path of the assembly emitted by the Compile
     /// stage, published for the IL-verify stage to read (ADR-0115 §C). It is
     /// <see langword="null"/> until a green stage-2 compile has run.

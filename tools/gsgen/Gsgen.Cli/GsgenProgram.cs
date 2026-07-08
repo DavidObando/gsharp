@@ -152,13 +152,35 @@ public static class GsgenProgram
     /// stub compilation zero references, leaving even <c>System.Obsolete</c>
     /// unresolved and every attribute-driven generator predicate a silent no-op.
     /// </summary>
+    /// <remarks>
+    /// The host fallback is applied ONLY when <paramref name="referencePaths"/>
+    /// resolves to zero usable files. A caller that already supplies its own
+    /// reference closure (e.g. the SDK's <c>GsgenTask</c>, forwarding
+    /// <c>@(ReferencePathWithRefAssemblies)</c> — the project's real,
+    /// transitively-closed REF-assembly set) must not have the host's OWN
+    /// runtime IMPL assemblies (e.g. <c>System.Private.CoreLib.dll</c> from
+    /// <c>shared/Microsoft.NETCore.App/&lt;ver&gt;/</c>) unioned in alongside
+    /// it: mixing a framework's REF assembly (from the targeting pack) with
+    /// its IMPL assembly (from the shared runtime) for the same well-known
+    /// types is a classic Roslyn "type exists in both ... and ..." (CS0433)
+    /// trap, and the resulting ambiguity makes even <c>System.String</c>/
+    /// <c>System.Object</c>/<c>System.Void</c> resolve as <see cref="SpecialType.None"/>
+    /// (CS0518 "predefined type ... is not defined"), which degraded EVERY
+    /// primitive/string-typed generator-produced member (e.g. CommunityToolkit
+    /// MVVM's <c>[ObservableProperty]</c> backing fields) to the G#
+    /// <c>object</c> placeholder even though reference/user types resolved
+    /// fine (they never go through <c>SpecialType</c>).
+    /// </remarks>
     private static IReadOnlyList<MetadataReference> BuildMetadataReferences(IReadOnlyList<string> referencePaths)
     {
         var explicitPaths = referencePaths.Where(File.Exists).ToArray();
-        var seenFileNames = new HashSet<string>(
-            explicitPaths.Select(Path.GetFileName), StringComparer.OrdinalIgnoreCase);
+        if (explicitPaths.Length > 0)
+        {
+            return explicitPaths.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p)).ToList();
+        }
 
-        var all = new List<string>(explicitPaths);
+        var seenFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var all = new List<string>();
         foreach (var host in GsReferenceResolver.HostTrustedPlatformAssemblyPaths())
         {
             if (seenFileNames.Add(Path.GetFileName(host)))
