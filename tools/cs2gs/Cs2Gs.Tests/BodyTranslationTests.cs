@@ -275,15 +275,20 @@ public class BodyTranslationTests
 
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
 
-        // A single merged catch, typed at the common supertype `Exception`.
-        Assert.Contains("} catch (ex Exception) {", body);
+        // A single merged catch, typed at the common supertype `Exception`,
+        // bound to a compiler-generated name that can never collide with a
+        // source catch-variable name (so the per-clause rebind below always
+        // fires, even for a clause whose original name is also "ex").
+        Assert.Contains("} catch (__caught Exception) {", body);
+        Assert.DoesNotContain("catch (ex", body);
         Assert.DoesNotContain("catch (ex2", body);
 
         // Dispatches on type then filter, in source order, with both bodies present.
-        Assert.Contains("ex is InvalidOperationException", body);
+        Assert.Contains("__caught is InvalidOperationException", body);
+        Assert.Contains("let ex = __caught", body);
         Assert.Contains("ex.Message.Length > 0", body);
-        Assert.Contains("ex is Exception", body);
-        Assert.Contains("let ex2 = ex", body);
+        Assert.Contains("__caught is Exception", body);
+        Assert.Contains("let ex2 = __caught", body);
         Assert.Contains("n = 2", body);
         Assert.Contains("n = 3", body);
     }
@@ -306,7 +311,7 @@ public class BodyTranslationTests
         // The sibling's body is preserved and reachable in the merged dispatch
         // (not made dead code by an escaping rethrow).
         Assert.Contains("n = 3", body);
-        Assert.Contains("let ex2 = ex", body);
+        Assert.Contains("let ex2 = __caught", body);
     }
 
     /// <summary>A filtered catch that is the LAST clause in the try is a SAFE

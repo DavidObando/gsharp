@@ -69,8 +69,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("catch (ex Exception)", printed);
-        Assert.Contains("ex is OperationCanceledException", printed);
+        Assert.Contains("catch (__caught Exception)", printed);
+        Assert.Contains("__caught is OperationCanceledException", printed);
         Assert.Contains("ct.IsCancellationRequested", printed);
         Assert.Contains("return 1", printed);
         Assert.Contains("return 2", printed);
@@ -117,8 +117,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("catch (ex Exception)", printed);
-        Assert.Contains("ex is InvalidOperationException", printed);
+        Assert.Contains("catch (__caught Exception)", printed);
+        Assert.Contains("__caught is InvalidOperationException", printed);
 
         CompileAndRun(printed, "System.Console.WriteLine(C().Run(true))", "1");
         CompileAndRun(printed, "System.Console.WriteLine(C().Run(false))", "2");
@@ -163,6 +163,102 @@ namespace Demo
         Assert.DoesNotContain("is InvalidOperationException", printed);
 
         CompileAndRun(printed, "System.Console.WriteLine(C().Run(true))", "1");
+    }
+
+    /// <summary>
+    /// M2 regression guard: the merged branch must expose the SUBTYPE-only
+    /// member on the narrowed catch variable (not just the merged/base
+    /// type), proving the `ex is OriginalType` smart-cast narrowing (ADR-0069)
+    /// this merge relies on actually takes effect at runtime, not just that
+    /// the printed G# contains the `is` test.
+    /// </summary>
+    [Fact]
+    public void MergedBranch_AccessesSubtypeOnlyMember_OnNarrowedCatchVariable()
+    {
+        string printed = TranslateUnit(@"
+using System;
+namespace Demo
+{
+    public class MyCustomException : Exception
+    {
+        public int CustomProp { get; }
+        public MyCustomException(int customProp) { CustomProp = customProp; }
+    }
+
+    public class C
+    {
+        public int Run(bool retryable)
+        {
+            try
+            {
+                throw new MyCustomException(42);
+            }
+            catch (MyCustomException ex) when (retryable)
+            {
+                return ex.CustomProp;
+            }
+            catch (Exception)
+            {
+                return -1;
+            }
+        }
+    }
+}");
+
+        Assert.Contains("__caught is MyCustomException", printed);
+
+        CompileAndRun(printed, "System.Console.WriteLine(C().Run(true))", "42");
+        CompileAndRun(printed, "System.Console.WriteLine(C().Run(false))", "-1");
+    }
+
+    /// <summary>
+    /// M1 regression guard: the ORIGINAL C# catch variable is named "ex" —
+    /// the exact case where the merge's shared binder used to ALSO be named
+    /// "ex", so the per-clause rebind was (bug) skipped and the closure below
+    /// would have captured the merged catch's declared (unnarrowed) type
+    /// instead of the smart-cast-narrowed subtype. Capturing the catch
+    /// variable in a closure and reading a subtype-only member from inside it
+    /// proves the compiler-generated shared-binder fix makes the narrowed
+    /// rebind unconditional and survive closure capture.
+    /// </summary>
+    [Fact]
+    public void MergedBranch_ClosureCapturesNarrowedCatchVariable_NamedExSameAsSharedBinder()
+    {
+        string printed = TranslateUnit(@"
+using System;
+namespace Demo
+{
+    public class MyCustomException : Exception
+    {
+        public int CustomProp { get; }
+        public MyCustomException(int customProp) { CustomProp = customProp; }
+    }
+
+    public class C
+    {
+        public int Run(bool retryable)
+        {
+            try
+            {
+                throw new MyCustomException(99);
+            }
+            catch (MyCustomException ex) when (retryable)
+            {
+                Func<int> get = () => ex.CustomProp;
+                return get();
+            }
+            catch (Exception)
+            {
+                return -1;
+            }
+        }
+    }
+}");
+
+        Assert.Contains("__caught is MyCustomException", printed);
+
+        CompileAndRun(printed, "System.Console.WriteLine(C().Run(true))", "99");
+        CompileAndRun(printed, "System.Console.WriteLine(C().Run(false))", "-1");
     }
 
     private static string TranslateUnit(string source)

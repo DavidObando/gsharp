@@ -7074,7 +7074,13 @@ public sealed class CSharpToGSharpTranslator
         /// </summary>
         private CatchClause BuildMergedFilteredCatch(TryStatementSyntax node, ITypeSymbol[] catchTypeSymbols, int mergeStartIndex)
         {
-            const string sharedBinder = "ex";
+            // Compiler-generated name (never a valid C# identifier a source
+            // catch variable could use) so the per-clause rebind below always
+            // fires, even when the original catch variable is itself named
+            // "ex" — otherwise that clause's body would see the merged
+            // binder's declared (unnarrowed) type instead of the smart-cast
+            // narrowed subtype.
+            const string sharedBinder = "__caught";
             var sharedBinderExpr = new IdentifierExpression(sharedBinder);
 
             // Safety-net fallback: unreachable if the merged catch's declared
@@ -7113,11 +7119,13 @@ public sealed class CSharpToGSharpTranslator
                 // Re-bind this clause's own catch-variable name to the shared
                 // binder (narrowed to this clause's type by the `is` test below)
                 // so the body's references to its original name still resolve.
-                var branchStatements = new List<GStatement>();
-                if (originalName != sharedBinder)
+                // Always emitted (sharedBinder can never collide with a
+                // source name), so this also carries the narrowed type into
+                // closures capturing the rebind, unlike the shared binder.
+                var branchStatements = new List<GStatement>
                 {
-                    branchStatements.Add(new LocalDeclarationStatement(BindingKind.Let, originalName, initializer: sharedBinderExpr));
-                }
+                    new LocalDeclarationStatement(BindingKind.Let, originalName, initializer: sharedBinderExpr),
+                };
 
                 GStatement matched = filter != null
                     ? new IfStatement(filter, body, new BlockStatement(new List<GStatement> { dispatch }))
