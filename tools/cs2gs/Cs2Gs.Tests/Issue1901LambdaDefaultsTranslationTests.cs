@@ -322,14 +322,19 @@ namespace Corpus.Issue1901
     }
 
     /// <summary>
-    /// A lambda default that is not a primitive/enum/null constant (here
-    /// <c>decimal</c>) has no gsc literal form; the translator must gap loudly
-    /// rather than substitute the wrong value AND type via <c>nil</c>.
+    /// Issue #2236: a lambda default of a <c>decimal</c> constant used to gap
+    /// ("not a simple literal") because <c>MapConstantValue</c>'s
+    /// constant-mapping switch had no <c>decimal</c> arm — even though
+    /// <c>decimal</c> is exactly as much a compile-time constant as
+    /// <c>double</c>/<c>float</c>, both of which it already handled. Now that
+    /// the missing arm is filled in, the default is preserved on the lambda
+    /// parameter and materialized at the omitted call site, with NO Unsupported
+    /// diagnostic.
     /// </summary>
     [Fact]
-    public void LambdaDefaultParameter_DecimalConstant_ReportsUnsupported()
+    public void LambdaDefaultParameter_DecimalConstant_TranslatesWithoutGap()
     {
-        (_, TranslationContext context) = Translate(@"
+        string rendered = Render(@"
 using System;
 namespace Corpus.Issue1901
 {
@@ -344,8 +349,9 @@ namespace Corpus.Issue1901
 }
 ");
 
-        Assert.Contains(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported
-            && d.Message.Contains("default value", StringComparison.Ordinal));
+        Assert.Contains("x decimal = 1.5", rendered, StringComparison.Ordinal);
+        Assert.Contains("Console.WriteLine(f(1.5))", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
     }
 
     private static (Cs2Gs.CodeModel.Ast.CompilationUnit Unit, TranslationContext Context) Translate(string source)
