@@ -32,7 +32,7 @@
     <!-- TUI for the gsi REPL (issue #1404). -->
     <SpectreConsolePackageReference Include="Spectre.Console" Version="0.49.1" />
     <!-- Design-time packages -->
-    <NerdbankGitVersioningPackageReference Include="Nerdbank.GitVersioning" Version="3.6.143" PrivateAssets="All" />
+    <NerdbankGitVersioningPackageReference Include="Nerdbank.GitVersioning" Version="3.11.13-beta" PrivateAssets="All" />
     <StyleCopAnalyzersPackageReference Include="StyleCop.Analyzers" Version="1.2.0-beta.556">
           <PrivateAssets>all</PrivateAssets>
           <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
