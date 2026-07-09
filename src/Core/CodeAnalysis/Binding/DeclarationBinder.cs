@@ -3829,7 +3829,24 @@ internal sealed class DeclarationBinder
                     {
                         found = true;
 
-                        if (!System.Collections.Generic.EqualityComparer<TypeSymbol>.Default.Equals(positionalParam.Type, iprop.Type))
+                        // Issue #2150 follow-up (Oahu migration): compare the
+                        // underlying (nullability-erased) types rather than
+                        // requiring an exact match. C# allows a non-nullable
+                        // interface property (e.g. `string AccountId { get; }`)
+                        // to be satisfied by a nullable-annotated positional
+                        // parameter (e.g. `record ProfileKey(string? AccountId)`)
+                        // with at most a nullable-warning, never a compile
+                        // error, because nullability is annotation-only and
+                        // both sides share the same runtime type. Unwrap any
+                        // `NullableTypeSymbol` on both sides before comparing.
+                        var positionalUnderlyingType = positionalParam.Type is NullableTypeSymbol positionalNullable
+                            ? positionalNullable.UnderlyingType
+                            : positionalParam.Type;
+                        var ifaceUnderlyingType = iprop.Type is NullableTypeSymbol ifaceNullable
+                            ? ifaceNullable.UnderlyingType
+                            : iprop.Type;
+
+                        if (!System.Collections.Generic.EqualityComparer<TypeSymbol>.Default.Equals(positionalUnderlyingType, ifaceUnderlyingType))
                         {
                             // Name matches but the type is incompatible: the
                             // positional parameter does not satisfy the contract.

@@ -105,6 +105,35 @@ public class Issue2150DataClassInterfacePropertyTests
     }
 
     [Fact]
+    public void NullableAnnotationMismatch_StillSatisfiesInterface_NoDiagnostics()
+    {
+        // Oahu migration: `interface IProfileKey { prop AccountId string { get; } }`
+        // (non-nullable) is satisfied by `open data class ProfileKey(AccountId
+        // string?) : IProfileKey` (nullable). C# allows a non-nullable
+        // interface property to be satisfied by a nullable-annotated
+        // implementation with at most a nullable warning, never a compile
+        // error, because nullability is annotation-only and both sides share
+        // the same runtime type (`string`). The reverse direction (nullable
+        // interface property satisfied by a non-nullable positional param)
+        // must also work, matching C#'s covariant-nullability leniency.
+        const string source = """
+            package Test
+            interface IProfileKey {
+                prop AccountId string { get; }
+            }
+            open data class ProfileKey(AccountId string?) : IProfileKey {
+            }
+            interface IHasNullableX {
+                prop X int32? { get; }
+            }
+            open data class NonNullableX(X int32) : IHasNullableX {
+            }
+            """;
+
+        Assert.Empty(Bind(source));
+    }
+
+    [Fact]
     public void PositionalParam_SatisfiesSetterRequiringInterfaceProperty_NoDiagnostics()
     {
         // A data-class positional parameter is a mutable public field, so it can
