@@ -20,7 +20,6 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 public sealed class ImportedTypeSymbol : TypeSymbol
 {
     private static readonly ConcurrentDictionary<Type, ImportedTypeSymbol> Cache = new();
-    private static readonly ConcurrentDictionary<(Type Type, string ConsumerAssembly), StructSymbol> AggregateCache = new();
 
     private ImportedTypeSymbol(Type type)
         : base(type.FullName ?? type.Name, type)
@@ -174,8 +173,19 @@ public sealed class ImportedTypeSymbol : TypeSymbol
             }
         }
 
-        var cacheKey = (type, references?.CurrentAssemblyName ?? string.Empty);
-        aggregate = AggregateCache.GetOrAdd(cacheKey, static key => BuildSemanticAggregate(key.Type, key.ConsumerAssembly));
+        var consumerAssemblyName = references?.CurrentAssemblyName ?? string.Empty;
+
+        // Issue #2263 / #2269: cache the aggregate on the resolver instance so
+        // its lifetime is tied to the metadata load context that owns `type`.
+        // A process-wide static cache would strongly pin these CLR Types (and
+        // their MLC/assemblies) for the whole process, leaking memory across
+        // compilations (ResourceLeakRegressionTests) and churning under the
+        // parallel test host. When no resolver is available (e.g. a synthetic
+        // ImportedClassSymbol), build uncached — the aggregate is structurally
+        // determined by `type`, so identity still holds within that scope.
+        aggregate = references != null
+            ? references.GetOrAddSemanticAggregate(type, consumerAssemblyName, static (t, consumer) => BuildSemanticAggregate(t, consumer))
+            : BuildSemanticAggregate(type, consumerAssemblyName);
         return aggregate != null;
     }
 
@@ -183,12 +193,13 @@ public sealed class ImportedTypeSymbol : TypeSymbol
     /// Removes all entries from the static type cache. Called by
     /// <see cref="ReferenceResolver.Dispose"/> to release stale
     /// <see cref="Type"/> objects backed by a disposed metadata load context
-    /// that would otherwise pin the context's memory indefinitely.
+    /// that would otherwise pin the context's memory indefinitely. The imported
+    /// data-type semantic-aggregate cache is resolver-scoped (see
+    /// <see cref="TryCreateSemanticAggregate"/>) and needs no clearing here.
     /// </summary>
     internal static void ClearCache()
     {
         Cache.Clear();
-        AggregateCache.Clear();
     }
 
     private static StructSymbol BuildSemanticAggregate(Type type, string consumerAssemblyName)
