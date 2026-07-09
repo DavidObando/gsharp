@@ -699,6 +699,61 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        // Issue #1235 (write side, follow-up to the read path in
+        // BindTypeParameterInstanceMemberAccess): a variable receiver whose
+        // static type is a type parameter constrained to a class (`t.F = v`
+        // with `t : T`, `T : Base`) or to a user-declared interface (`t.P = v`
+        // with `T : IShape`) writes through the constraint's field/property, the
+        // same instance member surface the read path already exposes. The
+        // emitter dispatches via `box !!T; stfld` (fields) or
+        // `box !!T; callvirt set_X` (properties) — mirroring the read path's
+        // `box !!T; ldfld`/`callvirt get_X`.
+        if (variable.Type is TypeParameterSymbol tpVarType)
+        {
+            if (tpVarType.ClassConstraint is StructSymbol tpClassConstraint)
+            {
+                if (TypeMemberModel.TryGetFieldIncludingInherited(tpClassConstraint, syntax.FieldIdentifier.Text, MemberQuery.Instance(MemberKinds.Field), out var tpField, out var tpFieldDeclaringType))
+                {
+                    var tpFieldConverted = conversions.BindConversion(syntax.Value.Location, BindValue(tpField.Type), tpField.Type);
+                    return new BoundFieldAssignmentExpression(null, variable, tpFieldDeclaringType, tpField, tpFieldConverted);
+                }
+
+                if (TypeMemberModel.TryGetProperty(tpClassConstraint, syntax.FieldIdentifier.Text, out var tpProp, out var tpPropDeclaringType))
+                {
+                    if (!tpProp.HasSetter)
+                    {
+                        Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
+                        return new BoundErrorExpression(null);
+                    }
+
+                    var tpPropConverted = conversions.BindConversion(syntax.Value.Location, BindValue(tpProp.Type), tpProp.Type);
+                    var tpPropReceiver = implicitFieldReceiverExpr ?? new BoundVariableExpression(null, variable);
+                    EnforceInitOnlyAssignment(tpProp, tpPropReceiver, syntax.EqualsToken.Location);
+                    return new BoundPropertyAssignmentExpression(null, tpPropReceiver, tpPropDeclaringType, tpProp, tpPropConverted);
+                }
+            }
+
+            if (tpVarType.InterfaceConstraint is InterfaceSymbol tpIfaceConstraint
+                && !tpIfaceConstraint.IsGenericDefinition
+                && tpIfaceConstraint.TypeArguments.IsDefaultOrEmpty
+                && TypeMemberModel.TryGetProperty(tpIfaceConstraint, syntax.FieldIdentifier.Text, out var tpIfaceProp, out _))
+            {
+                if (!tpIfaceProp.HasSetter)
+                {
+                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
+                    return new BoundErrorExpression(null);
+                }
+
+                var tpIfaceConverted = conversions.BindConversion(syntax.Value.Location, BindValue(tpIfaceProp.Type), tpIfaceProp.Type);
+                var tpIfaceReceiver = implicitFieldReceiverExpr ?? new BoundVariableExpression(null, variable);
+                EnforceInitOnlyAssignment(tpIfaceProp, tpIfaceReceiver, syntax.EqualsToken.Location);
+                return new BoundPropertyAssignmentExpression(null, tpIfaceReceiver, null, tpIfaceProp, tpIfaceConverted);
+            }
+
+            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
+            return new BoundErrorExpression(null);
+        }
+
         if (!(variable.Type is StructSymbol structSymbol))
         {
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);

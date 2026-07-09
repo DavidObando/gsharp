@@ -626,6 +626,18 @@ internal sealed partial class MethodBodyEmitter
                 this.EmitExpression(addressReceiver ?? fas.ReceiverExpression);
             }
 
+            // Issue #1235 (object-initializer follow-up): a `T{Field: value}`
+            // literal on a class-constrained type parameter lowers to an
+            // expression-receiver field write against the freshly constructed
+            // `!!T` value — box it (a runtime no-op for a reference-type
+            // instantiation) so the subsequent `stfld` is verifiable, mirroring
+            // the read/variable-receiver-write paths.
+            if (addressReceiver == null && fas.ReceiverExpression.Type is TypeParameterSymbol fieldExprAssnTp)
+            {
+                this.il.OpCode(ILOpCode.Box);
+                this.il.Token(this.outer.GetElementTypeToken(fieldExprAssnTp));
+            }
+
             this.EmitExpression(fas.Value);
             this.il.OpCode(ILOpCode.Dup);
             this.il.StoreLocal(valueSlot);
@@ -657,6 +669,27 @@ internal sealed partial class MethodBodyEmitter
         Debug.Assert(
             !ValueExpressionMutatesReceiver(fas.Value, fas.Receiver),
             $"EmitFieldAssignment: value expression for field '{fas.Field.Name}' must not reassign the receiver variable '{fas.Receiver.Name}'.");
+
+        // Issue #1235 (write side): a field write on a receiver whose static
+        // type is a type parameter constrained to a class (`t.F = v` with
+        // `t : T`, `T : Base`). Mirrors EmitFieldAccess's read-side
+        // `box !!T; ldfld` with `box !!T; stfld`.
+        if (fas.Receiver.Type is TypeParameterSymbol fieldAssnTp)
+        {
+            this.EmitLoadVariable(fas.Receiver);
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.GetElementTypeToken(fieldAssnTp));
+            this.EmitExpression(fas.Value);
+            this.il.OpCode(ILOpCode.Stfld);
+            this.il.Token(fieldHandle);
+
+            this.EmitLoadVariable(fas.Receiver);
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.GetElementTypeToken(fieldAssnTp));
+            this.il.OpCode(ILOpCode.Ldfld);
+            this.il.Token(fieldHandle);
+            return;
+        }
 
         // Class field assignment: load the reference, evaluate the value,
         // stfld through the reference. Re-load the receiver + ldfld to
@@ -860,6 +893,24 @@ internal sealed partial class MethodBodyEmitter
             this.il.OpCode(ILOpCode.Dup);
             this.il.StoreLocal(valueSlot);
             this.il.OpCode(ILOpCode.Call);
+            this.il.Token(setterHandle);
+            this.il.LoadLocal(valueSlot);
+            return;
+        }
+
+        // Issue #1235 (write side): a property write on a receiver whose
+        // static type is a type parameter constrained to a class or interface
+        // (`t.P = v` with `t : T`). Mirrors EmitPropertyAccess's read-side
+        // `box !!T; callvirt get_P` with `box !!T; callvirt set_P(value)`.
+        if (assn.Receiver.Type is TypeParameterSymbol tpAssnReceiver)
+        {
+            this.EmitExpression(assn.Receiver);
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.GetElementTypeToken(tpAssnReceiver));
+            this.EmitExpression(assn.Value);
+            this.il.OpCode(ILOpCode.Dup);
+            this.il.StoreLocal(valueSlot);
+            this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(setterHandle);
             this.il.LoadLocal(valueSlot);
             return;
