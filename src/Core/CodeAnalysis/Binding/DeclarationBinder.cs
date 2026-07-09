@@ -3889,6 +3889,15 @@ internal sealed class DeclarationBinder
 
                     if (!found)
                     {
+                        // Issue #2293: an interface property whose required
+                        // accessors all carry a default (arrow/block) body is
+                        // satisfied by inheritance, exactly like a
+                        // default-interface method — no GS0187 needed.
+                        if (PropertyHasDefaultBody(iprop))
+                        {
+                            continue;
+                        }
+
                         Diagnostics.ReportInterfaceMethodNotImplemented(
                             syntax.Identifier.Location,
                             structSymbol.Name,
@@ -4292,6 +4301,37 @@ internal sealed class DeclarationBinder
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Issue #2293: returns <c>true</c> when the supplied interface property
+    /// is fully satisfied by the interface's own default (arrow/block-bodied)
+    /// accessor implementations — i.e. every accessor the property actually
+    /// requires (getter when <see cref="PropertySymbol.HasGetter"/>, setter
+    /// when <see cref="PropertySymbol.HasSetter"/>) is a non-abstract default
+    /// slot with a real body. This mirrors <see cref="InterfaceSymbol.HasDefaultBody(FunctionSymbol)"/>
+    /// for default-interface *methods*: a class that omits the property
+    /// entirely still satisfies the contract by inheriting the interface's
+    /// default accessor bodies. An accessor without a default body (a
+    /// body-less/abstract slot) still requires the implementer to provide it,
+    /// so this returns <c>false</c> in that case even if the other accessor
+    /// has a default.
+    /// </summary>
+    /// <param name="property">The interface property to inspect.</param>
+    /// <returns>True when every required accessor has a default body.</returns>
+    private static bool PropertyHasDefaultBody(PropertySymbol property)
+    {
+        if (property.HasGetter && (property.GetterSymbol == null || property.GetterSymbol.IsAbstract))
+        {
+            return false;
+        }
+
+        if (property.HasSetter && (property.SetterSymbol == null || property.SetterSymbol.IsAbstract))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private void VerifyClrInterfaceImplementations(StructDeclarationSyntax syntax, StructSymbol structSymbol)
@@ -5611,10 +5651,22 @@ internal sealed class DeclarationBinder
                 // and `T.Prop` constrained dispatch. A bodied accessor is a
                 // *default* static slot; a body-less accessor is an *abstract*
                 // slot the implementer must provide.
-                if (isStaticInterfaceProperty)
+                //
+                // Issue #2293: an ordinary (non-static) instance interface
+                // property is given the exact same accessor-symbol treatment —
+                // mirroring how default-interface *methods* already work
+                // (ADR-0085 / issue #726). A bodied accessor (arrow `->` or
+                // block) is a default instance slot (non-abstract, dispatched
+                // through the interface, no override required from
+                // implementers); a body-less accessor is still an abstract
+                // slot the implementer must provide. Only the receiver type
+                // (`null` + Static for the static-virtual case vs. the owning
+                // InterfaceSymbol for the instance case) and the Static flag
+                // differ between the two.
                 {
                     var getAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsGetter);
                     var setAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsSetterOrInit);
+                    TypeSymbol accessorReceiverType = isStaticInterfaceProperty ? null : interfaceSymbol;
 
                     if (hasGetter)
                     {
@@ -5625,15 +5677,19 @@ internal sealed class DeclarationBinder
                             declaration: null,
                             package,
                             Accessibility.Public,
-                            receiverType: null);
-                        getterSymbol.IsStatic = true;
-                        getterSymbol.StaticOwnerType = interfaceSymbol;
+                            receiverType: accessorReceiverType);
+                        if (isStaticInterfaceProperty)
+                        {
+                            getterSymbol.IsStatic = true;
+                            getterSymbol.StaticOwnerType = interfaceSymbol;
+                        }
+
                         getterSymbol.IsSpecialName = true;
                         if (getAccessor?.Body != null)
                         {
-                            // Issue #1030: a default-bodied static-virtual
-                            // interface property accessor is a *default* slot
-                            // (Static | Virtual, non-abstract) emitting a real
+                            // Issue #1030 / #2293: a default-bodied interface
+                            // property accessor (static-virtual or instance)
+                            // is a non-abstract Virtual slot emitting a real
                             // method body. The body is bound in the Binder's
                             // interface accessor-body pass and registered in
                             // functionBodies keyed by this getter symbol.
@@ -5658,16 +5714,20 @@ internal sealed class DeclarationBinder
                             declaration: null,
                             package,
                             Accessibility.Public,
-                            receiverType: null);
-                        setterSymbol.IsStatic = true;
-                        setterSymbol.StaticOwnerType = interfaceSymbol;
+                            receiverType: accessorReceiverType);
+                        if (isStaticInterfaceProperty)
+                        {
+                            setterSymbol.IsStatic = true;
+                            setterSymbol.StaticOwnerType = interfaceSymbol;
+                        }
+
                         setterSymbol.IsSpecialName = true;
                         setterSymbol.IsInitOnlySetter = isInitOnly;
                         if (setAccessor?.Body != null)
                         {
-                            // Issue #1030: default-bodied static-virtual
-                            // interface property setter — a non-abstract
-                            // default slot with a real method body.
+                            // Issue #1030 / #2293: default-bodied interface
+                            // property setter — a non-abstract default slot
+                            // with a real method body.
                             setterSymbol.IsAbstract = false;
                             propSymbol.SetterBodySyntax = setAccessor.Body;
                         }

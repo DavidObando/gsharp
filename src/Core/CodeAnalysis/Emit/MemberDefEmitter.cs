@@ -1263,15 +1263,19 @@ internal sealed class MemberDefEmitter
             MethodDefinitionHandle? emittedGetter = null;
             if (prop.HasGetter && accessorHandles.Getter.HasValue)
             {
-                // Issue #1030: a default-bodied static-virtual interface
-                // property getter is a non-abstract Static|Virtual slot with a
-                // real IL body. Route it through the regular function-emit
-                // pipeline (signature + body + parameter rows), which stamps
-                // Static|Virtual|NewSlot|SpecialName for an interface-owned
-                // static accessor. The MethodDef row lands in the planned
-                // accessor position because this runs in accessor order.
-                if (prop.IsStatic
-                    && prop.GetterSymbol != null
+                // Issue #1030 / #2293: a default-bodied interface property
+                // getter — static-virtual or ordinary instance — is a
+                // non-abstract Virtual slot with a real IL body. Route it
+                // through the regular function-emit pipeline (signature +
+                // body + parameter rows), which stamps
+                // Static|Virtual|NewSlot|SpecialName for a static accessor,
+                // or Virtual|NewSlot|SpecialName (receiver = interface, no
+                // Static) for an instance default accessor — mirroring how
+                // default-interface *methods* are emitted (EmitFunction's
+                // receiver-is-interface branch). The MethodDef row lands in
+                // the planned accessor position because this runs in
+                // accessor order.
+                if (prop.GetterSymbol != null
                     && !prop.GetterSymbol.IsAbstract
                     && this.emitCtx.Program.Functions.TryGetValue(prop.GetterSymbol, out var getterBody))
                 {
@@ -1305,9 +1309,9 @@ internal sealed class MemberDefEmitter
             MethodDefinitionHandle? emittedSetter = null;
             if (prop.HasSetter && accessorHandles.Setter.HasValue)
             {
-                // Issue #1030: default-bodied static-virtual interface setter.
-                if (prop.IsStatic
-                    && prop.SetterSymbol != null
+                // Issue #1030 / #2293: default-bodied interface setter
+                // (static-virtual or ordinary instance).
+                if (prop.SetterSymbol != null
                     && !prop.SetterSymbol.IsAbstract
                     && this.emitCtx.Program.Functions.TryGetValue(prop.SetterSymbol, out var setterBody))
                 {

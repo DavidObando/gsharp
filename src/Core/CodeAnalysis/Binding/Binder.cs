@@ -1323,10 +1323,11 @@ public sealed class Binder
             }
         }
 
-        // Issue #1030: bind default bodies on static-virtual interface
-        // *property* accessors (get_/set_). These mirror the static-virtual
-        // method default-body loop above: a default-bodied accessor is a
-        // non-abstract Static|Virtual slot whose lowered body is registered in
+        // Issue #1030 / #2293: bind default bodies on interface *property*
+        // accessors (get_/set_), both static-virtual and ordinary instance
+        // properties. This mirrors the default-interface-method loop above: a
+        // default-bodied accessor (arrow `->` or block body) is a
+        // non-abstract Virtual slot whose lowered body is registered in
         // functionBodies keyed by the accessor FunctionSymbol. Abstract
         // accessors (no body) are skipped and remain abstract MethodDef rows.
         foreach (var ifaceSym in globalScope.Interfaces)
@@ -1338,11 +1339,6 @@ public sealed class Binder
 
             foreach (var prop in ifaceSym.Properties)
             {
-                if (!prop.IsStatic)
-                {
-                    continue;
-                }
-
                 if (prop.GetterSymbol != null && prop.GetterBodySyntax != null)
                 {
                     BindInterfaceAccessorBody(cache, dirtyTrees, parentScope, prop.GetterSymbol, prop.GetterBodySyntax, functionBodies, diagnostics, requireAllPathsReturn: true);
