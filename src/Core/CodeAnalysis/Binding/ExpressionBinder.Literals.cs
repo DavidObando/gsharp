@@ -948,6 +948,29 @@ internal sealed partial class ExpressionBinder
                         return BindImportedTypeLiteralExpression(syntax, importedClass.ClassType);
                     }
                 }
+                else if (syntax.TypeArgumentList == null && lookupType(typeName) is TypeParameterSymbol tpLiteral)
+                {
+                    // Issue #988 / #1235 (object-initializer follow-up): `T{Field: value,
+                    // ...}` constructs the type parameter `T` — mirroring C#'s
+                    // `new T { Field = value }` for a generic method constrained
+                    // `where T : class, new()` — when the enclosing generic declares
+                    // the `init()` default-constructor constraint. Lowered to a
+                    // reified `Activator.CreateInstance<T>()` construction followed by
+                    // member assignments through the constraint's field/property
+                    // surface (see BindTypeParameterObjectInitializer).
+                    if (!tpLiteral.HasDefaultConstructorConstraint)
+                    {
+                        Diagnostics.ReportConstructedTypeParameterRequiresNewConstraint(syntax.TypeIdentifier.Location, tpLiteral.Name);
+                        foreach (var initSyntax in syntax.Initializers)
+                        {
+                            _ = BindExpression(initSyntax.Value);
+                        }
+
+                        return new BoundErrorExpression(null);
+                    }
+
+                    return BindTypeParameterObjectInitializer(syntax, tpLiteral);
+                }
                 else if (structSymbol == null)
                 {
                     Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, typeName);
@@ -1392,6 +1415,101 @@ internal sealed partial class ExpressionBinder
             statements.Add(new BoundExpressionStatement(
                 initSyntax,
                 new BoundClrPropertyAssignmentExpression(initSyntax, receiverExpr, member, converted, targetSymbol)));
+        }
+
+        var resultExpr = new BoundVariableExpression(syntax, tempVar);
+        return new BoundBlockExpression(syntax, statements.ToImmutable(), resultExpr);
+    }
+
+    /// <summary>
+    /// Issue #988 / #1235: binds a composite literal <c>T{Member: value, ...}</c>
+    /// on a type parameter <paramref name="tp"/> constrained <c>where T : class,
+    /// new()</c> (or <c>init()</c> in the G# spelling) — the generic-method
+    /// counterpart of C#'s <c>new T { Member = value }</c>. Constructs <c>T</c>
+    /// via the same reified <see cref="BoundTypeParameterConstructionExpression"/>
+    /// that a bare <c>T()</c> call produces, then assigns each named member
+    /// through the constraint's field/property surface (class constraint fields
+    /// and properties, or a non-generic interface constraint's settable
+    /// properties) — mirroring the assignment-side member resolution in
+    /// <see cref="BindFieldAssignmentExpression"/>'s type-parameter branch. Shared
+    /// by both binders so a variable receiver (<c>t.Member = v</c>) and an
+    /// object-initializer literal (<c>T{Member: v}</c>) resolve members
+    /// identically.
+    /// </summary>
+    private BoundExpression BindTypeParameterObjectInitializer(StructLiteralExpressionSyntax syntax, TypeParameterSymbol tp)
+    {
+        var tempName = "$implit" + System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, tp);
+        scope.TryDeclareVariable(tempVar);
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        statements.Add(new BoundVariableDeclaration(syntax, tempVar, new BoundTypeParameterConstructionExpression(syntax, tp)));
+
+        var seen = new HashSet<string>();
+        foreach (var initSyntax in syntax.Initializers)
+        {
+            var memberName = initSyntax.FieldIdentifier.Text;
+            if (!seen.Add(memberName))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(initSyntax.FieldIdentifier.Location, memberName);
+                _ = BindExpression(initSyntax.Value);
+                continue;
+            }
+
+            var receiverExpr = new BoundVariableExpression(initSyntax, tempVar);
+
+            if (tp.ClassConstraint is StructSymbol classConstraint)
+            {
+                if (TypeMemberModel.TryGetFieldIncludingInherited(classConstraint, memberName, MemberQuery.Instance(MemberKinds.Field), out var field, out var fieldDeclaringType))
+                {
+                    var fieldValue = BindExpression(initSyntax.Value);
+                    var fieldConverted = conversions.BindConversion(initSyntax.Value.Location, fieldValue, field.Type);
+                    statements.Add(new BoundExpressionStatement(
+                        initSyntax,
+                        BoundFieldAssignmentExpression.WithExpressionReceiver(initSyntax, receiverExpr, fieldDeclaringType, field, fieldConverted)));
+                    continue;
+                }
+
+                if (TypeMemberModel.TryGetProperty(classConstraint, memberName, out var classProp, out var classPropDeclaringType))
+                {
+                    if (!classProp.HasSetter)
+                    {
+                        Diagnostics.ReportCannotAssign(initSyntax.FieldIdentifier.Location, memberName);
+                        _ = BindExpression(initSyntax.Value);
+                        continue;
+                    }
+
+                    var classPropValue = BindExpression(initSyntax.Value);
+                    var classPropConverted = conversions.BindConversion(initSyntax.Value.Location, classPropValue, classProp.Type);
+                    statements.Add(new BoundExpressionStatement(
+                        initSyntax,
+                        new BoundPropertyAssignmentExpression(initSyntax, receiverExpr, classPropDeclaringType, classProp, classPropConverted)));
+                    continue;
+                }
+            }
+
+            if (tp.InterfaceConstraint is InterfaceSymbol interfaceConstraint
+                && !interfaceConstraint.IsGenericDefinition
+                && interfaceConstraint.TypeArguments.IsDefaultOrEmpty
+                && TypeMemberModel.TryGetProperty(interfaceConstraint, memberName, out var ifaceProp, out _))
+            {
+                if (!ifaceProp.HasSetter)
+                {
+                    Diagnostics.ReportCannotAssign(initSyntax.FieldIdentifier.Location, memberName);
+                    _ = BindExpression(initSyntax.Value);
+                    continue;
+                }
+
+                var ifacePropValue = BindExpression(initSyntax.Value);
+                var ifacePropConverted = conversions.BindConversion(initSyntax.Value.Location, ifacePropValue, ifaceProp.Type);
+                statements.Add(new BoundExpressionStatement(
+                    initSyntax,
+                    new BoundPropertyAssignmentExpression(initSyntax, receiverExpr, null, ifaceProp, ifacePropConverted)));
+                continue;
+            }
+
+            Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, memberName);
+            _ = BindExpression(initSyntax.Value);
         }
 
         var resultExpr = new BoundVariableExpression(syntax, tempVar);
