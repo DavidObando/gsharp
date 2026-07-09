@@ -55,6 +55,31 @@ public sealed class CSharpTypeMapper
     private readonly HashSet<string> shortenedNamespaces = new();
 
     /// <summary>
+    /// Issue #2282: every distinct anonymous-type SHAPE (an ordered list of
+    /// member name + fully-qualified type) already mapped to a synthesized
+    /// <c>data class</c>, keyed structurally so two syntactically-identical
+    /// anonymous types declared at different source locations share one
+    /// synthesized declaration instead of each minting its own (which would
+    /// combinatorially explode across a large file). See
+    /// <see cref="GetOrCreateAnonymousDataClass"/>.
+    /// </summary>
+    private readonly Dictionary<string, NamedTypeReference> anonymousDataClassesByShape =
+        new(System.StringComparer.Ordinal);
+
+    /// <summary>
+    /// Issue #2282: the synthesized anonymous-type <c>data class</c>
+    /// declarations, in first-seen order, collected here (rather than emitted
+    /// inline) because <see cref="Map"/> is called from many contexts (a
+    /// parameter type, a field type, a generic argument, ...) that have no
+    /// direct way to append a new top-level type declaration to the
+    /// compilation unit being built. <c>CSharpToGSharpTranslator.TranslateDocument</c>
+    /// drains this list into the compilation unit's members once, after every
+    /// member has been translated (mirroring how <see cref="ShortenedNamespaces"/>
+    /// is drained into synthesized imports).
+    /// </summary>
+    private readonly List<TypeDeclaration> pendingAnonymousDataClasses = new();
+
+    /// <summary>
     /// Issue #1174: cached per-compilation census of source-declared type simple
     /// names (built lazily on first use), used to decide whether a source nested
     /// type's simple name is ambiguous and must be emitted in qualified form.
@@ -76,6 +101,13 @@ public sealed class CSharpTypeMapper
     /// this mapper so far (see <see cref="shortenedNamespaces"/>).
     /// </summary>
     public IReadOnlyCollection<string> ShortenedNamespaces => this.shortenedNamespaces;
+
+    /// <summary>
+    /// Gets the synthesized anonymous-type <c>data class</c> declarations
+    /// collected so far by <see cref="GetOrCreateAnonymousDataClass"/>, in
+    /// first-seen (deterministic) order.
+    /// </summary>
+    public IReadOnlyList<TypeDeclaration> PendingAnonymousDataClasses => this.pendingAnonymousDataClasses;
 
     /// <summary>
     /// Maps a Roslyn type symbol to its canonical G# type reference, recording
@@ -208,6 +240,76 @@ public sealed class CSharpTypeMapper
         }
 
         return this.Map(type, context, location);
+    }
+
+    /// <summary>
+    /// Issue #2282: maps a C# anonymous type (<c>new { A = 1, B = "x" }</c>) to
+    /// a synthesized G# <c>data class</c> whose primary-constructor parameters
+    /// carry the SAME member names, instead of the earlier positional-tuple
+    /// lowering (issue #1934) that discarded them (G# tuples have no
+    /// named-element syntax — verified: no such syntax exists anywhere in the
+    /// grammar/spec). The <c>object { }</c> anonymous-value literal (issue
+    /// #2224) is not a substitute either: it is only a value-literal
+    /// expression form with no corresponding TYPE-ANNOTATION spelling, so it
+    /// cannot be written down as, say, a lambda parameter's type — which is
+    /// exactly what issue #2282's repro needs (an EF-Core-style
+    /// <c>CreateTable</c>/<c>PrimaryKey</c> pattern where the SAME anonymous
+    /// type crosses from one lambda's inferred return type into another
+    /// lambda's parameter type via generic inference). A synthesized data
+    /// class is nameable at both the construction site and any type-position
+    /// use, and supports named-member access (<c>x.A</c>) directly with no
+    /// <c>.ItemN</c> rewrite. It is also legal inside an expression-tree
+    /// lambda: a user-declared struct/class composite literal is explicitly
+    /// permitted there (see <c>ExpressionTreeRestrictionValidator.ValidateExpression</c>,
+    /// <c>BoundStructLiteralExpression</c> case), unlike the tuple literal the
+    /// earlier lowering could have produced.
+    /// <para>
+    /// Every distinct anonymous-type SHAPE (the ordered list of member name +
+    /// fully-qualified property type) reuses the same synthesized type across
+    /// the whole document — keyed structurally via <see cref="anonymousDataClassesByShape"/>,
+    /// not by Roslyn symbol identity — so two syntactically-identical
+    /// anonymous types declared in different places still share one
+    /// declaration, avoiding a combinatorial explosion of synthesized types
+    /// across a large file.
+    /// </para>
+    /// </summary>
+    /// <param name="anonymousType">The anonymous type symbol.</param>
+    /// <param name="context">The translation context that accumulates diagnostics.</param>
+    /// <param name="location">The originating C# source location for diagnostics.</param>
+    /// <returns>A reference to the synthesized (or already-cached) data class.</returns>
+    public NamedTypeReference GetOrCreateAnonymousDataClass(INamedTypeSymbol anonymousType, TranslationContext context, Location location)
+    {
+        List<IPropertySymbol> properties = anonymousType.GetMembers().OfType<IPropertySymbol>().ToList();
+        string shapeKey = string.Join(
+            "|",
+            properties.Select(p => p.Name + ":" + p.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)));
+
+        if (this.anonymousDataClassesByShape.TryGetValue(shapeKey, out NamedTypeReference existing))
+        {
+            return existing;
+        }
+
+        string syntheticName = $"AnonymousType{this.anonymousDataClassesByShape.Count}";
+        var parameters = properties
+            .Select(p => new Cs2Gs.CodeModel.Ast.Parameter(CSharpToGSharpTranslator.SanitizeIdentifier(p.Name), this.Map(p.Type, context, location)))
+            .ToList();
+
+        context.Report(new TranslationDiagnostic(
+            anonymousType.ToDisplayString(),
+            $"C# anonymous type mapped to a synthesized G# 'data class {syntheticName}' preserving member names as primary-constructor parameters (issue #2282); supersedes the earlier name-dropping positional-tuple lowering (issue #1934) so named-member access ('x.{(properties.Count > 0 ? properties[0].Name : "Member")}') resolves.",
+            location,
+            TranslationSeverity.Info));
+
+        var declaration = new TypeDeclaration(
+            TypeDeclarationKind.DataClass,
+            syntheticName,
+            primaryConstructorParameters: parameters,
+            visibility: Visibility.Internal);
+
+        var reference = new NamedTypeReference(syntheticName);
+        this.anonymousDataClassesByShape[shapeKey] = reference;
+        this.pendingAnonymousDataClasses.Add(declaration);
+        return reference;
     }
 
     /// <summary>
@@ -446,22 +548,20 @@ public sealed class CSharpTypeMapper
                 return new TupleTypeReference(elementTypes);
             }
 
-            // Issue #1934: an anonymous type (`new { A = 1, B = 2 }`) has no G#
-            // equivalent, but its shape — an ordered list of property types — is
-            // exactly a tuple's shape, so it maps to the same positional tuple
-            // type as a named C# tuple, above.
+            // Issue #2282 (was #1934): an anonymous type (`new { A = 1, B = 2 }`)
+            // maps to a synthesized, shape-deduplicated G# `data class` that
+            // preserves member NAMES as primary-constructor parameters — see
+            // <see cref="GetOrCreateAnonymousDataClass"/> for why the earlier
+            // name-dropping positional-tuple lowering (issue #1934) was
+            // insufficient (G# tuples have no named-element syntax) and why the
+            // `object { }` anonymous-value literal (issue #2224) cannot replace
+            // it either (no type-annotation spelling, so it cannot appear at a
+            // TYPE position such as a lambda parameter whose type a generic
+            // method infers from another lambda's anonymous-typed return
+            // value).
             if (named.IsAnonymousType)
             {
-                List<GTypeReference> anonymousElementTypes = named.GetMembers()
-                    .OfType<IPropertySymbol>()
-                    .Select(p => this.Map(p.Type, context, location))
-                    .ToList();
-                context.Report(new TranslationDiagnostic(
-                    named.ToDisplayString(),
-                    "C# anonymous type mapped to the canonical G# positional tuple type; member names are dropped and named access lowers to '.ItemN' (ADR-0115 §B.4).",
-                    location,
-                    TranslationSeverity.Info));
-                return new TupleTypeReference(anonymousElementTypes);
+                return this.GetOrCreateAnonymousDataClass(named, context, location);
             }
 
             // Delegate types (Func/Action/named delegates) render in arrow form

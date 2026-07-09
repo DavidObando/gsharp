@@ -227,6 +227,16 @@ public sealed class CSharpToGSharpTranslator
             members.AddRange(visitor.DrainPendingTopLevel());
         }
 
+        // Issue #2282: every anonymous type reached during translation has been
+        // mapped, by now, to a synthesized `data class` (see
+        // `CSharpTypeMapper.GetOrCreateAnonymousDataClass`); the mapper cannot
+        // append these to the compilation unit itself (`Map` is called from
+        // many contexts with no member list in scope), so they are drained
+        // here, once, in first-seen (deterministic) order — before the trailing
+        // top-level statements, so a program-entry statement that constructs
+        // one can see it declared.
+        members.AddRange(typeMapper.PendingAnonymousDataClasses);
+
         // Top-level statements are appended after every declaration so the program
         // entry runs with all package types and funcs already in scope.
         members.AddRange(trailingStatements);
@@ -1786,7 +1796,7 @@ public sealed class CSharpToGSharpTranslator
                 // class/struct (which a `with` expression then cannot target).
                 if (hasAutoPropData && !hasExplicitInstanceCtor && record.ParameterList == null)
                 {
-                    autoPropertyLift = this.AnalyzeAutoPropertyLift(record, symbol);
+                    autoPropertyLift = this.AnalyzeAutoPropertyLift(record, symbol, kind.Value);
                 }
 
                 bool lifted = autoPropertyLift != ConstructorLift.None;
@@ -2135,7 +2145,7 @@ public sealed class CSharpToGSharpTranslator
         /// (GS0187) — the caller then falls back to the plain class/struct
         /// downgrade.
         /// </summary>
-        private ConstructorLift AnalyzeAutoPropertyLift(RecordDeclarationSyntax record, INamedTypeSymbol symbol)
+        private ConstructorLift AnalyzeAutoPropertyLift(RecordDeclarationSyntax record, INamedTypeSymbol symbol, TypeDeclarationKind kind)
         {
             if (symbol == null)
             {
@@ -2159,6 +2169,8 @@ public sealed class CSharpToGSharpTranslator
 
             var primaryParameters = new List<Parameter>();
             var propertiesAsParams = new HashSet<string>();
+            var propertiesAsBodyFields = new HashSet<string>();
+            var bodyFieldInitializers = new Dictionary<string, GExpression>();
             foreach (PropertyDeclarationSyntax prop in eligible)
             {
                 if (this.context.GetDeclaredSymbol(prop) is not IPropertySymbol propSymbol ||
@@ -2168,6 +2180,45 @@ public sealed class CSharpToGSharpTranslator
                 }
 
                 GTypeReference type = this.typeMapper.Map(propSymbol.Type, this.context, prop.Identifier.GetLocation());
+
+                // Issue #2281: a G# optional-parameter default must be a
+                // compile-time constant (GS0265) — but a C# record property
+                // initializer is NOT required to be one (it is evaluated once
+                // per constructed instance, exactly like a field initializer).
+                // Use the semantic model (not a syntactic guess, per the
+                // "never guess" rule) to tell the two shapes apart.
+                if (prop.Initializer != null &&
+                    !this.context.SemanticModel.GetConstantValue(prop.Initializer.Value).HasValue)
+                {
+                    // A `data struct` has no always-available parameterless
+                    // constructor distinct from its primary constructor (a
+                    // value type's zero-arg construction goes through the
+                    // struct-literal path, which only special-cases OMITTED
+                    // fields, not omitted PRIMARY-CTOR PARAMETERS) — so there
+                    // is no sound place to run a non-constant initializer for
+                    // a data struct. Bail the whole lift so the caller's
+                    // existing downgrade-to-plain-struct path takes over,
+                    // which already moves such an initializer into a
+                    // synthesized instance constructor body (OD-T1).
+                    if (kind == TypeDeclarationKind.DataStruct)
+                    {
+                        return ConstructorLift.None;
+                    }
+
+                    // A `data class` always emits BOTH a parameterless
+                    // constructor and its primary constructor (issue #2263):
+                    // the parameterless one runs every declared instance field
+                    // initializer before returning, exactly like a C# record's
+                    // per-instance property initializer. Lifting this property
+                    // to a plain body `let` field (instead of a primary-ctor
+                    // parameter) reuses that machinery — the required/optional
+                    // machinery on the primary constructor itself never needs
+                    // to represent a non-constant value at all.
+                    propertiesAsBodyFields.Add(prop.Identifier.Text);
+                    bodyFieldInitializers[prop.Identifier.Text] = this.TranslateExpression(prop.Initializer.Value);
+                    continue;
+                }
+
                 GExpression defaultValue = prop.Initializer != null
                     ? this.TranslateExpression(prop.Initializer.Value)
                     : null;
@@ -2176,9 +2227,15 @@ public sealed class CSharpToGSharpTranslator
                 propertiesAsParams.Add(prop.Identifier.Text);
             }
 
+            if (primaryParameters.Count == 0 && propertiesAsBodyFields.Count == 0)
+            {
+                return ConstructorLift.None;
+            }
+
+            var reportedNames = propertiesAsParams.Concat(propertiesAsBodyFields).OrderBy(n => n, StringComparer.Ordinal);
             this.context.Report(new TranslationDiagnostic(
                 nameof(SyntaxKind.RecordDeclaration),
-                $"record '{record.Identifier.Text}' is canonicalized to a 'data class'/'data struct': body auto-property data member(s) {string.Join(", ", propertiesAsParams.OrderBy(n => n))} become primary-constructor parameter fields (now public and mutable) (ADR-0115 §B.3/§B.4, issue #2228).",
+                $"record '{record.Identifier.Text}' is canonicalized to a 'data class'/'data struct': body auto-property data member(s) {string.Join(", ", reportedNames)} become primary-constructor parameter fields (now public and mutable), or — for a non-constant initializer that cannot be a valid G# optional-parameter default — a plain body field carrying that initializer (ADR-0115 §B.3/§B.4, issue #2228, issue #2281).",
                 record.GetLocation(),
                 TranslationSeverity.Info));
 
@@ -2189,7 +2246,9 @@ public sealed class CSharpToGSharpTranslator
                 PrimaryParameters = primaryParameters,
                 FieldsAsPrimaryParameters = new HashSet<string>(),
                 PropertiesAsPrimaryParameters = propertiesAsParams,
+                PropertiesAsBodyFields = propertiesAsBodyFields,
                 FieldInitializers = new Dictionary<string, GExpression>(),
+                BodyFieldInitializers = bodyFieldInitializers,
                 ResidualInitStatements = new List<GStatement>(),
             };
         }
@@ -2663,6 +2722,27 @@ public sealed class CSharpToGSharpTranslator
                 case PropertyDeclarationSyntax property:
                     if (lift.PropertiesAsPrimaryParameters.Contains(property.Identifier.Text))
                     {
+                        break;
+                    }
+
+                    // Issue #2281: a non-constant-initializer auto-property lifted
+                    // to a body field (see PropertiesAsBodyFields) emits as a plain
+                    // `let Name Type = initializer` field rather than a primary-
+                    // constructor parameter or a G# `prop`.
+                    if (lift.PropertiesAsBodyFields.Contains(property.Identifier.Text))
+                    {
+                        GExpression bodyFieldInit = lift.BodyFieldInitializers[property.Identifier.Text];
+                        GTypeReference bodyFieldType = this.context.GetDeclaredSymbol(property) is IPropertySymbol bodyFieldPropSymbol
+                            ? this.typeMapper.Map(bodyFieldPropSymbol.Type, this.context, property.Identifier.GetLocation())
+                            : null;
+                        yield return (
+                            new FieldDeclaration(
+                                BindingKind.Let,
+                                SanitizeIdentifier(property.Identifier.Text),
+                                bodyFieldType,
+                                bodyFieldInit,
+                                Visibility.Public),
+                            false);
                         break;
                     }
 
@@ -13155,35 +13235,39 @@ public sealed class CSharpToGSharpTranslator
 
         /// <summary>
         /// Translates a C# anonymous object creation (<c>new { A = 1, B = 2 }</c>)
-        /// to a G# anonymous-class literal (<c>object { let A int32 = 1; let B
-        /// int32 = 2 }</c>, issue #2224). gsc synthesizes a real backing type
-        /// per distinct member-name+type shape (structural typing, unified
-        /// like Roslyn's anonymous-type cache), so member names are preserved
-        /// — a later <c>x.A</c> access stays <c>x.A</c>, unlike the earlier
-        /// positional-tuple lowering this replaces (issue #1934), which
-        /// dropped names and also made anonymous-typed values illegal inside
-        /// expression-tree lambdas (GS0473) because tuple literals are
-        /// restricted there. Each member's type annotation is the C#
-        /// compiler's own inferred anonymous-type property type, written out
-        /// explicitly — G# (unlike C#) has no type inference at this syntax
-        /// position.
+        /// to a G# composite literal constructing a synthesized <c>data
+        /// class</c> (<c>AnonymousType0{A: 1, B: 2}</c>, issue #2282). See
+        /// <see cref="CSharpTypeMapper.GetOrCreateAnonymousDataClass"/> for why
+        /// a synthesized, shape-deduplicated data class supersedes both the
+        /// original positional-tuple lowering (issue #1934, which dropped
+        /// member names) and the intermediate <c>object { }</c> anonymous-value
+        /// literal (issue #2224, which cannot be spelled as an explicit TYPE —
+        /// e.g. a lambda parameter's type inferred from another lambda's
+        /// anonymous-typed return value, issue #2282's actual repro shape). A
+        /// user-declared struct/class composite literal — unlike a tuple
+        /// literal — is explicitly legal inside an expression-tree lambda, so
+        /// this remains safe even when the anonymous type is constructed
+        /// inside one. Each member's type annotation is the C# compiler's own
+        /// inferred anonymous-type property type, written out explicitly — G#
+        /// (unlike C#) has no type inference at this syntax position.
         /// </summary>
         private GExpression TranslateAnonymousObjectCreation(AnonymousObjectCreationExpressionSyntax anonymous)
         {
             this.context.Report(new TranslationDiagnostic(
                 nameof(SyntaxKind.AnonymousObjectCreationExpression),
-                "anonymous object creation 'new { ... }' maps to a G# anonymous-class literal 'object { let ... }' (issue #2224); gsc synthesizes a real backing type per distinct member shape, preserving named-member access.",
+                "anonymous object creation 'new { ... }' maps to a G# composite literal constructing a synthesized 'data class' (issue #2282); gsc reuses the same synthesized type for every structurally-identical anonymous-type shape, preserving named-member access at both the construction site and any type-position use.",
                 anonymous.GetLocation(),
                 TranslationSeverity.Info));
 
-            var members = anonymous.Initializers
-                .Select(i => new AnonymousClassMemberInitializer(
-                    AnonymousMemberName(i),
-                    this.ResolveExpressionType(i.Expression) ?? new NamedTypeReference("object"),
-                    this.TranslateExpression(i.Expression)))
+            GTypeReference syntheticType = this.context.GetTypeInfo(anonymous).Type is INamedTypeSymbol anonymousType
+                ? this.typeMapper.GetOrCreateAnonymousDataClass(anonymousType, this.context, anonymous.GetLocation())
+                : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+
+            var fieldInitializers = anonymous.Initializers
+                .Select(i => new FieldInitializer(AnonymousMemberName(i), this.TranslateExpression(i.Expression)))
                 .ToList();
 
-            return new AnonymousClassLiteralExpression(members);
+            return new CompositeLiteralExpression(syntheticType, fieldInitializers);
         }
 
         /// <summary>
@@ -13320,15 +13404,15 @@ public sealed class CSharpToGSharpTranslator
                 }
             }
 
-            // Issue #2224 (was #1934): an anonymous-typed receiver (`new { ... }`)
-            // is a C# reference type, so the flow-based passes below would wrap
-            // it in a G# `!!` non-null assertion. But the receiver lowers to a
-            // G# anonymous-class literal (`object { let ... }`), which is a
-            // synthesized value type (data struct) on the G# side — `!!` on it
-            // is both meaningless and hits a gsc IL-emission gap
-            // (StackUnexpected) for value-type receivers. Skip forgiveness for
-            // anonymous-type receivers; the anonymous-class value can never be
-            // null.
+            // Issue #2282 (was #2224, #1934): an anonymous-typed receiver (`new
+            // { ... }`) is a C# reference type, so the flow-based passes below
+            // would otherwise wrap it in a G# `!!` non-null assertion. The
+            // receiver now lowers to a composite literal constructing a
+            // synthesized `data class` — skip forgiveness for anonymous-type
+            // receivers regardless: a `new { ... }` expression's own value can
+            // never be null, so wrapping it would be meaningless (and,
+            // historically, hit a gsc IL-emission gap for the earlier
+            // value-type-based lowering this replaces).
             bool receiverIsAnonymousType =
                 this.context.GetTypeInfo(member.Expression).Type is { IsAnonymousType: true };
 
@@ -13366,9 +13450,10 @@ public sealed class CSharpToGSharpTranslator
                 memberName = positional.Name;
             }
 
-            // Issue #2224: an anonymous-typed value (`new { A = 1, B = 2 }`) now
-            // lowers to a G# anonymous-class literal (`object { let A int32 = 1; let B int32 = 2 }`)
-            // that preserves real member names — no rewrite needed; `x.A` stays
+            // Issue #2282 (was #2224): an anonymous-typed value (`new { A = 1,
+            // B = 2 }`) now lowers to a composite literal constructing a
+            // synthesized `data class` whose primary-constructor parameters
+            // preserve real member names — no rewrite needed; `x.A` stays
             // `x.A` on the G# side, exactly like the C# anonymous-type property.
             return new MemberAccessExpression(target, SanitizeIdentifier(memberName), isArrow);
         }
@@ -17993,7 +18078,28 @@ public sealed class CSharpToGSharpTranslator
 
             public HashSet<string> PropertiesAsPrimaryParameters { get; init; } = new HashSet<string>();
 
+            /// <summary>
+            /// Gets the auto-properties whose inline initializer is NOT a
+            /// compile-time constant (issue #2281) and so cannot become a
+            /// primary-constructor parameter default (G# optional-parameter
+            /// defaults must be constants, GS0265). Such a property is
+            /// instead lifted to a plain body <c>let</c> field carrying the
+            /// initializer verbatim — the field initializer runs from the
+            /// data class's always-emitted parameterless constructor
+            /// (mirroring the C# record's own per-instance initializer
+            /// semantics), while the primary constructor's parameter list
+            /// stays limited to constant-default/required members.
+            /// </summary>
+            public HashSet<string> PropertiesAsBodyFields { get; init; } = new HashSet<string>();
+
             public Dictionary<string, GExpression> FieldInitializers { get; init; } =
+                new Dictionary<string, GExpression>();
+
+            /// <summary>
+            /// Gets the initializer expressions for <see cref="PropertiesAsBodyFields"/>
+            /// (issue #2281), keyed by property name.
+            /// </summary>
+            public Dictionary<string, GExpression> BodyFieldInitializers { get; init; } =
                 new Dictionary<string, GExpression>();
 
             /// <summary>
