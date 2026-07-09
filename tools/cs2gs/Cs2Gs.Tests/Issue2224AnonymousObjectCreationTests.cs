@@ -17,15 +17,25 @@ namespace Cs2Gs.Tests;
 /// (issue #1934), which dropped member names (<c>x.A</c> rewritten to
 /// <c>x.Item1</c>) and — critically for EF Core migrations — made the value
 /// illegal inside expression-tree lambdas (GS0473, tuple literals are
-/// restricted there). It now lowers to a first-class G# anonymous-class
-/// literal, <c>object { let A int32 = 1 }</c>, which preserves member names
-/// and is legal inside expression trees, exactly like C#'s <c>new { ... }</c>
-/// is.
+/// restricted there). #2224 replaced that with a first-class G#
+/// anonymous-class literal, <c>object { let A int32 = 1 }</c>. Issue #2282
+/// found that the <c>object { }</c> literal has no corresponding TYPE
+/// ANNOTATION spelling (it is only a value-literal expression form), so it
+/// cannot express an anonymous type that crosses a real type boundary — e.g.
+/// an EF-Core-style <c>CreateTable</c>/<c>PrimaryKey</c> shape where the same
+/// anonymous type is inferred as a generic type argument in one lambda and
+/// then spelled as another lambda's parameter type. #2282 therefore
+/// supersedes the <c>object { }</c> lowering with a synthesized,
+/// shape-deduplicated <c>data class</c> (<c>AnonymousType0{A: 1}</c>), which
+/// is nameable at both the construction site and any type-position use, and
+/// still preserves member names and legality inside expression trees (a
+/// user-declared struct/class composite literal is explicitly permitted
+/// there, unlike a tuple literal).
 /// </summary>
 public class Issue2224AnonymousObjectCreationTests
 {
     [Fact]
-    public void AnonymousObjectCreation_SingleMember_LowersToAnonymousClassLiteral()
+    public void AnonymousObjectCreation_SingleMember_LowersToSynthesizedDataClassLiteral()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -39,11 +49,12 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("return object { let A int32 = 1 }", printed);
+        Assert.Contains("return AnonymousType0{A: 1}", printed);
+        Assert.Contains("data class AnonymousType0(A int32)", printed);
     }
 
     [Fact]
-    public void AnonymousObjectCreation_MultipleMembers_LowersToAnonymousClassLiteralAndPreservesMemberNames()
+    public void AnonymousObjectCreation_MultipleMembers_LowersToSynthesizedDataClassAndPreservesMemberNames()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -59,7 +70,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("object { let A int32 = 1; let B string = \"two\" }", printed);
+        Assert.Contains("AnonymousType0{A: 1, B: \"two\"}", printed);
+        Assert.Contains("data class AnonymousType0(A int32, B string)", printed);
         Assert.Contains("pair.A", printed);
         Assert.Contains("pair.B", printed);
         Assert.DoesNotContain("Item1", printed);
@@ -71,11 +83,10 @@ namespace Demo
     {
         // Regression test: under `#nullable enable`, an anonymous-typed local
         // is a flow-proven-non-null C# reference type, which the general
-        // member-access path would wrap in a G# `!!` non-null assertion. The
-        // receiver lowers to a G# anonymous-class literal (a synthesized
-        // value type that can never be null), so `!!` on it is both
-        // meaningless and hits a gsc IL-emission gap (StackUnexpected) for
-        // value-type receivers.
+        // member-access path would wrap in a G# `!!` non-null assertion. A
+        // freshly-constructed anonymous-type value can never itself be null,
+        // so `!!` on it would be meaningless — the translator skips
+        // forgiveness for anonymous-type receivers.
         string printed = TranslateUnit(@"
 #nullable enable
 namespace Demo
@@ -91,7 +102,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("object { let A int32 = 1; let B string = \"two\" }", printed);
+        Assert.Contains("AnonymousType0{A: 1, B: \"two\"}", printed);
         Assert.Contains("pair.A", printed);
         Assert.Contains("pair.B", printed);
         Assert.DoesNotContain("pair!!", printed);
@@ -102,8 +113,9 @@ namespace Demo
     {
         // C# infers the projected member name from a bare identifier or the
         // last segment of a member access when no `Name =` is given
-        // (`new { x.Id }` names the member `Id`) — the same rule the anonymous
-        // class literal's member name must follow.
+        // (`new { x.Id }` names the member `Id`) — the same rule the
+        // synthesized data class's primary-constructor parameter name must
+        // follow.
         string printed = TranslateUnit(@"
 namespace Demo
 {
@@ -122,7 +134,47 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("object { let id int32 = id; let Id int32 = row.Id }", printed);
+        Assert.Contains("AnonymousType0{id: id, Id: row.Id}", printed);
+        Assert.Contains("data class AnonymousType0(id int32, Id int32)", printed);
+    }
+
+    [Fact]
+    public void AnonymousObjectCreation_IdenticalShapesAcrossSite_ReuseSameSynthesizedDataClass()
+    {
+        // Issue #2282: two structurally-identical anonymous types declared in
+        // different places must share ONE synthesized data class — a
+        // per-occurrence synthesis would combinatorially explode across a
+        // large file (17+ occurrences were reported in the originating
+        // Oahu.Data migration files).
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public sealed class C
+    {
+        public object M1()
+        {
+            return new { A = 1, B = ""x"" };
+        }
+
+        public object M2()
+        {
+            return new { A = 2, B = ""y"" };
+        }
+    }
+}");
+
+        Assert.Contains("AnonymousType0{A: 1, B: \"x\"}", printed);
+        Assert.Contains("AnonymousType0{A: 2, B: \"y\"}", printed);
+
+        int declarationCount = 0;
+        int index = 0;
+        while ((index = printed.IndexOf("data class AnonymousType0(", index, System.StringComparison.Ordinal)) >= 0)
+        {
+            declarationCount++;
+            index++;
+        }
+
+        Assert.Equal(1, declarationCount);
     }
 
     private static string TranslateUnit(string source)
