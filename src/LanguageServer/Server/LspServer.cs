@@ -45,6 +45,7 @@ public sealed class LspServer
     internal Action<DocumentUri, DiagnosticComputationResult> TestOnParseResult;
     internal Action<DocumentUri, DiagnosticComputationResult> TestOnBindResult;
     internal Action<DocumentUri, IReadOnlyList<Diagnostic>> TestOnPublish;
+    internal Action TestOnDiagnosticRefreshAfterDiscovery;
     internal Func<CancellationToken, Task> TestPushBindDelay;
     private readonly TaskCompletionSource<int> exitSource = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly object refreshLock = new object();
@@ -90,7 +91,18 @@ public sealed class LspServer
         });
     }
 
-    [JsonRpcMethod("initialized")]
+    // UseSingleObjectParameterDeserialization is required (as it is on every other params-taking
+    // handler): the LSP "initialized" notification carries a params object ({}), and without this
+    // flag StreamJsonRpc treats that object as *named* arguments and finds nothing to bind to the
+    // single `@params` parameter, so it silently drops the notification (notifications get no
+    // error reply). The effect was severe and silent: Initialized never ran, background workspace
+    // discovery never started, no project was ever registered, and every file was bound against a
+    // project-less compilation — so all imported symbols (the project's own types and every
+    // referenced-assembly type, e.g. xunit's @Fact) permanently showed "type could not be found"
+    // squiggles even though the project built and ran fine. Directly calling Initialized() in a
+    // unit test bypasses RPC dispatch, which is why this escaped coverage; see
+    // LspServerInitializedDispatchTests for a transport-level regression guard.
+    [JsonRpcMethod("initialized", UseSingleObjectParameterDeserialization = true)]
     public void Initialized(JsonElement @params)
     {
         // Issue #1663: workspace discovery (globbing every project, reading and parsing every
@@ -128,6 +140,19 @@ public sealed class LspServer
                             this.gate.Release();
                         }
                     });
+
+                // Discovery can (and on a cold start typically does) finish *after* the client
+                // has already opened files: the editor sends didOpen the moment the window
+                // restores, racing the background load kicked off just above. Those files were
+                // bound against a project-less compilation (no project references), so every
+                // imported symbol — the project's own types and referenced-assembly types alike
+                // — was reported "could not be found" (e.g. GS0198 on xunit's @Fact). Now that
+                // projects and their references are known, refresh diagnostics for every open
+                // document so those spurious squiggles clear without the user having to edit the
+                // file to trigger a re-bind (issue: persistent import squiggles after scaffolding
+                // a multi-project workspace).
+                cts.Token.ThrowIfCancellationRequested();
+                this.RefreshOpenDocumentDiagnosticsAfterDiscovery();
             }
             catch (OperationCanceledException)
             {
@@ -1200,6 +1225,21 @@ public sealed class LspServer
             // Initialization option parsing is best-effort; fall back to the two-space default.
             return fallback;
         }
+    }
+
+    // Re-evaluates diagnostics for open documents once background workspace discovery has
+    // finished. Pull clients (e.g. VS Code) request diagnostics per document via
+    // textDocument/diagnostic; a file opened before discovery completed was bound without its
+    // project's references (see the call site in Initialized) and reported every imported symbol
+    // as "could not be found". Nothing re-pulls those diagnostics on its own, so the spurious
+    // squiggles persisted until the user edited the file. Asking the client to refresh makes it
+    // re-pull, and the fresh pull binds each file against its now-known project. (Push clients do
+    // not pull binding diagnostics on open — only on save — so they never showed the stale
+    // squiggles and need no refresh here.)
+    private void RefreshOpenDocumentDiagnosticsAfterDiscovery()
+    {
+        this.TestOnDiagnosticRefreshAfterDiscovery?.Invoke();
+        this.RequestDiagnosticRefresh();
     }
 
     private void RequestDiagnosticRefresh(DocumentUri changedUri)
