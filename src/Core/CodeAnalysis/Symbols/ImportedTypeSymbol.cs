@@ -158,19 +158,28 @@ public sealed class ImportedTypeSymbol : TypeSymbol
             return false;
         }
 
-        if (!type.IsValueType)
+        // Issue #2278: a generic type's OPEN definition (e.g. `Box<>`,
+        // `Pair<,>`) is always excluded, for both a `data class` and a `data
+        // struct` — building an aggregate from it would be 0-arity (its
+        // members typed by the raw, unsubstituted type parameter) and would
+        // shadow every real closed instantiation at construction sites. A
+        // CLOSED generic (`Box<int>`, `Pair<K,V>`) is fine: it is a distinct
+        // CLR `Type` per instantiation whose `MetadataToken` still matches the
+        // marker (tokens are shared between a generic type's open definition
+        // and every closed construction), and reflecting over it (fields,
+        // properties, methods) yields already-substituted member types — so
+        // the aggregate built below is correctly and independently shaped per
+        // closed generic type, with no shared/shadowed identity.
+        if (type.IsGenericTypeDefinition)
+        {
+            return false;
+        }
+
+        if (!type.IsValueType && !semantics.IsData)
         {
             // A plain (non-data) reference class is never marked by the
-            // emitter, so only genuine data classes reach here. Generic data
-            // classes are out of scope: their open definition would otherwise
-            // build a 0-arity aggregate that shadows the real generic type at
-            // construction sites, so they keep importing as an ordinary CLR
-            // class (a `with` on one still reports GS0161 rather than
-            // mis-binding).
-            if (!semantics.IsData || type.IsGenericType || type.IsGenericTypeDefinition)
-            {
-                return false;
-            }
+            // emitter, so only genuine data classes reach here.
+            return false;
         }
 
         var consumerAssemblyName = references?.CurrentAssemblyName ?? string.Empty;
@@ -260,7 +269,7 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         }
 
         var aggregate = new StructSymbol(
-            name: type.Name,
+            name: BuildAggregateDisplayName(type),
             fields: fieldBuilder.ToImmutable(),
             accessibility: MapTypeAccessibility(type),
             declaration: null,
@@ -277,6 +286,35 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         aggregate.SetMethods(BuildMethods(type, aggregate, includeInternal));
         aggregate.SetStaticMethods(BuildStaticMethods(type, aggregate, includeInternal));
         return aggregate;
+    }
+
+    /// <summary>
+    /// Issue #2278: renders the aggregate's display name. For a plain
+    /// (non-generic) imported data type this is just the CLR type's own
+    /// name (matching pre-#2278 behavior). For a CLOSED generic data
+    /// type this rebuilds a G#-flavored constructed-generic name (e.g.
+    /// <c>Box[int32]</c>, <c>Pair[int32, string]</c>) from the reflected
+    /// arguments rather than surfacing the raw backtick-arity CLR name
+    /// (<c>Box`1</c>) in diagnostics and hover text.
+    /// </summary>
+    /// <param name="type">The reflected CLR type the aggregate is built from.</param>
+    /// <returns>A display-friendly name for the aggregate.</returns>
+    private static string BuildAggregateDisplayName(Type type)
+    {
+        if (!type.IsGenericType || type.IsGenericTypeDefinition)
+        {
+            return type.Name;
+        }
+
+        var baseName = StripGenericArity(type.Name);
+        var args = type.GetGenericArguments().Select(BuildAggregateDisplayName);
+        return $"{baseName}[{string.Join(", ", args)}]";
+    }
+
+    private static string StripGenericArity(string name)
+    {
+        var tick = name.IndexOf('`', StringComparison.Ordinal);
+        return tick >= 0 ? name.Substring(0, tick) : name;
     }
 
     private static ImmutableArray<ParameterSymbol> BuildPrimaryConstructorParameters(
