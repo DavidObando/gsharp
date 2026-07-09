@@ -3,11 +3,11 @@
 // </copyright>
 
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
@@ -24,7 +24,18 @@ internal static class ImportedAssemblySemantics
     private const string AssemblyMetadataAttributeFullName = "System.Reflection.AssemblyMetadataAttribute";
     private const string InternalsVisibleToAttributeFullName = "System.Runtime.CompilerServices.InternalsVisibleToAttribute";
 
-    private static readonly ConcurrentDictionary<Assembly, AssemblySemantics> Cache = new();
+    // Keyed on the reflection-only Assembly object so an assembly's markers are
+    // parsed once. Issue #2269: this MUST be a ConditionalWeakTable rather than
+    // a ConcurrentDictionary — a strong process-wide dictionary would pin every
+    // Assembly (and the MetadataLoadContext reflection metadata behind it) for
+    // the whole process. gsc creates one MetadataLoadContext per compilation, so
+    // pinning leaks all of them across the parallel test host (and any long
+    // running process), exhausting memory. TryGetTypeSemantics is now consulted
+    // for imported *reference* types too (data-class support), which touches far
+    // more assemblies, so the pinning became an out-of-memory regression. A weak
+    // table lets each entry (and its Assembly key) be collected once the owning
+    // load context is disposed and unreachable.
+    private static readonly ConditionalWeakTable<Assembly, AssemblySemantics> Cache = new();
 
     public static bool TryGetTypeSemantics(Type type, out ImportedTypeSemantics semantics)
     {
@@ -36,7 +47,7 @@ internal static class ImportedAssemblySemantics
 
         try
         {
-            return Cache.GetOrAdd(type.Assembly, ReadAssemblySemantics).TypesByMetadataToken.TryGetValue(type.MetadataToken, out semantics);
+            return Cache.GetValue(type.Assembly, ReadAssemblySemantics).TypesByMetadataToken.TryGetValue(type.MetadataToken, out semantics);
         }
         catch
         {
@@ -73,7 +84,7 @@ internal static class ImportedAssemblySemantics
             // annotation — see
             // ReflectionMetadataEmitter.EmitFriendAssemblyAttributes). A
             // consumer name is only trusted if the owner actually declared it.
-            return Cache.GetOrAdd(assembly, ReadAssemblySemantics).FriendAssemblies.Contains(normalizedConsumer);
+            return Cache.GetValue(assembly, ReadAssemblySemantics).FriendAssemblies.Contains(normalizedConsumer);
         }
         catch
         {
