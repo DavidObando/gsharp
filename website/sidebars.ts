@@ -81,6 +81,7 @@ const sidebars: SidebarsConfig = {
   toolingSidebar: [
     'tooling/gsc',
     'tooling/sdk-projects',
+    'tooling/cs2gs',
     'tooling/vscode',
     'tooling/lsp',
     'tooling/debugging',
