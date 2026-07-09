@@ -670,31 +670,69 @@ public sealed class Evaluator
             asyncEnumerableInterface = streamType;
         }
 
-        if (asyncEnumerableInterface == null)
-        {
-            throw new EvaluatorException(
-                $"'await for' operand of CLR type '{streamType}' does not implement IAsyncEnumerable<T>.",
-                node);
-        }
-
         var cancellationToken = ScopeFrames.Count > 0
             ? ScopeFrames.Peek().Cts.Token
             : System.Threading.CancellationToken.None;
 
-        var getEnumerator = asyncEnumerableInterface.GetMethod(
-            "GetAsyncEnumerator",
-            new[] { typeof(System.Threading.CancellationToken) });
-        var enumerator = getEnumerator.Invoke(stream, [cancellationToken]);
+        MethodInfo getEnumerator;
+        object[] getEnumeratorArgs;
+        MethodInfo moveNextAsync;
+        MemberInfo currentMember;
+        if (asyncEnumerableInterface != null)
+        {
+            // Fast path: the type implements `IAsyncEnumerable[T]`.
+            getEnumerator = asyncEnumerableInterface.GetMethod(
+                "GetAsyncEnumerator",
+                new[] { typeof(System.Threading.CancellationToken) });
+            getEnumeratorArgs = new object[] { cancellationToken };
+
+            var enumeratorInterface = typeof(System.Collections.Generic.IAsyncEnumerator<>)
+                .MakeGenericType(asyncEnumerableInterface.GetGenericArguments()[0]);
+            moveNextAsync = enumeratorInterface.GetMethod("MoveNextAsync", Type.EmptyTypes);
+            currentMember = enumeratorInterface.GetProperty("Current");
+        }
+        else if (MemberLookup.TryResolveClrPatternAsyncEnumerator(streamType, out var patternGetEnumerator, out var patternMoveNextAsync, out var patternCurrentMember))
+        {
+            // Issue #2280: the duck-typed `await foreach` pattern — a
+            // public instance `GetAsyncEnumerator(...)` independent of any
+            // interface, e.g. `ConfiguredCancelableAsyncEnumerable[T]`
+            // (returned by `IAsyncEnumerable[T].ConfigureAwait(false)`),
+            // which implements no interfaces at all.
+            getEnumerator = patternGetEnumerator;
+            getEnumeratorArgs = getEnumerator.GetParameters().Length == 0
+                ? Array.Empty<object>()
+                : new object[] { cancellationToken };
+            moveNextAsync = patternMoveNextAsync;
+            currentMember = patternCurrentMember;
+        }
+        else
+        {
+            throw new EvaluatorException(
+                $"'await for' operand of CLR type '{streamType}' does not implement IAsyncEnumerable<T> and exposes no pattern-based GetAsyncEnumerator.",
+                node);
+        }
+
+        var enumerator = getEnumerator.Invoke(stream, getEnumeratorArgs);
         if (enumerator == null)
         {
             throw new EvaluatorException("'await for' GetAsyncEnumerator returned null.", node);
         }
 
-        var enumeratorInterface = typeof(System.Collections.Generic.IAsyncEnumerator<>)
-            .MakeGenericType(asyncEnumerableInterface.GetGenericArguments()[0]);
-        var moveNextAsync = enumeratorInterface.GetMethod("MoveNextAsync", Type.EmptyTypes);
-        var currentProperty = enumeratorInterface.GetProperty("Current");
-        var disposeAsync = typeof(System.IAsyncDisposable).GetMethod("DisposeAsync", Type.EmptyTypes);
+        // Issue #2280: `DisposeAsync` may be reached through
+        // `IAsyncDisposable` (the common case for compiler-generated
+        // iterators), or — for a fully duck-typed enumerator — as a plain
+        // public instance method found directly on the enumerator's runtime
+        // type. Per the C# spec, when neither shape is present no
+        // disposal is performed.
+        var enumeratorClrType = enumerator.GetType();
+        MethodInfo disposeAsync = typeof(System.IAsyncDisposable).IsAssignableFrom(enumeratorClrType)
+            ? typeof(System.IAsyncDisposable).GetMethod("DisposeAsync", Type.EmptyTypes)
+            : enumeratorClrType.GetMethod(
+                "DisposeAsync",
+                BindingFlags.Instance | BindingFlags.Public,
+                binder: null,
+                types: Type.EmptyTypes,
+                modifiers: null);
 
         try
         {
@@ -707,7 +745,12 @@ public sealed class Evaluator
                     break;
                 }
 
-                var current = currentProperty.GetValue(enumerator);
+                var current = currentMember switch
+                {
+                    PropertyInfo currentProperty => currentProperty.GetValue(enumerator),
+                    FieldInfo currentField => currentField.GetValue(enumerator),
+                    _ => throw new EvaluatorException("'await for' Current member has an unsupported shape.", node),
+                };
                 Assign(node.ValueVariable, current);
                 EvaluateStatement((BoundBlockStatement)node.Body);
 
@@ -3862,23 +3905,32 @@ public sealed class Evaluator
             return null;
         }
 
-        // Issue #148: `await for` desugaring produces `await __enum.MoveNextAsync()`
-        // and `await __enum.DisposeAsync()`, which return `ValueTask<bool>` /
-        // `ValueTask`. Use the same synchronous-await pragma the await-for
-        // path uses for the underlying enumerator calls.
         if (operand == null)
         {
             throw new EvaluatorException("'await' operand did not evaluate to an awaitable.", node);
         }
 
+        // Issue #2280 (parallel to the emitter's generic `AwaitableShape`,
+        // which already resolves ANY duck-typed awaitable structurally):
+        // this interpreter path previously only recognized `ValueTask`/
+        // `ValueTask<T>` by name after the Task fast path above — a shared
+        // gap that broke `await` on `ConfiguredTaskAwaitable(<T>)`/
+        // `ConfiguredValueTaskAwaitable(<T>)` (returned by
+        // `.ConfigureAwait(...)`, including the `MoveNextAsync`/
+        // `DisposeAsync` results of a pattern-based `await for` enumerator,
+        // see #148's desugaring), and any other fully custom duck-typed
+        // awaitable. Resolve via the C# spec's
+        // `GetAwaiter()`/`IsCompleted`/`GetResult()` pattern instead of a
+        // type-name allowlist; `BlockOnValueTask` already implements that
+        // resolution reflectively.
         var operandType = operand.GetType();
-        if (operandType.FullName == "System.Threading.Tasks.ValueTask" ||
-            (operandType.IsGenericType && operandType.GetGenericTypeDefinition().FullName == "System.Threading.Tasks.ValueTask`1"))
+        var getAwaiterMethod = operandType.GetMethod("GetAwaiter", Type.EmptyTypes);
+        if (getAwaiterMethod == null)
         {
-            return BlockOnValueTask(operand);
+            throw new EvaluatorException("'await' operand did not evaluate to a Task.", node);
         }
 
-        throw new EvaluatorException("'await' operand did not evaluate to a Task.", node);
+        return BlockOnValueTask(operand);
     }
 
     private static object EvaluateDefaultExpression(BoundDefaultExpression node)

@@ -38,6 +38,30 @@ total
     }
 
     [Fact]
+    public void AwaitFor_ConfigureAwaitFalse_DrainsAsyncEnumerable()
+    {
+        // Issue #2280: `stream.ConfigureAwait(false)` returns
+        // `ConfiguredCancelableAsyncEnumerable[T]`, a fully duck-typed
+        // (pattern-based) async enumerable that implements no interfaces at
+        // all. Confirms the binder recognizes the pattern shape (element-type
+        // inference) and the interpreter can drain it end-to-end.
+        var source = @"
+import System.Linq
+import System.Threading.Tasks
+import GSharp.Core.Tests.CodeAnalysis.Binding
+
+var total = 0
+await for v in AsyncStreamFixture.Counts().ConfigureAwait(false) {
+    total = total + v
+}
+total
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1 + 2 + 3, result.Value);
+    }
+
+    [Fact]
     public void AwaitFor_NonAsyncEnumerable_Diagnoses()
     {
         // A type that doesn't implement IAsyncEnumerable<T>; the binder

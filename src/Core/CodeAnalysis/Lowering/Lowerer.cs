@@ -589,31 +589,56 @@ public sealed class Lowerer : BoundTreeRewriter
             }
         }
 
-        if (asyncEnumerableInterface == null)
-        {
-            return new BoundExpressionStatement(null, new BoundErrorExpression(null));
-        }
-
         // Issue #652: resolve all helper types from the same MetadataLoadContext
         // as the stream type. Using typeof(...) here would yield host-runtime types
         // that cannot be mixed with MLC-loaded types in MakeGenericType/GetMethod
         // calls, causing ArgumentException ("Type must be a type provided by the
         // MetadataLoadContext").  Instead, derive everything from the interface and
         // method signatures that are already in the correct context.
+        System.Reflection.MethodInfo getAsyncEnumerator;
+        System.Reflection.MethodInfo moveNextAsync;
+        System.Reflection.MemberInfo currentMember;
+        if (asyncEnumerableInterface != null)
+        {
+            // Fast path: GetAsyncEnumerator is the sole method on IAsyncEnumerable<T>.
+            getAsyncEnumerator = asyncEnumerableInterface.GetMethod("GetAsyncEnumerator");
+            if (getAsyncEnumerator == null)
+            {
+                return new BoundExpressionStatement(null, new BoundErrorExpression(null));
+            }
 
-        // GetAsyncEnumerator is the sole method on IAsyncEnumerable<T>.
-        var getAsyncEnumerator = asyncEnumerableInterface.GetMethod("GetAsyncEnumerator");
-        if (getAsyncEnumerator == null)
+            var ifaceEnumeratorClr = getAsyncEnumerator.ReturnType;
+            moveNextAsync = ifaceEnumeratorClr.GetMethod("MoveNextAsync");
+            currentMember = ifaceEnumeratorClr.GetProperty("Current");
+        }
+        else if (!MemberLookup.TryResolveClrPatternAsyncEnumerator(streamClr, out getAsyncEnumerator, out moveNextAsync, out currentMember))
+        {
+            // Issue #2280: neither the `IAsyncEnumerable[T]` interface nor
+            // the duck-typed `await foreach` pattern (a public instance
+            // `GetAsyncEnumerator(...)` whose enumerator exposes
+            // `MoveNextAsync()`/`Current`) is present — e.g.
+            // `System.Runtime.CompilerServices.ConfiguredCancelableAsyncEnumerable[T]`
+            // (from `IAsyncEnumerable[T].ConfigureAwait(false)`) qualifies
+            // via this fallback since it implements no interfaces at all.
+            // The binder already validated one of the two shapes exists, so
+            // this branch should not be reachable for well-typed programs.
+            return new BoundExpressionStatement(null, new BoundErrorExpression(null));
+        }
+
+        if (moveNextAsync == null || currentMember == null)
         {
             return new BoundExpressionStatement(null, new BoundErrorExpression(null));
         }
 
-        // IAsyncEnumerator<T> — from the return type (already in MLC context).
+        // Issue #2280: `DisposeAsync` may be reached through the
+        // `IAsyncDisposable` interface (the common case for compiler-
+        // generated iterators), or — for a fully duck-typed enumerator such
+        // as `ConfiguredCancelableAsyncEnumerable[T].Enumerator`, which
+        // implements no interfaces — as a plain public instance method found
+        // directly on the enumerator type. Per the C# spec, when neither
+        // shape is present the loop performs no disposal at all (rather than
+        // failing to bind), so `disposeAsync` is allowed to stay null here.
         var enumeratorClr = getAsyncEnumerator.ReturnType;
-        var moveNextAsync = enumeratorClr.GetMethod("MoveNextAsync");
-        var currentProperty = enumeratorClr.GetProperty("Current");
-
-        // IAsyncDisposable.DisposeAsync — find via enumerator's implemented interfaces.
         System.Reflection.MethodInfo disposeAsync = null;
         foreach (var iface in enumeratorClr.GetInterfaces())
         {
@@ -624,23 +649,43 @@ public sealed class Lowerer : BoundTreeRewriter
             }
         }
 
-        if (moveNextAsync == null || currentProperty == null || disposeAsync == null)
+        if (disposeAsync == null)
         {
-            return new BoundExpressionStatement(null, new BoundErrorExpression(null));
+            disposeAsync = enumeratorClr.GetMethod(
+                "DisposeAsync",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+                binder: null,
+                types: System.Type.EmptyTypes,
+                modifiers: null);
         }
 
-        // ValueTask<bool> — from MoveNextAsync's return type (MLC context).
+        // The awaited result type of MoveNextAsync()/DisposeAsync() — from
+        // their actual return types (MLC context). These may be
+        // `ValueTask<bool>`/`ValueTask` (the interface shape) or a
+        // duck-typed awaitable such as `ConfiguredValueTaskAwaitable<bool>`/
+        // `ConfiguredValueTaskAwaitable` (the pattern shape produced by
+        // `.ConfigureAwait(false)`) — `BoundAwaitExpression`'s lowering
+        // (`AwaitableShape.Resolve`) already resolves the
+        // `GetAwaiter`/`IsCompleted`/`GetResult` triple structurally for any
+        // CLR type, so no special-casing is needed here beyond using the
+        // real return type instead of a hardcoded `ValueTask`.
         var valueTaskBoolClr = moveNextAsync.ReturnType;
-
-        // CancellationToken — from GetAsyncEnumerator's parameter (MLC context).
-        var cancellationTokenClr = getAsyncEnumerator.GetParameters()[0].ParameterType;
-
-        // ValueTask (non-generic) — from DisposeAsync's return type (MLC context).
-        var valueTaskClr = disposeAsync.ReturnType;
-
-        var cancellationTokenType = TypeSymbol.FromClrType(cancellationTokenClr);
         var valueTaskBoolType = TypeSymbol.FromClrType(valueTaskBoolClr);
-        var valueTaskType = TypeSymbol.FromClrType(valueTaskClr);
+
+        // GetAsyncEnumerator's arity: either the interface's single optional
+        // `CancellationToken` parameter, or the fully duck-typed parameterless
+        // overload (e.g. `ConfiguredCancelableAsyncEnumerable[T].GetAsyncEnumerator()`).
+        var getAsyncEnumeratorParams = getAsyncEnumerator.GetParameters();
+        ImmutableArray<BoundExpression> getEnumeratorArgs;
+        if (getAsyncEnumeratorParams.Length == 0)
+        {
+            getEnumeratorArgs = ImmutableArray<BoundExpression>.Empty;
+        }
+        else
+        {
+            var paramType = TypeSymbol.FromClrType(getAsyncEnumeratorParams[0].ParameterType);
+            getEnumeratorArgs = ImmutableArray.Create<BoundExpression>(new BoundDefaultExpression(null, paramType));
+        }
 
         // Issue #1002 (parallel to #774 for sync `for-in`): when the stream
         // is a symbolic `ImportedTypeSymbol IAsyncEnumerable[Shape]` whose
@@ -652,7 +697,9 @@ public sealed class Lowerer : BoundTreeRewriter
         // `valueVariable` (Shape) — even though the runtime tolerates the
         // reference. Synthesize a symbolic `IAsyncEnumerator[Shape]` so
         // the BoundClrPropertyAccessExpression carries the user's `Shape`,
-        // mirroring the synchronous symbolic-open path.
+        // mirroring the synchronous symbolic-open path. This symbolic
+        // recovery only applies to the interface fast path — the pattern
+        // fallback's `enumeratorClr` always carries a concrete CLR type.
         TypeSymbol enumeratorType;
         TypeSymbol currentType;
         if (stream.Type is ImportedTypeSymbol streamImp
@@ -671,7 +718,7 @@ public sealed class Lowerer : BoundTreeRewriter
         else
         {
             enumeratorType = TypeSymbol.FromClrType(enumeratorClr);
-            currentType = TypeSymbol.FromClrType(currentProperty.PropertyType);
+            currentType = GetClrMemberType(currentMember);
         }
 
         var enumeratorSymbol = new LocalVariableSymbol("$awaitEnum", isReadOnly: true, type: enumeratorType);
@@ -681,7 +728,7 @@ public sealed class Lowerer : BoundTreeRewriter
             stream,
             getAsyncEnumerator,
             enumeratorType,
-            ImmutableArray.Create<BoundExpression>(new BoundDefaultExpression(null, cancellationTokenType)));
+            getEnumeratorArgs);
         var enumeratorDecl = new BoundVariableDeclaration(null, enumeratorSymbol, getEnumCall);
 
         // Issue #937: the loop's continue label sits at the MoveNextAsync
@@ -701,7 +748,7 @@ public sealed class Lowerer : BoundTreeRewriter
         var moveNextAwait = new BoundAwaitExpression(null, moveNextCall, TypeSymbol.Bool);
         var moreDecl = new BoundVariableDeclaration(null, moreSymbol, moveNextAwait);
 
-        var currentAccess = new BoundClrPropertyAccessExpression(null, enumeratorExpr, currentProperty, currentType);
+        var currentAccess = new BoundClrPropertyAccessExpression(null, enumeratorExpr, currentMember, currentType);
         var assignValue = new BoundExpressionStatement(
             null,
             new BoundAssignmentExpression(null, valueVariable, currentAccess));
@@ -716,6 +763,16 @@ public sealed class Lowerer : BoundTreeRewriter
         tryStatements.Add(new BoundLabelStatement(null, endLabel));
         var tryBlock = new BoundBlockStatement(null, tryStatements.ToImmutable());
 
+        if (disposeAsync == null)
+        {
+            // Issue #2280: no `IAsyncDisposable`/pattern `DisposeAsync()` at
+            // all — per the C# spec the loop performs no disposal (matches
+            // `await foreach`'s own behavior for such enumerators).
+            return new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(enumeratorDecl, tryBlock));
+        }
+
+        var valueTaskClr = disposeAsync.ReturnType;
+        var valueTaskType = TypeSymbol.FromClrType(valueTaskClr);
         var disposeCall = new BoundImportedInstanceCallExpression(
             null,
             enumeratorExpr,
