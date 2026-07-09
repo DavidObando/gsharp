@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import { computeLaunchPaths } from '../utils/projectLayout';
 
 export function registerProjectCommands(context: vscode.ExtensionContext) {
   context.subscriptions.push(
@@ -50,6 +51,7 @@ export function registerProjectCommands(context: vscode.ExtensionContext) {
       // Generate launch.json
       const launchPath = path.join(vscodeDir, 'launch.json');
       if (!fs.existsSync(launchPath)) {
+        const { program, cwd } = computeLaunchPaths(workspaceFolder.uri.fsPath, projectPath);
         const launch = {
           version: '0.2.0',
           configurations: [
@@ -58,9 +60,9 @@ export function registerProjectCommands(context: vscode.ExtensionContext) {
               type: 'coreclr',
               request: 'launch',
               preLaunchTask: 'dotnet: build',
-              program: `\${workspaceFolder}/bin/Debug/net10.0/${projectName}.dll`,
+              program,
               args: [],
-              cwd: '${workspaceFolder}',
+              cwd,
               console: 'integratedTerminal',
               stopAtEntry: false,
             },
