@@ -2776,6 +2776,22 @@ internal sealed class OverloadResolver
         return new BoundStructLiteralExpression(ctorCall.Syntax, classType, initializers.ToImmutable());
     }
 
+    /// <summary>
+    /// Issue #2278: returns whether <paramref name="classType"/> is the
+    /// semantic aggregate for an already-CLOSED imported generic type (e.g.
+    /// <c>Box[int32]</c> built by reflecting over the closed CLR type
+    /// <c>Box&lt;int&gt;</c>). Such an aggregate is not itself a generic
+    /// definition (<see cref="StructSymbol.IsGenericDefinition"/> is
+    /// <see langword="false"/> — its members are already fully substituted),
+    /// but a construction call against it still legitimately carries the
+    /// original explicit <c>[...]</c> type-argument list the caller used to
+    /// select the closed CLR type in the first place.
+    /// </summary>
+    /// <param name="classType">The candidate aggregate.</param>
+    /// <returns><see langword="true"/> when <paramref name="classType"/> is a closed-generic imported aggregate.</returns>
+    private static bool IsClosedGenericImportedAggregate(StructSymbol classType)
+        => classType.ClrType != null && classType.ClrType.IsGenericType && !classType.ClrType.IsGenericTypeDefinition;
+
     private BoundExpression BindConstructorCallExpressionCore(CallExpressionSyntax syntax, StructSymbol classType)
     {
         // ADR-0047 §6 / #175: primary-constructor call `Foo(...)` is a
@@ -2971,8 +2987,17 @@ internal sealed class OverloadResolver
 
             classType = StructSymbol.Construct(classType, typeArgs.MoveToImmutable(), MapClrType);
         }
-        else if (syntax.TypeArgumentList != null)
+        else if (syntax.TypeArgumentList != null && !IsClosedGenericImportedAggregate(classType))
         {
+            // Issue #2278: a `classType` that is itself the semantic aggregate
+            // for an already-CLOSED imported generic data type (e.g.
+            // `Box[int32]`) is not a generic DEFINITION — its `TypeParameters`
+            // is empty because reflection over the closed CLR type already
+            // substituted every member. The caller
+            // (TryBindClrConstructorCall) resolved and consumed the explicit
+            // `[...]` type-argument list itself (via `Type.MakeGenericType`)
+            // before building this aggregate, so seeing one here is expected
+            // and must not be treated as an arity mismatch.
             Diagnostics.ReportWrongTypeArgumentCount(syntax.TypeArgumentList.Location, classType.Name, 0, syntax.TypeArgumentList.Arguments.Count);
             return new BoundErrorExpression(syntax);
         }
