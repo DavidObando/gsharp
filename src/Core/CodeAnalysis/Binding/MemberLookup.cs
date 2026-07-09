@@ -317,13 +317,24 @@ internal sealed class MemberLookup
 
     /// <summary>
     /// Probes <paramref name="type"/> for an
-    /// <c>IAsyncEnumerable&lt;T&gt;</c> implementation and returns its
-    /// element type when present.
+    /// <c>IAsyncEnumerable&lt;T&gt;</c> implementation, OR (issue #2280,
+    /// parallel to the sync <c>GetEnumerator()</c> pattern support for
+    /// #939/#990) the fully duck-typed <c>await foreach</c> pattern — a
+    /// public instance <c>GetAsyncEnumerator(...)</c> method independent of
+    /// any interface — and returns the element type when either shape is
+    /// present. The interface path is tried first (fast path, and it is the
+    /// only path that recovers a same-compilation user element type through
+    /// the symbolic <see cref="ImportedTypeSymbol"/> machinery); the pattern
+    /// path is the fallback used for CLR wrapper types that implement no
+    /// interfaces at all, such as
+    /// <c>System.Runtime.CompilerServices.ConfiguredCancelableAsyncEnumerable&lt;T&gt;</c>
+    /// (the type produced by <c>IAsyncEnumerable&lt;T&gt;.ConfigureAwait(bool)</c>).
     /// </summary>
     /// <param name="type">The <see cref="TypeSymbol"/> to probe.</param>
     /// <param name="elementType">The bound element type symbol, on success.</param>
     /// <returns><see langword="true"/> when the type implements
-    /// <c>IAsyncEnumerable&lt;T&gt;</c>.</returns>
+    /// <c>IAsyncEnumerable&lt;T&gt;</c> or exposes the pattern-based
+    /// <c>await foreach</c> shape.</returns>
     public static bool TryGetAsyncEnumerableElementType(TypeSymbol type, out TypeSymbol elementType)
     {
         elementType = null;
@@ -382,6 +393,132 @@ internal sealed class MemberLookup
             }
         }
 
+        // Issue #2280: neither `type` nor its OpenDefinition (when
+        // symbolic) implements `IAsyncEnumerable[T]`. Fall back to the
+        // duck-typed `await foreach` pattern before giving up — this is
+        // what makes `ConfiguredCancelableAsyncEnumerable[T]` (returned by
+        // `IAsyncEnumerable[T].ConfigureAwait(false)`) and other
+        // fully-pattern-based async enumerables iterable.
+        if (TryResolveClrPatternAsyncEnumerator(clr, out _, out _, out var currentMember))
+        {
+            elementType = TypeSymbol.FromClrType(GetClrMemberValueType(currentMember));
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #2280: resolves the C# spec's duck-typed <c>await foreach</c>
+    /// pattern directly on <paramref name="clrType"/> — a public instance
+    /// <c>GetAsyncEnumerator(...)</c> method (accepting zero arguments, or a
+    /// single optional argument such as <c>CancellationToken</c>), whose
+    /// return type in turn exposes a parameterless <c>MoveNextAsync()</c>
+    /// method and a <c>Current</c> member — all independent of any
+    /// interface. Mirrors <see cref="TryGetClrPatternEnumerableElementType"/>
+    /// (the sync <c>GetEnumerator()</c> pattern probe for #939/#990) for the
+    /// async shape.
+    /// </summary>
+    /// <param name="clrType">The CLR type to probe.</param>
+    /// <param name="getAsyncEnumerator">The resolved <c>GetAsyncEnumerator</c> method, on success.</param>
+    /// <param name="moveNextAsync">The resolved <c>MoveNextAsync</c> method on the enumerator type, on success.</param>
+    /// <param name="currentMember">The resolved <c>Current</c> property or field on the enumerator type, on success.</param>
+    /// <returns><see langword="true"/> when the pattern-based shape matches.</returns>
+    public static bool TryResolveClrPatternAsyncEnumerator(
+        Type clrType,
+        out MethodInfo getAsyncEnumerator,
+        out MethodInfo moveNextAsync,
+        out MemberInfo currentMember)
+    {
+        getAsyncEnumerator = null;
+        moveNextAsync = null;
+        currentMember = null;
+
+        if (clrType == null)
+        {
+            return false;
+        }
+
+        // Prefer a parameterless `GetAsyncEnumerator()` (the shape produced
+        // by `ConfiguredCancelableAsyncEnumerable[T]`) over a single-argument
+        // overload (the shape produced by `IAsyncEnumerable[T]` itself, which
+        // takes an optional `CancellationToken`) when a type happens to
+        // expose both — matching how the interface fast path always wins
+        // when present, so the pattern probe's own preference order rarely
+        // matters in practice.
+        MethodInfo zeroArgCandidate = null;
+        MethodInfo oneArgCandidate = null;
+        foreach (var candidate in ClrTypeUtilities.SafeGetMethods(clrType, BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (!string.Equals(candidate.Name, "GetAsyncEnumerator", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var parameters = candidate.GetParameters();
+            if (parameters.Length == 0 && zeroArgCandidate == null)
+            {
+                zeroArgCandidate = candidate;
+            }
+            else if (parameters.Length == 1 && oneArgCandidate == null)
+            {
+                oneArgCandidate = candidate;
+            }
+        }
+
+        var resolved = zeroArgCandidate ?? oneArgCandidate;
+        if (resolved == null)
+        {
+            return false;
+        }
+
+        var enumeratorType = resolved.ReturnType;
+        var moveNext = SafeGetMethodIncludingSelfAndInterfaces(enumeratorType, "MoveNextAsync", Type.EmptyTypes);
+        if (moveNext == null)
+        {
+            return false;
+        }
+
+        if (!TryGetClrCurrentMemberIncludingSelfAndInterfaces(enumeratorType, out var current))
+        {
+            return false;
+        }
+
+        getAsyncEnumerator = resolved;
+        moveNextAsync = moveNext;
+        currentMember = current;
+        return true;
+    }
+
+    /// <summary>
+    /// Looks up the <c>Current</c> member on a duck-typed CLR enumerator —
+    /// preferring a property over a field — walking the type's transitive
+    /// implemented interfaces in addition to the type itself. The async
+    /// counterpart to <see cref="TryGetClrCurrentMemberType"/>, which only
+    /// probes the type directly (sufficient for the sync pattern, whose
+    /// enumerator is always concrete); kept separate so that call site is
+    /// left untouched.
+    /// </summary>
+    /// <param name="enumeratorType">The duck-typed enumerator type.</param>
+    /// <param name="currentMember">The resolved <c>Current</c> property or field, on success.</param>
+    /// <returns><see langword="true"/> when a <c>Current</c> member exists.</returns>
+    public static bool TryGetClrCurrentMemberIncludingSelfAndInterfaces(Type enumeratorType, out MemberInfo currentMember)
+    {
+        var currentProperty = SafeGetPropertyIncludingSelfAndInterfaces(enumeratorType, "Current");
+        if (currentProperty != null)
+        {
+            currentMember = currentProperty;
+            return true;
+        }
+
+        var currentField = ClrTypeUtilities.SafeGetField(enumeratorType, "Current", BindingFlags.Instance | BindingFlags.Public);
+        if (currentField != null)
+        {
+            currentMember = currentField;
+            return true;
+        }
+
+        currentMember = null;
         return false;
     }
 
@@ -3114,6 +3251,23 @@ internal sealed class MemberLookup
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Returns the value type of a <c>Current</c> member resolved by
+    /// <see cref="TryResolveClrPatternAsyncEnumerator"/> — a property or a
+    /// field.
+    /// </summary>
+    /// <param name="member">The member to inspect.</param>
+    /// <returns>The member's value type.</returns>
+    private static Type GetClrMemberValueType(MemberInfo member)
+    {
+        return member switch
+        {
+            PropertyInfo property => property.PropertyType,
+            FieldInfo field => field.FieldType,
+            _ => null,
+        };
     }
 
     /// <summary>
