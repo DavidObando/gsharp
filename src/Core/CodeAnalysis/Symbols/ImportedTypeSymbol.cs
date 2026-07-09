@@ -141,8 +141,20 @@ public sealed class ImportedTypeSymbol : TypeSymbol
             || type.IsPrimitive
             || type.IsEnum
             || type.IsGenericParameter
-            || type.IsInterface
-            || !ImportedAssemblySemantics.TryGetTypeSemantics(type, out var semantics))
+            || type.IsInterface)
+        {
+            return false;
+        }
+
+        // Issue #2291: an externally-referenced assembly that was compiled by
+        // the C# compiler (not gsc) never carries the `GSharp.TypeSemantics`
+        // marker, even when the type is a genuine C# `record`/`record struct`.
+        // Fall back to recognizing the compiler-emitted record SHAPE (the
+        // `PrintMembers`/copy-constructor/`<Clone>$`/`EqualityContract`
+        // markers every C# record synthesizes) so such a type still resolves
+        // to a data-class semantic aggregate and `with`/copy keep working.
+        if (!ImportedAssemblySemantics.TryGetTypeSemantics(type, out var semantics)
+            && !ImportedAssemblySemantics.TryDetectCSharpRecordSemantics(type, out semantics))
         {
             return false;
         }
@@ -213,7 +225,8 @@ public sealed class ImportedTypeSymbol : TypeSymbol
 
     private static StructSymbol BuildSemanticAggregate(Type type, string consumerAssemblyName)
     {
-        if (!ImportedAssemblySemantics.TryGetTypeSemantics(type, out var semantics))
+        if (!ImportedAssemblySemantics.TryGetTypeSemantics(type, out var semantics)
+            && !ImportedAssemblySemantics.TryDetectCSharpRecordSemantics(type, out semantics))
         {
             return null;
         }
@@ -263,7 +276,7 @@ public sealed class ImportedTypeSymbol : TypeSymbol
                 hasSetter: setter != null && IsVisible(setter, includeInternal),
                 isAutoProperty: false,
                 isVirtual: (getter ?? setter)?.IsVirtual == true,
-                isOverride: (getter ?? setter)?.GetBaseDefinition() != (getter ?? setter),
+                isOverride: ClrTypeUtilities.SafeIsOverride(getter ?? setter),
                 isStatic: (getter ?? setter)?.IsStatic == true,
                 isInitOnly: setter != null && IsInitOnlySetter(setter)));
         }

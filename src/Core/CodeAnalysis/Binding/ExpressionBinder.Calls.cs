@@ -59,47 +59,104 @@ internal sealed partial class ExpressionBinder
         scope.TryDeclareVariable(tempVar);
 
         var seen = new HashSet<string>();
-        var explicitValues = new Dictionary<string, (FieldSymbol Field, StructSymbol DeclaringType, BoundExpression Value)>();
+        var explicitValues = new Dictionary<string, (FieldSymbol Field, PropertySymbol Property, BoundExpression Value)>();
         foreach (var initSyntax in overrides)
         {
-            var fieldName = initSyntax.FieldIdentifier.Text;
-            if (!seen.Add(fieldName))
+            var memberName = initSyntax.FieldIdentifier.Text;
+            if (!seen.Add(memberName))
             {
-                Diagnostics.ReportSymbolAlreadyDeclared(initSyntax.FieldIdentifier.Location, fieldName);
+                Diagnostics.ReportSymbolAlreadyDeclared(initSyntax.FieldIdentifier.Location, memberName);
                 continue;
             }
 
-            if (!TypeMemberModel.TryGetFieldIncludingInherited(structType, fieldName, MemberQuery.Instance(MemberKinds.Field), out var field, out var declaringType))
+            if (TypeMemberModel.TryGetFieldIncludingInherited(structType, memberName, MemberQuery.Instance(MemberKinds.Field), out var field, out var fieldDeclaringType))
             {
-                Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, fieldName);
+                // Issue #2059: a `with` update is a write to the named field —
+                // enforce the same `protected`/`private` accessibility rule as a
+                // plain assignment / composite literal member init (issue #950 /
+                // #2044 / #2059).
+                if (!AccessibilityChecker.IsAccessible(field.Accessibility, fieldDeclaringType, this.function))
+                {
+                    Diagnostics.ReportMemberInaccessible(initSyntax.FieldIdentifier.Location, field.Name, fieldDeclaringType.Name, field.Accessibility);
+                }
+
+                var fieldValueExpr = BindExpression(initSyntax.Value);
+                fieldValueExpr = conversions.BindConversion(initSyntax.Value.Location, fieldValueExpr, field.Type);
+                explicitValues[memberName] = (field, null, fieldValueExpr);
                 continue;
             }
 
-            // Issue #2059: a `with` update is a write to the named field —
-            // enforce the same `protected`/`private` accessibility rule as a
-            // plain assignment / composite literal member init (issue #950 /
-            // #2044 / #2059).
-            if (!AccessibilityChecker.IsAccessible(field.Accessibility, declaringType, this.function))
+            // Issue #2291: an imported C# record surfaces its positional
+            // members as auto-properties (compiler-mangled backing fields),
+            // not plain public fields like a gsc-native data class — fall
+            // back to a settable property with the same name so `with`
+            // updates a record's positional member through its setter/init
+            // accessor instead of failing to find a field at all.
+            if (TypeMemberModel.TryGetProperty(structType, memberName, out var property, out var propertyDeclaringType) && property.HasSetter)
             {
-                Diagnostics.ReportMemberInaccessible(initSyntax.FieldIdentifier.Location, field.Name, declaringType.Name, field.Accessibility);
+                if (!AccessibilityChecker.IsAccessible(property.Accessibility, propertyDeclaringType, this.function))
+                {
+                    Diagnostics.ReportMemberInaccessible(initSyntax.FieldIdentifier.Location, property.Name, propertyDeclaringType.Name, property.Accessibility);
+                }
+
+                var propertyValueExpr = BindExpression(initSyntax.Value);
+                propertyValueExpr = conversions.BindConversion(initSyntax.Value.Location, propertyValueExpr, property.Type);
+                explicitValues[memberName] = (null, property, propertyValueExpr);
+                continue;
             }
 
-            var valueExpr = BindExpression(initSyntax.Value);
-            valueExpr = conversions.BindConversion(initSyntax.Value.Location, valueExpr, field.Type);
-            explicitValues[fieldName] = (field, declaringType, valueExpr);
+            Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, memberName);
         }
 
         var initializers = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
+        var handledMembers = new HashSet<string>();
         foreach (var field in structType.Fields)
         {
+            handledMembers.Add(field.Name);
             if (explicitValues.TryGetValue(field.Name, out var explicitValue))
             {
-                initializers.Add(new BoundFieldInitializer(explicitValue.Field, explicitValue.Value));
+                initializers.Add(new BoundFieldInitializer(field, explicitValue.Value));
             }
             else
             {
                 var access = new BoundFieldAccessExpression(null, new BoundVariableExpression(null, tempVar), structType, field);
                 initializers.Add(new BoundFieldInitializer(field, access));
+            }
+        }
+
+        // Issue #2291: an imported C# record's positional members that are
+        // NOT backed by a visible field (property-only, e.g. auto-properties
+        // whose mangled backing field is intentionally hidden from the
+        // aggregate's field list) still need to participate in `with`/`copy`.
+        // `PrimaryConstructorParameters` names the record's full positional
+        // shape regardless of whether each member resolved to a field or a
+        // property (see ImportedTypeSymbol.BuildPrimaryConstructorParameters),
+        // so walking it here — skipping names already handled as a real
+        // field above — surfaces exactly the property-only positional
+        // members, for every kind of data class (gsc-native or imported).
+        if (!structType.PrimaryConstructorParameters.IsDefaultOrEmpty)
+        {
+            foreach (var parameter in structType.PrimaryConstructorParameters)
+            {
+                if (!handledMembers.Add(parameter.Name))
+                {
+                    continue;
+                }
+
+                if (!TypeMemberModel.TryGetProperty(structType, parameter.Name, out var property, out _) || !property.HasSetter)
+                {
+                    continue;
+                }
+
+                if (explicitValues.TryGetValue(parameter.Name, out var explicitValue))
+                {
+                    initializers.Add(new BoundFieldInitializer(property, explicitValue.Value));
+                }
+                else
+                {
+                    var access = new BoundPropertyAccessExpression(null, new BoundVariableExpression(null, tempVar), structType, property);
+                    initializers.Add(new BoundFieldInitializer(property, access));
+                }
             }
         }
 
@@ -684,9 +741,17 @@ internal sealed partial class ExpressionBinder
         // fail non-deterministically. Bind construction through the semantic
         // aggregate FIRST (it lowers to the same struct-literal node as `with`)
         // so a data class resolves to the SAME StructSymbol everywhere.
+        // Issue #2291: a `data struct` (including an imported C# `record
+        // struct`) has the identical dual-identity problem — its CLR type
+        // also carries a real primary `.ctor`, so without this same
+        // aggregate-first check for value types, TryBindClrConstructorFromType
+        // below binds `Point(1, 2)` to a plain (non-aggregate) ImportedTypeSymbol,
+        // and the resulting receiver never satisfies `structType.IsData` for
+        // `with`/copy. Generalize the check to both kinds (drop the
+        // `IsClass`-only restriction) so a data class AND a data struct both
+        // resolve construction through the one semantic aggregate.
         if (openGenericDefinition == null
             && ImportedTypeSymbol.TryCreateSemanticAggregate(clrType, scope.References, out var dataClassAggregate)
-            && dataClassAggregate.IsClass
             && dataClassAggregate.IsData
             && dataClassAggregate.HasPrimaryConstructor)
         {

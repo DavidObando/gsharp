@@ -690,6 +690,38 @@ public static class ClrTypeUtilities
     }
 
     /// <summary>
+    /// Issue #2291: safely determines whether a property accessor OVERRIDES a
+    /// base declaration, tolerating a <see cref="System.Reflection.MetadataLoadContext"/>
+    /// that does not support <see cref="MethodInfo.GetBaseDefinition"/> (it
+    /// throws <see cref="NotSupportedException"/> unconditionally for every
+    /// virtual method, not just an unresolvable one). A genuine C# record's
+    /// <c>EqualityContract</c> property getter is <c>virtual</c> (so a derived
+    /// record can widen it), which is exactly the shape that first surfaced
+    /// this: building a semantic aggregate for an imported record under an
+    /// MLC-backed resolver must not crash just because ONE property happens to
+    /// be virtual. Falls back to "not an override" on failure — the same
+    /// conservative default every other MLC-safe query in this file uses.
+    /// </summary>
+    /// <param name="accessor">The property accessor (getter or setter) to probe.</param>
+    /// <returns><c>true</c> when the accessor is confirmed to override a base declaration.</returns>
+    public static bool SafeIsOverride(MethodInfo accessor)
+    {
+        if (accessor is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return accessor.GetBaseDefinition() != accessor;
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Issue #1181: collects the transitive closure of imported/BCL base
     /// interfaces declared on <paramref name="interfaceSymbol"/> or on any of
     /// its user base interfaces. A user interface

@@ -55,6 +55,89 @@ internal static class ImportedAssemblySemantics
         }
     }
 
+    /// <summary>
+    /// Issue #2291: recognizes a genuine C# compiler-emitted <c>record</c> /
+    /// <c>record struct</c> shape when the assembly it lives in was compiled
+    /// by the C# compiler (not gsc) and therefore never wrote a
+    /// <see cref="TypeSemanticsMetadataKey"/> marker for it. Every C# record
+    /// synthesizes a <c>PrintMembers</c> method and a copy constructor
+    /// (<c>.ctor(SameType)</c>); a <c>record class</c> additionally
+    /// synthesizes a public parameterless <c>&lt;Clone&gt;$</c> method and a
+    /// protected/internal <c>EqualityContract</c> property (a <c>record
+    /// struct</c> has neither — value-type copying makes them unnecessary).
+    /// Requiring the FULL marker set for the type's value/reference kind
+    /// keeps this from ever misclassifying a hand-written class/struct that
+    /// merely happens to declare one of these members incidentally.
+    /// </summary>
+    /// <param name="type">The externally-referenced CLR type to inspect.</param>
+    /// <param name="semantics">The synthesized semantics on success.</param>
+    /// <returns><see langword="true"/> when <paramref name="type"/> has the full record shape.</returns>
+    public static bool TryDetectCSharpRecordSemantics(Type type, out ImportedTypeSemantics semantics)
+    {
+        semantics = null;
+        if (type == null || type.IsPrimitive || type.IsEnum || type.IsInterface || type.IsGenericTypeDefinition)
+        {
+            return false;
+        }
+
+        const BindingFlags InstanceAny = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+        // Look up methods/constructors WITHOUT passing an explicit parameter
+        // `Type[]` to `GetMethod`/`GetConstructor` overloads — under a
+        // `MetadataLoadContext`-backed resolver, `typeof(StringBuilder)` (or
+        // any host-runtime `Type`) is NOT "a type provided by the
+        // MetadataLoadContext" that loaded `type`, and the reflection binder
+        // throws `ArgumentException` rather than simply reporting no match.
+        // Enumerating and matching by simple name/FullName instead works
+        // uniformly for both the live-reflection and MLC-backed resolvers.
+        var hasPrintMembers = ClrTypeUtilities.SafeGetMethods(type, InstanceAny).Any(m =>
+            string.Equals(m.Name, "PrintMembers", StringComparison.Ordinal)
+            && m.ReturnType.FullName == "System.Boolean"
+            && m.GetParameters() is [{ ParameterType.FullName: "System.Text.StringBuilder" }]);
+
+        if (!hasPrintMembers)
+        {
+            return false;
+        }
+
+        // Issue #2291 follow-up: a `record class` needs an explicit copy
+        // constructor (`.ctor(SameType)`) plus `<Clone>$`/`EqualityContract`
+        // because `with` on a reference type must allocate a brand-new
+        // instance. A `record struct` has NEITHER — value-type assignment
+        // already copies the whole instance, so the C# compiler never
+        // synthesizes a copy constructor, `<Clone>$`, or `EqualityContract`
+        // for it (verified by inspecting the compiler-emitted metadata
+        // shape of `public record struct Point(int X, int Y)`). Requiring
+        // those reference-type-only markers on a record STRUCT would always
+        // fail detection, so `PrintMembers` alone — a marker unique to
+        // compiler-synthesized records — is the correct, sufficient
+        // signature for the value-type case.
+        if (!type.IsValueType)
+        {
+            var hasCopyConstructor = ClrTypeUtilities.SafeGetConstructors(type, InstanceAny).Any(c =>
+                c.GetParameters() is [{ } onlyParameter] && ClrTypeUtilities.AreSame(onlyParameter.ParameterType, type));
+            var hasClone = ClrTypeUtilities.SafeGetMethods(type, BindingFlags.Public | BindingFlags.Instance).Any(m =>
+                string.Equals(m.Name, "<Clone>$", StringComparison.Ordinal)
+                && m.GetParameters().Length == 0
+                && type.IsAssignableFrom(m.ReturnType));
+            var hasEqualityContract = type.GetProperty("EqualityContract", BindingFlags.NonPublic | BindingFlags.Instance) is { } equalityContractProperty
+                && equalityContractProperty.PropertyType.FullName == "System.Type";
+            if (!hasCopyConstructor || !hasClone || !hasEqualityContract)
+            {
+                return false;
+            }
+        }
+
+        var (parameterNames, parameterFieldTokens) = BuildRecordPrimaryConstructorShape(type);
+        semantics = new ImportedTypeSemantics(
+            MetadataToken: type.MetadataToken,
+            IsValueType: type.IsValueType,
+            IsData: true,
+            PrimaryConstructorParameterNames: parameterNames,
+            PrimaryConstructorParameterFieldTokens: parameterFieldTokens);
+        return true;
+    }
+
     public static bool GrantsInternalAccessTo(Assembly assembly, string consumerAssemblyName)
     {
         if (assembly == null || string.IsNullOrWhiteSpace(consumerAssemblyName))
@@ -90,6 +173,70 @@ internal static class ImportedAssemblySemantics
         {
             return false;
         }
+    }
+
+    // Issue #2291: the record's POSITIONAL primary constructor is the public
+    // instance constructor (other than the synthesized copy constructor,
+    // `.ctor(SameType)`) whose parameters name-match, 1:1 and in order, a
+    // public auto-property of the record (the shape every C#
+    // `record`/`record struct` positional declaration produces). A record
+    // with no positional parameters (e.g. `record struct Empty;`) has no such
+    // constructor — <c>with</c> then has nothing to set, which still compiles
+    // (an empty `{ }`  member list).
+    private static (ImmutableArray<string> Names, ImmutableArray<int> FieldTokens) BuildRecordPrimaryConstructorShape(Type type)
+    {
+        var autoProperties = type
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(p => p.GetMethod != null && p.SetMethod != null && p.GetIndexParameters().Length == 0)
+            .ToDictionary(p => p.Name, StringComparer.Ordinal);
+
+        if (autoProperties.Count == 0)
+        {
+            return (ImmutableArray<string>.Empty, ImmutableArray<int>.Empty);
+        }
+
+        ConstructorInfo bestMatch = null;
+        var bestParameters = Array.Empty<ParameterInfo>();
+        foreach (var ctor in type.GetConstructors(BindingFlags.Public | BindingFlags.Instance))
+        {
+            var parameters = ctor.GetParameters();
+
+            // Skip the synthesized copy constructor — it never denotes the
+            // positional shape.
+            if (parameters.Length == 1 && ClrTypeUtilities.AreSame(parameters[0].ParameterType, type))
+            {
+                continue;
+            }
+
+            if (parameters.Length == 0 || parameters.Length <= bestParameters.Length)
+            {
+                continue;
+            }
+
+            if (parameters.All(p => autoProperties.ContainsKey(p.Name ?? string.Empty)))
+            {
+                bestMatch = ctor;
+                bestParameters = parameters;
+            }
+        }
+
+        if (bestMatch == null)
+        {
+            return (ImmutableArray<string>.Empty, ImmutableArray<int>.Empty);
+        }
+
+        var namesBuilder = ImmutableArray.CreateBuilder<string>(bestParameters.Length);
+        var tokensBuilder = ImmutableArray.CreateBuilder<int>(bestParameters.Length);
+        foreach (var parameter in bestParameters)
+        {
+            var name = parameter.Name;
+            namesBuilder.Add(name);
+
+            var backingField = type.GetField($"<{name}>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance);
+            tokensBuilder.Add(backingField?.MetadataToken ?? 0);
+        }
+
+        return (namesBuilder.ToImmutable(), tokensBuilder.ToImmutable());
     }
 
     private static AssemblySemantics ReadAssemblySemantics(Assembly assembly)

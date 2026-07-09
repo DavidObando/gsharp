@@ -79,16 +79,31 @@ public sealed class Conversion
             return Conversion.Identity;
         }
 
-        if (from is StructSymbol { ClrType: not null } fromImportedStruct
-            && to is ImportedTypeSymbol
-            && ClrTypeUtilities.AreSame(fromImportedStruct.ClrType, to.ClrType))
-        {
-            return Conversion.Identity;
-        }
-
-        if (from is ImportedTypeSymbol
-            && to is StructSymbol { ClrType: not null } toImportedStruct
-            && ClrTypeUtilities.AreSame(from.ClrType, toImportedStruct.ClrType))
+        // Issue #2290: a referenced (cross-assembly) type can be independently
+        // re-minted into TWO non-reference-equal TypeSymbol wrappers for the
+        // SAME underlying CLR type — e.g. an imported `data class`/`data
+        // struct` resolves to its semantic-aggregate StructSymbol via one
+        // binding path (issue #2263) but to a plain ImportedTypeSymbol via
+        // another, or the very same ImportedTypeSymbol-eligible type is
+        // reflected through two distinct (but metadata-equivalent) `Type`
+        // instances — e.g. resolved via a fully-qualified name in one spot and
+        // brought into scope via `import` in another, each hitting the
+        // per-Type cache with a different `Type` object when the two lookups
+        // do not share reference identity. Only the two symbol kinds that
+        // ever wrap a REAL referenced CLR type (`ImportedTypeSymbol`, and a
+        // `StructSymbol` semantic aggregate built for an imported data type —
+        // recognized by its non-null `ClrType`, since a same-compilation
+        // user `struct`/`data struct` has none while binding) participate:
+        // this deliberately excludes wrapper symbols (e.g.
+        // `NullableTypeSymbol`) that merely borrow their underlying type's
+        // `ClrType` without denoting the SAME type. Whenever both sides
+        // qualify and their CLR types are the same underlying metadata type
+        // (`ClrTypeUtilities.AreSame`, safe across a MetadataLoadContext
+        // boundary), the two symbols denote one identical type — treat the
+        // conversion as identity rather than reporting a confusing "Cannot
+        // convert type 'X' to 'X'"-looking error.
+        if (IsImportedTypeIdentity(from) && IsImportedTypeIdentity(to)
+            && ClrTypeUtilities.AreSame(from.ClrType, to.ClrType))
         {
             return Conversion.Identity;
         }
@@ -1731,6 +1746,16 @@ public sealed class Conversion
         var retConv = Classify(fnReturn, targetReturn);
         return retConv.Exists && retConv.IsImplicit;
     }
+
+    // Issue #2290: identifies the two symbol kinds that ever wrap a genuine
+    // referenced CLR type — a plain `ImportedTypeSymbol`, or a `StructSymbol`
+    // semantic aggregate built for an imported `data class`/`data struct`
+    // (issue #2263). A same-compilation user `struct`/`data struct`
+    // `StructSymbol` has a null `ClrType` while binding (its CLR shape is
+    // still being built), so it is correctly excluded here — only an
+    // ALREADY-imported aggregate's non-null `ClrType` qualifies.
+    private static bool IsImportedTypeIdentity(TypeSymbol type)
+        => type is ImportedTypeSymbol || (type is StructSymbol && type.ClrType != null);
 
     // Issue #421 P2-5: enum⇄numeric and enum⇄enum conversions. Both
     // directions are explicit per C# §10.3.3 / §10.3.4 — the binder must
