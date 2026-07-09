@@ -958,30 +958,34 @@ internal sealed partial class MethodBodyEmitter
             || (type is NullableTypeSymbol nullable && nullable.UnderlyingType == TypeSymbol.String);
 
     /// <summary>
-    /// Issue #831: matches `T? == nil` / `T? != nil` (and the symmetric
-    /// `nil == T?` / `nil != T?`) where the underlying T is an open
-    /// type parameter (class-constrained, struct-constrained, or
+    /// Issue #831 / #2300: matches `T? == nil` / `T? != nil` AND bare
+    /// `T == nil` / `T != nil` (and their symmetric `nil == ...` forms)
+    /// where T is an open type parameter (class-constrained, struct-
+    /// constrained-but-nullable-wrapped, interface-constrained, or
     /// unconstrained). The concrete value-type Nullable&lt;T&gt; arm
     /// (driven by <see cref="liftedBinarySlots"/>) only catches
     /// operands with a static <c>ClrType</c>; open type parameters
     /// have none, so this match fills the gap. The caller boxes the
-    /// matched operand using its full nullable type token, which
-    /// resolves to a bare reference slot for class/unconstrained T and
-    /// to <c>Nullable&lt;!!T&gt;</c> for struct T.
+    /// matched operand using its full type token, which resolves to a
+    /// bare reference slot for class/unconstrained/interface-constrained
+    /// T (bare or `T?` — both have the same storage shape) and to
+    /// <c>Nullable&lt;!!T&gt;</c> for a struct-constrained `T?` (a bare
+    /// struct-constrained `T` never reaches here — the binder's
+    /// <c>IsNullCompare</c> rejects it because it can never be nil).
     /// </summary>
     private static bool TryMatchTypeParameterNilCompare(
         BoundBinaryExpression node,
         out BoundExpression operand)
     {
         if (node.Right.Type == TypeSymbol.Null
-            && IsOpenTypeParameterNullable(node.Left.Type))
+            && IsOpenTypeParameterOrNullable(node.Left.Type))
         {
             operand = node.Left;
             return true;
         }
 
         if (node.Left.Type == TypeSymbol.Null
-            && IsOpenTypeParameterNullable(node.Right.Type))
+            && IsOpenTypeParameterOrNullable(node.Right.Type))
         {
             operand = node.Right;
             return true;
@@ -992,22 +996,23 @@ internal sealed partial class MethodBodyEmitter
     }
 
     /// <summary>
-    /// Issue #831: returns true when <paramref name="t"/> is a
-    /// <see cref="NullableTypeSymbol"/> wrapping an open type parameter
-    /// (regardless of constraint). The CLR storage of <c>T?</c> is
-    /// either a bare <c>!!T</c> reference slot (class/unconstrained T)
-    /// or a <c>Nullable&lt;!!T&gt;</c> value-typed slot (struct T) —
-    /// see <see cref="ReflectionMetadataEmitter.GetElementTypeToken"/>.
-    /// Both shapes need the same `box; ldnull; ceq` lowering for
-    /// nil-comparison to be verifier-clean: boxing a reference is a
-    /// JIT-elided no-op, while boxing <c>Nullable&lt;T&gt;</c> per
-    /// ECMA-335 III.4.1 yields a managed-null reference when
-    /// HasValue is false.
+    /// Issue #831 / #2300: returns true when <paramref name="t"/> is an
+    /// open type parameter, either bare (<c>T</c>) or wrapped in a
+    /// <see cref="NullableTypeSymbol"/> (<c>T?</c>), regardless of
+    /// constraint. The CLR storage is either a bare <c>!!T</c> reference
+    /// slot (class/unconstrained/interface-constrained T, bare or `?` —
+    /// same shape either way) or a <c>Nullable&lt;!!T&gt;</c> value-typed
+    /// slot (struct-constrained `T?`) — see
+    /// <see cref="ReflectionMetadataEmitter.GetElementTypeToken"/>. Both
+    /// shapes need the same `box; ldnull; ceq` lowering for nil-comparison
+    /// to be verifier-clean: boxing a reference is a JIT-elided no-op,
+    /// while boxing <c>Nullable&lt;T&gt;</c> per ECMA-335 III.4.1 yields a
+    /// managed-null reference when HasValue is false.
     /// </summary>
-    private static bool IsOpenTypeParameterNullable(TypeSymbol t)
+    private static bool IsOpenTypeParameterOrNullable(TypeSymbol t)
     {
-        return t is NullableTypeSymbol nullable
-            && nullable.UnderlyingType is TypeParameterSymbol;
+        return t is TypeParameterSymbol
+            || (t is NullableTypeSymbol nullable && nullable.UnderlyingType is TypeParameterSymbol);
     }
 
     /// <summary>

@@ -499,10 +499,43 @@ public sealed record BoundBinaryOperator
         //     System.MulticastDelegate-derived closure.
         //   * Named delegate types declared with `delegate` — DelegateTypeSymbol.
         //   * `sequence[T]` / `asyncSequence[T]` — IEnumerable<T> / IAsyncEnumerable<T>.
-        return nullableOrUnderlying is FunctionTypeSymbol
+        if (nullableOrUnderlying is FunctionTypeSymbol
             || nullableOrUnderlying is DelegateTypeSymbol
             || nullableOrUnderlying is SequenceTypeSymbol
-            || nullableOrUnderlying is AsyncSequenceTypeSymbol;
+            || nullableOrUnderlying is AsyncSequenceTypeSymbol)
+        {
+            return true;
+        }
+
+        // Issue #2300: interface-typed operands are always CLR reference
+        // types (a G#-declared InterfaceSymbol or an imported interface),
+        // so `iface == nil` / `iface != nil` must bind exactly like the
+        // reference-shaped structural types above — no `?` spelling is
+        // needed (or even expressible in a way that changes the CLR
+        // storage: an interface reference is nullable at the CLR layer
+        // regardless of the G# static-nullability annotation).
+        if (nullableOrUnderlying is InterfaceSymbol
+            || (nullableOrUnderlying is ImportedTypeSymbol importedInterface && importedInterface.ClrType is { IsInterface: true }))
+        {
+            return true;
+        }
+
+        // Issue #2300: an open type parameter (`T`) whose constraint does
+        // not guarantee a non-nullable value type — i.e. unconstrained,
+        // class-constrained, or interface-constrained — may be
+        // substituted with a reference type at any instantiation site, so
+        // `T == nil` / `T != nil` must be legal (mirroring C#'s allowance
+        // of `t == null` for an unconstrained `T`, lowered through a
+        // boxing comparison). Only a `struct`-constrained (or otherwise
+        // known-value-type) type parameter is excluded, because such a
+        // `T` can never be `nil` and its `T?` spelling erases to
+        // `Nullable<T>` instead of a bare reference slot.
+        if (nullableOrUnderlying is TypeParameterSymbol typeParameter)
+        {
+            return !typeParameter.HasValueTypeConstraint;
+        }
+
+        return false;
     }
 
     private static BoundBinaryOperator[] BuildSupportedOperators()
