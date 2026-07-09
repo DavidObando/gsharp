@@ -3830,15 +3830,22 @@ internal sealed class DeclarationBinder
                         found = true;
 
                         // Issue #2150 follow-up (Oahu migration): compare the
-                        // underlying (nullability-erased) types rather than
-                        // requiring an exact match. C# allows a non-nullable
-                        // interface property (e.g. `string AccountId { get; }`)
-                        // to be satisfied by a nullable-annotated positional
-                        // parameter (e.g. `record ProfileKey(string? AccountId)`)
-                        // with at most a nullable-warning, never a compile
-                        // error, because nullability is annotation-only and
-                        // both sides share the same runtime type. Unwrap any
-                        // `NullableTypeSymbol` on both sides before comparing.
+                        // underlying (nullability-erased) types, then apply
+                        // Kotlin-style SOUND nullability variance on top —
+                        // G# targets Kotlin-faithful null safety (smart-casts,
+                        // `if let`/`guard let`), which enforces nullability via
+                        // subtyping: `T <: T?`, never the reverse. A get-only
+                        // interface property is a covariant (return) position,
+                        // so the implementing member's type merely needs to be
+                        // a SUBTYPE of the interface property's type — `T` or
+                        // `T?` both satisfy `T?`, but only `T` satisfies `T`
+                        // (accepting `T?` there would let a consumer of the
+                        // non-null contract observe `null` and NPE, which is
+                        // exactly the unsoundness this tightens). A property
+                        // that ALSO declares a setter is an invariant
+                        // (read/write) position — like a C# `in`/`out`
+                        // parameter mismatch, both directions must hold, so the
+                        // nullability must match EXACTLY.
                         var positionalUnderlyingType = positionalParam.Type is NullableTypeSymbol positionalNullable
                             ? positionalNullable.UnderlyingType
                             : positionalParam.Type;
@@ -3846,7 +3853,15 @@ internal sealed class DeclarationBinder
                             ? ifaceNullable.UnderlyingType
                             : iprop.Type;
 
-                        if (!System.Collections.Generic.EqualityComparer<TypeSymbol>.Default.Equals(positionalUnderlyingType, ifaceUnderlyingType))
+                        var underlyingTypesMatch = System.Collections.Generic.EqualityComparer<TypeSymbol>.Default.Equals(positionalUnderlyingType, ifaceUnderlyingType);
+                        var ifaceIsNullable = iprop.Type is NullableTypeSymbol;
+                        var implIsNullable = positionalParam.Type is NullableTypeSymbol;
+
+                        var nullabilityCompatible = iprop.HasSetter
+                            ? ifaceIsNullable == implIsNullable
+                            : !(!ifaceIsNullable && implIsNullable);
+
+                        if (!underlyingTypesMatch || !nullabilityCompatible)
                         {
                             // Name matches but the type is incompatible: the
                             // positional parameter does not satisfy the contract.

@@ -105,24 +105,29 @@ public class Issue2150DataClassInterfacePropertyTests
     }
 
     [Fact]
-    public void NullableAnnotationMismatch_StillSatisfiesInterface_NoDiagnostics()
+    public void GetOnlyNullableInterfaceProperty_SatisfiedByNullablePositionalParam_NoDiagnostics()
     {
-        // Oahu migration: `interface IProfileKey { prop AccountId string { get; } }`
-        // (non-nullable) is satisfied by `open data class ProfileKey(AccountId
-        // string?) : IProfileKey` (nullable). C# allows a non-nullable
-        // interface property to be satisfied by a nullable-annotated
-        // implementation with at most a nullable warning, never a compile
-        // error, because nullability is annotation-only and both sides share
-        // the same runtime type (`string`). The reverse direction (nullable
-        // interface property satisfied by a non-nullable positional param)
-        // must also work, matching C#'s covariant-nullability leniency.
+        // Original #2150 repro: iface `int32?` <- impl `int32?` (exact match).
         const string source = """
             package Test
-            interface IProfileKey {
-                prop AccountId string { get; }
+            interface IQuality {
+                prop SampleRate int32? { get; }
             }
-            open data class ProfileKey(AccountId string?) : IProfileKey {
+            open data class Quality(SampleRate int32?) : IQuality {
             }
+            """;
+
+        Assert.Empty(Bind(source));
+    }
+
+    [Fact]
+    public void GetOnlyNullableInterfaceProperty_SatisfiedByNonNullablePositionalParam_NoDiagnostics()
+    {
+        // Kotlin-style sound widening: `T <: T?`, so a non-nullable
+        // implementation always satisfies a nullable get-only contract:
+        // iface `int32?` <- impl `int32`.
+        const string source = """
+            package Test
             interface IHasNullableX {
                 prop X int32? { get; }
             }
@@ -131,6 +136,102 @@ public class Issue2150DataClassInterfacePropertyTests
             """;
 
         Assert.Empty(Bind(source));
+    }
+
+    [Fact]
+    public void GetOnlyNonNullableInterfaceProperty_SatisfiedByNonNullablePositionalParam_NoDiagnostics()
+    {
+        // Exact match: iface `int32` <- impl `int32`.
+        const string source = """
+            package Test
+            interface IHasX {
+                prop X int32 { get; }
+            }
+            open data class ExactX(X int32) : IHasX {
+            }
+            """;
+
+        Assert.Empty(Bind(source));
+    }
+
+    [Fact]
+    public void GetOnlyNonNullableInterfaceProperty_NotSatisfiedByNullablePositionalParam_ReportsGS0187()
+    {
+        // Unsound direction, now rejected: iface `int32` <- impl `int32?`.
+        // A get-only interface property is a covariant (return) position, so
+        // the implementation must be a SUBTYPE of the interface's declared
+        // type. `int32?` is a SUPERTYPE of `int32` (never the reverse), so
+        // accepting it here would let a consumer of the non-null `X int32`
+        // contract observe `null` and NPE. Mirrors
+        // `interface IProfileKey { prop AccountId string { get; } }` rejecting
+        // `open data class ProfileKey(AccountId string?) : IProfileKey`.
+        const string source = """
+            package Test
+            interface IProfileKey {
+                prop AccountId string { get; }
+            }
+            open data class ProfileKey(AccountId string?) : IProfileKey {
+            }
+            """;
+
+        var gs0187 = Bind(source).Where(d => d.Id == "GS0187").ToList();
+        Assert.Single(gs0187);
+    }
+
+    [Fact]
+    public void GetSetNullableInterfaceProperty_SatisfiedByNullablePositionalParam_NoDiagnostics()
+    {
+        // Invariant (get/set) position requires an EXACT nullability match:
+        // iface `int32?` <- impl `int32?`.
+        const string source = """
+            package Test
+            interface IHasX {
+                prop X int32? { get; set; }
+            }
+            open data class ExactNullableX(X int32?) : IHasX {
+            }
+            """;
+
+        Assert.Empty(Bind(source));
+    }
+
+    [Fact]
+    public void GetSetNullableInterfaceProperty_NotSatisfiedByNonNullablePositionalParam_ReportsGS0187()
+    {
+        // Invariant mismatch: iface `int32?` <- impl `int32`. A setter makes
+        // the interface property invariant (both a producer, via get, and a
+        // consumer, via set), so widening alone is unsound: a caller could
+        // `set` a `null` through the interface reference into a field the
+        // implementation type promises is never null.
+        const string source = """
+            package Test
+            interface IHasX {
+                prop X int32? { get; set; }
+            }
+            open data class NonNullableX(X int32) : IHasX {
+            }
+            """;
+
+        var gs0187 = Bind(source).Where(d => d.Id == "GS0187").ToList();
+        Assert.Single(gs0187);
+    }
+
+    [Fact]
+    public void GetSetNonNullableInterfaceProperty_NotSatisfiedByNullablePositionalParam_ReportsGS0187()
+    {
+        // Invariant mismatch (reverse direction): iface `int32` <- impl
+        // `int32?`. Also unsound via the `get` side (as in the get-only case).
+        const string source = """
+            package Test
+            interface IHasX {
+                prop X int32 { get; set; }
+            }
+            open data class NullableX(X int32?) : IHasX {
+            }
+            """;
+
+        var gs0187 = Bind(source).Where(d => d.Id == "GS0187").ToList();
+        Assert.Single(gs0187);
     }
 
     [Fact]
