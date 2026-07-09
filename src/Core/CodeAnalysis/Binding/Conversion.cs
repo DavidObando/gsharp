@@ -108,6 +108,27 @@ public sealed class Conversion
             return Conversion.Identity;
         }
 
+        // Issue #2299: the #2290 check above only handles a DIRECT
+        // ImportedTypeSymbol/StructSymbol-aggregate pair. The identical
+        // cross-context split just as easily reaches one level down, through
+        // a structural wrapper symbol that itself is deliberately excluded
+        // from the direct check above (its `ClrType` is merely borrowed from
+        // its element, so comparing the WRAPPER's `ClrType` would be wrong —
+        // e.g. two `[]Series` wrappers whose CLR array types are already
+        // reference-distinct even for the SAME element). Whenever both sides
+        // are the SAME wrapper kind (`[]T` slice, `T?` nullable, `T&`/`T*`
+        // byref/pointer, `seq[T]`, `chan[T]`, an async sequence, a
+        // fixed-length array of matching length, or a `map[K]V`), recurse
+        // into the wrapped element type(s) via `Classify` itself — reusing
+        // the direct check (and this same recursive step, so nested wrappers
+        // like `[]?Series` or `[][]Series` unwind depth-first) rather than
+        // duplicating the cross-context comparison logic per wrapper kind.
+        if (from != null && to != null && from.GetType() == to.GetType()
+            && TryClassifyWrappedElementIdentity(from, to))
+        {
+            return Conversion.Identity;
+        }
+
         // Issue #1018: the bottom (`never`) type of a throw-expression is
         // implicitly convertible to ANY target type — a throw never yields a
         // value, so it satisfies any target without a runtime conversion.
@@ -1756,6 +1777,66 @@ public sealed class Conversion
     // ALREADY-imported aggregate's non-null `ClrType` qualifies.
     private static bool IsImportedTypeIdentity(TypeSymbol type)
         => type is ImportedTypeSymbol || (type is StructSymbol && type.ClrType != null);
+
+    // Issue #2299: for a matching pair of structural wrapper symbols (see the
+    // call site above), extracts and compares the wrapped element type(s).
+    // `ArrayTypeSymbol` additionally requires the fixed lengths to match, and
+    // `MapTypeSymbol` requires BOTH the key and the value types to compare
+    // identical. Any other/mismatched symbol kind returns `false` so the
+    // caller falls through to the ordinary (non-identity) classification
+    // rules — this helper only ever WIDENS what counts as identity, never
+    // narrows an existing rule.
+    private static bool TryClassifyWrappedElementIdentity(TypeSymbol from, TypeSymbol to)
+    {
+        switch (from)
+        {
+            case SliceTypeSymbol fromSlice when to is SliceTypeSymbol toSlice:
+                return IsCrossContextIdenticalElement(fromSlice.ElementType, toSlice.ElementType);
+            case NullableTypeSymbol fromNullable when to is NullableTypeSymbol toNullable:
+                return IsCrossContextIdenticalElement(fromNullable.UnderlyingType, toNullable.UnderlyingType);
+            case ByRefTypeSymbol fromByRef when to is ByRefTypeSymbol toByRef:
+                return IsCrossContextIdenticalElement(fromByRef.PointeeType, toByRef.PointeeType);
+            case PointerTypeSymbol fromPointer when to is PointerTypeSymbol toPointer:
+                return IsCrossContextIdenticalElement(fromPointer.PointeeType, toPointer.PointeeType);
+            case SequenceTypeSymbol fromSequence when to is SequenceTypeSymbol toSequence:
+                return IsCrossContextIdenticalElement(fromSequence.ElementType, toSequence.ElementType);
+            case ChannelTypeSymbol fromChannel when to is ChannelTypeSymbol toChannel:
+                return IsCrossContextIdenticalElement(fromChannel.ElementType, toChannel.ElementType);
+            case AsyncSequenceTypeSymbol fromAsync when to is AsyncSequenceTypeSymbol toAsync:
+                return IsCrossContextIdenticalElement(fromAsync.ElementType, toAsync.ElementType);
+            case ArrayTypeSymbol fromArray when to is ArrayTypeSymbol toArray:
+                return fromArray.Length == toArray.Length
+                    && IsCrossContextIdenticalElement(fromArray.ElementType, toArray.ElementType);
+            case MapTypeSymbol fromMap when to is MapTypeSymbol toMap:
+                return IsCrossContextIdenticalElement(fromMap.KeyType, toMap.KeyType)
+                    && IsCrossContextIdenticalElement(fromMap.ValueType, toMap.ValueType);
+            default:
+                return false;
+        }
+    }
+
+    // Issue #2299: element-level identity check used by
+    // `TryClassifyWrappedElementIdentity`. Reference-equal elements are
+    // trivially identical; otherwise recurses through `Classify` itself so
+    // the direct ImportedTypeSymbol/StructSymbol check (and, transitively,
+    // this same wrapper check) applies to the element too — this is what
+    // lets nested wrappers (e.g. `[]?Series`, `[][]Series`) unwind depth-first
+    // without duplicating the cross-context comparison per level.
+    private static bool IsCrossContextIdenticalElement(TypeSymbol a, TypeSymbol b)
+    {
+        if (a == b)
+        {
+            return true;
+        }
+
+        if (a == null || b == null)
+        {
+            return false;
+        }
+
+        var elementConversion = Classify(a, b);
+        return elementConversion.Exists && elementConversion.IsIdentity;
+    }
 
     // Issue #421 P2-5: enum⇄numeric and enum⇄enum conversions. Both
     // directions are explicit per C# §10.3.3 / §10.3.4 — the binder must
