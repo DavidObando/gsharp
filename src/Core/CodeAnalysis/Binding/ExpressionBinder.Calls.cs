@@ -3615,6 +3615,18 @@ internal sealed partial class ExpressionBinder
                 return constrainedObjectCall;
             }
 
+            // Issue #2304: a source-declared interface (`InterfaceSymbol`,
+            // ClrType still null at bind time) implicitly derives from
+            // `System.Object` for member-access purposes, exactly like the
+            // type-parameter fallback just above. Run AFTER every
+            // user/imported-interface member and extension lookup so a
+            // same-named interface/extension member still wins.
+            if (receiver != null && receiver.Type is InterfaceSymbol
+                && TryBindInterfaceObjectMemberCall(receiver, methodName, arguments, ce, argumentNames, out var ifaceObjectCall))
+            {
+                return ifaceObjectCall;
+            }
+
             Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
             return new BoundErrorExpression(null);
         }
@@ -3859,6 +3871,20 @@ internal sealed partial class ExpressionBinder
             && overloads.TryReportUnknownNamedArgumentForClr(recvClr, methodName, BindingFlags.Instance | BindingFlags.Public, ce, argumentNames))
         {
             return new BoundErrorExpression(null);
+        }
+
+        // Issue #2304: an imported interface (`ImportedTypeSymbol` whose
+        // `ClrType.IsInterface` is true) implicitly derives from
+        // `System.Object` for member-access purposes. `Type.GetMethods()` on
+        // an interface type never reports Object's members (only the
+        // interface's own transitive base interfaces are walked above), so
+        // ToString/GetHashCode/Equals/GetType otherwise dead-end here. Run
+        // AFTER every instance/extension lookup so a same-named member still
+        // wins.
+        if (clrType is { IsInterface: true }
+            && TryBindInterfaceObjectMemberCall(receiver, methodName, arguments, ce, argumentNames, out var importedIfaceObjectCall))
+        {
+            return importedIfaceObjectCall;
         }
 
         Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
@@ -6607,6 +6633,99 @@ internal sealed partial class ExpressionBinder
             refKinds,
             default,
             constrainedReceiverTypeParameter: tp,
+            constrainedInterfaceType: null);
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #2304: binds a call to a universal <see cref="object"/> instance
+    /// member (<c>ToString</c>, <c>GetHashCode</c>, <c>Equals(object)</c>,
+    /// <c>GetType</c>) dispatched through an INTERFACE-typed receiver — either
+    /// a source-declared <see cref="InterfaceSymbol"/> (whose <c>ClrType</c> is
+    /// still <see langword="null"/> at bind time) or an imported interface
+    /// (an <see cref="ImportedTypeSymbol"/> whose <c>ClrType.IsInterface</c> is
+    /// <see langword="true"/>). Every interface implicitly derives from
+    /// <see cref="object"/> at the CLR/C# layer for member-access purposes —
+    /// <c>Type.GetMethods()</c> on an interface type never reports it, though,
+    /// so the shared CLR-instance-method enumeration (which walks only an
+    /// interface's own transitive base interfaces) never finds these names and
+    /// the call otherwise dead-ends at <c>GS0159</c>.
+    /// </summary>
+    /// <remarks>
+    /// Unlike <see cref="TryBindConstrainedObjectMemberCall"/> (used for an
+    /// erased type-parameter receiver), no <c>constrained.</c> prefix is
+    /// needed here: an interface-typed receiver is ALWAYS a genuine managed
+    /// reference at the CLR level (never an unboxed value), so a plain
+    /// <c>callvirt System.Object::Method(...)</c> against that reference is
+    /// already verifiable and dispatches to the runtime type's override.
+    /// </remarks>
+    /// <param name="receiver">The bound receiver (its static type is the interface).</param>
+    /// <param name="methodName">The invoked method name.</param>
+    /// <param name="arguments">The bound argument expressions.</param>
+    /// <param name="ce">The originating call-expression syntax.</param>
+    /// <param name="argumentNames">Optional named-argument labels in source order.</param>
+    /// <param name="result">The bound call on success.</param>
+    /// <returns><see langword="true"/> when a matching object member was found and bound.</returns>
+    private bool TryBindInterfaceObjectMemberCall(
+        BoundExpression receiver,
+        string methodName,
+        ImmutableArray<BoundExpression> arguments,
+        CallExpressionSyntax ce,
+        ImmutableArray<string> argumentNames,
+        out BoundExpression result)
+    {
+        result = null;
+
+        var candidates = ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(typeof(object), BindingFlags.Instance | BindingFlags.Public)
+            .Where(m => m.Name == methodName)
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            return false;
+        }
+
+        var argTypes = new Type[arguments.Length];
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var t = GetEffectiveArgumentClrTypeForOverloadResolution(arguments[i].Type);
+            if (t == null && arguments[i].Type != TypeSymbol.Null)
+            {
+                return false;
+            }
+
+            argTypes[i] = t;
+        }
+
+        var resolution = OverloadResolution.Resolve(
+            candidates,
+            argTypes,
+            null,
+            scope.References.MapClrTypeToReferences,
+            null,
+            argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
+        if (resolution.Outcome != OverloadResolution.ResolutionOutcome.Resolved)
+        {
+            return false;
+        }
+
+        var method = resolution.Best;
+        var parameters = method.GetParameters();
+        var returnType = TypeSymbol.FromClrType(method.ReturnType);
+
+        var mapping = resolution.ParameterMapping;
+        var convertedArgs = conversions.BindClrParameterConversions(arguments, parameters, ce, mapping, method: method, receiverType: receiver.Type);
+        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(convertedArgs, mapping, parameters);
+        var refKinds = ComputeArgumentRefKinds(parameters);
+
+        result = new BoundImportedInstanceCallExpression(
+            ce,
+            receiver,
+            method,
+            returnType,
+            orderedArgs,
+            refKinds,
+            default,
+            constrainedReceiverTypeParameter: null,
             constrainedInterfaceType: null);
         return true;
     }

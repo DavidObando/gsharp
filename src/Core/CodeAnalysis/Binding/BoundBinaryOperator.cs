@@ -520,6 +520,19 @@ public sealed record BoundBinaryOperator
             return true;
         }
 
+        // Issue #2305 (residual of #2300): an imported CLR type whose
+        // ClrType is a reference type — an imported class, delegate, or
+        // (redundantly, alongside the interface arm above) an imported
+        // interface — is always nil-able at the CLR layer, exactly like
+        // the structural shapes above. Only imported *value* types
+        // (structs / enums, `ClrType.IsValueType`) are excluded, since
+        // those can never be nil.
+        if (nullableOrUnderlying is ImportedTypeSymbol importedReferenceType
+            && importedReferenceType.ClrType is { IsValueType: false })
+        {
+            return true;
+        }
+
         // Issue #2300: an open type parameter (`T`) whose constraint does
         // not guarantee a non-nullable value type — i.e. unconstrained,
         // class-constrained, or interface-constrained — may be
