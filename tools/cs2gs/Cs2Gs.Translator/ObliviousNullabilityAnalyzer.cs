@@ -134,6 +134,13 @@ internal static class ObliviousNullabilityAnalyzer
             SeedReturnTaint(root, model, tainted, edges);
         }
 
+        // Issue #2285: an interface member and every member that implements it
+        // (across the whole compilation) must reach the SAME tainted-ness, so
+        // cs2gs never promotes one endpoint (e.g. a record's primary-ctor
+        // parameter) to `T?` while leaving the other (the interface property it
+        // satisfies) non-null `T` — see <see cref="CollectInterfaceImplementationEdges"/>.
+        CollectInterfaceImplementationEdges(compilation, edges);
+
         // Fixpoint: propagate taint along the edge set until it stabilizes.
         bool changed = true;
         while (changed)
@@ -563,6 +570,146 @@ internal static class ObliviousNullabilityAnalyzer
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Issue #2285: for every source-declared type in <paramref name="compilation"/>
+    /// that implements an interface, records BIDIRECTIONAL taint edges between
+    /// each reference-typed interface property and the member that implements
+    /// it, so the two endpoints of the same logical contract always reach the
+    /// SAME tainted-ness in the fixpoint below — cs2gs must never promote only
+    /// one side (the interface property's `T` vs. the implementation's `T?`),
+    /// since gsc's Kotlin-style get-only-property variance rejects a non-null
+    /// interface contract satisfied by a nullable member (GS0187, tightened by
+    /// the #2150/#2284 follow-up). Both directions are recorded (not just the
+    /// sound "impl nullable -> widen the interface" direction) so the two
+    /// endpoints CONVERGE regardless of which side taint was originally seeded
+    /// on (e.g. a caller might null-check through the INTERFACE-typed reference
+    /// rather than the concrete type).
+    /// <para>
+    /// A C# record's positional parameter is a distinct <see cref="ISymbol"/>
+    /// from its synthesized auto-property (the one
+    /// <c>INamedTypeSymbol.FindImplementationForInterfaceMember</c>
+    /// reports as the interface-member implementation) — yet cs2gs maps the
+    /// PARAMETER's own type, not the property's, to the emitted G# primary-
+    /// constructor parameter (<see cref="CSharpToGSharpTranslator.DeclarationVisitor.MapParameter"/>).
+    /// The synthesized property's declaring syntax reference IS the parameter
+    /// syntax node itself for a positional record member, so the corresponding
+    /// <see cref="IParameterSymbol"/> is resolved from it and wired into the
+    /// same edge set, generalizing this fix beyond ordinary classes/properties
+    /// to record positional parameters.
+    /// </para>
+    /// </summary>
+    /// <param name="compilation">The C# compilation being translated.</param>
+    /// <param name="edges">The taint-edge list to append to.</param>
+    private static void CollectInterfaceImplementationEdges(
+        Compilation compilation,
+        List<(ISymbol Target, ISymbol Source)> edges)
+    {
+        foreach (INamedTypeSymbol type in EnumerateSourceNamedTypes(compilation))
+        {
+            if (type.TypeKind is not (TypeKind.Class or TypeKind.Struct) || type.AllInterfaces.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            foreach (INamedTypeSymbol iface in type.AllInterfaces)
+            {
+                foreach (ISymbol member in iface.GetMembers())
+                {
+                    if (member is not IPropertySymbol interfaceProperty
+                        || interfaceProperty.Type is not { IsReferenceType: true }
+                        || interfaceProperty.Type.NullableAnnotation == NullableAnnotation.Annotated)
+                    {
+                        continue;
+                    }
+
+                    if (type.FindImplementationForInterfaceMember(interfaceProperty) is not IPropertySymbol implementingProperty)
+                    {
+                        continue;
+                    }
+
+                    ISymbol interfaceCanonical = Canonical(interfaceProperty);
+                    ISymbol implCanonical = Canonical(implementingProperty);
+                    edges.Add((interfaceCanonical, implCanonical));
+                    edges.Add((implCanonical, interfaceCanonical));
+
+                    IParameterSymbol positionalParameter = FindPositionalRecordParameter(compilation, implementingProperty);
+                    if (positionalParameter != null)
+                    {
+                        ISymbol paramCanonical = Canonical(positionalParameter);
+                        edges.Add((interfaceCanonical, paramCanonical));
+                        edges.Add((paramCanonical, interfaceCanonical));
+                    }
+                }
+            }
+        }
+    }
+
+    // A record's positional-parameter property has a declaring syntax
+    // reference that IS the `ParameterSyntax` node itself (verified against
+    // Roslyn's actual behavior), so the corresponding primary-constructor
+    // `IParameterSymbol` — the symbol cs2gs's own primary-constructor mapping
+    // promotes — is resolved by re-binding that same syntax node. Returns
+    // `null` for an ordinary (non-positional) property.
+    private static IParameterSymbol FindPositionalRecordParameter(Compilation compilation, IPropertySymbol property)
+    {
+        foreach (SyntaxReference reference in property.DeclaringSyntaxReferences)
+        {
+            if (reference.GetSyntax() is ParameterSyntax parameterSyntax)
+            {
+                SemanticModel model = compilation.GetSemanticModel(parameterSyntax.SyntaxTree);
+                if (model.GetDeclaredSymbol(parameterSyntax) is IParameterSymbol parameterSymbol)
+                {
+                    return parameterSymbol;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    // Every source-declared named type reachable from the compilation's
+    // assembly, walking nested types too (mirrors
+    // `CSharpToGSharpTranslator.EnumerateNamedTypes`, duplicated locally so
+    // this analyzer stays a self-contained, independently testable unit).
+    private static IEnumerable<INamedTypeSymbol> EnumerateSourceNamedTypes(Compilation compilation)
+    {
+        foreach (INamedTypeSymbol type in EnumerateNamespaceTypes(compilation.Assembly.GlobalNamespace))
+        {
+            yield return type;
+        }
+    }
+
+    private static IEnumerable<INamedTypeSymbol> EnumerateNamespaceTypes(INamespaceSymbol ns)
+    {
+        foreach (INamedTypeSymbol type in ns.GetTypeMembers())
+        {
+            foreach (INamedTypeSymbol typeOrNested in EnumerateTypeAndNested(type))
+            {
+                yield return typeOrNested;
+            }
+        }
+
+        foreach (INamespaceSymbol nested in ns.GetNamespaceMembers())
+        {
+            foreach (INamedTypeSymbol type in EnumerateNamespaceTypes(nested))
+            {
+                yield return type;
+            }
+        }
+    }
+
+    private static IEnumerable<INamedTypeSymbol> EnumerateTypeAndNested(INamedTypeSymbol type)
+    {
+        yield return type;
+        foreach (INamedTypeSymbol nested in type.GetTypeMembers())
+        {
+            foreach (INamedTypeSymbol nestedOrDeeper in EnumerateTypeAndNested(nested))
+            {
+                yield return nestedOrDeeper;
+            }
+        }
     }
 
     private static void ApplyReturnValue(
