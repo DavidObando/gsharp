@@ -516,11 +516,30 @@ internal sealed partial class MethodBodyEmitter
         this.il.Call(this.outer.GetMethodEntityHandle(bounded));
     }
 
+    // Issue #2283: entry point used from expression-position emit
+    // (MethodBodyEmitter.Expressions.cs). MaterializeSpilledChannelReceives
+    // runs EmitChannelReceiveCore for every receive in the containing
+    // statement before any of the statement's IL is emitted, so by the time
+    // this is reached the result is already sitting in its slot — just load
+    // it. This guarantees the try/catch below only ever runs at an
+    // empty-stack point, regardless of where `<-ch` appears syntactically.
     private void EmitChannelReceiveExpression(BoundChannelReceiveExpression node)
     {
-        // try { result = ch.Reader.ReadAsync(default).AsTask().GetAwaiter().GetResult(); }
-        // catch (ChannelClosedException) { result = default(T); }
-        // ldloc result
+        Debug.Assert(
+            this.materializedChannelReceives.Contains(node),
+            "BoundChannelReceiveExpression reached emit without being materialised by MaterializeSpilledChannelReceives.");
+        this.il.LoadLocal(this.channelOpSlots[node].Result);
+    }
+
+    // try { result = ch.Reader.ReadAsync(default).AsTask().GetAwaiter().GetResult(); }
+    // catch (ChannelClosedException) { result = default(T); }
+    //
+    // Emits the try/catch at the CURRENT IL position and stores the outcome
+    // into the node's pre-allocated result slot, but does NOT load it back —
+    // callers own that (see MaterializeSpilledChannelReceives, which runs
+    // this at the empty-stack start of the containing statement).
+    private void EmitChannelReceiveCore(BoundChannelReceiveExpression node)
+    {
         var chType = (ChannelTypeSymbol)node.Channel.Type;
         var elementClr = ResolveChannelElementClrType(chType.ElementType);
         var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
@@ -580,8 +599,6 @@ internal sealed partial class MethodBodyEmitter
 
         var catchTypeHandle = (EntityHandle)this.outer.GetTypeReference(ccExceptionClr);
         this.il.ControlFlowBuilder.AddCatchRegion(tryStart, tryEnd, handlerStart, handlerEnd, catchTypeHandle);
-
-        this.il.LoadLocal(resultSlot);
     }
 
     private void EmitChannelCloseExpression(BoundChannelCloseExpression node)
