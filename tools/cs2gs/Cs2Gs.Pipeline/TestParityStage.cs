@@ -255,6 +255,14 @@ public sealed class TestParityStage : IMigrationStage
 
         var files = new List<GsharpSourceFile>();
         var usedGsFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Issue #2292: ONE translator instance shared across every document in
+        // this project (rather than a fresh one per file) so its package-scoped
+        // anonymous-type registry (see `CSharpToGSharpTranslator.
+        // anonymousTypeRegistriesByPackage`) is shared too — otherwise two
+        // files in the same package could each mint a colliding
+        // `AnonymousTypeN` name for two DIFFERENT anonymous shapes (GS0102).
+        var translator = new CSharpToGSharpTranslator();
         foreach (LoadedDocument document in project.Documents)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -264,7 +272,7 @@ public sealed class TestParityStage : IMigrationStage
                 document.SemanticModel,
                 document.FilePath);
 
-            CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, translationContext);
+            CompilationUnit unit = translator.TranslateDocument(document, translationContext);
             string printed = GSharpPrinter.Print(unit);
 
             TranslationDiagnostic unsupported = translationContext.Diagnostics

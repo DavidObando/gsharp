@@ -92,6 +92,19 @@ public sealed class CSharpToGSharpTranslator
     // (GS0102). Null (default) preserves the exact prior no-filter behavior.
     private readonly HashSet<string> retainedFilePaths;
 
+    // Issue #2292: one AnonymousTypeRegistry per resolved G# package, shared
+    // across every document this translator instance translates (every
+    // pipeline caller creates ONE CSharpToGSharpTranslator per project and
+    // calls TranslateDocument once per file in that project — see
+    // TranslateStage/TestParityStage), so two unrelated files sharing the
+    // same package draw synthetic anonymous-type names from ONE counter and
+    // reuse an identical shape's data class instead of each starting a fresh
+    // dictionary/counter at zero (which allowed a distinct shape in file B to
+    // mint the same name as an unrelated shape already declared in file A —
+    // a GS0102 collision once both files' output is compiled together).
+    private readonly Dictionary<string, AnonymousTypeRegistry> anonymousTypeRegistriesByPackage =
+        new(StringComparer.Ordinal);
+
     /// <summary>
     /// Initializes a new instance of the <see cref="CSharpToGSharpTranslator"/> class.
     /// </summary>
@@ -197,7 +210,24 @@ public sealed class CSharpToGSharpTranslator
         IMethodSymbol entryPoint = context.Compilation.GetEntryPoint(default);
         INamedTypeSymbol entryType = entryPoint?.ContainingType;
 
-        var typeMapper = new CSharpTypeMapper();
+        // Issue #2292: share the anonymous-type registry with every other
+        // document already translated (by this same translator instance)
+        // into the same package, so distinct/identical shapes across FILES
+        // never collide (see `anonymousTypeRegistriesByPackage`'s comment).
+        // `package` is null for a file with no namespace declaration (the
+        // global namespace, e.g. a top-level-statements `Program.cs`) — a
+        // Dictionary key cannot be null, so the global namespace is keyed by
+        // the empty string instead (still one shared registry for every
+        // global-namespace file in this translator's project, exactly
+        // mirroring the non-null-package case).
+        string registryKey = package ?? string.Empty;
+        if (!this.anonymousTypeRegistriesByPackage.TryGetValue(registryKey, out AnonymousTypeRegistry anonymousTypeRegistry))
+        {
+            anonymousTypeRegistry = new AnonymousTypeRegistry();
+            this.anonymousTypeRegistriesByPackage[registryKey] = anonymousTypeRegistry;
+        }
+
+        var typeMapper = new CSharpTypeMapper(anonymousTypeRegistry);
         var visitor = new DeclarationVisitor(context, typeMapper, openBases, staticUsingTargets, entryPoint, partialTypeParts, this.preservePartialParts, this.markMergedTypePartial);
 
         var members = new List<GNode>();
