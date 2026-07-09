@@ -2729,6 +2729,55 @@ internal sealed class OverloadResolver
 
     public BoundExpression BindConstructorCallExpression(CallExpressionSyntax syntax, StructSymbol classType)
     {
+        var bound = BindConstructorCallExpressionCore(syntax, classType);
+
+        // Issue #2263: an imported `data class` is a reference type whose CLR
+        // type (and real parameterless + primary constructors) are already
+        // emitted. Normalise its construction to the SAME
+        // BoundStructLiteralExpression the `with`/copy path produces so the
+        // emitter uses one consistent lowering (`newobj .ctor(); dup; <value>;
+        // stfld` per field) and — crucially — the data class keeps a single
+        // semantic-aggregate identity in EVERY position (let-initializer,
+        // argument, return, member access). Binding construction to a plain
+        // CLR-ctor call instead would surface a bare ImportedTypeSymbol here
+        // while the type clause / return / member paths surface the aggregate,
+        // reintroducing the dual identity that breaks `with` non-deterministically.
+        if (bound is BoundConstructorCallExpression ctorCall
+            && ctorCall.StructType.IsClass
+            && ctorCall.StructType.ClrType != null
+            && ctorCall.StructType.IsData)
+        {
+            return LowerImportedDataClassConstruction(ctorCall);
+        }
+
+        return bound;
+    }
+
+    /// <summary>
+    /// Issue #2263: rewrites an imported <c>data class</c> primary-constructor
+    /// call into the field-initialising <see cref="BoundStructLiteralExpression"/>
+    /// shared with the <c>with</c>/copy lowering. The constructor's arguments
+    /// are already reordered into primary-constructor parameter order, so each
+    /// argument maps onto the field named by the parameter at the same index.
+    /// </summary>
+    private static BoundExpression LowerImportedDataClassConstruction(BoundConstructorCallExpression ctorCall)
+    {
+        var classType = ctorCall.StructType;
+        var parameters = classType.PrimaryConstructorParameters;
+        var initializers = ImmutableArray.CreateBuilder<BoundFieldInitializer>(parameters.Length);
+        for (var i = 0; i < parameters.Length && i < ctorCall.Arguments.Length; i++)
+        {
+            if (classType.TryGetField(parameters[i].Name, out var field))
+            {
+                initializers.Add(new BoundFieldInitializer(field, ctorCall.Arguments[i]));
+            }
+        }
+
+        return new BoundStructLiteralExpression(ctorCall.Syntax, classType, initializers.ToImmutable());
+    }
+
+    private BoundExpression BindConstructorCallExpressionCore(CallExpressionSyntax syntax, StructSymbol classType)
+    {
         // ADR-0047 §6 / #175: primary-constructor call `Foo(...)` is a
         // use of the class type itself.
         reportObsoleteUseIfApplicable(syntax.Identifier.Location, classType, classType.Name);

@@ -86,6 +86,20 @@ public sealed class ReferenceResolver : IDisposable
     private static readonly Type MissTypeSentinel = typeof(NotFoundSentinel);
     private readonly ConcurrentDictionary<string, Type> resolveCache = new(StringComparer.Ordinal);
 
+    // Issue #2263 / #2269: per-compilation cache of imported data-type semantic
+    // aggregates (see ImportedTypeSymbol.TryCreateSemanticAggregate). This MUST
+    // be an instance field, not a process-wide static: the cached StructSymbol
+    // graphs strongly reference the CLR Type objects — and therefore the
+    // MetadataLoadContext / assemblies — of this resolver. Scoping the cache to
+    // the resolver ties that graph's lifetime to the MLC, so it is released when
+    // this resolver is disposed (ResourceLeakRegressionTests) and never pins a
+    // disposed context's memory. A single resolver serves an entire compilation
+    // (one consumer assembly), so keying by Type alone still yields one
+    // consistent aggregate identity per type in every binding position, and
+    // avoids the cross-thread cache churn a shared static cache suffered when
+    // xUnit ran compilations in parallel.
+    private readonly ConcurrentDictionary<Type, StructSymbol> semanticAggregateCache = new();
+
     // Issue #854: a lazily-built, full-name -> Type index over every assembly in
     // `assemblies`. The previous TryResolveType implementation scanned all
     // references on every cache miss (Assembly.GetType per assembly), which on a
@@ -125,6 +139,25 @@ public sealed class ReferenceResolver : IDisposable
     /// <c>InternalsVisibleTo</c> friendship on referenced assemblies.
     /// </summary>
     public string CurrentAssemblyName { get; set; }
+
+    /// <summary>
+    /// Returns the cached imported data-type semantic aggregate for
+    /// <paramref name="type"/> within this resolver's (compilation's) lifetime,
+    /// building it via <paramref name="factory"/> on first request. See the
+    /// <c>semanticAggregateCache</c> field remarks for why this cache is
+    /// resolver-scoped rather than a process-wide static (issue #2263 / #2269).
+    /// </summary>
+    /// <param name="type">The imported CLR type to build an aggregate for.</param>
+    /// <param name="consumerAssemblyName">
+    /// The simple name of the assembly being compiled, passed to
+    /// <paramref name="factory"/> so it can honor <c>InternalsVisibleTo</c>.
+    /// </param>
+    /// <param name="factory">
+    /// Builds the aggregate for a cache miss, given the type and consumer name.
+    /// </param>
+    /// <returns>The cached or newly built semantic aggregate.</returns>
+    internal StructSymbol GetOrAddSemanticAggregate(Type type, string consumerAssemblyName, Func<Type, string, StructSymbol> factory)
+        => semanticAggregateCache.GetOrAdd(type, factory, consumerAssemblyName);
 
     private ReferenceResolver(ImmutableArray<Assembly> assemblies, MetadataLoadContext metadataContext)
         : this(assemblies, metadataContext, ImmutableArray<string>.Empty)

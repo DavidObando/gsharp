@@ -20,7 +20,6 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 public sealed class ImportedTypeSymbol : TypeSymbol
 {
     private static readonly ConcurrentDictionary<Type, ImportedTypeSymbol> Cache = new();
-    private static readonly ConcurrentDictionary<(Type Type, string ConsumerAssembly), StructSymbol> AggregateCache = new();
 
     private ImportedTypeSymbol(Type type)
         : base(type.FullName ?? type.Name, type)
@@ -139,18 +138,54 @@ public sealed class ImportedTypeSymbol : TypeSymbol
     {
         aggregate = null;
         if (type == null
-            || !type.IsValueType
             || type.IsPrimitive
             || type.IsEnum
             || type.IsGenericParameter
-            || !ImportedAssemblySemantics.TryGetTypeSemantics(type, out var semantics)
-            || !semantics.IsValueType)
+            || type.IsInterface
+            || !ImportedAssemblySemantics.TryGetTypeSemantics(type, out var semantics))
         {
             return false;
         }
 
-        var cacheKey = (type, references?.CurrentAssemblyName ?? string.Empty);
-        aggregate = AggregateCache.GetOrAdd(cacheKey, static key => BuildSemanticAggregate(key.Type, key.ConsumerAssembly));
+        // Issue #2263: a marked *reference* type is an imported `data class`;
+        // a marked *value* type is a `data struct` (or a primary-ctor struct).
+        // Both build a semantic-aggregate StructSymbol so members, primary
+        // constructors and `with`/copy resolve consistently in EVERY position.
+        // Guard the payload against a value/reference mismatch so a stale
+        // marker can never mis-shape the aggregate.
+        if (type.IsValueType != semantics.IsValueType)
+        {
+            return false;
+        }
+
+        if (!type.IsValueType)
+        {
+            // A plain (non-data) reference class is never marked by the
+            // emitter, so only genuine data classes reach here. Generic data
+            // classes are out of scope: their open definition would otherwise
+            // build a 0-arity aggregate that shadows the real generic type at
+            // construction sites, so they keep importing as an ordinary CLR
+            // class (a `with` on one still reports GS0161 rather than
+            // mis-binding).
+            if (!semantics.IsData || type.IsGenericType || type.IsGenericTypeDefinition)
+            {
+                return false;
+            }
+        }
+
+        var consumerAssemblyName = references?.CurrentAssemblyName ?? string.Empty;
+
+        // Issue #2263 / #2269: cache the aggregate on the resolver instance so
+        // its lifetime is tied to the metadata load context that owns `type`.
+        // A process-wide static cache would strongly pin these CLR Types (and
+        // their MLC/assemblies) for the whole process, leaking memory across
+        // compilations (ResourceLeakRegressionTests) and churning under the
+        // parallel test host. When no resolver is available (e.g. a synthetic
+        // ImportedClassSymbol), build uncached — the aggregate is structurally
+        // determined by `type`, so identity still holds within that scope.
+        aggregate = references != null
+            ? references.GetOrAddSemanticAggregate(type, consumerAssemblyName, static (t, consumer) => BuildSemanticAggregate(t, consumer))
+            : BuildSemanticAggregate(type, consumerAssemblyName);
         return aggregate != null;
     }
 
@@ -158,12 +193,13 @@ public sealed class ImportedTypeSymbol : TypeSymbol
     /// Removes all entries from the static type cache. Called by
     /// <see cref="ReferenceResolver.Dispose"/> to release stale
     /// <see cref="Type"/> objects backed by a disposed metadata load context
-    /// that would otherwise pin the context's memory indefinitely.
+    /// that would otherwise pin the context's memory indefinitely. The imported
+    /// data-type semantic-aggregate cache is resolver-scoped (see
+    /// <see cref="TryCreateSemanticAggregate"/>) and needs no clearing here.
     /// </summary>
     internal static void ClearCache()
     {
         Cache.Clear();
-        AggregateCache.Clear();
     }
 
     private static StructSymbol BuildSemanticAggregate(Type type, string consumerAssemblyName)
@@ -231,7 +267,7 @@ public sealed class ImportedTypeSymbol : TypeSymbol
             packageName: type.Namespace,
             isData: semantics.IsData,
             isInline: false,
-            isClass: false,
+            isClass: !semantics.IsValueType,
             primaryConstructorParameters: BuildPrimaryConstructorParameters(fieldBuilder.ToImmutable(), propertyBuilder.ToImmutable(), fieldByToken, semantics),
             isOpen: false,
             baseClass: null,

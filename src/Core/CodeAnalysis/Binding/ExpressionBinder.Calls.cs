@@ -675,6 +675,25 @@ internal sealed partial class ExpressionBinder
             clrType = importedClass.ClassType;
         }
 
+        // Issue #2263: for an imported `data class` the CLR type carries a real
+        // primary `.ctor`, so TryBindClrConstructorFromType below would succeed
+        // and yield a plain ImportedTypeSymbol result — a DUAL identity, since
+        // the type-clause / member-access / return paths already resolve the
+        // same type to its semantic-aggregate StructSymbol. That inconsistency
+        // is exactly what makes `with`/copy on a locally-constructed data class
+        // fail non-deterministically. Bind construction through the semantic
+        // aggregate FIRST (it lowers to the same struct-literal node as `with`)
+        // so a data class resolves to the SAME StructSymbol everywhere.
+        if (openGenericDefinition == null
+            && ImportedTypeSymbol.TryCreateSemanticAggregate(clrType, scope.References, out var dataClassAggregate)
+            && dataClassAggregate.IsClass
+            && dataClassAggregate.IsData
+            && dataClassAggregate.HasPrimaryConstructor)
+        {
+            result = overloads.BindConstructorCallExpression(syntax, dataClassAggregate);
+            return true;
+        }
+
         if (TryBindClrConstructorFromType(clrType, syntax, out result, openGenericDefinition, symbolicTypeArgs))
         {
             return true;
