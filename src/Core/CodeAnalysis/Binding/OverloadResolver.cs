@@ -2759,6 +2759,13 @@ internal sealed class OverloadResolver
     /// shared with the <c>with</c>/copy lowering. The constructor's arguments
     /// are already reordered into primary-constructor parameter order, so each
     /// argument maps onto the field named by the parameter at the same index.
+    /// Issue #2291: an imported C# record surfaces its positional members as
+    /// auto-properties (mangled backing fields), not plain public fields like
+    /// a gsc-native data class — a parameter with no matching field falls
+    /// back to a settable property with the same name so the emitter's
+    /// positional-constructor construction path (<c>MethodBodyEmitter.
+    /// EmitImportedPositionalRecordLiteral</c>) sees a value for every
+    /// positional member regardless of which kind of data class it is.
     /// </summary>
     private static BoundExpression LowerImportedDataClassConstruction(BoundConstructorCallExpression ctorCall)
     {
@@ -2770,6 +2777,12 @@ internal sealed class OverloadResolver
             if (classType.TryGetField(parameters[i].Name, out var field))
             {
                 initializers.Add(new BoundFieldInitializer(field, ctorCall.Arguments[i]));
+                continue;
+            }
+
+            if (TypeMemberModel.TryGetProperty(classType, parameters[i].Name, out var property) && property.HasSetter)
+            {
+                initializers.Add(new BoundFieldInitializer(property, ctorCall.Arguments[i]));
             }
         }
 
@@ -3126,6 +3139,15 @@ internal sealed class OverloadResolver
                     if (classType.TryGetField(parameters[i].Name, out var field))
                     {
                         fieldInitializersV.Add(new BoundFieldInitializer(field, packedArgs[i]));
+                        continue;
+                    }
+
+                    // Issue #2291: an imported C# `record struct`'s positional
+                    // members are auto-properties, not plain fields — fall
+                    // back to a settable property with the same name.
+                    if (TypeMemberModel.TryGetProperty(classType, parameters[i].Name, out var propertyV) && propertyV.HasSetter)
+                    {
+                        fieldInitializersV.Add(new BoundFieldInitializer(propertyV, packedArgs[i]));
                     }
                 }
 
@@ -3353,6 +3375,15 @@ internal sealed class OverloadResolver
                 if (classType.TryGetField(parameters[i].Name, out var field))
                 {
                     fieldInitializers.Add(new BoundFieldInitializer(field, boundArguments[i]));
+                    continue;
+                }
+
+                // Issue #2291: an imported C# `record struct`'s positional
+                // members are auto-properties, not plain fields — fall back
+                // to a settable property with the same name.
+                if (TypeMemberModel.TryGetProperty(classType, parameters[i].Name, out var property) && property.HasSetter)
+                {
+                    fieldInitializers.Add(new BoundFieldInitializer(property, boundArguments[i]));
                 }
             }
 

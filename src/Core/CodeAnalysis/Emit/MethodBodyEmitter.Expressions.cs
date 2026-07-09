@@ -1077,6 +1077,24 @@ internal sealed partial class MethodBodyEmitter
         // Class literal: newobj <ctor>; (dup; <value>; stfld) per init.
         if (literal.StructType.IsClass)
         {
+            // Issue #2291: an imported C# `record class` has NO public
+            // parameterless constructor — only its positional primary
+            // constructor and a synthesized copy constructor
+            // (`.ctor(SameType)`). #2263's parameterless-ctor + per-member
+            // stfld/setter strategy cannot construct it at all. Detect that
+            // shape up front and construct through the positional primary
+            // constructor instead, passing each member's already-resolved
+            // value (explicit override or a copy read off the temp
+            // variable) as a constructor argument in declaration order.
+            if (!isGeneric
+                && !this.outer.cache.ClassCtorHandles.ContainsKey(literal.StructType)
+                && literal.StructType.ClrType is { } importedClrTypeForCtorCheck
+                && importedClrTypeForCtorCheck.GetConstructor(Type.EmptyTypes) == null)
+            {
+                this.EmitImportedPositionalRecordLiteral(literal, importedClrTypeForCtorCheck);
+                return;
+            }
+
             EntityHandle ctorHandle;
             if (isGeneric)
             {
@@ -1197,6 +1215,106 @@ internal sealed partial class MethodBodyEmitter
 
         // Leave the constructed struct value on the stack.
         this.il.LoadLocal(slot);
+    }
+
+    /// <summary>
+    /// Issue #2291: constructs an imported C# `record class` — which has no
+    /// public parameterless constructor, only its positional primary
+    /// constructor and a synthesized copy constructor — by calling the
+    /// primary constructor directly with each positional member's resolved
+    /// value (an explicit `with` override, or a copy read off the source
+    /// instance) as an argument, in declaration order. Any remaining
+    /// initializer not covered by a primary-constructor parameter (e.g. an
+    /// ordinary non-positional field or property) is still applied
+    /// afterwards via `dup`+`stfld`/setter call, exactly like the
+    /// parameterless-ctor path in <see cref="EmitStructLiteral"/>.
+    /// </summary>
+    private void EmitImportedPositionalRecordLiteral(BoundStructLiteralExpression literal, Type importedClrType)
+    {
+        var parameters = literal.StructType.PrimaryConstructorParameters;
+        if (parameters.IsDefaultOrEmpty)
+        {
+            throw new InvalidOperationException(
+                $"Imported data class '{literal.StructType.Name}' has no parameterless constructor and no positional primary-constructor shape to construct through.");
+        }
+
+        var primaryCtor = ResolveImportedPositionalConstructor(importedClrType, parameters.Length)
+            ?? throw new InvalidOperationException(
+                $"Imported data class '{literal.StructType.Name}' has no positional constructor matching its {parameters.Length}-member shape.");
+
+        var initializersByName = new Dictionary<string, BoundFieldInitializer>(StringComparer.Ordinal);
+        foreach (var init in literal.Initializers)
+        {
+            initializersByName[init.MemberName] = init;
+        }
+
+        var consumed = new HashSet<BoundFieldInitializer>();
+        foreach (var parameter in parameters)
+        {
+            if (!initializersByName.TryGetValue(parameter.Name, out var init))
+            {
+                throw new InvalidOperationException(
+                    $"Imported data class '{literal.StructType.Name}' is missing a value for positional member '{parameter.Name}'.");
+            }
+
+            this.EmitExpression(init.Value);
+            consumed.Add(init);
+        }
+
+        this.il.OpCode(ILOpCode.Newobj);
+        this.il.Token(this.outer.GetCtorReference(primaryCtor));
+
+        foreach (var init in literal.Initializers)
+        {
+            if (consumed.Contains(init))
+            {
+                continue;
+            }
+
+            if (init.Property != null)
+            {
+                var setterHandle = this.ResolveStructLiteralSetter(literal.StructType, init.Property, isGeneric: true);
+                this.il.OpCode(ILOpCode.Dup);
+                this.EmitExpression(init.Value);
+                this.il.OpCode(ILOpCode.Callvirt);
+                this.il.Token(setterHandle);
+                continue;
+            }
+
+            var fieldHandle = this.outer.ResolveFieldToken(literal.StructType, init.Field);
+            this.il.OpCode(ILOpCode.Dup);
+            this.EmitExpression(init.Value);
+            this.il.OpCode(ILOpCode.Stfld);
+            this.il.Token(fieldHandle);
+        }
+    }
+
+    /// <summary>
+    /// Issue #2291: finds the public instance constructor on an imported
+    /// record class matching its positional shape — <paramref name="parameterCount"/>
+    /// parameters, excluding the synthesized copy constructor
+    /// (`.ctor(SameType)`, recognizable as a single parameter whose type is
+    /// the declaring type itself).
+    /// </summary>
+    private static ConstructorInfo ResolveImportedPositionalConstructor(Type importedClrType, int parameterCount)
+    {
+        foreach (var ctor in ClrTypeUtilities.SafeGetConstructors(importedClrType, BindingFlags.Public | BindingFlags.Instance))
+        {
+            var ctorParameters = ctor.GetParameters();
+            if (ctorParameters.Length != parameterCount)
+            {
+                continue;
+            }
+
+            if (ctorParameters.Length == 1 && ClrTypeUtilities.AreSame(ctorParameters[0].ParameterType, importedClrType))
+            {
+                continue;
+            }
+
+            return ctor;
+        }
+
+        return null;
     }
 
     /// <summary>

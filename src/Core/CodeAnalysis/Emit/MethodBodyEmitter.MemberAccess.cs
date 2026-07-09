@@ -798,6 +798,13 @@ internal sealed partial class MethodBodyEmitter
         {
             getterHandle = handles.Getter.Value;
         }
+        else if ((access.StructType as StructSymbol)?.ClrType != null)
+        {
+            // Issue #2291: a property on an IMPORTED type (e.g. a C# record's
+            // auto-property) has no planned PropertyAccessorHandles entry —
+            // resolve its getter MethodRef directly off the imported CLR type.
+            getterHandle = this.outer.ResolveUserPropertyAccessorToken(access.StructType as StructSymbol, access.Property, wantSetter: false);
+        }
         else
         {
             throw new InvalidOperationException(
@@ -866,6 +873,12 @@ internal sealed partial class MethodBodyEmitter
         else if (this.outer.cache.PropertyAccessorHandles.TryGetValue(assn.Property, out var handles) && handles.Setter.HasValue)
         {
             setterHandle = handles.Setter.Value;
+        }
+        else if ((assn.StructType as StructSymbol)?.ClrType != null)
+        {
+            // Issue #2291: mirrors the getter fallback above for IMPORTED
+            // properties with no planned PropertyAccessorHandles entry.
+            setterHandle = this.outer.ResolveUserPropertyAccessorToken(assn.StructType as StructSymbol, assn.Property, wantSetter: true);
         }
         else
         {
