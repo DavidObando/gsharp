@@ -8,6 +8,16 @@ draft: false
 
 `cs2gs` is the repository's C#→G# migration tool and gap-discovery pipeline. It lives under `tools\cs2gs\`, uses Roslyn as an external C# front end, emits canonical G#, and then validates the result through the real G# toolchain. It is sibling tooling: `gsc` does not reference Roslyn.
 
+## Install as a global tool
+
+`cs2gs` is published as the [`Gsharp.Cs2Gs`](https://www.nuget.org/packages/Gsharp.Cs2Gs/) .NET global tool (it requires a .NET 10 runtime):
+
+```sh
+dotnet tool install --global Gsharp.Cs2Gs
+```
+
+Once installed, the `cs2gs` command is on your `PATH`, and the examples below use it directly. Update or remove it with `dotnet tool update --global Gsharp.Cs2Gs` and `dotnet tool uninstall --global Gsharp.Cs2Gs`. When working from a source build of this repository instead, invoke the same verbs through the built assembly — `dotnet out\bin\Release\Cs2Gs.Cli\cs2gs.dll <verb>`.
+
 ## What it does
 
 A migration run is deterministic and stage-based:
@@ -21,10 +31,10 @@ Every run writes artifacts, `report.html`, and `summary.json` under the run dire
 
 ## Basic usage
 
-The Release tool's help currently reports:
+The tool's help reports:
 
-```powershell
-dotnet out\bin\Release\Cs2Gs.Cli\cs2gs.dll --help
+```sh
+cs2gs --help
 ```
 
 ```text
@@ -38,8 +48,8 @@ cs2gs triage sync [--gaps <file>] [--write] [--no-test-reason <why>]
 
 For a normal corpus run:
 
-```powershell
-dotnet out\bin\Release\Cs2Gs.Cli\cs2gs.dll migrate --corpus tools\cs2gs\corpus --out cs2gs-runs
+```sh
+cs2gs migrate --corpus tools\cs2gs\corpus --out cs2gs-runs
 ```
 
 Useful `migrate` options:
@@ -48,7 +58,7 @@ Useful `migrate` options:
 | --- | --- |
 | `--corpus <dir>` | Corpus root. Defaults to `tools\cs2gs\corpus` when run from the repository. |
 | `--app <id>` | Migrate only one app. May be repeated. |
-| `--gsc <path>` | Override `gsc.dll`; default is `out\bin\<Config>\Compiler\gsc.dll`. |
+| `--via-sdk` | Build the emitted G# via `dotnet build` + the `Gsharp.NET.Sdk` (instead of invoking `gsc` directly) so source generators run. |
 | `--out <dir>` | Runs root for artifacts; default is `cs2gs-runs`. |
 | `--config <name>` | Build configuration used to find tools; default is `Release`. |
 | `--baseline <file>` | Gate on the gap ledger. New and regressed fingerprints fail; known-open gaps are tolerated. |
