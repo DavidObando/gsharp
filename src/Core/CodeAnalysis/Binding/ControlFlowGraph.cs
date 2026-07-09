@@ -147,7 +147,7 @@ public sealed class ControlFlowGraph
     /// </summary>
     /// <param name="switchStatement">The pattern switch statement.</param>
     /// <returns>Whether the switch definitely returns on every path.</returns>
-    private static bool SwitchAlwaysReturns(BoundPatternSwitchStatement switchStatement)
+    internal static bool SwitchAlwaysReturns(BoundPatternSwitchStatement switchStatement)
     {
         var hasDefault = false;
         foreach (var arm in switchStatement.Arms)

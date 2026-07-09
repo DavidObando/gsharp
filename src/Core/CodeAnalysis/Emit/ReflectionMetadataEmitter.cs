@@ -1567,22 +1567,22 @@ internal sealed class ReflectionMetadataEmitter
 
                 this.cache.PropertyAccessorHandles[prop] = (getterHandle, setterHandle);
 
-                // ADR-0089 / issue #1019: for a static-virtual interface
-                // property, register the accessor FunctionSymbols against
-                // their planned MethodDef rows so `constrained.` dispatch
-                // (`T.Prop` → get_Prop) resolves the slot handle, exactly as
-                // for static-virtual interface methods.
-                if (prop.IsStatic)
+                // ADR-0089 / issue #1019, #2293: register the accessor
+                // FunctionSymbols against their planned MethodDef rows for
+                // BOTH static-virtual and ordinary instance interface
+                // properties, mirroring the instance-method registration
+                // above (`i.Methods`). This lets `constrained.` dispatch
+                // (`T.Prop` → get_Prop) and ordinary interface-typed callvirt
+                // sites resolve the accessor's slot handle even when the
+                // implementer relies on the interface's default body.
+                if (prop.GetterSymbol != null && getterHandle.HasValue)
                 {
-                    if (prop.GetterSymbol != null && getterHandle.HasValue)
-                    {
-                        this.cache.MethodHandles[prop.GetterSymbol] = getterHandle.Value;
-                    }
+                    this.cache.MethodHandles[prop.GetterSymbol] = getterHandle.Value;
+                }
 
-                    if (prop.SetterSymbol != null && setterHandle.HasValue)
-                    {
-                        this.cache.MethodHandles[prop.SetterSymbol] = setterHandle.Value;
-                    }
+                if (prop.SetterSymbol != null && setterHandle.HasValue)
+                {
+                    this.cache.MethodHandles[prop.SetterSymbol] = setterHandle.Value;
                 }
             }
 
