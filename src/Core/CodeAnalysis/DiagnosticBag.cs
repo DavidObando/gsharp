@@ -936,6 +936,19 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// ADR-0147: reports that an object literal does not structurally satisfy a
+    /// target type because it is missing a required member.
+    /// </summary>
+    /// <param name="location">The text location where the error was found.</param>
+    /// <param name="targetType">The target type the literal fails to satisfy.</param>
+    /// <param name="memberName">The missing required member name.</param>
+    public void ReportStructuralMemberMissing(TextLocation location, TypeSymbol targetType, string memberName)
+    {
+        var message = $"Object literal does not satisfy type '{targetType}': missing required member '{memberName}'.";
+        Report(location, "GS0490", message);
+    }
+
+    /// <summary>
     /// Issue #337: reports that a CLR member method group cannot be converted to
     /// the expected target type (it is not a compatible delegate type, or no
     /// overload matches the delegate signature).

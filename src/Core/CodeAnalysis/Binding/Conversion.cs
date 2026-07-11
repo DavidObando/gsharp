@@ -34,16 +34,31 @@ public sealed class Conversion
     /// </summary>
     public static readonly Conversion Explicit = new Conversion(exists: true, isIdentity: false, isImplicit: false);
 
+    /// <summary>
+    /// ADR-0147: an object literal (anonymous <see cref="StructSymbol"/>) is
+    /// implicitly assignable to a concrete value-type target whose required
+    /// members are all present in the literal with compatible types (width
+    /// subtyping: extra literal members are allowed). The value is rebuilt as
+    /// the target type at the conversion site.
+    /// </summary>
+    public static readonly Conversion Structural = new Conversion(exists: true, isIdentity: false, isImplicit: true, isStructural: true);
+
     // Issue #1482: the implicit numeric-widening lattice and the numeric
     // primitive set now live in the single authoritative
     // `NumericWideningLattice` helper. Conversion classification and overload
     // "better conversion" ranking both query that one table so they cannot
     // drift apart (they previously disagreed about native-int widening).
     private Conversion(bool exists, bool isIdentity, bool isImplicit)
+        : this(exists, isIdentity, isImplicit, isStructural: false)
+    {
+    }
+
+    private Conversion(bool exists, bool isIdentity, bool isImplicit, bool isStructural)
     {
         Exists = exists;
         IsIdentity = isIdentity;
         IsImplicit = isImplicit;
+        IsStructural = isStructural;
     }
 
     /// <summary>
@@ -60,6 +75,12 @@ public sealed class Conversion
     /// Gets a value indicating whether the conversion is implicit or not.
     /// </summary>
     public bool IsImplicit { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether the conversion is a structural
+    /// literal-to-type assignment (ADR-0147).
+    /// </summary>
+    public bool IsStructural { get; }
 
     /// <summary>
     /// Gets a value indicating whether the conversion is explicit or not.
@@ -1040,6 +1061,22 @@ public sealed class Conversion
             return Conversion.Implicit;
         }
 
+        // ADR-0147: structural literal-to-type assignability. An object literal
+        // (a synthesized StructSymbol with no declaring syntax node and no CLR
+        // type) converts implicitly to a concrete target (class / struct /
+        // data struct) whose required members are all present in the literal
+        // with compatible types. Width subtyping: extra source members are
+        // allowed. The value is rebuilt as the target type at the conversion
+        // site (see ConversionClassifier.BindStructuralRecordConversion).
+        if (from is StructSymbol fromLit
+            && fromLit.Declaration == null
+            && to is StructSymbol toLit
+            && !toLit.IsAbstract
+            && StructuralConversionSatisfiesMembers(fromLit, toLit))
+        {
+            return Conversion.Structural;
+        }
+
         return Conversion.None;
     }
 
@@ -1141,6 +1178,65 @@ public sealed class Conversion
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// ADR-0147: checks whether all required members of the target type
+    /// (<paramref name="to"/>) are present in the source literal type
+    /// (<paramref name="from"/>) with implicitly-convertible types. Required
+    /// members are instance fields and settable properties. Extra source
+    /// members are ignored (width subtyping).
+    /// </summary>
+    private static bool StructuralConversionSatisfiesMembers(StructSymbol from, StructSymbol to)
+    {
+        foreach (var field in to.Fields)
+        {
+            if (!TryFindSourceMember(from, field.Name, field.Type))
+            {
+                return false;
+            }
+        }
+
+        foreach (var prop in to.Properties)
+        {
+            if (!prop.HasSetter && !prop.IsAutoProperty)
+            {
+                continue;
+            }
+
+            if (!TryFindSourceMember(from, prop.Name, prop.Type))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// ADR-0147: looks for a same-named member in the source literal type and
+    /// checks that its type is implicitly convertible to
+    /// <paramref name="targetType"/>.
+    /// </summary>
+    private static bool TryFindSourceMember(StructSymbol source, string name, TypeSymbol targetType)
+    {
+        foreach (var field in source.Fields)
+        {
+            if (field.Name == name)
+            {
+                return Classify(field.Type, targetType).IsImplicit;
+            }
+        }
+
+        foreach (var prop in source.Properties)
+        {
+            if (prop.Name == name)
+            {
+                return Classify(prop.Type, targetType).IsImplicit;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

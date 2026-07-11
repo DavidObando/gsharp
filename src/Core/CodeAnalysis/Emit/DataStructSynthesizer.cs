@@ -427,38 +427,45 @@ internal sealed class DataStructSynthesizer
     /// <param name="structSym">The data-struct symbol to emit members for.</param>
     public void EmitDataStructSynthesizedMembers(StructSymbol structSym)
     {
-        // ADR-0029: data structs must have at least one field (or, for a
-        // synthesized anonymous-class type, at least one property — see
-        // GetSynthesisFields). This is enforced by the binder; assert here so
-        // the emit IL stays simple.
-        Debug.Assert(
-            !GetSynthesisFields(structSym).IsDefaultOrEmpty,
-            "Data structs must have at least one field; the binder should have rejected an empty data struct.");
+        // ADR-0029 / ADR-0146: data structs must have at least one field (or,
+        // for a synthesized anonymous-class type, at least one property — see
+        // GetSynthesisFields). A zero-member anonymous object literal
+        // (`object {}`) can produce a data-struct symbol with no fields or
+        // properties; skip Equals/GetHashCode/ToString/Deconstruct synthesis
+        // rather than crashing the emit pipeline. The primary-ctor emission
+        // below is still needed because the binder emits a
+        // BoundConstructorCallExpression for plain object literals.
+        if (!GetSynthesisFields(structSym).IsDefaultOrEmpty)
+        {
+            var typeDef = this.resolveUserTypeToken(structSym);
+            var equalsTypedHandle = this.EmitDataStructEqualsTyped(structSym);
+            this.EmitDataStructEqualsObject(structSym, typeDef, equalsTypedHandle);
+            this.EmitDataStructGetHashCode(structSym);
+            this.EmitDataStructToString(structSym);
+            this.cache.DataStructOpEqualityHandles[structSym] = this.EmitDataStructEqualityOperator(structSym, isInequality: false);
+            this.EmitDataStructEqualityOperator(structSym, isInequality: true);
+            this.EmitDataStructDeconstruct(structSym);
+        }
 
-        var typeDef = this.resolveUserTypeToken(structSym);
-        var equalsTypedHandle = this.EmitDataStructEqualsTyped(structSym);
-        this.EmitDataStructEqualsObject(structSym, typeDef, equalsTypedHandle);
-        this.EmitDataStructGetHashCode(structSym);
-        this.EmitDataStructToString(structSym);
-        this.cache.DataStructOpEqualityHandles[structSym] = this.EmitDataStructEqualityOperator(structSym, isInequality: false);
-        this.EmitDataStructEqualityOperator(structSym, isInequality: true);
-        this.EmitDataStructDeconstruct(structSym);
-
-        // Rubber-duck follow-up to issue #2224: an anonymous-class literal's
-        // synthesized type has no plain fields (only get-only auto-properties
-        // — see Binding.AnonymousTypeCache), so its primary-ctor "call" sugar
-        // can't be routed through BoundStructLiteralExpression's
-        // field-initializer emission like an ordinary `data struct Foo(x
-        // int32)` does — that one keeps Fields non-empty and OverloadResolver
-        // routes its call syntax to a struct literal instead, so it never
-        // needs a real .ctor row (see the comment near
-        // `!classType.IsClass` there). An anonymous-class literal is instead
-        // bound directly as a BoundConstructorCallExpression (see
-        // ExpressionBinder.BindAnonymousClassExpression), which needs a real
-        // newobj-callable instance constructor — both for ordinary compiled
-        // code and for ExpressionTreeLowerer.BuildUserConstructorExpression's
-        // runtime `Type.GetConstructor` lookup.
-        if (structSym.Fields.IsDefaultOrEmpty && structSym.HasPrimaryConstructor)
+        // Rubber-duck follow-up to issue #2224 / ADR-0146: an
+        // anonymous-class literal's synthesized type has no plain fields
+        // (only get-only auto-properties — see Binding.AnonymousTypeCache),
+        // so its primary-ctor "call" sugar can't be routed through
+        // BoundStructLiteralExpression's field-initializer emission like an
+        // ordinary `data struct Foo(x int32)` does — that one keeps Fields
+        // non-empty and OverloadResolver routes its call syntax to a struct
+        // literal instead, so it never needs a real .ctor row (see the
+        // comment near `!classType.IsClass` there). An anonymous-class
+        // literal is instead bound directly as a
+        // BoundConstructorCallExpression (see
+        // ExpressionBinder.BindAnonymousClassExpression), which needs a
+        // real newobj-callable instance constructor — both for ordinary
+        // compiled code and for
+        // ExpressionTreeLowerer.BuildUserConstructorExpression's runtime
+        // `Type.GetConstructor` lookup. This includes zero-member anonymous
+        // types (`object {}`), which need a parameterless .ctor for their
+        // BoundConstructorCallExpression.
+        if (structSym.Fields.IsDefaultOrEmpty)
         {
             this.cache.ClassPrimaryCtorHandles[structSym] = this.EmitDataStructPrimaryConstructor(structSym);
         }

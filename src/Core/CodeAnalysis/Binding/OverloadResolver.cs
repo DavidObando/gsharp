@@ -5953,6 +5953,23 @@ internal sealed class OverloadResolver
                 continue;
             }
 
+            // ADR-0147: a structural literal-to-type conversion (anonymous
+            // object literal → concrete value type) is implicit but NOT
+            // representation-preserving — it rebuilds the source value as the
+            // target type. Unlike a reference upcast / boxing, passing the raw
+            // source through would type-mismatch at the call site, so lower it
+            // through BindConversion (which rebuilds a BoundStructLiteralExpression
+            // of the target) before the implicit-pass-through below.
+            if (argument.Type != expectedType
+                && !(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type))
+                && Conversion.Classify(argument.Type, expectedType) is var structuralConv
+                && structuralConv.IsStructural)
+            {
+                var structLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
+                boundArguments[i] = conversions.BindConversion(structLoc, argument, expectedType);
+                continue;
+            }
+
             if (argument.Type != expectedType
                 && !(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type))
                 && !Conversion.Classify(argument.Type, expectedType).IsImplicit)

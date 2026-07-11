@@ -1796,20 +1796,30 @@ internal sealed class ReflectionMetadataEmitter
                 // Issue #410 / ADR-0029: data structs synthesize 7 MethodDef
                 // rows: Equals(object), Equals(Name), GetHashCode, ToString,
                 // op_Equality, op_Inequality, Deconstruct.
-                methodRow += 7;
+                // ADR-0146: a zero-member anonymous object literal (`object {}`)
+                // creates an IsData struct with no fields or properties; skip
+                // row reservation to match EmitDataStructSynthesizedMembers'
+                // early return for the same case.
+                bool hasSynthesisFields = !s.Fields.IsDefaultOrEmpty || !s.Properties.IsDefaultOrEmpty;
+                if (hasSynthesisFields)
+                {
+                    methodRow += 7;
+                }
 
-                // Rubber-duck follow-up to issue #2224: an anonymous-class
-                // literal's synthesized type has no plain fields (only
-                // get-only auto-properties — see AnonymousTypeCache), so its
-                // primary-ctor "call" sugar can't route through
-                // BoundStructLiteralExpression's field-initializer emission
-                // like an ordinary `data struct Foo(x int32)` does (that one
-                // keeps Fields non-empty and never needs a real .ctor row —
-                // see the OverloadResolver comment near
-                // `!classType.IsClass`). It needs one extra reserved row for
-                // a real newobj-callable instance constructor, emitted by
-                // DataStructSynthesizer.EmitDataStructSynthesizedMembers.
-                if (s.Fields.IsDefaultOrEmpty && s.HasPrimaryConstructor)
+                // Rubber-duck follow-up to issue #2224 / ADR-0146: an
+                // anonymous-class literal's synthesized type has no plain
+                // fields (only get-only auto-properties — see
+                // AnonymousTypeCache), so its primary-ctor "call" sugar can't
+                // route through BoundStructLiteralExpression's field-initializer
+                // emission like an ordinary `data struct Foo(x int32)` does
+                // (that one keeps Fields non-empty and never needs a real .ctor
+                // row — see the OverloadResolver comment near
+                // `!classType.IsClass`). It needs one extra reserved row for a
+                // real newobj-callable instance constructor, emitted by
+                // DataStructSynthesizer.EmitDataStructSynthesizedMembers. This
+                // includes zero-member anonymous types (`object {}`), which need
+                // a parameterless .ctor for their BoundConstructorCallExpression.
+                if (s.Fields.IsDefaultOrEmpty)
                 {
                     classPrimaryCtorRows[s] = methodRow++;
                 }

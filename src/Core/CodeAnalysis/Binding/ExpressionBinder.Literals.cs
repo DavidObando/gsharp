@@ -801,7 +801,7 @@ internal sealed partial class ExpressionBinder
             memberValues.Add(value);
         }
 
-        if (hadError || memberNames.Count == 0)
+        if (hadError)
         {
             return new BoundErrorExpression(syntax);
         }

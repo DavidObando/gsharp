@@ -915,6 +915,32 @@ operators `+ - | & ^ << >>`; parenthesized sub-expressions; and references to
 already-declared sibling members by bare name. Anything else (a function call,
 a non-sibling identifier, a floating-point literal, …) is rejected with GS0467.
 
+## Structural literal-to-type member missing (GS0490)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0490 | Error | An object literal assigned to a concrete type (class / struct / data struct) is missing a required member. |
+
+ADR-0147 adds implicit structural assignment from an object literal (an
+anonymous `data object` / `object { … }` literal) to a concrete target
+type (class / struct / data struct) whose required members are all present
+in the literal with compatible types (width subtyping: extra literal members
+are allowed). Required members include instance fields and settable
+properties.
+
+With strict classification, missing required members cause the conversion
+to be classified as `None` at type-checking time, which produces a
+type-mismatch error rather than GS0490. GS0490 is defined in the lowering
+path (`ConversionClassifier.BindStructuralRecordConversion`) as a safety
+diagnostic but is currently unreachable for structural-literal assignments.
+
+```gsharp
+data struct Point { var X int32; var Y int32 }
+
+// Type-mismatch error (not GS0490): the literal has no `Y`.
+var p Point = object { let X = 1 }
+```
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |

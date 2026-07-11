@@ -407,6 +407,13 @@ internal sealed class ConversionClassifier
 
         var conversion = Conversion.Classify(expression.Type, type);
 
+        // ADR-0147: a structural literal-to-type assignment rebuilds the source
+        // object-literal value as the target concrete value type.
+        if (conversion.IsStructural)
+        {
+            return BindStructuralRecordConversion(diagnosticLocation, expression, (StructSymbol)type);
+        }
+
         // Issue #1183: C# §10.2.11 implicit constant expression conversion.
         // A *constant* integer expression (an integer literal, or unary +/-
         // applied to one) whose value lies within the target integer type's
@@ -2214,5 +2221,86 @@ internal sealed class ConversionClassifier
             expression.Syntax,
             ImmutableArray.Create<BoundStatement>(declaration),
             rebuilt);
+    }
+
+    // ----- ADR-0147 structural literal-to-type conversion -----
+
+    /// <summary>
+    /// ADR-0147: lowers a structural object-literal assignment into a
+    /// <see cref="BoundStructLiteralExpression"/> of the target concrete
+    /// type. Each target required member (instance field / settable property)
+    /// is matched by name against the source literal's members; the source
+    /// value is converted to the member type and emitted as a
+    /// <see cref="BoundFieldInitializer"/>. A missing required member is a
+    /// binder error (GS0490). Extra source members are ignored (width
+    /// subtyping).
+    /// </summary>
+    private BoundExpression BindStructuralRecordConversion(TextLocation diagnosticLocation, BoundExpression expression, StructSymbol target)
+    {
+        var sourceValues = GetObjectLiteralMemberValues(expression);
+        var initializers = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
+
+        foreach (var field in target.Fields)
+        {
+            if (!sourceValues.TryGetValue(field.Name, out var value))
+            {
+                Diagnostics.ReportStructuralMemberMissing(diagnosticLocation, target, field.Name);
+                return new BoundErrorExpression(expression.Syntax);
+            }
+
+            var converted = BindConversion(diagnosticLocation, value, field.Type, allowExplicit: false);
+            initializers.Add(new BoundFieldInitializer(field, converted));
+        }
+
+        foreach (var prop in target.Properties)
+        {
+            // Only settable properties participate in composite-literal
+            // construction (mirrors BindStructLiteralExpression).
+            if (!prop.HasSetter && !prop.IsAutoProperty)
+            {
+                continue;
+            }
+
+            if (!sourceValues.TryGetValue(prop.Name, out var value))
+            {
+                Diagnostics.ReportStructuralMemberMissing(diagnosticLocation, target, prop.Name);
+                return new BoundErrorExpression(expression.Syntax);
+            }
+
+            var converted = BindConversion(diagnosticLocation, value, prop.Type, allowExplicit: false);
+            initializers.Add(new BoundFieldInitializer(prop, converted));
+        }
+
+        return new BoundStructLiteralExpression(expression.Syntax, target, initializers.ToImmutable());
+    }
+
+    /// <summary>
+    /// ADR-0147: extracts the (member name → bound value) map from a bound
+    /// object literal. A <see cref="BoundStructLiteralExpression"/> (data
+    /// object) yields its field initializers directly; a
+    /// <see cref="BoundConstructorCallExpression"/> (plain object) yields its
+    /// primary-constructor arguments keyed by parameter name.
+    /// </summary>
+    private static Dictionary<string, BoundExpression> GetObjectLiteralMemberValues(BoundExpression expression)
+    {
+        var map = new Dictionary<string, BoundExpression>(StringComparer.Ordinal);
+
+        if (expression is BoundStructLiteralExpression structLiteral)
+        {
+            foreach (var initializer in structLiteral.Initializers)
+            {
+                map[initializer.MemberName] = initializer.Value;
+            }
+        }
+        else if (expression is BoundConstructorCallExpression constructorCall)
+        {
+            var parameters = constructorCall.StructType.PrimaryConstructorParameters;
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                map[parameters[i].Name] = constructorCall.Arguments[i];
+            }
+        }
+
+        return map;
     }
 }
