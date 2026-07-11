@@ -1,0 +1,14 @@
+Create a skill for the G# language, G# is a new dotnet language. Put the skill in "SKILLS" directory.
+
+**Structure of the skill**:
+
+```
+SKILL.md
+-- /references
+```
+
+- **references**: will contains files about all feature of G#, language specifications, etc.
+
+G# language documentations:
+
+The whole G# repository is available here "<PATH_TO_REPO_CLONE>" , it contains source code, documentations, examples
