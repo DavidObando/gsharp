@@ -175,13 +175,29 @@
     </ItemGroup>
   </Target>
 
+  <!-- Issue #2294 / ADR-0145 parity gap: several generator-adjacent NuGet
+       packages populate @(AdditionalFiles) themselves by hooking a standard
+       csc/vbc extensibility target rather than a plain ItemGroup. The
+       canonical example is Avalonia: Avalonia.Generators.props injects the
+       project's AXAML into @(AdditionalFiles) via
+       `BeforeTargets="GenerateMSBuildEditorConfigFileShouldRun"` — a target
+       defined only in Microsoft.Managed.Core.targets, which a Gsharp project
+       never imports (§E). MSBuild silently no-ops a BeforeTargets reference to
+       a target name that does not exist, so that injection never ran and
+       @(AdditionalFiles) reached gsgen empty even though gsgen's
+       AdditionalText/SourceItemGroup plumbing (issue #2223) already fully
+       supports it. Defining the same hook name here — even as a no-op body —
+       is enough for such packages' BeforeTargets to fire, matching csc's
+       extensibility surface without special-casing Avalonia. -->
+  <Target Name="GenerateMSBuildEditorConfigFileShouldRun" />
+
   <!-- (2) Run gsgen over the user's .gs (BEFORE generated files are added to
        @(Compile)), the resolved reference closure, and the resolved analyzers.
        Incremental: re-runs only when a source/analyzer/reference/project file is
        newer than the manifest. -->
   <Target Name="_GsharpRunSourceGenerators"
           BeforeTargets="CoreCompile"
-          DependsOnTargets="_GsharpPartitionForeignCompile;_GsharpResolveAnalyzers;_GsharpCollectGeneratorOptions;ResolveReferences"
+          DependsOnTargets="_GsharpPartitionForeignCompile;GenerateMSBuildEditorConfigFileShouldRun;_GsharpResolveAnalyzers;_GsharpCollectGeneratorOptions;ResolveReferences"
           Condition=" '$(GsharpRunSourceGenerators)' != 'false' "
           Inputs="@(Compile);@(_GsharpForeignCompile);@(AdditionalFiles);@(GsharpAnalyzer);@(ReferencePathWithRefAssemblies);$(MSBuildAllProjects)"
           Outputs="$(IntermediateOutputPath)gsgen\gsgen.manifest">

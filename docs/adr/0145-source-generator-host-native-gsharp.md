@@ -359,6 +359,33 @@ gsc consumes the emitted `.g.gs`):
   Avalonia is merely the first consumer. Verified via
   `tools/gsgen/GSharp.GeneratorHost.Tests/AdditionalTextGeneratorTests.cs` and
   `GsgenArgsAdditionalFilesTests.cs`.
+- **`@(AdditionalFiles)` population for a native `.gsproj`** (issue #2294) —
+  the §C forwarding above assumes `@(AdditionalFiles)` is already populated by
+  the time `_GsharpRunSourceGenerators` runs, which csc-oriented packages don't
+  all guarantee the same way. `CompilerVisibleProperty`/`CompilerVisibleItemMetadata`
+  are plain `ItemGroup`s and work unconditionally (CommunityToolkit.Mvvm's
+  feature-switch wiring), but `Avalonia.Generators.props`' `_InjectAdditionalFiles`
+  target — the step that actually copies `@(AvaloniaXaml)` into
+  `@(AdditionalFiles)` — is declared `BeforeTargets="GenerateMSBuildEditorConfigFileShouldRun"`,
+  a target only defined by `Microsoft.Managed.Core.targets` (imported solely by
+  C#/VB `Microsoft.NET.Sdk` projects, never by Gsharp's). MSBuild silently
+  no-ops a `BeforeTargets` reference to a nonexistent target name, so that
+  injection never ran for a `.gsproj` and `@(AdditionalFiles)` reached gsgen
+  empty — even though every other link (§C's `HostAdditionalText`/
+  `HostAnalyzerConfigOptionsProvider`, `SourceItemGroup` propagation) was
+  already correct and tested. Fixed generically, not as an Avalonia special
+  case: `Gsharp.NET.Core.Sdk.targets` now declares a no-op
+  `GenerateMSBuildEditorConfigFileShouldRun` target and adds it to
+  `_GsharpRunSourceGenerators`'s `DependsOnTargets`, so *any* package using this
+  common csc extensibility point to inject `@(AdditionalFiles)` now works under
+  the Gsharp SDK too. Pinned by
+  `test/Sdk.Tests/SdkLayoutTests.cs::Core_Targets_Declares_GenerateMSBuildEditorConfigFileShouldRun_Hook`.
+  This is the first instance of a broader pattern worth watching: packages that
+  hook standard `Microsoft.Managed.Core.targets`/`Microsoft.Common.CurrentVersion.targets`
+  target names (rather than plain properties/items) silently no-op under a
+  from-scratch SDK unless that target name is also defined here. The
+  Nerdbank.GitVersioning gap below is the same family of issue from the other
+  direction (a `$(Language)` property gate instead of a missing target name).
 - **Avalonia runtime XAML (`CompileAvaloniaXaml`)** — the post-compile IL-rewrite
   task that makes compiled XAML load at runtime needs *no* new host/SDK code: the
   G# SDK imports `Microsoft.NET.Sdk` and its `CoreCompile` emits the assembly at
