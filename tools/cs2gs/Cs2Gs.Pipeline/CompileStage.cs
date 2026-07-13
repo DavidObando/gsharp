@@ -343,12 +343,20 @@ public sealed class CompileStage : IMigrationStage
     {
         if (!string.IsNullOrEmpty(diagnosticFile))
         {
-            string name = Path.GetFileName(diagnosticFile);
-            EmittedGsFile match = files.FirstOrDefault(f =>
-                string.Equals(Path.GetFileName(f.GsPath), name, StringComparison.OrdinalIgnoreCase));
-            if (match is not null)
+            string diagnosticFullPath = Path.GetFullPath(diagnosticFile);
+            EmittedGsFile exactMatch = files.FirstOrDefault(f =>
+                string.Equals(Path.GetFullPath(f.GsPath), diagnosticFullPath, StringComparison.OrdinalIgnoreCase));
+            if (exactMatch is not null)
             {
-                return match;
+                return exactMatch;
+            }
+
+            string name = Path.GetFileName(diagnosticFile);
+            EmittedGsFile[] matches = files.Where(f =>
+                string.Equals(Path.GetFileName(f.GsPath), name, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (matches.Length == 1)
+            {
+                return matches[0];
             }
         }
 

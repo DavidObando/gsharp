@@ -160,16 +160,22 @@ public sealed class SdkCompileRunner
         }
 
         string projectPath = Path.Combine(appRunDir, projectName + ".gsproj");
+        IReadOnlyList<string> projectSources = (gsFilePaths ?? Array.Empty<string>())
+            .Select(path => Path.GetRelativePath(appRunDir, path))
+            .ToList();
+        IReadOnlyList<string> explicitAdditionalFiles = (additionalFiles ?? Array.Empty<string>())
+            .Where(spec => RequiresExplicitProjectItem(appRunDir, spec))
+            .ToList();
         string projectXml = BuildProjectXml(
             sdk.Value.Version,
             target,
             rootNamespace,
-            gsFilePaths ?? Array.Empty<string>(),
+            projectSources,
             packages,
             references,
             analyzerReferences,
             declaredOnlyPackages,
-            additionalFiles);
+            explicitAdditionalFiles);
         File.WriteAllText(projectPath, projectXml);
 
         var args = new List<string> { "build", projectPath, "-c", config ?? "Release" };
@@ -447,6 +453,28 @@ public sealed class SdkCompileRunner
         sb.Append('\n');
         sb.Append("</Project>\n");
         return sb.ToString();
+    }
+
+    internal static bool RequiresExplicitProjectItem(string projectDirectory, string spec)
+    {
+        if (string.IsNullOrEmpty(spec))
+        {
+            return false;
+        }
+
+        string[] segments = spec.Split(';', StringSplitOptions.RemoveEmptyEntries);
+        bool isAvaloniaXaml = segments.Skip(1).Any(
+            s => string.Equals(s, "SourceItemGroup=AvaloniaXaml", StringComparison.OrdinalIgnoreCase));
+        if (!isAvaloniaXaml)
+        {
+            return true;
+        }
+
+        string relativePath = Path.GetRelativePath(projectDirectory, segments[0]);
+        return Path.IsPathRooted(relativePath) ||
+            relativePath.Equals("..", StringComparison.Ordinal) ||
+            relativePath.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
+            relativePath.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal);
     }
 
     /// <summary>

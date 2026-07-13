@@ -219,6 +219,41 @@ public class SdkCompileRunnerTests
             xml);
     }
 
+    [Fact]
+    public void RequiresExplicitProjectItem_UsesDefaultGlobForCopiedAvaloniaXaml()
+    {
+        Assert.False(SdkCompileRunner.RequiresExplicitProjectItem(
+            "/migration/Oahu.UI",
+            "/migration/Oahu.UI/Views/BookLibraryView.axaml;SourceItemGroup=AvaloniaXaml"));
+        Assert.True(SdkCompileRunner.RequiresExplicitProjectItem(
+            "/migration/Oahu.UI",
+            "/source/Oahu.UI/Views/BookLibraryView.axaml;SourceItemGroup=AvaloniaXaml"));
+    }
+
+    [Fact]
+    public void WriteIsolationBoundary_PreservesCopiedProjectBuildFiles()
+    {
+        string directory = Path.Combine(
+            Directory.GetCurrentDirectory(),
+            "sdkcompilerunnertests-isolation-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string propsPath = Path.Combine(directory, "Directory.Build.props");
+        const string Props = "<Project><PropertyGroup><Custom>true</Custom></PropertyGroup></Project>";
+        File.WriteAllText(propsPath, Props);
+
+        try
+        {
+            GsharpTestProjectRunner.WriteIsolationBoundary(directory);
+
+            Assert.Equal(Props, File.ReadAllText(propsPath));
+            Assert.True(File.Exists(Path.Combine(directory, "Directory.Build.targets")));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     /// <summary>
     /// A scratch directory populated with one fake shared-framework assembly
     /// file, so <see cref="SdkCompileRunner.PartitionReferences"/>'s runtime-dir

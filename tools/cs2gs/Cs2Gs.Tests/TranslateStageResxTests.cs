@@ -41,7 +41,8 @@ public class TranslateStageResxTests
         }
 
         string projectDir = NewScratchDir("translate-resx");
-        File.WriteAllText(Path.Combine(projectDir, "Directory.Build.props"), "<Project></Project>");
+        const string DirectoryBuildProps = "<Project><PropertyGroup><SampleProperty>true</SampleProperty></PropertyGroup></Project>";
+        File.WriteAllText(Path.Combine(projectDir, "Directory.Build.props"), DirectoryBuildProps);
         string projectPath = Path.Combine(projectDir, "Sample.csproj");
         File.WriteAllText(projectPath, """
             <Project Sdk="Microsoft.NET.Sdk">
@@ -78,6 +79,19 @@ public class TranslateStageResxTests
         File.WriteAllText(
             Path.Combine(projectDir, "Program.cs"),
             "public class Program { public static void Main() { } }");
+        string viewsDir = Path.Combine(projectDir, "Views");
+        Directory.CreateDirectory(viewsDir);
+        File.WriteAllText(
+            Path.Combine(viewsDir, "MainView.cs"),
+            "namespace Sample.App.Views; public class MainView { }");
+        File.WriteAllText(Path.Combine(viewsDir, "MainView.axaml"), "<UserControl />");
+        string assetsDir = Path.Combine(projectDir, "Assets");
+        Directory.CreateDirectory(assetsDir);
+        File.WriteAllBytes(Path.Combine(assetsDir, "logo.bin"), new byte[] { 1, 2, 3 });
+        Directory.CreateDirectory(Path.Combine(projectDir, "bin"));
+        File.WriteAllText(Path.Combine(projectDir, "bin", "ignored.txt"), "ignore");
+        Directory.CreateDirectory(Path.Combine(projectDir, "obj"));
+        File.WriteAllText(Path.Combine(projectDir, "obj", "ignored.txt"), "ignore");
 
         string outRoot = NewOutputRoot("translate-resx");
         var options = new PipelineOptions { GscPath = compiler, OutputRoot = outRoot };
@@ -96,6 +110,23 @@ public class TranslateStageResxTests
         string generated = File.ReadAllText(designerFile);
         Assert.Contains("Sample.App.Properties", generated);
         Assert.Contains("Greeting", generated);
+
+        string appOutputDir = Directory.GetParent(Path.GetDirectoryName(designerFile)).FullName;
+        Assert.True(File.Exists(Path.Combine(appOutputDir, "Program.gs")));
+        Assert.True(File.Exists(Path.Combine(appOutputDir, "Views", "MainView.gs")));
+        Assert.Equal(
+            "<UserControl />",
+            File.ReadAllText(Path.Combine(appOutputDir, "Views", "MainView.axaml")));
+        Assert.Equal(
+            new byte[] { 1, 2, 3 },
+            File.ReadAllBytes(Path.Combine(appOutputDir, "Assets", "logo.bin")));
+        Assert.True(File.Exists(Path.Combine(appOutputDir, "Properties", "Resources.resx")));
+        Assert.Equal(
+            DirectoryBuildProps,
+            File.ReadAllText(Path.Combine(appOutputDir, "Directory.Build.props")));
+        Assert.False(File.Exists(Path.Combine(appOutputDir, "Sample.csproj")));
+        Assert.False(Directory.Exists(Path.Combine(appOutputDir, "bin")));
+        Assert.False(Directory.Exists(Path.Combine(appOutputDir, "obj")));
 
         // The hand-authored Resources.Designer.cs must not itself have been
         // translated into a second competing .gs file.
