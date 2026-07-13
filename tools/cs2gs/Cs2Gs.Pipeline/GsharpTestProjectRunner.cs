@@ -316,8 +316,17 @@ public class GsharpTestProjectRunner
         // the corpus does (no GitVersioning, StyleCop, or AssemblyName rewrite),
         // which otherwise breaks for the Gsharp language CodeDomProvider.
         const string Empty = "<Project>\n</Project>\n";
-        File.WriteAllText(Path.Combine(workDir, "Directory.Build.props"), Empty);
-        File.WriteAllText(Path.Combine(workDir, "Directory.Build.targets"), Empty);
+        string propsPath = Path.Combine(workDir, "Directory.Build.props");
+        string targetsPath = Path.Combine(workDir, "Directory.Build.targets");
+        if (!File.Exists(propsPath))
+        {
+            File.WriteAllText(propsPath, Empty);
+        }
+
+        if (!File.Exists(targetsPath))
+        {
+            File.WriteAllText(targetsPath, Empty);
+        }
     }
 
     internal static string FindRepoRoot()

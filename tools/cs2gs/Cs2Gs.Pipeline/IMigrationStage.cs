@@ -117,6 +117,12 @@ public sealed class StageExecutionContext
     public List<string> GeneratorGlobalOptions { get; } = new List<string>();
 
     /// <summary>
+    /// Gets or sets the source project's root namespace, captured by the
+    /// Translate stage for the SDK compile project.
+    /// </summary>
+    public string RootNamespace { get; set; }
+
+    /// <summary>
     /// Gets the source project's declared build/dev-only <c>PackageReference</c>s
     /// (issue #2267) — e.g. a version-bumped <c>Nerdbank.GitVersioning</c> — that
     /// must be re-declared into the isolated <c>--via-sdk</c> gsproj because they

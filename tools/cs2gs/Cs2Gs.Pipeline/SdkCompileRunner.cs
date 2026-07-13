@@ -51,6 +51,7 @@ public sealed class SdkCompileRunner
     /// locally-built <c>Gsharp.NET.Sdk</c>.
     /// </summary>
     /// <param name="appRunDir">The per-app output directory to scaffold the build project under.</param>
+    /// <param name="projectName">The source project name to preserve for the generated <c>.gsproj</c> and assembly.</param>
     /// <param name="gsFilePaths">The absolute paths of the emitted G# files to compile, in compile order.</param>
     /// <param name="target">The output kind (exe or library).</param>
     /// <param name="referencePaths">
@@ -60,6 +61,7 @@ public sealed class SdkCompileRunner
     /// MSBuild items instead.
     /// </param>
     /// <param name="analyzerPaths">The analyzer/generator assembly paths (issue #2215).</param>
+    /// <param name="additionalFiles">The source generator inputs, including AXAML item metadata (issue #2223).</param>
     /// <param name="rootNamespace">The root namespace to set on the project, or <see langword="null"/>.</param>
     /// <param name="config">The build configuration (e.g. <c>Release</c>).</param>
     /// <param name="declaredPackageReferences">
@@ -72,10 +74,12 @@ public sealed class SdkCompileRunner
     /// <returns>The compile result, or an unavailable result when no local SDK nupkg can be found.</returns>
     public SdkCompileResult Compile(
         string appRunDir,
+        string projectName,
         IReadOnlyList<string> gsFilePaths,
         TargetKind target,
         IReadOnlyList<string> referencePaths,
         IReadOnlyList<string> analyzerPaths,
+        IReadOnlyList<string> additionalFiles,
         string rootNamespace,
         string config,
         IReadOnlyList<DeclaredPackageReference> declaredPackageReferences = null)
@@ -83,6 +87,11 @@ public sealed class SdkCompileRunner
         if (string.IsNullOrEmpty(appRunDir))
         {
             throw new ArgumentException("An app run directory is required.", nameof(appRunDir));
+        }
+
+        if (string.IsNullOrWhiteSpace(projectName))
+        {
+            throw new ArgumentException("A project name is required.", nameof(projectName));
         }
 
         string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
@@ -122,13 +131,16 @@ public sealed class SdkCompileRunner
                 continue;
             }
 
-            analyzerReferences.Add(Path.GetFullPath(analyzerPath));
-
             (string Id, string Version)? owningPackage = TryParsePackageFromPath(analyzerPath, nugetPackagesRoot);
             if (owningPackage is not null)
             {
+                // The PackageReference contributes its analyzer assets. Adding
+                // the same DLL explicitly would run generators twice.
                 AddOrUpgradePackage(packages, packageIndex, owningPackage.Value.Id, owningPackage.Value.Version);
+                continue;
             }
+
+            analyzerReferences.Add(Path.GetFullPath(analyzerPath));
         }
 
         // Issue #2267: a declared build/dev-only package (nbgv) that also
@@ -147,17 +159,23 @@ public sealed class SdkCompileRunner
             declaredOnlyPackages.Add(declared);
         }
 
-        const string ProjectName = "App";
-        string projectPath = Path.Combine(appRunDir, ProjectName + ".gsproj");
+        string projectPath = Path.Combine(appRunDir, projectName + ".gsproj");
+        IReadOnlyList<string> projectSources = (gsFilePaths ?? Array.Empty<string>())
+            .Select(path => Path.GetRelativePath(appRunDir, path))
+            .ToList();
+        IReadOnlyList<string> explicitAdditionalFiles = (additionalFiles ?? Array.Empty<string>())
+            .Where(spec => RequiresExplicitProjectItem(appRunDir, spec))
+            .ToList();
         string projectXml = BuildProjectXml(
             sdk.Value.Version,
             target,
             rootNamespace,
-            gsFilePaths ?? Array.Empty<string>(),
+            projectSources,
             packages,
             references,
             analyzerReferences,
-            declaredOnlyPackages);
+            declaredOnlyPackages,
+            explicitAdditionalFiles);
         File.WriteAllText(projectPath, projectXml);
 
         var args = new List<string> { "build", projectPath, "-c", config ?? "Release" };
@@ -184,7 +202,7 @@ public sealed class SdkCompileRunner
             }
         }
 
-        string assemblyPath = FindEmittedAssembly(appRunDir, ProjectName, config);
+        string assemblyPath = FindEmittedAssembly(appRunDir, projectName, config);
         return SdkCompileResult.Completed(result.ExitCode, result.Output, diagnostics, assemblyPath);
     }
 
@@ -297,7 +315,7 @@ public sealed class SdkCompileRunner
     }
 
     /// <summary>
-    /// Renders the isolated <c>App.gsproj</c> XML text: the SDK-project header,
+    /// Renders the migrated, source-named <c>.gsproj</c> XML text: the SDK-project header,
     /// build properties, <c>@(Compile)</c> items, <c>@(PackageReference)</c>
     /// (both the reconstructed-from-DLL set and the declared build/dev-only set,
     /// issue #2267), <c>@(Reference)</c>, and <c>@(Analyzer)</c> items. Exposed
@@ -316,6 +334,7 @@ public sealed class SdkCompileRunner
     /// (issue #2267) to re-declare even though they contributed no compile-time
     /// DLL to <paramref name="packages"/>.
     /// </param>
+    /// <param name="additionalFiles">The source generator inputs to emit as project items.</param>
     /// <returns>The full <c>.gsproj</c> XML text.</returns>
     internal static string BuildProjectXml(
         string sdkVersion,
@@ -325,9 +344,11 @@ public sealed class SdkCompileRunner
         IReadOnlyList<(string Id, string Version)> packages,
         IReadOnlyList<string> references,
         IReadOnlyList<string> analyzerReferences,
-        IReadOnlyList<DeclaredPackageReference> declaredPackageReferences = null)
+        IReadOnlyList<DeclaredPackageReference> declaredPackageReferences = null,
+        IReadOnlyList<string> additionalFiles = null)
     {
         declaredPackageReferences ??= Array.Empty<DeclaredPackageReference>();
+        additionalFiles ??= Array.Empty<string>();
         string outputType = target == TargetKind.Exe ? "Exe" : "Library";
         var sb = new StringBuilder();
         sb.Append("<Project Sdk=\"").Append(SdkPackageId).Append('/').Append(sdkVersion).Append("\">\n");
@@ -412,9 +433,48 @@ public sealed class SdkCompileRunner
             sb.Append("  </ItemGroup>\n");
         }
 
+        if (additionalFiles.Count > 0)
+        {
+            sb.Append('\n');
+            sb.Append("  <ItemGroup>\n");
+            foreach (string spec in additionalFiles)
+            {
+                string[] segments = spec.Split(';', StringSplitOptions.RemoveEmptyEntries);
+                string path = segments[0];
+                bool isAvaloniaXaml = segments.Skip(1).Any(
+                    s => string.Equals(s, "SourceItemGroup=AvaloniaXaml", StringComparison.OrdinalIgnoreCase));
+                string itemName = isAvaloniaXaml ? "AvaloniaXaml" : "AdditionalFiles";
+                sb.Append("    <").Append(itemName).Append(" Include=\"").Append(path).Append("\" />\n");
+            }
+
+            sb.Append("  </ItemGroup>\n");
+        }
+
         sb.Append('\n');
         sb.Append("</Project>\n");
         return sb.ToString();
+    }
+
+    internal static bool RequiresExplicitProjectItem(string projectDirectory, string spec)
+    {
+        if (string.IsNullOrEmpty(spec))
+        {
+            return false;
+        }
+
+        string[] segments = spec.Split(';', StringSplitOptions.RemoveEmptyEntries);
+        bool isAvaloniaXaml = segments.Skip(1).Any(
+            s => string.Equals(s, "SourceItemGroup=AvaloniaXaml", StringComparison.OrdinalIgnoreCase));
+        if (!isAvaloniaXaml)
+        {
+            return true;
+        }
+
+        string relativePath = Path.GetRelativePath(projectDirectory, segments[0]);
+        return Path.IsPathRooted(relativePath) ||
+            relativePath.Equals("..", StringComparison.Ordinal) ||
+            relativePath.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
+            relativePath.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal);
     }
 
     /// <summary>
