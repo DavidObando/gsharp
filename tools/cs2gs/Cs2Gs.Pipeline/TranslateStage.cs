@@ -100,6 +100,8 @@ public sealed class TranslateStage : IMigrationStage
             // (or, worse, collide with) output that belongs to the sibling.
             if (!isReferencedProject)
             {
+                context.RootNamespace = currentProject.RootNamespace;
+
                 foreach (string analyzerPath in currentProject.AnalyzerReferencePaths)
                 {
                     context.AnalyzerReferencePaths.Add(analyzerPath);

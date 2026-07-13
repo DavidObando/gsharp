@@ -50,11 +50,13 @@ public sealed class CompileStage : IMigrationStage
         {
             SdkCompileResult sdkResult = new SdkCompileRunner().Compile(
                 context.AppRunDir,
+                Path.GetFileNameWithoutExtension(context.App.ProjectPath),
                 gsFiles,
                 context.App.TargetKind,
                 references,
                 context.AnalyzerReferencePaths,
-                rootNamespace: null,
+                context.AdditionalGeneratorFiles,
+                context.RootNamespace,
                 context.Options.Config,
                 context.BuildOnlyPackageReferences);
 

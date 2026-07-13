@@ -197,6 +197,28 @@ public class SdkCompileRunnerTests
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(xml, "<PackageReference"));
     }
 
+    [Fact]
+    public void BuildProjectXml_PreservesRootNamespaceAndAvaloniaXamlItems()
+    {
+        string xml = SdkCompileRunner.BuildProjectXml(
+            sdkVersion: "1.0.0",
+            target: TargetKind.Library,
+            rootNamespace: "Oahu.Core.UI.Avalonia",
+            gsFilePaths: new[] { "/migration/BookLibraryView_axaml.gs" },
+            packages: new List<(string Id, string Version)> { ("avalonia", "11.2.7") },
+            references: Array.Empty<string>(),
+            analyzerReferences: Array.Empty<string>(),
+            additionalFiles: new[]
+            {
+                "/source/Views/BookLibraryView.axaml;SourceItemGroup=AvaloniaXaml",
+            });
+
+        Assert.Contains("<RootNamespace>Oahu.Core.UI.Avalonia</RootNamespace>", xml);
+        Assert.Contains(
+            "<AvaloniaXaml Include=\"/source/Views/BookLibraryView.axaml\" />",
+            xml);
+    }
+
     /// <summary>
     /// A scratch directory populated with one fake shared-framework assembly
     /// file, so <see cref="SdkCompileRunner.PartitionReferences"/>'s runtime-dir
