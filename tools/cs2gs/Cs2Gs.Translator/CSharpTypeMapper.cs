@@ -742,7 +742,17 @@ public sealed class CSharpTypeMapper
     private bool HasSourceHomonym(INamedTypeSymbol named, TranslationContext context)
     {
         this.sourceSimpleNameCounts ??= BuildSourceSimpleNameCounts(context.Compilation);
-        return this.sourceSimpleNameCounts.TryGetValue(named.Name, out var count) && count > 1;
+        if (!this.sourceSimpleNameCounts.TryGetValue(named.Name, out var count))
+        {
+            return false;
+        }
+
+        // Issue #2307: for a source symbol, one census entry is the symbol
+        // itself, so ambiguity starts at two. A metadata symbol is not in the
+        // source census at all, so even one same-named source declaration is a
+        // distinct homonym and the metadata reference must stay qualified.
+        int selfCount = named.Locations.Any(l => l.IsInSource) ? 1 : 0;
+        return count > selfCount;
     }
 
     /// <summary>

@@ -183,6 +183,79 @@ namespace Consumer
         Assert.True(roundTrip.Success, string.Join(Environment.NewLine, roundTrip.Errors));
     }
 
+    [Fact]
+    public void MetadataType_WithSourceHomonym_IsEmittedQualified()
+    {
+        MetadataReference libRef = CompileLibrary(
+            @"
+namespace Oahu.BooksDatabase
+{
+    public class Codec
+    {
+        public string Name { get; set; }
+    }
+}
+",
+            "Issue2307OahuData");
+
+        SyntaxTree sourceHomonym = CSharpSyntaxTree.ParseText(
+            @"
+namespace Oahu.Audible.Json
+{
+    public class Codec
+    {
+        public int Id { get; set; }
+    }
+}
+",
+            new CSharpParseOptions(LanguageVersion.Latest),
+            path: "AudibleCodec.cs");
+        SyntaxTree caller = CSharpSyntaxTree.ParseText(
+            @"
+using System.Collections.Generic;
+using System.Linq;
+using Oahu.Audible.Json;
+using Oahu.BooksDatabase;
+
+namespace Oahu.Core
+{
+    public class C
+    {
+        public Oahu.BooksDatabase.Codec Find(
+            ICollection<Oahu.BooksDatabase.Codec> codecs,
+            string name)
+        {
+            return codecs.FirstOrDefault(
+                (Oahu.BooksDatabase.Codec c) => c.Name == name);
+        }
+    }
+}
+",
+            new CSharpParseOptions(LanguageVersion.Latest),
+            path: "Caller.cs");
+        var compilation = CSharpCompilation.Create(
+            "Cs2Gs.Issue2307.MetadataTypeWithSourceHomonym",
+            new[] { sourceHomonym, caller },
+            CSharpProjectLoader.RuntimeReferences().Append(libRef).ToImmutableArray(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        Assert.DoesNotContain(
+            compilation.GetDiagnostics(),
+            d => d.Severity == DiagnosticSeverity.Error);
+
+        SemanticModel model = compilation.GetSemanticModel(caller);
+        var document = new LoadedDocument("Caller.cs", caller, model);
+        var context = new TranslationContext(compilation, model, document.FilePath);
+        CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        string printed = GSharpPrinter.Print(unit);
+
+        Assert.Contains("ICollection[Oahu.BooksDatabase.Codec]", printed);
+        Assert.Contains("(c Oahu.BooksDatabase.Codec)", printed);
+
+        RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
+        Assert.True(roundTrip.Success, string.Join(Environment.NewLine, roundTrip.Errors));
+    }
+
     /// <summary>
     /// Issue #2222 ordering blindspot: namespace <c>First</c> is reached via
     /// an explicit <c>using</c>, but the colliding namespace <c>Second</c> is
