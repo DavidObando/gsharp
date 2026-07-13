@@ -37,7 +37,7 @@ total
         Assert.Equal(1 + 2 + 3, result.Value);
     }
 
-    [Fact(Skip = "Flaky in CI: intermittently reports a spurious binder diagnostic (reference-resolution race in the test fixture). Tracked by #2303.")]
+    [Fact]
     public void AwaitFor_ConfigureAwaitFalse_DrainsAsyncEnumerable()
     {
         // Issue #2280: `stream.ConfigureAwait(false)` returns
