@@ -790,31 +790,50 @@ public sealed class Evaluator
 
     private static object BlockOnValueTask(object valueTask)
     {
-        // Works uniformly for `Task`, `Task<T>`, `ValueTask`, and
-        // `ValueTask<T>`. ValueTask awaiters cannot be polled
-        // synchronously for an incomplete task — convert via `AsTask()`
-        // when available so the underlying `Task` awaiter is the one we
-        // call `GetResult()` on. Matches Phase 5.1's `await` pragma.
+        // Works uniformly for `Task`, `Task<T>`, `ValueTask`, `ValueTask<T>`,
+        // and any `ConfigureAwait(...)`-flavored awaitable
+        // (`ConfiguredTaskAwaitable(<T>)` / `ConfiguredValueTaskAwaitable(<T>)`).
+        //
+        // Issue #2303: this previously converted `ValueTask`-shaped operands
+        // to a real `Task` via `AsTask()` before blocking — but
+        // `ConfiguredValueTaskAwaitable(<T>)` (the type returned by
+        // `IAsyncEnumerable[T].ConfigureAwait(false)` and used pervasively by
+        // the `await for` pattern-based path, #2280) has no `AsTask` method,
+        // so its awaiter's `GetResult()` was invoked directly. Per the
+        // `IValueTaskSource` contract, `GetResult()` on such an awaiter is
+        // only valid once the operation has actually completed; calling it
+        // eagerly is a race — `ConfigureAwait(false)` lets the antecedent's
+        // continuation resume on any thread-pool thread, so `GetResult()`
+        // could run before that continuation reached its `yield`/completion,
+        // throwing `InvalidOperationException` intermittently. Instead,
+        // check `IsCompleted` first and, if not yet done, block on a
+        // completion signal registered via `OnCompleted`/`UnsafeOnCompleted`
+        // — the spec-mandated awaiter pattern — before calling `GetResult()`.
         if (valueTask == null)
         {
             return null;
         }
 
-        var type = valueTask.GetType();
-        var asTask = type.GetMethod("AsTask", Type.EmptyTypes);
-        object awaitable = asTask != null ? asTask.Invoke(valueTask, null) : valueTask;
-        if (awaitable == null)
-        {
-            return null;
-        }
-
-        var awaiter = awaitable.GetType().GetMethod("GetAwaiter", Type.EmptyTypes)?.Invoke(awaitable, null);
+        var awaiter = valueTask.GetType().GetMethod("GetAwaiter", Type.EmptyTypes)?.Invoke(valueTask, null);
         if (awaiter == null)
         {
             return null;
         }
 
-        var getResult = awaiter.GetType().GetMethod("GetResult", Type.EmptyTypes);
+        var awaiterType = awaiter.GetType();
+        var isCompletedProperty = awaiterType.GetProperty("IsCompleted");
+        var isCompleted = isCompletedProperty != null && (bool)isCompletedProperty.GetValue(awaiter);
+        if (!isCompleted)
+        {
+            using var completed = new ManualResetEventSlim(false);
+            var onCompletedMethod = awaiterType.GetMethod("UnsafeOnCompleted", new[] { typeof(Action) })
+                ?? awaiterType.GetMethod("OnCompleted", new[] { typeof(Action) });
+            Action continuation = () => completed.Set();
+            onCompletedMethod?.Invoke(awaiter, new object[] { continuation });
+            completed.Wait();
+        }
+
+        var getResult = awaiterType.GetMethod("GetResult", Type.EmptyTypes);
         try
         {
             return getResult?.Invoke(awaiter, null);
