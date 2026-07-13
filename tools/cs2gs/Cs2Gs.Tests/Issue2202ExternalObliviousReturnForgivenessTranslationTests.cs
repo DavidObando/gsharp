@@ -155,6 +155,55 @@ namespace Demo
         Assert.DoesNotContain("!!!!",  printed);
     }
 
+    [Fact]
+    public void NullableEnabled_InferredLocalFromObliviousExternalReturn_RendersNullableType()
+    {
+        string printed = TranslateEnabledWithObliviousLibrary(@"
+namespace Demo
+{
+    public class C
+    {
+        public void Run(ExtLib ext)
+        {
+            var response = ext.GetResponse();
+            if (response is null) return;
+            System.Console.WriteLine(response.Value);
+        }
+    }
+}");
+
+        Assert.Contains("response ExternalResponse? =", printed);
+        Assert.Contains("if response == nil", printed);
+    }
+
+    [Fact]
+    public void NullableEnabled_InferredLocalFromAnnotatedNullableReturn_RendersNullableType()
+    {
+        string printed = TranslateEnabledWithObliviousLibrary(@"
+using System.Linq;
+
+namespace Demo
+{
+    public sealed class AuthSession
+    {
+        public string AccountId { get; init; } = string.Empty;
+    }
+
+    public class C
+    {
+        public AuthSession? Find(AuthSession[] sessions)
+        {
+            var match = sessions.FirstOrDefault();
+            if (match is not null) return match;
+            return null;
+        }
+    }
+}");
+
+        Assert.Contains("match AuthSession? =", printed);
+        Assert.Contains("if match != nil", printed);
+    }
+
     /// <summary>
     /// Compiles a tiny "external" library WITHOUT a nullable context (oblivious),
     /// then translates the <paramref name="source"/> snippet referencing it in an
@@ -247,7 +296,14 @@ public class AnnotatedLib
 public class ExtLib
 {
     public string Combine(string separator) { return separator; }
+    public ExternalResponse GetResponse() { return null; }
 }
+
+public class ExternalResponse
+{
+    public string Value { get; set; }
+}
+
 ";
         MetadataReference libRef = CompileObliviousLibrary(LibSource, "ObliviousExtLibForEnabled");
 
