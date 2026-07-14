@@ -11835,11 +11835,57 @@ internal sealed class ReflectionMetadataEmitter
     // constructed entirely within the reference context. Non-generic types
     // keep the original flat lookup; an open definition with no reference
     // equivalent falls back to the host type unchanged, same as before.
+    //
+    // Issue #2325 follow-up: an array (`T[]`/`T[,]`), pointer (`T*`), or
+    // byref (`T&`) shape can appear as (or nested inside — e.g.
+    // `Action<int[], object>`) a constructed generic argument, and is
+    // subject to the exact same cross-context mismatch: `T.MakeArrayType()`
+    // / `MakePointerType()` / `MakeByRefType()` built over an unmapped
+    // host-context element `Type` still carries the host identity, so a
+    // later `MakeGenericType` combining it with a reference-context open
+    // definition throws GS9998 the same way an unmapped constructed generic
+    // argument did. Each of these three shapes wraps exactly one element
+    // type (`Type.GetElementType()`), so recurse through this same helper on
+    // the element and rebuild the wrapper — preserving the exact array rank
+    // (and the vector- vs. general-rank-1-array distinction, via
+    // `Type.IsSZArray`) — entirely within the reference context. An element
+    // that is itself a `Type.IsGenericParameter` (e.g. `T[]` for an in-scope
+    // type parameter) falls through unchanged via the flat lookup below,
+    // exactly as an unwrapped generic parameter already did: this rebuild
+    // only changes how the *wrapper* is reconstructed, not generic-parameter
+    // handling.
     internal Type MapToReferenceClrType(Type hostType)
     {
         if (hostType == null)
         {
             return null;
+        }
+
+        if (hostType.IsByRef)
+        {
+            var mappedElement = this.MapToReferenceClrType(hostType.GetElementType()) ?? hostType.GetElementType();
+            return mappedElement.MakeByRefType();
+        }
+
+        if (hostType.IsPointer)
+        {
+            var mappedElement = this.MapToReferenceClrType(hostType.GetElementType()) ?? hostType.GetElementType();
+            return mappedElement.MakePointerType();
+        }
+
+        if (hostType.IsArray)
+        {
+            var mappedElement = this.MapToReferenceClrType(hostType.GetElementType()) ?? hostType.GetElementType();
+
+            // A rank-1 array is either a vector (`T[]`, constructed via the
+            // parameterless `MakeArrayType()`) or a general rank-1 array
+            // (`T[*]`, constructed via `MakeArrayType(1)`) — reflection
+            // treats these as distinct array kinds sharing rank 1;
+            // `Type.IsSZArray` is the documented way to tell them apart
+            // (mirrors DocumentationIdProvider.AppendArraySuffix).
+            return hostType.IsSZArray
+                ? mappedElement.MakeArrayType()
+                : mappedElement.MakeArrayType(hostType.GetArrayRank());
         }
 
         if (hostType.IsConstructedGenericType)
