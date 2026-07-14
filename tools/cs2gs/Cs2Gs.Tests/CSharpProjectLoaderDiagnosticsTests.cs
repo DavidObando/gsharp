@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -50,6 +51,100 @@ public class CSharpProjectLoaderDiagnosticsTests
 
         Assert.NotEmpty(project.LoadDiagnostics);
         Assert.Contains(project.LoadDiagnostics, d => d.Severity == DiagnosticSeverity.Error);
+        Assert.False(
+            project.BoundWithoutErrors,
+            "A project with an unresolvable ProjectReference must not report BoundWithoutErrors=true.");
+    }
+
+    /// <summary>
+    /// Issue #2321 (loader path 1 of 2): a project whose only MSBuild workspace
+    /// failure is a NuGet audit vulnerability advisory (the NU1901-NU1904
+    /// shape — here NU1903/high for the well-known
+    /// <c>Newtonsoft.Json 12.0.1</c> advisory GHSA-5crp-9r3c-p9vr) must still
+    /// bind: the advisory must not trip <see cref="CSharpProjectLoader.WorkspaceLoadFailureDiagnosticId"/>
+    /// (CS2GS0001), <see cref="LoadedCSharpProject.WorkspaceLoadFailed"/>, or
+    /// <see cref="LoadedCSharpProject.BoundWithoutErrors"/>. The advisory
+    /// remains visible as an informational
+    /// <see cref="CSharpProjectLoader.NuGetAuditAdvisoryDiagnosticId"/> (CS2GS0003)
+    /// diagnostic instead of being dropped silently.
+    /// </summary>
+    [Fact]
+    public async Task LoadProjectAsync_NuGetAuditAdvisoryDoesNotFailWorkspaceLoad()
+    {
+        string projectDir = NewScratchDir("nuget-audit-advisory");
+        WriteVulnerablePackageProject(projectDir, "Vulnerable.csproj");
+
+        LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(
+            Path.Combine(projectDir, "Vulnerable.csproj"));
+
+        Assert.False(
+            project.WorkspaceLoadFailed,
+            "A benign NuGet audit vulnerability advisory (NU1901-NU1904 shape) must not trip CS2GS0001.");
+        Assert.True(
+            project.BoundWithoutErrors,
+            "A benign NuGet audit vulnerability advisory must not report BoundWithoutErrors=false.");
+        Assert.DoesNotContain(
+            project.ErrorDiagnostics,
+            d => d.Id == CSharpProjectLoader.WorkspaceLoadFailureDiagnosticId);
+        Assert.Contains(
+            project.LoadDiagnostics,
+            d => d.Id == CSharpProjectLoader.NuGetAuditAdvisoryDiagnosticId && d.Severity == DiagnosticSeverity.Info);
+    }
+
+    /// <summary>
+    /// Issue #2321 (loader path 2 of 2): the same benign-advisory exemption
+    /// applies to <see cref="CSharpProjectLoader.LoadProjectWithReferencesAsync"/>
+    /// — the second project-loading path that independently gates on MSBuild
+    /// workspace load failures.
+    /// </summary>
+    [Fact]
+    public async Task LoadProjectWithReferencesAsync_NuGetAuditAdvisoryDoesNotFailWorkspaceLoad()
+    {
+        string projectDir = NewScratchDir("nuget-audit-advisory-with-refs");
+        WriteVulnerablePackageProject(projectDir, "Vulnerable.csproj");
+
+        System.Collections.Generic.IReadOnlyList<LoadedCSharpProject> projects =
+            await CSharpProjectLoader.LoadProjectWithReferencesAsync(Path.Combine(projectDir, "Vulnerable.csproj"));
+
+        LoadedCSharpProject project = Assert.Single(projects);
+        Assert.False(
+            project.WorkspaceLoadFailed,
+            "A benign NuGet audit vulnerability advisory (NU1901-NU1904 shape) must not trip CS2GS0001.");
+        Assert.True(project.BoundWithoutErrors);
+        Assert.Contains(
+            project.LoadDiagnostics,
+            d => d.Id == CSharpProjectLoader.NuGetAuditAdvisoryDiagnosticId && d.Severity == DiagnosticSeverity.Info);
+    }
+
+    /// <summary>
+    /// Issue #2321 regression guard: <see cref="CSharpProjectLoader.LoadProjectWithReferencesAsync"/>
+    /// must keep gating on a GENUINE workspace load failure exactly like
+    /// <see cref="LoadProjectAsync_SurfacesMSBuildWorkspaceLoadFailure"/> proves
+    /// for <see cref="CSharpProjectLoader.LoadProjectAsync"/> — the narrowed
+    /// policy must not have weakened this second loading path.
+    /// </summary>
+    [Fact]
+    public async Task LoadProjectWithReferencesAsync_SurfacesMSBuildWorkspaceLoadFailure()
+    {
+        string projectDir = NewScratchDir("with-references-load-failure");
+        File.WriteAllText(Path.Combine(projectDir, "Directory.Build.props"), "<Project></Project>");
+        string projectPath = Path.Combine(projectDir, "Broken.csproj");
+        File.WriteAllText(projectPath, @"<Project Sdk=""Microsoft.NET.Sdk"">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include=""..\DoesNotExist\DoesNotExist.csproj"" />
+  </ItemGroup>
+</Project>
+");
+        File.WriteAllText(Path.Combine(projectDir, "Program.cs"), "public class Program { public static void Main() { } }");
+
+        System.Collections.Generic.IReadOnlyList<LoadedCSharpProject> projects =
+            await CSharpProjectLoader.LoadProjectWithReferencesAsync(projectPath);
+
+        LoadedCSharpProject project = Assert.Single(projects);
+        Assert.True(project.WorkspaceLoadFailed);
         Assert.False(
             project.BoundWithoutErrors,
             "A project with an unresolvable ProjectReference must not report BoundWithoutErrors=true.");
@@ -216,5 +311,66 @@ namespace Sample
         string root = Path.Combine(AppContext.BaseDirectory, "loader-tests", label, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         return root;
+    }
+
+    /// <summary>
+    /// Issue #2321: writes a buildable console project referencing
+    /// <c>Newtonsoft.Json 12.0.1</c>, whose known high-severity vulnerability
+    /// (GHSA-5crp-9r3c-p9vr) NuGet reports as warning NU1903 during restore —
+    /// the exact benign advisory shape this policy must exempt. An empty
+    /// <c>Directory.Build.props</c> override stops MSBuild's directory search
+    /// from climbing to this repo's own root props (which sets
+    /// <c>TreatWarningsAsErrors</c>), matching this file's other scratch
+    /// projects and keeping the test independent of that repo-wide setting.
+    /// </summary>
+    private static void WriteVulnerablePackageProject(string projectDir, string projectFileName)
+    {
+        File.WriteAllText(Path.Combine(projectDir, "Directory.Build.props"), "<Project></Project>");
+        string projectPath = Path.Combine(projectDir, projectFileName);
+        File.WriteAllText(projectPath, @"<Project Sdk=""Microsoft.NET.Sdk"">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include=""Newtonsoft.Json"" Version=""12.0.1"" />
+  </ItemGroup>
+</Project>
+");
+        File.WriteAllText(
+            Path.Combine(projectDir, "Program.cs"),
+            "public class Program { public static void Main() { } }");
+
+        // Issue #2321: the advisory only surfaces through MSBuildWorkspace once
+        // the project has an on-disk obj/project.assets.json to replay — same
+        // as any already-restored/built app cs2gs is pointed at in practice (a
+        // brand-new, never-restored project simply has no resolved package
+        // assets for OpenProjectAsync to evaluate against). Run a real
+        // `dotnet restore` here to reproduce that real-world precondition.
+        RunDotnetRestore(projectPath);
+    }
+
+    private static void RunDotnetRestore(string projectPath)
+    {
+        var startInfo = new ProcessStartInfo("dotnet", $"restore \"{projectPath}\"")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+
+        using Process process = Process.Start(startInfo);
+        string stdout = process.StandardOutput.ReadToEnd();
+        string stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        // `dotnet restore` itself exits 0 here because the vulnerability is a
+        // plain warning (not elevated) under the empty Directory.Build.props
+        // override — a non-zero exit means something unrelated broke restore
+        // (e.g. no network access to nuget.org), which every assertion below
+        // would otherwise misattribute to the policy under test.
+        Assert.True(
+            process.ExitCode == 0,
+            $"Prerequisite `dotnet restore` failed (exit {process.ExitCode}); cannot exercise the NuGet audit advisory path.\nstdout:\n{stdout}\nstderr:\n{stderr}");
     }
 }

@@ -69,6 +69,13 @@ public sealed class TranslateStage : IMigrationStage
             return StageOutcome.Failed(artifacts);
         }
 
+        // Issue #2321: a benign NuGet audit vulnerability advisory (CS2GS0003)
+        // does not fail the workspace load above, but must not be dropped
+        // silently either — record it in the per-app translate.log, the same
+        // best-effort append-only text log TestParityStage's Note already
+        // uses for non-fatal, informational events (test-parity.log).
+        NoteNuGetAuditAdvisories(context, project);
+
         var usedOutputPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         CopyProjectFiles(project.ProjectDirectory, context.AppRunDir, usedOutputPaths);
         CopyCentralPackageManagementFile(project.ProjectDirectory, context.AppRunDir, context);
@@ -314,6 +321,46 @@ public sealed class TranslateStage : IMigrationStage
         EmitNerdbankGitVersioningBumps(context);
 
         return artifacts.Count == 0 ? StageOutcome.Passed() : StageOutcome.Failed(artifacts);
+    }
+
+    /// <summary>
+    /// Issue #2321: records any benign NuGet audit vulnerability advisory
+    /// (<see cref="CSharpProjectLoader.NuGetAuditAdvisoryDiagnosticId"/>,
+    /// CS2GS0003) MSBuildWorkspace reported while opening <paramref name="project"/>
+    /// into the per-app <c>translate.log</c>. The advisory never fails this
+    /// stage — <see cref="CSharpProjectLoader"/> already excludes it from
+    /// <see cref="LoadedCSharpProject.ErrorDiagnostics"/> — this only keeps it
+    /// from being silently dropped once <see cref="LoadedCSharpProject.LoadDiagnostics"/>
+    /// is no longer inspected past the <see cref="LoadedCSharpProject.WorkspaceLoadFailed"/>
+    /// gate above.
+    /// </summary>
+    private static void NoteNuGetAuditAdvisories(StageExecutionContext context, LoadedCSharpProject project)
+    {
+        foreach (Diagnostic advisory in project.LoadDiagnostics
+            .Where(d => d.Id == CSharpProjectLoader.NuGetAuditAdvisoryDiagnosticId))
+        {
+            Note(context, "NuGet audit advisory (CS2GS0003, non-fatal): " + advisory.GetMessage());
+        }
+    }
+
+    /// <summary>
+    /// A best-effort, append-only per-app text log — the Translate-stage
+    /// counterpart of <see cref="TestParityStage"/>'s identical <c>Note</c>
+    /// helper (which writes <c>test-parity.log</c>). Never fails the stage on
+    /// a log write.
+    /// </summary>
+    private static void Note(StageExecutionContext context, string message)
+    {
+        try
+        {
+            File.AppendAllText(
+                Path.Combine(context.AppRunDir, "translate.log"),
+                message + Environment.NewLine);
+        }
+        catch (IOException)
+        {
+            // A best-effort diagnostic log; never fail the stage on a log write.
+        }
     }
 
     private static void CopyProjectFiles(
