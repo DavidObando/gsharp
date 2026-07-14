@@ -41,8 +41,9 @@ public class IlVerifyRunner
         @"(?:\[(?<location>.*?)\]\s*\[offset[^\]]*\]\s*)?(?<message>.*)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    private readonly object restoreSync = new();
-    private bool restoreAttempted;
+    private static readonly object ToolRestoreSync = new();
+    private static readonly Dictionary<string, bool> ToolAvailabilityByRepoRoot = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan DotnetToolTimeout = TimeSpan.FromMinutes(5);
 
     /// <summary>
     /// Initializes a new instance of the <see cref="IlVerifyRunner"/> class.
@@ -153,7 +154,7 @@ public class IlVerifyRunner
             return IlVerifyResult.Skipped();
         }
 
-        this.EnsureToolRestored();
+        this.EnsureToolAvailable();
 
         IReadOnlyList<string> references = BuildReferenceSet(assemblyPath, additionalReferences);
 
@@ -197,6 +198,42 @@ public class IlVerifyRunner
 
         var ignored = new HashSet<string>(KnownIlVerifyFalsePositives, StringComparer.OrdinalIgnoreCase);
         return errors.Where(e => e.Code is null || !ignored.Contains(e.Code)).ToList();
+    }
+
+    /// <summary>
+    /// Probes/restores the repo local <c>dotnet-ilverify</c> tool once per
+    /// process and repo root. The shared lock prevents parallel test hosts from
+    /// racing on the same local tool manifest.
+    /// </summary>
+    /// <returns><see langword="true"/> when the tool is available after the probe/restore attempt.</returns>
+    public bool EnsureToolAvailable()
+    {
+        if (!IsEnabled)
+        {
+            return true;
+        }
+
+        lock (ToolRestoreSync)
+        {
+            if (ToolAvailabilityByRepoRoot.TryGetValue(this.RepoRoot, out bool available))
+            {
+                return available;
+            }
+
+            // `dotnet tool run ilverify --version` returns 0 when the manifest
+            // tool is already restored. Only pay the restore cost when needed.
+            (int probeExit, _) = this.RunDotnet(new[] { "tool", "run", "ilverify", "--version" });
+            available = probeExit == 0;
+            if (!available)
+            {
+                (int restoreExit, _) = this.RunDotnet(new[] { "tool", "restore" });
+                available = restoreExit == 0 &&
+                    this.RunDotnet(new[] { "tool", "run", "ilverify", "--version" }).Exit == 0;
+            }
+
+            ToolAvailabilityByRepoRoot[this.RepoRoot] = available;
+            return available;
+        }
     }
 
     private static string ExtractMethod(string location)
@@ -316,37 +353,11 @@ public class IlVerifyRunner
         return Environment.CurrentDirectory;
     }
 
-    private void EnsureToolRestored()
-    {
-        if (this.restoreAttempted)
-        {
-            return;
-        }
-
-        lock (this.restoreSync)
-        {
-            if (this.restoreAttempted)
-            {
-                return;
-            }
-
-            this.restoreAttempted = true;
-
-            // `dotnet tool run ilverify --version` returns 0 when the manifest
-            // tool is already restored. Only pay the restore cost when needed.
-            (int probeExit, _) = this.RunDotnet(new[] { "tool", "run", "ilverify", "--version" });
-            if (probeExit != 0)
-            {
-                this.RunDotnet(new[] { "tool", "restore" });
-            }
-        }
-    }
-
     private (int Exit, string Output) RunDotnet(IReadOnlyList<string> arguments)
     {
         // The local tool manifest is discovered relative to the working
         // directory; anchor at the repo root. All paths are passed absolute.
-        ProcessRunResult result = ProcessRunner.Run("dotnet", arguments, this.RepoRoot);
+        ProcessRunResult result = ProcessRunner.Run("dotnet", arguments, this.RepoRoot, DotnetToolTimeout);
         return (result.ExitCode, result.Output);
     }
 }

@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Runtime.CompilerServices;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
@@ -30,7 +31,7 @@ public static class ClrTypeUtilities
     /// for BCL types with wide interface sets (<c>List&lt;T&gt;</c>) that cost
     /// was paid once per call site instead of once per type.
     /// </summary>
-    private static readonly ConcurrentDictionary<Type, Type[]> InterfacesCache = new();
+    private static ConditionalWeakTable<Type, Type[]> interfacesCache = new();
 
     /// <summary>
     /// Resolves a named method without asking a constructed
@@ -858,7 +859,7 @@ public static class ClrTypeUtilities
         // Issue #1678: Type.GetInterfaces() walks the full transitive interface
         // graph on every call; memoize it per Type so a receiver used at N call
         // sites (or matched against N interface methods) pays that walk once.
-        return InterfacesCache.GetOrAdd(type, t =>
+        return interfacesCache.GetValue(type, static t =>
         {
             try
             {
@@ -873,7 +874,7 @@ public static class ClrTypeUtilities
 
     /// <summary>
     /// Removes every entry from the process-wide CLR member-enumeration caches
-    /// (<see cref="InterfacesCache"/> and the per-member-kind caches backing
+    /// (<c>interfacesCache</c> and the per-member-kind caches backing
     /// <see cref="SafeEnumerate{TMember}"/>). Called by
     /// <see cref="ReferenceResolver.Dispose"/> alongside the other
     /// process-wide symbol caches (#1622) so entries keyed on a disposed
@@ -882,7 +883,7 @@ public static class ClrTypeUtilities
     /// </summary>
     internal static void ClearCache()
     {
-        InterfacesCache.Clear();
+        interfacesCache = new ConditionalWeakTable<Type, Type[]>();
         MemberCache<MethodInfo>.Cache.Clear();
         MemberCache<PropertyInfo>.Cache.Clear();
         MemberCache<FieldInfo>.Cache.Clear();

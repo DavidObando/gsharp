@@ -3343,8 +3343,7 @@ public sealed class CSharpToGSharpTranslator
                     // is nullable (e.g. `?.`-access) is rendered `T?`.
                     if (symbol != null)
                     {
-                        type = this.PromoteIfInitializerNullable(
-                            type, symbol.Type, declarator.Initializer.Value);
+                        type = this.PromoteIfInitializerNullable(type, symbol, declarator.Initializer.Value);
                     }
                 }
 
@@ -4040,8 +4039,7 @@ public sealed class CSharpToGSharpTranslator
             // rendered `T?` so the initializer assignment type-checks.
             if (symbol != null)
             {
-                type = this.PromoteIfInitializerNullable(
-                    type, symbol.Type, node.Initializer.Value);
+                type = this.PromoteIfInitializerNullable(type, symbol, node.Initializer.Value);
             }
 
             // A mutable static auto-property (`{ get; set; }` / `{ get; private set; }`)
@@ -5029,12 +5027,9 @@ public sealed class CSharpToGSharpTranslator
                 // no-op for a tuple value type).
                 mapped = this.PromoteTupleReturnIfTainted(mapped, returnType, node);
 
-                // Issue #2113: promote the return type to `T?` when the
-                // whole-program taint analysis proved this method's RETURN
-                // null-tainted (an oblivious compilation with a `return null` /
-                // nullable-returning path). Type-parameter returns are excluded
-                // for the same reason as declaration sites.
-                return this.PromoteReturnIfTainted(mapped, symbol, returnType);
+                // Issue #2113: promote the return type to `T?` through the same
+                // shared symbol-position decision used by every declaration sink.
+                return this.PromoteReturnIfTainted(mapped, symbol);
             }
 
             return node.ReturnType is PredefinedTypeSyntax predefined &&
@@ -6036,7 +6031,7 @@ public sealed class CSharpToGSharpTranslator
                             emitType = true;
                         }
                         else if (this.context.GetDeclaredSymbol(declarator) is ILocalSymbol equalTypeLocal
-                            && this.IsPromotedToNullableReference(equalTypeLocal))
+                            && this.ShouldPromoteToNullableReference(equalTypeLocal))
                         {
                             // Issue #1737: the explicit-type-equals-initializer-type
                             // shape above bypasses the type clause entirely (relying
@@ -6065,8 +6060,9 @@ public sealed class CSharpToGSharpTranslator
                 }
                 else if (initializer != null &&
                     this.context.GetDeclaredSymbol(declarator) is ILocalSymbol inferredLocal &&
-                    (this.IsUsedAsNullable(inferredLocal, this.GetNullabilityScope(inferredLocal))
-                        || this.IsPromotedToNullableReference(inferredLocal)))
+                    (this.ShouldPromoteToNullableReference(inferredLocal)
+                        || (IsAnnotatedNullableReference(inferredLocal.Type)
+                            && this.IsUsedAsNullable(inferredLocal, this.GetNullabilityScope(inferredLocal)))))
                 {
                     // Issue #1072/#2305 (inferred-type form): a `var x = e` local
                     // whose uses prove it nullable needs an explicit `T?`.
@@ -6369,7 +6365,7 @@ public sealed class CSharpToGSharpTranslator
             }
 
             if (this.context.GetSymbolInfo(assignment.Left).Symbol is IPropertySymbol indexer
-                && this.IsPromotedToNullableReference(indexer))
+                && this.ShouldPromoteToNullableReference(indexer))
             {
                 return translatedRhs;
             }
@@ -10571,41 +10567,20 @@ public sealed class CSharpToGSharpTranslator
                 return type;
             }
 
-            return this.IsPromotedToNullableReference(symbol) ? MakeNullable(type) : type;
+            return this.ShouldPromoteToNullableReference(symbol) ? MakeNullable(type) : type;
         }
 
-        // Issue #2113: promote a method's mapped return type to `T?` when the
-        // whole-program oblivious taint analysis proved the method's RETURN
-        // null-tainted. Value-type returns, already-nullable returns, and
-        // type-parameter returns are left untouched (the last for the same
-        // reason declaration sites exclude type parameters — a `T?` return of an
-        // unconstrained parameter has no faithful non-null call site). No-op for
-        // a nullable-enabled compilation, where `IsTainted` is always false.
-        private GTypeReference PromoteReturnIfTainted(
-            GTypeReference type,
-            IMethodSymbol symbol,
-            ITypeSymbol returnType)
+        // Issue #2113/#914: method/local-function returns are just another
+        // symbol-position declaration sink, so their promote/not-promote answer
+        // must come from the shared decision table.
+        private GTypeReference PromoteReturnIfTainted(GTypeReference type, IMethodSymbol symbol)
         {
-            if (type == null
-                || type.IsNullable
-                || symbol == null
-                || returnType is not { IsReferenceType: true }
-                || returnType.NullableAnnotation == NullableAnnotation.Annotated)
+            if (type == null || type.IsNullable || symbol == null)
             {
                 return type;
             }
 
-            // Issue #914 (oblivious deferred-return-promotion): a REFERENCE-
-            // constrained type-parameter return (`where T : class`) is promoted
-            // to `T?` when its return is null-tainted, exactly like a concrete
-            // reference return. For such a `T`, `T?` is an unambiguous nullable
-            // reference (the generated locals already use `var x T? = …`), and
-            // the promotion leaves `Cast[T]`/`typeof(T)`/`T()` NAME positions
-            // untouched. Unconstrained type parameters are excluded automatically:
-            // their `IsReferenceType` is false, so the guard above already
-            // returned. (Method-return-of-`T` was the residual blocking
-            // Oahu.Foundation's `DeserializeJsonFile[T]() T { … return nil }`.)
-            return ObliviousNullabilityAnalyzer.IsTainted(this.context.Compilation, symbol)
+            return this.ShouldPromoteToNullableReference(symbol)
                 ? MakeNullable(type)
                 : type;
         }
@@ -10616,9 +10591,10 @@ public sealed class CSharpToGSharpTranslator
         // whose body does `return (dir, file)` — where `dir`/`file` are promoted
         // `string?` locals — must render `(string?, string?)`, otherwise the
         // `(string?, string?) -> (string, string)` return is rejected (GS0155).
-        // Gated to an oblivious compilation so a nullable-enabled project stays
-        // byte-identical; only reference-typed, non-nullable elements are eligible
-        // (mirroring the scalar-return and declaration-site guards).
+        // This stays separate because it answers a different question: tuple
+        // ELEMENT positions have no symbol of their own, so each returned value
+        // is inspected and any symbol value still routes through
+        // ShouldPromoteToNullableReference via IsNullablePromotedValue.
         private GTypeReference PromoteTupleReturnIfTainted(
             GTypeReference mapped,
             ITypeSymbol returnType,
@@ -10738,10 +10714,8 @@ public sealed class CSharpToGSharpTranslator
             ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
             return symbol switch
             {
-                IFieldSymbol or IPropertySymbol or ILocalSymbol or IParameterSymbol =>
-                    this.IsPromotedToNullableReference(symbol),
-                IMethodSymbol method =>
-                    ObliviousNullabilityAnalyzer.IsTainted(this.context.Compilation, method),
+                IFieldSymbol or IPropertySymbol or ILocalSymbol or IParameterSymbol or IMethodSymbol =>
+                    this.ShouldPromoteToNullableReference(symbol),
                 _ => false,
             };
         }
@@ -10753,8 +10727,9 @@ public sealed class CSharpToGSharpTranslator
         // nullability in oblivious metadata, so a call like `sendOrPost(o => …,
         // null)` is the only evidence that the delegate's second position is really
         // `object?`; without it the `nil -> object` argument is rejected (GS0155).
-        // Gated to an oblivious compilation; only reference-typed, non-nullable
-        // arrow positions are eligible.
+        // This stays separate because delegate arrow-parameter positions have no
+        // declaration symbol to ask; the distinct signal is an invocation of the
+        // delegate parameter with a null/promoted-nullable argument.
         private GTypeReference PromoteDelegateParameterInvokedWithNull(
             GTypeReference type,
             IParameterSymbol symbol)
@@ -10842,24 +10817,26 @@ public sealed class CSharpToGSharpTranslator
             };
         }
 
-        // Issue #1072 (field/property initializer form): when a field or property is
-        // emitted with an explicit declared type plus an initializer whose
-        // Roslyn-inferred type is nullable (e.g. the value comes from a `?.`
-        // conditional access or a method returning `T?`), widen the emitted declared
-        // type to `T?`. Otherwise gsc rejects the initializer with
-        // `GS0156: Cannot convert type 'T?' to 'T'`. We always key off the Roslyn
-        // `TypeInfo` of the FULL initializer expression (so a `?? nonNullFallback`
-        // that Roslyn proves non-null stays `T`). Value types and already-nullable
-        // declared types are left untouched.
+        // Issue #1072 (field/property initializer form): field/property
+        // initializers first consume the shared symbol-position promotion
+        // decision, then the distinct direct-initializer signal (`?.`, declared
+        // `T?` metadata, etc.) that has no declaration symbol of its own.
         private GTypeReference PromoteIfInitializerNullable(
             GTypeReference type,
-            ITypeSymbol declaredType,
+            ISymbol symbol,
             ExpressionSyntax initializer)
         {
-            if (type == null || type.IsNullable || initializer == null)
+            if (type == null || type.IsNullable || symbol == null)
             {
                 return type;
             }
+
+            ITypeSymbol declaredType = symbol switch
+            {
+                IFieldSymbol field => field.Type,
+                IPropertySymbol property => property.Type,
+                _ => null,
+            };
 
             if (declaredType is not { IsReferenceType: true }
                 || declaredType.NullableAnnotation == NullableAnnotation.Annotated)
@@ -10867,7 +10844,10 @@ public sealed class CSharpToGSharpTranslator
                 return type;
             }
 
-            return this.IsNullableInitializer(initializer) ? MakeNullable(type) : type;
+            return this.ShouldPromoteToNullableReference(symbol)
+                || this.IsNullableInitializer(initializer)
+                    ? MakeNullable(type)
+                    : type;
         }
 
         // Determines whether <paramref name="expression"/> (a field/property
@@ -10933,17 +10913,16 @@ public sealed class CSharpToGSharpTranslator
                 && symbolType.NullableAnnotation == NullableAnnotation.Annotated;
         }
 
-        // Issue #1072: true when <paramref name="symbol"/> is a parameter/field/local
-        // whose DECLARED type is a non-nullable reference (or array) but which is
-        // null-checked or null-assigned in its scope, so the translator renders it
-        // `T?`. This is the single source of truth shared by the type-rendering paths
-        // (param/field/local) and the `!!` non-null-assertion pass
-        // (<see cref="ReceiverNeedsNullForgiveness"/>) so a promoted receiver still
-        // gets its flow-proven `recv!!.Member` assertion.
-        private bool IsPromotedToNullableReference(ISymbol symbol)
+        // Issue #1072/#2113/#914: the single translator-side promotion decision
+        // for a reference-typed symbol position. Declaration rendering and sink
+        // `!!` insertion both route through this helper so a tainted interface/
+        // implementation member, local/parameter/property/field, or method return
+        // gets the same `T?`/forgiveness treatment everywhere.
+        private bool ShouldPromoteToNullableReference(ISymbol symbol)
         {
             ITypeSymbol declared = symbol switch
             {
+                IMethodSymbol m => m.ReturnType,
                 IFieldSymbol f => f.Type,
                 IPropertySymbol pr => pr.Type,
                 ILocalSymbol l => l.Type,
@@ -10992,7 +10971,9 @@ public sealed class CSharpToGSharpTranslator
                 return true;
             }
 
-            return this.IsUsedAsNullable(symbol, this.GetNullabilityScope(symbol));
+            return symbol is IMethodSymbol
+                ? false
+                : this.IsUsedAsNullable(symbol, this.GetNullabilityScope(symbol));
         }
 
         // The syntax region a symbol's null usage is searched in: the whole
@@ -13585,7 +13566,7 @@ public sealed class CSharpToGSharpTranslator
             // locals gsc DOES smart-cast) keep their flow-driven path untouched.
             if (this.IsObliviousCompilation()
                 && symbol is ILocalSymbol or IParameterSymbol
-                && this.IsPromotedToNullableReference(symbol))
+                && this.ShouldPromoteToNullableReference(symbol))
             {
                 return true;
             }
@@ -13621,7 +13602,7 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return declared.NullableAnnotation == NullableAnnotation.Annotated
-                || this.IsPromotedToNullableReference(symbol);
+                || this.ShouldPromoteToNullableReference(symbol);
         }
 
         // Issue #2113: true for a nullable-oblivious compilation
@@ -13862,7 +13843,7 @@ public sealed class CSharpToGSharpTranslator
             // (issue #1072: null-checked param/field/local) is rendered nullable
             // too, so its flow-proven uses need the same assertion for consistency.
             return declared.NullableAnnotation == NullableAnnotation.Annotated
-                || this.IsPromotedToNullableReference(symbol);
+                || this.ShouldPromoteToNullableReference(symbol);
         }
 
         // Issue #2164: true when <paramref name="recv"/> reads a nullable
@@ -13914,7 +13895,7 @@ public sealed class CSharpToGSharpTranslator
             }
 
             bool emittedNullable = declared.NullableAnnotation == NullableAnnotation.Annotated
-                || this.IsPromotedToNullableReference(symbol);
+                || this.ShouldPromoteToNullableReference(symbol);
             if (!emittedNullable)
             {
                 symbol = null;
@@ -14354,7 +14335,7 @@ public sealed class CSharpToGSharpTranslator
             // If the oblivious analyzer DID promote this member to nullable,
             // the return type is already `T?` and forgiving the arm is unnecessary
             // (and would be wrong — the caller expects nullable).
-            return !ObliviousNullabilityAnalyzer.IsTainted(this.context.Compilation, enclosingMember);
+            return !this.ShouldPromoteToNullableReference(enclosingMember);
         }
 
         // Walks up from a return statement to find the enclosing property (via a
@@ -15735,6 +15716,39 @@ public sealed class CSharpToGSharpTranslator
             return new InvocationExpression(new IdentifierExpression(type.ToString()), arguments);
         }
 
+        // Object-initializer member assignment is a sink just like an argument,
+        // return, or element write: if the source expression was promoted to `T?`
+        // but the target member still emits as non-null `T`, assert the source.
+        private GExpression ForgiveObjectInitializerValue(
+            AssignmentExpressionSyntax assignment,
+            GExpression translatedValue)
+        {
+            ISymbol target = this.context.GetSymbolInfo(assignment.Left).Symbol;
+            if (!this.IsObliviousCompilation()
+                || translatedValue is NonNullAssertionExpression
+                || !this.IsNullablePromotedValue(assignment.Right)
+                || target is not (IFieldSymbol or IPropertySymbol))
+            {
+                return translatedValue;
+            }
+
+            ITypeSymbol targetType = target switch
+            {
+                IFieldSymbol field => field.Type,
+                IPropertySymbol property => property.Type,
+                _ => null,
+            };
+
+            if (targetType is not { IsReferenceType: true }
+                || targetType.NullableAnnotation == NullableAnnotation.Annotated
+                || this.ShouldPromoteToNullableReference(target))
+            {
+                return translatedValue;
+            }
+
+            return new NonNullAssertionExpression(translatedValue);
+        }
+
         /// <summary>
         /// Maps a constructed type's G# name to a callable construction callee.
         /// A G# primitive type keyword (<c>object</c>, <c>string</c>, <c>decimal</c>,
@@ -15803,9 +15817,10 @@ public sealed class CSharpToGSharpTranslator
                         }
                     }
 
+                    GExpression value = this.TranslateExpression(assignment.Right);
                     fieldInitializers.Add(new FieldInitializer(
                         SanitizeIdentifier(name.Identifier.Text),
-                        this.TranslateExpression(assignment.Right)));
+                        this.ForgiveObjectInitializerValue(assignment, value)));
                 }
                 else
                 {
@@ -15868,7 +15883,9 @@ public sealed class CSharpToGSharpTranslator
 
                     memberInitializers.Add(new FieldInitializer(
                         SanitizeIdentifier(name.Identifier.Text),
-                        this.TranslateExpression(assignment.Right)));
+                        this.ForgiveObjectInitializerValue(
+                            assignment,
+                            this.TranslateExpression(assignment.Right))));
                 }
                 else
                 {
@@ -16479,19 +16496,12 @@ public sealed class CSharpToGSharpTranslator
                     : null;
             }
 
-            // Issue #914 (oblivious sink): promote a LOCAL FUNCTION's (or
-            // lambda's) mapped return type to `T?` when the whole-program taint
-            // analysis proved its RETURN null-tainted — exactly like a top-level
-            // method return (see MapReturnType/PromoteReturnIfTainted). The
-            // analyzer seeds return taint for local functions and lambdas, so a
-            // `static Version TryParse(string s) { … return succ ? version :
-            // null; }` local function whose body yields `Version?` renders
-            // `func (s string) Version?`, avoiding a `Version? -> Version` return
-            // rejection (GS0155). No-op for a nullable-enabled compilation.
+            // Issue #914 (oblivious sink): local-function/lambda return
+            // promotion uses the same shared symbol-position decision as a
+            // top-level method return.
             return this.PromoteReturnIfTainted(
                 this.typeMapper.Map(returnType, this.context, location),
-                symbol,
-                returnType);
+                symbol);
         }
 
         private Parameter MapLambdaParameter(ParameterSyntax parameter)
@@ -16637,6 +16647,7 @@ public sealed class CSharpToGSharpTranslator
         private GExpression TranslateSwitchExpression(SwitchExpressionSyntax node)
         {
             GExpression subject = this.TranslateExpression(node.GoverningExpression);
+            GTypeReference nullableResultType = this.NullableReferenceSwitchResultType(node);
             var arms = new List<SwitchArm>();
             bool hasTotalArm = false;
 
@@ -16677,7 +16688,7 @@ public sealed class CSharpToGSharpTranslator
                         ? this.TranslateExpression(arm.WhenClause.Condition)
                         : null;
                     guard = CombinePatternGuards(guards, guard);
-                    body = this.TranslateExpression(arm.Expression);
+                    body = this.TranslateSwitchArmExpression(arm.Expression, nullableResultType);
                 }
                 finally
                 {
@@ -16727,6 +16738,27 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return new SwitchExpression(subject, arms);
+        }
+
+        private GTypeReference NullableReferenceSwitchResultType(SwitchExpressionSyntax node)
+        {
+            ITypeSymbol resultType = this.context.GetTypeInfo(node).Type;
+            if (resultType is not { IsReferenceType: true })
+            {
+                return null;
+            }
+
+            GTypeReference mapped = this.typeMapper.Map(resultType, this.context, node.GetLocation());
+            return mapped.IsNullable ? mapped : MakeNullable(mapped);
+        }
+
+        private GExpression TranslateSwitchArmExpression(
+            ExpressionSyntax expression,
+            GTypeReference nullableResultType)
+        {
+            return nullableResultType != null && IsNullOrDefaultLiteral(expression)
+                ? new DefaultValueExpression(nullableResultType)
+                : this.TranslateExpression(expression);
         }
 
         // Lowers a C# switch EXPRESSION that appears in statement position

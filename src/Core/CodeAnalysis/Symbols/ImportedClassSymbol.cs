@@ -479,7 +479,7 @@ public sealed class ImportedClassSymbol : Symbol
     {
         for (var i = 0; i < boundArguments.Length; i++)
         {
-            if (!ReferenceEquals(argTypes[i], source))
+            if (!ClrTypeUtilities.AreSame(argTypes[i], source))
             {
                 continue;
             }

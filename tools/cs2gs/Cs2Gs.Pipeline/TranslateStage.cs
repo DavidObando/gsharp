@@ -378,6 +378,7 @@ public sealed class TranslateStage : IMigrationStage
             string relativePath = Path.GetRelativePath(projectDirectory, sourcePath);
             if (HasExcludedDirectory(relativePath) ||
                 Path.GetExtension(sourcePath).Equals(".cs", StringComparison.OrdinalIgnoreCase) ||
+                IsResxDesignerCodebehind(sourcePath) ||
                 Path.GetExtension(sourcePath).Equals(".csproj", StringComparison.OrdinalIgnoreCase) ||
                 IsUnderDirectory(sourcePath, outputDirectory))
             {
@@ -389,6 +390,21 @@ public sealed class TranslateStage : IMigrationStage
             File.Copy(sourcePath, destinationPath, overwrite: true);
             usedOutputPaths.Add(relativePath);
         }
+    }
+
+    private static bool IsResxDesignerCodebehind(string sourcePath)
+    {
+        if (!Path.GetFileName(sourcePath).EndsWith(
+            GSharp.Core.Resx.ResxCodeGenerator.DesignerFileSuffix,
+            StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        string resxPath = Path.Combine(
+            Path.GetDirectoryName(sourcePath) ?? string.Empty,
+            Path.GetFileName(sourcePath)[..^GSharp.Core.Resx.ResxCodeGenerator.DesignerFileSuffix.Length] + ".resx");
+        return File.Exists(resxPath);
     }
 
     /// <summary>

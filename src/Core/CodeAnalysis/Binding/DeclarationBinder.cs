@@ -7801,7 +7801,11 @@ internal sealed class DeclarationBinder
             // interpolated-string literals (base-ctor arguments are always
             // positional, never named).
             var interpolatedStringArgs = ComputeInterpolatedStringArgFlags(argSyntax, boundArguments.Count);
-            var resolution = OverloadResolution.Resolve(ctors, argTypes, interpolatedStringArgs: interpolatedStringArgs);
+            var resolution = OverloadResolution.Resolve(
+                ctors,
+                argTypes,
+                interpolatedStringArgs: interpolatedStringArgs,
+                constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(boundArguments));
             switch (resolution.Outcome)
             {
                 case OverloadResolution.ResolutionOutcome.Resolved:

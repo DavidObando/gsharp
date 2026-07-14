@@ -12194,6 +12194,8 @@ internal sealed class ReflectionMetadataEmitter
     private static FunctionSymbol ResolveOpenInterfaceInstanceMethod(InterfaceSymbol iface, FunctionSymbol slot)
     {
         var def = iface.Definition ?? iface;
+        // Function/interface symbols are canonical within one emit pass; CLR
+        // metadata Type identity is not involved in this positional map.
         if (ReferenceEquals(def, iface))
         {
             return slot;
@@ -12223,6 +12225,8 @@ internal sealed class ReflectionMetadataEmitter
     private static FunctionSymbol ResolveOpenInterfaceStaticMethod(InterfaceSymbol iface, FunctionSymbol slot)
     {
         var def = iface.Definition ?? iface;
+        // Function/interface symbols are canonical within one emit pass; CLR
+        // metadata Type identity is not involved in this positional map.
         if (ReferenceEquals(def, iface))
         {
             return slot;
@@ -12301,6 +12305,8 @@ internal sealed class ReflectionMetadataEmitter
                 PropertySymbol implProp = null;
                 foreach (var candidate in structSymbol.StaticProperties)
                 {
+                    // PropertySymbol.Type is a compiler TypeSymbol, not a CLR
+                    // reflection Type; keep symbol identity plus name fallback.
                     if (candidate.Name == slotProp.Name
                         && (ReferenceEquals(candidate.Type, slotProp.Type) || candidate.Type?.Name == slotProp.Type?.Name))
                     {
@@ -12346,6 +12352,8 @@ internal sealed class ReflectionMetadataEmitter
             return false;
         }
 
+        // FunctionSymbol.Type and parameter Type values are compiler symbols
+        // canonicalized for this emit pass, not reflection Type instances.
         if (!ReferenceEquals(a.Type, b.Type) && a.Type?.Name != b.Type?.Name)
         {
             return false;
