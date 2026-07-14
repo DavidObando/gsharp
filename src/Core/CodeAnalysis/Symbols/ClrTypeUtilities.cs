@@ -64,6 +64,64 @@ public static class ClrTypeUtilities
     }
 
     /// <summary>
+    /// Issue #2327: single shared guard for every enum-reflection predicate
+    /// in the binder/emitter (generalizes the #1100 / #2135 pattern already
+    /// established for <c>IsAssignableFrom</c>/<c>IsInterface</c> probes).
+    /// <see cref="Type.IsEnum"/> walks the base-type chain via
+    /// <c>IsSubclassOf(typeof(Enum))</c> under the hood, which is one of the
+    /// operations <c>System.Reflection.Emit.TypeBuilderInstantiation</c>
+    /// (a constructed generic — e.g. a compiler-synthesized structural
+    /// function-type delegate — closed over an in-flight <see cref="TypeBuilder"/>
+    /// definition) throws <see cref="NotSupportedException"/> for. Such a type
+    /// is never a genuine CLR enum, so a throw here is treated as a definite
+    /// "not an enum" rather than propagating and crashing emit/binding.
+    /// </summary>
+    /// <param name="type">The CLR type to probe. May be <see langword="null"/>.</param>
+    /// <returns><c>true</c> when <paramref name="type"/> is a real CLR enum.</returns>
+    public static bool IsEnumSafe(this Type type)
+    {
+        if (type is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return type.IsEnum;
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Issue #2327: safe companion to <see cref="IsEnumSafe"/> — resolves the
+    /// CLR underlying primitive of an enum type without risking the same
+    /// <see cref="NotSupportedException"/> a <c>TypeBuilderInstantiation</c>
+    /// (or other unsupported reflection type) can throw from
+    /// <see cref="Enum.GetUnderlyingType"/>'s own <c>IsEnum</c> validation.
+    /// </summary>
+    /// <param name="type">The candidate enum CLR type. May be <see langword="null"/>.</param>
+    /// <returns>The underlying primitive <see cref="Type"/>, or <see langword="null"/> when <paramref name="type"/> is not a genuine CLR enum.</returns>
+    public static Type GetEnumUnderlyingTypeSafe(this Type type)
+    {
+        if (!type.IsEnumSafe())
+        {
+            return null;
+        }
+
+        try
+        {
+            return Enum.GetUnderlyingType(type);
+        }
+        catch (NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Returns whether two <see cref="Type"/>s refer to the same logical CLR
     /// type, regardless of which reflection context produced them. Two types
     /// are considered the same when their <see cref="Type.FullName"/>s match.

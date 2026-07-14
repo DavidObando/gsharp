@@ -9100,8 +9100,13 @@ internal sealed class DeclarationBinder
             return true;
         }
 
-        var clr = type?.ClrType;
-        return clr != null && clr.IsEnum;
+        // Issue #2327: `type.ClrType` may be a
+        // System.Reflection.Emit.TypeBuilderInstantiation whose `IsEnum`
+        // throws NotSupportedException. Route through the shared safe
+        // helper (generalizing the #1100/#2135 pattern established in
+        // Conversion.IsEnumLikeType / IsInterfaceLikeType) rather than
+        // probing `ClrType.IsEnum` directly.
+        return type?.ClrType.IsEnumSafe() == true;
     }
 
     private static bool TryParseTargetKind(string text, out AttributeTargetKind kind)
