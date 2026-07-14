@@ -162,9 +162,21 @@ public sealed class AsyncStateMachineFieldMap
     }
 
     /// <summary>
-    /// Attempts to find the hoisted field for a variable (local or parameter).
-    /// Returns <c>true</c> if the variable is hoisted.
+    /// Attempts to find the hoisted field for a variable (local, parameter,
+    /// or the kickoff method's implicit <c>this</c>). Returns <c>true</c> if
+    /// the variable is hoisted.
     /// </summary>
+    /// <remarks>
+    /// Issue #2331: <c>this</c> is hoisted into <see cref="ThisField"/>
+    /// unconditionally for every instance-method state machine (see
+    /// <see cref="AsyncStateMachineTypeBuilder"/>), but it is intentionally
+    /// kept out of <see cref="parameterFields"/> because it is not an
+    /// ordinary kickoff parameter. Every caller that resolves a hoisted slot
+    /// for a captured variable — including the emitter's closure-construction
+    /// site (<c>EmitCapturedVariableLoad</c>) — must special-case it here so
+    /// there is a single source of truth for "is this variable hoisted",
+    /// rather than duplicating the <c>this</c> check at each call site.
+    /// </remarks>
     /// <param name="variable">The variable to look up.</param>
     /// <param name="field">The hoisted field, if found.</param>
     /// <returns><c>true</c> if the variable is hoisted; otherwise <c>false</c>.</returns>
@@ -172,6 +184,12 @@ public sealed class AsyncStateMachineFieldMap
     {
         if (variable is ParameterSymbol ps)
         {
+            if (ThisField != null && ReferenceEquals(ps, StateMachine.KickoffMethod.ThisParameter))
+            {
+                field = ThisField;
+                return true;
+            }
+
             return parameterFields.TryGetValue(ps, out field);
         }
 
