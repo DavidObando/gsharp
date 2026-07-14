@@ -292,6 +292,19 @@ internal sealed partial class MethodBodyEmitter
     /// MethodDef handle is supplied directly. Mirrors
     /// <see cref="EmitFunctionLiteral(BoundFunctionLiteralExpression, Type)"/>
     /// but uses a metadata handle instead of a runtime <see cref="Type"/>.
+    /// Issue #2338 follow-up (deferred from the primary-ctor field-token fix):
+    /// when the display class was reified generic over its enclosing type
+    /// parameters (issue #1477 — e.g. a lambda captures a `T`-typed value
+    /// inside a generic containing type/method), the capture-site
+    /// <c>newobj</c>/<c>stfld</c>/<c>ldftn</c> tokens must be MemberRefs
+    /// parented at the CONSTRUCTED closure TypeSpec, exactly like the
+    /// no-named-delegate sibling above already does — a bare
+    /// MethodDef/FieldDef of a member on a generic type is an illegal
+    /// capture-store/delegate-function token (TypeLoadException + ilverify
+    /// StackUnexpected/DelegateCtor). This overload previously always used
+    /// the bare (open) handles unconditionally, so a generic-reified closure
+    /// bound to a named (rather than `Func`/`Action`) delegate type crashed
+    /// the same way primary-ctor field stores did before the #2338 fix.
     /// </summary>
     private void EmitFunctionLiteralToNamedDelegate(BoundFunctionLiteralExpression literal, EntityHandle delegateCtorHandle)
     {
@@ -309,8 +322,13 @@ internal sealed partial class MethodBodyEmitter
                     $"Closure invoke method '{closure.InvokeMethod.Name}' has no emitted MethodDef.");
             }
 
+            var constructedClosure = closure.ConstructedClassSym;
+            var closureIsGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(constructedClosure);
+
             this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(closureCtor);
+            this.il.Token(closureIsGeneric
+                ? this.outer.ResolveUserCtorTokenForDefault(constructedClosure)
+                : closureCtor);
 
             foreach (var captured in literal.CapturedVariables)
             {
@@ -320,7 +338,16 @@ internal sealed partial class MethodBodyEmitter
                         $"Closure for '{literal.Function.Name}' has no field for captured '{captured.Name}'.");
                 }
 
-                if (!this.outer.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle))
+                EntityHandle fieldToken;
+                if (closureIsGeneric)
+                {
+                    fieldToken = this.outer.ResolveFieldToken(constructedClosure, field);
+                }
+                else if (this.outer.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle))
+                {
+                    fieldToken = fieldHandle;
+                }
+                else
                 {
                     throw new InvalidOperationException(
                         $"Closure field '{field.Name}' has no emitted FieldDef.");
@@ -329,11 +356,13 @@ internal sealed partial class MethodBodyEmitter
                 this.il.OpCode(ILOpCode.Dup);
                 this.EmitCapturedVariableLoad(captured);
                 this.il.OpCode(ILOpCode.Stfld);
-                this.il.Token(fieldHandle);
+                this.il.Token(fieldToken);
             }
 
             this.il.OpCode(ILOpCode.Ldftn);
-            this.il.Token(closureInvoke);
+            this.il.Token(closureIsGeneric
+                ? this.outer.ResolveClosureInvokeFtnToken(constructedClosure, closure.ClassSym, closure.InvokeMethod)
+                : closureInvoke);
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(delegateCtorHandle);
             return;

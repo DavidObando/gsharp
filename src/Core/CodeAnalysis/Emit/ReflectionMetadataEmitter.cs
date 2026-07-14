@@ -4657,6 +4657,10 @@ internal sealed class ReflectionMetadataEmitter
         il.Token(baseCtorToken);
 
         // this.<field> = arg; positional 1:1 with same-named fields.
+        // Issue #2338 / ADR-0087 §3 R3: for a generic class the stfld must
+        // reference the field via a MemberRef parented at the
+        // self-instantiation TypeSpec (ResolveFieldToken), not the bare
+        // open FieldDef, or ilverify rejects the constructed receiver.
         for (var i = 0; i < parameters.Length; i++)
         {
             var param = parameters[i];
@@ -4665,10 +4669,7 @@ internal sealed class ReflectionMetadataEmitter
                 throw new InvalidOperationException($"Class '{classSym.Name}' has no field for primary ctor parameter '{param.Name}'.");
             }
 
-            if (!this.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle))
-            {
-                throw new InvalidOperationException($"Class field '{field.Name}' has no emitted FieldDef.");
-            }
+            var fieldHandle = this.ResolveFieldToken(classSym, field);
 
             il.LoadArgument(0);
             il.LoadArgument(i + 1);

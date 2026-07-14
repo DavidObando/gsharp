@@ -662,6 +662,24 @@ public sealed class InterfaceSymbol : TypeSymbol
             substMethod.StaticOwnerType = instance;
         }
 
+        // Issue #2340 follow-up: preserve the ORIGINAL method's own
+        // (method-level) generic type parameters, e.g. `func Transform[TOut](...)`
+        // on a generic interface `ITransformer[TIn]`. These type parameters are
+        // never touched by `subst` (which only maps the INTERFACE's own type
+        // parameters, e.g. TIn), so the same TypeParameterSymbol instances
+        // remain valid on the constructed method. Without copying them here,
+        // every constructed generic interface's methods silently lost their
+        // method-level generic arity (defaulting to the empty array), which
+        // made `DeclarationBinder.TryBuildMethodTypeParameterMap` see a bogus
+        // arity mismatch (0 vs. the implementer's real arity) against ANY
+        // otherwise-correct implementation of a generic method on a
+        // constructed generic interface, incorrectly rejecting it before
+        // signature comparison ever ran and misreporting GS0187.
+        if (!m.TypeParameters.IsDefaultOrEmpty)
+        {
+            substMethod.TypeParameters = m.TypeParameters;
+        }
+
         return substMethod;
     }
 
@@ -768,6 +786,61 @@ public sealed class InterfaceSymbol : TypeSymbol
             return changed
                 ? Construct(iface.Definition, substitutedArgs.MoveToImmutable(), mapClrType)
                 : iface;
+        }
+
+        // Issue #2340 follow-up: a member type that is a constructed
+        // struct/class over the interface's own type parameter (e.g. a
+        // generic interface method `func Make() Box[T]`) carries the
+        // definition's type parameters in its arguments, exactly like the
+        // InterfaceSymbol case above. Without this branch a constructed
+        // interface's method kept exposing `Box[T_iface]` instead of
+        // `Box[int32]`, which made GS0187's signature-matching (see
+        // DeclarationBinder.TypeSignaturesEquivalent's StructSymbol branch)
+        // compare an unsubstituted type argument against the implementing
+        // class's closed argument and reject a genuinely correct
+        // implementation. Mirrors StructSymbol.SubstituteTypeForConstruction's
+        // own recursive handling of nested constructed generics.
+        if (type is StructSymbol structType && !structType.TypeArguments.IsDefaultOrEmpty)
+        {
+            var substitutedArgs = ImmutableArray.CreateBuilder<TypeSymbol>(structType.TypeArguments.Length);
+            var changed = false;
+            for (var i = 0; i < structType.TypeArguments.Length; i++)
+            {
+                var substituted = SubstituteType(structType.TypeArguments[i], subst, mapClrType);
+                substitutedArgs.Add(substituted);
+                changed |= !ReferenceEquals(substituted, structType.TypeArguments[i]);
+            }
+
+            return changed
+                ? StructSymbol.Construct(structType.Definition, substitutedArgs.MoveToImmutable(), mapClrType)
+                : structType;
+        }
+
+        // Issue #2340 follow-up (sibling to the #1503 branch already present
+        // in StructSymbol.SubstituteTypeForConstruction, and the matching
+        // Binder.SubstituteType branch added for the call-site defect): a
+        // member type that is a constructed named delegate over the
+        // interface's own type parameter (e.g. `func Make() Getter[T]`) must
+        // have its own type arguments substituted so the constructed
+        // interface exposes `Getter[int32]` rather than the still-open
+        // `Getter[T]`.
+        if (type is DelegateTypeSymbol del
+            && del.Definition != null
+            && !ReferenceEquals(del.Definition, del)
+            && !del.TypeArguments.IsDefaultOrEmpty)
+        {
+            var substitutedArgs = ImmutableArray.CreateBuilder<TypeSymbol>(del.TypeArguments.Length);
+            var changed = false;
+            for (var i = 0; i < del.TypeArguments.Length; i++)
+            {
+                var substituted = SubstituteType(del.TypeArguments[i], subst, mapClrType);
+                substitutedArgs.Add(substituted);
+                changed |= !ReferenceEquals(substituted, del.TypeArguments[i]);
+            }
+
+            return changed
+                ? DelegateTypeSymbol.Construct(del.Definition, substitutedArgs.MoveToImmutable())
+                : del;
         }
 
         // Issue #974: a member type that is a constructed imported generic over

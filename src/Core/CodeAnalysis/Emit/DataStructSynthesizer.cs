@@ -518,11 +518,45 @@ internal sealed class DataStructSynthesizer
     }
 
     /// <summary>
+    /// Issue #2338 follow-up: returns the <see cref="MethodAttributes"/> for a
+    /// synthesized <c>Object</c>-virtual override (<c>Equals(object)</c>,
+    /// <c>GetHashCode()</c>, <c>ToString()</c>) on a data type. A data STRUCT's
+    /// override is always <c>final</c> (structs can't be subclassed anyway,
+    /// and the parser rejects <c>open data struct</c> outright — ADR-0078 /
+    /// GS0309). A data CLASS's override is only <c>final</c> when the class
+    /// itself cannot be further subclassed — mirroring the exact
+    /// <c>!structSym.IsOpen &amp;&amp; !structSym.IsSealedHierarchy</c> condition
+    /// <see cref="TypeDefEmitter"/> uses to decide the TypeDef's own
+    /// <c>TypeAttributes.Sealed</c> flag. An <c>open</c> (or ADR-0078
+    /// <c>sealed class</c> discriminated-union) data class must leave these
+    /// overrides non-final so a further-derived data class can re-override
+    /// them with its own combined field set; marking them unconditionally
+    /// final made loading ANY data-class-extends-data-class hierarchy throw
+    /// <c>TypeLoadException: Declaration referenced in a method
+    /// implementation cannot be a final method</c> the moment the subclass
+    /// tried to override the base's already-final <c>Equals</c>/
+    /// <c>GetHashCode</c>/<c>ToString</c>.
+    /// </summary>
+    private static MethodAttributes DataObjectOverrideAttributes(StructSymbol structSym)
+    {
+        var attrs = MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig;
+        if (!structSym.IsClass || (!structSym.IsOpen && !structSym.IsSealedHierarchy))
+        {
+            attrs |= MethodAttributes.Final;
+        }
+
+        return attrs;
+    }
+
+    /// <summary>
     /// Issue #410 / ADR-0029: emits
     /// <c>public sealed override bool Equals(object other)</c> that performs
     /// <c>other is Name p &amp;&amp; this.Equals(p)</c>. Sealed because struct
     /// methods cannot be overridden in user code anyway, but the metadata
-    /// flag communicates intent.
+    /// flag communicates intent. Issue #2338 follow-up: for an <c>open</c>
+    /// (or ADR-0078 sealed-hierarchy) data CLASS the override is instead left
+    /// non-final via <see cref="DataObjectOverrideAttributes"/> so a further
+    /// derived data class can re-override it.
     /// </summary>
     private void EmitDataStructEqualsObject(StructSymbol structSym, EntityHandle typeDef, MethodDefinitionHandle equalsTypedHandle)
     {
@@ -556,7 +590,7 @@ internal sealed class DataStructSynthesizer
             .Parameters(1, r => r.Type().Boolean(), ps => ps.AddParameter().Type().Object());
 
         this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.Final | MethodAttributes.HideBySig,
+            attributes: DataObjectOverrideAttributes(structSym),
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.emitCtx.Metadata.GetOrAddString("Equals"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
@@ -711,7 +745,7 @@ internal sealed class DataStructSynthesizer
             .Parameters(0, r => r.Type().Int32(), _ => { });
 
         this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.Final | MethodAttributes.HideBySig,
+            attributes: DataObjectOverrideAttributes(structSym),
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.emitCtx.Metadata.GetOrAddString("GetHashCode"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
@@ -784,7 +818,7 @@ internal sealed class DataStructSynthesizer
             .Parameters(0, r => r.Type().String(), _ => { });
 
         this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.Final | MethodAttributes.HideBySig,
+            attributes: DataObjectOverrideAttributes(structSym),
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.emitCtx.Metadata.GetOrAddString("ToString"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sig),
