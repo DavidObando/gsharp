@@ -9992,23 +9992,27 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
-    /// Issue #1572: gets a MemberRef for <c>System.Nullable`1&lt;T&gt;::get_Value()</c>
-    /// where <c>T</c> is a user-declared value type emitted in this assembly
-    /// (a value-kind <see cref="StructSymbol"/> or an <see cref="EnumSymbol"/>).
-    /// The type has no runtime CLR type, so the BCL-backed
-    /// <see cref="WellKnownReferences.GetNullableGetValueReference"/> path cannot
-    /// build it; instead the parent TypeSpec closes <c>Nullable&lt;&gt;</c> over
-    /// the type's emitted TypeDef/TypeSpec and the getter returns <c>!0</c>.
-    /// Used by the <c>(v!!)</c> unwrap and value-type narrowing-read emit.
+    /// Issue #1572 / #2333: gets a MemberRef for
+    /// <c>System.Nullable`1&lt;T&gt;::get_Value()</c> where <c>T</c> is either a
+    /// user-declared value type emitted in this assembly (a value-kind
+    /// <see cref="StructSymbol"/> or an <see cref="EnumSymbol"/>) or an open
+    /// type parameter constrained to <c>struct</c>. Neither shape has a
+    /// resolvable runtime CLR <see cref="Type"/> during emit, so the
+    /// BCL-backed <see cref="WellKnownReferences.GetNullableGetValueReference"/>
+    /// path cannot build the MemberRef; instead the parent TypeSpec closes
+    /// <c>Nullable&lt;&gt;</c> over the emitted TypeDef/TypeSpec (or the
+    /// generic-parameter var/mvar signature slot) and the getter returns
+    /// <c>!0</c>. Used by the <c>(v!!)</c> unwrap, value-type narrowing-read
+    /// emit, and the null-conditional receiver probe.
     /// </summary>
-    /// <param name="nullableOfUserVt">A <c>Nullable&lt;T&gt;</c> over a user value type (enum or value struct).</param>
+    /// <param name="nullableOfUserVt">A <c>Nullable&lt;T&gt;</c> over a user value type (enum or value struct) or a struct-constrained type parameter.</param>
     /// <returns>The <c>get_Value()</c> MemberRef.</returns>
     internal MemberReferenceHandle GetNullableGetValueMemberRefForUserValueType(NullableTypeSymbol nullableOfUserVt)
     {
-        if (nullableOfUserVt == null || !NullableLifting.IsUserValueTypeNullable(nullableOfUserVt))
+        if (nullableOfUserVt == null || !NullableLifting.RequiresSymbolicNullableGetValue(nullableOfUserVt))
         {
             throw new InvalidOperationException(
-                "GetNullableGetValueMemberRefForUserValueType requires Nullable<user enum or value struct>.");
+                "GetNullableGetValueMemberRefForUserValueType requires Nullable<user enum, value struct, or struct-constrained type parameter>.");
         }
 
         var underlying = nullableOfUserVt.UnderlyingType;
@@ -11100,6 +11104,24 @@ internal sealed class ReflectionMetadataEmitter
             return true;
         }
 
+        // Issue #2335: a bare (non-nullable) value-type-constrained generic
+        // type parameter (`where T : struct`, optionally combined with an
+        // `Enum`/other constraint) lowers to an unboxed CLR value on the
+        // evaluation stack — the same as `Nullable<T>`'s underlying, which
+        // the arm above already recognises. Without this check, a bare
+        // `TypeParameterSymbol` with `HasValueTypeConstraint` (no
+        // `NullableTypeSymbol` wrapper, and — since it is an open generic
+        // parameter — no `ClrType` at emit time) fell through to `return
+        // false`, misclassifying it as a reference type. Consumers such as
+        // `MethodBodyEmitter.EmitTypePattern` then selected `castclass`
+        // instead of `unbox.any` for a `case enm is TEnum` pattern,
+        // producing IL that ILVerify rejects ("found ref TEnum, expected
+        // value TEnum").
+        if (type is TypeParameterSymbol bareTp && bareTp.HasValueTypeConstraint)
+        {
+            return true;
+        }
+
         if (type?.ClrType != null && type.ClrType.IsValueType)
         {
             return true;
@@ -11431,34 +11453,20 @@ internal sealed class ReflectionMetadataEmitter
     /// generics from a reference open definition so the produced TypeSpec /
     /// MemberRef binds to the target framework assemblies. Falls back to the
     /// host type when no reference mapping is available.
+    ///
+    /// Issue #2325: this used to carry its own constructed-generic remapping
+    /// loop, separate from (and ahead of) the one in
+    /// <see cref="MapToReferenceClrType"/> — which only did a flat
+    /// full-name lookup and therefore could not resolve a constructed generic
+    /// argument (e.g. the inner `Action&lt;object&gt;` of
+    /// `Action&lt;Action&lt;object&gt;, object&gt;`). That let a nested/
+    /// higher-order delegate mix a MetadataLoadContext open definition with a
+    /// host-context type argument, which `MakeGenericType` rejects at emit
+    /// time (GS9998). `MapToReferenceClrType` now performs the same recursive
+    /// remapping itself, so both callers share one implementation.
     /// </summary>
     internal Type ResolveTargetDelegateClrType(Type hostDelegate)
-    {
-        if (hostDelegate == null)
-        {
-            return null;
-        }
-
-        if (hostDelegate.IsConstructedGenericType)
-        {
-            var openName = hostDelegate.GetGenericTypeDefinition().FullName;
-            if (openName != null && this.emitCtx.References.TryResolveType(openName, requireExternalVisibility: false, out var openRef))
-            {
-                var hostArgs = hostDelegate.GetGenericArguments();
-                var refArgs = new Type[hostArgs.Length];
-                for (var i = 0; i < hostArgs.Length; i++)
-                {
-                    refArgs[i] = this.MapToReferenceClrType(hostArgs[i]) ?? hostArgs[i];
-                }
-
-                return openRef.MakeGenericType(refArgs);
-            }
-
-            return hostDelegate;
-        }
-
-        return this.MapToReferenceClrType(hostDelegate) ?? hostDelegate;
-    }
+        => this.MapToReferenceClrType(hostDelegate);
 
     // Phase 4 emit parity (E1): resolve the BCL delegate type backing a
     // GSharp function type. The default ClrType on FunctionTypeSymbol uses
@@ -11833,11 +11841,102 @@ internal sealed class ReflectionMetadataEmitter
     // unchanged when no mapping is found — non-primitive host types whose
     // FullName isn't resolvable will keep their original identity (and may
     // still encode fine via EncodeClrType's primitive matching).
+    //
+    // Issue #2325: this is the single recursive reference-context remapper
+    // shared by every caller that needs to cross from host-runtime `Type`s
+    // to the emitter's MetadataLoadContext `Type`s (ResolveDelegateArgClrType,
+    // ResolveTargetDelegateClrType, ResolveAsyncDelegateClrType, and the
+    // event-handler-type lookups in MethodBodyEmitter.Closures.cs). A
+    // *constructed* generic type — e.g. `Action<object>`, or nested/
+    // higher-order shapes like `Action<Action<object>, object>` — cannot be
+    // resolved by the flat `Type.FullName` lookup below: `FullName` on a
+    // constructed generic type embeds each argument's assembly-qualified
+    // name (e.g. "System.Action`1[[System.Object, ...]]"), which never
+    // matches the reference index (built from open generic *definitions*
+    // only — see AddToTypeNameIndex). Left unhandled, a constructed generic
+    // delegate argument fell through to the "return hostType unchanged"
+    // fallback, and a later `MakeGenericType` on a reference-context open
+    // definition mixed in a host-context type argument — MakeGenericType
+    // rejects that combination at emit time (GS9998: "was not loaded by the
+    // MetadataLoadContext that loaded the generic type or method").
+    //
+    // The fix: resolve the open generic definition through the active
+    // reference context, then recurse into every type argument through this
+    // same helper — so an arbitrarily nested constructed generic (the
+    // higher-order delegate case) is remapped, and the closed type is
+    // constructed entirely within the reference context. Non-generic types
+    // keep the original flat lookup; an open definition with no reference
+    // equivalent falls back to the host type unchanged, same as before.
+    //
+    // Issue #2325 follow-up: an array (`T[]`/`T[,]`), pointer (`T*`), or
+    // byref (`T&`) shape can appear as (or nested inside — e.g.
+    // `Action<int[], object>`) a constructed generic argument, and is
+    // subject to the exact same cross-context mismatch: `T.MakeArrayType()`
+    // / `MakePointerType()` / `MakeByRefType()` built over an unmapped
+    // host-context element `Type` still carries the host identity, so a
+    // later `MakeGenericType` combining it with a reference-context open
+    // definition throws GS9998 the same way an unmapped constructed generic
+    // argument did. Each of these three shapes wraps exactly one element
+    // type (`Type.GetElementType()`), so recurse through this same helper on
+    // the element and rebuild the wrapper — preserving the exact array rank
+    // (and the vector- vs. general-rank-1-array distinction, via
+    // `Type.IsSZArray`) — entirely within the reference context. An element
+    // that is itself a `Type.IsGenericParameter` (e.g. `T[]` for an in-scope
+    // type parameter) falls through unchanged via the flat lookup below,
+    // exactly as an unwrapped generic parameter already did: this rebuild
+    // only changes how the *wrapper* is reconstructed, not generic-parameter
+    // handling.
     internal Type MapToReferenceClrType(Type hostType)
     {
         if (hostType == null)
         {
             return null;
+        }
+
+        if (hostType.IsByRef)
+        {
+            var mappedElement = this.MapToReferenceClrType(hostType.GetElementType()) ?? hostType.GetElementType();
+            return mappedElement.MakeByRefType();
+        }
+
+        if (hostType.IsPointer)
+        {
+            var mappedElement = this.MapToReferenceClrType(hostType.GetElementType()) ?? hostType.GetElementType();
+            return mappedElement.MakePointerType();
+        }
+
+        if (hostType.IsArray)
+        {
+            var mappedElement = this.MapToReferenceClrType(hostType.GetElementType()) ?? hostType.GetElementType();
+
+            // A rank-1 array is either a vector (`T[]`, constructed via the
+            // parameterless `MakeArrayType()`) or a general rank-1 array
+            // (`T[*]`, constructed via `MakeArrayType(1)`) — reflection
+            // treats these as distinct array kinds sharing rank 1;
+            // `Type.IsSZArray` is the documented way to tell them apart
+            // (mirrors DocumentationIdProvider.AppendArraySuffix).
+            return hostType.IsSZArray
+                ? mappedElement.MakeArrayType()
+                : mappedElement.MakeArrayType(hostType.GetArrayRank());
+        }
+
+        if (hostType.IsConstructedGenericType)
+        {
+            var openDef = hostType.GetGenericTypeDefinition();
+            if (openDef.FullName != null
+                && this.emitCtx.References.TryResolveType(openDef.FullName, requireExternalVisibility: false, out var openRef))
+            {
+                var hostArgs = hostType.GetGenericArguments();
+                var refArgs = new Type[hostArgs.Length];
+                for (var i = 0; i < hostArgs.Length; i++)
+                {
+                    refArgs[i] = this.MapToReferenceClrType(hostArgs[i]) ?? hostArgs[i];
+                }
+
+                return openRef.MakeGenericType(refArgs);
+            }
+
+            return hostType;
         }
 
         if (this.emitCtx.References.TryResolveType(hostType.FullName ?? hostType.Name, requireExternalVisibility: false, out var mapped))

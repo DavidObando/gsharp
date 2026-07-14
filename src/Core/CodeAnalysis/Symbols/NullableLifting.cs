@@ -161,6 +161,37 @@ public static class NullableLifting
     }
 
     /// <summary>
+    /// Issue #2333: returns <see langword="true"/> when <paramref name="nullable"/>
+    /// wraps an underlying whose <c>Nullable&lt;T&gt;::get_Value()</c> MemberRef
+    /// cannot be built from a runtime <see cref="Type"/> (the emit-side
+    /// <c>WellKnownReferences.GetNullableGetValueReference</c> helper) because
+    /// the underlying has no <c>ClrType</c> during emit. Two shapes qualify:
+    /// <list type="bullet">
+    ///   <item><description>a user-declared value-kind struct or enum (see
+    ///     <see cref="IsUserValueTypeNullable"/>);</description></item>
+    ///   <item><description>an open type parameter constrained to
+    ///     <c>struct</c> — its <c>Nullable&lt;T&gt;</c> instantiation closes
+    ///     over a generic-parameter var/mvar signature slot, not a resolvable
+    ///     host <c>Type</c>.</description></item>
+    /// </list>
+    /// Both shapes route through the emit-side
+    /// <c>ReflectionMetadataEmitter.GetNullableGetValueMemberRefForUserValueType</c>
+    /// helper, which builds the MemberRef symbolically off the
+    /// emitted/encoded parent TypeSpec instead. Callers that must pick
+    /// between the ClrType-based and symbolic <c>get_Value</c> paths
+    /// (<c>EmitUnary</c>'s <c>!!</c> arm, the null-conditional receiver
+    /// probe, and <c>NullableValueTypeUnwrapCollector</c>'s slot-planning
+    /// pass) use this single predicate so all three stay in agreement.
+    /// </summary>
+    /// <param name="nullable">The wrapper to test.</param>
+    /// <returns><see langword="true"/> when the symbolic <c>get_Value</c> path is required.</returns>
+    internal static bool RequiresSymbolicNullableGetValue(NullableTypeSymbol nullable)
+    {
+        return IsUserValueTypeNullable(nullable)
+            || (nullable?.UnderlyingType is TypeParameterSymbol tp && tp.HasValueTypeConstraint);
+    }
+
+    /// <summary>
     /// Issue #1700: unifies <see cref="IsValueTypeNullable"/> (BCL / open
     /// struct-constrained type-parameter underlyings, which carry a runtime
     /// <c>ClrType</c>) and <see cref="IsUserValueTypeNullable"/> (same-

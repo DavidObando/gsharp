@@ -50,13 +50,19 @@ public sealed class CompileStage : IMigrationStage
         {
             SdkCompileResult sdkResult = new SdkCompileRunner().Compile(
                 context.AppRunDir,
+                Path.GetFileNameWithoutExtension(context.App.ProjectPath),
                 gsFiles,
                 context.App.TargetKind,
                 references,
                 context.AnalyzerReferencePaths,
-                rootNamespace: null,
+                context.AdditionalGeneratorFiles,
+                context.RootNamespace,
                 context.Options.Config,
-                context.BuildOnlyPackageReferences);
+                context.BuildOnlyPackageReferences,
+                context.PackageReferences,
+                context.ProjectReferences,
+                context.Options.GeneratedProjectPaths,
+                context.UsesCentralPackageManagement);
 
             if (sdkResult.IsAvailable)
             {
@@ -71,8 +77,13 @@ public sealed class CompileStage : IMigrationStage
                 return Task.FromResult(BuildFailureOutcome(context, sdkResult.Errors, sdkSyntheticMessage));
             }
 
-            // Issue #2261: no locally-built Gsharp.NET.Sdk nupkg is available.
-            // Fall back to the gsc-direct path rather than failing the app.
+            string unavailableMessage = "dotnet build (--via-sdk) is unavailable: " +
+                sdkResult.UnavailableReason +
+                " Pass --no-via-sdk to explicitly use the legacy direct-gsc path.";
+            return Task.FromResult(BuildFailureOutcome(
+                context,
+                Array.Empty<GscDiagnostic>(),
+                unavailableMessage));
         }
 
         GscResult result = context.Gsc.Compile(
@@ -341,12 +352,20 @@ public sealed class CompileStage : IMigrationStage
     {
         if (!string.IsNullOrEmpty(diagnosticFile))
         {
-            string name = Path.GetFileName(diagnosticFile);
-            EmittedGsFile match = files.FirstOrDefault(f =>
-                string.Equals(Path.GetFileName(f.GsPath), name, StringComparison.OrdinalIgnoreCase));
-            if (match is not null)
+            string diagnosticFullPath = Path.GetFullPath(diagnosticFile);
+            EmittedGsFile exactMatch = files.FirstOrDefault(f =>
+                string.Equals(Path.GetFullPath(f.GsPath), diagnosticFullPath, StringComparison.OrdinalIgnoreCase));
+            if (exactMatch is not null)
             {
-                return match;
+                return exactMatch;
+            }
+
+            string name = Path.GetFileName(diagnosticFile);
+            EmittedGsFile[] matches = files.Where(f =>
+                string.Equals(Path.GetFileName(f.GsPath), name, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (matches.Length == 1)
+            {
+                return matches[0];
             }
         }
 

@@ -480,13 +480,19 @@ internal sealed partial class MethodBodyEmitter
             return enumSym.UnderlyingType;
         }
 
-        var clr = type?.ClrType;
-        if (clr != null && clr.IsEnum)
+        // Issue #2327: `type.ClrType` may be a
+        // System.Reflection.Emit.TypeBuilderInstantiation (e.g. a
+        // compiler-synthesized structural function-type delegate closed
+        // over an in-flight TypeBuilder definition), whose `IsEnum` throws
+        // NotSupportedException. Route through the shared safe helper
+        // (generalizing the #1100/#2135 pattern) rather than probing
+        // `ClrType.IsEnum` directly — a throw means the type is definitely
+        // not an enum, matching the guard used by EnumOperatorTable.
+        var underlying = type?.ClrType.GetEnumUnderlyingTypeSafe();
+        if (underlying != null)
         {
-            // Loaded via a MetadataLoadContext or normal load: use the
-            // CLR's own underlying-type API, then map back to a
-            // TypeSymbol for the numeric lattice.
-            var underlying = System.Enum.GetUnderlyingType(clr);
+            // Loaded via a MetadataLoadContext or normal load: map the CLR
+            // underlying type back to a TypeSymbol for the numeric lattice.
             return TypeSymbol.FromClrType(underlying);
         }
 
@@ -856,6 +862,29 @@ internal sealed partial class MethodBodyEmitter
             {
                 return true;
             }
+        }
+
+        // Issue #2323: extends #2140 to the five generic single-type-
+        // argument array interfaces — IEnumerable<T>, ICollection<T>,
+        // IList<T>, IReadOnlyList<T>, IReadOnlyCollection<T> — for a slice
+        // `[]T` whose element `T` is a generic type parameter or same-
+        // compilation user type. Such elements leave the slice's backing
+        // `ClrType` null during emit, so neither the #521 CLR reference-
+        // upcast arm nor the #570 `ImplementsInterfaceByName` arm above can
+        // fire (both require a non-null `ClrType` on `a`). The binder
+        // already accepts this exact conversion via
+        // `Conversion.SliceImplementsInterfaceSymbolically`; delegate to
+        // that SAME symbolic rule here rather than re-deriving a second,
+        // potentially divergent open-definition / type-argument match, so
+        // binder acceptance and emitter reference-compatibility can never
+        // disagree. That helper's `AreTypeArgumentsEquivalent` comparison
+        // still rejects a mismatched element type, preserving slice
+        // invariance and GS0155 for genuine element mismatches.
+        if (a is SliceTypeSymbol aSliceSymbolic
+            && aSliceSymbolic.ClrType == null
+            && Conversion.SliceImplementsInterfaceSymbolically(aSliceSymbolic, b))
+        {
+            return true;
         }
 
         return false;

@@ -6031,6 +6031,40 @@ internal sealed class OverloadResolver
                 var argLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
                 boundArguments[i] = conversions.BindConversion(argLoc, argument, expectedType);
             }
+            else if (argument.Type != expectedType
+                && !(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type)))
+            {
+                // Issue #2335 (audit follow-up): every OTHER implicit
+                // conversion reaches this point already classified
+                // `IsImplicit` by the negation in the very first `if` above
+                // (that branch's `!IsImplicit` guard is what routed
+                // execution past it), yet none of the specific branches
+                // above (delegate/tuple/named-delegate/nullable-lift)
+                // materializes it. Left unconverted, the raw argument would
+                // flow straight to the emitter — which, for a plain
+                // (non-imported) function call, applies NO further implicit
+                // widening/boxing of its own (contrast the CLR-call and
+                // instance/shared/extension-call paths, which always run
+                // their argument through `BindCallArgumentWithRefKind` /
+                // `BindConversion`). The most common manifestation is a
+                // value-type/generic-type-parameter argument passed to an
+                // `object`/interface-typed plain-function parameter (e.g.
+                // `func Show(x object) {…}; Show(42)`): the missing `box`
+                // opcode produces IL ilverify rejects
+                // (`StackUnexpected: found Int32, expected ref 'object'`).
+                // The same gap silently dropped numeric widening
+                // (`int32 → int64`) and other representation-changing
+                // implicit conversions. `parameter.Type` (the UNSUBSTITUTED
+                // declared type) is checked — not `expectedType` — so an
+                // open erased slot in a generic callee (paramType containing
+                // a type parameter of THIS call's own substitution) is still
+                // skipped and left for the emitter's type-erasure boxing at
+                // the call boundary, exactly mirroring the equivalent guard
+                // in `BindUserInstanceCall`'s per-argument loop
+                // (`if (paramType is TypeParameterSymbol) { …; continue; }`).
+                var argLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
+                boundArguments[i] = conversions.BindConversion(argLoc, argument, expectedType);
+            }
         }
 
         // Issue #951: any deferred un-typed arrow lambda that did not map to a

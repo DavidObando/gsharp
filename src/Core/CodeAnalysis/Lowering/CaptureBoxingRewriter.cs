@@ -696,6 +696,162 @@ internal static class CaptureBoxingRewriter
         }
 
         /// <inheritdoc/>
+        protected override BoundStatement RewriteTryStatement(BoundTryStatement node)
+        {
+            var tryBlock = this.RewriteStatement(node.TryBlock);
+
+            var rewrittenClauses = ImmutableArray.CreateBuilder<BoundCatchClause>(node.CatchClauses.Length);
+            var clausesChanged = false;
+            foreach (var clause in node.CatchClauses)
+            {
+                var body = this.RewriteStatement(clause.Body);
+                if (clause.Variable != null && this.boxInfo.TryGetValue(clause.Variable, out var bi))
+                {
+                    body = PrependSeedStatements(body, this.BuildBoxSeedStatements(bi));
+                    clausesChanged = true;
+                }
+                else if (!ReferenceEquals(body, clause.Body))
+                {
+                    clausesChanged = true;
+                }
+
+                rewrittenClauses.Add(new BoundCatchClause(clause.ExceptionType, clause.Variable, body));
+            }
+
+            var finallyBlock = node.FinallyBlock == null ? null : this.RewriteStatement(node.FinallyBlock);
+
+            if (ReferenceEquals(tryBlock, node.TryBlock) && !clausesChanged && ReferenceEquals(finallyBlock, node.FinallyBlock))
+            {
+                return node;
+            }
+
+            return new BoundTryStatement(null, tryBlock, rewrittenClauses.ToImmutable(), finallyBlock);
+        }
+
+        /// <inheritdoc/>
+        protected override BoundStatement RewritePatternSwitchStatement(BoundPatternSwitchStatement node)
+        {
+            var discriminant = this.RewriteExpression(node.Discriminant);
+            ImmutableArray<BoundPatternSwitchArm>.Builder builder = null;
+            for (var i = 0; i < node.Arms.Length; i++)
+            {
+                var arm = node.Arms[i];
+                var pattern = arm.Pattern == null ? null : this.RewritePattern(arm.Pattern);
+                var guard = arm.Guard == null ? null : this.RewriteExpression(arm.Guard);
+                var body = this.RewriteStatement(arm.Body);
+
+                if (pattern is BoundTypePattern typePattern
+                    && typePattern.Variable != null
+                    && this.boxInfo.TryGetValue(typePattern.Variable, out var bi))
+                {
+                    body = PrependSeedStatements(body, this.BuildBoxSeedStatements(bi));
+                }
+
+                if (builder == null && (pattern != arm.Pattern || guard != arm.Guard || body != arm.Body))
+                {
+                    builder = ImmutableArray.CreateBuilder<BoundPatternSwitchArm>(node.Arms.Length);
+                    for (var j = 0; j < i; j++)
+                    {
+                        builder.Add(node.Arms[j]);
+                    }
+                }
+
+                builder?.Add(new BoundPatternSwitchArm(null, pattern, guard, body));
+            }
+
+            if (discriminant == node.Discriminant && builder == null)
+            {
+                return node;
+            }
+
+            return new BoundPatternSwitchStatement(null, discriminant, builder?.MoveToImmutable() ?? node.Arms);
+        }
+
+        /// <inheritdoc/>
+        protected override BoundExpression RewriteSwitchExpression(BoundSwitchExpression node)
+        {
+            var discriminant = this.RewriteExpression(node.Discriminant);
+            ImmutableArray<BoundSwitchExpressionArm>.Builder builder = null;
+
+            for (var i = 0; i < node.Arms.Length; i++)
+            {
+                var arm = node.Arms[i];
+                var pattern = arm.Pattern == null ? null : this.RewritePattern(arm.Pattern);
+                var guard = arm.Guard == null ? null : this.RewriteExpression(arm.Guard);
+                var result = this.RewriteExpression(arm.Result);
+
+                if (pattern is BoundTypePattern typePattern
+                    && typePattern.Variable != null
+                    && this.boxInfo.TryGetValue(typePattern.Variable, out var bi))
+                {
+                    // A switch-expression arm has no statement body to prepend
+                    // into — only a `Result` expression — so the seed becomes a
+                    // BoundBlockExpression's prefix statements (folding into an
+                    // existing one from a prior rewrite, e.g. #2130's expression-
+                    // tree lowering, rather than nesting).
+                    var seed = this.BuildBoxSeedStatements(bi);
+                    result = result is BoundBlockExpression existingBlock
+                        ? new BoundBlockExpression(null, seed.AddRange(existingBlock.Statements), existingBlock.Expression)
+                        : new BoundBlockExpression(null, seed, result);
+                }
+
+                if (builder == null && (pattern != arm.Pattern || guard != arm.Guard || result != arm.Result))
+                {
+                    builder = ImmutableArray.CreateBuilder<BoundSwitchExpressionArm>(node.Arms.Length);
+                    for (var j = 0; j < i; j++)
+                    {
+                        builder.Add(node.Arms[j]);
+                    }
+                }
+
+                builder?.Add(new BoundSwitchExpressionArm(null, pattern, guard, result));
+            }
+
+            if (discriminant == node.Discriminant && builder == null)
+            {
+                return node;
+            }
+
+            return new BoundSwitchExpression(null, discriminant, builder?.MoveToImmutable() ?? node.Arms, node.Type);
+        }
+
+        /// <inheritdoc/>
+        protected override BoundStatement RewriteSelectStatement(BoundSelectStatement node)
+        {
+            ImmutableArray<BoundSelectCase>.Builder builder = null;
+            for (var i = 0; i < node.Cases.Length; i++)
+            {
+                var arm = node.Cases[i];
+                var channel = arm.Channel == null ? null : this.RewriteExpression(arm.Channel);
+                var value = arm.Value == null ? null : this.RewriteExpression(arm.Value);
+                var body = this.RewriteStatement(arm.Body);
+
+                if (arm.Variable != null && this.boxInfo.TryGetValue(arm.Variable, out var bi))
+                {
+                    body = PrependSeedStatements(body, this.BuildBoxSeedStatements(bi));
+                }
+
+                if (builder == null && (channel != arm.Channel || value != arm.Value || body != arm.Body))
+                {
+                    builder = ImmutableArray.CreateBuilder<BoundSelectCase>(node.Cases.Length);
+                    for (var j = 0; j < i; j++)
+                    {
+                        builder.Add(node.Cases[j]);
+                    }
+                }
+
+                builder?.Add(new BoundSelectCase(arm.CaseKind, channel, value, arm.Variable, body));
+            }
+
+            if (builder == null)
+            {
+                return node;
+            }
+
+            return new BoundSelectStatement(null, builder.MoveToImmutable());
+        }
+
+        /// <inheritdoc/>
         protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
         {
             if (this.boxInfo.TryGetValue(node.Variable, out var bi) && bi.Original == node.Variable)
@@ -781,6 +937,64 @@ internal static class CaptureBoxingRewriter
                 node.FunctionType,
                 newBody,
                 newCaptured.ToImmutable());
+        }
+
+        // Issue #2329: a catch-clause variable, a select-arm receive-bind
+        // variable, and a pattern-switch/switch-expression type-pattern
+        // variable are all "declaration-less" from CaptureBoxingRewriter's
+        // point of view — the emitter stores their runtime value straight
+        // into their ordinary local slot from specialized dispatch logic
+        // (EmitCatchClauses' stloc of the caught exception, the select
+        // TryRead out-argument, EmitTypePattern's stloc after isinst), with
+        // no BoundVariableDeclaration node ever appearing in the tree (unlike
+        // `var n = e`, which RewriteVariableDeclaration boxes above, or an
+        // inline `out var x`, which OutVarBoxIntroductionScanner boxes at its
+        // address-of site). When one of these variables is captured by a
+        // nested lambda, boxInfo still hoists it into a Box (CaptureWalker
+        // does not distinguish how a captured VariableSymbol was introduced),
+        // but the box is never allocated or seeded anywhere — crashing emit
+        // with GS9998 "has no local slot" (the box local itself has no slot)
+        // exactly like the #1453 out-var gap.
+        //
+        // The fix mirrors the captured-parameter prologue (box constructed,
+        // then seeded from the plain-slot value) but scoped to the construct's
+        // own body/result instead of function entry: the plain slot still
+        // receives the runtime value via the unmodified emit dispatch path,
+        // and the first thing the (rewritten) body/result does is copy that
+        // value into the box before any box.Value read executes.
+        private ImmutableArray<BoundStatement> BuildBoxSeedStatements(BoxedVariable bi)
+        {
+            this.allocated.Add(bi.Original);
+            return ImmutableArray.Create<BoundStatement>(
+                new BoundVariableDeclaration(
+                    null,
+                    bi.BoxLocal,
+                    new BoundConstructorCallExpression(
+                        null,
+                        bi.BoxClass,
+                        ImmutableArray<BoundExpression>.Empty)),
+                new BoundExpressionStatement(
+                    null,
+                    new BoundFieldAssignmentExpression(
+                        null,
+                        bi.BoxLocal,
+                        bi.BoxClass,
+                        bi.BoxField,
+                        new BoundVariableExpression(null, bi.Original))));
+        }
+
+        // Prepends box-seed statements ahead of a construct's already-rewritten
+        // body, tolerating a non-block body (defensive: every current caller's
+        // grammar requires a brace-delimited body, but binding this generically
+        // avoids a latent cast failure if that ever changes).
+        private static BoundStatement PrependSeedStatements(BoundStatement body, ImmutableArray<BoundStatement> seed)
+        {
+            if (body is BoundBlockStatement block)
+            {
+                return new BoundBlockStatement(null, seed.AddRange(block.Statements));
+            }
+
+            return new BoundBlockStatement(null, seed.Add(body));
         }
     }
 }

@@ -117,6 +117,12 @@ public sealed class StageExecutionContext
     public List<string> GeneratorGlobalOptions { get; } = new List<string>();
 
     /// <summary>
+    /// Gets or sets the source project's root namespace, captured by the
+    /// Translate stage for the SDK compile project.
+    /// </summary>
+    public string RootNamespace { get; set; }
+
+    /// <summary>
     /// Gets the source project's declared build/dev-only <c>PackageReference</c>s
     /// (issue #2267) — e.g. a version-bumped <c>Nerdbank.GitVersioning</c> — that
     /// must be re-declared into the isolated <c>--via-sdk</c> gsproj because they
@@ -127,6 +133,31 @@ public sealed class StageExecutionContext
     /// items at all).
     /// </summary>
     public List<DeclaredPackageReference> BuildOnlyPackageReferences { get; } = new List<DeclaredPackageReference>();
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the generated app's copied
+    /// <c>Directory.Packages.props</c> actually enables NuGet Central Package
+    /// Management (<c>ManagePackageVersionsCentrally</c>, issue #2319). Set by
+    /// the Translate stage; consumed by the <c>--via-sdk</c> compile path so any
+    /// <c>PackageReference</c> it synthesizes (e.g. the bumped nbgv reference)
+    /// omits <c>Version=</c> — CPM forbids that attribute on project-level
+    /// <c>PackageReference</c> items and NuGet fails restore (NU1008) otherwise.
+    /// </summary>
+    public bool UsesCentralPackageManagement { get; set; }
+
+    /// <summary>
+    /// Gets the source project's declared PackageReference items. A below-floor
+    /// literal <c>Nerdbank.GitVersioning</c> <c>Version</c> declared directly on
+    /// this list's item (as opposed to split across an ancestor
+    /// <c>Directory.Build.props</c>/<c>Directory.Packages.props</c>, which
+    /// <see cref="BuildOnlyPackageReferences"/> instead covers) is already
+    /// bumped by the Translate stage (issue #2319) before being copied verbatim
+    /// into the generated <c>.gsproj</c>.
+    /// </summary>
+    public List<DeclaredProjectItem> PackageReferences { get; } = new List<DeclaredProjectItem>();
+
+    /// <summary>Gets the source project's declared ProjectReference items.</summary>
+    public List<DeclaredProjectItem> ProjectReferences { get; } = new List<DeclaredProjectItem>();
 
     /// <summary>
     /// Gets or sets the absolute path of the assembly emitted by the Compile

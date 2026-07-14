@@ -48,6 +48,20 @@ public static class CSharpProjectLoader
     /// </summary>
     public const string WorkspaceLoadFailureDiagnosticId = "CS2GS0001";
 
+    /// <summary>
+    /// Diagnostic id for a benign NuGet audit vulnerability advisory (issue
+    /// #2321) — a <see cref="WorkspaceDiagnosticKind.Failure"/> MSBuildWorkspace
+    /// diagnostic that <see cref="NuGetAuditAdvisoryPolicy.IsBenignAdvisory(string)"/>
+    /// recognized as the stable NU1901-NU1904 advisory shape. Recorded at
+    /// <see cref="DiagnosticSeverity.Info"/> — visible in
+    /// <see cref="LoadedCSharpProject.LoadDiagnostics"/> for anything that later
+    /// wants to surface it, but excluded from
+    /// <see cref="LoadedCSharpProject.ErrorDiagnostics"/> so it does not trip
+    /// <see cref="LoadedCSharpProject.BoundWithoutErrors"/> or
+    /// <see cref="LoadedCSharpProject.WorkspaceLoadFailed"/>.
+    /// </summary>
+    public const string NuGetAuditAdvisoryDiagnosticId = "CS2GS0003";
+
     private static readonly object MSBuildRegistrationLock = new object();
 
     /// <summary>
@@ -76,6 +90,20 @@ public static class CSharpProjectLoader
         id: "CS2GS0002",
         title: "Generated source file excluded from translation",
         messageFormat: "Skipped '{0}' because it is recognized as generated code",
+        category: "Cs2Gs.Loading",
+        defaultSeverity: DiagnosticSeverity.Info,
+        isEnabledByDefault: true);
+
+    /// <summary>
+    /// Issue #2321: a NuGet audit vulnerability advisory (NU1901-NU1904 shape)
+    /// that MSBuildWorkspace misclassified as a
+    /// <see cref="WorkspaceDiagnosticKind.Failure"/>. Recorded informationally
+    /// instead of as an error — the package still restores and builds.
+    /// </summary>
+    private static readonly DiagnosticDescriptor NuGetAuditAdvisoryDescriptor = new DiagnosticDescriptor(
+        id: NuGetAuditAdvisoryDiagnosticId,
+        title: "Benign NuGet audit vulnerability advisory",
+        messageFormat: "MSBuild workspace reported a NuGet vulnerability advisory (non-fatal): {0}",
         category: "Cs2Gs.Loading",
         defaultSeverity: DiagnosticSeverity.Info,
         isEnabledByDefault: true);
@@ -124,10 +152,9 @@ public static class CSharpProjectLoader
         // previously never inspected, so the translator proceeded on a degraded
         // compilation and the user only saw confusing downstream binding errors.
         // Surface them as load errors so BoundWithoutErrors reflects reality.
-        loadDiagnostics.AddRange(
-            workspace.Diagnostics
-                .Where(d => d.Kind == WorkspaceDiagnosticKind.Failure)
-                .Select(d => Diagnostic.Create(MSBuildWorkspaceLoadFailureDescriptor, Location.None, d.Message)));
+        // Issue #2321: a benign NuGet audit vulnerability advisory (NU1901-NU1904)
+        // is exempted from that gate — see ClassifyWorkspaceLoadDiagnostics.
+        loadDiagnostics.AddRange(ClassifyWorkspaceLoadDiagnostics(workspace));
 
         return await BuildLoadedProjectAsync(project, loadDiagnostics, cancellationToken).ConfigureAwait(false);
     }
@@ -169,10 +196,9 @@ public static class CSharpProjectLoader
         Project project = await workspace.OpenProjectAsync(fullPath, cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
-        workspaceFailures.AddRange(
-            workspace.Diagnostics
-                .Where(d => d.Kind == WorkspaceDiagnosticKind.Failure)
-                .Select(d => Diagnostic.Create(MSBuildWorkspaceLoadFailureDescriptor, Location.None, d.Message)));
+        // Issue #2321: same policy as LoadProjectAsync — a benign NuGet audit
+        // vulnerability advisory must not trip the workspace-load-failure gate.
+        workspaceFailures.AddRange(ClassifyWorkspaceLoadDiagnostics(workspace));
 
         var results = new List<LoadedCSharpProject>
         {
@@ -298,6 +324,36 @@ public static class CSharpProjectLoader
                     queue.Enqueue(referenced);
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Issue #2321: classifies every <see cref="WorkspaceDiagnosticKind.Failure"/>
+    /// diagnostic MSBuildWorkspace recorded while opening a project into either
+    /// a genuine <see cref="MSBuildWorkspaceLoadFailureDescriptor"/> error, or —
+    /// when <see cref="NuGetAuditAdvisoryPolicy.IsBenignAdvisory(string)"/>
+    /// recognizes the message as the stable NU1901-NU1904 advisory shape — a
+    /// non-fatal <see cref="NuGetAuditAdvisoryDescriptor"/> info diagnostic.
+    /// Applied identically by both <see cref="LoadProjectAsync"/> and
+    /// <see cref="LoadProjectWithReferencesAsync"/> so neither path lets a
+    /// benign vulnerability warning trip <see cref="WorkspaceLoadFailureDiagnosticId"/>
+    /// (CS2GS0001), while every other soft-fail (missing SDK/imports, an
+    /// unresolvable <c>ProjectReference</c>, an unsupported TFM, NU1900
+    /// audit-fetch failures, or a mixed/multiline message with any non-advisory
+    /// line) remains fatal.
+    /// </summary>
+    private static IEnumerable<Diagnostic> ClassifyWorkspaceLoadDiagnostics(MSBuildWorkspace workspace)
+    {
+        foreach (WorkspaceDiagnostic diagnostic in workspace.Diagnostics)
+        {
+            if (diagnostic.Kind != WorkspaceDiagnosticKind.Failure)
+            {
+                continue;
+            }
+
+            yield return NuGetAuditAdvisoryPolicy.IsBenignAdvisory(diagnostic.Message)
+                ? Diagnostic.Create(NuGetAuditAdvisoryDescriptor, Location.None, diagnostic.Message)
+                : Diagnostic.Create(MSBuildWorkspaceLoadFailureDescriptor, Location.None, diagnostic.Message);
         }
     }
 

@@ -174,6 +174,62 @@ public class SdkCompileRunnerTests
     }
 
     [Fact]
+    public void BuildProjectXml_OmitsVersionOnDeclaredNbgvPackageReference_WhenCentralPackageManagementIsUsed()
+    {
+        // Issue #2319: under CPM the version comes exclusively from the copied
+        // Directory.Packages.props's <PackageVersion> item. A Version=
+        // attribute on the generated <PackageReference> as well is rejected by
+        // NuGet's CPM validation (NU1008), so BuildProjectXml must omit it here.
+        var declared = new[]
+        {
+            new DeclaredPackageReference(
+                NerdbankGitVersioningPolicy.PackageId,
+                NerdbankGitVersioningPolicy.MinimumGSharpVersion,
+                privateAssets: "all"),
+        };
+
+        string xml = SdkCompileRunner.BuildProjectXml(
+            sdkVersion: "1.0.0",
+            target: TargetKind.Exe,
+            rootNamespace: null,
+            gsFilePaths: new[] { "/app/Program.gs" },
+            packages: Array.Empty<(string Id, string Version)>(),
+            references: Array.Empty<string>(),
+            analyzerReferences: Array.Empty<string>(),
+            declaredPackageReferences: declared,
+            usesCentralPackageManagement: true);
+
+        Assert.Contains(
+            "<PackageReference Include=\"Nerdbank.GitVersioning\" PrivateAssets=\"all\" />",
+            xml);
+        Assert.DoesNotContain("Version=", xml);
+    }
+
+    [Fact]
+    public void BuildProjectXml_OmitsVersionOnReconstructedPackage_WhenCentralPackageManagementIsUsed()
+    {
+        // Issue #2319: the same Version= suppression must apply to the
+        // DLL-reconstructed `packages` set, not just the declared build-only
+        // set, so BuildProjectXml stays internally consistent whenever CPM
+        // governs the generated app (even though in the real --via-sdk
+        // CompileStage call shape `packages` is always empty once declared
+        // PackageReference items are present).
+        string xml = SdkCompileRunner.BuildProjectXml(
+            sdkVersion: "1.0.0",
+            target: TargetKind.Library,
+            rootNamespace: null,
+            gsFilePaths: new[] { "/app/Lib.gs" },
+            packages: new List<(string Id, string Version)> { ("communitytoolkit.mvvm", "8.4.0") },
+            references: Array.Empty<string>(),
+            analyzerReferences: Array.Empty<string>(),
+            declaredPackageReferences: Array.Empty<DeclaredPackageReference>(),
+            usesCentralPackageManagement: true);
+
+        Assert.Contains("<PackageReference Include=\"communitytoolkit.mvvm\" />", xml);
+        Assert.DoesNotContain("Version=", xml);
+    }
+
+    [Fact]
     public void BuildProjectXml_DoesNotDuplicateDeclaredPackage_WhenAlreadyReconstructedFromDll()
     {
         // A package that DID resolve a compile-time DLL is already fully
@@ -195,6 +251,103 @@ public class SdkCompileRunnerTests
 
         Assert.Contains("<PackageReference Include=\"communitytoolkit.mvvm\" Version=\"8.4.0\" />", xml);
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(xml, "<PackageReference"));
+    }
+
+    [Fact]
+    public void BuildProjectXml_PreservesRootNamespaceAndAvaloniaXamlItems()
+    {
+        string xml = SdkCompileRunner.BuildProjectXml(
+            sdkVersion: "1.0.0",
+            target: TargetKind.Library,
+            rootNamespace: "Oahu.Core.UI.Avalonia",
+            gsFilePaths: new[] { "/migration/BookLibraryView_axaml.gs" },
+            packages: new List<(string Id, string Version)> { ("avalonia", "11.2.7") },
+            references: Array.Empty<string>(),
+            analyzerReferences: Array.Empty<string>(),
+            additionalFiles: new[]
+            {
+                "/source/Views/BookLibraryView.axaml;SourceItemGroup=AvaloniaXaml",
+            });
+
+        Assert.Contains("<RootNamespace>Oahu.Core.UI.Avalonia</RootNamespace>", xml);
+        Assert.Contains(
+            "<AvaloniaXaml Include=\"/source/Views/BookLibraryView.axaml\" />",
+            xml);
+    }
+
+    [Fact]
+    public void BuildProjectXml_PreservesDeclaredDependencyMetadataAndConditions()
+    {
+        var packages = new[]
+        {
+            new DeclaredProjectItem(
+                "'$(TargetFramework)' == 'net10.0'",
+                System.Xml.Linq.XElement.Parse(
+                    "<PackageReference Include=\"Example\" Version=\"1.2.3\" " +
+                    "PrivateAssets=\"all\"><Aliases>sample</Aliases></PackageReference>")),
+        };
+        var projects = new[]
+        {
+            new DeclaredProjectItem(
+                null,
+                System.Xml.Linq.XElement.Parse(
+                    "<ProjectReference Include=\"../Lib/Lib.gsproj\" " +
+                    "ReferenceOutputAssembly=\"false\"><Private>true</Private></ProjectReference>")),
+        };
+
+        string xml = SdkCompileRunner.BuildProjectXml(
+            sdkVersion: "1.0.0",
+            target: TargetKind.Library,
+            rootNamespace: null,
+            gsFilePaths: new[] { "Lib.gs" },
+            packages: Array.Empty<(string Id, string Version)>(),
+            references: Array.Empty<string>(),
+            analyzerReferences: Array.Empty<string>(),
+            packageReferences: packages,
+            projectReferences: projects);
+
+        Assert.Contains("<ItemGroup Condition=\"'$(TargetFramework)' == 'net10.0'\">", xml);
+        Assert.Contains(
+            "<PackageReference Include=\"Example\" Version=\"1.2.3\" PrivateAssets=\"all\"><Aliases>sample</Aliases></PackageReference>",
+            xml);
+        Assert.Contains(
+            "<ProjectReference Include=\"../Lib/Lib.gsproj\" ReferenceOutputAssembly=\"false\"><Private>true</Private></ProjectReference>",
+            xml);
+    }
+
+    [Fact]
+    public void RequiresExplicitProjectItem_UsesDefaultGlobForCopiedAvaloniaXaml()
+    {
+        Assert.False(SdkCompileRunner.RequiresExplicitProjectItem(
+            "/migration/Oahu.UI",
+            "/migration/Oahu.UI/Views/BookLibraryView.axaml;SourceItemGroup=AvaloniaXaml"));
+        Assert.True(SdkCompileRunner.RequiresExplicitProjectItem(
+            "/migration/Oahu.UI",
+            "/source/Oahu.UI/Views/BookLibraryView.axaml;SourceItemGroup=AvaloniaXaml"));
+    }
+
+    [Fact]
+    public void WriteIsolationBoundary_PreservesCopiedProjectBuildFiles()
+    {
+        string directory = Path.Combine(
+            Directory.GetCurrentDirectory(),
+            "sdkcompilerunnertests-isolation-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string propsPath = Path.Combine(directory, "Directory.Build.props");
+        const string Props = "<Project><PropertyGroup><Custom>true</Custom></PropertyGroup></Project>";
+        File.WriteAllText(propsPath, Props);
+
+        try
+        {
+            GsharpTestProjectRunner.WriteIsolationBoundary(directory);
+
+            Assert.Equal(Props, File.ReadAllText(propsPath));
+            Assert.True(File.Exists(Path.Combine(directory, "Directory.Build.targets")));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     /// <summary>

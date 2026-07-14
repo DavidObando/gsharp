@@ -168,6 +168,15 @@ public sealed class TestParityStage : IMigrationStage
             return StageOutcome.Failed(new[] { loadArtifact });
         }
 
+        // Issue #2321: a benign NuGet audit vulnerability advisory (CS2GS0003)
+        // never fails the .Tests project load above, but must not be dropped
+        // silently either — record it regardless of whether translation below
+        // is Ready or (still) Pending.
+        foreach (Diagnostic advisory in tests.AdvisoryDiagnostics)
+        {
+            this.Note(context, "NuGet audit advisory (CS2GS0003, non-fatal) in .Tests project: " + advisory.GetMessage());
+        }
+
         if (tests.PendingReason is not null)
         {
             // Gated intentionally (ADR-0115 §E) until test-translation lands —
@@ -253,6 +262,14 @@ public sealed class TestParityStage : IMigrationStage
             return TranslatedProject.LoadFailed(project.WorkspaceLoadErrors);
         }
 
+        // Issue #2321: a benign NuGet audit vulnerability advisory (CS2GS0003)
+        // does not fail the workspace load gate above; carry it forward to the
+        // caller so it can be recorded (not silently dropped) regardless of
+        // whether translation below ends up Ready or Pending.
+        List<Diagnostic> advisoryDiagnostics = project.LoadDiagnostics
+            .Where(d => d.Id == CSharpProjectLoader.NuGetAuditAdvisoryDiagnosticId)
+            .ToList();
+
         var files = new List<GsharpSourceFile>();
         var usedGsFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -281,7 +298,8 @@ public sealed class TestParityStage : IMigrationStage
             {
                 return TranslatedProject.Pending(
                     $"test-translation pending map-advanced — unsupported C# construct " +
-                    $"'{unsupported.ConstructKind}' in {Path.GetFileName(document.FilePath)}: {unsupported.Message}");
+                    $"'{unsupported.ConstructKind}' in {Path.GetFileName(document.FilePath)}: {unsupported.Message}",
+                    advisoryDiagnostics);
             }
 
             RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
@@ -290,14 +308,15 @@ public sealed class TestParityStage : IMigrationStage
                 return TranslatedProject.Pending(
                     $"test-translation pending map-advanced — emitted G# for " +
                     $"{Path.GetFileName(document.FilePath)} did not round-trip-parse: " +
-                    (roundTrip.Errors.FirstOrDefault() ?? "unknown parse error"));
+                    (roundTrip.Errors.FirstOrDefault() ?? "unknown parse error"),
+                    advisoryDiagnostics);
             }
 
             string gsFileName = EmittedFileNaming.UniqueGsFileName(document.FilePath, usedGsFileNames);
             files.Add(new GsharpSourceFile(gsFileName, printed));
         }
 
-        return TranslatedProject.Ready(files);
+        return TranslatedProject.Ready(files, advisoryDiagnostics);
     }
 
     private static (int Exit, string Stdout, string Stderr, bool TimedOut) RunProgram(string assemblyPath, string workingDirectory)
@@ -358,11 +377,13 @@ public sealed class TestParityStage : IMigrationStage
         private TranslatedProject(
             IReadOnlyList<GsharpSourceFile> files,
             string pendingReason,
-            IReadOnlyList<Diagnostic> loadErrors)
+            IReadOnlyList<Diagnostic> loadErrors,
+            IReadOnlyList<Diagnostic> advisoryDiagnostics)
         {
             this.Files = files ?? Array.Empty<GsharpSourceFile>();
             this.PendingReason = pendingReason;
             this.LoadErrors = loadErrors;
+            this.AdvisoryDiagnostics = advisoryDiagnostics ?? Array.Empty<Diagnostic>();
         }
 
         public IReadOnlyList<GsharpSourceFile> Files { get; }
@@ -372,13 +393,21 @@ public sealed class TestParityStage : IMigrationStage
         /// <summary>Gets the load-error diagnostics, or <see langword="null"/> if the project bound.</summary>
         public IReadOnlyList<Diagnostic> LoadErrors { get; }
 
-        public static TranslatedProject Ready(IReadOnlyList<GsharpSourceFile> files) =>
-            new TranslatedProject(files, null, null);
+        /// <summary>
+        /// Gets the benign NuGet audit vulnerability advisories (issue #2321,
+        /// <see cref="CSharpProjectLoader.NuGetAuditAdvisoryDiagnosticId"/>,
+        /// CS2GS0003) MSBuildWorkspace reported while opening this project.
+        /// Always empty for a <see cref="LoadFailed"/> project.
+        /// </summary>
+        public IReadOnlyList<Diagnostic> AdvisoryDiagnostics { get; }
 
-        public static TranslatedProject Pending(string reason) =>
-            new TranslatedProject(Array.Empty<GsharpSourceFile>(), reason, null);
+        public static TranslatedProject Ready(IReadOnlyList<GsharpSourceFile> files, IReadOnlyList<Diagnostic> advisoryDiagnostics) =>
+            new TranslatedProject(files, null, null, advisoryDiagnostics);
+
+        public static TranslatedProject Pending(string reason, IReadOnlyList<Diagnostic> advisoryDiagnostics) =>
+            new TranslatedProject(Array.Empty<GsharpSourceFile>(), reason, null, advisoryDiagnostics);
 
         public static TranslatedProject LoadFailed(IReadOnlyList<Diagnostic> loadErrors) =>
-            new TranslatedProject(Array.Empty<GsharpSourceFile>(), null, loadErrors);
+            new TranslatedProject(Array.Empty<GsharpSourceFile>(), null, loadErrors, null);
     }
 }

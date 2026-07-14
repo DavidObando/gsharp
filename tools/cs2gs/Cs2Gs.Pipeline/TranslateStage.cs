@@ -39,9 +39,15 @@ public sealed class TranslateStage : IMigrationStage
             throw new ArgumentNullException(nameof(context));
         }
 
-        IReadOnlyList<LoadedCSharpProject> projects = await CSharpProjectLoader
-            .LoadProjectWithReferencesAsync(context.App.ProjectPath, cancellationToken)
-            .ConfigureAwait(false);
+        IReadOnlyList<LoadedCSharpProject> projects = context.Options.CompileViaSdk
+            ? new[]
+            {
+                await CSharpProjectLoader.LoadProjectAsync(context.App.ProjectPath, cancellationToken)
+                    .ConfigureAwait(false),
+            }
+            : await CSharpProjectLoader
+                .LoadProjectWithReferencesAsync(context.App.ProjectPath, cancellationToken)
+                .ConfigureAwait(false);
         LoadedCSharpProject project = projects[0];
 
         var artifacts = new List<TriageArtifact>();
@@ -63,7 +69,21 @@ public sealed class TranslateStage : IMigrationStage
             return StageOutcome.Failed(artifacts);
         }
 
-        var usedGsFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Issue #2321: a benign NuGet audit vulnerability advisory (CS2GS0003)
+        // does not fail the workspace load above, but must not be dropped
+        // silently either — record it in the per-app translate.log, the same
+        // best-effort append-only text log TestParityStage's Note already
+        // uses for non-fatal, informational events (test-parity.log).
+        NoteNuGetAuditAdvisories(context, project);
+
+        var usedOutputPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        CopyProjectFiles(project.ProjectDirectory, context.AppRunDir, usedOutputPaths);
+        CopyCentralPackageManagementFile(project.ProjectDirectory, context.AppRunDir, context);
+        context.PackageReferences.AddRange(
+            DeclaredProjectItems.BumpNerdbankGitVersioningVersion(
+                DeclaredProjectItems.Read(context.App.ProjectPath, "PackageReference")));
+        context.ProjectReferences.AddRange(
+            DeclaredProjectItems.Read(context.App.ProjectPath, "ProjectReference"));
 
         // Translate the app itself (index 0) plus its transitively referenced
         // sibling projects (Refs #914). Sibling G# is emitted so the app's uses
@@ -100,6 +120,8 @@ public sealed class TranslateStage : IMigrationStage
             // (or, worse, collide with) output that belongs to the sibling.
             if (!isReferencedProject)
             {
+                context.RootNamespace = currentProject.RootNamespace;
+
                 foreach (string analyzerPath in currentProject.AnalyzerReferencePaths)
                 {
                     context.AnalyzerReferencePaths.Add(analyzerPath);
@@ -110,7 +132,11 @@ public sealed class TranslateStage : IMigrationStage
                 // file-driven generator output (e.g. Avalonia's InitializeComponent).
                 foreach (string additionalFile in currentProject.AdditionalFiles)
                 {
-                    string spec = additionalFile;
+                    string copiedPath = MirroredPath(
+                        additionalFile,
+                        currentProject.ProjectDirectory,
+                        context.AppRunDir);
+                    string spec = File.Exists(copiedPath) ? copiedPath : additionalFile;
                     string ext = Path.GetExtension(additionalFile);
                     if (ext.Equals(".axaml", StringComparison.OrdinalIgnoreCase) ||
                         ext.Equals(".xaml", StringComparison.OrdinalIgnoreCase) ||
@@ -131,7 +157,7 @@ public sealed class TranslateStage : IMigrationStage
 
                     if (!string.IsNullOrEmpty(currentProject.ProjectDirectory))
                     {
-                        context.GeneratorGlobalOptions.Add("ProjectDir=" + currentProject.ProjectDirectory);
+                        context.GeneratorGlobalOptions.Add("ProjectDir=" + context.AppRunDir);
                     }
                 }
             }
@@ -164,15 +190,21 @@ public sealed class TranslateStage : IMigrationStage
                 CompilationUnit unit = translator.TranslateDocument(document, translationContext);
                 string printed = GSharpPrinter.Print(unit);
 
-                string gsFileName = EmittedFileNaming.UniqueGsFileName(document.FilePath, usedGsFileNames);
-                string gsPath = Path.Combine(context.AppRunDir, gsFileName);
+                string gsRelativePath = OutputPathForSource(
+                    document.FilePath,
+                    currentProject,
+                    isReferencedProject,
+                    usedOutputPaths);
+                string gsPath = Path.Combine(context.AppRunDir, gsRelativePath);
+                Directory.CreateDirectory(Path.GetDirectoryName(gsPath));
                 File.WriteAllText(gsPath, printed);
 
                 var declaredTypeNames = new List<string>();
                 var baseClassNames = new List<string>();
                 CollectTypeGraph(unit.Members, declaredTypeNames, baseClassNames);
 
-                string relativeGsPath = MigrationPipeline.SanitizeAppId(context.App.Id) + "/" + gsFileName;
+                string relativeGsPath = MigrationPipeline.SanitizeAppId(context.App.Id) + "/" +
+                    gsRelativePath.Replace(Path.DirectorySeparatorChar, '/');
                 var emitted = new EmittedGsFile(
                     gsPath,
                     relativeGsPath,
@@ -243,20 +275,17 @@ public sealed class TranslateStage : IMigrationStage
 
                 string className = Path.GetFileNameWithoutExtension(resxPath);
 
-                // EmittedFileNaming.UniqueGsFileName sanitizes a single-extension
-                // ".gs" name, so drive uniqueness off the resx path itself (e.g.
-                // "Resources.resx" -> "Resources.gs") and re-derive the real
-                // "*.Designer.gs" name from whatever de-duplicated base name it
-                // picked (e.g. "Properties.Resources.gs" on a folder collision) —
-                // this still correctly detects a clash against a hand-written
-                // "Resources.cs" translated into "Resources.gs", since both would
-                // declare a same-named type in the output directory.
-                string uniqueBaseGsName = EmittedFileNaming.UniqueGsFileName(resxPath, usedGsFileNames);
-                string gsFileName = Path.GetFileNameWithoutExtension(uniqueBaseGsName) + GSharp.Core.Resx.ResxCodeGenerator.DesignerFileSuffix;
-                string gsPath = Path.Combine(context.AppRunDir, gsFileName);
+                string gsRelativePath = OutputPathForResx(
+                    resxPath,
+                    currentProject,
+                    isReferencedProject,
+                    usedOutputPaths);
+                string gsPath = Path.Combine(context.AppRunDir, gsRelativePath);
+                Directory.CreateDirectory(Path.GetDirectoryName(gsPath));
                 File.WriteAllText(gsPath, generated);
 
-                string relativeGsPath = MigrationPipeline.SanitizeAppId(context.App.Id) + "/" + gsFileName;
+                string relativeGsPath = MigrationPipeline.SanitizeAppId(context.App.Id) + "/" +
+                    gsRelativePath.Replace(Path.DirectorySeparatorChar, '/');
                 var emittedResx = new EmittedGsFile(
                     gsPath,
                     relativeGsPath,
@@ -292,6 +321,227 @@ public sealed class TranslateStage : IMigrationStage
         EmitNerdbankGitVersioningBumps(context);
 
         return artifacts.Count == 0 ? StageOutcome.Passed() : StageOutcome.Failed(artifacts);
+    }
+
+    /// <summary>
+    /// Issue #2321: records any benign NuGet audit vulnerability advisory
+    /// (<see cref="CSharpProjectLoader.NuGetAuditAdvisoryDiagnosticId"/>,
+    /// CS2GS0003) MSBuildWorkspace reported while opening <paramref name="project"/>
+    /// into the per-app <c>translate.log</c>. The advisory never fails this
+    /// stage — <see cref="CSharpProjectLoader"/> already excludes it from
+    /// <see cref="LoadedCSharpProject.ErrorDiagnostics"/> — this only keeps it
+    /// from being silently dropped once <see cref="LoadedCSharpProject.LoadDiagnostics"/>
+    /// is no longer inspected past the <see cref="LoadedCSharpProject.WorkspaceLoadFailed"/>
+    /// gate above.
+    /// </summary>
+    private static void NoteNuGetAuditAdvisories(StageExecutionContext context, LoadedCSharpProject project)
+    {
+        foreach (Diagnostic advisory in project.LoadDiagnostics
+            .Where(d => d.Id == CSharpProjectLoader.NuGetAuditAdvisoryDiagnosticId))
+        {
+            Note(context, "NuGet audit advisory (CS2GS0003, non-fatal): " + advisory.GetMessage());
+        }
+    }
+
+    /// <summary>
+    /// A best-effort, append-only per-app text log — the Translate-stage
+    /// counterpart of <see cref="TestParityStage"/>'s identical <c>Note</c>
+    /// helper (which writes <c>test-parity.log</c>). Never fails the stage on
+    /// a log write.
+    /// </summary>
+    private static void Note(StageExecutionContext context, string message)
+    {
+        try
+        {
+            File.AppendAllText(
+                Path.Combine(context.AppRunDir, "translate.log"),
+                message + Environment.NewLine);
+        }
+        catch (IOException)
+        {
+            // A best-effort diagnostic log; never fail the stage on a log write.
+        }
+    }
+
+    private static void CopyProjectFiles(
+        string projectDirectory,
+        string outputDirectory,
+        ISet<string> usedOutputPaths)
+    {
+        if (string.IsNullOrEmpty(projectDirectory) || !Directory.Exists(projectDirectory))
+        {
+            return;
+        }
+
+        foreach (string sourcePath in Directory.EnumerateFiles(projectDirectory, "*", SearchOption.AllDirectories))
+        {
+            string relativePath = Path.GetRelativePath(projectDirectory, sourcePath);
+            if (HasExcludedDirectory(relativePath) ||
+                Path.GetExtension(sourcePath).Equals(".cs", StringComparison.OrdinalIgnoreCase) ||
+                Path.GetExtension(sourcePath).Equals(".csproj", StringComparison.OrdinalIgnoreCase) ||
+                IsUnderDirectory(sourcePath, outputDirectory))
+            {
+                continue;
+            }
+
+            string destinationPath = Path.Combine(outputDirectory, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(destinationPath));
+            File.Copy(sourcePath, destinationPath, overwrite: true);
+            usedOutputPaths.Add(relativePath);
+        }
+    }
+
+    /// <summary>
+    /// Locates the ancestor <c>Directory.Packages.props</c> that governs the
+    /// source project (Central Package Management) and writes it into the
+    /// generated app root — the file NuGet actually restores the generated
+    /// <c>.gsproj</c> against. Issue #2319: a below-floor literal nbgv
+    /// <c>PackageVersion</c> is bumped here, in this copy, using the same
+    /// <see cref="NerdbankGitVersioningPolicy.TryBumpProjectXml"/> the
+    /// project-file bump path already uses — the previous behavior copied the
+    /// file verbatim and wrote the bumped text to an inert
+    /// <c>nbgv-bump/Directory.Packages.props</c> that nothing ever restored
+    /// against, so NuGet still saw the below-floor version while
+    /// <see cref="SdkCompileRunner"/> independently emitted a bumped
+    /// <c>Version=</c> attribute on the generated NBGV <c>PackageReference</c> —
+    /// a combination Central Package Management rejects outright (NU1008).
+    /// Also records on <paramref name="context"/> whether the copied file
+    /// actually enables CPM (<c>ManagePackageVersionsCentrally</c>), so the
+    /// <c>--via-sdk</c> compile path knows to omit <c>Version=</c> from any
+    /// <c>PackageReference</c> it synthesizes rather than reconstructs
+    /// verbatim from the source project.
+    /// </summary>
+    private static void CopyCentralPackageManagementFile(
+        string projectDirectory,
+        string outputDirectory,
+        StageExecutionContext context)
+    {
+        string directory = projectDirectory;
+        while (!string.IsNullOrEmpty(directory))
+        {
+            string sourcePath = Path.Combine(directory, "Directory.Packages.props");
+            if (File.Exists(sourcePath))
+            {
+                string original;
+                try
+                {
+                    original = File.ReadAllText(sourcePath);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    return;
+                }
+
+                string content = NerdbankGitVersioningPolicy.TryBumpProjectXml(original, out string bumped)
+                    ? bumped
+                    : original;
+                File.WriteAllText(Path.Combine(outputDirectory, "Directory.Packages.props"), content);
+                context.UsesCentralPackageManagement =
+                    CentralPackageManagementPolicy.IsEnabled(projectDirectory, directory, content);
+                return;
+            }
+
+            directory = Directory.GetParent(directory)?.FullName;
+        }
+    }
+
+    private static string OutputPathForSource(
+        string sourcePath,
+        LoadedCSharpProject project,
+        bool isReferencedProject,
+        ISet<string> usedOutputPaths)
+    {
+        string relativePath = RelativeSourcePath(sourcePath, project.ProjectDirectory);
+        relativePath = Path.ChangeExtension(relativePath, ".gs");
+        return UniqueOutputPath(PrefixReferencedProject(relativePath, project, isReferencedProject), usedOutputPaths);
+    }
+
+    private static string OutputPathForResx(
+        string sourcePath,
+        LoadedCSharpProject project,
+        bool isReferencedProject,
+        ISet<string> usedOutputPaths)
+    {
+        string relativePath = RelativeSourcePath(sourcePath, project.ProjectDirectory);
+        string directory = Path.GetDirectoryName(relativePath);
+        string fileName = Path.GetFileNameWithoutExtension(relativePath) +
+            GSharp.Core.Resx.ResxCodeGenerator.DesignerFileSuffix;
+        relativePath = string.IsNullOrEmpty(directory) ? fileName : Path.Combine(directory, fileName);
+        return UniqueOutputPath(PrefixReferencedProject(relativePath, project, isReferencedProject), usedOutputPaths);
+    }
+
+    private static string PrefixReferencedProject(
+        string relativePath,
+        LoadedCSharpProject project,
+        bool isReferencedProject)
+    {
+        if (!isReferencedProject)
+        {
+            return relativePath;
+        }
+
+        string projectName = project.Compilation.AssemblyName ?? "ReferencedProject";
+        foreach (char invalid in Path.GetInvalidFileNameChars())
+        {
+            projectName = projectName.Replace(invalid, '_');
+        }
+
+        return Path.Combine(".references", projectName, relativePath);
+    }
+
+    private static string RelativeSourcePath(string sourcePath, string projectDirectory)
+    {
+        string relativePath = Path.GetRelativePath(projectDirectory, sourcePath);
+        return IsOutsideDirectory(relativePath) ? Path.GetFileName(sourcePath) : relativePath;
+    }
+
+    private static string UniqueOutputPath(string relativePath, ISet<string> usedOutputPaths)
+    {
+        if (usedOutputPaths.Add(relativePath))
+        {
+            return relativePath;
+        }
+
+        string directory = Path.GetDirectoryName(relativePath);
+        string extension = Path.GetExtension(relativePath);
+        string baseName = Path.GetFileNameWithoutExtension(relativePath);
+        for (int suffix = 2; ; suffix++)
+        {
+            string fileName = baseName + "." + suffix + extension;
+            string candidate = string.IsNullOrEmpty(directory) ? fileName : Path.Combine(directory, fileName);
+            if (usedOutputPaths.Add(candidate))
+            {
+                return candidate;
+            }
+        }
+    }
+
+    private static string MirroredPath(string sourcePath, string projectDirectory, string outputDirectory)
+    {
+        string relativePath = Path.GetRelativePath(projectDirectory, sourcePath);
+        return IsOutsideDirectory(relativePath) ? sourcePath : Path.Combine(outputDirectory, relativePath);
+    }
+
+    private static bool HasExcludedDirectory(string relativePath)
+    {
+        string[] segments = relativePath.Split(
+            new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+            StringSplitOptions.RemoveEmptyEntries);
+        return segments.Any(s =>
+            s.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+            s.Equals("obj", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsOutsideDirectory(string relativePath) =>
+        Path.IsPathRooted(relativePath) ||
+        relativePath.Equals("..", StringComparison.Ordinal) ||
+        relativePath.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
+        relativePath.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal);
+
+    private static bool IsUnderDirectory(string path, string directory)
+    {
+        string relativePath = Path.GetRelativePath(directory, path);
+        return !IsOutsideDirectory(relativePath);
     }
 
     /// <summary>

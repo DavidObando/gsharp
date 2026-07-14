@@ -114,6 +114,13 @@ public sealed class MigrationPipeline
             this.options.OutputRoot ?? Path.Combine(Directory.GetCurrentDirectory(), "cs2gs-runs"));
         string runDir = Path.Combine(outputRoot, runId);
         Directory.CreateDirectory(runDir);
+        this.options.GeneratedProjectPaths = apps.ToDictionary(
+            app => Path.GetFullPath(app.ProjectPath),
+            app => Path.Combine(
+                runDir,
+                SanitizeAppId(app.Id),
+                Path.GetFileNameWithoutExtension(app.ProjectPath) + ".gsproj"),
+            StringComparer.OrdinalIgnoreCase);
 
         IReadOnlyDictionary<string, List<TriageRetryEntry>> priorHistory =
             LoadPriorRetryEntries(outputRoot, runId);
@@ -127,18 +134,29 @@ public sealed class MigrationPipeline
             Succeeded = true,
         };
 
-        foreach (CorpusApp app in apps)
+        var appResults = new Dictionary<string, AppResult>(StringComparer.OrdinalIgnoreCase);
+        foreach (CorpusApp app in OrderForSdkBuild(apps))
         {
             cancellationToken.ThrowIfCancellationRequested();
             AppResult appResult = await this.RunAppAsync(
                 app, gsc, gscVersion, runId, timestamp, runDir, priorHistory, cancellationToken)
                 .ConfigureAwait(false);
-            runResult.Apps.Add(appResult);
+            appResults[app.Id] = appResult;
             if (!appResult.Succeeded)
             {
                 runResult.Succeeded = false;
             }
         }
+
+        foreach (CorpusApp app in apps)
+        {
+            runResult.Apps.Add(appResults[app.Id]);
+        }
+
+        SolutionGenerator.Generate(
+            this.options.SourceRoot,
+            runDir,
+            this.options.GeneratedProjectPaths);
 
         if (runResult.Succeeded && runResult.Apps.Any(a => a.Unverified))
         {
@@ -149,6 +167,53 @@ public sealed class MigrationPipeline
         File.WriteAllText(runJsonPath, JsonSerializer.Serialize(runResult, TriageSerialization.Options));
 
         return runResult;
+    }
+
+    private IReadOnlyList<CorpusApp> OrderForSdkBuild(IReadOnlyList<CorpusApp> apps)
+    {
+        if (!this.options.CompileViaSdk || apps.Count <= 1)
+        {
+            return apps;
+        }
+
+        var byPath = apps.ToDictionary(
+            app => Path.GetFullPath(app.ProjectPath),
+            StringComparer.OrdinalIgnoreCase);
+        var ordered = new List<CorpusApp>(apps.Count);
+        var visiting = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void Visit(CorpusApp app)
+        {
+            string path = Path.GetFullPath(app.ProjectPath);
+            if (!visited.Add(path))
+            {
+                return;
+            }
+
+            if (!visiting.Add(path))
+            {
+                return;
+            }
+
+            foreach (string referencePath in DeclaredProjectItems.ProjectReferencePaths(path))
+            {
+                if (byPath.TryGetValue(referencePath, out CorpusApp dependency))
+                {
+                    Visit(dependency);
+                }
+            }
+
+            visiting.Remove(path);
+            ordered.Add(app);
+        }
+
+        foreach (CorpusApp app in apps)
+        {
+            Visit(app);
+        }
+
+        return ordered;
     }
 
     private static string NewRunId(DateTime utc)

@@ -176,4 +176,31 @@ public class SdkLayoutTests
         Assert.Contains("'$(DebugType)' != 'embedded'", condition, System.StringComparison.Ordinal);
         Assert.Contains("'$(DebugType)' != 'none'", condition, System.StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void Core_Targets_Declares_GenerateMSBuildEditorConfigFileShouldRun_Hook()
+    {
+        // Issue #2294: Avalonia.Generators.props (and any other package that
+        // populates @(AdditionalFiles) via BeforeTargets, rather than a plain
+        // ItemGroup) hooks BeforeTargets="GenerateMSBuildEditorConfigFileShouldRun".
+        // That target only exists because Microsoft.Managed.Core.targets defines
+        // it for C#/VB SDK projects; a Gsharp project never imports it, so without
+        // this pinned no-op target the hook silently never fires and
+        // @(AdditionalFiles) never receives the injected items. This test pins
+        // both the target's existence and its position ahead of gsgen's own
+        // AdditionalFiles-consuming target so a future edit can't reintroduce the
+        // gap silently.
+        var path = Path.Combine(RepoRoot.SdkSourceDir, "build", "Gsharp.NET.Core.Sdk.targets");
+        var doc = XDocument.Load(path);
+
+        var hook = doc.Descendants(MsbuildNs + "Target")
+            .FirstOrDefault(t => (string)t.Attribute("Name") == "GenerateMSBuildEditorConfigFileShouldRun");
+        Assert.NotNull(hook);
+
+        var runGenerators = doc.Descendants(MsbuildNs + "Target")
+            .First(t => (string)t.Attribute("Name") == "_GsharpRunSourceGenerators");
+        var dependsOn = ((string)runGenerators.Attribute("DependsOnTargets"))
+            .Split(';', System.StringSplitOptions.RemoveEmptyEntries);
+        Assert.Contains("GenerateMSBuildEditorConfigFileShouldRun", dependsOn);
+    }
 }

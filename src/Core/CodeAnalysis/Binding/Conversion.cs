@@ -1181,6 +1181,75 @@ public sealed class Conversion
     }
 
     /// <summary>
+    /// Issue #1162: symbolic counterpart to <see cref="SliceImplementsInterface"/>
+    /// for a slice <c>[]T</c> whose element <c>T</c> is a same-compilation user
+    /// type and whose backing <see cref="TypeSymbol.ClrType"/> is therefore
+    /// <see langword="null"/> during binding. The backing CLR array cannot be
+    /// walked, so instead match the target interface's open definition against
+    /// the known generic interfaces that a one-dimensional <c>T[]</c> implements
+    /// (<c>IEnumerable&lt;T&gt;</c>, <c>IReadOnlyList&lt;T&gt;</c>,
+    /// <c>IReadOnlyCollection&lt;T&gt;</c>, <c>IList&lt;T&gt;</c>,
+    /// <c>ICollection&lt;T&gt;</c>) and require the single type argument to match
+    /// the slice element. Slice invariance is preserved because
+    /// <see cref="AreTypeArgumentsEquivalent"/> demands an exact element match.
+    ///
+    /// Issue #2323: made <see langword="internal"/> (rather than
+    /// <see langword="private"/>) so <c>MethodBodyEmitter.IsReferenceCompatible</c>
+    /// can call this SAME symbolic rule instead of maintaining a divergent
+    /// copy — the binder accepted these conversions, but the emitter's
+    /// reference-compatibility check only mirrored the element-INDEPENDENT
+    /// #2140 array interfaces, throwing <see cref="NotSupportedException"/>
+    /// for the five generic single-type-argument interfaces when the slice
+    /// element is a generic type parameter or same-compilation user type.
+    /// </summary>
+    /// <param name="slice">The source slice type <c>[]T</c>.</param>
+    /// <param name="targetInterface">The candidate target interface type.</param>
+    /// <returns>
+    /// <see langword="true"/> when <paramref name="slice"/> converts to
+    /// <paramref name="targetInterface"/> under the symbolic slice-to-
+    /// interface rule; otherwise <see langword="false"/>.
+    /// </returns>
+    internal static bool SliceImplementsInterfaceSymbolically(SliceTypeSymbol slice, TypeSymbol targetInterface)
+    {
+        // Issue #2140: element-INDEPENDENT non-generic array interfaces.
+        // Every one-dimensional array implements these regardless of its
+        // element type, so a `[]T` (generic-type-parameter or same-
+        // compilation-user element, null backing ClrType) converts to them
+        // unconditionally. Match by the target's full name.
+        if (IsElementIndependentArrayInterface(targetInterface))
+        {
+            return true;
+        }
+
+        if (targetInterface is not ImportedTypeSymbol imported
+            || imported.OpenDefinition is null
+            || imported.TypeArguments.Length != 1)
+        {
+            return false;
+        }
+
+        var openName = imported.OpenDefinition.FullName;
+        if (openName is null)
+        {
+            return false;
+        }
+
+        var isArrayInterface =
+            string.Equals(openName, typeof(System.Collections.Generic.IEnumerable<>).FullName, StringComparison.Ordinal)
+            || string.Equals(openName, typeof(System.Collections.Generic.IReadOnlyList<>).FullName, StringComparison.Ordinal)
+            || string.Equals(openName, typeof(System.Collections.Generic.IReadOnlyCollection<>).FullName, StringComparison.Ordinal)
+            || string.Equals(openName, typeof(System.Collections.Generic.IList<>).FullName, StringComparison.Ordinal)
+            || string.Equals(openName, typeof(System.Collections.Generic.ICollection<>).FullName, StringComparison.Ordinal);
+
+        if (!isArrayInterface)
+        {
+            return false;
+        }
+
+        return AreTypeArgumentsEquivalent(imported.TypeArguments[0], slice.ElementType);
+    }
+
+    /// <summary>
     /// ADR-0147: checks whether all required members of the target type
     /// (<paramref name="to"/>) are present in the source literal type
     /// (<paramref name="from"/>) with implicitly-convertible types. Required
@@ -2035,29 +2104,18 @@ public sealed class Conversion
             return true;
         }
 
-        var clr = type?.ClrType;
-        if (clr == null)
-        {
-            return false;
-        }
-
-        // Issue #1100: a constructed generic delegate closed over a
-        // same-compilation user type (whose CLR backing is an in-flight emit
-        // TypeBuilder) surfaces as a
+        // Issue #1100 / generalized by #2327: a constructed generic delegate
+        // closed over a same-compilation user type (whose CLR backing is an
+        // in-flight emit TypeBuilder) surfaces as a
         // System.Reflection.Emit.TypeBuilderInstantiation. Its reflection
         // predicates throw NotSupportedException ("TypeBuilder generic
-        // instantiation does not support resolving members") — IsEnum probes the
-        // base-type chain via IsSubclassOf, which is one of the unsupported
-        // operations. Such a delegate type is never an enum, so treat a throw as
-        // a definite "not enum-like".
-        try
-        {
-            return clr.IsEnum;
-        }
-        catch (NotSupportedException)
-        {
-            return false;
-        }
+        // instantiation does not support resolving members") — IsEnum probes
+        // the base-type chain via IsSubclassOf, which is one of the
+        // unsupported operations. Such a delegate type is never an enum, so
+        // treat a throw as a definite "not enum-like". Routed through the
+        // shared ClrTypeUtilities.IsEnumSafe helper so every enum-reflection
+        // call site in the binder/emitter shares one guard.
+        return type?.ClrType.IsEnumSafe() == true;
     }
 
     private static bool IsReferenceLikeTarget(TypeSymbol type)
@@ -2334,59 +2392,6 @@ public sealed class Conversion
         }
 
         return false;
-    }
-
-    /// <summary>
-    /// Issue #1162: symbolic counterpart to <see cref="SliceImplementsInterface"/>
-    /// for a slice <c>[]T</c> whose element <c>T</c> is a same-compilation user
-    /// type and whose backing <see cref="TypeSymbol.ClrType"/> is therefore
-    /// <see langword="null"/> during binding. The backing CLR array cannot be
-    /// walked, so instead match the target interface's open definition against
-    /// the known generic interfaces that a one-dimensional <c>T[]</c> implements
-    /// (<c>IEnumerable&lt;T&gt;</c>, <c>IReadOnlyList&lt;T&gt;</c>,
-    /// <c>IReadOnlyCollection&lt;T&gt;</c>, <c>IList&lt;T&gt;</c>,
-    /// <c>ICollection&lt;T&gt;</c>) and require the single type argument to match
-    /// the slice element. Slice invariance is preserved because
-    /// <see cref="AreTypeArgumentsEquivalent"/> demands an exact element match.
-    /// </summary>
-    private static bool SliceImplementsInterfaceSymbolically(SliceTypeSymbol slice, TypeSymbol targetInterface)
-    {
-        // Issue #2140: element-INDEPENDENT non-generic array interfaces.
-        // Every one-dimensional array implements these regardless of its
-        // element type, so a `[]T` (generic-type-parameter or same-
-        // compilation-user element, null backing ClrType) converts to them
-        // unconditionally. Match by the target's full name.
-        if (IsElementIndependentArrayInterface(targetInterface))
-        {
-            return true;
-        }
-
-        if (targetInterface is not ImportedTypeSymbol imported
-            || imported.OpenDefinition is null
-            || imported.TypeArguments.Length != 1)
-        {
-            return false;
-        }
-
-        var openName = imported.OpenDefinition.FullName;
-        if (openName is null)
-        {
-            return false;
-        }
-
-        var isArrayInterface =
-            string.Equals(openName, typeof(System.Collections.Generic.IEnumerable<>).FullName, StringComparison.Ordinal)
-            || string.Equals(openName, typeof(System.Collections.Generic.IReadOnlyList<>).FullName, StringComparison.Ordinal)
-            || string.Equals(openName, typeof(System.Collections.Generic.IReadOnlyCollection<>).FullName, StringComparison.Ordinal)
-            || string.Equals(openName, typeof(System.Collections.Generic.IList<>).FullName, StringComparison.Ordinal)
-            || string.Equals(openName, typeof(System.Collections.Generic.ICollection<>).FullName, StringComparison.Ordinal);
-
-        if (!isArrayInterface)
-        {
-            return false;
-        }
-
-        return AreTypeArgumentsEquivalent(imported.TypeArguments[0], slice.ElementType);
     }
 
     /// <summary>

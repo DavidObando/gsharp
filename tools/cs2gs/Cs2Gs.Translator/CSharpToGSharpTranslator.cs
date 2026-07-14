@@ -6065,15 +6065,13 @@ public sealed class CSharpToGSharpTranslator
                 }
                 else if (initializer != null &&
                     this.context.GetDeclaredSymbol(declarator) is ILocalSymbol inferredLocal &&
-                    this.IsPromotedToNullableReference(inferredLocal))
+                    (this.IsUsedAsNullable(inferredLocal, this.GetNullabilityScope(inferredLocal))
+                        || this.IsPromotedToNullableReference(inferredLocal)))
                 {
-                    // Issue #1072 (inferred-type form): a `var x = e` local with no
-                    // explicit type whose initializer is a non-nullable reference but
-                    // which is compared to `nil` / assigned `nil` in scope is really
-                    // nullable. Type inference over the non-null initializer would
-                    // pick the non-nullable type, so the `== nil` / `!= nil` guard
-                    // fails (GS0129) or a later `= nil` fails (GS0156). Emit an
-                    // explicit `T?` annotation so the binding is nullable.
+                    // Issue #1072/#2305 (inferred-type form): a `var x = e` local
+                    // whose uses prove it nullable needs an explicit `T?`.
+                    // Otherwise G# may re-infer a non-null type from `e`, making a
+                    // later nil check fail GS0129.
                     type = MakeNullable(this.typeMapper.Map(
                         inferredLocal.Type, this.context, declaration.Type.GetLocation()));
                 }
