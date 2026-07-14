@@ -1725,6 +1725,32 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// GS9008: issue #2330 — an unmanaged pointer (<c>*T</c>) bound by a
+    /// <c>fixed</c> statement (ADR-0125 / issue #1026) is only valid for the
+    /// lifetime of the pin: the pinned handle is released when the enclosing
+    /// <c>fixed</c> block exits. A nested closure may run after that point
+    /// (or, for local functions, be invoked repeatedly across further pins),
+    /// so capturing the pointer would let it escape its declaring scope's
+    /// lifetime — the same "escape" concern as the existing by-ref-like
+    /// (<c>ref struct</c>) and managed-pointer (<c>ref T</c>) capture
+    /// rejections, but for an unmanaged pointer instead. Rejected here, at
+    /// capture analysis, rather than left to reach
+    /// <c>CaptureBoxingRewriter</c>/emission, which previously crashed with
+    /// GS9998 ("has no local slot") because the pointer variable is
+    /// declaration-less (bound directly by <c>BoundFixedStatement</c>, not a
+    /// <c>BoundVariableDeclaration</c>) and was never boxed.
+    /// </summary>
+    /// <param name="location">The text location of the capturing closure.</param>
+    /// <param name="variableName">The captured fixed-pointer variable's name.</param>
+    public void ReportFixedPointerCannotEscape(TextLocation location, string variableName)
+    {
+        Report(
+            location,
+            "GS9008",
+            $"Unmanaged pointer '{variableName}' from a `fixed` statement cannot be captured by a closure; the pin is released when the enclosing `fixed` block exits.");
+    }
+
+    /// <summary>
     /// GS0398: an unmanaged pointer (ADR-0122 / issue #1014) targets a
     /// pointee type that is not blittable. Only <c>void</c>-equivalent
     /// (<c>uint8</c>) and blittable primitive pointees (and pointers to

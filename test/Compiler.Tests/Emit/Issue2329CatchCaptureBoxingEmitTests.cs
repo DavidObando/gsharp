@@ -52,8 +52,16 @@ namespace GSharp.Compiler.Tests.Emit;
 /// share one variable cell for the whole loop, not a fresh cell per
 /// iteration — a `for x in collection` foreach loop remains intentionally
 /// un-boxed, since its per-iteration-fresh variable already matches C#
-/// foreach semantics). An unsafe <c>fixed</c> pointer/pinned local capture
-/// remains a separate, deferred gap — see the repository notes.
+/// foreach semantics). An unsafe <c>fixed</c> pointer/pinned local capture was
+/// also audited: rather than box a raw unmanaged pointer past the lifetime of
+/// its pin (unsafe — the pin is released when the enclosing <c>fixed</c>
+/// block exits), the fix rejects the escape at binding time with a dedicated
+/// diagnostic (GS9008); see
+/// <c>Issue2329FixedPointerCaptureEscapeTests</c> in Core.Tests for the
+/// focused binder-level coverage, and
+/// <see cref="EndToEnd_FixedPointerCapturedInLambda_ReportsGS9008NotGS9998"/>
+/// / <see cref="EndToEnd_FixedNonCapturingUsageStillCompilesAndRuns"/> below
+/// for full-pipeline (<c>gsc</c> CLI) coverage.
 /// </para>
 /// Each test compiles, IL-verifies (inside <see cref="CompileAndRun"/>), and
 /// runs. Every package name is unique so the process-wide
@@ -314,6 +322,102 @@ public class Issue2329CatchCaptureBoxingEmitTests
     }
 
     [Fact]
+    public void EndToEnd_FixedPointerCapturedInLambda_ReportsGS9008NotGS9998()
+    {
+        // Completes the deferred audit item: a nested lambda capturing a
+        // `fixed`-pinned pointer variable is a reachable "declaration-less
+        // capture" gap identical in shape to the catch/pattern-switch/select
+        // gaps fixed above (CaptureBoxingRewriter has no allocation/seed path
+        // for a BoundFixedStatement pointer variable). Unlike those, boxing a
+        // raw unmanaged pointer past its pin's lifetime would be unsafe, so
+        // the fix rejects the escape at binding time (GS9008) instead of
+        // lowering/emitting it. Verifies the FULL gsc CLI pipeline: no
+        // GS9998, no unhandled exception, and a nonzero exit with exactly
+        // the expected diagnostic.
+        var source = """
+            package Probe2329FixedEscape
+            import System
+
+            unsafe func run() {
+                var buf = []uint8{uint8(1), uint8(2), uint8(3)}
+                fixed pD *uint8 = buf {
+                    let log = () -> Console.WriteLine(int32(pD[0]))
+                    log()
+                }
+            }
+
+            func Main() {
+                run()
+            }
+            """;
+
+        var (exitCode, stdout, _) = CompileOnly(source);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS9008", stdout);
+        Assert.DoesNotContain("GS9998", stdout);
+        Assert.DoesNotContain("InvalidOperationException", stdout);
+    }
+
+    [Fact]
+    public void EndToEnd_FixedNonCapturingUsageStillCompilesAndRuns()
+    {
+        // The allowed case must remain unaffected by the escape check: using
+        // the fixed pointer only within the fixed block itself (not from a
+        // nested closure) compiles and runs exactly as before.
+        var source = """
+            package Probe2329FixedOk
+            import System
+
+            unsafe func run() {
+                var buf = []uint8{uint8(65), uint8(66), uint8(67)}
+                fixed pD *uint8 = buf {
+                    pD[0] = uint8(90)
+                }
+                Console.WriteLine(int32(buf[0]))
+            }
+
+            func Main() {
+                run()
+            }
+            """;
+
+        Assert.Equal("90\n", CompileAndRun(source, FixedIlVerifyIgnored));
+    }
+
+    [Fact]
+    public void EndToEnd_LambdaInsideFixedCapturesOtherOuterVariable_Runs()
+    {
+        // A lambda declared inside a `fixed` block that captures a
+        // *different*, ordinary (non-pointer) outer local must still box
+        // normally — GS9008 is specific to the fixed-pointer variable, not
+        // to every capture that happens to occur inside a `fixed` block.
+        var source = """
+            package Probe2329FixedOtherCap
+            import System
+
+            unsafe func run() {
+                var buf = []uint8{uint8(1), uint8(2), uint8(3)}
+                var total = 0
+                fixed pD *uint8 = buf {
+                    pD[0] = uint8(9)
+                    let log = () -> {
+                        total = total + 1
+                    }
+                    log()
+                    log()
+                }
+                Console.WriteLine(total)
+            }
+
+            func Main() {
+                run()
+            }
+            """;
+
+        Assert.Equal("2\n", CompileAndRun(source, FixedIlVerifyIgnored));
+    }
+
+    [Fact]
     public void EndToEnd_SelectReceiveBindVariableCapturedByLambda_Runs()
     {
         // Audit finding: a `select` receive-bind arm variable has the same
@@ -339,7 +443,69 @@ public class Issue2329CatchCaptureBoxingEmitTests
         Assert.Equal("7\n", CompileAndRun(source));
     }
 
-    private static string CompileAndRun(string source)
+    /// <summary>
+    /// Compiles source that is expected to fail binding (a diagnostic, not a
+    /// crash) and returns the process exit code plus captured stdout/stderr,
+    /// without running the (nonexistent) output assembly.
+    /// </summary>
+    private static (int ExitCode, string Stdout, string Stderr) CompileOnly(string source)
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_2329_fail_").FullName;
+        try
+        {
+            var srcPath = Path.Combine(tempDir, "test.gs");
+            var dllPath = Path.Combine(tempDir, "test.dll");
+            File.WriteAllText(srcPath, source);
+
+            var args = new[]
+            {
+                "/out:" + dllPath,
+                "/target:exe",
+                "/targetframework:net10.0",
+                srcPath,
+            };
+
+            using var stdoutWriter = new StringWriter();
+            using var stderrWriter = new StringWriter();
+            var prevOut = Console.Out;
+            var prevErr = Console.Error;
+            Console.SetOut(stdoutWriter);
+            Console.SetError(stderrWriter);
+            int compileExit;
+            try
+            {
+                compileExit = Program.Main(args);
+            }
+            finally
+            {
+                Console.SetOut(prevOut);
+                Console.SetError(prevErr);
+            }
+
+            return (compileExit, stdoutWriter.ToString(), stderrWriter.ToString());
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    // Issue #1026 / ADR-0125: pinning a buffer and dereferencing an unmanaged
+    // pointer is unverifiable by design. Reused here (rather than duplicated)
+    // for the two `fixed`-statement tests above, which need the same
+    // ignoredErrorCodes as Issue1026FixedEmitTests.
+    private static readonly string[] FixedIlVerifyIgnored =
+    {
+        "Unverifiable",
+        "UnmanagedPointer",
+        "StackUnexpected",
+        "StackByRef",
+        "ExpectedPtr",
+        "StackUnexpectedArrayType",
+        "ExpectedNumericType",
+    };
+
+    private static string CompileAndRun(string source, string[] ilVerifyIgnoredErrorCodes = null)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_2329_exe_").FullName;
         try
@@ -377,7 +543,7 @@ public class Issue2329CatchCaptureBoxingEmitTests
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{stdoutWriter}\nstderr:\n{stderrWriter}");
 
-            IlVerifier.Verify(dllPath);
+            IlVerifier.Verify(dllPath, null, ilVerifyIgnoredErrorCodes);
 
             var rtConfig = Path.ChangeExtension(dllPath, ".runtimeconfig.json");
             if (!File.Exists(rtConfig))
