@@ -112,7 +112,7 @@ public class TranslateStageNbgvPackageReferenceTests
     }
 
     [Fact]
-    public async Task TranslateStage_NonCpmProject_LeavesCentralPackageManagementDisabledAndCopiesNoPropsFile()
+    public async Task TranslateStage_NonCpmProject_LeavesCentralPackageManagementDisabledAndBumpsAppLocalDeclaration()
     {
         // Preserve non-CPM behavior (issue #2319): when the source project's
         // ancestry has no Directory.Packages.props at all, no such file should
@@ -156,6 +156,24 @@ public class TranslateStageNbgvPackageReferenceTests
         Assert.Equal(StageStatus.Passed, outcome.Status);
         Assert.False(context.UsesCentralPackageManagement);
         Assert.False(File.Exists(Path.Combine(appRunDir, "Directory.Packages.props")));
+
+        // Issue #2319 follow-up: an app-local literal Version= below the floor
+        // is declared directly (not split across an ancestor Directory.Build/
+        // Packages.props), so BuildOnlyPackageReferences alone cannot recover
+        // it — SdkCompileRunner.Compile's declaredPackageIds filter would
+        // discard that entry as a duplicate of this already-"declared" item,
+        // and SdkCompileRunner.BuildProjectXml copies this item verbatim. The
+        // bump must therefore happen here, on context.PackageReferences itself.
+        DeclaredProjectItem nbgvItem = Assert.Single(
+            context.PackageReferences,
+            item => string.Equals(
+                item.Element.Attribute("Include")?.Value,
+                NerdbankGitVersioningPolicy.PackageId,
+                StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(
+            NerdbankGitVersioningPolicy.MinimumGSharpVersion,
+            nbgvItem.Element.Attribute("Version")?.Value);
+        Assert.Equal("all", nbgvItem.Element.Attribute("PrivateAssets")?.Value);
     }
 
     private static string NewOutputRoot(string label)

@@ -73,7 +73,8 @@ public sealed class TranslateStage : IMigrationStage
         CopyProjectFiles(project.ProjectDirectory, context.AppRunDir, usedOutputPaths);
         CopyCentralPackageManagementFile(project.ProjectDirectory, context.AppRunDir, context);
         context.PackageReferences.AddRange(
-            DeclaredProjectItems.Read(context.App.ProjectPath, "PackageReference"));
+            DeclaredProjectItems.BumpNerdbankGitVersioningVersion(
+                DeclaredProjectItems.Read(context.App.ProjectPath, "PackageReference")));
         context.ProjectReferences.AddRange(
             DeclaredProjectItems.Read(context.App.ProjectPath, "ProjectReference"));
 

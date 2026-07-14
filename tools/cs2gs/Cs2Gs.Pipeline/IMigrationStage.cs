@@ -145,7 +145,15 @@ public sealed class StageExecutionContext
     /// </summary>
     public bool UsesCentralPackageManagement { get; set; }
 
-    /// <summary>Gets the source project's declared PackageReference items.</summary>
+    /// <summary>
+    /// Gets the source project's declared PackageReference items. A below-floor
+    /// literal <c>Nerdbank.GitVersioning</c> <c>Version</c> declared directly on
+    /// this list's item (as opposed to split across an ancestor
+    /// <c>Directory.Build.props</c>/<c>Directory.Packages.props</c>, which
+    /// <see cref="BuildOnlyPackageReferences"/> instead covers) is already
+    /// bumped by the Translate stage (issue #2319) before being copied verbatim
+    /// into the generated <c>.gsproj</c>.
+    /// </summary>
     public List<DeclaredProjectItem> PackageReferences { get; } = new List<DeclaredProjectItem>();
 
     /// <summary>Gets the source project's declared ProjectReference items.</summary>
