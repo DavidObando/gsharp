@@ -7447,6 +7447,39 @@ internal sealed class DeclarationBinder
                 && TypeArgumentsEquivalent(ia.TypeArguments, ib.TypeArguments, typeParamMap);
         }
 
+        // Issue #2340 follow-up: a named delegate constructed over a
+        // *method-level* generic parameter (e.g. an interface method
+        // `func Make[T](seed T) Getter[T]`) is never covered by the
+        // StructSymbol/InterfaceSymbol branches above, and — unlike the
+        // interface-level generic case — is not fixed by substituting the
+        // interface's own type arguments, because the delegate's type
+        // argument here is the *method's* type parameter, which is only
+        // resolved through `typeParamMap` (built per call by
+        // TryBuildMethodTypeParameterMap). Without this branch,
+        // `Getter[T_interfaceMethod]` and `Getter[T_implMethod]` are two
+        // distinct DelegateTypeSymbol.Construct cache entries (different
+        // TypeParameterSymbol instances as their sole type argument) that
+        // fail the top-level ReferenceEquals check and then fall through to
+        // the ClrType fallback below, which does not apply the
+        // method-type-parameter map and wrongly rejects a genuinely matching
+        // signature with GS0187. Recurses through TypeArgumentsEquivalent
+        // exactly like the StructSymbol/InterfaceSymbol branches so the
+        // typeParamMap substitution applies to each type argument.
+        if (a is DelegateTypeSymbol dta && b is DelegateTypeSymbol dtb)
+        {
+            // Unlike StructSymbol/InterfaceSymbol (whose `Definition` self-
+            // references on the open definition), DelegateTypeSymbol.Definition
+            // is only set on constructed instances (issue #1503) and stays
+            // `null` on the open definition / non-generic delegates — so it
+            // must be normalized to itself before comparing, or two distinct
+            // non-generic (or open-definition) delegate types would both
+            // report `Definition == null` and wrongly compare as equivalent.
+            var defA = dta.Definition ?? dta;
+            var defB = dtb.Definition ?? dtb;
+            return ReferenceEquals(defA, defB)
+                && TypeArgumentsEquivalent(dta.TypeArguments, dtb.TypeArguments, typeParamMap);
+        }
+
         if (a is ImportedTypeSymbol pa && b is ImportedTypeSymbol pb)
         {
             // Constructed imported generics carrying symbolic arguments (e.g.
