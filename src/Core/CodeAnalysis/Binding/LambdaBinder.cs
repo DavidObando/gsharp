@@ -365,6 +365,8 @@ internal sealed class LambdaBinder
         // class, which the CLR forbids.
         // ADR-0058 / issue #376: a managed-pointer (*T / ByRefTypeSymbol) local also
         // cannot be captured — the closure may outlive the pointed-to variable.
+        // Issue #2330: an unmanaged pointer (PointerTypeSymbol) bound by a
+        // `fixed` statement is likewise rejected — see ReportFixedPointerCannotEscape.
         foreach (var capturedVariable in captured)
         {
             if (TypeSymbol.IsByRefLike(capturedVariable.Type))
@@ -376,6 +378,10 @@ internal sealed class LambdaBinder
                 Diagnostics.ReportByRefCannotEscape(
                     syntax.Location,
                     $"managed pointer '{capturedVariable.Name}' cannot be captured by a closure; the closure may outlive the pointed-to variable");
+            }
+            else if (capturedVariable.Type is PointerTypeSymbol)
+            {
+                Diagnostics.ReportFixedPointerCannotEscape(syntax.Location, capturedVariable.Name);
             }
         }
 
@@ -767,6 +773,7 @@ internal sealed class LambdaBinder
 
         // Issue #367 / ADR-0058: by-ref-like or managed-pointer locals cannot
         // be captured by a closure; mirror the function-literal checks.
+        // Issue #2330: same for an unmanaged `fixed` pointer.
         foreach (var capturedVariable in captured)
         {
             if (TypeSymbol.IsByRefLike(capturedVariable.Type))
@@ -778,6 +785,10 @@ internal sealed class LambdaBinder
                 Diagnostics.ReportByRefCannotEscape(
                     syntax.Location,
                     $"managed pointer '{capturedVariable.Name}' cannot be captured by a closure; the closure may outlive the pointed-to variable");
+            }
+            else if (capturedVariable.Type is PointerTypeSymbol)
+            {
+                Diagnostics.ReportFixedPointerCannotEscape(syntax.Location, capturedVariable.Name);
             }
         }
 
