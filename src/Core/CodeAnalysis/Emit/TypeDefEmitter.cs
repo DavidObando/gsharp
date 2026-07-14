@@ -454,12 +454,16 @@ internal sealed class TypeDefEmitter
                 // System.Attribute, regardless of any other resolution.
                 baseType = this.wellKnown.GetSystemAttributeTypeRef();
             }
-            else if (structSym.BaseClass != null && !structSym.BaseClass.TypeArguments.IsDefaultOrEmpty)
+            else if (structSym.BaseClass != null && ReflectionMetadataEmitter.IsUserGenericTypeReference(structSym.BaseClass))
             {
                 // Issue #1055: the base is a CONSTRUCTED generic user class
                 // (e.g. `Derived : Base[int32]`). Reference it via a TypeSpec
                 // naming the generic instantiation so the runtime sees the
                 // correct base subobject layout, vtable slots and type identity.
+                // Issue #2337: also covers a nested sibling base that only
+                // carries the enclosing generic's reified TypeParameters (no
+                // own TypeArguments) — it must resolve to the base's
+                // self-instantiation TypeSpec, not the bare open TypeDef.
                 baseType = this.getUserStructTypeSpec(structSym.BaseClass);
             }
             else if (structSym.BaseClass != null && this.cache.StructTypeDefs.TryGetValue(structSym.BaseClass, out var baseHandle))
@@ -609,9 +613,11 @@ internal sealed class TypeDefEmitter
             }
 
             typeAttrs = classAttrs;
-            if (structSym.BaseClass != null && !structSym.BaseClass.TypeArguments.IsDefaultOrEmpty)
+            if (structSym.BaseClass != null && ReflectionMetadataEmitter.IsUserGenericTypeReference(structSym.BaseClass))
             {
                 // Issue #1055: nested class extending a constructed generic base.
+                // Issue #2337: also covers a nested sibling base carrying only
+                // the enclosing generic's reified TypeParameters.
                 baseType = this.getUserStructTypeSpec(structSym.BaseClass);
             }
             else if (structSym.BaseClass != null && this.cache.StructTypeDefs.TryGetValue(structSym.BaseClass, out var baseHandle))
@@ -1697,7 +1703,11 @@ internal sealed class TypeDefEmitter
         // MethodDef is keyed by the open definition, so resolve a MemberRef
         // parented at the constructed base's TypeSpec instead of falling back to
         // System.Object (which would chain past the real base subobject).
-        if (classSym.BaseClass != null && !classSym.BaseClass.TypeArguments.IsDefaultOrEmpty)
+        // Issue #2337: also covers a nested sibling base that only carries the
+        // enclosing generic's reified TypeParameters (implicit generic arity,
+        // no own TypeArguments) — it likewise needs a TypeSpec-parented
+        // MemberRef, not the bare base ctor MethodDef.
+        if (classSym.BaseClass != null && ReflectionMetadataEmitter.IsUserGenericTypeReference(classSym.BaseClass))
         {
             return this.resolveConstructedBaseCtorToken(classSym.BaseClass);
         }
@@ -1781,10 +1791,13 @@ internal sealed class TypeDefEmitter
         // is invalid for a generic type. Emit a MemberRef parented at the
         // constructed base's TypeSpec for the selected ctor (primary or explicit
         // `init(...)`), mirroring the parameter-less #1055 path.
+        // Issue #2337: a nested sibling base carrying only the enclosing
+        // generic's reified TypeParameters (no own TypeArguments) requires the
+        // same TypeSpec-parented MemberRef treatment.
         var constructedGenericBase =
-            (classSym.BaseClass != null && !classSym.BaseClass.TypeArguments.IsDefaultOrEmpty)
+            (classSym.BaseClass != null && ReflectionMetadataEmitter.IsUserGenericTypeReference(classSym.BaseClass))
                 ? classSym.BaseClass
-                : ((gsharpBase != null && !gsharpBase.TypeArguments.IsDefaultOrEmpty) ? gsharpBase : null);
+                : ((gsharpBase != null && ReflectionMetadataEmitter.IsUserGenericTypeReference(gsharpBase)) ? gsharpBase : null);
         if (constructedGenericBase != null)
         {
             return this.resolveConstructedBaseExplicitCtorToken(constructedGenericBase, init.GSharpConstructor);
