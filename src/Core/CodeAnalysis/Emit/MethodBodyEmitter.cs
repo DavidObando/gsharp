@@ -858,6 +858,29 @@ internal sealed partial class MethodBodyEmitter
             }
         }
 
+        // Issue #2323: extends #2140 to the five generic single-type-
+        // argument array interfaces — IEnumerable<T>, ICollection<T>,
+        // IList<T>, IReadOnlyList<T>, IReadOnlyCollection<T> — for a slice
+        // `[]T` whose element `T` is a generic type parameter or same-
+        // compilation user type. Such elements leave the slice's backing
+        // `ClrType` null during emit, so neither the #521 CLR reference-
+        // upcast arm nor the #570 `ImplementsInterfaceByName` arm above can
+        // fire (both require a non-null `ClrType` on `a`). The binder
+        // already accepts this exact conversion via
+        // `Conversion.SliceImplementsInterfaceSymbolically`; delegate to
+        // that SAME symbolic rule here rather than re-deriving a second,
+        // potentially divergent open-definition / type-argument match, so
+        // binder acceptance and emitter reference-compatibility can never
+        // disagree. That helper's `AreTypeArgumentsEquivalent` comparison
+        // still rejects a mismatched element type, preserving slice
+        // invariance and GS0155 for genuine element mismatches.
+        if (a is SliceTypeSymbol aSliceSymbolic
+            && aSliceSymbolic.ClrType == null
+            && Conversion.SliceImplementsInterfaceSymbolically(aSliceSymbolic, b))
+        {
+            return true;
+        }
+
         return false;
     }
 
