@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -49,7 +50,7 @@ internal sealed class MemberLookup
     /// <c>MetadataLoadContext</c>'s <see cref="Type"/> instances do not pin
     /// that context's memory for the process lifetime (#1622-style leak).
     /// </summary>
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(Type ClrType, string Name), IReadOnlyList<MethodInfo>> MethodsIncludingSelfAndInterfacesCache = new();
+    private static ConditionalWeakTable<Type, System.Collections.Concurrent.ConcurrentDictionary<string, IReadOnlyList<MethodInfo>>> methodsIncludingSelfAndInterfacesCache = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="MemberLookup"/> class.
@@ -80,6 +81,25 @@ internal sealed class MemberLookup
         {
             yield return i;
         }
+    }
+
+    /// <summary>
+    /// Returns source-declared instance methods visible on a receiver-like type.
+    /// Keeps diagnostics/private-interface handling at the call site.
+    /// </summary>
+    /// <param name="receiverType">The receiver or constraint type to inspect.</param>
+    /// <param name="methodName">The method name to match.</param>
+    /// <returns>The source-declared method candidates in existing lookup order.</returns>
+    public static ImmutableArray<FunctionSymbol> CollectSourceInstanceMethods(TypeSymbol receiverType, string methodName)
+    {
+        return receiverType switch
+        {
+            StructSymbol structRecv => TypeMemberModel.GetMethods(structRecv, methodName, MemberQuery.Instance(MemberKinds.Method)),
+            InterfaceSymbol ifaceRecv => TypeMemberModel.GetMethods(ifaceRecv, methodName, MemberQuery.Instance(MemberKinds.Method)),
+            TypeParameterSymbol { InterfaceConstraint: { } constraint } => TypeMemberModel.GetMethods(constraint, methodName, MemberQuery.Instance(MemberKinds.Method)),
+            TypeParameterSymbol { ClassConstraint: StructSymbol classConstraint } => TypeMemberModel.GetMethods(classConstraint, methodName, MemberQuery.Instance(MemberKinds.Method)),
+            _ => ImmutableArray<FunctionSymbol>.Empty,
+        };
     }
 
     /// <summary>
@@ -153,10 +173,11 @@ internal sealed class MemberLookup
         // every call before this cache existed. Keyed on the CLR Type (not the
         // GSharp symbol) so it is naturally invalidated by
         // ClrTypeUtilities.ClearCache() clearing the caches it reads from.
-        return MethodsIncludingSelfAndInterfacesCache.GetOrAdd((clrType, name), key =>
+        return methodsIncludingSelfAndInterfacesCache
+            .GetValue(clrType, static _ => new System.Collections.Concurrent.ConcurrentDictionary<string, IReadOnlyList<MethodInfo>>(StringComparer.Ordinal))
+            .GetOrAdd(name, n =>
         {
-            var (t, n) = key;
-            var selfMethods = ClrTypeUtilities.SafeGetMethods(t, BindingFlags.Public | BindingFlags.Instance);
+            var selfMethods = ClrTypeUtilities.SafeGetMethods(clrType, BindingFlags.Public | BindingFlags.Instance);
             var result = new List<MethodInfo>();
             foreach (var m in selfMethods)
             {
@@ -167,7 +188,7 @@ internal sealed class MemberLookup
             }
 
             // Walk transitive interfaces for DIMs not surfaced by the concrete type.
-            foreach (var iface in ClrTypeUtilities.SafeGetInterfaces(t))
+            foreach (var iface in ClrTypeUtilities.SafeGetInterfaces(clrType))
             {
                 foreach (var m in ClrTypeUtilities.SafeGetMethods(iface, BindingFlags.Public | BindingFlags.Instance))
                 {
@@ -766,7 +787,7 @@ internal sealed class MemberLookup
             if (declaring != null && openDefinition != null && !typeArguments.IsDefaultOrEmpty)
             {
                 var declaringDef = declaring.IsGenericTypeDefinition ? declaring : (declaring.IsGenericType ? declaring.GetGenericTypeDefinition() : declaring);
-                if (declaringDef == openDefinition)
+                if (ClrTypeUtilities.AreSame(declaringDef, openDefinition))
                 {
                     var pos = openClr.GenericParameterPosition;
                     if ((uint)pos < (uint)typeArguments.Length)
@@ -2185,6 +2206,53 @@ internal sealed class MemberLookup
         => NullableLifting.TryConstructNullable(this.binderCtx.References, underlying, out constructed);
 
     /// <summary>
+    /// Enumerates imported CLR method groups for member-call probing. Instance
+    /// groups use the same self/interface walk as final CLR instance binding;
+    /// extension groups report offset 1 for their synthetic receiver parameter.
+    /// </summary>
+    /// <param name="staticClassType">The imported static class to inspect, or <see langword="null"/> for receiver calls.</param>
+    /// <param name="receiverClrType">The receiver CLR type for instance probes, or <see langword="null"/>.</param>
+    /// <param name="methodName">The method name to match.</param>
+    /// <param name="includeExtensions">Whether to append imported extension-method probes.</param>
+    /// <returns>The imported method probe groups in existing lookup order.</returns>
+    public List<ImportedMethodProbe> CollectImportedMethodProbes(Type staticClassType, Type receiverClrType, string methodName, bool includeExtensions)
+    {
+        var result = new List<ImportedMethodProbe>();
+        if (staticClassType != null)
+        {
+            var statics = ClrTypeUtilities.SafeGetMethods(staticClassType, BindingFlags.Static | BindingFlags.Public)
+                .Where(m => string.Equals(m.Name, methodName, StringComparison.Ordinal))
+                .ToList();
+            if (statics.Count > 0)
+            {
+                result.Add(new ImportedMethodProbe(statics, receiverParameterOffset: 0));
+            }
+
+            return result;
+        }
+
+        if (receiverClrType != null)
+        {
+            var instance = new List<MethodInfo>(SafeGetMethodsIncludingSelfAndInterfaces(receiverClrType, methodName));
+            if (instance.Count > 0)
+            {
+                result.Add(new ImportedMethodProbe(instance, receiverParameterOffset: 0));
+            }
+        }
+
+        if (includeExtensions)
+        {
+            var extensions = this.CollectImportedExtensionMethods(methodName);
+            if (extensions.Count > 0)
+            {
+                result.Add(new ImportedMethodProbe(extensions, receiverParameterOffset: 1));
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
     /// Issue #294: collects every <c>static [Extension]</c> method named
     /// <paramref name="methodName"/> across the imported extension-holding
     /// classes (see <see cref="GetImportedExtensionClasses"/>).
@@ -2348,11 +2416,11 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
-    /// Removes every entry from the <see cref="MethodsIncludingSelfAndInterfacesCache"/>.
+    /// Removes every entry from the method cache.
     /// Called by <see cref="ReferenceResolver.Dispose"/> (#1678, mirroring #1622)
     /// alongside <see cref="ClrTypeUtilities.ClearCache"/>.
     /// </summary>
-    internal static void ClearCache() => MethodsIncludingSelfAndInterfacesCache.Clear();
+    internal static void ClearCache() => methodsIncludingSelfAndInterfacesCache = new ConditionalWeakTable<Type, System.Collections.Concurrent.ConcurrentDictionary<string, IReadOnlyList<MethodInfo>>>();
 
     private bool IsVisibleImportedMethod(MethodBase method)
         => method.IsPublic || (method.IsAssembly && this.binderCtx.References.CanAccessInternalMembers(method.DeclaringType?.Assembly));
@@ -2834,7 +2902,7 @@ internal sealed class MemberLookup
             // Pattern A: actual is an ImportedTypeSymbol whose OpenDefinition matches exactly.
             if (actual is ImportedTypeSymbol imp
                 && imp.OpenDefinition != null
-                && imp.OpenDefinition == openDef
+                && ClrTypeUtilities.AreSame(imp.OpenDefinition, openDef)
                 && !imp.TypeArguments.IsDefaultOrEmpty
                 && imp.TypeArguments.Length == openArgs.Length)
             {
@@ -2954,7 +3022,7 @@ internal sealed class MemberLookup
         // targetOpenDef, then substitute the symbolic args back through.
         foreach (var iface in EnumerateOpenInterfacesAndBases(imp.OpenDefinition))
         {
-            if (!iface.IsGenericType || iface.GetGenericTypeDefinition() != targetOpenDef)
+            if (!iface.IsGenericType || !ClrTypeUtilities.AreSame(iface.GetGenericTypeDefinition(), targetOpenDef))
             {
                 continue;
             }
@@ -3293,5 +3361,18 @@ internal sealed class MemberLookup
         public ImmutableArray<TypeSymbol> SymbolicArgs { get; }
 
         public bool IsInherited { get; }
+    }
+
+    internal readonly struct ImportedMethodProbe
+    {
+        public ImportedMethodProbe(IReadOnlyList<MethodInfo> methods, int receiverParameterOffset)
+        {
+            this.Methods = methods;
+            this.ReceiverParameterOffset = receiverParameterOffset;
+        }
+
+        public IReadOnlyList<MethodInfo> Methods { get; }
+
+        public int ReceiverParameterOffset { get; }
     }
 }

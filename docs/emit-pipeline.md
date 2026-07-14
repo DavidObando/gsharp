@@ -198,3 +198,35 @@ specific test that emitted the bad IL.
 - To bypass the gate while iterating locally, set
   `GSHARP_SKIP_ILVERIFY=1` in the environment. CI must run with the gate
   enabled — there is no opt-out in `build.yml`.
+
+## Compiler source invariants (enforced by internal analyzers)
+
+Three recurring bug classes in the emitter/symbol layer are now enforced at
+build time by the internal Roslyn analyzers in
+[`src/Analyzers/InternalAnalyzers`](../src/Analyzers/InternalAnalyzers). They
+run as a `TreatWarningsAsErrors` gate on `Core`, so a violation fails the
+build. See [internal-analyzers.md](./internal-analyzers.md) and
+[ADR-0147](./adr/0147-internal-source-analyzers.md) for the full rules and
+suppression guidance.
+
+- **Field-token resolution (`GSA0001`).** Never read
+  `cache.StructFieldDefs[field]` directly to obtain a token for emission —
+  a generic self-instantiated type needs a `TypeSpec` `MemberRef`, not a bare
+  `FieldDef`. Route every field-token lookup through
+  `ReflectionMetadataEmitter.ResolveFieldToken` /
+  `ResolveInterfaceFieldToken`, which are the only sanctioned readers of the
+  cache. (`StructFieldDefs` writes that *populate* the cache in
+  `TypeDefEmitter` are fine.)
+- **Imported type identity (`GSA0002`).** Compare imported CLR
+  `System.Type` values with `ClrTypeUtilities.AreSame` / `IsSameAs`, and key
+  `Type`-dictionaries with `TypeIdentityComparer.Instance` — never
+  `ReferenceEquals`, `==`, or `== typeof(...)`. The same metadata `Type`
+  reached via a qualified name versus an import is not reference-equal, and
+  splitting its identity produced the GS0155/0158/0159 clusters.
+  Reference-equality on *compiler symbols* (e.g. `ThisParameter`) is
+  unaffected and remains correct.
+- **Reflection-keyed cache lifetime (`GSA0003`).** Static caches keyed by
+  `System.Type`/`Assembly`/`Module` pin per-compilation
+  `MetadataLoadContext`s and OOM CI. Use `ConditionalWeakTable` or scope the
+  cache to a `ReferenceResolver` instance. Caches keyed by compiler
+  `TypeSymbol`s are safe and unaffected.

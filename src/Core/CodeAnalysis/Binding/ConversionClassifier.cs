@@ -1158,6 +1158,8 @@ internal sealed class ConversionClassifier
             // no user-supplied call-argument syntax at all (argTypes are the
             // delegate's own parameter types), so no argument could ever be an
             // interpolated-string literal in the first place.
+            // The same applies to constant-narrowing: there are no bound call
+            // arguments here, only the target delegate signature.
             var resolution = OverloadResolution.Resolve(applicable, argTypes);
             if (resolution.Outcome == OverloadResolution.ResolutionOutcome.Resolved)
             {

@@ -21,6 +21,7 @@ namespace Cs2Gs.Tests;
 /// and the <c>dotnet-ilverify</c> tool being present, returning early otherwise
 /// like the other e2e tests.
 /// </summary>
+[Collection(IlVerifyPipelineCollection.Name)]
 public class IlVerifyStageTests
 {
     private const string SampleErrorLine =
@@ -266,48 +267,7 @@ public class IlVerifyStageTests
 
         try
         {
-            var runner = new IlVerifyRunner();
-            var psi = new System.Diagnostics.ProcessStartInfo("dotnet")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = runner.RepoRoot,
-            };
-            foreach (string arg in new[] { "tool", "run", "ilverify", "--version" })
-            {
-                psi.ArgumentList.Add(arg);
-            }
-
-            using var proc = System.Diagnostics.Process.Start(psi);
-            proc.StandardOutput.ReadToEnd();
-            proc.StandardError.ReadToEnd();
-            proc.WaitForExit();
-            if (proc.ExitCode == 0)
-            {
-                return true;
-            }
-
-            // Try a one-time restore, then re-probe.
-            var restore = new System.Diagnostics.ProcessStartInfo("dotnet")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = runner.RepoRoot,
-            };
-            foreach (string arg in new[] { "tool", "restore" })
-            {
-                restore.ArgumentList.Add(arg);
-            }
-
-            using var rp = System.Diagnostics.Process.Start(restore);
-            rp.StandardOutput.ReadToEnd();
-            rp.StandardError.ReadToEnd();
-            rp.WaitForExit();
-            return rp.ExitCode == 0;
+            return new IlVerifyRunner().EnsureToolAvailable();
         }
         catch
         {
