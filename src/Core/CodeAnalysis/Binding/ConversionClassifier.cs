@@ -2300,6 +2300,18 @@ internal sealed class ConversionClassifier
                 map[parameters[i].Name] = constructorCall.Arguments[i];
             }
         }
+        else if (expression.Type is StructSymbol sourceStruct && sourceStruct.Declaration == null)
+        {
+            foreach (var field in sourceStruct.Fields)
+            {
+                map[field.Name] = new BoundFieldAccessExpression(null, expression, sourceStruct, field);
+            }
+
+            foreach (var prop in sourceStruct.Properties)
+            {
+                map[prop.Name] = new BoundPropertyAccessExpression(null, expression, sourceStruct, prop);
+            }
+        }
 
         return map;
     }

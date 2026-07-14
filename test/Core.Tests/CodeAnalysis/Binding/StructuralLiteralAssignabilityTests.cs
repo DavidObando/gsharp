@@ -305,6 +305,62 @@ announce(object { let Name = ""Fido""; let WoofCount = 3; let Tag = 99 })
         Assert.Equal("Fido", result.Value);
     }
 
+    [Fact]
+    public void LiteralToDataStruct_ViaVariable_Binds()
+    {
+        var source = @"
+import System
+
+data struct Pet {
+    var Name string
+    var Age int32
+}
+
+func describe(p Pet) string { return p.Name + ""/"" + p.Age.ToString() }
+let lit = object { let Name = ""Fido""; let Age = 4 }
+describe(lit)
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("Fido/4", result.Value);
+    }
+
+    [Fact]
+    public void LiteralToDataStruct_ViaLocalAssignment_Binds()
+    {
+        var source = @"
+data struct Pet {
+    var Name string
+    var Age int32
+}
+
+let lit = object { let Name = ""Fido""; let Age = 4 }
+let p Pet = lit
+p.Name
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("Fido", result.Value);
+    }
+
+    [Fact]
+    public void LiteralToClass_ViaVariable_Binds()
+    {
+        var source = @"
+class Dog {
+    var Name string
+    var WoofCount int32
+}
+
+func announce(d Dog) string { return d.Name }
+let lit = object { let Name = ""Fido""; let WoofCount = 3 }
+announce(lit)
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("Fido", result.Value);
+    }
+
     private static System.Collections.Immutable.ImmutableArray<Diagnostic> GetDiagnostics(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
