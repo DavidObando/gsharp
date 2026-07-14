@@ -298,8 +298,25 @@ internal sealed partial class MethodBodyEmitter
         this.il.Branch(ILOpCode.Brfalse, failLabel);
 
         // Bind the narrowed value into Variable.
+        //
+        // Issue #2335 (audit follow-up): a bare (any-constraint) open
+        // TYPE-PARAMETER pattern target — not just the struct/value-type-
+        // constrained shape that motivated this issue — cannot pick between
+        // `unbox.any` and `castclass` from its declared constraint alone: an
+        // UNCONSTRAINED (or class/interface-constrained) `T` may still close
+        // over a value type at a given call site (e.g. `case v is T` inside
+        // `func F[T](value object, fallback T) T`, instantiated as
+        // `F[int32]`), and `castclass !!T` is invalid IL — and silently wrong
+        // at runtime under the JIT's shared generic-code instantiation — for
+        // that closure. Per ECMA-335 III.4.32, `unbox.any` degrades to the
+        // exact `castclass` behavior when the closed type is a reference
+        // type, so it is the single opcode that is correct for every
+        // constraint/closure combination. Route every bare type-parameter
+        // target through it, in addition to the concrete value-type target
+        // shapes `IsValueTypeSymbol` already recognises (struct, enum,
+        // tuple, struct-constrained type parameter, etc.).
         this.il.LoadLocal(scratch);
-        if (ReflectionMetadataEmitter.IsValueTypeSymbol(tp.TargetType))
+        if (ReflectionMetadataEmitter.IsValueTypeSymbol(tp.TargetType) || tp.TargetType is TypeParameterSymbol)
         {
             this.il.OpCode(ILOpCode.Unbox_any);
             this.il.Token(this.outer.GetElementTypeToken(tp.TargetType));

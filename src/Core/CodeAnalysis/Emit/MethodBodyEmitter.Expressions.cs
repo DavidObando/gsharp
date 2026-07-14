@@ -1882,7 +1882,23 @@ internal sealed partial class MethodBodyEmitter
             this.il.Token(this.outer.GetElementTypeToken(underlyingTypeParameter));
         }
 
-        if (ReflectionMetadataEmitter.IsValueTypeSymbol(narrowed)
+        // Issue #2335 (audit follow-up): mirrors the identical generalization
+        // in EmitTypePattern — a bare (ANY-constraint, including fully
+        // unconstrained) `narrowed` TYPE PARAMETER cannot pick between
+        // `unbox.any` and `castclass` from `IsValueTypeSymbol`/`ClrType`
+        // alone, since an unconstrained (or class/interface-constrained) `T`
+        // can still close over a value type at a given instantiation (e.g.
+        // narrowing an `object`-typed variable to `T` inside
+        // `func F[T](x object) { if x is T { return x } }`, closed over
+        // `int32`). `castclass !!T` is invalid/silently-wrong IL for that
+        // closure. Per ECMA-335 III.4.32, `unbox.any` degrades to the exact
+        // `castclass` behavior when the closed type turns out to be a
+        // reference type, so it is the single opcode correct for every
+        // constraint/closure combination — route every bare type-parameter
+        // narrowing target through it, in addition to the concrete
+        // value-type shapes `IsValueTypeSymbol` already recognizes.
+        if (narrowed is TypeParameterSymbol
+            || ReflectionMetadataEmitter.IsValueTypeSymbol(narrowed)
             || (narrowed.ClrType != null && narrowed.ClrType.IsValueType))
         {
             this.il.OpCode(ILOpCode.Unbox_any);

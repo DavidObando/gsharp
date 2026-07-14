@@ -11094,6 +11094,24 @@ internal sealed class ReflectionMetadataEmitter
             return true;
         }
 
+        // Issue #2335: a bare (non-nullable) value-type-constrained generic
+        // type parameter (`where T : struct`, optionally combined with an
+        // `Enum`/other constraint) lowers to an unboxed CLR value on the
+        // evaluation stack — the same as `Nullable<T>`'s underlying, which
+        // the arm above already recognises. Without this check, a bare
+        // `TypeParameterSymbol` with `HasValueTypeConstraint` (no
+        // `NullableTypeSymbol` wrapper, and — since it is an open generic
+        // parameter — no `ClrType` at emit time) fell through to `return
+        // false`, misclassifying it as a reference type. Consumers such as
+        // `MethodBodyEmitter.EmitTypePattern` then selected `castclass`
+        // instead of `unbox.any` for a `case enm is TEnum` pattern,
+        // producing IL that ILVerify rejects ("found ref TEnum, expected
+        // value TEnum").
+        if (type is TypeParameterSymbol bareTp && bareTp.HasValueTypeConstraint)
+        {
+            return true;
+        }
+
         if (type?.ClrType != null && type.ClrType.IsValueType)
         {
             return true;

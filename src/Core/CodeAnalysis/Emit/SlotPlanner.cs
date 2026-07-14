@@ -945,7 +945,24 @@ internal sealed class SlotPlanner
             // (parameters/locals/globals) are addressable directly; any other
             // shape (an rvalue such as `getX().CompareTo(y)`) must be spilled to
             // a local so its address can be taken.
-            if (node.IsConstrainedTypeParameterCall && node.Receiver is not BoundVariableExpression)
+            //
+            // Issue #2335 (audit follow-up): a NARROWED variable receiver
+            // (ADR-0069 smart-cast — `bve.NarrowedType != null`, e.g. `if x is
+            // T { x.ToString() }` narrowing an `object`-typed parameter/local
+            // to a type-parameter view `T`) is NOT addressable directly either:
+            // the narrowed view still physically lives in the wider DECLARED
+            // storage slot, so taking that slot's own address yields
+            // `<declared>&` (e.g. `object&`), not the `!!T&` the `constrained.`
+            // prefix requires — ilverify rejects the mismatch
+            // (`StackUnexpected`) and, pre-verification, the wrong pointer
+            // shape corrupts the receiver read. Route a narrowed variable
+            // receiver through the same rvalue-spill path as any other
+            // non-addressable receiver shape so the emitter re-materializes
+            // the correctly narrowed `!!T` value (via
+            // `EmitNarrowingCastIfNeeded`) into a fresh scratch local of type
+            // `T` before taking ITS address.
+            if (node.IsConstrainedTypeParameterCall
+                && (node.Receiver is not BoundVariableExpression importedRecvVar || importedRecvVar.NarrowedType != null))
             {
                 this.sink.Add(node.Receiver);
             }
@@ -963,7 +980,12 @@ internal sealed class SlotPlanner
             // address for the `constrained.` prefix. Variable receivers
             // (parameters/locals/globals) are addressable directly; any other shape
             // (an rvalue) must be spilled to a local so its address can be taken.
-            if (node.IsConstrainedTypeParameterCall && node.Receiver is not BoundVariableExpression)
+            //
+            // Issue #2335 (audit follow-up): see the matching narrowed-variable
+            // rationale in VisitImportedInstanceCallExpression above — a
+            // narrowed variable receiver must also be spilled here.
+            if (node.IsConstrainedTypeParameterCall
+                && (node.Receiver is not BoundVariableExpression userRecvVar || userRecvVar.NarrowedType != null))
             {
                 this.sink.Add(node.Receiver);
             }

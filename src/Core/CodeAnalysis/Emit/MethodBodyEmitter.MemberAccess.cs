@@ -1375,10 +1375,33 @@ internal sealed partial class MethodBodyEmitter
     /// both. Addressable variables (parameters, locals, globals) load directly;
     /// non-addressable rvalue receivers are spilled to a pre-planned local.
     /// </summary>
+    /// <remarks>
+    /// Issue #2335 (audit follow-up): a NARROWED variable receiver
+    /// (ADR-0069 smart-cast — <c>bve.NarrowedType != null</c>, e.g. <c>if x is
+    /// T { x.ToString() }</c> narrowing an <c>object</c>-typed
+    /// parameter/local to a type-parameter view <c>T</c>) must NOT take the
+    /// fast "own address" path even though it IS a
+    /// <see cref="BoundVariableExpression"/>: the narrowed view still
+    /// physically lives in the wider DECLARED storage slot (e.g. an
+    /// <c>object</c> field/parameter/local), so <c>ldarga</c>/<c>ldloca</c>
+    /// on that slot yields <c>&lt;declared&gt;&amp;</c> (e.g.
+    /// <c>object&amp;</c>) — NOT the <c>!!T&amp;</c> the <c>constrained.</c>
+    /// prefix requires. ilverify rejects the mismatch
+    /// (<c>StackUnexpected</c>), and the wrong pointer shape would
+    /// misinterpret the receiver's bytes at runtime for shared generic code.
+    /// <see cref="SlotPlanner.ReceiverSpillCollector"/> plans a spill slot
+    /// (typed as the NARROWED type, since <c>BoundVariableExpression.Type</c>
+    /// reports <c>NarrowedType ?? Variable.Type</c>) for exactly this case, so
+    /// falling through to the general rvalue-spill path below —
+    /// <see cref="EmitExpression"/> re-materializes the correctly narrowed
+    /// <c>!!T</c> value via <c>EmitNarrowingCastIfNeeded</c> — produces a
+    /// verifiable, correctly-addressed receiver.
+    /// </remarks>
     /// <param name="receiver">The constrained type-parameter receiver expression.</param>
     private void EmitConstrainedTypeParameterReceiver(BoundExpression receiver)
     {
         if (receiver is BoundVariableExpression bve
+            && bve.NarrowedType == null
             && this.TryLoadVariableAddress(bve.Variable))
         {
             return;
