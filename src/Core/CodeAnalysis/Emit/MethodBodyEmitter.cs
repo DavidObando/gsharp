@@ -480,13 +480,19 @@ internal sealed partial class MethodBodyEmitter
             return enumSym.UnderlyingType;
         }
 
-        var clr = type?.ClrType;
-        if (clr != null && clr.IsEnum)
+        // Issue #2327: `type.ClrType` may be a
+        // System.Reflection.Emit.TypeBuilderInstantiation (e.g. a
+        // compiler-synthesized structural function-type delegate closed
+        // over an in-flight TypeBuilder definition), whose `IsEnum` throws
+        // NotSupportedException. Route through the shared safe helper
+        // (generalizing the #1100/#2135 pattern) rather than probing
+        // `ClrType.IsEnum` directly — a throw means the type is definitely
+        // not an enum, matching the guard used by EnumOperatorTable.
+        var underlying = type?.ClrType.GetEnumUnderlyingTypeSafe();
+        if (underlying != null)
         {
-            // Loaded via a MetadataLoadContext or normal load: use the
-            // CLR's own underlying-type API, then map back to a
-            // TypeSymbol for the numeric lattice.
-            var underlying = System.Enum.GetUnderlyingType(clr);
+            // Loaded via a MetadataLoadContext or normal load: map the CLR
+            // underlying type back to a TypeSymbol for the numeric lattice.
             return TypeSymbol.FromClrType(underlying);
         }
 

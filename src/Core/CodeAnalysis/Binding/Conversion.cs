@@ -2008,29 +2008,18 @@ public sealed class Conversion
             return true;
         }
 
-        var clr = type?.ClrType;
-        if (clr == null)
-        {
-            return false;
-        }
-
-        // Issue #1100: a constructed generic delegate closed over a
-        // same-compilation user type (whose CLR backing is an in-flight emit
-        // TypeBuilder) surfaces as a
+        // Issue #1100 / generalized by #2327: a constructed generic delegate
+        // closed over a same-compilation user type (whose CLR backing is an
+        // in-flight emit TypeBuilder) surfaces as a
         // System.Reflection.Emit.TypeBuilderInstantiation. Its reflection
         // predicates throw NotSupportedException ("TypeBuilder generic
-        // instantiation does not support resolving members") — IsEnum probes the
-        // base-type chain via IsSubclassOf, which is one of the unsupported
-        // operations. Such a delegate type is never an enum, so treat a throw as
-        // a definite "not enum-like".
-        try
-        {
-            return clr.IsEnum;
-        }
-        catch (NotSupportedException)
-        {
-            return false;
-        }
+        // instantiation does not support resolving members") — IsEnum probes
+        // the base-type chain via IsSubclassOf, which is one of the
+        // unsupported operations. Such a delegate type is never an enum, so
+        // treat a throw as a definite "not enum-like". Routed through the
+        // shared ClrTypeUtilities.IsEnumSafe helper so every enum-reflection
+        // call site in the binder/emitter shares one guard.
+        return type?.ClrType.IsEnumSafe() == true;
     }
 
     private static bool IsReferenceLikeTarget(TypeSymbol type)

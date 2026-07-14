@@ -189,9 +189,18 @@ internal static class EnumOperatorTable
             return false;
         }
 
-        if (type.ClrType?.IsEnum == true)
+        // Issue #2327: `type.ClrType` may be a
+        // System.Reflection.Emit.TypeBuilderInstantiation — e.g. a
+        // compiler-synthesized structural function-type delegate closed
+        // over an in-flight TypeBuilder definition — whose `IsEnum` throws
+        // NotSupportedException. Route through the shared safe helper
+        // (generalizing the #1100/#2135 pattern) instead of probing
+        // `ClrType.IsEnum` directly; a throw means "definitely not an enum",
+        // so IsUnsignedOrChar correctly falls through to its signed default.
+        var underlying = type.ClrType.GetEnumUnderlyingTypeSafe();
+        if (underlying != null)
         {
-            var underlyingName = Enum.GetUnderlyingType(type.ClrType).FullName;
+            var underlyingName = underlying.FullName;
             return underlyingName == "System.Byte"
                 || underlyingName == "System.UInt16"
                 || underlyingName == "System.UInt32"
@@ -222,7 +231,10 @@ internal static class EnumOperatorTable
             return true;
         }
 
-        return type?.ClrType != null && type.ClrType.IsEnum;
+        // Issue #2327: guard against NotSupportedException from a
+        // TypeBuilderInstantiation-backed ClrType (see IsUnsignedEnumUnderlying
+        // above for the full rationale).
+        return type?.ClrType.IsEnumSafe() == true;
     }
 
     /// <summary>
@@ -239,9 +251,12 @@ internal static class EnumOperatorTable
             return es.UnderlyingType;
         }
 
-        if (enumType?.ClrType?.IsEnum == true)
+        // Issue #2327: guard against NotSupportedException from a
+        // TypeBuilderInstantiation-backed ClrType (see IsUnsignedEnumUnderlying
+        // above for the full rationale).
+        var clrUnderlying = enumType?.ClrType.GetEnumUnderlyingTypeSafe();
+        if (clrUnderlying != null)
         {
-            var clrUnderlying = Enum.GetUnderlyingType(enumType.ClrType);
             return TypeSymbol.FromClrType(clrUnderlying);
         }
 
