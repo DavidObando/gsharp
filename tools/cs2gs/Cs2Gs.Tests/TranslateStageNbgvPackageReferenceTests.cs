@@ -43,6 +43,9 @@ public class TranslateStageNbgvPackageReferenceTests
             Path.Combine(repoDir, "Directory.Packages.props"),
             """
             <Project>
+              <PropertyGroup>
+                <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+              </PropertyGroup>
               <ItemGroup>
                 <PackageVersion Include="Nerdbank.GitVersioning" Version="3.7.115" />
               </ItemGroup>
@@ -92,6 +95,67 @@ public class TranslateStageNbgvPackageReferenceTests
         Assert.Equal(NerdbankGitVersioningPolicy.PackageId, nbgvReference.Id);
         Assert.Equal(NerdbankGitVersioningPolicy.MinimumGSharpVersion, nbgvReference.Version);
         Assert.Equal("all", nbgvReference.PrivateAssets);
+
+        // Issue #2319: the copied Directory.Packages.props — the file NuGet
+        // actually restores the generated app against — must itself carry the
+        // bumped version; a verbatim copy plus the previous inert
+        // nbgv-bump/Directory.Packages.props left the below-floor version in
+        // place for restore. The Translate stage must also record that CPM
+        // governs this app so the Compile stage omits Version= from any
+        // PackageReference it synthesizes.
+        Assert.True(context.UsesCentralPackageManagement);
+        string copiedProps = File.ReadAllText(Path.Combine(appRunDir, "Directory.Packages.props"));
+        Assert.Contains(
+            "<PackageVersion Include=\"Nerdbank.GitVersioning\" Version=\"3.11.13-beta\" />",
+            copiedProps);
+        Assert.DoesNotContain("3.7.115", copiedProps);
+    }
+
+    [Fact]
+    public async Task TranslateStage_NonCpmProject_LeavesCentralPackageManagementDisabledAndCopiesNoPropsFile()
+    {
+        // Preserve non-CPM behavior (issue #2319): when the source project's
+        // ancestry has no Directory.Packages.props at all, no such file should
+        // be copied, and UsesCentralPackageManagement must stay false so the
+        // Compile stage keeps emitting a normal Version= attribute.
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            return;
+        }
+
+        string repoDir = NewScratchDir("translate-nbgv-noncpm");
+        string projectDir = Path.Combine(repoDir, "src", "Sample");
+        Directory.CreateDirectory(projectDir);
+        string projectPath = Path.Combine(projectDir, "Sample.csproj");
+        File.WriteAllText(projectPath, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <OutputType>Exe</OutputType>
+                <RootNamespace>Sample.App</RootNamespace>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="Nerdbank.GitVersioning" Version="3.7.115" PrivateAssets="all" />
+              </ItemGroup>
+            </Project>
+            """);
+        File.WriteAllText(
+            Path.Combine(projectDir, "Program.cs"),
+            "public class Program { public static void Main() { } }");
+
+        string appRunDir = NewOutputRoot("translate-nbgv-noncpm");
+        var app = new CorpusApp("test/NbgvNonCpmApp", projectPath, TargetKind.Exe);
+        var options = new PipelineOptions { GscPath = compiler };
+        var gsc = new GscInvoker(compiler);
+        var triage = new TriageBuilder("test-run", "2026-01-01T00:00:00Z", "0.0.0", app.Id);
+        var context = new StageExecutionContext(app, options, gsc, appRunDir, triage);
+
+        StageOutcome outcome = await new TranslateStage().ExecuteAsync(context);
+
+        Assert.Equal(StageStatus.Passed, outcome.Status);
+        Assert.False(context.UsesCentralPackageManagement);
+        Assert.False(File.Exists(Path.Combine(appRunDir, "Directory.Packages.props")));
     }
 
     private static string NewOutputRoot(string label)

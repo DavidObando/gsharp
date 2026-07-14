@@ -174,6 +174,62 @@ public class SdkCompileRunnerTests
     }
 
     [Fact]
+    public void BuildProjectXml_OmitsVersionOnDeclaredNbgvPackageReference_WhenCentralPackageManagementIsUsed()
+    {
+        // Issue #2319: under CPM the version comes exclusively from the copied
+        // Directory.Packages.props's <PackageVersion> item. A Version=
+        // attribute on the generated <PackageReference> as well is rejected by
+        // NuGet's CPM validation (NU1008), so BuildProjectXml must omit it here.
+        var declared = new[]
+        {
+            new DeclaredPackageReference(
+                NerdbankGitVersioningPolicy.PackageId,
+                NerdbankGitVersioningPolicy.MinimumGSharpVersion,
+                privateAssets: "all"),
+        };
+
+        string xml = SdkCompileRunner.BuildProjectXml(
+            sdkVersion: "1.0.0",
+            target: TargetKind.Exe,
+            rootNamespace: null,
+            gsFilePaths: new[] { "/app/Program.gs" },
+            packages: Array.Empty<(string Id, string Version)>(),
+            references: Array.Empty<string>(),
+            analyzerReferences: Array.Empty<string>(),
+            declaredPackageReferences: declared,
+            usesCentralPackageManagement: true);
+
+        Assert.Contains(
+            "<PackageReference Include=\"Nerdbank.GitVersioning\" PrivateAssets=\"all\" />",
+            xml);
+        Assert.DoesNotContain("Version=", xml);
+    }
+
+    [Fact]
+    public void BuildProjectXml_OmitsVersionOnReconstructedPackage_WhenCentralPackageManagementIsUsed()
+    {
+        // Issue #2319: the same Version= suppression must apply to the
+        // DLL-reconstructed `packages` set, not just the declared build-only
+        // set, so BuildProjectXml stays internally consistent whenever CPM
+        // governs the generated app (even though in the real --via-sdk
+        // CompileStage call shape `packages` is always empty once declared
+        // PackageReference items are present).
+        string xml = SdkCompileRunner.BuildProjectXml(
+            sdkVersion: "1.0.0",
+            target: TargetKind.Library,
+            rootNamespace: null,
+            gsFilePaths: new[] { "/app/Lib.gs" },
+            packages: new List<(string Id, string Version)> { ("communitytoolkit.mvvm", "8.4.0") },
+            references: Array.Empty<string>(),
+            analyzerReferences: Array.Empty<string>(),
+            declaredPackageReferences: Array.Empty<DeclaredPackageReference>(),
+            usesCentralPackageManagement: true);
+
+        Assert.Contains("<PackageReference Include=\"communitytoolkit.mvvm\" />", xml);
+        Assert.DoesNotContain("Version=", xml);
+    }
+
+    [Fact]
     public void BuildProjectXml_DoesNotDuplicateDeclaredPackage_WhenAlreadyReconstructedFromDll()
     {
         // A package that DID resolve a compile-time DLL is already fully
