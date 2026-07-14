@@ -1507,7 +1507,7 @@ internal sealed partial class MethodBodyEmitter
             this.il.Branch(ILOpCode.Brfalse, nilFallthrough);
 
             this.il.LoadLocalAddress(wrapperSlot);
-            if (NullableLifting.IsUserValueTypeNullable(receiverNullable))
+            if (NullableLifting.RequiresSymbolicNullableGetValue(receiverNullable))
             {
                 this.il.OpCode(ILOpCode.Call);
                 this.il.Token(this.outer.GetNullableGetValueMemberRefForUserValueType(receiverNullable));

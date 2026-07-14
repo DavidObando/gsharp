@@ -44,16 +44,20 @@ internal sealed partial class MethodBodyEmitter
         // dependency on stack tracking inside the operand.
         if (u.Op.Kind == BoundUnaryOperatorKind.NullAssertion)
         {
-            // Issue #1572: a value-type `Nullable<T>` operand where T is a
-            // user-declared value type (value-kind struct or enum) emitted in
-            // this compilation. Its underlying has no runtime CLR type, so the
+            // Issue #1572 / #2333: a value-type `Nullable<T>` operand where T
+            // is a user-declared value type (value-kind struct or enum)
+            // emitted in this compilation, OR an open type parameter
+            // constrained to `struct` (its `Nullable<T>` instantiation closes
+            // over a generic-parameter signature slot, not a resolvable host
+            // `Type`). Either underlying has no runtime CLR type, so the
             // BCL-backed `get_Value` reference below cannot be built; spill the
             // struct to the pre-allocated `Nullable<T>` slot, take its address,
             // and call `Nullable<T>::get_Value()` off a TypeSpec MemberRef that
-            // closes `Nullable<>` over the emitted TypeDef/TypeSpec. Mirrors the
-            // primitive value-type arm below (issue #504).
+            // closes `Nullable<>` over the emitted TypeDef/TypeSpec or the
+            // generic-parameter slot. Mirrors the primitive value-type arm
+            // below (issue #504).
             if (u.Operand.Type is NullableTypeSymbol userVtNullable
-                && NullableLifting.IsUserValueTypeNullable(userVtNullable))
+                && NullableLifting.RequiresSymbolicNullableGetValue(userVtNullable))
             {
                 if (!this.receiverSpillSlots.TryGetValue(u.Operand, out var userVtSlot))
                 {
@@ -136,6 +140,40 @@ internal sealed partial class MethodBodyEmitter
 
                 this.il.MarkLabel(tpNonNull);
                 this.il.LoadLocal(tpUnwrapSlot);
+                return;
+            }
+
+            // Issue #2333: an operand whose static type is a bare value type
+            // — NOT wrapped in `NullableTypeSymbol` — can never be a CLR
+            // `null`: value types have no "no value" bit pattern on the
+            // evaluation stack outside of the `Nullable<T>` wrapper handled
+            // by the arms above. This shape arises two ways:
+            //
+            //   * Control-flow smart-cast narrowing: `BuildNarrowedRead`
+            //     (ExpressionBinder) already wraps a narrowed nullable
+            //     value-type read in a synthesized inner `!!`, so a
+            //     user-written `x!!` over an already-narrowed `x` sees an
+            //     operand whose static type is the bare underlying `T` (the
+            //     inner synthesized unwrap already proved/produced it). Any
+            //     second check here is provably redundant.
+            //
+            //   * A direct `!!` written over an already non-nullable value
+            //     (float/double, a BCL or user struct/enum, a
+            //     struct-constrained type parameter, or even a plain
+            //     int32/bool): the bottom `dup; brtrue` fallback is not just
+            //     redundant here but UNSOUND — `brtrue` has no valid
+            //     interpretation for a struct/float stack value (ilverify
+            //     `StackUnexpected`), and even for the integral/bool/enum
+            //     shapes that happen to verify, branching on the VALUE
+            //     misidentifies a legitimate falsy-but-non-null value (`0`,
+            //     `false`) as "null" and throws `NullReferenceException`
+            //     incorrectly.
+            //
+            // Emit the operand and stop: no runtime check is meaningful for
+            // a value that structurally cannot be nil.
+            if (IsNonNullableValueOperand(u.Operand.Type))
+            {
+                this.EmitExpression(u.Operand);
                 return;
             }
 
@@ -1042,6 +1080,36 @@ internal sealed partial class MethodBodyEmitter
 
         typeParameter = null;
         return false;
+    }
+
+    /// <summary>
+    /// Issue #2333: returns <see langword="true"/> when <paramref name="type"/>
+    /// is a bare (non-<see cref="NullableTypeSymbol"/>) value type — a
+    /// primitive, enum, struct, tuple, or a type parameter constrained to
+    /// <c>struct</c>. Such a type's runtime representation on the evaluation
+    /// stack is never a CLR <c>null</c>, so a null-assertion (<c>!!</c>) over
+    /// it needs no runtime check at all. Used by <c>EmitUnary</c>'s
+    /// <see cref="BoundUnaryOperatorKind.NullAssertion"/> arm to recognise an
+    /// operand that is either a direct non-nullable value or the result of a
+    /// smart-cast-narrowed nullable value-type read (which
+    /// <see cref="ExpressionBinder"/>'s <c>BuildNarrowedRead</c> already
+    /// unwrapped via a synthesized inner <c>!!</c>).
+    /// </summary>
+    /// <param name="type">The operand's static type.</param>
+    /// <returns><see langword="true"/> when no runtime null check applies.</returns>
+    private static bool IsNonNullableValueOperand(TypeSymbol type)
+    {
+        if (type is NullableTypeSymbol)
+        {
+            return false;
+        }
+
+        if (type is TypeParameterSymbol typeParameter)
+        {
+            return typeParameter.HasValueTypeConstraint;
+        }
+
+        return ReflectionMetadataEmitter.IsValueTypeSymbol(type);
     }
 
     private void EmitNarrowingTruncationIfNeeded(BoundBinaryOperatorKind kind, TypeSymbol resultType)

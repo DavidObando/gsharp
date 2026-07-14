@@ -9982,23 +9982,27 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
-    /// Issue #1572: gets a MemberRef for <c>System.Nullable`1&lt;T&gt;::get_Value()</c>
-    /// where <c>T</c> is a user-declared value type emitted in this assembly
-    /// (a value-kind <see cref="StructSymbol"/> or an <see cref="EnumSymbol"/>).
-    /// The type has no runtime CLR type, so the BCL-backed
-    /// <see cref="WellKnownReferences.GetNullableGetValueReference"/> path cannot
-    /// build it; instead the parent TypeSpec closes <c>Nullable&lt;&gt;</c> over
-    /// the type's emitted TypeDef/TypeSpec and the getter returns <c>!0</c>.
-    /// Used by the <c>(v!!)</c> unwrap and value-type narrowing-read emit.
+    /// Issue #1572 / #2333: gets a MemberRef for
+    /// <c>System.Nullable`1&lt;T&gt;::get_Value()</c> where <c>T</c> is either a
+    /// user-declared value type emitted in this assembly (a value-kind
+    /// <see cref="StructSymbol"/> or an <see cref="EnumSymbol"/>) or an open
+    /// type parameter constrained to <c>struct</c>. Neither shape has a
+    /// resolvable runtime CLR <see cref="Type"/> during emit, so the
+    /// BCL-backed <see cref="WellKnownReferences.GetNullableGetValueReference"/>
+    /// path cannot build the MemberRef; instead the parent TypeSpec closes
+    /// <c>Nullable&lt;&gt;</c> over the emitted TypeDef/TypeSpec (or the
+    /// generic-parameter var/mvar signature slot) and the getter returns
+    /// <c>!0</c>. Used by the <c>(v!!)</c> unwrap, value-type narrowing-read
+    /// emit, and the null-conditional receiver probe.
     /// </summary>
-    /// <param name="nullableOfUserVt">A <c>Nullable&lt;T&gt;</c> over a user value type (enum or value struct).</param>
+    /// <param name="nullableOfUserVt">A <c>Nullable&lt;T&gt;</c> over a user value type (enum or value struct) or a struct-constrained type parameter.</param>
     /// <returns>The <c>get_Value()</c> MemberRef.</returns>
     internal MemberReferenceHandle GetNullableGetValueMemberRefForUserValueType(NullableTypeSymbol nullableOfUserVt)
     {
-        if (nullableOfUserVt == null || !NullableLifting.IsUserValueTypeNullable(nullableOfUserVt))
+        if (nullableOfUserVt == null || !NullableLifting.RequiresSymbolicNullableGetValue(nullableOfUserVt))
         {
             throw new InvalidOperationException(
-                "GetNullableGetValueMemberRefForUserValueType requires Nullable<user enum or value struct>.");
+                "GetNullableGetValueMemberRefForUserValueType requires Nullable<user enum, value struct, or struct-constrained type parameter>.");
         }
 
         var underlying = nullableOfUserVt.UnderlyingType;
