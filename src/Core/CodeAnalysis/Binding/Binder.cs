@@ -4659,6 +4659,38 @@ public sealed class Binder
                 : type;
         }
 
+        // Issue #2340 follow-up (sibling to the #1503 branch already present
+        // in StructSymbol.SubstituteTypeForConstruction): a constructed
+        // generic named delegate appearing as a call's parameter or return
+        // type (e.g. `func MakeGetter[T](item T) Getter[T]`) must have its own
+        // type arguments substituted through the call's method-type-argument
+        // map so the bound call surfaces `Getter[int32]` rather than the
+        // still-open `Getter[T]`. Without this branch the binder's computed
+        // call-expression type stayed open over the callee's own type
+        // parameter even though the emitter correctly built a MethodSpec/
+        // MemberRef closed over the concrete argument — the mismatch between
+        // the (wrong, open) declared type of the receiving local/field and
+        // the (correct, closed) value actually produced by the `call`
+        // instruction failed ilverify with `StackUnexpected`.
+        if (type is DelegateTypeSymbol del
+            && del.Definition != null
+            && !ReferenceEquals(del.Definition, del)
+            && !del.TypeArguments.IsDefaultOrEmpty)
+        {
+            var newDelegateArgs = ImmutableArray.CreateBuilder<TypeSymbol>(del.TypeArguments.Length);
+            var delegateChanged = false;
+            foreach (var arg in del.TypeArguments)
+            {
+                var substituted = SubstituteType(arg, substitution, mapClrType);
+                delegateChanged |= !ReferenceEquals(substituted, arg);
+                newDelegateArgs.Add(substituted);
+            }
+
+            return delegateChanged
+                ? DelegateTypeSymbol.Construct(del.Definition, newDelegateArgs.MoveToImmutable())
+                : type;
+        }
+
         if (type is ImportedTypeSymbol it && it.HasTypeParameterArgument)
         {
             // #313: substitute a generic type parameterized by an in-scope type
