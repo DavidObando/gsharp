@@ -11421,34 +11421,20 @@ internal sealed class ReflectionMetadataEmitter
     /// generics from a reference open definition so the produced TypeSpec /
     /// MemberRef binds to the target framework assemblies. Falls back to the
     /// host type when no reference mapping is available.
+    ///
+    /// Issue #2325: this used to carry its own constructed-generic remapping
+    /// loop, separate from (and ahead of) the one in
+    /// <see cref="MapToReferenceClrType"/> — which only did a flat
+    /// full-name lookup and therefore could not resolve a constructed generic
+    /// argument (e.g. the inner `Action&lt;object&gt;` of
+    /// `Action&lt;Action&lt;object&gt;, object&gt;`). That let a nested/
+    /// higher-order delegate mix a MetadataLoadContext open definition with a
+    /// host-context type argument, which `MakeGenericType` rejects at emit
+    /// time (GS9998). `MapToReferenceClrType` now performs the same recursive
+    /// remapping itself, so both callers share one implementation.
     /// </summary>
     internal Type ResolveTargetDelegateClrType(Type hostDelegate)
-    {
-        if (hostDelegate == null)
-        {
-            return null;
-        }
-
-        if (hostDelegate.IsConstructedGenericType)
-        {
-            var openName = hostDelegate.GetGenericTypeDefinition().FullName;
-            if (openName != null && this.emitCtx.References.TryResolveType(openName, requireExternalVisibility: false, out var openRef))
-            {
-                var hostArgs = hostDelegate.GetGenericArguments();
-                var refArgs = new Type[hostArgs.Length];
-                for (var i = 0; i < hostArgs.Length; i++)
-                {
-                    refArgs[i] = this.MapToReferenceClrType(hostArgs[i]) ?? hostArgs[i];
-                }
-
-                return openRef.MakeGenericType(refArgs);
-            }
-
-            return hostDelegate;
-        }
-
-        return this.MapToReferenceClrType(hostDelegate) ?? hostDelegate;
-    }
+        => this.MapToReferenceClrType(hostDelegate);
 
     // Phase 4 emit parity (E1): resolve the BCL delegate type backing a
     // GSharp function type. The default ClrType on FunctionTypeSymbol uses
@@ -11823,11 +11809,56 @@ internal sealed class ReflectionMetadataEmitter
     // unchanged when no mapping is found — non-primitive host types whose
     // FullName isn't resolvable will keep their original identity (and may
     // still encode fine via EncodeClrType's primitive matching).
+    //
+    // Issue #2325: this is the single recursive reference-context remapper
+    // shared by every caller that needs to cross from host-runtime `Type`s
+    // to the emitter's MetadataLoadContext `Type`s (ResolveDelegateArgClrType,
+    // ResolveTargetDelegateClrType, ResolveAsyncDelegateClrType, and the
+    // event-handler-type lookups in MethodBodyEmitter.Closures.cs). A
+    // *constructed* generic type — e.g. `Action<object>`, or nested/
+    // higher-order shapes like `Action<Action<object>, object>` — cannot be
+    // resolved by the flat `Type.FullName` lookup below: `FullName` on a
+    // constructed generic type embeds each argument's assembly-qualified
+    // name (e.g. "System.Action`1[[System.Object, ...]]"), which never
+    // matches the reference index (built from open generic *definitions*
+    // only — see AddToTypeNameIndex). Left unhandled, a constructed generic
+    // delegate argument fell through to the "return hostType unchanged"
+    // fallback, and a later `MakeGenericType` on a reference-context open
+    // definition mixed in a host-context type argument — MakeGenericType
+    // rejects that combination at emit time (GS9998: "was not loaded by the
+    // MetadataLoadContext that loaded the generic type or method").
+    //
+    // The fix: resolve the open generic definition through the active
+    // reference context, then recurse into every type argument through this
+    // same helper — so an arbitrarily nested constructed generic (the
+    // higher-order delegate case) is remapped, and the closed type is
+    // constructed entirely within the reference context. Non-generic types
+    // keep the original flat lookup; an open definition with no reference
+    // equivalent falls back to the host type unchanged, same as before.
     internal Type MapToReferenceClrType(Type hostType)
     {
         if (hostType == null)
         {
             return null;
+        }
+
+        if (hostType.IsConstructedGenericType)
+        {
+            var openDef = hostType.GetGenericTypeDefinition();
+            if (openDef.FullName != null
+                && this.emitCtx.References.TryResolveType(openDef.FullName, requireExternalVisibility: false, out var openRef))
+            {
+                var hostArgs = hostType.GetGenericArguments();
+                var refArgs = new Type[hostArgs.Length];
+                for (var i = 0; i < hostArgs.Length; i++)
+                {
+                    refArgs[i] = this.MapToReferenceClrType(hostArgs[i]) ?? hostArgs[i];
+                }
+
+                return openRef.MakeGenericType(refArgs);
+            }
+
+            return hostType;
         }
 
         if (this.emitCtx.References.TryResolveType(hostType.FullName ?? hostType.Name, requireExternalVisibility: false, out var mapped))
