@@ -1340,12 +1340,14 @@ internal sealed class SlotPlanner
                     needsSlot = n.UnderlyingType?.ClrType is { IsValueType: true }
                         || (n.UnderlyingType is TypeParameterSymbol tp && !tp.HasValueTypeConstraint)
 
-                        // Issue #1572: a user-declared value-type underlying
-                        // (value-kind struct or enum) has a null ClrType during
-                        // emit, so the ClrType probe above misses it. The `(v!!)`
-                        // emit arm spills to a `Nullable<T>` slot and calls
-                        // get_Value off its address, so it needs the same slot.
-                        || NullableLifting.IsUserValueTypeNullable(n);
+                        // Issue #1572 / #2333: a user-declared value-type
+                        // underlying (value-kind struct or enum), or an open
+                        // type parameter constrained to `struct`, has a null
+                        // ClrType during emit, so the ClrType probe above
+                        // misses both. The `(v!!)` emit arm spills either
+                        // shape to a `Nullable<T>` slot and calls get_Value
+                        // off its address, so both need the same slot.
+                        || NullableLifting.RequiresSymbolicNullableGetValue(n);
                 }
                 else if (node.Operand.Type is TypeParameterSymbol bare && !bare.HasValueTypeConstraint)
                 {
@@ -1369,7 +1371,7 @@ internal sealed class SlotPlanner
 
     // Issue #519: walks the bound tree collecting every `BoundBinaryExpression`
     // whose operator is `NullCoalesce` (`??`) and whose LHS needs an emit-time
-    // spill slot. Two shapes qualify:
+    // spill slot. Several shapes qualify:
     //
     //   * Value-type `Nullable<T>` LHS — the emitter spills the LHS once and
     //     calls `Nullable<T>::get_HasValue` / `get_Value` off the slot's
@@ -1383,6 +1385,13 @@ internal sealed class SlotPlanner
     //     layer. The slot is typed as `T?` (which encodes as bare `!!T` per
     //     `ReflectionMetadataEmitter.GetElementTypeToken`), and the emitter
     //     probes its non-nullness via `box !!T; brfalse fallback`.
+    //
+    //   * Issue #1578 / #2333: `Nullable<T>` LHS where T is a user-declared
+    //     value-kind struct/enum, or an open type parameter constrained to
+    //     `struct`. Neither has a runtime ClrType during emit, so the emitter
+    //     spills to a `Nullable<T>` slot and probes non-nullness via
+    //     `box Nullable<T>; brfalse fallback` off the symbolically-encoded
+    //     TypeSpec, unwrapping via the symbolic `get_Value` MemberRef.
     //
     // Reference-type `??` over a concrete reference type (string?, Func<T>?,
     // sequence[T], etc.) uses the existing `dup; brtrue; pop; rhs` pattern
@@ -1407,14 +1416,19 @@ internal sealed class SlotPlanner
                     needsSlot = n.UnderlyingType?.ClrType is { IsValueType: true }
                         || (n.UnderlyingType is TypeParameterSymbol tp && !tp.HasValueTypeConstraint)
 
-                        // Issue #1578: a user-declared value-type underlying
-                        // (value-kind struct or enum) has a null ClrType during
-                        // emit, so the ClrType probe above misses it. The `??`
-                        // emit arm spills the `Nullable<UserT>` LHS to this slot
-                        // and box-probes / calls get_Value off its address, so
-                        // it needs the same pre-allocated slot. Keep this in
-                        // exact agreement with the emitter's user value-type arm.
-                        || NullableLifting.IsUserValueTypeNullable(n);
+                        // Issue #1578 / #2333: a user-declared value-type
+                        // underlying (value-kind struct or enum), or an open
+                        // type parameter constrained to `struct` (its
+                        // `Nullable<T>` instantiation closes over a
+                        // generic-parameter signature slot, not a resolvable
+                        // host `Type` — the #2333 sibling-path audit), has a
+                        // null ClrType during emit, so the ClrType probe above
+                        // misses both shapes. The `??` emit arm spills the
+                        // `Nullable<T>` LHS to this slot and box-probes / calls
+                        // the symbolic get_Value off its address, so it needs
+                        // the same pre-allocated slot. Keep this in exact
+                        // agreement with the emitter's symbolic value-type arm.
+                        || NullableLifting.RequiresSymbolicNullableGetValue(n);
                 }
                 else if (IsReferenceTypeParameterCoalesceProbe(node, out _))
                 {
