@@ -888,43 +888,11 @@ public static class MoveNextBodyRewriter
 
             private bool TryGetHoistedField(VariableSymbol variable, out FieldSymbol field)
             {
-                field = null;
-                if (variable is ParameterSymbol param)
-                {
-                    // Check if this is the `this` parameter of an instance method.
-                    // The `this` reference is hoisted to the special ThisField.
-                    if (ctx.plan.FieldMap.ThisField != null &&
-                        ReferenceEquals(param, ctx.plan.KickoffMethod.ThisParameter))
-                    {
-                        field = ctx.plan.FieldMap.ThisField;
-                        return true;
-                    }
-
-                    try
-                    {
-                        field = ctx.plan.FieldMap.GetParameterField(param);
-                        return true;
-                    }
-                    catch (KeyNotFoundException)
-                    {
-                        return false;
-                    }
-                }
-
-                if (variable is LocalVariableSymbol)
-                {
-                    try
-                    {
-                        field = ctx.plan.FieldMap.GetLocalField(variable);
-                        return true;
-                    }
-                    catch (KeyNotFoundException)
-                    {
-                        return false;
-                    }
-                }
-
-                return false;
+                // Delegate to the field map's single source of truth (issue
+                // #2331) so `this`, ordinary parameters, and locals resolve
+                // identically here and at the emitter's closure-construction
+                // site (MethodBodyEmitter.Closures.cs' EmitCapturedVariableLoad).
+                return ctx.plan.FieldMap.TryGetHoistedField(variable, out field);
             }
         }
     }

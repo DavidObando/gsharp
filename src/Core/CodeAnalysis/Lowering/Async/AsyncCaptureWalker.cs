@@ -159,12 +159,110 @@ public static class AsyncCaptureWalker
             return base.RewriteVariableDeclaration(node);
         }
 
+        /// <summary>
+        /// Issue #2331 (deferred half): a parameter or local whose only
+        /// reference anywhere in this async body is inside a nested lambda —
+        /// including a lambda nested inside that lambda — must still
+        /// contribute to the hoist set. Otherwise its value does not survive
+        /// suspension across an intervening <c>await</c>: a resumed
+        /// <c>MoveNext</c> call is a fresh invocation of the same method, so
+        /// any variable that was not hoisted into a state-machine field is
+        /// re-initialized to the CLR default instead of retaining the value
+        /// it held before suspension.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="BoundTreeRewriter"/> intentionally treats a function
+        /// literal as an opaque leaf (its body is a separate lexical scope),
+        /// so without this override the walk above never reaches a variable
+        /// read/written only inside a nested lambda body. Blindly descending
+        /// into <c>node.Body</c> with <em>this</em> walker would be wrong: it
+        /// would also invoke <see cref="RewriteVariableDeclaration"/> for
+        /// locals the lambda itself declares, incorrectly hoisting
+        /// lambda-owned state into the outer async method's state machine
+        /// and breaking the lambda's own lexical scope.
+        /// <para>
+        /// Instead, this reuses the capture metadata the binder already
+        /// computed: <see cref="BoundFunctionLiteralExpression.CapturedVariables"/>
+        /// lists every outer-scope variable the lambda (or any lambda
+        /// transitively nested within it) needs, because
+        /// <c>LambdaBinder.CapturedVariableCollector.RewriteFunctionLiteralExpression</c>
+        /// already propagates a nested literal's own captures up into every
+        /// enclosing literal's list (issue #503) — the exact mechanism
+        /// <see cref="Lowering.CaptureBoxingRewriter"/>'s own capture walker
+        /// relies on for the same reason. <see cref="LambdaCaptureCollector"/>
+        /// additionally recurses defensively (mirroring
+        /// <see cref="Lowering.CaptureBoxingRewriter"/>'s walker) using a
+        /// dedicated helper that itself never records a variable declaration,
+        /// so a lambda's own locals are still never hoisted even if a future
+        /// binder change stops fully flattening the capture list.
+        /// </para>
+        /// </remarks>
+        protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
+        {
+            foreach (var captured in LambdaCaptureCollector.Collect(node))
+            {
+                Record(captured);
+            }
+
+            return node;
+        }
+
         private void Record(VariableSymbol variable)
         {
             if (variable is LocalVariableSymbol local && seen.Add(local))
             {
                 orderedLocals.Add(local);
             }
+        }
+    }
+
+    /// <summary>
+    /// Collects the set of outer-scope variables that a lambda literal — or
+    /// any lambda transitively nested inside its body — captures, using only
+    /// the binder-computed <see cref="BoundFunctionLiteralExpression.CapturedVariables"/>
+    /// metadata on each literal it visits (never a lambda's own local
+    /// declarations or parameter reads). Mirrors
+    /// <c>CaptureBoxingRewriter.CaptureWalker</c>'s defensive recursion (see
+    /// #567) for the same reason: the binder already flattens transitive
+    /// captures onto every enclosing literal (#503), so the recursion below
+    /// is normally a no-op, but keeps this collector correct if that
+    /// invariant ever changes.
+    /// </summary>
+    private sealed class LambdaCaptureCollector : BoundTreeRewriter
+    {
+        private readonly HashSet<VariableSymbol> sink = new HashSet<VariableSymbol>();
+
+        /// <summary>Collects the transitive capture set for <paramref name="root"/>.</summary>
+        /// <param name="root">The lambda literal to start from.</param>
+        /// <returns>Every outer-scope variable <paramref name="root"/> or any
+        /// lambda nested within it needs.</returns>
+        public static IReadOnlyCollection<VariableSymbol> Collect(BoundFunctionLiteralExpression root)
+        {
+            var collector = new LambdaCaptureCollector();
+            collector.VisitLiteral(root);
+            return collector.sink;
+        }
+
+        protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
+        {
+            VisitLiteral(node);
+            return node;
+        }
+
+        private void VisitLiteral(BoundFunctionLiteralExpression node)
+        {
+            foreach (var captured in node.CapturedVariables)
+            {
+                sink.Add(captured);
+            }
+
+            // Recurse purely to reach any further-nested BoundFunctionLiteralExpression
+            // node (via this class's own RewriteFunctionLiteralExpression override
+            // above). Unlike ReferenceCollector, this walker never overrides
+            // RewriteVariableDeclaration/RewriteVariableExpression/RewriteAssignmentExpression,
+            // so visiting the lambda's own statements cannot record its own
+            // locals or parameters as captures of the enclosing async method.
+            RewriteStatement(node.Body);
         }
     }
 }
