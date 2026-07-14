@@ -161,6 +161,7 @@ internal static class Program
         }
 
         (string corpus, List<string> appIds, PipelineOptions options, string baselinePath, bool baselineStrict) = parsed.Value;
+        options.SourceRoot = Path.GetFullPath(corpus);
 
         IReadOnlyList<CorpusApp> apps;
         if (appIds.Count > 0)
@@ -437,6 +438,9 @@ internal static class Program
                     case "--via-sdk":
                         options.CompileViaSdk = true;
                         break;
+                    case "--no-via-sdk":
+                        options.CompileViaSdk = false;
+                        break;
                     default:
                         Console.Error.WriteLine($"cs2gs: unknown option '{arg}'.");
                         PrintUsage();
@@ -589,8 +593,8 @@ internal static class Program
         Console.WriteLine("  --baseline <file> Gate on the gap ledger (tools/cs2gs/triage/gaps.json): fail only on");
         Console.WriteLine("                    NEW or REGRESSED fingerprints; known-open gaps are tolerated.");
         Console.WriteLine("  --baseline-strict Also fail on STALE ledger entries (nightly mode).");
-        Console.WriteLine("  --via-sdk         Build emitted G# via 'dotnet build' + Gsharp.NET.Sdk so source");
-        Console.WriteLine("                    generators run (issue #2261).");
+        Console.WriteLine("  --via-sdk         Build emitted G# via 'dotnet build' + Gsharp.NET.Sdk (default).");
+        Console.WriteLine("  --no-via-sdk      Use the legacy direct-gsc compile path.");
         Console.WriteLine();
         Console.WriteLine("report options:");
         Console.WriteLine("  --run <dir>       Existing run directory containing run.json (required).");

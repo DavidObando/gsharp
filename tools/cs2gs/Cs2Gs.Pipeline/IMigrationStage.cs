@@ -134,6 +134,12 @@ public sealed class StageExecutionContext
     /// </summary>
     public List<DeclaredPackageReference> BuildOnlyPackageReferences { get; } = new List<DeclaredPackageReference>();
 
+    /// <summary>Gets the source project's declared PackageReference items.</summary>
+    public List<DeclaredProjectItem> PackageReferences { get; } = new List<DeclaredProjectItem>();
+
+    /// <summary>Gets the source project's declared ProjectReference items.</summary>
+    public List<DeclaredProjectItem> ProjectReferences { get; } = new List<DeclaredProjectItem>();
+
     /// <summary>
     /// Gets or sets the absolute path of the assembly emitted by the Compile
     /// stage, published for the IL-verify stage to read (ADR-0115 §C). It is

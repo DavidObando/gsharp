@@ -12,7 +12,7 @@ using System.Text.RegularExpressions;
 namespace Cs2Gs.Pipeline;
 
 /// <summary>
-/// Opt-in stage-2 compile path (issue #2261): instead of invoking <c>gsc</c>
+/// Default stage-2 compile path (issue #2261): instead of invoking <c>gsc</c>
 /// directly, builds the emitted G# with <c>dotnet build</c> against the
 /// locally-built <c>Gsharp.NET.Sdk</c>. The SDK's gsgen MSBuild targets run the
 /// real Roslyn source generators (e.g. CommunityToolkit.Mvvm's
@@ -21,9 +21,8 @@ namespace Cs2Gs.Pipeline;
 /// original C# project would, which the direct-gsc path — a bare
 /// <c>MetadataLoadContext</c> over an explicit reference/analyzer list — does
 /// not reproduce. This is the dominant remaining Oahu-migration blocker.
-/// The gsc-direct path (<see cref="CompileStage"/> default) remains unchanged;
-/// this runner is only exercised when <see cref="PipelineOptions.CompileViaSdk"/>
-/// is set.
+/// The gsc-direct path remains available when
+/// <see cref="PipelineOptions.CompileViaSdk"/> is explicitly disabled.
 /// </summary>
 public sealed class SdkCompileRunner
 {
@@ -71,6 +70,9 @@ public sealed class SdkCompileRunner
     /// compile-time reference DLL for <see cref="PartitionReferences"/> to
     /// recover. May be <see langword="null"/> or empty.
     /// </param>
+    /// <param name="packageReferences">The source project's declared PackageReference items.</param>
+    /// <param name="projectReferences">The source project's declared ProjectReference items.</param>
+    /// <param name="generatedProjectPaths">The source-to-generated project mapping.</param>
     /// <returns>The compile result, or an unavailable result when no local SDK nupkg can be found.</returns>
     public SdkCompileResult Compile(
         string appRunDir,
@@ -82,7 +84,10 @@ public sealed class SdkCompileRunner
         IReadOnlyList<string> additionalFiles,
         string rootNamespace,
         string config,
-        IReadOnlyList<DeclaredPackageReference> declaredPackageReferences = null)
+        IReadOnlyList<DeclaredPackageReference> declaredPackageReferences = null,
+        IReadOnlyList<DeclaredProjectItem> packageReferences = null,
+        IReadOnlyList<DeclaredProjectItem> projectReferences = null,
+        IReadOnlyDictionary<string, string> generatedProjectPaths = null)
     {
         if (string.IsNullOrEmpty(appRunDir))
         {
@@ -116,6 +121,14 @@ public sealed class SdkCompileRunner
 
         (List<(string Id, string Version)> packages, List<string> references) =
             PartitionReferences(referencePaths ?? Array.Empty<string>(), nugetPackagesRoot, runtimeDir);
+        bool hasDeclaredDependencyItems = packageReferences is not null || projectReferences is not null;
+        if (hasDeclaredDependencyItems)
+        {
+            packages.Clear();
+            references = references
+                .Where(path => !IsRepresentedByProjectReference(path, projectReferences))
+                .ToList();
+        }
 
         var packageIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         for (int i = 0; i < packages.Count; i++)
@@ -136,7 +149,11 @@ public sealed class SdkCompileRunner
             {
                 // The PackageReference contributes its analyzer assets. Adding
                 // the same DLL explicitly would run generators twice.
-                AddOrUpgradePackage(packages, packageIndex, owningPackage.Value.Id, owningPackage.Value.Version);
+                if (!hasDeclaredDependencyItems)
+                {
+                    AddOrUpgradePackage(packages, packageIndex, owningPackage.Value.Id, owningPackage.Value.Version);
+                }
+
                 continue;
             }
 
@@ -149,9 +166,17 @@ public sealed class SdkCompileRunner
         // here, carrying the PrivateAssets/IncludeAssets metadata `packages`
         // has no room for.
         var declaredOnlyPackages = new List<DeclaredPackageReference>();
+        var declaredPackageIds = new HashSet<string>(
+            (packageReferences ?? Array.Empty<DeclaredProjectItem>())
+                .Select(item => item.Element.Attribute("Include")?.Value)
+                .Where(id => !string.IsNullOrEmpty(id)),
+            StringComparer.OrdinalIgnoreCase);
         foreach (DeclaredPackageReference declared in declaredPackageReferences ?? Array.Empty<DeclaredPackageReference>())
         {
-            if (declared is null || string.IsNullOrWhiteSpace(declared.Id) || packageIndex.ContainsKey(declared.Id))
+            if (declared is null ||
+                string.IsNullOrWhiteSpace(declared.Id) ||
+                packageIndex.ContainsKey(declared.Id) ||
+                declaredPackageIds.Contains(declared.Id))
             {
                 continue;
             }
@@ -166,6 +191,11 @@ public sealed class SdkCompileRunner
         IReadOnlyList<string> explicitAdditionalFiles = (additionalFiles ?? Array.Empty<string>())
             .Where(spec => RequiresExplicitProjectItem(appRunDir, spec))
             .ToList();
+        IReadOnlyList<DeclaredProjectItem> rewrittenProjectReferences =
+            DeclaredProjectItems.RewriteProjectReferences(
+                projectReferences,
+                appRunDir,
+                generatedProjectPaths);
         string projectXml = BuildProjectXml(
             sdk.Value.Version,
             target,
@@ -175,7 +205,9 @@ public sealed class SdkCompileRunner
             references,
             analyzerReferences,
             declaredOnlyPackages,
-            explicitAdditionalFiles);
+            explicitAdditionalFiles,
+            packageReferences,
+            rewrittenProjectReferences);
         File.WriteAllText(projectPath, projectXml);
 
         var args = new List<string> { "build", projectPath, "-c", config ?? "Release" };
@@ -335,6 +367,8 @@ public sealed class SdkCompileRunner
     /// DLL to <paramref name="packages"/>.
     /// </param>
     /// <param name="additionalFiles">The source generator inputs to emit as project items.</param>
+    /// <param name="packageReferences">The declared PackageReference items to preserve.</param>
+    /// <param name="projectReferences">The declared ProjectReference items to preserve.</param>
     /// <returns>The full <c>.gsproj</c> XML text.</returns>
     internal static string BuildProjectXml(
         string sdkVersion,
@@ -345,7 +379,9 @@ public sealed class SdkCompileRunner
         IReadOnlyList<string> references,
         IReadOnlyList<string> analyzerReferences,
         IReadOnlyList<DeclaredPackageReference> declaredPackageReferences = null,
-        IReadOnlyList<string> additionalFiles = null)
+        IReadOnlyList<string> additionalFiles = null,
+        IReadOnlyList<DeclaredProjectItem> packageReferences = null,
+        IReadOnlyList<DeclaredProjectItem> projectReferences = null)
     {
         declaredPackageReferences ??= Array.Empty<DeclaredPackageReference>();
         additionalFiles ??= Array.Empty<string>();
@@ -408,6 +444,9 @@ public sealed class SdkCompileRunner
 
             sb.Append("  </ItemGroup>\n");
         }
+
+        AppendDeclaredItems(sb, packageReferences);
+        AppendDeclaredItems(sb, projectReferences);
 
         if (references.Count > 0)
         {
@@ -475,6 +514,60 @@ public sealed class SdkCompileRunner
             relativePath.Equals("..", StringComparison.Ordinal) ||
             relativePath.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
             relativePath.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal);
+    }
+
+    private static void AppendDeclaredItems(StringBuilder sb, IReadOnlyList<DeclaredProjectItem> items)
+    {
+        foreach (IGrouping<string, DeclaredProjectItem> group in
+            (items ?? Array.Empty<DeclaredProjectItem>()).GroupBy(item => item.ItemGroupCondition))
+        {
+            sb.Append('\n');
+            sb.Append("  <ItemGroup");
+            if (!string.IsNullOrEmpty(group.Key))
+            {
+                sb.Append(' ').Append(new System.Xml.Linq.XAttribute("Condition", group.Key));
+            }
+
+            sb.Append(">\n");
+            foreach (DeclaredProjectItem item in group)
+            {
+                string xml = item.Element.ToString(System.Xml.Linq.SaveOptions.DisableFormatting);
+                sb.Append("    ").Append(xml).Append('\n');
+            }
+
+            sb.Append("  </ItemGroup>\n");
+        }
+    }
+
+    private static bool IsRepresentedByProjectReference(
+        string referencePath,
+        IReadOnlyList<DeclaredProjectItem> projectReferences)
+    {
+        if (TryParsePackageFromPath(referencePath, ResolveNugetPackagesRoot()) is not null)
+        {
+            return true;
+        }
+
+        string fullReferencePath = Path.GetFullPath(referencePath);
+        foreach (DeclaredProjectItem projectReference in projectReferences ?? Array.Empty<DeclaredProjectItem>())
+        {
+            if (string.IsNullOrEmpty(projectReference.SourceInclude))
+            {
+                continue;
+            }
+
+            string projectDirectory = Path.GetDirectoryName(projectReference.SourceInclude);
+            string relative = Path.GetRelativePath(projectDirectory, fullReferencePath);
+            if (!Path.IsPathRooted(relative) &&
+                !relative.Equals("..", StringComparison.Ordinal) &&
+                !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) &&
+                !relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

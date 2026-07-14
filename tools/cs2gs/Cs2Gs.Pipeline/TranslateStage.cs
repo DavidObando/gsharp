@@ -39,9 +39,15 @@ public sealed class TranslateStage : IMigrationStage
             throw new ArgumentNullException(nameof(context));
         }
 
-        IReadOnlyList<LoadedCSharpProject> projects = await CSharpProjectLoader
-            .LoadProjectWithReferencesAsync(context.App.ProjectPath, cancellationToken)
-            .ConfigureAwait(false);
+        IReadOnlyList<LoadedCSharpProject> projects = context.Options.CompileViaSdk
+            ? new[]
+            {
+                await CSharpProjectLoader.LoadProjectAsync(context.App.ProjectPath, cancellationToken)
+                    .ConfigureAwait(false),
+            }
+            : await CSharpProjectLoader
+                .LoadProjectWithReferencesAsync(context.App.ProjectPath, cancellationToken)
+                .ConfigureAwait(false);
         LoadedCSharpProject project = projects[0];
 
         var artifacts = new List<TriageArtifact>();
@@ -65,6 +71,11 @@ public sealed class TranslateStage : IMigrationStage
 
         var usedOutputPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         CopyProjectFiles(project.ProjectDirectory, context.AppRunDir, usedOutputPaths);
+        CopyCentralPackageManagementFile(project.ProjectDirectory, context.AppRunDir);
+        context.PackageReferences.AddRange(
+            DeclaredProjectItems.Read(context.App.ProjectPath, "PackageReference"));
+        context.ProjectReferences.AddRange(
+            DeclaredProjectItems.Read(context.App.ProjectPath, "ProjectReference"));
 
         // Translate the app itself (index 0) plus its transitively referenced
         // sibling projects (Refs #914). Sibling G# is emitted so the app's uses
@@ -329,6 +340,25 @@ public sealed class TranslateStage : IMigrationStage
             Directory.CreateDirectory(Path.GetDirectoryName(destinationPath));
             File.Copy(sourcePath, destinationPath, overwrite: true);
             usedOutputPaths.Add(relativePath);
+        }
+    }
+
+    private static void CopyCentralPackageManagementFile(string projectDirectory, string outputDirectory)
+    {
+        string directory = projectDirectory;
+        while (!string.IsNullOrEmpty(directory))
+        {
+            string sourcePath = Path.Combine(directory, "Directory.Packages.props");
+            if (File.Exists(sourcePath))
+            {
+                File.Copy(
+                    sourcePath,
+                    Path.Combine(outputDirectory, "Directory.Packages.props"),
+                    overwrite: true);
+                return;
+            }
+
+            directory = Directory.GetParent(directory)?.FullName;
         }
     }
 

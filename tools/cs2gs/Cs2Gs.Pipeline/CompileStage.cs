@@ -58,7 +58,10 @@ public sealed class CompileStage : IMigrationStage
                 context.AdditionalGeneratorFiles,
                 context.RootNamespace,
                 context.Options.Config,
-                context.BuildOnlyPackageReferences);
+                context.BuildOnlyPackageReferences,
+                context.PackageReferences,
+                context.ProjectReferences,
+                context.Options.GeneratedProjectPaths);
 
             if (sdkResult.IsAvailable)
             {
@@ -73,8 +76,13 @@ public sealed class CompileStage : IMigrationStage
                 return Task.FromResult(BuildFailureOutcome(context, sdkResult.Errors, sdkSyntheticMessage));
             }
 
-            // Issue #2261: no locally-built Gsharp.NET.Sdk nupkg is available.
-            // Fall back to the gsc-direct path rather than failing the app.
+            string unavailableMessage = "dotnet build (--via-sdk) is unavailable: " +
+                sdkResult.UnavailableReason +
+                " Pass --no-via-sdk to explicitly use the legacy direct-gsc path.";
+            return Task.FromResult(BuildFailureOutcome(
+                context,
+                Array.Empty<GscDiagnostic>(),
+                unavailableMessage));
         }
 
         GscResult result = context.Gsc.Compile(

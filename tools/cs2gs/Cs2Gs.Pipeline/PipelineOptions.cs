@@ -4,6 +4,8 @@
 
 namespace Cs2Gs.Pipeline;
 
+using System.Collections.Generic;
+
 /// <summary>
 /// Whole-run options for a <see cref="MigrationPipeline"/> execution: the
 /// optional <c>gsc</c> override, the runs-root output directory, and the build
@@ -34,6 +36,9 @@ public sealed class PipelineOptions
     /// </summary>
     public string OutputRoot { get; set; }
 
+    /// <summary>Gets or sets the source directory being migrated.</summary>
+    public string SourceRoot { get; set; }
+
     /// <summary>
     /// Gets or sets the build configuration used to locate the default compiler
     /// (<c>Release</c> by default).
@@ -47,10 +52,14 @@ public sealed class PipelineOptions
     /// runs Roslyn source generators (e.g. CommunityToolkit.Mvvm's
     /// <c>[ObservableProperty]</c>/<c>[RelayCommand]</c>) through its gsgen
     /// MSBuild targets, which the direct-gsc path does not — the dominant
-    /// remaining Oahu-migration blocker. Defaults to
-    /// <see langword="false"/> so a plain migrate run is unchanged; when the
-    /// SDK build is unavailable (no locally-built nupkg), the stage falls back
-    /// to the gsc-direct path rather than failing.
+    /// remaining Oahu-migration blocker. Defaults to <see langword="true"/>;
+    /// callers can explicitly disable it to use the legacy gsc-direct path.
     /// </summary>
-    public bool CompileViaSdk { get; set; }
+    public bool CompileViaSdk { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets the canonical source-project to generated-project mapping
+    /// established before migration starts.
+    /// </summary>
+    internal IReadOnlyDictionary<string, string> GeneratedProjectPaths { get; set; }
 }

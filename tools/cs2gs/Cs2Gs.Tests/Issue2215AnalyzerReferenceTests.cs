@@ -68,7 +68,13 @@ public class Issue2215AnalyzerReferenceTests
             p => string.Equals(Path.GetFileName(p), Path.GetFileName(generatorDll), StringComparison.OrdinalIgnoreCase));
 
         string outRoot = NewOutputRoot("analyzer-ref");
-        var options = new PipelineOptions { GscPath = compiler, GsgenPath = gsgen, OutputRoot = outRoot };
+        var options = new PipelineOptions
+        {
+            GscPath = compiler,
+            GsgenPath = gsgen,
+            OutputRoot = outRoot,
+            CompileViaSdk = false,
+        };
         var pipeline = new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage(), new CompileStage() });
 
         var app = new CorpusApp("test/AnalyzerRefApp", projectPath, TargetKind.Library);
