@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Xml.Linq;
+using Cs2Gs.Translator.Loading;
 
 namespace Cs2Gs.Pipeline;
 
@@ -82,6 +83,64 @@ internal static class DeclaredProjectItems
             .Select(item => item.SourceInclude)
             .Where(path => !string.IsNullOrEmpty(path))
             .ToList();
+
+    /// <summary>
+    /// Bumps a below-floor literal <c>Version</c> attribute on a declared
+    /// <c>Nerdbank.GitVersioning</c> <c>PackageReference</c> item (issue #2319,
+    /// following #2225/#2267). When the source project's own <c>.csproj</c>
+    /// declares nbgv directly — rather than via an ancestor
+    /// <c>Directory.Build.props</c>/<c>Directory.Packages.props</c> split, the
+    /// shape <see cref="TranslateStage.EmitNerdbankGitVersioningBumps"/>'s
+    /// <see cref="StageExecutionContext.BuildOnlyPackageReferences"/> path
+    /// exists to recover — this same declared item is what
+    /// <c>SdkCompileRunner.BuildProjectXml</c>'s declared-item passthrough
+    /// re-emits <b>verbatim</b> into the generated <c>.gsproj</c>. Without this
+    /// rewrite the below-floor version silently survives into the isolated
+    /// build and nbgv never emits the G# <c>ThisAssembly</c> source. Every
+    /// other declared <c>PackageReference</c> item (including nbgv items that
+    /// are already at or above the floor, or carry a non-literal version this
+    /// policy cannot safely reason about) is returned unchanged — this never
+    /// touches ordinary package references, and a CPM project's own
+    /// versionless nbgv <c>PackageReference</c> has no <c>Version</c> attribute
+    /// to bump in the first place, so CPM behavior is unaffected.
+    /// </summary>
+    /// <param name="items">The declared <c>PackageReference</c> items read from the source project.</param>
+    /// <returns>
+    /// <paramref name="items"/> unchanged when no item needs bumping, otherwise
+    /// an equivalent list with the nbgv item's <c>Version</c> attribute bumped.
+    /// </returns>
+    internal static IReadOnlyList<DeclaredProjectItem> BumpNerdbankGitVersioningVersion(
+        IReadOnlyList<DeclaredProjectItem> items)
+    {
+        if (items is null || items.Count == 0)
+        {
+            return items ?? Array.Empty<DeclaredProjectItem>();
+        }
+
+        List<DeclaredProjectItem> rewritten = null;
+        for (int i = 0; i < items.Count; i++)
+        {
+            DeclaredProjectItem item = items[i];
+            string include = item.Element.Attribute("Include")?.Value;
+            string version = item.Element.Attribute("Version")?.Value;
+            bool isNbgv = string.Equals(
+                include, NerdbankGitVersioningPolicy.PackageId, StringComparison.OrdinalIgnoreCase);
+            if (!isNbgv || !NerdbankGitVersioningPolicy.TryGetRequiredBump(version, out string bumped))
+            {
+                rewritten?.Add(item);
+                continue;
+            }
+
+            // First bump found: materialize the prefix of untouched items so
+            // the returned list mirrors the input verbatim up to this point.
+            rewritten ??= new List<DeclaredProjectItem>(items.Take(i));
+            var element = new XElement(item.Element);
+            element.SetAttributeValue("Version", bumped);
+            rewritten.Add(new DeclaredProjectItem(item.ItemGroupCondition, element, item.SourceInclude));
+        }
+
+        return rewritten ?? items;
+    }
 
     internal static IReadOnlyList<DeclaredProjectItem> RewriteProjectReferences(
         IReadOnlyList<DeclaredProjectItem> items,

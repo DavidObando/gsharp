@@ -71,9 +71,10 @@ public sealed class TranslateStage : IMigrationStage
 
         var usedOutputPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         CopyProjectFiles(project.ProjectDirectory, context.AppRunDir, usedOutputPaths);
-        CopyCentralPackageManagementFile(project.ProjectDirectory, context.AppRunDir);
+        CopyCentralPackageManagementFile(project.ProjectDirectory, context.AppRunDir, context);
         context.PackageReferences.AddRange(
-            DeclaredProjectItems.Read(context.App.ProjectPath, "PackageReference"));
+            DeclaredProjectItems.BumpNerdbankGitVersioningVersion(
+                DeclaredProjectItems.Read(context.App.ProjectPath, "PackageReference")));
         context.ProjectReferences.AddRange(
             DeclaredProjectItems.Read(context.App.ProjectPath, "ProjectReference"));
 
@@ -343,7 +344,30 @@ public sealed class TranslateStage : IMigrationStage
         }
     }
 
-    private static void CopyCentralPackageManagementFile(string projectDirectory, string outputDirectory)
+    /// <summary>
+    /// Locates the ancestor <c>Directory.Packages.props</c> that governs the
+    /// source project (Central Package Management) and writes it into the
+    /// generated app root — the file NuGet actually restores the generated
+    /// <c>.gsproj</c> against. Issue #2319: a below-floor literal nbgv
+    /// <c>PackageVersion</c> is bumped here, in this copy, using the same
+    /// <see cref="NerdbankGitVersioningPolicy.TryBumpProjectXml"/> the
+    /// project-file bump path already uses — the previous behavior copied the
+    /// file verbatim and wrote the bumped text to an inert
+    /// <c>nbgv-bump/Directory.Packages.props</c> that nothing ever restored
+    /// against, so NuGet still saw the below-floor version while
+    /// <see cref="SdkCompileRunner"/> independently emitted a bumped
+    /// <c>Version=</c> attribute on the generated NBGV <c>PackageReference</c> —
+    /// a combination Central Package Management rejects outright (NU1008).
+    /// Also records on <paramref name="context"/> whether the copied file
+    /// actually enables CPM (<c>ManagePackageVersionsCentrally</c>), so the
+    /// <c>--via-sdk</c> compile path knows to omit <c>Version=</c> from any
+    /// <c>PackageReference</c> it synthesizes rather than reconstructs
+    /// verbatim from the source project.
+    /// </summary>
+    private static void CopyCentralPackageManagementFile(
+        string projectDirectory,
+        string outputDirectory,
+        StageExecutionContext context)
     {
         string directory = projectDirectory;
         while (!string.IsNullOrEmpty(directory))
@@ -351,10 +375,22 @@ public sealed class TranslateStage : IMigrationStage
             string sourcePath = Path.Combine(directory, "Directory.Packages.props");
             if (File.Exists(sourcePath))
             {
-                File.Copy(
-                    sourcePath,
-                    Path.Combine(outputDirectory, "Directory.Packages.props"),
-                    overwrite: true);
+                string original;
+                try
+                {
+                    original = File.ReadAllText(sourcePath);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    return;
+                }
+
+                string content = NerdbankGitVersioningPolicy.TryBumpProjectXml(original, out string bumped)
+                    ? bumped
+                    : original;
+                File.WriteAllText(Path.Combine(outputDirectory, "Directory.Packages.props"), content);
+                context.UsesCentralPackageManagement =
+                    CentralPackageManagementPolicy.IsEnabled(projectDirectory, directory, content);
                 return;
             }
 

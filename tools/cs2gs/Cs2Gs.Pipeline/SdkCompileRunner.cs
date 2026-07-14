@@ -73,6 +73,14 @@ public sealed class SdkCompileRunner
     /// <param name="packageReferences">The source project's declared PackageReference items.</param>
     /// <param name="projectReferences">The source project's declared ProjectReference items.</param>
     /// <param name="generatedProjectPaths">The source-to-generated project mapping.</param>
+    /// <param name="usesCentralPackageManagement">
+    /// Whether the generated app's copied <c>Directory.Packages.props</c>
+    /// actually enables NuGet Central Package Management (issue #2319). When
+    /// <see langword="true"/>, any <c>PackageReference</c> this method
+    /// synthesizes (e.g. <paramref name="declaredPackageReferences"/>) omits
+    /// <c>Version=</c> — CPM's own <c>PackageVersion</c> items supply it, and
+    /// NuGet's restore fails (NU1008) if both are present.
+    /// </param>
     /// <returns>The compile result, or an unavailable result when no local SDK nupkg can be found.</returns>
     public SdkCompileResult Compile(
         string appRunDir,
@@ -87,7 +95,8 @@ public sealed class SdkCompileRunner
         IReadOnlyList<DeclaredPackageReference> declaredPackageReferences = null,
         IReadOnlyList<DeclaredProjectItem> packageReferences = null,
         IReadOnlyList<DeclaredProjectItem> projectReferences = null,
-        IReadOnlyDictionary<string, string> generatedProjectPaths = null)
+        IReadOnlyDictionary<string, string> generatedProjectPaths = null,
+        bool usesCentralPackageManagement = false)
     {
         if (string.IsNullOrEmpty(appRunDir))
         {
@@ -207,7 +216,8 @@ public sealed class SdkCompileRunner
             declaredOnlyPackages,
             explicitAdditionalFiles,
             packageReferences,
-            rewrittenProjectReferences);
+            rewrittenProjectReferences,
+            usesCentralPackageManagement);
         File.WriteAllText(projectPath, projectXml);
 
         var args = new List<string> { "build", projectPath, "-c", config ?? "Release" };
@@ -369,6 +379,15 @@ public sealed class SdkCompileRunner
     /// <param name="additionalFiles">The source generator inputs to emit as project items.</param>
     /// <param name="packageReferences">The declared PackageReference items to preserve.</param>
     /// <param name="projectReferences">The declared ProjectReference items to preserve.</param>
+    /// <param name="usesCentralPackageManagement">
+    /// Whether the generated app's copied <c>Directory.Packages.props</c>
+    /// actually enables NuGet Central Package Management (issue #2319). When
+    /// <see langword="true"/>, every synthesized <c>PackageReference</c> below
+    /// (both <paramref name="packages"/> and <paramref name="declaredPackageReferences"/>)
+    /// omits <c>Version=</c>, since CPM requires the version to come exclusively
+    /// from a <c>PackageVersion</c> item and rejects a project-level
+    /// <c>Version=</c> attribute outright (NU1008).
+    /// </param>
     /// <returns>The full <c>.gsproj</c> XML text.</returns>
     internal static string BuildProjectXml(
         string sdkVersion,
@@ -381,7 +400,8 @@ public sealed class SdkCompileRunner
         IReadOnlyList<DeclaredPackageReference> declaredPackageReferences = null,
         IReadOnlyList<string> additionalFiles = null,
         IReadOnlyList<DeclaredProjectItem> packageReferences = null,
-        IReadOnlyList<DeclaredProjectItem> projectReferences = null)
+        IReadOnlyList<DeclaredProjectItem> projectReferences = null,
+        bool usesCentralPackageManagement = false)
     {
         declaredPackageReferences ??= Array.Empty<DeclaredPackageReference>();
         additionalFiles ??= Array.Empty<string>();
@@ -417,18 +437,30 @@ public sealed class SdkCompileRunner
             sb.Append("  <ItemGroup>\n");
             foreach ((string id, string version) in packages)
             {
-                sb.Append("    <PackageReference Include=\"").Append(id)
-                    .Append("\" Version=\"").Append(version).Append("\" />\n");
+                sb.Append("    <PackageReference Include=\"").Append(id).Append('"');
+                if (!usesCentralPackageManagement)
+                {
+                    sb.Append(" Version=\"").Append(version).Append('"');
+                }
+
+                sb.Append(" />\n");
             }
 
             // Issue #2267: build/dev-only packages (e.g. Nerdbank.GitVersioning)
             // that contributed no compile-time DLL and so are absent from
             // `packages` above, re-declared here so their MSBuild source
-            // generators still run under `dotnet build`.
+            // generators still run under `dotnet build`. Issue #2319: under
+            // Central Package Management the version comes exclusively from
+            // the copied Directory.Packages.props's PackageVersion item — a
+            // Version= attribute here as well is rejected by NuGet (NU1008).
             foreach (DeclaredPackageReference declared in declaredPackageReferences)
             {
-                sb.Append("    <PackageReference Include=\"").Append(declared.Id)
-                    .Append("\" Version=\"").Append(declared.Version).Append('"');
+                sb.Append("    <PackageReference Include=\"").Append(declared.Id).Append('"');
+                if (!usesCentralPackageManagement)
+                {
+                    sb.Append(" Version=\"").Append(declared.Version).Append('"');
+                }
+
                 if (!string.IsNullOrEmpty(declared.PrivateAssets))
                 {
                     sb.Append(" PrivateAssets=\"").Append(declared.PrivateAssets).Append('"');
