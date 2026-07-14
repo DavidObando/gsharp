@@ -465,22 +465,31 @@ internal sealed partial class MethodBodyEmitter
                 return;
             }
 
-            // Issue #1578: NullCoalesce over a user value-type nullable LHS —
-            // `Nullable<UserT>` where UserT is a user-declared value-kind
-            // struct or enum emitted in this compilation (#1572). The
-            // underlying has no runtime CLR type, so neither the primitive
-            // `Nullable<T>` spill arm at the top (which probes via the
-            // BCL-backed `get_HasValue`) nor the bottom `dup; brtrue` shape is
-            // usable. Mirror the sibling value-type spill (#831 / #1516) with a
-            // box-probe over the emitted `Nullable<UserT>` TypeSpec: spill the
-            // LHS to the pre-allocated `Nullable<UserT>` slot, box it (boxing a
-            // `Nullable<T>` yields `null` when `!HasValue`, else a boxed `T` —
-            // ECMA-335), and `brfalse` to the fallback on the empty case. On
-            // the non-null branch, reproduce the operator's result type: reload
-            // the wrapper when the result is itself `Nullable<UserT>`, else
-            // unwrap to `UserT` via the TypeSpec `get_Value` MemberRef (#1572).
+            // Issue #1578 / #2333: NullCoalesce over a "symbolic" value-type
+            // nullable LHS — `Nullable<UserT>` where UserT is a user-declared
+            // value-kind struct or enum emitted in this compilation (#1572),
+            // OR `Nullable<T>` where T is an open type parameter constrained
+            // to `struct` (its instantiation closes over a generic-parameter
+            // signature slot, not a resolvable host `Type` — issue #2333's
+            // audit of this sibling path). Both underlyings have no runtime
+            // CLR type, so neither the primitive `Nullable<T>` spill arm at
+            // the top (which probes via the BCL-backed `get_HasValue`) nor
+            // the bottom `dup; brtrue` shape is usable. Mirror the sibling
+            // value-type spill (#831 / #1516) with a box-probe over the
+            // emitted/encoded `Nullable<T>` TypeSpec: spill the LHS to the
+            // pre-allocated `Nullable<T>` slot, box it (boxing a
+            // `Nullable<T>` yields `null` when `!HasValue`, else a boxed `T`
+            // — ECMA-335 III.4.1), and `brfalse` to the fallback on the empty
+            // case. On the non-null branch, reproduce the operator's result
+            // type: reload the wrapper when the result is itself
+            // `Nullable<T>`, else unwrap to `T` via the symbolic `get_Value`
+            // MemberRef (#1572 / #2333), reusing the same
+            // `RequiresSymbolicNullableGetValue` predicate and
+            // `GetNullableGetValueMemberRefForUserValueType` helper that the
+            // `!!` and `?.` emit paths use, rather than a separate special
+            // case for the type-parameter shape.
             if (b.Left.Type is NullableTypeSymbol userVtNullable
-                && NullableLifting.IsUserValueTypeNullable(userVtNullable))
+                && NullableLifting.RequiresSymbolicNullableGetValue(userVtNullable))
             {
                 if (!this.nullableCoalesceSpillSlots.TryGetValue(b, out var userVtSlot))
                 {
@@ -523,10 +532,12 @@ internal sealed partial class MethodBodyEmitter
 
             // Defensive: any other value-typed LHS remains unsupported by
             // `??`. All known value-type shapes are handled above (primitive
-            // `Nullable<T>` #519, open struct-constrained `T?` #831, bare
-            // reference type-parameter #1516, user value-type nullable #1578);
-            // fail loudly rather than silently producing PEVerify-rejected IL
-            // for any unanticipated value-type stack shape.
+            // `Nullable<T>` #519, open class/unconstrained-type-parameter
+            // `T?` #831, bare reference type-parameter #1516, symbolic
+            // user-value-type / struct-constrained-generic-type-parameter
+            // nullable #1578 / #2333); fail loudly rather than silently
+            // producing PEVerify-rejected IL for any unanticipated
+            // value-type stack shape.
             var leftType = b.Left.Type;
             if (ReflectionMetadataEmitter.IsValueTypeSymbol(leftType))
             {
