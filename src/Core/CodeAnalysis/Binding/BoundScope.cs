@@ -34,6 +34,11 @@ public sealed class BoundScope
     // per-compilation anonymous-type cache.
     private AnonymousTypeCache anonymousTypeCache;
 
+    // Issue #2342: the ambient "current declaring package" (see
+    // SetCurrentDeclaringPackage), lazily set/cleared only on the root scope
+    // of the chain, exactly like anonymousTypeCache above.
+    private string currentDeclaringPackageName;
+
     private Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol> richAnonymousClassMap;
 
     // Issue #1680: name-keyed index over extensionFunctions. Extension lookup is a
@@ -749,22 +754,50 @@ public sealed class BoundScope
             return true;
         }
 
-        // Issue #1080: a name clash on the simple (arity-bearing) key is only a
-        // genuine duplicate — GS0102 — when both types live in the SAME
-        // declaration scope (both top-level, or both nested in the SAME
-        // enclosing type). A nested type must NOT collide with a package-level
-        // type of the same simple name, nor with a nested type of a DIFFERENT
-        // enclosing type. Such non-conflicting types coexist: the package-level
-        // (top-level) type keeps the simple key so it stays resolvable by simple
-        // name, while the nested "loser" is retained under its containing-type-
-        // qualified key (so emit — which enumerates the stored values — still
-        // produces its TypeDef).
+        // Issue #1080 / #2342: a name clash on the simple (arity-bearing) key is
+        // only a genuine duplicate — GS0102 — when both types live in the SAME
+        // declaration scope: both nested in the SAME enclosing type, or both
+        // top-level AND in the SAME package. A nested type must NOT collide with
+        // a top-level type of the same simple name, nor with a nested type of a
+        // DIFFERENT enclosing type (#1080); and two top-level types of the same
+        // simple name in DIFFERENT packages/namespaces are not duplicates either
+        // (#2342) — a single compilation-wide flat scope must not defeat package
+        // isolation. Such non-conflicting types coexist: whichever type already
+        // owns the simple key keeps it so it stays resolvable by simple name,
+        // while the "loser" is retained under a distinct fallback key (the
+        // containing-type-qualified key for a nested-vs-top-level clash, or a
+        // package-qualified key for a top-level-vs-top-level clash across
+        // packages) — emit, which enumerates all stored values regardless of
+        // key, still produces its TypeDef.
         var existing = TryGetTypeAliasInChain(key, out var existingValue) ? existingValue : null;
         var targetEnclosing = TypeContainingType(target);
         var existingEnclosing = TypeContainingType(existing);
-        if (IsSameDeclarationScope(existingEnclosing, targetEnclosing))
+        if (IsSameDeclarationScope(existing, target))
         {
             return false;
+        }
+
+        // Issue #2342: both declarations reach here as TOP-LEVEL (no enclosing
+        // type) — a same-package top-level clash was already rejected above by
+        // IsSameDeclarationScope — so they belong to DIFFERENT packages. Neither
+        // is more "top-level" than the other, so (unlike the nested-vs-top-level
+        // case below) the already-declared type keeps the simple key undisturbed
+        // and the incoming type is retained under a package-qualified key. Both
+        // stay resolvable (the qualified key is still enumerated at emit time)
+        // without moving state the first declaration may already be referenced
+        // by.
+        if (targetEnclosing == null && existingEnclosing == null)
+        {
+            var packageQualifiedKey = MangleArity(PackageQualifiedName(TypePackageName(target), name), arity);
+            if (TypeAliasVisible(packageQualifiedKey))
+            {
+                // Same simple name AND same package-qualified key: a genuine
+                // duplicate (e.g. three-plus same-named packages colliding).
+                return false;
+            }
+
+            AddTypeAlias(packageQualifiedKey, target);
+            return true;
         }
 
         // Prefer the top-level type as the owner of the simple key. If a nested
@@ -851,6 +884,35 @@ public sealed class BoundScope
         if (name == null)
         {
             return false;
+        }
+
+        // Issue #2342: when a "current declaring package" is set (the body of a
+        // top-level declaration belonging to that package is being bound — see
+        // <see cref="SetCurrentDeclaringPackage"/>), prefer that package's OWN
+        // type over an unrelated package's same-named homonym occupying the
+        // plain simple key. Without this, a package whose top-level type LOST
+        // the plain-simple-key "race" against another package's same-named
+        // type (see <see cref="TryDeclareTypeAlias"/>) could never resolve ITS
+        // OWN type by simple name from within its own code — the exact
+        // "AnonymousType0 declared independently in two packages" shape from
+        // the real Oahu.Data migration corpus.
+        var currentPackage = GetCurrentDeclaringPackage();
+        if (currentPackage != null)
+        {
+            if (preferredArity > 0)
+            {
+                var ownArityKey = MangleArity(PackageQualifiedName(currentPackage, name), preferredArity);
+                if (TryGetTypeAliasInChain(ownArityKey, out type))
+                {
+                    return true;
+                }
+            }
+
+            var ownKey = PackageQualifiedName(currentPackage, name);
+            if (TryGetTypeAliasInChain(ownKey, out type))
+            {
+                return true;
+            }
         }
 
         if (preferredArity > 0)
@@ -1053,6 +1115,34 @@ public sealed class BoundScope
         => Parent != null ? Parent.GetAnonymousTypeCache() : anonymousTypeCache ??= new AnonymousTypeCache();
 
     /// <summary>
+    /// Issue #2342: sets the package name of the top-level (or nested) type or
+    /// function declaration whose body/initializers are CURRENTLY being bound,
+    /// so <see cref="TryLookupTypeAlias(string, int, out TypeSymbol)"/> can
+    /// prefer that package's own type over a same-simple-name homonym declared
+    /// in a different package. Stored at the root of this scope's chain
+    /// (mirroring <see cref="GetAnonymousTypeCache"/>) since one shared
+    /// <see cref="BoundScope"/> instance is used for the whole compilation.
+    /// Pass <see langword="null"/> to clear (no ambient package preference —
+    /// the pre-#2342 behavior). Returns the PREVIOUS value so a caller can
+    /// restore it once the body finishes binding (nesting-safe: a top-level
+    /// declaration's nested types/functions always share its own package, so
+    /// they never need their own inner set/restore).
+    /// </summary>
+    /// <param name="packageName">The package name to make ambient for lookup, or <see langword="null"/> to clear it.</param>
+    /// <returns>The previous ambient package name.</returns>
+    internal string SetCurrentDeclaringPackage(string packageName)
+    {
+        if (Parent != null)
+        {
+            return Parent.SetCurrentDeclaringPackage(packageName);
+        }
+
+        var previous = currentDeclaringPackageName;
+        currentDeclaringPackageName = packageName;
+        return previous;
+    }
+
+    /// <summary>
     /// Gets the per-compile-pass map from a "rich" anonymous-object literal
     /// (one carrying a base/interface clause, methods, or events — ADR-0146 /
     /// issue #2243) to its desugared, compiler-synthesized backing
@@ -1063,6 +1153,14 @@ public sealed class BoundScope
     /// <returns>The shared rich-anonymous-object map for this scope's chain.</returns>
     internal Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol> GetRichAnonymousClassMap()
         => Parent != null ? Parent.GetRichAnonymousClassMap() : richAnonymousClassMap ??= new Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol>();
+
+    /// <summary>
+    /// Issue #2342: gets the ambient "current declaring package" set by
+    /// <see cref="SetCurrentDeclaringPackage"/>, or <see langword="null"/> when
+    /// none is set.
+    /// </summary>
+    private string GetCurrentDeclaringPackage()
+        => Parent != null ? Parent.GetCurrentDeclaringPackage() : currentDeclaringPackageName;
 
     /// <summary>
     /// Adds a brand-new type-alias key, not previously visible anywhere in the
@@ -1383,12 +1481,47 @@ public sealed class BoundScope
         => ReferenceEquals(TypeContainingType(type), container);
 
     /// <summary>
-    /// Issue #1080: two type declarations share a declaration scope when both
-    /// are top-level (no enclosing type) or both are nested directly in the
-    /// SAME enclosing type. Only same-scope same-name types are duplicates.
+    /// Issue #2342: returns the declaring package name of a top-level user type
+    /// symbol, generalized across every symbol kind that shares the top-level
+    /// type/alias tables (classes/data classes and structs via
+    /// <see cref="StructSymbol"/>, enums, interfaces, and named delegates), or
+    /// <c>null</c> when the symbol carries no package identity. A plain
+    /// <c>type Name = ...</c> alias (<see cref="DeclarationBinder.BindTypeAliasDeclaration"/>)
+    /// has no dedicated symbol of its own — <c>target</c> IS the aliased type —
+    /// so its "package" for duplicate-detection purposes is, as a best effort,
+    /// whatever package the aliased type itself belongs to (or <c>null</c> for
+    /// an imported/BCL/primitive alias target, preserving prior same-scope
+    /// behavior for those).
     /// </summary>
-    private static bool IsSameDeclarationScope(TypeSymbol a, TypeSymbol b)
-        => a == null ? b == null : ReferenceEquals(a, b);
+    private static string TypePackageName(TypeSymbol type) => type switch
+    {
+        StructSymbol s => s.PackageName,
+        EnumSymbol e => e.PackageName,
+        InterfaceSymbol i => i.PackageName,
+        DelegateTypeSymbol d => d.PackageName,
+        _ => null,
+    };
+
+    /// <summary>
+    /// Issue #1080 / #2342: two type declarations share a declaration scope —
+    /// and are therefore a genuine GS0102 duplicate on a simple-name clash —
+    /// when both are nested directly in the SAME enclosing type, or both are
+    /// top-level (no enclosing type) AND declared in the SAME package. Two
+    /// top-level declarations of the same simple name in DIFFERENT packages no
+    /// longer share a scope: package identity, not one flat compilation-wide
+    /// table, decides top-level uniqueness.
+    /// </summary>
+    private static bool IsSameDeclarationScope(TypeSymbol existing, TypeSymbol target)
+    {
+        var existingEnclosing = TypeContainingType(existing);
+        var targetEnclosing = TypeContainingType(target);
+        if (existingEnclosing == null && targetEnclosing == null)
+        {
+            return string.Equals(TypePackageName(existing), TypePackageName(target), StringComparison.Ordinal);
+        }
+
+        return ReferenceEquals(existingEnclosing, targetEnclosing);
+    }
 
     /// <summary>
     /// Issue #1080: builds the containing-type-qualified dotted name of a type
@@ -1409,6 +1542,21 @@ public sealed class BoundScope
         parts.Reverse();
         return string.Join(".", parts);
     }
+
+    /// <summary>
+    /// Issue #2342: builds the package-qualified fallback storage-key segment
+    /// for a top-level type — <c>packageName + "#" + simpleName</c> — used when
+    /// two top-level declarations share a simple (arity-mangled) name but
+    /// belong to different packages. <c>'#'</c> cannot appear in a gsharp
+    /// identifier or in a package name (both are lexed from
+    /// letter/digit/underscore identifier tokens — optionally dot-joined for a
+    /// package name — see <see cref="GSharp.Core.CodeAnalysis.Syntax.Lexer"/>),
+    /// nor in the dotted containing-type-qualified key format produced by
+    /// <see cref="QualifiedTypeName"/>, so this key space never collides with
+    /// either of those.
+    /// </summary>
+    private static string PackageQualifiedName(string packageName, string simpleName)
+        => (packageName ?? string.Empty) + "#" + simpleName;
 
     /// <summary>
     /// Issue #1051: parses a composite storage key, reporting whether it names
