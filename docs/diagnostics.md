@@ -33,6 +33,14 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 </PropertyGroup>
 ```
 
+> **`GS####` vs `GSA####`.** The `GS####`/`CS2GS####` identifiers in this
+> document are emitted by `gsc`/`cs2gs` about **user** G# code. They are
+> distinct from the internal `GSA####` Roslyn analyzers that police the
+> compiler's own C# source (field-token resolution, imported-type identity,
+> reflection-cache lifetime). Those are a build-time developer gate on this
+> repository, not user-facing language diagnostics — see
+> [internal-analyzers.md](./internal-analyzers.md).
+
 ## Diagnostic catalogue
 
 ### Lexer diagnostics (GS0001–GS0005)

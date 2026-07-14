@@ -19,6 +19,7 @@ namespace Cs2Gs.Tests;
 /// compiler artifact being present, returning early otherwise like the other
 /// pipeline e2e tests.
 /// </summary>
+[Collection(IlVerifyPipelineCollection.Name)]
 public class TestParityStageTests
 {
     /// <summary>

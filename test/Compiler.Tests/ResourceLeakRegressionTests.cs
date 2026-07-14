@@ -7,6 +7,9 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using GSharp.Core.CodeAnalysis.Symbols;
 using Xunit;
 
 namespace GSharp.Compiler.Tests;
@@ -85,9 +88,77 @@ public class ResourceLeakRegressionTests
             "This suggests MetadataLoadContext instances are not being disposed.");
     }
 
+    [Fact]
+    public void MetadataLoadContextCaches_DoNotKeepResolverAliveAfterDispose()
+    {
+        var references = TrustedPlatformAssemblies().ToList();
+        if (references.Count == 0)
+        {
+            return;
+        }
+
+        var (contextRef, assemblyRef, typeRef) = CreateCachedMetadataWeakReferences(references);
+        AssertCollected(contextRef, "MetadataLoadContext");
+        AssertCollected(assemblyRef, "reflected assembly");
+        AssertCollected(typeRef, "reflected type");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (WeakReference Context, WeakReference Assembly, WeakReference Type) CreateCachedMetadataWeakReferences(List<string> references)
+    {
+        WeakReference contextRef;
+        WeakReference assemblyRef;
+        WeakReference typeRef;
+
+        using (var resolver = ReferenceResolver.WithReferences(references))
+        {
+            Assert.True(resolver.TryResolveType("System.Text.StringBuilder", out var type));
+
+            var context = typeof(ReferenceResolver)
+                .GetField("metadataContext", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?.GetValue(resolver);
+
+            Assert.NotNull(context);
+            _ = ImportedTypeSymbol.Get(type);
+            _ = InvokeClrInterfacesCache(type);
+            _ = InvokeMemberLookupCache(type);
+
+            contextRef = new WeakReference(context);
+            assemblyRef = new WeakReference(type.Assembly);
+            typeRef = new WeakReference(type);
+        }
+
+        return (contextRef, assemblyRef, typeRef);
+    }
+
+    private static object InvokeMemberLookupCache(Type type)
+    {
+        var memberLookup = typeof(ReferenceResolver).Assembly.GetType("GSharp.Core.CodeAnalysis.Binding.MemberLookup");
+        var method = memberLookup?.GetMethod("SafeGetMethodsIncludingSelfAndInterfaces", BindingFlags.Public | BindingFlags.Static);
+        return method?.Invoke(null, new object[] { type, "ToString" });
+    }
+
+    private static object InvokeClrInterfacesCache(Type type)
+    {
+        var method = typeof(ClrTypeUtilities).GetMethod("SafeGetInterfaces", BindingFlags.NonPublic | BindingFlags.Static);
+        return method?.Invoke(null, new object[] { type });
+    }
+
+    private static void AssertCollected(WeakReference weakReference, string name)
+    {
+        for (var i = 0; i < 5 && weakReference.IsAlive; i++)
+        {
+            GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+        }
+
+        Assert.False(weakReference.IsAlive, $"{name} should be collectable after ReferenceResolver.Dispose().");
+    }
+
     private static void RunCompilation(string source, List<string> references)
     {
-        var tempDir = Directory.CreateTempSubdirectory("gs_leak_test_").FullName;
+        var tempDir = CreateTestDirectory("gs_leak_test_");
         try
         {
             var srcPath = Path.Combine(tempDir, "test.gs");
@@ -129,6 +200,15 @@ public class ResourceLeakRegressionTests
         {
             try { Directory.Delete(tempDir, recursive: true); } catch { }
         }
+    }
+
+    private static string CreateTestDirectory(string prefix)
+    {
+        var root = Path.Combine(Environment.CurrentDirectory, "TestArtifacts");
+        Directory.CreateDirectory(root);
+        var path = Path.Combine(root, prefix + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(path);
+        return path;
     }
 
     private static IEnumerable<string> TrustedPlatformAssemblies()

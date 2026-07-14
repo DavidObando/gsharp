@@ -629,7 +629,13 @@ internal sealed partial class MethodBodyEmitter
             (b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals))
         {
             var field = inlineStruct.Fields[0];
-            var fieldHandle = this.outer.cache.StructFieldDefs[field];
+
+            // Route through ResolveFieldToken so a generic inline struct
+            // (e.g. `inline struct Box<T>`) emits a self-instantiation
+            // MemberRef rather than a bare open FieldDef, which ILVerify
+            // rejects ("found ref Box<T0>, expected ref Box"). Non-generic
+            // inline structs still resolve to the bare FieldDef unchanged.
+            var fieldHandle = this.outer.ResolveFieldToken(inlineStruct, field);
             this.EmitExpression(b.Left);
             this.il.OpCode(ILOpCode.Ldfld);
             this.il.Token(fieldHandle);

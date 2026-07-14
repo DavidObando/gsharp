@@ -24,6 +24,7 @@ namespace Cs2Gs.Tests;
 /// expected rather than gating, while still gating a bare tool crash and
 /// still gating any app that has not opted in.
 /// </summary>
+[Collection(IlVerifyPipelineCollection.Name)]
 public class Issue1933UnsafeIlVerifyPolicyTests
 {
     /// <summary>
@@ -265,47 +266,7 @@ public class Issue1933UnsafeIlVerifyPolicyTests
 
         try
         {
-            var runner = new IlVerifyRunner();
-            var psi = new System.Diagnostics.ProcessStartInfo("dotnet")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = runner.RepoRoot,
-            };
-            foreach (string arg in new[] { "tool", "run", "ilverify", "--version" })
-            {
-                psi.ArgumentList.Add(arg);
-            }
-
-            using var proc = System.Diagnostics.Process.Start(psi);
-            proc.StandardOutput.ReadToEnd();
-            proc.StandardError.ReadToEnd();
-            proc.WaitForExit();
-            if (proc.ExitCode == 0)
-            {
-                return true;
-            }
-
-            var restore = new System.Diagnostics.ProcessStartInfo("dotnet")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = runner.RepoRoot,
-            };
-            foreach (string arg in new[] { "tool", "restore" })
-            {
-                restore.ArgumentList.Add(arg);
-            }
-
-            using var rp = System.Diagnostics.Process.Start(restore);
-            rp.StandardOutput.ReadToEnd();
-            rp.StandardError.ReadToEnd();
-            rp.WaitForExit();
-            return rp.ExitCode == 0;
+            return new IlVerifyRunner().EnsureToolAvailable();
         }
         catch
         {

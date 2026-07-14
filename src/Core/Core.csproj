@@ -16,4 +16,8 @@
     <InternalsVisibleTo Include="GSharp.Core.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\Analyzers\InternalAnalyzers\InternalAnalyzers.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" PrivateAssets="all" />
+  </ItemGroup>
+
 </Project>

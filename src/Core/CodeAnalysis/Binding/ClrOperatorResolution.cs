@@ -112,6 +112,9 @@ internal static class ClrOperatorResolution
         // to test for InterpolatedStringExpressionSyntax in the first place.
         // An interpolated-string operand already collapses to its natural
         // `string` type before reaching this operator lookup.
+        // Constant-narrowing likewise is not applied here: this helper receives
+        // only operand types, not the bound operand expressions needed to prove
+        // an integer value is a compile-time constant and in range.
         var argTypes = new[] { leftType?.ClrType, rightType?.ClrType };
         var outcome = OverloadResolution.Resolve(candidates, argTypes);
         if (outcome.Outcome == OverloadResolution.ResolutionOutcome.Resolved)
@@ -154,6 +157,8 @@ internal static class ClrOperatorResolution
         // Issue #1812: same rationale as TryResolveBinary above — resolved
         // purely from the operand's TypeSymbol, no ExpressionSyntax available
         // to classify as an interpolated string.
+        // Constant-narrowing is also unavailable for the same reason: the
+        // literal value is not present in this type-only helper.
         var argTypes = new[] { operandType.ClrType };
         var outcome = OverloadResolution.Resolve(candidates, argTypes);
         if (outcome.Outcome == OverloadResolution.ResolutionOutcome.Resolved)

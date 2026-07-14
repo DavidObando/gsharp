@@ -7,8 +7,10 @@ using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Documentation;
+using GSharp.Core.CodeAnalysis.Emit;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
@@ -19,7 +21,7 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// </summary>
 public sealed class ImportedTypeSymbol : TypeSymbol
 {
-    private static readonly ConcurrentDictionary<Type, ImportedTypeSymbol> Cache = new();
+    private static readonly ConditionalWeakTable<Assembly, ConcurrentDictionary<Type, ImportedTypeSymbol>> Cache = new();
 
     private ImportedTypeSymbol(Type type)
         : base(type.FullName ?? type.Name, type)
@@ -102,7 +104,10 @@ public sealed class ImportedTypeSymbol : TypeSymbol
             throw new ArgumentNullException(nameof(type));
         }
 
-        return Cache.GetOrAdd(type, t => new ImportedTypeSymbol(t));
+        var assemblyCache = Cache.GetValue(
+            type.Assembly,
+            static _ => new ConcurrentDictionary<Type, ImportedTypeSymbol>(TypeIdentityComparer.Instance));
+        return assemblyCache.GetOrAdd(type, static t => new ImportedTypeSymbol(t));
     }
 
     /// <summary>
@@ -211,16 +216,12 @@ public sealed class ImportedTypeSymbol : TypeSymbol
     }
 
     /// <summary>
-    /// Removes all entries from the static type cache. Called by
-    /// <see cref="ReferenceResolver.Dispose"/> to release stale
-    /// <see cref="Type"/> objects backed by a disposed metadata load context
-    /// that would otherwise pin the context's memory indefinitely. The imported
-    /// data-type semantic-aggregate cache is resolver-scoped (see
-    /// <see cref="TryCreateSemanticAggregate"/>) and needs no clearing here.
+    /// Legacy dispose hook. The cache is weakly keyed by assembly and each
+    /// per-assembly dictionary uses metadata identity for CLR types, so disposed
+    /// metadata contexts are collectable without process-wide clearing.
     /// </summary>
     internal static void ClearCache()
     {
-        Cache.Clear();
     }
 
     private static StructSymbol BuildSemanticAggregate(Type type, string consumerAssemblyName)

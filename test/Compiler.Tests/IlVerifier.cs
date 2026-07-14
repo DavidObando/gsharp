@@ -132,9 +132,17 @@ internal static class IlVerifier
 
         using var proc = Process.Start(psi)
             ?? throw new XunitException($"ilverify: failed to start '{command}'");
-        var stdout = proc.StandardOutput.ReadToEnd();
-        var stderr = proc.StandardError.ReadToEnd();
+
+        // Drain both pipes concurrently before waiting: reading stdout to EOF
+        // and only then stderr can deadlock when ilverify fills the stderr pipe
+        // buffer (~64 KB of error lines) while we are still blocked on stdout,
+        // leaving the child unable to exit. Awaiting both reads together avoids
+        // the classic redirected-pipe deadlock.
+        var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+        var stderrTask = proc.StandardError.ReadToEndAsync();
         proc.WaitForExit();
+        var stdout = stdoutTask.GetAwaiter().GetResult();
+        var stderr = stderrTask.GetAwaiter().GetResult();
 
         if (proc.ExitCode != 0)
         {

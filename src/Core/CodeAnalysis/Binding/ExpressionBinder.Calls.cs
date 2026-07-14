@@ -1808,7 +1808,7 @@ internal sealed partial class ExpressionBinder
             return null;
         }
 
-        if (closedMethod.DeclaringType == openDefinition)
+        if (ClrTypeUtilities.AreSame(closedMethod.DeclaringType, openDefinition))
         {
             return closedMethod;
         }
@@ -1868,39 +1868,23 @@ internal sealed partial class ExpressionBinder
         string methodName)
     {
         var result = new List<ParameterInfo[]>();
-        if (classSymbol != null)
+        var staticClassType = classSymbol?.ClassType;
+        var receiverClrType = classSymbol == null ? receiver?.Type?.ClrType : null;
+        foreach (var probe in this.memberLookup.CollectImportedMethodProbes(staticClassType, receiverClrType, methodName, includeExtensions: classSymbol == null))
         {
-            foreach (var m in ClrTypeUtilities.SafeGetMethods(classSymbol.ClassType, BindingFlags.Static | BindingFlags.Public)
-                .Where(m => m.Name == methodName))
+            foreach (var method in probe.Methods)
             {
-                result.Add(m.GetParameters());
+                var parameters = method.GetParameters();
+                if (probe.ReceiverParameterOffset == 0)
+                {
+                    result.Add(parameters);
+                    continue;
+                }
+
+                var stripped = new ParameterInfo[parameters.Length - probe.ReceiverParameterOffset];
+                System.Array.Copy(parameters, probe.ReceiverParameterOffset, stripped, 0, stripped.Length);
+                result.Add(stripped);
             }
-
-            return result;
-        }
-
-        if (receiver?.Type?.ClrType is System.Type receiverClrType)
-        {
-            foreach (var m in ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(receiverClrType, BindingFlags.Instance | BindingFlags.Public)
-                .Where(m => m.Name == methodName))
-            {
-                result.Add(m.GetParameters());
-            }
-        }
-
-        foreach (var ext in this.memberLookup.CollectImportedExtensionMethods(methodName))
-        {
-            var extParams = ext.GetParameters();
-            if (extParams.Length == 0)
-            {
-                continue;
-            }
-
-            // Strip the leading `this` receiver parameter so positional indices
-            // line up with the call's explicit arguments (offset 0).
-            var stripped = new ParameterInfo[extParams.Length - 1];
-            System.Array.Copy(extParams, 1, stripped, 0, stripped.Length);
-            result.Add(stripped);
         }
 
         return result;
@@ -1944,21 +1928,7 @@ internal sealed partial class ExpressionBinder
             return;
         }
 
-        ImmutableArray<FunctionSymbol> candidates;
-        switch (receiver.Type)
-        {
-            case StructSymbol structRecv:
-                candidates = TypeMemberModel.GetMethods(structRecv, methodName, MemberQuery.Instance(MemberKinds.Method));
-                break;
-            case InterfaceSymbol ifaceRecv:
-                candidates = TypeMemberModel.GetMethods(ifaceRecv, methodName, MemberQuery.Instance(MemberKinds.Method));
-                break;
-            case TypeParameterSymbol { InterfaceConstraint: { } constraint }:
-                candidates = TypeMemberModel.GetMethods(constraint, methodName, MemberQuery.Instance(MemberKinds.Method));
-                break;
-            default:
-                return;
-        }
+        var candidates = MemberLookup.CollectSourceInstanceMethods(receiver.Type, methodName);
 
         if (candidates.IsDefaultOrEmpty)
         {
@@ -2299,33 +2269,11 @@ internal sealed partial class ExpressionBinder
             receiverType = normalizedReceiverType;
         }
 
-        var probes = new List<(IReadOnlyList<MethodInfo> Methods, int Offset)>();
-        if (classSymbol != null)
-        {
-            var statics = ClrTypeUtilities.SafeGetMethods(classSymbol.ClassType, BindingFlags.Static | BindingFlags.Public)
-                .Where(m => m.Name == methodName)
-                .ToList();
-            if (statics.Count > 0)
-            {
-                probes.Add((statics, 0));
-            }
-        }
-        else if (receiverType?.ClrType is System.Type receiverClrType)
-        {
-            var instance = ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(receiverClrType, BindingFlags.Instance | BindingFlags.Public)
-                .Where(m => m.Name == methodName)
-                .ToList();
-            if (instance.Count > 0)
-            {
-                probes.Add((instance, 0));
-            }
-
-            var extensions = this.memberLookup.CollectImportedExtensionMethods(methodName);
-            if (extensions.Count > 0)
-            {
-                probes.Add((extensions, 1));
-            }
-        }
+        var probes = this.memberLookup.CollectImportedMethodProbes(
+            classSymbol?.ClassType,
+            classSymbol == null ? receiverType?.ClrType : null,
+            methodName,
+            includeExtensions: classSymbol == null && receiverType?.ClrType != null);
 
         if (probes.Count == 0)
         {
@@ -2345,9 +2293,9 @@ internal sealed partial class ExpressionBinder
         // lambda against it. This path only succeeds (and pre-empts the CLR
         // paths) when it actually recovers a same-compilation user type, so the
         // referenced-element-type and primitive cases are untouched.
-        foreach (var (methods, offset) in probes)
+        foreach (var probe in probes)
         {
-            if (TryMapDeferredLambdaTargetsSymbolic(methods, offset, receiverType, ce, deferredIndices, boundArgs, deferred, out var symbolicTargets))
+            if (TryMapDeferredLambdaTargetsSymbolic(probe.Methods, probe.ReceiverParameterOffset, receiverType, ce, deferredIndices, boundArgs, deferred, out var symbolicTargets))
             {
                 foreach (var idx in deferredIndices)
                 {
@@ -2362,8 +2310,10 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        foreach (var (methods, offset) in probes)
+        foreach (var probe in probes)
         {
+            var offset = probe.ReceiverParameterOffset;
+            var methods = probe.Methods;
             var argTypes = new System.Type[boundArgs.Length + offset];
             if (offset == 1)
             {
@@ -2465,9 +2415,9 @@ internal sealed partial class ExpressionBinder
         // from the non-lambda arguments (so the lambda's *parameter* types close)
         // and bind each lambda against a target carrying only those parameter
         // types, leaving its return type to be inferred from the body.
-        foreach (var (methods, offset) in probes)
+        foreach (var probe in probes)
         {
-            if (TryMapDeferredLambdaParameterTargets(methods, offset, receiverType, ce, deferredIndices, boundArgs, out var partialTargets))
+            if (TryMapDeferredLambdaParameterTargets(probe.Methods, probe.ReceiverParameterOffset, receiverType, ce, deferredIndices, boundArgs, out var partialTargets))
             {
                 foreach (var idx in deferredIndices)
                 {
@@ -3432,7 +3382,7 @@ internal sealed partial class ExpressionBinder
             // rather than a bare `callvirt` on the unboxed value.
             if (receiver != null && receiver.Type is TypeParameterSymbol tpRecv && tpRecv.InterfaceConstraint != null)
             {
-                var tpOverloads = TypeMemberModel.GetMethods(tpRecv.InterfaceConstraint, methodName, MemberQuery.Instance(MemberKinds.Method));
+                var tpOverloads = MemberLookup.CollectSourceInstanceMethods(tpRecv, methodName);
                 if (tpOverloads.Length > 0)
                 {
                     var tpIfaceMethod = overloads.SelectInstanceOverloadOrReport(tpOverloads, arguments, ce, methodName, argumentNames);
@@ -3460,7 +3410,7 @@ internal sealed partial class ExpressionBinder
             if (receiver != null && receiver.Type is TypeParameterSymbol tpClassRecv
                 && tpClassRecv.ClassConstraint is StructSymbol tpClassConstraint)
             {
-                var tpClassOverloads = TypeMemberModel.GetMethods(tpClassConstraint, methodName, MemberQuery.Instance(MemberKinds.Method));
+                var tpClassOverloads = MemberLookup.CollectSourceInstanceMethods(tpClassRecv, methodName);
                 if (tpClassOverloads.Length > 0)
                 {
                     var tpClassMethod = overloads.SelectInstanceOverloadOrReport(tpClassOverloads, arguments, ce, methodName, argumentNames);
@@ -3488,7 +3438,7 @@ internal sealed partial class ExpressionBinder
             // if receiver is a user struct symbol.
             if (receiver != null && receiver.Type is StructSymbol userClass)
             {
-                var userOverloads = TypeMemberModel.GetMethods(userClass, methodName, MemberQuery.Instance(MemberKinds.Method));
+                var userOverloads = MemberLookup.CollectSourceInstanceMethods(userClass, methodName);
                 if (userOverloads.Length > 0)
                 {
                     var userMethod = overloads.SelectInstanceOverloadOrReport(userOverloads, arguments, ce, methodName, argumentNames);
@@ -3636,7 +3586,7 @@ internal sealed partial class ExpressionBinder
         // fallback for imported CLR types.)
         if (receiver.Type is StructSymbol userClassPriority)
         {
-            var priorityOverloads = TypeMemberModel.GetMethods(userClassPriority, methodName, MemberQuery.Instance(MemberKinds.Method));
+            var priorityOverloads = MemberLookup.CollectSourceInstanceMethods(userClassPriority, methodName);
             if (priorityOverloads.Length > 0)
             {
                 var userMethodPriority = overloads.SelectInstanceOverloadOrReport(priorityOverloads, arguments, ce, methodName, argumentNames);
@@ -3684,9 +3634,7 @@ internal sealed partial class ExpressionBinder
         // methods declared on a base interface (e.g.
         // IEnumerable<T>.GetEnumerator() surfaced through
         // IReadOnlyList<T>) are found.
-        var candidates = ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(clrType, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
-            .Where(m => m.Name == methodName)
-            .ToList();
+        var candidates = new List<MethodInfo>(MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(clrType, methodName));
 
         if (candidates.Count > 0)
         {
@@ -5459,7 +5407,7 @@ internal sealed partial class ExpressionBinder
     {
         for (var i = 0; i < boundArguments.Count; i++)
         {
-            if (!ReferenceEquals(argTypes[i], source))
+            if (!ClrTypeUtilities.AreSame(argTypes[i], source))
             {
                 continue;
             }
@@ -5529,7 +5477,7 @@ internal sealed partial class ExpressionBinder
     {
         for (var i = 0; i < boundArguments.Length; i++)
         {
-            if (!ReferenceEquals(argTypes[i], source))
+            if (!ClrTypeUtilities.AreSame(argTypes[i], source))
             {
                 continue;
             }
@@ -6444,9 +6392,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var candidates = ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(clrType, BindingFlags.Instance | BindingFlags.Public)
-            .Where(m => m.Name == methodName)
-            .ToList();
+        var candidates = new List<MethodInfo>(MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(clrType, methodName));
         if (candidates.Count == 0)
         {
             return false;
@@ -6475,7 +6421,8 @@ internal sealed partial class ExpressionBinder
             null,
             scope.References.MapClrTypeToReferences,
             interpolatedStringArgs,
-            argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
+            argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
+            constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments));
         if (resolution.Outcome != OverloadResolution.ResolutionOutcome.Resolved)
         {
             return false;
@@ -6563,9 +6510,7 @@ internal sealed partial class ExpressionBinder
     {
         result = null;
 
-        var candidates = ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(typeof(object), BindingFlags.Instance | BindingFlags.Public)
-            .Where(m => m.Name == methodName)
-            .ToList();
+        var candidates = new List<MethodInfo>(MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(typeof(object), methodName));
         if (candidates.Count == 0)
         {
             return false;
@@ -6592,6 +6537,9 @@ internal sealed partial class ExpressionBinder
         // the flag. Unlike TryBindConstrainedClrInterfaceCall above, this path
         // does run the full CLR parameter-conversion pass afterward, but that
         // fact is irrelevant given no candidate parameter shape could match.
+        // Constant-narrowing is intentionally omitted for the same reason:
+        // object members expose only zero parameters or Equals(object), never a
+        // narrower integer parameter.
         var resolution = OverloadResolution.Resolve(
             candidates,
             argTypes,
@@ -6676,9 +6624,7 @@ internal sealed partial class ExpressionBinder
     {
         result = null;
 
-        var candidates = ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(typeof(object), BindingFlags.Instance | BindingFlags.Public)
-            .Where(m => m.Name == methodName)
-            .ToList();
+        var candidates = new List<MethodInfo>(MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(typeof(object), methodName));
         if (candidates.Count == 0)
         {
             return false;
@@ -6696,6 +6642,9 @@ internal sealed partial class ExpressionBinder
             argTypes[i] = t;
         }
 
+        // Constant-narrowing is intentionally omitted: the only object member
+        // with an argument is Equals(object), so there is no narrower integer
+        // parameter for §10.2.11 to target.
         var resolution = OverloadResolution.Resolve(
             candidates,
             argTypes,
