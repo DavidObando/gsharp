@@ -58,7 +58,8 @@ Useful `migrate` options:
 | --- | --- |
 | `--corpus <dir>` | Corpus root. Defaults to `tools\cs2gs\corpus` when run from the repository. |
 | `--app <id>` | Migrate only one app. May be repeated. |
-| `--via-sdk` | Build the emitted G# via `dotnet build` + the `Gsharp.NET.Sdk` (instead of invoking `gsc` directly) so source generators run. |
+| `--via-sdk` | Build the emitted G# via `dotnet build` + the `Gsharp.NET.Sdk` so source generators run. This is the default. |
+| `--no-via-sdk` | Use the legacy direct-`gsc` translation path instead of the SDK build. |
 | `--out <dir>` | Runs root for artifacts; default is `cs2gs-runs`. |
 | `--config <name>` | Build configuration used to find tools; default is `Release`. |
 | `--baseline <file>` | Gate on the gap ledger. New and regressed fingerprints fail; known-open gaps are tolerated. |

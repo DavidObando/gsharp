@@ -220,6 +220,46 @@ public class SdkCompileRunnerTests
     }
 
     [Fact]
+    public void BuildProjectXml_PreservesDeclaredDependencyMetadataAndConditions()
+    {
+        var packages = new[]
+        {
+            new DeclaredProjectItem(
+                "'$(TargetFramework)' == 'net10.0'",
+                System.Xml.Linq.XElement.Parse(
+                    "<PackageReference Include=\"Example\" Version=\"1.2.3\" " +
+                    "PrivateAssets=\"all\"><Aliases>sample</Aliases></PackageReference>")),
+        };
+        var projects = new[]
+        {
+            new DeclaredProjectItem(
+                null,
+                System.Xml.Linq.XElement.Parse(
+                    "<ProjectReference Include=\"../Lib/Lib.gsproj\" " +
+                    "ReferenceOutputAssembly=\"false\"><Private>true</Private></ProjectReference>")),
+        };
+
+        string xml = SdkCompileRunner.BuildProjectXml(
+            sdkVersion: "1.0.0",
+            target: TargetKind.Library,
+            rootNamespace: null,
+            gsFilePaths: new[] { "Lib.gs" },
+            packages: Array.Empty<(string Id, string Version)>(),
+            references: Array.Empty<string>(),
+            analyzerReferences: Array.Empty<string>(),
+            packageReferences: packages,
+            projectReferences: projects);
+
+        Assert.Contains("<ItemGroup Condition=\"'$(TargetFramework)' == 'net10.0'\">", xml);
+        Assert.Contains(
+            "<PackageReference Include=\"Example\" Version=\"1.2.3\" PrivateAssets=\"all\"><Aliases>sample</Aliases></PackageReference>",
+            xml);
+        Assert.Contains(
+            "<ProjectReference Include=\"../Lib/Lib.gsproj\" ReferenceOutputAssembly=\"false\"><Private>true</Private></ProjectReference>",
+            xml);
+    }
+
+    [Fact]
     public void RequiresExplicitProjectItem_UsesDefaultGlobForCopiedAvaloniaXaml()
     {
         Assert.False(SdkCompileRunner.RequiresExplicitProjectItem(
