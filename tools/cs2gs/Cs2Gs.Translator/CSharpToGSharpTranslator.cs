@@ -1370,7 +1370,16 @@ public sealed class CSharpToGSharpTranslator
 
         private static bool IsFieldlessRecord(RecordDeclarationSyntax record)
         {
-            bool hasPositional = record.ParameterList != null && record.ParameterList.Parameters.Count > 0;
+            // Issue #2363: an explicit-but-empty positional parameter list
+            // (`record Name()`) still declares positional record *shape* — it
+            // is a genuine (zero-arity) primary constructor, distinct from a
+            // record with no parameter list at all (`record Name;`). Only the
+            // latter is truly "fieldless"; `record Name()` maps to a G# `data
+            // class`/`data struct` with zero fields (now supported by gsc —
+            // GS0104 no longer rejects an empty-field data type) so it must
+            // NOT be downgraded to a plain class/struct merely because its
+            // primary constructor happens to have zero parameters.
+            bool hasPositional = record.ParameterList != null;
             bool hasDataMember = record.Members.Any(m =>
                 (m is FieldDeclarationSyntax field && !field.Modifiers.Any(SyntaxKind.StaticKeyword) && !field.Modifiers.Any(SyntaxKind.ConstKeyword)) ||
                 (m is PropertyDeclarationSyntax property && !property.Modifiers.Any(SyntaxKind.StaticKeyword)));

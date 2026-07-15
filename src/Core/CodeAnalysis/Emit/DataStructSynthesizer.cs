@@ -141,8 +141,14 @@ internal sealed class DataStructSynthesizer
     /// literal's synthesized type (<see cref="Binding.AnonymousTypeCache"/>)
     /// instead has get-only auto-<see cref="StructSymbol.Properties"/> with no
     /// plain fields, so its members are their <see cref="PropertySymbol.BackingField"/>s.
-    /// These two shapes are mutually exclusive today, so checking
-    /// <see cref="StructSymbol.Fields"/> first is unambiguous.
+    /// Issue #2363: since a zero-field data class/struct is now legal, a
+    /// user-declared type can ALSO have empty <see cref="StructSymbol.Fields"/>
+    /// while still declaring ordinary (non-auto) <see cref="StructSymbol.Properties"/>
+    /// — e.g. a virtual/override computed property with no backing field at
+    /// all (<c>PropertySymbol.BackingField == null</c>). Such properties
+    /// don't participate in equality/hash/ToString/Deconstruct (there is
+    /// nothing to read), so they are filtered out here rather than added as
+    /// a null field entry (which previously crashed field-token resolution).
     /// </summary>
     private static ImmutableArray<FieldSymbol> GetSynthesisFields(StructSymbol structSym)
     {
@@ -159,11 +165,27 @@ internal sealed class DataStructSynthesizer
         var builder = ImmutableArray.CreateBuilder<FieldSymbol>(structSym.Properties.Length);
         foreach (var property in structSym.Properties)
         {
-            builder.Add(property.BackingField);
+            if (property.BackingField != null)
+            {
+                builder.Add(property.BackingField);
+            }
         }
 
-        return builder.MoveToImmutable();
+        return builder.ToImmutable();
     }
+
+    /// <summary>
+    /// Issue #2363: true when <paramref name="structSym"/> is a data
+    /// class/struct with zero synthesis fields (see
+    /// <see cref="GetSynthesisFields"/>) — used by the row-count planner
+    /// (<c>ReflectionMetadataEmitter.PlanClassMethods</c> /
+    /// <c>PlanStructMethods</c>) to reserve six MethodDef rows instead of
+    /// seven, since <see cref="EmitDataStructDeconstruct"/> is skipped for
+    /// such a type.
+    /// </summary>
+    /// <param name="structSym">The data-struct/data-class symbol to check.</param>
+    /// <returns><see langword="true"/> if the type has no synthesis fields; otherwise <see langword="false"/>.</returns>
+    public static bool HasZeroSynthesisFields(StructSymbol structSym) => GetSynthesisFields(structSym).IsDefaultOrEmpty;
 
     public void EmitInlineStructSynthesizedMembers(StructSymbol structSym)
     {
@@ -436,12 +458,13 @@ internal sealed class DataStructSynthesizer
     }
 
     /// <summary>
-    /// Issue #410 / ADR-0029: emits the seven synthesized members for a
-    /// <c>data struct</c> type. The MethodDef rows are added in a fixed
-    /// order so they align 1:1 with the rows reserved by the method-row
-    /// planner: <c>Equals(Name)</c>, <c>Equals(object)</c>,
+    /// Issue #410 / ADR-0029: emits the synthesized members for a
+    /// <c>data struct</c> type — up to seven, depending on which are
+    /// applicable: <c>Equals(Name)</c>, <c>Equals(object)</c>,
     /// <c>GetHashCode</c>, <c>ToString</c>, <c>op_Equality</c>,
-    /// <c>op_Inequality</c>, <c>Deconstruct</c>.
+    /// <c>op_Inequality</c>, <c>Deconstruct</c>. The MethodDef rows are
+    /// added in a fixed order so they align 1:1 with the rows reserved by
+    /// the method-row planner.
     /// <c>Equals(Name)</c> is emitted first so its MethodDef handle is
     /// available when <c>Equals(object)</c> is emitted.
     /// Issue #2361: when the type declares a compatible hand-written
@@ -452,18 +475,14 @@ internal sealed class DataStructSynthesizer
     /// <c>ReflectionMetadataEmitter.EmitFunction</c>'s
     /// <c>isDataToStringOverride</c> handling for the Virtual/Final
     /// attributes that make the slot line up with the synthesized siblings).
+    /// Issue #2363: <c>Deconstruct</c> is skipped entirely for a zero-field
+    /// type (<see cref="HasZeroSynthesisFields"/>) — there is nothing to
+    /// deconstruct. The two skips are independent and compose: a zero-field
+    /// type with a user ToString override emits five rows.
     /// </summary>
     /// <param name="structSym">The data-struct symbol to emit members for.</param>
     public void EmitDataStructSynthesizedMembers(StructSymbol structSym)
     {
-        // ADR-0029: data structs must have at least one field (or, for a
-        // synthesized anonymous-class type, at least one property — see
-        // GetSynthesisFields). This is enforced by the binder; assert here so
-        // the emit IL stays simple.
-        Debug.Assert(
-            !GetSynthesisFields(structSym).IsDefaultOrEmpty,
-            "Data structs must have at least one field; the binder should have rejected an empty data struct.");
-
         var typeDef = this.resolveUserTypeToken(structSym);
         var equalsTypedHandle = this.EmitDataStructEqualsTyped(structSym);
         this.EmitDataStructEqualsObject(structSym, typeDef, equalsTypedHandle);
@@ -481,7 +500,17 @@ internal sealed class DataStructSynthesizer
 
         this.cache.DataStructOpEqualityHandles[structSym] = this.EmitDataStructEqualityOperator(structSym, isInequality: false);
         this.EmitDataStructEqualityOperator(structSym, isInequality: true);
-        this.EmitDataStructDeconstruct(structSym);
+
+        // Issue #2363 / ADR-0029: `Deconstruct` is skipped entirely for a
+        // zero-field data class/struct — there is nothing to deconstruct, and
+        // a `Deconstruct()` overload with zero `out` parameters would be
+        // meaningless (no arity ever binds to it). The row-count planner
+        // (ReflectionMetadataEmitter) reserves one fewer MethodDef row for
+        // such types to match.
+        if (!GetSynthesisFields(structSym).IsDefaultOrEmpty)
+        {
+            this.EmitDataStructDeconstruct(structSym);
+        }
 
         // Rubber-duck follow-up to issue #2224: an anonymous-class literal's
         // synthesized type has no plain fields (only get-only auto-properties
@@ -751,7 +780,21 @@ internal sealed class DataStructSynthesizer
 
         if (!this.emitCtx.MetadataOnly)
         {
-            if (!useFold)
+            if (fields.IsDefaultOrEmpty)
+            {
+                // Issue #2363: `HashCode.Combine()` has no zero-arity
+                // overload, so a zero-field data class/struct can't route
+                // through the ordinary fold. All instances of the type are
+                // "equal" (see EmitDataStructEqualsTyped), so the hash need
+                // only be a fixed constant satisfying the Equals/GetHashCode
+                // contract; a deterministic (non-randomized) FNV-1a hash of
+                // the type name gives distinct constants across distinct
+                // zero-field types instead of colliding them all on the same
+                // value.
+                il.LoadConstantI4(unchecked((int)Fnv1aHash(structSym.Name)));
+                il.OpCode(ILOpCode.Ret);
+            }
+            else if (!useFold)
             {
                 foreach (var field in fields)
                 {
@@ -822,6 +865,33 @@ internal sealed class DataStructSynthesizer
     private void EmitDataStructToString(StructSymbol structSym)
     {
         var fields = GetSynthesisFields(structSym);
+
+        // Issue #2363: a zero-field data class/struct renders as "Name()" —
+        // a fixed literal, no array/Concat machinery needed (and fields[0]
+        // below would throw IndexOutOfRangeException for zero fields).
+        if (fields.IsDefaultOrEmpty)
+        {
+            var il0 = new InstructionEncoder(new BlobBuilder());
+            if (!this.emitCtx.MetadataOnly)
+            {
+                il0.LoadString(this.emitCtx.Metadata.GetOrAddUserString(structSym.Name + "()"));
+                il0.OpCode(ILOpCode.Ret);
+            }
+
+            var sig0 = new BlobBuilder();
+            new BlobEncoder(sig0).MethodSignature(isInstanceMethod: true)
+                .Parameters(0, r => r.Type().String(), _ => { });
+
+            this.emitCtx.Metadata.AddMethodDefinition(
+                attributes: DataObjectOverrideAttributes(structSym),
+                implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+                name: this.emitCtx.Metadata.GetOrAddString("ToString"),
+                signature: this.emitCtx.Metadata.GetOrAddBlob(sig0),
+                bodyOffset: this.FinishInlineBody(il0),
+                parameterList: this.nextParameterHandle());
+            return;
+        }
+
         int pieceCount = (2 * fields.Length) + 1;
 
         var il = new InstructionEncoder(new BlobBuilder());
@@ -1065,6 +1135,28 @@ internal sealed class DataStructSynthesizer
         new BlobEncoder(sig).MethodSignature(isInstanceMethod: true)
             .Parameters(1, r => r.Type().Boolean(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), structSym));
         return this.resolveUserMethodRef(structSym, equalsTypedHandle, "Equals", sig);
+    }
+
+    /// <summary>
+    /// Issue #2363: a deterministic (build-reproducible, not process-
+    /// randomized) 32-bit FNV-1a hash of <paramref name="value"/>, used as
+    /// the fixed <c>GetHashCode()</c> constant for a zero-field data
+    /// class/struct. Unlike <see cref="string.GetHashCode()"/> (randomized
+    /// per process by default), this always produces the same IL constant
+    /// for the same type name across builds.
+    /// </summary>
+    private static uint Fnv1aHash(string value)
+    {
+        const uint offsetBasis = 2166136261;
+        const uint prime = 16777619;
+        uint hash = offsetBasis;
+        foreach (char c in value)
+        {
+            hash ^= c;
+            hash *= prime;
+        }
+
+        return hash;
     }
 
     /// <summary>

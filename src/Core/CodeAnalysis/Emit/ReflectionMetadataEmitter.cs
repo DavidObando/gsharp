@@ -1663,14 +1663,21 @@ internal sealed class ReflectionMetadataEmitter
             // reservation and EmitClassMethodBodies' matching emit call,
             // which must run in the same relative order (before
             // user-declared methods) so the MethodDef rows line up.
+            // Issue #2363: a zero-field data class skips Deconstruct (one
+            // fewer row) — see DataStructSynthesizer.HasZeroSynthesisFields
+            // and EmitDataStructSynthesizedMembers's matching skip.
             // Issue #2361: when the class declares a compatible hand-written
-            // ToString, only six rows are reserved here — the seventh
-            // ("ToString") is instead reserved by the ordinary c.Methods loop
-            // below, matching DataStructSynthesizer.EmitDataStructSynthesizedMembers
-            // skipping the synthesized ToString body in that case.
+            // ToString, one fewer row is reserved here too — the "ToString"
+            // row is instead reserved by the ordinary c.Methods loop below,
+            // matching DataStructSynthesizer.EmitDataStructSynthesizedMembers
+            // skipping the synthesized ToString body in that case. The two
+            // skips are independent and compose (a zero-field data class
+            // with a user ToString override reserves five rows).
             if (c.IsData)
             {
-                methodRow += DataStructSynthesizer.HasUserToStringOverride(c) ? 6 : 7;
+                methodRow += 7
+                    - (DataStructSynthesizer.HasZeroSynthesisFields(c) ? 1 : 0)
+                    - (DataStructSynthesizer.HasUserToStringOverride(c) ? 1 : 0);
             }
 
             if (!c.Methods.IsDefaultOrEmpty)
@@ -1800,11 +1807,17 @@ internal sealed class ReflectionMetadataEmitter
             {
                 // Issue #410 / ADR-0029: data structs synthesize 7 MethodDef
                 // rows: Equals(object), Equals(Name), GetHashCode, ToString,
-                // op_Equality, op_Inequality, Deconstruct.
-                // Issue #2361: only 6 when the struct declares a compatible
-                // hand-written ToString — see the matching class-side comment
-                // in PlanClassMethods above.
-                methodRow += DataStructSynthesizer.HasUserToStringOverride(s) ? 6 : 7;
+                // Issue #410 / ADR-0029: data structs synthesize 7 MethodDef
+                // rows: Equals(object), Equals(Name), GetHashCode, ToString,
+                // op_Equality, op_Inequality, Deconstruct. Issue #2363: a
+                // zero-field data struct skips Deconstruct (one fewer row).
+                // Issue #2361: one fewer row also when the struct declares a
+                // compatible hand-written ToString — see the matching
+                // class-side comment in PlanClassMethods above. The two
+                // skips compose independently.
+                methodRow += 7
+                    - (DataStructSynthesizer.HasZeroSynthesisFields(s) ? 1 : 0)
+                    - (DataStructSynthesizer.HasUserToStringOverride(s) ? 1 : 0);
 
                 // Rubber-duck follow-up to issue #2224: an anonymous-class
                 // literal's synthesized type has no plain fields (only
