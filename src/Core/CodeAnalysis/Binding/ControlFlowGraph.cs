@@ -455,12 +455,11 @@ public sealed class ControlFlowGraph
                     {
                         case BoundNodeKind.GotoStatement:
                             var gs = (BoundGotoStatement)statement;
-                            var toBlock = blockFromLabel[gs.Label];
-                            Connect(current, toBlock);
+                            Connect(current, ResolveLabelTarget(gs.Label, blockFromLabel, end));
                             break;
                         case BoundNodeKind.ConditionalGotoStatement:
                             var cgs = (BoundConditionalGotoStatement)statement;
-                            var thenBlock = blockFromLabel[cgs.Label];
+                            var thenBlock = ResolveLabelTarget(cgs.Label, blockFromLabel, end);
                             var elseBlock = next;
                             var negatedCondition = Negate(cgs.Condition);
                             var thenCondition = cgs.JumpIfTrue ? cgs.Condition : negatedCondition;
@@ -571,6 +570,48 @@ public sealed class ControlFlowGraph
 
             branches.RemoveAll(branch => removed.Contains(branch.From) || removed.Contains(branch.To));
             blocks.RemoveAll(block => removed.Contains(block));
+        }
+
+        /// <summary>
+        /// Resolves a goto/conditional-goto's target label to the basic block
+        /// that declares it, or <paramref name="end"/> when the label is not
+        /// declared anywhere in the region this graph was built over.
+        /// </summary>
+        /// <remarks>
+        /// <para>Issue #2360: several analyses (<see cref="RefStructAsyncLivenessAnalyzer"/>,
+        /// <see cref="RefKindDefiniteAssignmentAnalyzer"/>) build a fresh, narrowly
+        /// scoped <see cref="ControlFlowGraph"/> over just one nested compound
+        /// statement's body — a <c>try</c>/<c>catch</c>/<c>finally</c> block, a
+        /// <c>select</c> case, a <c>scope</c>, or a <c>fixed</c> body — because the
+        /// outer graph treats those as single opaque statements (issue #1642). A
+        /// <c>goto</c> lexically inside such a region can legitimately target a
+        /// label declared <em>outside</em> it: the async lowering pipeline's
+        /// generalized try/finally-with-return funnel (<see cref="Lowering.Lowerer"/>'s
+        /// <c>RewriteReturnStatement</c>/<c>WrapWithMethodExitEpilogue</c>) rewrites a
+        /// <c>return</c> inside a protected region into exactly this shape — a
+        /// <c>goto</c> to a synthesized exit label placed after the whole
+        /// enclosing statement, i.e. outside the try body's own region. The same
+        /// applies to a user <c>break</c>/<c>continue</c> lowered to a <c>goto</c>
+        /// past a loop that encloses (but is not entirely inside) the region.</para>
+        /// <para>Such a label is, from the narrow region's point of view,
+        /// indistinguishable from any other exit out of the region — exactly like
+        /// a <c>return</c> or <c>throw</c>, which already connect straight to
+        /// <paramref name="end"/> (see the switch above). Routing an unresolved
+        /// label to <paramref name="end"/> keeps every synthesized branch target
+        /// meaningful to the analysis (the region-scoped liveness/assignment
+        /// fixpoint folds in whatever is live/assigned past the region, via each
+        /// analyzer's own <c>liveOutOfRegion</c>/<c>isFunctionBody</c> plumbing)
+        /// instead of throwing <see cref="KeyNotFoundException"/> and crashing the
+        /// compiler (GS9998) the moment a by-ref-like local or an <c>out</c>
+        /// parameter happens to make either analyzer examine the region.</para>
+        /// </remarks>
+        /// <param name="label">The goto/conditional-goto's target label.</param>
+        /// <param name="blockFromLabel">The label-to-block map for this region.</param>
+        /// <param name="end">This graph's end block.</param>
+        /// <returns>The declaring block, or <paramref name="end"/> if the label escapes the region.</returns>
+        private static BasicBlock ResolveLabelTarget(BoundLabel label, Dictionary<BoundLabel, BasicBlock> blockFromLabel, BasicBlock end)
+        {
+            return blockFromLabel.TryGetValue(label, out var block) ? block : end;
         }
 
         private void Connect(BasicBlock from, BasicBlock to, BoundExpression condition = null)
