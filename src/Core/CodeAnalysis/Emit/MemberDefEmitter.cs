@@ -312,6 +312,22 @@ internal sealed class MemberDefEmitter
             // Issue #248: implicit interface implementation requires Virtual | NewSlot.
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
         }
+        else if (prop.ExplicitInterfaceMember != null)
+        {
+            // Issue #2362: a mangled-name explicit interface property
+            // implementation is bound to its interface slot purely via an
+            // explicit MethodImpl row (see
+            // EmitExplicitInterfacePropertyMethodImpls) — its accessor's own
+            // name never matches the interface member's name, so
+            // PropertyImplicitlyImplementsInterface (a name-based check)
+            // never fires for it. Per ECMA-335 §II.10.3.3, a MethodImpl body
+            // method must be virtual; Final additionally prevents a derived
+            // class from accidentally overriding this synthetic accessor by
+            // name (it has no natural override point, exactly like the
+            // #2010 mangled explicit method convention's own methods, which
+            // get Virtual | NewSlot | Final unconditionally via EmitFunction).
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final;
+        }
 
         return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: methodAttrs,
@@ -371,6 +387,14 @@ internal sealed class MemberDefEmitter
         {
             // Issue #248: implicit interface implementation requires Virtual | NewSlot.
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
+        }
+        else if (prop.ExplicitInterfaceMember != null)
+        {
+            // Issue #2362: see the matching comment in EmitPropertyGetter —
+            // the setter half of a mangled-name explicit interface property
+            // implementation needs the same Virtual | NewSlot | Final promotion
+            // so its MethodImpl row (emitted separately) is ECMA-335-valid.
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final;
         }
 
         // Emit a Parameter row for "value" so the setter has a named parameter.

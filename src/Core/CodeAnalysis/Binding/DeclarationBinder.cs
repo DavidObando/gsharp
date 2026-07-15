@@ -3798,6 +3798,33 @@ internal sealed class DeclarationBinder
                     }
                 }
 
+                // Issue #2362: a mangled-name explicit PROPERTY implementation
+                // (`__explicit_<Interface>__<Member>`) is resolved against the
+                // interface's OPEN DEFINITION property table, not the
+                // (possibly constructed-generic) `iface.Properties` iterated
+                // below. Unlike Methods, InterfaceSymbol.Construct does not
+                // substitute Properties onto a constructed instance (see
+                // InterfaceSymbol.TryResolveMembers) — `iface.Properties` is
+                // empty for a constructed generic interface, so the main loop
+                // below never even runs for one. Resolving against
+                // `iface.Definition ?? iface` here (a no-op for a non-generic
+                // interface, where Definition is the interface itself) lets a
+                // generic interface's explicit property implementation still
+                // get linked, mirroring the #2181 fix for methods and
+                // `EmitStaticVirtualPropertyMethodImpls`, which reads
+                // `defIface.Properties` for the identical reason.
+                var explicitPropDefIface = iface.Definition ?? iface;
+                if (!explicitPropDefIface.Properties.IsDefaultOrEmpty)
+                {
+                    foreach (var openIprop in explicitPropDefIface.Properties)
+                    {
+                        if (!openIprop.IsStatic)
+                        {
+                            TryResolveExplicitInterfacePropertyImplementation(structSymbol, iface, openIprop);
+                        }
+                    }
+                }
+
                 // ADR-0051: verify property requirements.
                 foreach (var iprop in iface.Properties)
                 {
@@ -3806,6 +3833,18 @@ internal sealed class DeclarationBinder
                     // implementer's static properties); skip them here so the
                     // instance-property contract check doesn't misfire.
                     if (iprop.IsStatic)
+                    {
+                        continue;
+                    }
+
+                    // Issue #2362: a mangled-name explicit implementation
+                    // (`__explicit_<Interface>__<Member>`) satisfies this slot
+                    // even though its own name never matches `iprop.Name` —
+                    // already resolved and linked by the pre-pass above. Skip
+                    // entirely; no diagnostic, and the emitter binds the
+                    // accessor MethodImpl rows via
+                    // `PropertySymbol.ExplicitInterfaceMember`.
+                    if (TryResolveExplicitInterfacePropertyImplementation(structSymbol, iface, iprop) != null)
                     {
                         continue;
                     }
@@ -7317,6 +7356,106 @@ internal sealed class DeclarationBinder
 
     private static ImmutableArray<ParameterSymbol> GetCallableParameters(FunctionSymbol method)
         => method.ExplicitReceiverParameter == null ? method.Parameters : method.Parameters.RemoveAt(0);
+
+    /// <summary>
+    /// Issue #2362: extends #2010's mangled-name explicit implementation
+    /// resolution from methods to properties/indexers. Resolves and links a
+    /// mangled-name explicit property implementation (see
+    /// <see cref="TryParseExplicitInterfaceImplName"/>) on
+    /// <paramref name="structSymbol"/> against <paramref name="iprop"/>, an
+    /// abstract property of <paramref name="iface"/>. Returns the linked
+    /// property (setting its <see cref="PropertySymbol.ExplicitInterfaceMember"/>
+    /// the first time it is resolved) or <see langword="null"/> if no such
+    /// property exists. <paramref name="iprop"/> may come from
+    /// <paramref name="iface"/>'s own definition OR (for a constructed
+    /// generic interface, whose <see cref="InterfaceSymbol.Properties"/> are
+    /// never substituted — see <see cref="InterfaceSymbol"/>) from
+    /// <c>iface.Definition</c>; either way <paramref name="iface"/> itself
+    /// supplies the type-argument substitution used to compare
+    /// <paramref name="iprop"/>'s declared type against the candidate's own
+    /// (concrete) type.
+    /// </summary>
+    private static PropertySymbol TryResolveExplicitInterfacePropertyImplementation(StructSymbol structSymbol, InterfaceSymbol iface, PropertySymbol iprop)
+    {
+        if (structSymbol.Properties.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        foreach (var candidate in structSymbol.Properties)
+        {
+            if (ReferenceEquals(candidate.ExplicitInterfaceMember, iprop))
+            {
+                return candidate;
+            }
+
+            if (candidate.ExplicitInterfaceMember != null)
+            {
+                // Already linked to a different interface member.
+                continue;
+            }
+
+            if (!TryParseExplicitInterfaceImplName(candidate.Name, out var explicitIfaceName, out var explicitMemberName) ||
+                explicitIfaceName != QualifyInterfaceName(iface) ||
+                explicitMemberName != iprop.Name)
+            {
+                continue;
+            }
+
+            // Issue #2362: an explicit property implementation is its own
+            // distinct G# member — unlike #985's covariant-return method
+            // bridge, there is no "same name, different return type" slot-
+            // sharing concern here, so the concrete implementation's type
+            // must equal the interface's declared type exactly (after
+            // substituting the interface's own type parameters, for a
+            // generic interface). The accessor SHAPE (get/set/init) must
+            // also match exactly — valid C# never lets an explicit property
+            // implementation declare an accessor the interface doesn't
+            // require.
+            if (iprop.HasGetter != candidate.HasGetter || iprop.HasSetter != candidate.HasSetter)
+            {
+                continue;
+            }
+
+            var typeParamMap = BuildInterfaceTypeParameterMap(iface);
+            if (!TypeSignaturesEquivalent(iprop.Type, candidate.Type, typeParamMap))
+            {
+                continue;
+            }
+
+            candidate.ExplicitInterfaceMember = iprop;
+            return candidate;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Issue #2362: builds the substitution map from a constructed generic
+    /// interface's OWN type parameters (declared on <c>iface.Definition</c>)
+    /// to <paramref name="iface"/>'s type arguments, for comparing an
+    /// interface property's declared (open) type against an implementer's
+    /// concrete type via <see cref="TypeSignaturesEquivalent(TypeSymbol, TypeSymbol, IReadOnlyDictionary{TypeParameterSymbol, TypeSymbol})"/>.
+    /// Returns <see langword="null"/> for a non-generic interface (or the
+    /// open definition itself), matching that method's "no substitution"
+    /// convention.
+    /// </summary>
+    private static IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> BuildInterfaceTypeParameterMap(InterfaceSymbol iface)
+    {
+        var def = iface.Definition;
+        if (def == null || ReferenceEquals(def, iface) || def.TypeParameters.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        for (var i = 0; i < def.TypeParameters.Length && i < iface.TypeArguments.Length; i++)
+        {
+            map[def.TypeParameters[i]] = iface.TypeArguments[i];
+        }
+
+        return map;
+    }
 
     /// <summary>
     /// Namespace/nesting-qualified name of a G# interface, dots sanitized to

@@ -128,6 +128,30 @@ public sealed class PropertySymbol : Symbol
     public Syntax.BlockStatementSyntax SetterBodySyntax { get; set; }
 
     /// <summary>
+    /// Gets or sets the in-compilation (G#) interface member this property
+    /// explicitly implements (issue #2362, extending the #2010 mangled-name
+    /// convention from methods to properties/indexers). Set when the
+    /// property's declared name matches the reserved
+    /// <c>__explicit_&lt;Interface&gt;__&lt;Member&gt;</c> mangled-name
+    /// convention (see
+    /// <see cref="Binding.DeclarationBinder.TryParseExplicitInterfaceImplName"/>)
+    /// and a matching abstract property is found on one of the containing
+    /// type's declared interfaces. Mirrors
+    /// <see cref="FunctionSymbol.ExplicitInterfaceMember"/>: the emitter
+    /// resolves this property's getter/setter accessor methods to a
+    /// MethodDef or (for a constructed generic interface) a
+    /// MemberRef/TypeSpec token and binds a <c>MethodImpl</c> row per
+    /// accessor so the CLR routes interface dispatch to this property's own
+    /// distinct accessor bodies instead of relying on name-based virtual
+    /// dispatch. Because the mangled name embeds the interface's own name, an
+    /// explicit property implementation never collides with a same-named
+    /// public concrete property (the #2362 defect: previously both were
+    /// translated under the same unmangled name, producing GS0102). Defaults
+    /// to <see langword="null"/> for ordinary properties.
+    /// </summary>
+    public PropertySymbol ExplicitInterfaceMember { get; set; }
+
+    /// <summary>
     /// ADR-0105 Phase 2 — re-points this (reused) property at the declaration
     /// node of a freshly-parsed syntax tree whose property signature and
     /// accessor shape are byte-identical to the previous one (a body-only edit).

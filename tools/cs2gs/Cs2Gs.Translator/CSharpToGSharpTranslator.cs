@@ -3484,7 +3484,7 @@ public sealed class CSharpToGSharpTranslator
             }
 
             string mangledExplicitName = isUserInterfaceExplicitImpl
-                ? MangleExplicitInterfaceImplName(symbol)
+                ? MangleExplicitInterfaceImplName(symbol.ExplicitInterfaceImplementations[0])
                 : null;
 
             Receiver receiver = null;
@@ -3663,23 +3663,24 @@ public sealed class CSharpToGSharpTranslator
         /// into the reserved <c>__explicit_&lt;Interface&gt;__&lt;Member&gt;</c>
         /// convention gsc's binder recognizes (see
         /// <c>DeclarationBinder.TryParseExplicitInterfaceImplName</c>).
-        /// Only called when <see cref="IMethodSymbol.ExplicitInterfaceImplementations"/>
-        /// has exactly one entry (see the caller in <see cref="TranslateMethod"/>),
-        /// so indexing <c>[0]</c> here is safe.
         ///
-        /// Follow-up fix: the interface component is the interface's
-        /// NAMESPACE-QUALIFIED name (dots sanitized to underscores), not its
-        /// bare simple name — two same-simple-name interfaces declared in
-        /// different namespaces (e.g. <c>Foo.IBar</c> and <c>Baz.IBar</c>)
-        /// previously mangled to the identical name and collided (GS0264).
-        /// The binder-side match in
-        /// <c>DeclarationBinder.TryResolveExplicitInterfaceImplementation</c>
-        /// builds the same qualified-name string from the G# interface's
-        /// package + name and must stay in sync with this method.
+        /// Issue #2362: generalized from <c>IMethodSymbol</c> to <c>ISymbol</c>
+        /// so this same mangling logic is shared, verbatim, between explicit
+        /// interface METHODS (<see cref="TranslateMethod"/>, which resolves
+        /// <c>symbol.ExplicitInterfaceImplementations[0]</c> itself and passes
+        /// it in directly) and explicit interface PROPERTIES/indexers
+        /// (<see cref="TranslateProperty"/>/<see cref="TranslateIndexer"/>,
+        /// which do the same against <c>IPropertySymbol.ExplicitInterfaceImplementations</c>).
+        /// Only <c>ContainingType</c>/<c>Name</c> are read, both declared on
+        /// <c>ISymbol</c> itself, so no method-specific member is needed.
         /// </summary>
-        private static string MangleExplicitInterfaceImplName(IMethodSymbol symbol)
+        /// <param name="explicitMember">
+        /// The single resolved explicit-interface-implementation target (e.g.
+        /// <c>symbol.ExplicitInterfaceImplementations[0]</c>). Callers must
+        /// only invoke this when there is exactly one such entry.
+        /// </param>
+        private static string MangleExplicitInterfaceImplName(ISymbol explicitMember)
         {
-            ISymbol explicitMember = symbol.ExplicitInterfaceImplementations[0];
             string interfaceName = SanitizeIdentifier(QualifyInterfaceName(explicitMember.ContainingType));
             string memberName = SanitizeIdentifier(explicitMember.Name);
             return $"__explicit_{interfaceName}__{memberName}";
@@ -3828,6 +3829,121 @@ public sealed class CSharpToGSharpTranslator
         /// <c>IInterface.Member</c> name for use in translation diagnostics.
         /// </summary>
         private static string FormatExplicitInterfaceName(IMethodSymbol symbol)
+        {
+            ISymbol explicitInterfaceMember = symbol.ExplicitInterfaceImplementations[0];
+            return $"{explicitInterfaceMember.ContainingType.Name}.{explicitInterfaceMember.Name}";
+        }
+
+        /// <summary>
+        /// Issue #2362: property/indexer counterpart of
+        /// <see cref="FindPriorCollidingSibling"/>, used for BOTH an external
+        /// interface's explicit property implementation (collision-drop
+        /// fallback, exactly like the method case) AND an indexer's explicit
+        /// implementation of ANY interface, user or external (indexers have no
+        /// distinct-name mangling available at all — see the call site in
+        /// <see cref="TranslateIndexer"/> — so every indexer explicit impl uses
+        /// this collision-drop path, never the mangled-name one).
+        ///
+        /// Unlike the method version, a return/property-TYPE mismatch does
+        /// NOT exempt two candidates from colliding: G# properties have no
+        /// covariant-return "bridge" mechanism (issue #985 has no property
+        /// analogue), so two same-effective-name, same-parameter-shape
+        /// properties always occupy the same flat-namespace slot in G#
+        /// regardless of their declared type.
+        /// </summary>
+        private static IPropertySymbol FindPriorCollidingSiblingProperty(IPropertySymbol explicitImplementation, BasePropertyDeclarationSyntax node)
+        {
+            INamedTypeSymbol containingType = explicitImplementation.ContainingType;
+            if (containingType == null)
+            {
+                return null;
+            }
+
+            string simpleName = explicitImplementation.ExplicitInterfaceImplementations[0].Name;
+            int selfPosition = node.SpanStart;
+
+            IPropertySymbol bestPublicCandidate = null;
+            IPropertySymbol bestExplicitCandidate = null;
+            int bestExplicitPosition = int.MaxValue;
+
+            foreach (ISymbol member in containingType.GetMembers())
+            {
+                if (member is not IPropertySymbol candidate ||
+                    SymbolEqualityComparer.Default.Equals(candidate, explicitImplementation) ||
+                    EffectiveSimplePropertyName(candidate) != simpleName ||
+                    candidate.Parameters.Length != explicitImplementation.Parameters.Length ||
+                    !HasSamePropertyParameterTypes(candidate, explicitImplementation))
+                {
+                    continue;
+                }
+
+                if (candidate.ExplicitInterfaceImplementations.Length == 0)
+                {
+                    bestPublicCandidate = candidate;
+                    continue;
+                }
+
+                int candidatePosition = candidate.DeclaringSyntaxReferences.FirstOrDefault()?.Span.Start ?? int.MaxValue;
+                if (candidatePosition < bestExplicitPosition)
+                {
+                    bestExplicitCandidate = candidate;
+                    bestExplicitPosition = candidatePosition;
+                }
+            }
+
+            // A plain public property always wins over an explicit implementation.
+            if (bestPublicCandidate != null)
+            {
+                return bestPublicCandidate;
+            }
+
+            // Among explicit implementations only, the earliest-declared one
+            // wins; this declaration yields only if some other explicit impl is
+            // strictly earlier.
+            if (bestExplicitCandidate != null && bestExplicitPosition < selfPosition)
+            {
+                return bestExplicitCandidate;
+            }
+
+            return null;
+        }
+
+        private static string EffectiveSimplePropertyName(IPropertySymbol property)
+        {
+            return property.ExplicitInterfaceImplementations.Length > 0
+                ? property.ExplicitInterfaceImplementations[0].Name
+                : property.Name;
+        }
+
+        private static bool HasSamePropertyParameterTypes(IPropertySymbol left, IPropertySymbol right)
+        {
+            for (int i = 0; i < left.Parameters.Length; i++)
+            {
+                if (!SymbolEqualityComparer.Default.Equals(left.Parameters[i].Type, right.Parameters[i].Type))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Issue #2362: property/indexer counterpart of
+        /// <see cref="FormatSiblingName"/>.
+        /// </summary>
+        private static string FormatSiblingPropertyName(IPropertySymbol sibling)
+        {
+            return sibling.ExplicitInterfaceImplementations.Length > 0
+                ? FormatExplicitInterfacePropertyName(sibling)
+                : sibling.Name;
+        }
+
+        /// <summary>
+        /// Issue #2362: property/indexer counterpart of
+        /// <see cref="FormatExplicitInterfaceName"/>.
+        /// </summary>
+        private static string FormatExplicitInterfacePropertyName(IPropertySymbol symbol)
         {
             ISymbol explicitInterfaceMember = symbol.ExplicitInterfaceImplementations[0];
             return $"{explicitInterfaceMember.ContainingType.Name}.{explicitInterfaceMember.Name}";
@@ -4061,6 +4177,66 @@ public sealed class CSharpToGSharpTranslator
             PropertyDeclarationSyntax node, IReadOnlyCollection<string> primaryCtorParamNames = null)
         {
             var symbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
+
+            // Issue #2362: explicit interface PROPERTY implementations get the
+            // exact same treatment as explicit interface METHODS (issues
+            // #1911/#2010/#2181) — see the extensive comment on this same
+            // decision tree in TranslateMethod, which this mirrors verbatim
+            // (mangled-name + CLR MethodImpl bridge for a G# USER interface;
+            // forced-public collision-drop fallback for an EXTERNAL/BCL
+            // interface). The property-specific difference: there is no
+            // covariant-return "bridge" mechanism for properties (issue #985
+            // has no property analogue), so collision detection never exempts
+            // a type mismatch — see FindPriorCollidingSiblingProperty.
+            bool isExplicitInterfacePropertyImpl = symbol != null && symbol.ExplicitInterfaceImplementations.Length > 0;
+
+            bool isUserInterfaceExplicitPropertyImpl = isExplicitInterfacePropertyImpl &&
+                symbol.ExplicitInterfaceImplementations.Length == 1 &&
+                symbol.ExplicitInterfaceImplementations[0].ContainingType.Locations.Any(l => l.IsInSource);
+
+            if (isExplicitInterfacePropertyImpl && symbol.ExplicitInterfaceImplementations.Length > 1 &&
+                symbol.ExplicitInterfaceImplementations.All(e => e.ContainingType.Locations.Any(l => l.IsInSource)))
+            {
+                string names = string.Join(", ", symbol.ExplicitInterfaceImplementations.Select(e => e.ContainingType.Name));
+                string multiEntryMessage =
+                    $"explicit interface property implementation '{FormatExplicitInterfacePropertyName(symbol)}' satisfies " +
+                    $"more than one G# user interface member in one C# declaration ({names}), likely via interface " +
+                    "inheritance (a base interface re-declaring the same property). The issue #2010/#2362 mangled-name + " +
+                    "CLR MethodImpl scheme only wires a single interface slot per mangled property, so this falls back to " +
+                    "the #1911-style named/forced-public path instead of mangling — the property keeps its plain name " +
+                    "and every interface's slot is satisfied via ordinary implicit name+signature dispatch (known gap: " +
+                    "the property becomes publicly callable by name, unlike real C# explicit-impl semantics).";
+                this.context.Report(new TranslationDiagnostic(
+                    nameof(SyntaxKind.PropertyDeclaration), multiEntryMessage, node.GetLocation(), TranslationSeverity.Info));
+            }
+
+            if (isExplicitInterfacePropertyImpl && !isUserInterfaceExplicitPropertyImpl)
+            {
+                IPropertySymbol propertySurvivor = FindPriorCollidingSiblingProperty(symbol, node);
+                if (propertySurvivor != null)
+                {
+                    string message =
+                        $"explicit interface property implementation '{symbol.ContainingType.Name}.{FormatExplicitInterfacePropertyName(symbol)}' " +
+                        $"shares its name and signature with '{symbol.ContainingType.Name}.{FormatSiblingPropertyName(propertySurvivor)}'; " +
+                        "G# has no explicit-interface-implementation surface (ADR-0091), so the two C# properties cannot both " +
+                        "be emitted (would be an exact-signature duplicate, GS0102). This declaration is dropped in favor " +
+                        "of the surviving sibling, which already satisfies the interface by name; if the surviving " +
+                        "sibling's accessors differ from this dropped declaration's, any C# access through the " +
+                        "interface-typed reference that previously reached this property now silently observes the " +
+                        "surviving property instead (semantic loss, known gap, issue #1911 analogue). This diagnostic " +
+                        "covers only EXTERNAL/BCL interfaces — a same-signature collision between two G# user-interface " +
+                        "explicit property implementations is fully supported (issue #2362, mangled-name + CLR MethodImpl).";
+                    this.context.Report(new TranslationDiagnostic(
+                        nameof(SyntaxKind.PropertyDeclaration), message, node.GetLocation(), TranslationSeverity.Unsupported));
+
+                    return (null, false, null);
+                }
+            }
+
+            string mangledExplicitPropertyName = isUserInterfaceExplicitPropertyImpl
+                ? MangleExplicitInterfaceImplName(symbol.ExplicitInterfaceImplementations[0])
+                : null;
+
             bool isStatic = symbol != null && symbol.IsStatic;
 
             GTypeReference type = symbol != null
@@ -4121,11 +4297,24 @@ public sealed class CSharpToGSharpTranslator
             // members carry no `open` modifier (ADR-0115 §B.6).
             bool isOpen = this.IsMemberEmittedOpen(symbol, isOverride);
 
+            // Issue #2362: see the matching visibility comment in TranslateMethod
+            // for the full rationale — a G# user-interface explicit property
+            // implementation (mangled name + CLR MethodImpl) keeps C#'s own
+            // `private`-equivalent visibility (Roslyn reports `Private`, mapped
+            // straight through by MapVisibility); an EXTERNAL/BCL interface
+            // explicit property implementation still relies on name-based
+            // dispatch and must stay forced-public (`Visibility.Default`, which
+            // for a class-member position IS public per ADR-0115 §B.10) or
+            // ilverify would reject the missing interface method.
+            Visibility explicitInterfacePropertyVisibility = isExplicitInterfacePropertyImpl && !isUserInterfaceExplicitPropertyImpl
+                ? Visibility.Default
+                : MapVisibility(symbol, this.context, node);
+
             var property = new PropertyDeclaration(
-                SanitizeIdentifier(node.Identifier.Text),
+                mangledExplicitPropertyName ?? SanitizeIdentifier(node.Identifier.Text),
                 type,
                 accessors: accessors,
-                visibility: MapVisibility(symbol, this.context, node),
+                visibility: explicitInterfacePropertyVisibility,
                 isOpen: isOpen,
                 isOverride: isOverride,
                 attributes: this.MapAttributes(node.AttributeLists),
@@ -4228,6 +4417,40 @@ public sealed class CSharpToGSharpTranslator
             var symbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
             bool isStatic = symbol != null && symbol.IsStatic;
 
+            // Issue #2362: unlike an ordinary property or a method, a G#
+            // indexer's identity is structurally fixed to `this[...]`/CLR
+            // `Item` (PropertyDeclarationSyntax.IsIndexer is purely
+            // `ThisKeyword != null` — see ADR-0118) — it can never carry a
+            // distinct mangled name, so the #2010/#2362 mangled-name + CLR
+            // MethodImpl bridge is not possible for ANY explicit interface
+            // indexer implementation, user or external alike. Every explicit
+            // indexer implementation instead uses the same collision-drop
+            // fallback the #1911 method/property conventions use for
+            // EXTERNAL interfaces only — here applied uniformly, and
+            // reported as a known, permanent (not merely deferred) gap.
+            bool isExplicitInterfaceIndexerImpl = symbol != null && symbol.ExplicitInterfaceImplementations.Length > 0;
+            if (isExplicitInterfaceIndexerImpl)
+            {
+                IPropertySymbol indexerSurvivor = FindPriorCollidingSiblingProperty(symbol, node);
+                if (indexerSurvivor != null)
+                {
+                    string message =
+                        $"explicit interface indexer implementation '{symbol.ContainingType.Name}.{FormatExplicitInterfacePropertyName(symbol)}' " +
+                        $"shares its parameter shape with '{symbol.ContainingType.Name}.{FormatSiblingPropertyName(indexerSurvivor)}'; " +
+                        "G# indexer identity is structurally fixed to `this[...]` (ADR-0118) with no room for a distinct " +
+                        "mangled name (unlike issue #2010/#2362's method/property bridge), so the two C# indexers cannot " +
+                        "both be emitted (would be an exact-signature duplicate, GS0102). This declaration is dropped in " +
+                        "favor of the surviving sibling, which already satisfies the interface by parameter shape; if the " +
+                        "surviving sibling's accessors differ from this dropped declaration's, any C# access through the " +
+                        "interface-typed reference that previously reached this indexer now silently observes the " +
+                        "surviving indexer instead (semantic loss, known permanent gap — indexers cannot be mangled).";
+                    this.context.Report(new TranslationDiagnostic(
+                        nameof(SyntaxKind.IndexerDeclaration), message, node.GetLocation(), TranslationSeverity.Unsupported));
+
+                    return (null, false);
+                }
+            }
+
             GTypeReference type = symbol != null
                 ? this.typeMapper.Map(symbol.Type, this.context, node.GetLocation())
                 : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
@@ -4259,11 +4482,23 @@ public sealed class CSharpToGSharpTranslator
             bool isOverride = symbol != null && symbol.IsOverride && !OverridesExternalBaseProperty(symbol);
             bool isOpen = this.IsMemberEmittedOpen(symbol, isOverride);
 
+            // Issue #2362: an explicit interface indexer implementation that
+            // survives the collision-drop check above (i.e. IS the survivor,
+            // or has no colliding sibling at all) still needs the same forced-
+            // public visibility the #1911 external-interface method/property
+            // bridge uses — its slot is filled purely by name+parameter-shape
+            // dispatch (there being no mangled-name alternative), which
+            // requires public visibility or ilverify rejects the missing
+            // interface method.
+            Visibility indexerVisibility = isExplicitInterfaceIndexerImpl
+                ? Visibility.Default
+                : MapVisibility(symbol, this.context, node);
+
             var property = new PropertyDeclaration(
                 "this",
                 type,
                 accessors: accessors,
-                visibility: MapVisibility(symbol, this.context, node),
+                visibility: indexerVisibility,
                 isOpen: isOpen,
                 isOverride: isOverride,
                 attributes: this.MapAttributes(node.AttributeLists),

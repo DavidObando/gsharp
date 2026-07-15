@@ -2992,6 +2992,10 @@ internal sealed class ReflectionMetadataEmitter
             // Issue #985: emit MethodImpl rows for covariant-return interface
             // bridges (e.g. the non-generic IEnumerable.GetEnumerator).
             this.EmitExplicitInterfaceMethodImpls(c);
+
+            // Issue #2362: emit MethodImpl rows for mangled-name explicit
+            // interface property implementations (accessor methods).
+            this.EmitExplicitInterfacePropertyMethodImpls(c);
         }
 
         foreach (var c in topClasses)
@@ -3086,6 +3090,10 @@ internal sealed class ReflectionMetadataEmitter
             // Issue #985: emit MethodImpl rows for covariant-return interface
             // bridges declared on a struct that implements `IEnumerable[T]` &c.
             this.EmitExplicitInterfaceMethodImpls(s);
+
+            // Issue #2362: emit MethodImpl rows for mangled-name explicit
+            // interface property implementations (accessor methods).
+            this.EmitExplicitInterfacePropertyMethodImpls(s);
         }
 
         foreach (var s in topStructs)
@@ -12099,6 +12107,95 @@ internal sealed class ReflectionMetadataEmitter
             if (slotHandle.HasValue)
             {
                 this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implHandle, slotHandle.Value);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Issue #2362: emit <c>MethodImpl</c> rows for mangled-name explicit
+    /// interface PROPERTY implementations — the property-level counterpart of
+    /// <see cref="EmitExplicitInterfaceMethodImpls"/>. A property whose
+    /// <see cref="PropertySymbol.ExplicitInterfaceMember"/> is set explicitly
+    /// implements one specific in-compilation (G#) interface property; its
+    /// mangled name never matches the interface member's own name, so
+    /// ordinary name-based virtual dispatch never wires its accessors into
+    /// that interface's slot. An explicit <c>MethodImpl</c> row per accessor
+    /// (getter and/or setter) is required, exactly mirroring
+    /// <see cref="EmitStaticVirtualPropertyMethodImpls"/>'s generic-aware
+    /// token resolution for a constructed interface, but for an INSTANCE
+    /// property slot resolved from <see cref="StructSymbol.Interfaces"/>
+    /// rather than a static-virtual slot.
+    /// </summary>
+    /// <param name="structSymbol">The implementing class or struct.</param>
+    private void EmitExplicitInterfacePropertyMethodImpls(StructSymbol structSymbol)
+    {
+        if (structSymbol == null || structSymbol.Properties.IsDefaultOrEmpty || structSymbol.Interfaces.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        if (!this.cache.StructTypeDefs.TryGetValue(structSymbol, out var implTypeDef))
+        {
+            return;
+        }
+
+        foreach (var prop in structSymbol.Properties)
+        {
+            var ifaceMember = prop.ExplicitInterfaceMember;
+            if (ifaceMember == null)
+            {
+                continue;
+            }
+
+            if (!this.cache.PropertyAccessorHandles.TryGetValue(prop, out var implAccessors))
+            {
+                continue;
+            }
+
+            foreach (var iface in structSymbol.Interfaces)
+            {
+                // Issue #2362: InterfaceSymbol.Construct does not substitute
+                // Properties onto a constructed generic instance (see
+                // InterfaceSymbol.TryResolveMembers) — `ExplicitInterfaceMember`
+                // is always linked against the OPEN definition's property (see
+                // TryResolveExplicitInterfacePropertyImplementation), so match
+                // against `defIface.Properties` here too, exactly like
+                // EmitStaticVirtualPropertyMethodImpls.
+                var defIface = iface.Definition ?? iface;
+                if (defIface.Properties.IsDefaultOrEmpty || !defIface.Properties.Contains(ifaceMember))
+                {
+                    continue;
+                }
+
+                var isGenericIface = IsUserGenericInterfaceReference(iface);
+
+                if (ifaceMember.HasGetter && implAccessors.Getter.HasValue && ifaceMember.GetterSymbol != null)
+                {
+                    EntityHandle? getterDecl = isGenericIface
+                        ? this.ResolveUserInterfaceInstanceMethodToken(iface, ifaceMember.GetterSymbol)
+                        : this.cache.MethodHandles.TryGetValue(ifaceMember.GetterSymbol, out var getterDefHandle)
+                            ? getterDefHandle
+                            : (EntityHandle?)null;
+                    if (getterDecl.HasValue)
+                    {
+                        this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Getter.Value, getterDecl.Value);
+                    }
+                }
+
+                if (ifaceMember.HasSetter && implAccessors.Setter.HasValue && ifaceMember.SetterSymbol != null)
+                {
+                    EntityHandle? setterDecl = isGenericIface
+                        ? this.ResolveUserInterfaceInstanceMethodToken(iface, ifaceMember.SetterSymbol)
+                        : this.cache.MethodHandles.TryGetValue(ifaceMember.SetterSymbol, out var setterDefHandle)
+                            ? setterDefHandle
+                            : (EntityHandle?)null;
+                    if (setterDecl.HasValue)
+                    {
+                        this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Setter.Value, setterDecl.Value);
+                    }
+                }
+
+                break;
             }
         }
     }
