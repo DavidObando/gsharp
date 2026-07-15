@@ -9,6 +9,11 @@
   <ItemGroup>
     <PackageReference Include="FsCheck.Xunit" Version="3.0.0" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+    <!-- Issue #2345 follow-up: real third-party "Microsoft.*"-named NuGet
+         package, referenced test-only, to regression-test
+         ReferenceResolver.IsBclOrRuntimeAssemblyPath against an actual
+         non-BCL assembly rather than a synthetic stand-in. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.0" />
   </ItemGroup>
 
   <ItemGroup>

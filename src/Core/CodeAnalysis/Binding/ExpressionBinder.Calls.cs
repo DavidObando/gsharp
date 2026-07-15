@@ -1178,8 +1178,33 @@ internal sealed partial class ExpressionBinder
         int sourceArgIndex,
         string argName,
         out FunctionTypeSymbol target)
+        => TryResolveDelegateTargetFromCandidates(candidateParameterLists, paramOffset, sourceArgIndex, argName, out target, out _);
+
+    /// <summary>
+    /// Issue #2345: overload of <see cref="TryResolveDelegateTargetFromCandidates(IReadOnlyList{ParameterInfo[]}, int, int, string, out FunctionTypeSymbol)"/>
+    /// that also reports whether resolution failed specifically because every
+    /// matching candidate parameter at this slot is an <em>open</em> generic
+    /// delegate (<c>ParameterType.ContainsGenericParameters</c>) — e.g. an
+    /// imported generic method's <c>Action&lt;Builder&lt;TColumns&gt;&gt;</c>
+    /// parameter whose <c>TColumns</c> is only closed once the method's type
+    /// arguments are inferred from the call's other arguments. Callers use
+    /// this signal to defer such a lambda (mirroring the existing untyped-
+    /// arrow-lambda deferral) instead of binding it immediately with no
+    /// target, which is what previously produced a wrong (non-void) inferred
+    /// delegate shape for a block-bodied lambda whose trailing statement calls
+    /// a fluent/self-returning method.
+    /// </summary>
+    private static bool TryResolveDelegateTargetFromCandidates(
+        IReadOnlyList<ParameterInfo[]> candidateParameterLists,
+        int paramOffset,
+        int sourceArgIndex,
+        string argName,
+        out FunctionTypeSymbol target,
+        out bool blockedByOpenGenericParameter)
     {
         target = null;
+        blockedByOpenGenericParameter = false;
+        var sawAnyMatchingSlot = false;
         foreach (var parameters in candidateParameterLists)
         {
             int paramIndex;
@@ -1210,10 +1235,17 @@ internal sealed partial class ExpressionBinder
             }
 
             var parameterType = parameters[paramIndex].ParameterType;
-            if (parameterType == null || parameterType.ContainsGenericParameters)
+            if (parameterType == null)
+            {
+                continue;
+            }
+
+            sawAnyMatchingSlot = true;
+            if (parameterType.ContainsGenericParameters)
             {
                 // Open generic delegate parameters are resolved later, once the
                 // generic method's type arguments have been inferred.
+                blockedByOpenGenericParameter = true;
                 continue;
             }
 
@@ -1231,9 +1263,15 @@ internal sealed partial class ExpressionBinder
                 // Candidates disagree on the delegate shape — leave the lambda
                 // to be bound without a target (overload resolution decides).
                 target = null;
+                blockedByOpenGenericParameter = false;
                 return false;
             }
         }
+
+        // Only report the "blocked" signal when every matching slot was open —
+        // if some candidate produced a usable closed target, that target wins
+        // and there is nothing left to defer.
+        blockedByOpenGenericParameter = blockedByOpenGenericParameter && target == null && sawAnyMatchingSlot;
 
         return target != null;
     }
@@ -2307,14 +2345,20 @@ internal sealed partial class ExpressionBinder
         // referenced-element-type and primitive cases are untouched.
         foreach (var probe in probes)
         {
-            if (TryMapDeferredLambdaTargetsSymbolic(probe.Methods, probe.ReceiverParameterOffset, receiverType, ce, deferredIndices, boundArgs, deferred, out var symbolicTargets))
+            if (TryMapDeferredLambdaTargetsSymbolic(probe.Methods, probe.ReceiverParameterOffset, receiverType, ce, deferredIndices, boundArgs, deferred, out var symbolicTargets, out var exactReturnIndices))
             {
                 foreach (var idx in deferredIndices)
                 {
                     var inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx]);
                     if (inner is LambdaExpressionSyntax lambdaSyntax && symbolicTargets.TryGetValue(idx, out var target))
                     {
-                        boundArgs[idx] = lambdas.BindLambdaExpression(lambdaSyntax, target, inferReturnTypeFromBody: true);
+                        // Issue #2345: when this slot's return type was fully
+                        // recovered (e.g. `void` for an Action-shaped
+                        // parameter), bind against the real target so the
+                        // void-discard / ordinary target-typed return-type
+                        // inference applies instead of inferring the return
+                        // type purely from the lambda body.
+                        boundArgs[idx] = lambdas.BindLambdaExpression(lambdaSyntax, target, inferReturnTypeFromBody: !exactReturnIndices.Contains(idx));
                     }
                 }
 
@@ -2612,6 +2656,19 @@ internal sealed partial class ExpressionBinder
     /// recovered parameter type is a same-compilation user type, so the
     /// referenced-element and primitive cases continue through the existing
     /// CLR paths unchanged.
+    ///
+    /// Issue #2345: also recovers the delegate's <em>return</em> shape when it
+    /// is fully closed by the same unification (including the common case of a
+    /// <c>void</c>-returning <c>Action</c>-shaped delegate). When recovered,
+    /// the corresponding slot in <paramref name="exactReturnIndices"/> is
+    /// marked so callers bind that lambda against the real target (not
+    /// <c>inferReturnTypeFromBody</c>) — this is what lets a block-bodied
+    /// lambda whose trailing statement calls a fluent/self-returning method
+    /// correctly discard that value instead of being mis-inferred as a
+    /// value-returning <c>Func</c> (see <c>InferLambdaReturnType</c>'s issue
+    /// #889 void-discard rule). When the return type still contains an
+    /// unresolved method type parameter, the slot keeps the previous
+    /// placeholder behavior (return type inferred from the lambda body).
     /// </summary>
     private bool TryMapDeferredLambdaTargetsSymbolic(
         IReadOnlyList<MethodInfo> methods,
@@ -2621,8 +2678,11 @@ internal sealed partial class ExpressionBinder
         List<int> deferredIndices,
         BoundExpression[] boundArgs,
         HashSet<int> deferred,
-        out Dictionary<int, FunctionTypeSymbol> targets)
+        out Dictionary<int, FunctionTypeSymbol> targets,
+        out HashSet<int> exactReturnIndices)
     {
+        exactReturnIndices = new HashSet<int>();
+
         targets = null;
 
         // Symbolic recovery is anchored on the candidate's symbolic argument
@@ -2671,6 +2731,7 @@ internal sealed partial class ExpressionBinder
         }
 
         Dictionary<int, ImmutableArray<TypeSymbol>> agreed = null;
+        Dictionary<int, TypeSymbol> agreedReturnTypes = null;
         var anySameCompilationType = false;
 
         foreach (var method in methods)
@@ -2706,6 +2767,7 @@ internal sealed partial class ExpressionBinder
             var methodTypeArgs = ImmutableArray.Create(inferred);
 
             var slotTargets = new Dictionary<int, ImmutableArray<TypeSymbol>>();
+            var slotReturnTypes = new Dictionary<int, TypeSymbol>();
             var candidateUsable = true;
             var candidateHasSameCompilationType = false;
 
@@ -2790,6 +2852,22 @@ internal sealed partial class ExpressionBinder
                 }
 
                 slotTargets[idx] = parameterTypes.ToImmutable();
+
+                // Issue #2345: recover the delegate's return shape too, when it
+                // is fully closed by this unification (most commonly `void`,
+                // for an Action-shaped constraints/configuration delegate).
+                // Candidates that leave the return type open (e.g. still
+                // containing an unresolved method type parameter) fall back to
+                // the pre-existing placeholder + inferReturnTypeFromBody
+                // behavior for that slot.
+                var returnClrType = invoke.ReturnType;
+                var mappedReturn = returnClrType != null && returnClrType.IsSameAs(typeof(void))
+                    ? TypeSymbol.Void
+                    : MemberLookup.MapOpenClrTypeToSymbolic(returnClrType, openDefinition: null, typeArguments: default, openMethodDefinition: openMethod, methodTypeArguments: methodTypeArgs);
+                if (mappedReturn != null && mappedReturn != TypeSymbol.Error && !TypeSymbol.ContainsTypeParameter(mappedReturn))
+                {
+                    slotReturnTypes[idx] = mappedReturn;
+                }
             }
 
             if (!candidateUsable || slotTargets.Count != deferredIndices.Count)
@@ -2800,10 +2878,29 @@ internal sealed partial class ExpressionBinder
             if (agreed == null)
             {
                 agreed = slotTargets;
+                agreedReturnTypes = slotReturnTypes;
             }
             else if (!SymbolicLambdaParameterTypesAgree(agreed, slotTargets))
             {
                 return false;
+            }
+            else
+            {
+                // Issue #2345: parameter shapes agree across candidates, but
+                // only keep a recovered return type for a slot when every
+                // agreeing candidate recovered the *same* return type;
+                // otherwise that slot falls back to the pre-existing
+                // placeholder + inferReturnTypeFromBody behavior.
+                foreach (var idx in deferredIndices)
+                {
+                    if (agreedReturnTypes.TryGetValue(idx, out var existingReturn))
+                    {
+                        if (!slotReturnTypes.TryGetValue(idx, out var otherReturn) || !Equals(existingReturn, otherReturn))
+                        {
+                            agreedReturnTypes.Remove(idx);
+                        }
+                    }
+                }
             }
 
             anySameCompilationType |= candidateHasSameCompilationType;
@@ -2817,9 +2914,23 @@ internal sealed partial class ExpressionBinder
         var built = new Dictionary<int, FunctionTypeSymbol>();
         foreach (var kv in agreed)
         {
-            // The return slot is a placeholder; callers bind with
-            // inferReturnTypeFromBody so the lambda infers its own return type.
-            built[kv.Key] = FunctionTypeSymbol.Get(kv.Value, TypeSymbol.Object);
+            if (agreedReturnTypes != null && agreedReturnTypes.TryGetValue(kv.Key, out var exactReturn))
+            {
+                // Issue #2345: the delegate's return shape was fully closed by
+                // unification (e.g. `void` for an Action-shaped parameter) —
+                // bind against the real target so the caller does NOT pass
+                // inferReturnTypeFromBody, letting InferLambdaReturnType's
+                // void-discard rule (issue #889) and ordinary target-typed
+                // inference apply.
+                built[kv.Key] = FunctionTypeSymbol.Get(kv.Value, exactReturn);
+                exactReturnIndices.Add(kv.Key);
+            }
+            else
+            {
+                // The return slot is a placeholder; callers bind with
+                // inferReturnTypeFromBody so the lambda infers its own return type.
+                built[kv.Key] = FunctionTypeSymbol.Get(kv.Value, TypeSymbol.Object);
+            }
         }
 
         targets = built;
@@ -3136,8 +3247,42 @@ internal sealed partial class ExpressionBinder
                         delegateTargetCandidateParams = CollectDelegateTargetCandidateParameterLists(receiver, classSymbol, methodName);
                     }
 
-                    boundArguments.Add(BindCallArgumentWithDelegateTargetTyping(
-                        argument, delegateTargetCandidateParams, sourceArgIndex: argSlot, argName: argName, paramOffset: 0));
+                    // Issue #2345: an explicitly-typed lambda whose matching
+                    // delegate parameter is an *open* generic (e.g. an imported
+                    // generic method's `Action<Builder<TColumns>>`, where
+                    // `TColumns` only closes once the method's type arguments
+                    // are inferred from the call's other arguments) cannot be
+                    // target-typed yet. Binding it now with no target is only
+                    // safe for an expression-bodied lambda (`-> expr`), whose
+                    // return type is unambiguously the expression's type either
+                    // way. A block-bodied lambda (`-> { ... }`) is different:
+                    // with no target, a trailing call expression-statement (e.g.
+                    // a fluent/self-returning builder method) is treated as the
+                    // block's *value*, producing a `Func<..., TResult>`-shaped
+                    // lambda instead of the `void`-returning `Action` the (still
+                    // unresolved) target actually expects — which mismatches the
+                    // real parameter and cascades into "cannot find function" at
+                    // the outer call. Defer such lambdas exactly like an
+                    // untyped arrow lambda so the staged inference below
+                    // (`ResolveDeferredArrowLambdaArguments`) can close the
+                    // generic method's type arguments from the other arguments
+                    // first, then bind this lambda against the now-closed
+                    // delegate target (its own explicit parameter types are
+                    // unaffected — only return-type inference depends on the
+                    // target).
+                    if (inner is LambdaExpressionSyntax { Body: BlockExpressionSyntax } blockLambda
+                        && argumentNames.IsDefault
+                        && !TryResolveDelegateTargetFromCandidates(delegateTargetCandidateParams, paramOffset: 0, sourceArgIndex: argSlot, argName: argName, target: out _, blockedByOpenGenericParameter: out var blocked)
+                        && blocked)
+                    {
+                        deferredArrowLambdaIndices.Add(argSlot);
+                        boundArguments.Add(new BoundErrorExpression(blockLambda));
+                    }
+                    else
+                    {
+                        boundArguments.Add(BindCallArgumentWithDelegateTargetTyping(
+                            argument, delegateTargetCandidateParams, sourceArgIndex: argSlot, argName: argName, paramOffset: 0));
+                    }
                 }
             }
             else

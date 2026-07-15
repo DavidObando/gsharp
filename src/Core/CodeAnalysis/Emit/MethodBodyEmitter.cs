@@ -545,6 +545,24 @@ internal sealed partial class MethodBodyEmitter
             return true;
         }
 
+        // Issue #2354 follow-up: the SAME self-referential generic class type
+        // can surface as two non-reference-equal StructSymbol instances — an
+        // OPEN generic definition (e.g. the type of a generic class's own
+        // `this` parameter) versus the identical type spelled out explicitly
+        // with its own type parameters as arguments (e.g. a member signature
+        // written `Box[T]` inside `class Box[T]`, bound via
+        // `StructSymbol.Construct`). Both erase to the exact same TypeDef at
+        // the IL level, so the conversion is a no-op reference load — mirrors
+        // `Conversion.AreSameConstructedStructIdentity`, the binder-side rule
+        // that admits this same case for `Conversion.Classify` (e.g. `return
+        // this` from such a method). Reusing the shared predicate keeps the
+        // binder's and emitter's notion of "same type" from drifting apart.
+        if (a is StructSymbol aSelfStruct && b is StructSymbol bSelfStruct
+            && Conversion.AreSameConstructedStructIdentity(aSelfStruct, bSelfStruct))
+        {
+            return true;
+        }
+
         // Issue #1431: two reference types that resolve to the SAME closed CLR
         // type token are identical at the IL level even when their symbols use
         // different representations of the same type argument (e.g. a lambda
