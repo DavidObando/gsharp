@@ -397,10 +397,22 @@ public static class TypeMemberModel
         else if (type is InterfaceSymbol interfaceSymbol)
         {
             // Issue #1006: walk base interfaces too.
+            //
+            // ADR-0149 follow-up (issue #2370): like Properties (see
+            // InterfaceSymbol.TryResolveMembers's remarks — only
+            // Methods/StaticMethods/PrivateMethods/StaticPrivateMethods are
+            // substituted onto a CONSTRUCTED generic interface instance),
+            // Events is never populated on a constructed instance either —
+            // only the open Definition carries it. Resolve against
+            // `iface.Definition ?? iface` (a no-op for a non-generic
+            // interface) so a constructed generic interface receiver (e.g.
+            // `IWatchable[int32]`) still finds its own event instead of
+            // silently reporting "not found".
             foreach (var iface in interfaceSymbol.SelfAndAllBaseInterfaces())
             {
-                iface.EnsureMembersResolved();
-                foreach (var e in iface.Events)
+                var def = iface.Definition ?? iface;
+                def.EnsureMembersResolved();
+                foreach (var e in def.Events)
                 {
                     if (e.Name == name)
                     {

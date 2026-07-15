@@ -407,6 +407,190 @@ class Host {
         Assert.Contains(diagnostics, d => d.Id == "GS0102");
     }
 
+    // ADR-0149 follow-up (issue #2370, "final completion pass"): generalizes
+    // the explicit-interface qualifier clause to STATIC methods/properties
+    // (C# 11 `static abstract`/`static virtual` interface members,
+    // ADR-0089/#755/#1019). See <c>Issue2370ExplicitInterfaceStaticMemberEmitTests</c>
+    // for the emit-level (MethodImpl / runtime-dispatch) coverage; these
+    // tests focus on the binder diagnostics, mirroring the instance-member
+    // tests above exactly but inside a `shared { }` block.
+    [Fact]
+    public void StaticClauseReferencesNonInterfaceType_ReportsGS0492()
+    {
+        var source = @"
+package P
+
+class NotAnInterface { }
+
+class Host {
+    shared {
+        private func (NotAnInterface) M() int32 { return 1 }
+    }
+}
+";
+        var diagnostics = GetDiagnostics(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0492");
+    }
+
+    [Fact]
+    public void StaticClauseReferencesUnimplementedInterface_ReportsGS0493()
+    {
+        var source = @"
+package P
+
+interface IBar {
+    shared {
+        func M() int32;
+    }
+}
+
+interface IOther {
+    shared {
+        func M() int32;
+    }
+}
+
+class Host : IBar {
+    shared {
+        func M() int32 { return 1 }
+
+        private func (IOther) M() int32 { return 2 }
+    }
+}
+";
+        var diagnostics = GetDiagnostics(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0493");
+    }
+
+    [Fact]
+    public void StaticClauseReferencesInterfaceWithNoMatchingMember_ReportsGS0494()
+    {
+        var source = @"
+package P
+
+interface IFoo {
+    shared {
+        prop Bar string { get; }
+    }
+}
+
+class Impl : IFoo {
+    shared {
+        prop Bar string -> ""impl""
+
+        private prop (IFoo) Baz string -> ""x""
+    }
+}
+";
+        var diagnostics = GetDiagnostics(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0494");
+    }
+
+    [Fact]
+    public void TwoStaticMethodsClaimSameInterfaceSlot_ReportsGS0495()
+    {
+        var source = @"
+package P
+
+interface IFoo {
+    shared {
+        func Bar() int32;
+    }
+}
+
+class Impl : IFoo {
+    shared {
+        private func (IFoo) Bar() int32 { return 1 }
+
+        private func (IFoo) Bar() int32 { return 2 }
+    }
+}
+";
+        var diagnostics = GetDiagnostics(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0495");
+    }
+
+    [Fact]
+    public void TwoStaticPropertiesClaimSameInterfaceSlot_ReportsGS0495()
+    {
+        var source = @"
+package P
+
+interface IFoo {
+    shared {
+        prop Bar string { get; }
+    }
+}
+
+class Impl : IFoo {
+    shared {
+        private prop (IFoo) Bar string -> ""a""
+
+        private prop (IFoo) Bar string -> ""b""
+    }
+}
+";
+        var diagnostics = GetDiagnostics(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0495");
+    }
+
+    [Fact]
+    public void StaticPublicMethodAndExplicitClauseMethod_ShareSourceName_NoDiagnostics()
+    {
+        // The static counterpart of the Oahu Authorization/IProfile shape: a
+        // plain, implicitly-dispatched static method and a purely-explicit-
+        // slot static method may share the same declared source name.
+        var source = @"
+package P
+
+interface IFoo {
+    shared {
+        func Bar() int32;
+    }
+}
+
+class Impl : IFoo {
+    shared {
+        func Bar() int32 { return 1 }
+
+        private func (IFoo) Bar() int32 { return 2 }
+    }
+}
+";
+        var diagnostics = GetDiagnostics(source);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void TwoStaticExplicitClausesTargetingDifferentInterfaces_ShareSourceName_NoDiagnostics()
+    {
+        var source = @"
+package P
+
+interface IFoo {
+    shared {
+        func Bar() string;
+    }
+}
+
+interface IBaz {
+    shared {
+        func Bar() string;
+    }
+}
+
+class Both : IFoo, IBaz {
+    shared {
+        private func (IFoo) Bar() string { return ""foo"" }
+
+        private func (IBaz) Bar() string { return ""baz"" }
+    }
+}
+";
+        var diagnostics = GetDiagnostics(source);
+        Assert.Empty(diagnostics);
+    }
+
     private static IEnumerable<Diagnostic> GetDiagnostics(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

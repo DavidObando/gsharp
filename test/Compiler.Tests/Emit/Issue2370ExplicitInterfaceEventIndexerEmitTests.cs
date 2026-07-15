@@ -129,21 +129,14 @@ public class Issue2370ExplicitInterfaceEventIndexerEmitTests
     [Fact]
     public void ExplicitEventImpl_DispatchesThroughInterface_AddAndRemove()
     {
-        // NOTE: like indexers (see the NOTE on
-        // ExplicitIndexerImpl_DispatchesThroughInterface_GetAndSet below),
-        // G# does not yet support accessing an EVENT through an
-        // interface-TYPED receiver (`asIface.Changed += H`) at all — this is
-        // a genuinely separate, pre-existing binder gap that reproduces
-        // identically for a plain, non-explicit interface event with zero
-        // explicit-interface involvement (confirmed: `interface IFoo { event
-        // Changed () -> void } / class C : IFoo { open event Changed ...
-        // }` still fails `asIface.Changed += H` with GS0158 today). Ordinary
-        // interface PROPERTY access through an interface-typed receiver
-        // already works fine; only events and indexers share this
-        // call-site-only limitation. Dispatch is therefore verified here via
-        // reflection, invoking the explicit accessor's own mangled add/remove
-        // methods directly — proving the MethodImpl bridge itself is wired
-        // correctly, independent of that separate gap.
+        // Dispatch is verified here via reflection, invoking the explicit
+        // accessor's own mangled add/remove methods directly — proving the
+        // MethodImpl bridge itself is wired correctly. See
+        // ExplicitEventImpl_DispatchesThroughInterfaceTypedReceiver_AddAndRemove
+        // below for the follow-up fix that also proves dispatch through a
+        // REAL interface-typed receiver (`asIface.Changed += h`), which used
+        // to fail with GS0158 for ANY interface event (explicit or not) and
+        // is now fixed generally in ExpressionBinder.Async.cs.
         var assembly = CompileToAssembly(EventDispatchReproSource);
         var counterType = assembly.GetTypes().Single(t => t.Name == "Counter");
         var instance = Activator.CreateInstance(counterType)!;
@@ -255,18 +248,15 @@ public class Issue2370ExplicitInterfaceEventIndexerEmitTests
     [Fact]
     public void ExplicitIndexerImpl_DispatchesThroughInterface_GetAndSet()
     {
-        // NOTE: G# does not support indexer access through an
-        // interface-TYPED receiver (`asIface["k"]`) at all — this is a
-        // genuinely separate, pre-existing gap
-        // (`ExpressionBinder.Access.cs`'s `TryGetUserIndexer` only resolves a
-        // `StructSymbol` receiver type), unrelated to explicit-interface
-        // support and never possible for ANY indexer before this fix (since
-        // interfaces could not even declare an indexer contract previously).
-        // This test instead verifies the MethodImpl bridge dispatches
-        // correctly at the CLR level, invoking the explicit accessor's own
-        // mangled method directly via reflection — exactly mirroring how a
-        // real interface-typed call would route once/if that separate
-        // call-site gap is closed.
+        // This test verifies the MethodImpl bridge dispatches correctly at
+        // the CLR level, invoking the explicit accessor's own mangled
+        // method directly via reflection. See
+        // ExplicitIndexerImpl_DispatchesThroughInterfaceTypedReceiver_GetAndSet
+        // below for the follow-up fix that also proves dispatch through a
+        // REAL interface-typed receiver (`asIface["k"]`), which used to fail
+        // for ANY indexer (explicit or not) since interfaces previously
+        // could not even declare an indexer contract, and is now fixed
+        // generally in ExpressionBinder.Access.cs.
         var assembly = CompileToAssembly(IndexerReproSource);
         var storeType = assembly.GetTypes().Single(t => t.Name == "Store");
         var instance = Activator.CreateInstance(storeType)!;
@@ -424,6 +414,382 @@ public class Issue2370ExplicitInterfaceEventIndexerEmitTests
         {
             TryCleanup(dllPath);
         }
+    }
+
+    // ----------------------------------------------------------------------
+    // Follow-up (issue #2362/PR #2370, final completion pass): the two
+    // "DispatchesThroughInterface" tests above proved the explicit-member
+    // MethodImpl bridge is wired correctly via reflection, but noted a
+    // SEPARATE, pre-existing binder gap: NEITHER explicit NOR ordinary
+    // interface events/indexers could be reached through a genuine
+    // interface-TYPED receiver (`asIface[...]`, `asIface.Event += h`) — every
+    // such call site failed to bind at all (GS0158 / "not indexable").
+    //
+    // That gap is now fixed generally:
+    //   * ExpressionBinder.Access.cs gained an InterfaceSymbol-receiver
+    //     TryGetUserIndexer overload plus matching read/write bind branches.
+    //   * ExpressionBinder.Async.cs gained an InterfaceSymbol branch for the
+    //     event `+=`/`-=` compound-assignment binder.
+    //   * MethodBodyEmitter.Closures.cs's EmitUserEventSubscription gained
+    //     generic-interface-aware accessor token resolution and always
+    //     emits `callvirt` when the owner is an interface.
+    //
+    // The tests below prove REAL end-to-end dispatch through actual
+    // interface-typed-receiver source syntax (not just reflection into the
+    // mangled CLR method), for both ordinary (non-explicit — the "control"
+    // proving the fix is general, not explicit-interface-specific) and
+    // explicit-interface members, across source-declared, generic, and
+    // imported (BCL) interfaces.
+    // ----------------------------------------------------------------------
+    [Fact]
+    public void PlainNonExplicitIndexer_DoesNotSatisfyInterfaceIndexerContract_ReportsGS0187()
+    {
+        // ADR-0118 (issue #944): an indexer's CLR name ("Item") is not
+        // reachable by ordinary member-name lookup — only through `obj[i]`
+        // index syntax — so `TypeMemberModel.TryGetProperty` deliberately
+        // excludes indexers, and `VerifyInterfaceImplementations` has no
+        // separate by-shape indexer-matching path. By design (pre-existing,
+        // unrelated to this fix), only an EXPLICIT `(IFace)` clause indexer
+        // implementation can satisfy an interface's indexer contract; a
+        // plain non-explicit indexer of the identical shape does not count
+        // and GS0187 correctly fires. This is a control confirming the new
+        // interface-typed-receiver dispatch work does not (and should not)
+        // change that pre-existing, intentional restriction. See
+        // ImportedBclInterfaceIndexer_DispatchesThroughInterfaceTypedReceiver
+        // below for the genuine "ordinary" (non-G#-explicit-clause) control
+        // proving the receiver-dispatch fix itself is general.
+        const string source = """
+            package GapCheck
+
+            interface IRepo {
+                prop this[key string] int32 { get; set }
+            }
+
+            class Store : IRepo {
+                prop this[key string] int32 { get { return 1 } set { } }
+            }
+            """;
+
+        var (exitCode, output) = CompileExpectingFailure(source);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS0187", output);
+    }
+
+    private static (int ExitCode, string Output) CompileExpectingFailure(string source)
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_issue2370_fail_").FullName;
+        var srcPath = Path.Combine(tempDir, "test.gs");
+        var outPath = Path.Combine(tempDir, "test.dll");
+        File.WriteAllText(srcPath, source);
+
+        using var stdoutWriter = new StringWriter();
+        using var stderrWriter = new StringWriter();
+        var prevOut = Console.Out;
+        var prevErr = Console.Error;
+        Console.SetOut(stdoutWriter);
+        Console.SetError(stderrWriter);
+        int compileExit;
+        try
+        {
+            compileExit = Program.Main(new[]
+            {
+                "/out:" + outPath,
+                "/target:library",
+                "/targetframework:net10.0",
+                srcPath,
+            });
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+            Console.SetError(prevErr);
+        }
+
+        return (compileExit, stdoutWriter.ToString() + stderrWriter.ToString());
+    }
+
+    [Fact]
+    public void ExplicitIndexerImpl_DispatchesThroughInterfaceTypedReceiver_GetAndSet()
+    {
+        var source = IndexerReproSource + """
+
+            var store = Store()
+            var asIface IRepo = store
+            asIface["k"] = 99
+            public var result = asIface["k"] + store["k"]
+            """;
+
+        // asIface["k"] (interface-typed receiver) must route to the
+        // EXPLICIT accessor (returns 2), while store["k"] (concrete-typed
+        // receiver) must keep routing to the ordinary plain indexer
+        // (returns 1) — proving the two members remain independently
+        // addressable and the new receiver dispatch reaches the correct
+        // (explicit) slot rather than falling back to the plain one.
+        Assert.Equal(3, RunAndGetIntResult(source));
+    }
+
+    [Fact]
+    public void OrdinaryEventImpl_DispatchesThroughInterfaceTypedReceiver_AddAndRemove()
+    {
+        const string source = """
+            package GapCheck
+
+            interface ICounter {
+                event Changed () -> void
+            }
+
+            class Sink {
+                var Hits int32
+                init() { Hits = 0 }
+                func Bump() { Hits = Hits + 1 }
+            }
+
+            class Counter : ICounter {
+                event Changed () -> void
+                func Fire() { Changed?.Invoke() }
+            }
+
+            var counter = Counter()
+            var asIface ICounter = counter
+            var sink = Sink()
+            var handler = func() { sink.Bump() }
+            asIface.Changed += handler
+            counter.Fire()
+            counter.Fire()
+            asIface.Changed -= handler
+            counter.Fire()
+            public var result = sink.Hits
+            """;
+
+        Assert.Equal(2, RunAndGetIntResult(source));
+    }
+
+    [Fact]
+    public void ExplicitEventImpl_DispatchesThroughInterfaceTypedReceiver_AddAndRemove()
+    {
+        const string source = """
+            package GapCheck
+
+            interface ICounter {
+                event Changed () -> void
+            }
+
+            class Sink {
+                var Hits int32
+                init() { Hits = 0 }
+                func Bump() { Hits = Hits + 1 }
+            }
+
+            open class Counter : ICounter {
+                private var _explicitHandler (() -> void)?
+                open event Changed () -> void
+                private event (ICounter) Changed () -> void {
+                    add { _explicitHandler = value }
+                    remove { _explicitHandler = nil }
+                }
+                func FireExplicit() { _explicitHandler?.Invoke() }
+                func FirePublic() { Changed?.Invoke() }
+            }
+
+            var counter = Counter()
+            var asIface ICounter = counter
+            var sink = Sink()
+            asIface.Changed += func() { sink.Bump() }
+            counter.FireExplicit()
+            counter.FireExplicit()
+            counter.FirePublic()
+            public var result = sink.Hits
+            """;
+
+        // Subscribing via the interface-typed receiver must reach the
+        // EXPLICIT accessor's own backing field, so only the two
+        // FireExplicit() calls count; FirePublic() raises the unrelated
+        // plain field-like event and must not invoke the same handler.
+        Assert.Equal(2, RunAndGetIntResult(source));
+    }
+
+    [Fact]
+    public void OrdinaryGenericInterfaceIndexer_DispatchesThroughInterfaceTypedReceiver()
+    {
+        const string source = """
+            package GapCheck
+
+            interface IWatchable[T] {
+                prop this[index int32] T { get; }
+            }
+
+            class IntObservable : IWatchable[int32] {
+                prop this[index int32] int32 -> index * 2
+            }
+
+            var obs = IntObservable()
+            var asIface IWatchable[int32] = obs
+            public var result = asIface[5]
+            """;
+
+        Assert.Equal(10, RunAndGetIntResult(source));
+    }
+
+    [Fact]
+    public void ExplicitGenericInterfaceIndexer_DispatchesThroughInterfaceTypedReceiver()
+    {
+        var source = GenericInterfaceEventAndIndexerReproSource + """
+
+            var obs = IntObservable()
+            var asIface IWatchable[int32] = obs
+            public var result = asIface[5]
+            """;
+
+        Assert.Equal(10, RunAndGetIntResult(source));
+    }
+
+    [Fact]
+    public void OrdinaryGenericInterfaceEvent_DispatchesThroughInterfaceTypedReceiver()
+    {
+        const string source = """
+            package GapCheck
+
+            interface IWatchable[T] {
+                event Changed () -> void
+            }
+
+            class Sink {
+                var Hits int32
+                init() { Hits = 0 }
+                func Bump() { Hits = Hits + 1 }
+            }
+
+            class IntObservable : IWatchable[int32] {
+                event Changed () -> void
+                func Fire() { Changed?.Invoke() }
+            }
+
+            var obs = IntObservable()
+            var asIface IWatchable[int32] = obs
+            var sink = Sink()
+            asIface.Changed += func() { sink.Bump() }
+            obs.Fire()
+            public var result = sink.Hits
+            """;
+
+        Assert.Equal(1, RunAndGetIntResult(source));
+    }
+
+    [Fact]
+    public void ExplicitGenericInterfaceEvent_DispatchesThroughInterfaceTypedReceiver()
+    {
+        const string source = """
+            package GapCheck
+
+            interface IWatchable[T] {
+                event Changed () -> void
+            }
+
+            class Sink {
+                var Hits int32
+                init() { Hits = 0 }
+                func Bump() { Hits = Hits + 1 }
+            }
+
+            class IntObservable : IWatchable[int32] {
+                private var _handler (() -> void)?
+                private event (IWatchable[int32]) Changed () -> void {
+                    add { _handler = value }
+                    remove { _handler = nil }
+                }
+                func Fire() { _handler?.Invoke() }
+            }
+
+            var obs = IntObservable()
+            var asIface IWatchable[int32] = obs
+            var sink = Sink()
+            asIface.Changed += func() { sink.Bump() }
+            obs.Fire()
+            obs.Fire()
+            public var result = sink.Hits
+            """;
+
+        // Exercises the new generic-interface accessor token resolution
+        // path in MethodBodyEmitter.Closures.cs's EmitUserEventSubscription
+        // (constructed generic interface receiver, explicit member).
+        Assert.Equal(2, RunAndGetIntResult(source));
+    }
+
+    [Fact]
+    public void ImportedBclInterfaceIndexer_DispatchesThroughInterfaceTypedReceiver()
+    {
+        // Proves the fix also covers IMPORTED (BCL) interfaces, not just
+        // G#-declared ones: InterfaceSymbol is the single, sealed
+        // representation used for both source-declared and imported
+        // interfaces, so List[int32]'s IList[int32].this[int32] contract
+        // is reachable through an IList[int32]-typed receiver.
+        const string source = """
+            package GapCheck
+            import System.Collections.Generic
+
+            var xs = List[int32]()
+            xs.Add(10)
+            xs.Add(20)
+            var asIface IList[int32] = xs
+            asIface[0] = 99
+            public var result = asIface[0] + asIface[1]
+            """;
+
+        Assert.Equal(119, RunAndGetIntResult(source));
+    }
+
+    private static Assembly CompileToAssemblyExe(string source)
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_issue2370_exe_asm_").FullName;
+        var srcPath = Path.Combine(tempDir, "test.gs");
+        var outPath = Path.Combine(tempDir, "test.dll");
+        File.WriteAllText(srcPath, source);
+
+        using var stdoutWriter = new StringWriter();
+        using var stderrWriter = new StringWriter();
+        var prevOut = Console.Out;
+        var prevErr = Console.Error;
+        Console.SetOut(stdoutWriter);
+        Console.SetError(stderrWriter);
+        int compileExit;
+        try
+        {
+            compileExit = Program.Main(new[]
+            {
+                "/out:" + outPath,
+                "/target:exe",
+                "/targetframework:net10.0",
+                srcPath,
+            });
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+            Console.SetError(prevErr);
+        }
+
+        Assert.True(
+            compileExit == 0,
+            $"gsc failed:\nstdout:\n{stdoutWriter}\nstderr:\n{stderrWriter}");
+        IlVerifier.Verify(outPath);
+
+        var bytes = File.ReadAllBytes(outPath);
+        return Assembly.Load(bytes);
+    }
+
+    private static int RunAndGetIntResult(string source)
+    {
+        var assembly = CompileToAssemblyExe(source);
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var entry = program.GetMethod(
+            "<Main>$",
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        var resultField = program.GetField(
+            "result",
+            BindingFlags.Public | BindingFlags.Static);
+
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
+        return (int)resultField!.GetValue(null)!;
     }
 
     private static TypeDefinition FindType(MetadataReader reader, string name)

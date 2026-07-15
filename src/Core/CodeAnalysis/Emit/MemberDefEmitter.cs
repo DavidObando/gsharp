@@ -770,12 +770,24 @@ internal sealed class MemberDefEmitter
         {
             foreach (var iface in structSym.Interfaces)
             {
-                if (iface.Properties.IsDefaultOrEmpty)
+                // ADR-0149 follow-up (issue #2370): Properties is never
+                // substituted onto a CONSTRUCTED generic interface instance
+                // (see InterfaceSymbol.TryResolveMembers — only
+                // Methods/StaticMethods/PrivateMethods/StaticPrivateMethods
+                // are substituted), so `iface.Properties` is empty for e.g.
+                // `IWatchable[int32]`. Resolve against `iface.Definition ??
+                // iface` (a no-op for a non-generic interface) so an
+                // ordinary (implicit) property implementation of a GENERIC
+                // interface still gets promoted to Virtual|NewSlot instead
+                // of silently staying non-virtual and failing to satisfy the
+                // interface slot at the CLR level.
+                var defIface = iface.Definition ?? iface;
+                if (defIface.Properties.IsDefaultOrEmpty)
                 {
                     continue;
                 }
 
-                foreach (var ifaceProp in iface.Properties)
+                foreach (var ifaceProp in defIface.Properties)
                 {
                     if (ifaceProp.Name == prop.Name)
                     {
@@ -824,12 +836,17 @@ internal sealed class MemberDefEmitter
 
         foreach (var iface in structSym.Interfaces)
         {
-            if (iface.Events.IsDefaultOrEmpty)
+            // ADR-0149 follow-up (issue #2370): see the matching comment in
+            // PropertyImplicitlyImplementsInterface — Events is likewise
+            // never substituted onto a constructed generic interface
+            // instance, so this must resolve against the open Definition.
+            var defIface = iface.Definition ?? iface;
+            if (defIface.Events.IsDefaultOrEmpty)
             {
                 continue;
             }
 
-            foreach (var ifaceEvent in iface.Events)
+            foreach (var ifaceEvent in defIface.Events)
             {
                 if (ifaceEvent.Name == ev.Name)
                 {

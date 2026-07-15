@@ -4611,12 +4611,109 @@ internal sealed partial class ExpressionBinder
                 elementType);
         }
 
+        // ADR-0149 follow-up (issue #2370): index access through an
+        // INTERFACE-typed receiver (`asIface[i]`, `b: IBox; b[0]`). Interfaces
+        // could not declare indexers at all before ADR-0149, so this branch
+        // never had a symbol to resolve; now that `prop this[...] T` is legal
+        // inside a G# interface body, dispatch it exactly like the concrete
+        // struct/class case above — `callvirt` through the interface's OWN
+        // get_Item slot (registered in `MethodHandles`/`ResolveUserInterfaceInstanceMethodToken`
+        // by the emitter regardless of whether the implementer satisfies the
+        // slot implicitly or via an explicit `(IFoo)` clause).
+        if (target.Type is InterfaceSymbol userIndexIface
+            && TryGetUserIndexer(userIndexIface, out var readIfaceIndexer, out var readIfaceSubstitution)
+            && readIfaceIndexer.Parameters.Length == 1)
+        {
+            if (readIfaceIndexer.GetterSymbol == null)
+            {
+                Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
+                return new BoundErrorExpression(null);
+            }
+
+            var paramType = readIfaceSubstitution != null
+                ? Binder.SubstituteType(readIfaceIndexer.Parameters[0].Type, readIfaceSubstitution, scope.References.MapClrTypeToReferences)
+                : readIfaceIndexer.Parameters[0].Type;
+            var indexArg = ConvertIndex(paramType);
+            var elementType = readIfaceSubstitution != null
+                ? Binder.SubstituteType(readIfaceIndexer.Type, readIfaceSubstitution, scope.References.MapClrTypeToReferences)
+                : readIfaceIndexer.Type;
+            return new BoundUserInstanceCallExpression(
+                null,
+                target,
+                readIfaceIndexer.GetterSymbol,
+                ImmutableArray.Create(indexArg),
+                elementType);
+        }
+
         if (target.Type != TypeSymbol.Error)
         {
             Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
         }
 
         return new BoundErrorExpression(null);
+    }
+
+    /// <summary>
+    /// ADR-0149 follow-up (issue #2370): the interface counterpart of
+    /// <see cref="TryGetUserIndexer(StructSymbol, out PropertySymbol, out Dictionary{TypeParameterSymbol, TypeSymbol})"/>.
+    /// Walks <paramref name="target"/> and its base interfaces
+    /// (<see cref="InterfaceSymbol.SelfAndAllBaseInterfaces"/>) for the first
+    /// declared indexer (an interface may declare at most one <c>this[...]</c>
+    /// slot per ADR-0149's parameter-shape uniqueness rule — multiple
+    /// interfaces with DIFFERENT indexer shapes are disambiguated by the
+    /// static receiver TYPE at the call site, exactly like ordinary named
+    /// members), building the type-parameter substitution for a constructed
+    /// generic receiver (e.g. <c>IBox[int32]</c> over <c>interface IBox[T]</c>).
+    /// </summary>
+    private static bool TryGetUserIndexer(
+        InterfaceSymbol target,
+        out PropertySymbol indexer,
+        out Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
+    {
+        indexer = null;
+        substitution = null;
+
+        foreach (var iface in target.SelfAndAllBaseInterfaces())
+        {
+            var def = iface.Definition ?? iface;
+            foreach (var p in def.Properties)
+            {
+                if (p.IsIndexer)
+                {
+                    indexer = p;
+                    break;
+                }
+            }
+
+            if (indexer != null)
+            {
+                break;
+            }
+        }
+
+        if (indexer == null)
+        {
+            return false;
+        }
+
+        // Build the type-parameter substitution for a constructed generic
+        // receiver (e.g. `IBox[int32]` over `interface IBox[T]`).
+        if (!target.TypeArguments.IsDefaultOrEmpty
+            && target.Definition != null
+            && !ReferenceEquals(target.Definition, target))
+        {
+            var defTps = target.Definition.TypeParameters;
+            if (!defTps.IsDefaultOrEmpty && defTps.Length == target.TypeArguments.Length)
+            {
+                substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>(defTps.Length);
+                for (var i = 0; i < defTps.Length; i++)
+                {
+                    substitution[defTps[i]] = target.TypeArguments[i];
+                }
+            }
+        }
+
+        return true;
     }
 
     private BoundExpression BindIndexedWriteThroughChain(
@@ -4989,6 +5086,36 @@ internal sealed partial class ExpressionBinder
                 null,
                 new BoundVariableExpression(null, variable),
                 writeIndexer.SetterSymbol,
+                ImmutableArray.Create(indexArg, value));
+        }
+
+        // ADR-0149 follow-up (issue #2370): index assignment through an
+        // INTERFACE-typed receiver — the write-side counterpart of the read
+        // branch above. Dispatches via `callvirt` through the interface's own
+        // set_Item slot.
+        if (variable.Type is InterfaceSymbol writeIndexIface
+            && TryGetUserIndexer(writeIndexIface, out var writeIfaceIndexer, out var writeIfaceSubstitution)
+            && writeIfaceIndexer.Parameters.Length == 1)
+        {
+            if (writeIfaceIndexer.SetterSymbol == null)
+            {
+                Diagnostics.ReportTypeNotIndexable(diagnosticLocation, variable.Type);
+                return new BoundErrorExpression(null);
+            }
+
+            var paramType = writeIfaceSubstitution != null
+                ? Binder.SubstituteType(writeIfaceIndexer.Parameters[0].Type, writeIfaceSubstitution, scope.References.MapClrTypeToReferences)
+                : writeIfaceIndexer.Parameters[0].Type;
+            var elementType = writeIfaceSubstitution != null
+                ? Binder.SubstituteType(writeIfaceIndexer.Type, writeIfaceSubstitution, scope.References.MapClrTypeToReferences)
+                : writeIfaceIndexer.Type;
+
+            var indexArg = conversions.BindConversion(indexSyntax, paramType);
+            var value = BindValue(elementType);
+            return new BoundUserInstanceCallExpression(
+                null,
+                new BoundVariableExpression(null, variable),
+                writeIfaceIndexer.SetterSymbol,
                 ImmutableArray.Create(indexArg, value));
         }
 

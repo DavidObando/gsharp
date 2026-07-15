@@ -12489,13 +12489,38 @@ internal sealed class ReflectionMetadataEmitter
                     ? this.ResolveUserInterfaceInstanceMethodToken(iface, openSlot)
                     : slotDefHandle;
 
+                // ADR-0149 follow-up (issue #2370): an explicit-interface-
+                // clause static method (`func (IFoo) M(...)` inside a
+                // `shared { }` block) is linked by the binder via
+                // `ExplicitInterfaceMember` (DeclarationBinder's
+                // `TryResolveExplicitInterfaceStaticImplementation`) against
+                // this exact constructed-instance `slot`, regardless of its
+                // own declared name — prefer that link over the name-based
+                // `StaticVirtualSignatureEquals` scan below, mirroring
+                // `EmitExplicitInterfaceMethodImpls`'s instance-method
+                // precedent.
                 FunctionSymbol implMatch = null;
-                foreach (var candidate in structSymbol.GetStaticMethods(slot.Name))
+                if (!structSymbol.StaticMethods.IsDefaultOrEmpty)
                 {
-                    if (StaticVirtualSignatureEquals(slot, candidate))
+                    foreach (var explicitCandidate in structSymbol.StaticMethods)
                     {
-                        implMatch = candidate;
-                        break;
+                        if (ReferenceEquals(explicitCandidate.ExplicitInterfaceMember, slot))
+                        {
+                            implMatch = explicitCandidate;
+                            break;
+                        }
+                    }
+                }
+
+                if (implMatch == null)
+                {
+                    foreach (var candidate in structSymbol.GetStaticMethods(slot.Name))
+                    {
+                        if (StaticVirtualSignatureEquals(slot, candidate))
+                        {
+                            implMatch = candidate;
+                            break;
+                        }
                     }
                 }
 
@@ -12642,16 +12667,36 @@ internal sealed class ReflectionMetadataEmitter
                     continue;
                 }
 
+                // ADR-0149 follow-up (issue #2370): an explicit-interface-
+                // clause static property (`prop (IFoo) P T` inside a
+                // `shared { }` block) is linked by the binder via
+                // `ExplicitInterfaceMember` against this exact `slotProp`
+                // (both resolved from the OPEN interface definition's
+                // `Properties` table — see `VerifyStaticVirtualInterfaceProperty
+                // Implementations`'s `staticPropDefIface` fix) — prefer that
+                // link over the name-based scan below.
                 PropertySymbol implProp = null;
-                foreach (var candidate in structSymbol.StaticProperties)
+                foreach (var explicitCandidate in structSymbol.StaticProperties)
                 {
-                    // PropertySymbol.Type is a compiler TypeSymbol, not a CLR
-                    // reflection Type; keep symbol identity plus name fallback.
-                    if (candidate.Name == slotProp.Name
-                        && (ReferenceEquals(candidate.Type, slotProp.Type) || candidate.Type?.Name == slotProp.Type?.Name))
+                    if (ReferenceEquals(explicitCandidate.ExplicitInterfaceMember, slotProp))
                     {
-                        implProp = candidate;
+                        implProp = explicitCandidate;
                         break;
+                    }
+                }
+
+                if (implProp == null)
+                {
+                    foreach (var candidate in structSymbol.StaticProperties)
+                    {
+                        // PropertySymbol.Type is a compiler TypeSymbol, not a CLR
+                        // reflection Type; keep symbol identity plus name fallback.
+                        if (candidate.Name == slotProp.Name
+                            && (ReferenceEquals(candidate.Type, slotProp.Type) || candidate.Type?.Name == slotProp.Type?.Name))
+                        {
+                            implProp = candidate;
+                            break;
+                        }
                     }
                 }
 
