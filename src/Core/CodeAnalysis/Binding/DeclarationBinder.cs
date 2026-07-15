@@ -1271,11 +1271,16 @@ internal sealed class DeclarationBinder
             fields.Add(fieldSymbol);
         }
 
-        if (syntax.IsData && fields.Count == 0)
-        {
-            Diagnostics.ReportEmptyDataStruct(syntax.Identifier.Location, name);
-        }
-
+        // Issue #2363: a `data class`/`data struct` with zero fields is now a
+        // supported (if degenerate) declaration — needed for the G# mapping
+        // of an empty positional C# record (`record Name()`), and equally for
+        // a record whose only body members are contract properties (virtual/
+        // override/interface-implementing) that cannot be lifted into fields.
+        // Such a type still gets the full synthesized member set (equality,
+        // hash, ToString, copy), just with a trivial (always-equal, same
+        // fixed hash) leaf-type body (ADR-0029) and no `Deconstruct` (there is
+        // nothing to deconstruct). GS0104 is retained for source/API
+        // stability but is no longer emitted by this check.
         if (syntax.IsInline)
         {
             if (syntax.IsData)

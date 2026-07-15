@@ -114,15 +114,21 @@ a == b
     }
 
     [Fact]
-    public void DataStruct_NoFields_Diagnosed()
+    public void DataStruct_NoFields_NoLongerDiagnosed()
     {
+        // Issue #2363 / ADR-0029 amendment: a zero-field `data struct` was
+        // previously unconditionally rejected (GS0104). It is now a
+        // supported degenerate shape (needed to translate an empty C#
+        // positional record/record struct) — see
+        // Issue2363EmptyDataTypesTests for the full zero-field-support
+        // regression suite.
         var source = @"
 data struct Empty {
 }
 0
 ";
         var result = Evaluate(source);
-        Assert.NotEmpty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics);
     }
 
     [Fact]
