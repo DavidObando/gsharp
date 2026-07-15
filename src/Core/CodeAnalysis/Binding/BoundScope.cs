@@ -338,7 +338,38 @@ public sealed class BoundScope
         extensionFunctions ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
         extensionFunctionsByName ??= ImmutableDictionary.CreateBuilder<string, ImmutableArray<FunctionSymbol>.Builder>();
 
-        if (extensionFunctionsByName.TryGetValue(function.Name, out var bucket))
+        // Issue #2342 follow-up: mirror TryDeclareFunction's package-scoped
+        // overload-bucket rule for extension functions. An extension's
+        // identity triple (receiverType, name, signature) already keeps two
+        // DIFFERENT user-defined receiver types from different packages from
+        // ever colliding — they are distinct TypeSymbol instances even when
+        // same-named (see #2342) — but two packages that both declare an
+        // extension on a SHARED receiver type (a primitive, an imported/BCL
+        // type, or any other type with no per-package identity of its own)
+        // under the same simple name and signature previously collided as a
+        // spurious GS0264 duplicate. The plain name key remains
+        // first-come-first-served across packages — extensions, like free
+        // functions, are broadly visible by design (packages are not import
+        // boundaries) — so unrelated packages continue to resolve every
+        // OTHER (non-colliding) extension by simple name exactly as before.
+        // A same-name, same-signature extension declared by a DIFFERENT
+        // package than the bucket's first entry is not a genuine duplicate;
+        // it is retained under its own package-qualified bucket instead of
+        // being merged into (and duplicate-checked against) a foreign
+        // package's overload set. Two extensions from the SAME package (or
+        // two with a null Package) still share one bucket and still enforce
+        // the existing signature-uniqueness rule.
+        var key = function.Name;
+        var incomingPackage = function.Package?.Name;
+        if (extensionFunctionsByName.TryGetValue(key, out var bucket)
+            && bucket.Count > 0
+            && !string.Equals(bucket[0].Package?.Name, incomingPackage, StringComparison.Ordinal))
+        {
+            key = PackageQualifiedName(incomingPackage, function.Name);
+            extensionFunctionsByName.TryGetValue(key, out bucket);
+        }
+
+        if (bucket != null)
         {
             foreach (var existing in bucket)
             {
@@ -352,7 +383,7 @@ public sealed class BoundScope
         else
         {
             bucket = ImmutableArray.CreateBuilder<FunctionSymbol>();
-            extensionFunctionsByName.Add(function.Name, bucket);
+            extensionFunctionsByName.Add(key, bucket);
         }
 
         extensionFunctions.Add(function);
@@ -396,115 +427,33 @@ public sealed class BoundScope
     {
         function = null;
 
+        // Issue #2342 follow-up: when the body currently being bound belongs
+        // to a known declaring package (see SetCurrentDeclaringPackage), and
+        // that package owns its OWN package-qualified bucket for `name` (see
+        // TryDeclareExtensionFunction's package-qualified fallback bucket),
+        // prefer a match from that bucket over a foreign package's same-name,
+        // same-signature homonym that occupies the plain simple-name key. A
+        // package that does not declare its own colliding extension under
+        // this name still sees every extension by simple name via the plain
+        // bucket fallback below, preserving the pre-existing "broadly
+        // visible" behavior for non-conflicting extension names.
+        var currentPackage = GetCurrentDeclaringPackage();
+        if (currentPackage != null
+            && extensionFunctionsByName != null
+            && extensionFunctionsByName.TryGetValue(PackageQualifiedName(currentPackage, name), out var ownBucket)
+            && TryFindExtensionInBucket(ownBucket, receiverType, out function))
+        {
+            return true;
+        }
+
         // Issue #1680: probe the name-keyed bucket instead of scanning every
         // extension declared in this scope. A scope with no extensions named
         // `name` is skipped in O(1) instead of an O(extensions) miss.
         if (extensionFunctionsByName != null
-            && extensionFunctionsByName.TryGetValue(name, out var bucket))
+            && extensionFunctionsByName.TryGetValue(name, out var bucket)
+            && TryFindExtensionInBucket(bucket, receiverType, out function))
         {
-            foreach (var ext in bucket)
-            {
-                if (ReceiverMatches(ext.ExtensionReceiverType, receiverType))
-                {
-                    function = ext;
-                    return true;
-                }
-            }
-
-            // Issue #773 / ADR-0084 §L2 follow-up: an extension whose
-            // receiver type carries one of the function's own type
-            // parameters (e.g. `(self sequence[T])`, `(self IEnumerable[T])`,
-            // `(self T?)`, `(self Dictionary[K, V])`) is never reference-
-            // equal to a concrete call-site receiver. Fall back to receiver
-            // inference: try to unify the declared open receiver with the
-            // call-site type and accept the candidate when every type
-            // parameter that appears in the receiver gets bound.
-            //
-            // ADR-0097 / issue #775: when multiple candidates unify against
-            // the same receiver type (e.g. one carrying `[T class]` and one
-            // carrying `[T struct]`), the constraint check decides the
-            // winner. We collect every unifiable candidate, drop those
-            // whose constraints are violated by the inferred substitution,
-            // and prefer the most specific (struct > class > unconstrained)
-            // surviving candidate. Mutually-incomparable cases fall through
-            // to the first declared candidate so the call site is not
-            // silently ambiguous (the existing GS0160 will surface from the
-            // call-binding path if applicable).
-            FunctionSymbol candidate = null;
-            int candidateSpecificity = -1;
-            foreach (var ext in bucket)
-            {
-                if (ext.TypeParameters.IsDefaultOrEmpty)
-                {
-                    continue;
-                }
-
-                if (ext.ExtensionReceiverType == null || ext.ExtensionReceiverType == TypeSymbol.Error)
-                {
-                    continue;
-                }
-
-                if (!ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters))
-                {
-                    continue;
-                }
-
-                if (!TryUnifyAndCheckConstraints(ext, receiverType, out var specificity))
-                {
-                    continue;
-                }
-
-                if (candidate == null || specificity > candidateSpecificity)
-                {
-                    candidate = ext;
-                    candidateSpecificity = specificity;
-                }
-            }
-
-            if (candidate != null)
-            {
-                function = candidate;
-                return true;
-            }
-
-            // Issue #1548: no exact and no generic-unification match in this
-            // scope. Broaden to implicitly-convertible (subtype) receivers: a
-            // declared receiver `R` is applicable when the call-site receiver
-            // `S` is implicitly convertible to `R` (identity/implicit-reference/
-            // boxing). Among applicable candidates pick the MOST specific
-            // (most-derived) declared receiver so this singular path stays
-            // deterministic (e.g. `string` beats `object`); ties fall back to
-            // declaration order.
-            FunctionSymbol subtypeCandidate = null;
-            var subtypeSpecificity = -1;
-            foreach (var ext in bucket)
-            {
-                if (!ext.TypeParameters.IsDefaultOrEmpty
-                    && ext.ExtensionReceiverType != null
-                    && ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters))
-                {
-                    // Open receivers are handled by the unification pass above.
-                    continue;
-                }
-
-                if (!ReceiverConvertible(ext.ExtensionReceiverType, receiverType))
-                {
-                    continue;
-                }
-
-                var specificity = ReceiverConvertibilitySpecificity(bucket, ext.ExtensionReceiverType);
-                if (subtypeCandidate == null || specificity > subtypeSpecificity)
-                {
-                    subtypeCandidate = ext;
-                    subtypeSpecificity = specificity;
-                }
-            }
-
-            if (subtypeCandidate != null)
-            {
-                function = subtypeCandidate;
-                return true;
-            }
+            return true;
         }
 
         return Parent?.TryLookupExtensionFunction(receiverType, name, out function) ?? false;
@@ -531,57 +480,26 @@ public sealed class BoundScope
     /// <returns>The matching extension overloads, or an empty array when none match.</returns>
     public ImmutableArray<FunctionSymbol> TryLookupExtensionFunctions(TypeSymbol receiverType, string name)
     {
-        ImmutableArray<FunctionSymbol>.Builder builder = null;
-        for (var s = this; s != null; s = s.Parent)
+        // Issue #2342 follow-up: mirror TryLookupFunctions' ambient-package
+        // preference. If the body currently being bound belongs to a known
+        // declaring package and that package owns its OWN package-qualified
+        // bucket for `name` (populated only when a cross-package collision
+        // occurred — see TryDeclareExtensionFunction), resolve to that
+        // package's own matching overloads rather than mixing in a foreign
+        // package's same-name, same-signature homonym. A package with no
+        // colliding extension under this name still sees every OTHER
+        // extension by simple name via the plain-key fallback below.
+        var currentPackage = GetCurrentDeclaringPackage();
+        if (currentPackage != null)
         {
-            // Issue #1680: probe the name-keyed bucket instead of scanning every
-            // extension declared in this scope; scopes with no extension named
-            // `name` are skipped in O(1).
-            if (s.extensionFunctionsByName == null
-                || !s.extensionFunctionsByName.TryGetValue(name, out var bucket))
+            var ownMatches = CollectExtensionFunctionMatches(PackageQualifiedName(currentPackage, name), receiverType);
+            if (!ownMatches.IsDefaultOrEmpty)
             {
-                continue;
-            }
-
-            foreach (var ext in bucket)
-            {
-                var matches = ReceiverMatches(ext.ExtensionReceiverType, receiverType);
-                if (!matches
-                    && !ext.TypeParameters.IsDefaultOrEmpty
-                    && ext.ExtensionReceiverType != null
-                    && ext.ExtensionReceiverType != TypeSymbol.Error
-                    && ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters)
-                    && TryUnifyAndCheckConstraints(ext, receiverType, out _))
-                {
-                    matches = true;
-                }
-
-                // Issue #1548: broaden to implicitly-convertible (subtype)
-                // receivers with a CONCRETE declared receiver type. Open
-                // receivers (those mentioning the function's own type
-                // parameters) are handled by the unification pass above; a
-                // concrete `R` is applicable whenever the call-site receiver is
-                // implicitly convertible to it. Every applicable candidate is
-                // collected so the caller's overload resolution — which scores
-                // the receiver as parameter 0 — picks the most specific one.
-                if (!matches
-                    && (ext.TypeParameters.IsDefaultOrEmpty
-                        || ext.ExtensionReceiverType == null
-                        || !ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters))
-                    && ReceiverConvertible(ext.ExtensionReceiverType, receiverType))
-                {
-                    matches = true;
-                }
-
-                if (matches)
-                {
-                    builder ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
-                    builder.Add(ext);
-                }
+                return ownMatches;
             }
         }
 
-        return builder == null ? ImmutableArray<FunctionSymbol>.Empty : builder.ToImmutable();
+        return CollectExtensionFunctionMatches(name, receiverType);
     }
 
     /// <summary>Gets the extension functions declared in this scope (Phase 3.B.6).</summary>
@@ -1411,6 +1329,195 @@ public sealed class BoundScope
             {
                 builder ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
                 builder.AddRange(bucket);
+            }
+        }
+
+        return builder == null ? ImmutableArray<FunctionSymbol>.Empty : builder.ToImmutable();
+    }
+
+    /// <summary>
+    /// Issue #2342 follow-up: runs the exact-match / generic-receiver-
+    /// unification / implicit-conversion (subtype) three-phase extension
+    /// match documented on <see cref="TryLookupExtensionFunction"/> against a
+    /// single already-resolved bucket, factored out so the same matching
+    /// logic can be tried against either a package-qualified bucket or the
+    /// plain simple-name bucket without duplicating the phases.
+    /// </summary>
+    /// <param name="bucket">The extension-function bucket to search.</param>
+    /// <param name="receiverType">The static type of the call receiver.</param>
+    /// <param name="function">The matching extension function, when found.</param>
+    /// <returns>True when an extension function in <paramref name="bucket"/> matches.</returns>
+    private bool TryFindExtensionInBucket(ImmutableArray<FunctionSymbol>.Builder bucket, TypeSymbol receiverType, out FunctionSymbol function)
+    {
+        function = null;
+
+        foreach (var ext in bucket)
+        {
+            if (ReceiverMatches(ext.ExtensionReceiverType, receiverType))
+            {
+                function = ext;
+                return true;
+            }
+        }
+
+        // Issue #773 / ADR-0084 §L2 follow-up: an extension whose receiver
+        // type carries one of the function's own type parameters (e.g.
+        // `(self sequence[T])`, `(self IEnumerable[T])`, `(self T?)`,
+        // `(self Dictionary[K, V])`) is never reference-equal to a concrete
+        // call-site receiver. Fall back to receiver inference: try to unify
+        // the declared open receiver with the call-site type and accept the
+        // candidate when every type parameter that appears in the receiver
+        // gets bound.
+        //
+        // ADR-0097 / issue #775: when multiple candidates unify against the
+        // same receiver type (e.g. one carrying `[T class]` and one carrying
+        // `[T struct]`), the constraint check decides the winner. We collect
+        // every unifiable candidate, drop those whose constraints are
+        // violated by the inferred substitution, and prefer the most
+        // specific (struct > class > unconstrained) surviving candidate.
+        // Mutually-incomparable cases fall through to the first declared
+        // candidate so the call site is not silently ambiguous (the existing
+        // GS0160 will surface from the call-binding path if applicable).
+        FunctionSymbol candidate = null;
+        int candidateSpecificity = -1;
+        foreach (var ext in bucket)
+        {
+            if (ext.TypeParameters.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            if (ext.ExtensionReceiverType == null || ext.ExtensionReceiverType == TypeSymbol.Error)
+            {
+                continue;
+            }
+
+            if (!ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters))
+            {
+                continue;
+            }
+
+            if (!TryUnifyAndCheckConstraints(ext, receiverType, out var specificity))
+            {
+                continue;
+            }
+
+            if (candidate == null || specificity > candidateSpecificity)
+            {
+                candidate = ext;
+                candidateSpecificity = specificity;
+            }
+        }
+
+        if (candidate != null)
+        {
+            function = candidate;
+            return true;
+        }
+
+        // Issue #1548: no exact and no generic-unification match in this
+        // bucket. Broaden to implicitly-convertible (subtype) receivers: a
+        // declared receiver `R` is applicable when the call-site receiver `S`
+        // is implicitly convertible to `R` (identity/implicit-reference/
+        // boxing). Among applicable candidates pick the MOST specific
+        // (most-derived) declared receiver so this singular path stays
+        // deterministic (e.g. `string` beats `object`); ties fall back to
+        // declaration order.
+        FunctionSymbol subtypeCandidate = null;
+        var subtypeSpecificity = -1;
+        foreach (var ext in bucket)
+        {
+            if (!ext.TypeParameters.IsDefaultOrEmpty
+                && ext.ExtensionReceiverType != null
+                && ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters))
+            {
+                // Open receivers are handled by the unification pass above.
+                continue;
+            }
+
+            if (!ReceiverConvertible(ext.ExtensionReceiverType, receiverType))
+            {
+                continue;
+            }
+
+            var specificity = ReceiverConvertibilitySpecificity(bucket, ext.ExtensionReceiverType);
+            if (subtypeCandidate == null || specificity > subtypeSpecificity)
+            {
+                subtypeCandidate = ext;
+                subtypeSpecificity = specificity;
+            }
+        }
+
+        if (subtypeCandidate != null)
+        {
+            function = subtypeCandidate;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #2342 follow-up: collects every extension-function overload
+    /// stored under the exact storage <paramref name="key"/> across this
+    /// scope's Parent chain that matches <paramref name="receiverType"/> (the
+    /// same walking behavior <see cref="TryLookupExtensionFunctions"/> always
+    /// used, factored out so it can be tried against either a
+    /// package-qualified key or the plain simple-name key). Honours the same
+    /// three dispatch phases as <see cref="TryFindExtensionInBucket"/> —
+    /// exact-match, generic-receiver unification (issue #773/#775), and
+    /// implicit-conversion (subtype) broadening (issue #1548) — but collects
+    /// every applicable candidate instead of stopping at the first.
+    /// </summary>
+    /// <param name="key">The exact extension-function table storage key.</param>
+    /// <param name="receiverType">The static type of the call receiver.</param>
+    /// <returns>The matching extension overloads, or an empty array when none match.</returns>
+    private ImmutableArray<FunctionSymbol> CollectExtensionFunctionMatches(string key, TypeSymbol receiverType)
+    {
+        ImmutableArray<FunctionSymbol>.Builder builder = null;
+        for (var s = this; s != null; s = s.Parent)
+        {
+            if (s.extensionFunctionsByName == null
+                || !s.extensionFunctionsByName.TryGetValue(key, out var bucket))
+            {
+                continue;
+            }
+
+            foreach (var ext in bucket)
+            {
+                var matches = ReceiverMatches(ext.ExtensionReceiverType, receiverType);
+                if (!matches
+                    && !ext.TypeParameters.IsDefaultOrEmpty
+                    && ext.ExtensionReceiverType != null
+                    && ext.ExtensionReceiverType != TypeSymbol.Error
+                    && ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters)
+                    && TryUnifyAndCheckConstraints(ext, receiverType, out _))
+                {
+                    matches = true;
+                }
+
+                // Issue #1548: broaden to implicitly-convertible (subtype)
+                // receivers with a CONCRETE declared receiver type. Open
+                // receivers (those mentioning the function's own type
+                // parameters) are handled by the unification pass above; a
+                // concrete `R` is applicable whenever the call-site receiver is
+                // implicitly convertible to it. Every applicable candidate is
+                // collected so the caller's overload resolution — which scores
+                // the receiver as parameter 0 — picks the most specific one.
+                if (!matches
+                    && (ext.TypeParameters.IsDefaultOrEmpty
+                        || ext.ExtensionReceiverType == null
+                        || !ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters))
+                    && ReceiverConvertible(ext.ExtensionReceiverType, receiverType))
+                {
+                    matches = true;
+                }
+
+                if (matches)
+                {
+                    builder ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
+                    builder.Add(ext);
+                }
             }
         }
 
