@@ -161,6 +161,52 @@ public sealed class CSharpTypeMapper
     public IReadOnlyList<TypeDeclaration> PendingAnonymousDataClasses => this.pendingAnonymousDataClasses;
 
     /// <summary>
+    /// Records the declaring namespace of a resolved extension-method
+    /// invocation or method-group reference into the same shortened-namespace
+    /// tracking set used for type imports (see <see cref="shortenedNamespaces"/>),
+    /// so that an import is synthesized for it even though the call site
+    /// itself names no type. Extension-method calls (reduced instance form,
+    /// unreduced static form, or a bare method-group reference) never flow
+    /// through <see cref="TrackShortenedNamespace"/> because they don't
+    /// reference a type name directly, so without this tracking a file that
+    /// relies on a project-wide or implicit <c>using</c> for the extension's
+    /// namespace (e.g. <c>&lt;ImplicitUsings&gt;enable&lt;/ImplicitUsings&gt;</c>
+    /// providing <c>System.Linq</c>) would translate to G# with no import for
+    /// that namespace at all.
+    /// </summary>
+    /// <param name="method">The resolved extension method symbol.</param>
+    public void TrackExtensionMethodNamespace(IMethodSymbol method)
+    {
+        if (method is null)
+        {
+            return;
+        }
+
+        // Reduced instance-form calls (key.All(predicate)) resolve to a
+        // reduced symbol; unwrap it back to the original static-form method
+        // so ContainingNamespace reflects the extension's declaring type.
+        IMethodSymbol original = method.ReducedFrom ?? method;
+
+        // C# 14 extension blocks compile their members onto a synthetic
+        // marker type nested inside the containing type; unwrap to the
+        // enclosing (real, declared) type so the namespace we record is the
+        // one the user would actually need to import.
+        INamedTypeSymbol containingType = original.ContainingType;
+        if (containingType is { IsExtension: true } && containingType.ContainingType is { } declaringType)
+        {
+            containingType = declaringType;
+        }
+
+        INamespaceSymbol ns = containingType?.ContainingNamespace;
+        if (ns is null || ns.IsGlobalNamespace)
+        {
+            return;
+        }
+
+        this.shortenedNamespaces.Add(ns.ToDisplayString());
+    }
+
+    /// <summary>
     /// Maps a Roslyn type symbol to its canonical G# type reference, recording
     /// an unsupported-construct diagnostic on <paramref name="context"/> for any
     /// type with no canonical G# form.
