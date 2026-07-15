@@ -10503,23 +10503,42 @@ public class Parser
         return ParseStatement();
     }
 
-    // Issue #669 / ADR-0128 / issue #1172: lookahead to determine whether an
-    // `if` at the current position is a value-producing if-EXPRESSION rather
-    // than a void if-STATEMENT inside a block expression (e.g. an arrow-lambda
-    // `-> { ... }` body, an if-expression then/else block, or a standalone
-    // block expression).
+    // Issue #669 / ADR-0128 / issue #1172 / issue #2349: lookahead to
+    // determine whether an `if` at the current position is a value-producing
+    // if-EXPRESSION rather than a void if-STATEMENT inside a block expression
+    // (e.g. an arrow-lambda `-> { ... }` body, an if-expression then/else
+    // block, or a standalone block expression).
     //
-    // The disambiguation rule (ADR-0128 / issue #1172): an `if`/`else if`
-    // chain is a value-producing if-expression ONLY when the chain terminates
-    // in a plain `else { ... }` branch — only then does every code path yield
-    // a value (matching the binder's BindIfExpression, which requires a
-    // non-null ElseExpression). A chain that ends without a plain final `else`
-    // (no `else` at all, or a trailing `else if` with nothing after) has a
-    // path with no value and is therefore parsed as a void if-statement. This
-    // brings block-bodied arrow lambdas to parity with func literals: a
-    // non-trailing `if`/`else if` chain without a final `else` becomes a void
-    // statement, and a trailing one yields a void (Action-like) lambda instead
-    // of being rejected with GS0276/GS0124.
+    // The disambiguation rule (ADR-0128 / issue #1172, refined by issue
+    // #2349) has TWO independent requirements — both must hold for the `if`
+    // to be treated as a value-producing if-expression:
+    //
+    //   1. SHAPE: the `if`/`else if` chain terminates in a plain
+    //      `else { ... }` branch — only then does every code path yield a
+    //      value (matching the binder's BindIfExpression, which requires a
+    //      non-null ElseExpression). A chain that ends without a plain final
+    //      `else` (no `else` at all, or a trailing `else if` with nothing
+    //      after) has a path with no value.
+    //
+    //   2. POSITION: the chain is the LAST item in its enclosing block
+    //      expression (i.e. immediately followed by that block's closing
+    //      `}`), so it is actually eligible to become the block's trailing
+    //      value-producing expression. Issue #2349: a mid-body `if`/`else`
+    //      (more statements follow inside the same block) can never be used
+    //      as a value — its result, if any, is always discarded — so it must
+    //      be parsed as a void if-STATEMENT regardless of shape. Requiring
+    //      value-producing THEN/ELSE arms for such an `if` was wrong: the
+    //      arms are free to end in ordinary void statements (a method call,
+    //      an assignment, …), and forcing them through the value-requiring
+    //      block-expression binder produced a spurious GS0124 ("Expression
+    //      must have a value") even though the `if` was never used as a
+    //      value in the first place.
+    //
+    // This brings block-bodied arrow lambdas to parity with func literals: a
+    // non-trailing `if`/`else if` chain (with or without a final `else`)
+    // becomes a void statement, and only a trailing, else-terminated one
+    // yields a value (or, for a void-typed lambda body, a void (Action-like)
+    // lambda) instead of being rejected with GS0276/GS0124.
     //
     // We perform look-ahead only (no token consumption): we walk every link of
     // the `if`/`else if` chain. For each link we scan forward to its then-block
@@ -10528,7 +10547,9 @@ public class Parser
     // handles nested blocks). After the matching `}` we inspect what follows:
     //   * not `else`                -> void if-statement (return false);
     //   * `else if`                 -> continue walking from that inner `if`;
-    //   * plain `else { ... }`      -> value-producing if-expression (return true).
+    //   * plain `else { ... }`      -> scan that final else-block to its own
+    //                                  matching close brace, then require
+    //                                  requirement 2 (tail position) above.
     private bool LooksLikeIfExpression()
     {
         // `i` is the offset of the `if` keyword for the current chain link.
@@ -10633,9 +10654,49 @@ public class Parser
                 continue;
             }
 
-            // Plain final `else { ... }`: the chain terminates in an else, so
-            // every path yields a value -> value-producing if-expression.
-            return true;
+            // Plain final `else { ... }`: shape requirement satisfied (every
+            // path yields a value). Issue #2349: also require the POSITION
+            // requirement — this chain must be the last item in its
+            // enclosing block expression, i.e. immediately followed by that
+            // block's closing `}`, or it can never actually be used as a
+            // value and must be a void if-statement instead. Scan the final
+            // else-block to its own matching close brace to find that
+            // position.
+            var elseBraceDepth = 0;
+            var m = j + 2;
+            while (true)
+            {
+                if (m > LookaheadMaxScan)
+                {
+                    return false;
+                }
+
+                var k = Peek(m).Kind;
+                if (k == SyntaxKind.EndOfFileToken)
+                {
+                    return false;
+                }
+
+                if (k == SyntaxKind.OpenBraceToken)
+                {
+                    elseBraceDepth++;
+                }
+                else if (k == SyntaxKind.CloseBraceToken)
+                {
+                    elseBraceDepth--;
+                    if (elseBraceDepth == 0)
+                    {
+                        break;
+                    }
+                }
+
+                m++;
+            }
+
+            // `m` is now at the final else-block's matching close brace.
+            // Value-producing only when immediately followed by the
+            // enclosing block expression's own closing brace (tail position).
+            return Peek(m + 1).Kind == SyntaxKind.CloseBraceToken;
         }
     }
 
