@@ -25,6 +25,17 @@ public sealed class BoundScope
     private ImmutableArray<string>.Builder typeAliasKeys;
     private ImmutableArray<FunctionSymbol>.Builder extensionFunctions;
 
+    // Issue #2342 follow-up: per-storage-key override recording the
+    // DECLARING package of a plain `type Name = Target` alias (see
+    // DeclarationBinder.BindTypeAliasDeclaration and
+    // TryDeclareTypeAlias(string, TypeSymbol, string)), keyed by the exact
+    // same key used in `typeAliases`. Populated only for plain alias
+    // declarations that pass an explicit declaringPackageName; struct/enum/
+    // interface/delegate declarations leave their key unregistered here since
+    // their stored value already carries accurate package identity
+    // intrinsically (see TypePackageName).
+    private ImmutableDictionary<string, string>.Builder aliasDeclaringPackages;
+
     // Issue #2224: lazily created only on the root scope of whatever chain
     // this scope belongs to. Every Binder in a single BindGlobalScope/
     // BindProgram pass shares the same root-scope chain (it's threaded in as
@@ -156,12 +167,37 @@ public sealed class BoundScope
         }
 
         functions ??= ImmutableDictionary.CreateBuilder<string, ImmutableArray<FunctionSymbol>.Builder>();
-        if (!functions.TryGetValue(function.Name, out var bucket))
+        functionKeys ??= ImmutableArray.CreateBuilder<string>();
+
+        // Issue #2342 follow-up: a top-level function's overload set is scoped
+        // to its DECLARING PACKAGE, mirroring TryDeclareTypeAlias. The plain
+        // (unqualified) name key is a first-come-first-served slot: whichever
+        // package's function is declared first under a given simple name
+        // keeps it, so unrelated packages continue to resolve every OTHER
+        // (non-colliding) function by simple name exactly as before (packages
+        // are not real import boundaries — see the class-level scoping notes
+        // on IsSameDeclarationScope). A second, same-simple-name function
+        // declared by a DIFFERENT package is not a genuine duplicate overload;
+        // it is retained under its own package-qualified bucket instead of
+        // being merged into (and duplicate-checked against) a foreign
+        // package's overload set. Two functions from the SAME package (or two
+        // built-ins, both with a null Package) still share one bucket and
+        // still enforce the existing signature-uniqueness rule.
+        var key = function.Name;
+        var incomingPackage = function.Package?.Name;
+        if (functions.TryGetValue(key, out var bucket)
+            && bucket.Count > 0
+            && !string.Equals(bucket[0].Package?.Name, incomingPackage, StringComparison.Ordinal))
+        {
+            key = PackageQualifiedName(incomingPackage, function.Name);
+            functions.TryGetValue(key, out bucket);
+        }
+
+        if (bucket == null)
         {
             bucket = ImmutableArray.CreateBuilder<FunctionSymbol>();
-            functions.Add(function.Name, bucket);
-            functionKeys ??= ImmutableArray.CreateBuilder<string>();
-            functionKeys.Add(function.Name);
+            functions.Add(key, bucket);
+            functionKeys.Add(key);
         }
         else
         {
@@ -201,17 +237,28 @@ public sealed class BoundScope
             return ImmutableArray<FunctionSymbol>.Empty;
         }
 
-        ImmutableArray<FunctionSymbol>.Builder builder = null;
-        for (var s = this; s != null; s = s.Parent)
+        // Issue #2342 follow-up: when the body currently being bound belongs
+        // to a known declaring package (see SetCurrentDeclaringPackage), and
+        // that package declared its OWN function(s) under this simple name
+        // (see TryDeclareFunction's package-qualified fallback bucket),
+        // resolve to that package's own overload set rather than falling
+        // through to whichever package's homonym happens to occupy the plain
+        // name key. A package that does not declare its own function under
+        // this name still sees every OTHER (non-colliding) function by simple
+        // name via the plain-key fallback below, preserving the pre-existing
+        // "one flat namespace" visibility for non-conflicting names.
+        var currentPackage = GetCurrentDeclaringPackage();
+        if (currentPackage != null)
         {
-            if (s.functions != null && s.functions.TryGetValue(name, out var bucket) && bucket.Count > 0)
+            var ownKey = PackageQualifiedName(currentPackage, name);
+            var ownBucket = CollectFunctionBucket(ownKey);
+            if (!ownBucket.IsDefaultOrEmpty)
             {
-                builder ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
-                builder.AddRange(bucket);
+                return ownBucket;
             }
         }
 
-        return builder == null ? ImmutableArray<FunctionSymbol>.Empty : builder.ToImmutable();
+        return CollectFunctionBucket(name);
     }
 
     /// <summary>
@@ -551,6 +598,24 @@ public sealed class BoundScope
     {
         if (name != null && symbols != null && symbols.TryGetValue(name, out var symbol))
         {
+            // Issue #2342 follow-up: `symbols[name]` only ever holds the
+            // FIRST top-level function ever declared under this simple name
+            // (see TryDeclareFunction), regardless of which package declared
+            // it. When a body from a known declaring package is currently
+            // being bound and that package owns its OWN overload bucket for
+            // `name` (see TryLookupFunctions), prefer that package's own
+            // function so a bare-name reference resolves to the caller's own
+            // declaration rather than an unrelated package's same-named
+            // function that merely happened to be declared first.
+            if (symbol is FunctionSymbol && GetCurrentDeclaringPackage() != null)
+            {
+                var ownOverloads = TryLookupFunctions(name);
+                if (!ownOverloads.IsDefaultOrEmpty && !ReferenceEquals(ownOverloads[0], symbol))
+                {
+                    return ownOverloads[0];
+                }
+            }
+
             return symbol;
         }
 
@@ -737,6 +802,35 @@ public sealed class BoundScope
     /// <param name="target">The underlying type.</param>
     /// <returns>Whether the alias was declared (false if the name was already taken).</returns>
     public bool TryDeclareTypeAlias(string name, TypeSymbol target)
+        => TryDeclareTypeAlias(name, target, declaringPackageName: null);
+
+    /// <summary>
+    /// Tries to declare a type alias, with an explicit declaring-package
+    /// identity for the alias itself.
+    /// </summary>
+    /// <param name="name">The alias name.</param>
+    /// <param name="target">The underlying type.</param>
+    /// <param name="declaringPackageName">
+    /// Issue #2342 follow-up: the package that DECLARES this alias (see
+    /// <see cref="DeclarationBinder.BindTypeAliasDeclaration(GSharp.Core.CodeAnalysis.Syntax.TypeAliasDeclarationSyntax, PackageSymbol)"/>),
+    /// or <see langword="null"/>. A plain <c>type Name = Target</c> alias has
+    /// no dedicated symbol of its own — <c>target</c> IS the aliased type —
+    /// so, absent this override, its package identity would have to be
+    /// inferred (best-effort) from whatever package <c>target</c> itself
+    /// belongs to (see <see cref="TypePackageName"/>), which is <see
+    /// langword="null"/> for a primitive/imported/BCL/anonymous target and
+    /// therefore indistinguishable between two unrelated packages that each
+    /// alias such a target under the same simple name. Passing the alias's
+    /// OWN declaring package here gives it a stable identity independent of
+    /// the target, so two same-simple-name aliases in different packages
+    /// coexist (like any other top-level declaration under #2342) even when
+    /// their targets have no package identity of their own — or share one.
+    /// Callers declaring a real symbol (struct/enum/interface/delegate) pass
+    /// <see langword="null"/>: their <paramref name="target"/> already
+    /// carries accurate, stable package identity intrinsically.
+    /// </param>
+    /// <returns>Whether the alias was declared (false if the name was already taken).</returns>
+    public bool TryDeclareTypeAlias(string name, TypeSymbol target, string declaringPackageName)
     {
         if (name == null)
         {
@@ -751,6 +845,7 @@ public sealed class BoundScope
         if (!TypeAliasVisible(key))
         {
             AddTypeAlias(key, target);
+            RegisterAliasDeclaringPackage(key, declaringPackageName);
             return true;
         }
 
@@ -772,7 +867,7 @@ public sealed class BoundScope
         var existing = TryGetTypeAliasInChain(key, out var existingValue) ? existingValue : null;
         var targetEnclosing = TypeContainingType(target);
         var existingEnclosing = TypeContainingType(existing);
-        if (IsSameDeclarationScope(existing, target))
+        if (IsSameDeclarationScope(existing, target, key, declaringPackageName))
         {
             return false;
         }
@@ -788,7 +883,8 @@ public sealed class BoundScope
         // by.
         if (targetEnclosing == null && existingEnclosing == null)
         {
-            var packageQualifiedKey = MangleArity(PackageQualifiedName(TypePackageName(target), name), arity);
+            var targetPackage = declaringPackageName ?? TypePackageName(target);
+            var packageQualifiedKey = MangleArity(PackageQualifiedName(targetPackage, name), arity);
             if (TypeAliasVisible(packageQualifiedKey))
             {
                 // Same simple name AND same package-qualified key: a genuine
@@ -797,6 +893,7 @@ public sealed class BoundScope
             }
 
             AddTypeAlias(packageQualifiedKey, target);
+            RegisterAliasDeclaringPackage(packageQualifiedKey, declaringPackageName);
             return true;
         }
 
@@ -813,7 +910,13 @@ public sealed class BoundScope
             }
 
             AddTypeAlias(existingQualifiedKey, existing);
+            if (TryGetAliasDeclaringPackageInChain(key, out var carriedOverPackage))
+            {
+                RegisterAliasDeclaringPackage(existingQualifiedKey, carriedOverPackage);
+            }
+
             SetTypeAliasOverride(key, target);
+            RegisterAliasDeclaringPackage(key, declaringPackageName);
             return true;
         }
 
@@ -828,6 +931,7 @@ public sealed class BoundScope
         }
 
         AddTypeAlias(qualifiedKey, target);
+        RegisterAliasDeclaringPackage(qualifiedKey, declaringPackageName);
         return true;
     }
 
@@ -892,7 +996,7 @@ public sealed class BoundScope
         // type over an unrelated package's same-named homonym occupying the
         // plain simple key. Without this, a package whose top-level type LOST
         // the plain-simple-key "race" against another package's same-named
-        // type (see <see cref="TryDeclareTypeAlias"/>) could never resolve ITS
+        // type (see <see cref="TryDeclareTypeAlias(string, TypeSymbol, string)"/>) could never resolve ITS
         // OWN type by simple name from within its own code — the exact
         // "AnonymousType0 declared independently in two packages" shape from
         // the real Oahu.Data migration corpus.
@@ -956,7 +1060,7 @@ public sealed class BoundScope
     /// Issue #1174: resolves a nested type by its enclosing <paramref name="container"/>
     /// and simple <paramref name="simpleName"/>, rather than by global simple
     /// name. This is required when a top-level type shares the nested type's
-    /// simple name: per <see cref="TryDeclareTypeAlias"/>, the top-level homonym
+    /// simple name: per <see cref="TryDeclareTypeAlias(string, TypeSymbol, string)"/>, the top-level homonym
     /// keeps the simple key while the nested type is retained under its
     /// containing-type-qualified key (e.g. <c>"C.E"</c>). A plain
     /// <see cref="TryLookupTypeAlias(string, out TypeSymbol)"/> of the simple
@@ -1178,7 +1282,7 @@ public sealed class BoundScope
 
     /// <summary>
     /// Overrides the value of a type-alias key that already exists somewhere in
-    /// the scope chain (the eviction/promotion case in <see cref="TryDeclareTypeAlias"/>).
+    /// the scope chain (the eviction/promotion case in <see cref="TryDeclareTypeAlias(string, TypeSymbol, string)"/>).
     /// Only overwrites the value at this scope; it does not move the key's
     /// declaration-order position (which was fixed when the key was first
     /// introduced by <see cref="AddTypeAlias"/>) and does not mutate the
@@ -1188,6 +1292,47 @@ public sealed class BoundScope
     {
         typeAliases ??= ImmutableDictionary.CreateBuilder<string, TypeSymbol>();
         typeAliases[key] = target;
+    }
+
+    /// <summary>
+    /// Issue #2342 follow-up: records that the type-alias entry stored under
+    /// <paramref name="key"/> was declared by <paramref name="declaringPackageName"/>
+    /// (a plain <c>type Name = Target</c> alias — see
+    /// <see cref="TryDeclareTypeAlias(string, TypeSymbol, string)"/>). A no-op
+    /// when <paramref name="declaringPackageName"/> is <see langword="null"/>
+    /// (the caller is declaring a real symbol, not a plain alias).
+    /// </summary>
+    private void RegisterAliasDeclaringPackage(string key, string declaringPackageName)
+    {
+        if (declaringPackageName == null)
+        {
+            return;
+        }
+
+        aliasDeclaringPackages ??= ImmutableDictionary.CreateBuilder<string, string>();
+        aliasDeclaringPackages[key] = declaringPackageName;
+    }
+
+    /// <summary>
+    /// Issue #2342 follow-up: looks up the recorded alias-declaring-package
+    /// override for <paramref name="key"/> (see <see cref="RegisterAliasDeclaringPackage"/>),
+    /// walking the Parent chain the same way <see cref="TryGetTypeAliasInChain"/>
+    /// does. Returns <see langword="false"/> when the entry at <paramref name="key"/>
+    /// is a real symbol (no override was ever registered for it) rather than a
+    /// plain alias.
+    /// </summary>
+    private bool TryGetAliasDeclaringPackageInChain(string key, out string declaringPackageName)
+    {
+        for (var s = this; s != null; s = s.Parent)
+        {
+            if (s.aliasDeclaringPackages != null && s.aliasDeclaringPackages.TryGetValue(key, out declaringPackageName))
+            {
+                return true;
+            }
+        }
+
+        declaringPackageName = null;
+        return false;
     }
 
     /// <summary>Whether <paramref name="key"/> is visible anywhere in this scope chain.</summary>
@@ -1246,6 +1391,30 @@ public sealed class BoundScope
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Issue #2342 follow-up: collects every function stored under the exact
+    /// storage <paramref name="key"/> across this scope's Parent chain (the
+    /// same walking behavior <see cref="TryLookupFunctions"/> always used,
+    /// factored out so it can be tried against either a package-qualified key
+    /// or the plain simple-name key).
+    /// </summary>
+    /// <param name="key">The exact function-table storage key.</param>
+    /// <returns>The overload set stored under <paramref name="key"/>, or empty.</returns>
+    private ImmutableArray<FunctionSymbol> CollectFunctionBucket(string key)
+    {
+        ImmutableArray<FunctionSymbol>.Builder builder = null;
+        for (var s = this; s != null; s = s.Parent)
+        {
+            if (s.functions != null && s.functions.TryGetValue(key, out var bucket) && bucket.Count > 0)
+            {
+                builder ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
+                builder.AddRange(bucket);
+            }
+        }
+
+        return builder == null ? ImmutableArray<FunctionSymbol>.Empty : builder.ToImmutable();
     }
 
     /// <summary>
@@ -1509,15 +1678,28 @@ public sealed class BoundScope
     /// top-level (no enclosing type) AND declared in the SAME package. Two
     /// top-level declarations of the same simple name in DIFFERENT packages no
     /// longer share a scope: package identity, not one flat compilation-wide
-    /// table, decides top-level uniqueness.
+    /// table, decides top-level uniqueness. Package identity for the
+    /// already-stored <paramref name="existing"/> value prefers a registered
+    /// alias-declaring-package override at <paramref name="key"/> (see
+    /// <see cref="TryGetAliasDeclaringPackageInChain"/>) over the best-effort
+    /// <see cref="TypePackageName"/> inference from the value itself; package
+    /// identity for the incoming <paramref name="target"/> prefers the caller-
+    /// supplied <paramref name="targetDeclaringPackageOverride"/> the same way.
+    /// This is what gives a plain <c>type Name = Target</c> alias a stable
+    /// declaring-package identity independent of whatever package (if any) its
+    /// target happens to belong to.
     /// </summary>
-    private static bool IsSameDeclarationScope(TypeSymbol existing, TypeSymbol target)
+    private bool IsSameDeclarationScope(TypeSymbol existing, TypeSymbol target, string key, string targetDeclaringPackageOverride)
     {
         var existingEnclosing = TypeContainingType(existing);
         var targetEnclosing = TypeContainingType(target);
         if (existingEnclosing == null && targetEnclosing == null)
         {
-            return string.Equals(TypePackageName(existing), TypePackageName(target), StringComparison.Ordinal);
+            var existingPackage = TryGetAliasDeclaringPackageInChain(key, out var existingOverride)
+                ? existingOverride
+                : TypePackageName(existing);
+            var targetPackage = targetDeclaringPackageOverride ?? TypePackageName(target);
+            return string.Equals(existingPackage, targetPackage, StringComparison.Ordinal);
         }
 
         return ReferenceEquals(existingEnclosing, targetEnclosing);

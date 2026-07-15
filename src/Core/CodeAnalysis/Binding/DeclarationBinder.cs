@@ -182,7 +182,18 @@ internal sealed class DeclarationBinder
     private FunctionSymbol function => getCurrentFunction();
 #pragma warning restore SA1300
 
-    internal void BindTypeAliasDeclaration(TypeAliasDeclarationSyntax syntax)
+    /// <summary>
+    /// Binds a plain <c>type Name = Target</c> alias declaration.
+    /// </summary>
+    /// <param name="syntax">The alias declaration syntax.</param>
+    /// <param name="package">
+    /// Issue #2342 follow-up: the package that declares this alias, giving it
+    /// a stable declaring-package identity for top-level duplicate detection
+    /// (see <see cref="BoundScope.TryDeclareTypeAlias(string, TypeSymbol, string)"/>)
+    /// independent of whatever package (if any) the aliased target itself
+    /// belongs to.
+    /// </param>
+    internal void BindTypeAliasDeclaration(TypeAliasDeclarationSyntax syntax, PackageSymbol package)
     {
         var name = syntax.Identifier.Text;
 
@@ -210,7 +221,7 @@ internal sealed class DeclarationBinder
             "a type alias declaration",
             System.AttributeTargets.Class);
 
-        if (!scope.TryDeclareTypeAlias(name, aliasedType))
+        if (!scope.TryDeclareTypeAlias(name, aliasedType, package?.Name))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
         }

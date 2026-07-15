@@ -753,8 +753,9 @@ public sealed class Binder
                                                .OfType<TypeAliasDeclarationSyntax>();
         foreach (var typeAlias in typeAliasDeclarations)
         {
+            var owningPackage = packageByTree[typeAlias.SyntaxTree];
             binder.declarations.ValidateTopLevelProtected(typeAlias.AccessibilityModifier);
-            binder.declarations.BindTypeAliasDeclaration(typeAlias);
+            RunWithPackage(owningPackage, () => binder.declarations.BindTypeAliasDeclaration(typeAlias, owningPackage));
         }
 
         // ADR-0059 / issue #255: declare named delegate types BEFORE
