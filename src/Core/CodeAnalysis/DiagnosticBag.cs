@@ -2418,6 +2418,26 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
+    /// Issue #2361 / ADR-0029 follow-up: reports that a data class/struct's
+    /// hand-written <c>ToString</c> declaration is incompatible with the slot
+    /// it would need to suppress/replace (<c>public string ToString()</c> —
+    /// zero parameters, non-static, non-generic, non-async, returning
+    /// <c>string</c>). Unlike the other five synthesized names (which are
+    /// always rejected via <see cref="ReportDataStructSynthesizedMemberConflict"/>),
+    /// a <c>ToString</c> declaration gets this more specific diagnostic so the
+    /// message can describe the exact shape it must match.
+    /// </summary>
+    /// <param name="location">The text location of the member name.</param>
+    /// <param name="typeName">The data type name.</param>
+    /// <param name="isClass"><see langword="true"/> when the type is a data class; otherwise a data struct.</param>
+    public void ReportIncompatibleDataToStringOverride(TextLocation location, string typeName, bool isClass)
+    {
+        var kind = isClass ? "class" : "struct";
+        var message = $"Data {kind} '{typeName}' declares 'ToString' with an incompatible shape; a data {kind} may only override ToString as 'public ToString() string' (no parameters, not static, not generic, not async, returning 'string').";
+        Report(location, "GS0487", message);
+    }
+
+    /// <summary>
     /// ADR-0059 / issue #255: reports that a delegate declaration
     /// (<c>type Name = delegate …</c>) was not followed by a <c>func(...)</c>
     /// signature. Named delegates must take the shape

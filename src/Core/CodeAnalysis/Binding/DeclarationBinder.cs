@@ -1598,7 +1598,14 @@ internal sealed class DeclarationBinder
                     continue;
                 }
 
-                if (structSymbol.IsData && IsDataStructSynthesizedMemberName(methodName))
+                // Issue #2361: a data class/struct's ToString is the one
+                // synthesized-name exception — its exact shape is validated a
+                // few lines below (once the parameter list/return type are
+                // bound), where it either falls through as an ordinary
+                // in-body method (suppressing the synthesized ToString) or is
+                // rejected with the more specific GS0487. The other five
+                // synthesized names stay unconditionally reserved here.
+                if (structSymbol.IsData && IsDataStructSynthesizedMemberName(methodName) && !IsUserOverridableDataMemberName(methodName))
                 {
                     Diagnostics.ReportDataStructSynthesizedMemberConflict(methodSyntax.Identifier.Location, structSymbol.Name, structSymbol.IsClass, methodName);
                     continue;
@@ -1727,6 +1734,22 @@ internal sealed class DeclarationBinder
                     // FunctionSymbol.IsAsync below) so override / shadow matching
                     // compares the async-normalized effective return type.
                     var methodIsAsync = methodSyntax.IsAsync || isAsyncIteratorReturnType(returnType);
+
+                    // Issue #2361: now that the parameter list/return type are
+                    // bound, validate a data class/struct's ToString shape.
+                    // Compatible: fall through as an ordinary in-body method
+                    // (its FunctionSymbol lands in structSymbol.Methods below,
+                    // which both the emitter's method-row planner and
+                    // DataStructSynthesizer.EmitDataStructSynthesizedMembers
+                    // check to suppress the synthesized ToString row/body).
+                    // Incompatible: reject with GS0487 instead of silently
+                    // colliding with (or shadowing) the synthesized member.
+                    if (structSymbol.IsData && methodName == "ToString"
+                        && !IsCompatibleDataToStringOverride(methodSyntax.Parameters.Count, returnType, methodReturnRefKind, methodIsAsync, methodSyntax.IsUnsafe, methodTypeParameters, methodAccessibility))
+                    {
+                        Diagnostics.ReportIncompatibleDataToStringOverride(methodSyntax.Identifier.Location, structSymbol.Name, structSymbol.IsClass);
+                        continue;
+                    }
 
                     // Phase 3.B.3 sub-step 3: open/override validation against
                     // base class chain per ADR-0017.
@@ -6359,9 +6382,21 @@ internal sealed class DeclarationBinder
                     return;
                 }
 
-                if (methodReceiverStruct.IsData && IsDataStructSynthesizedMemberName(methodName))
+                // Issue #2361: same ToString exception as the in-body form
+                // above — a compatible shape falls through as an ordinary
+                // receiver-clause method (suppressing the synthesized
+                // ToString); an incompatible one gets the more specific
+                // GS0487 instead of the blanket GS0232.
+                if (methodReceiverStruct.IsData && IsDataStructSynthesizedMemberName(methodName) && !IsUserOverridableDataMemberName(methodName))
                 {
                     Diagnostics.ReportDataStructSynthesizedMemberConflict(syntax.Identifier.Location, methodReceiverStruct.Name, methodReceiverStruct.IsClass, methodName);
+                    return;
+                }
+
+                if (methodReceiverStruct.IsData && methodName == "ToString"
+                    && !IsCompatibleDataToStringOverride(syntax.Parameters.Count, type, returnRefKind, syntax.IsAsync, syntax.IsUnsafe, typeParameters, accessibility))
+                {
+                    Diagnostics.ReportIncompatibleDataToStringOverride(syntax.Identifier.Location, methodReceiverStruct.Name, methodReceiverStruct.IsClass);
                     return;
                 }
 
@@ -6634,10 +6669,63 @@ internal sealed class DeclarationBinder
     /// names as inline structs (<c>Equals</c>, <c>GetHashCode</c>,
     /// <c>ToString</c>, <c>op_Equality</c>, <c>op_Inequality</c>,
     /// <c>Deconstruct</c>). User code may not hand-write any of them.
+    /// Issue #2361: <c>ToString</c> is the one exception — see
+    /// <see cref="IsUserOverridableDataMemberName"/> and
+    /// <see cref="IsCompatibleDataToStringOverride"/>.
     /// </summary>
     private static bool IsDataStructSynthesizedMemberName(string methodName)
     {
         return IsInlineSynthesizedMemberName(methodName);
+    }
+
+    /// <summary>
+    /// Issue #2361: names in the ADR-0029 synthesized-member set that MAY be
+    /// hand-written on a data class/struct when the declared shape is
+    /// compatible (see <see cref="IsCompatibleDataToStringOverride"/>),
+    /// suppressing/replacing the synthesized member instead of being
+    /// unconditionally rejected. Deliberately narrow today (only
+    /// <c>ToString</c> — a record's display format is the one synthesized
+    /// facet C# lets users override while keeping equality/hash/copy
+    /// compiler-controlled), but factored as its own predicate (rather than
+    /// inlining a literal string compare at each of the three call sites)
+    /// so a future issue can widen the set without touching the call sites
+    /// again.
+    /// </summary>
+    private static bool IsUserOverridableDataMemberName(string methodName)
+    {
+        return methodName == "ToString";
+    }
+
+    /// <summary>
+    /// Issue #2361: a data class/struct's hand-written <c>ToString</c> is
+    /// only allowed to suppress/replace the synthesized one when its shape
+    /// exactly matches what <c>DataStructSynthesizer.EmitDataStructToString</c>
+    /// would have emitted — <c>public string ToString()</c>: zero
+    /// parameters, non-static (the caller only reaches this for the
+    /// instance-method lists, so staticness is never in question here),
+    /// non-generic, non-async, non-unsafe, returning <c>string</c> by value,
+    /// with <c>public</c> accessibility (matching
+    /// <c>DataStructSynthesizer.DataObjectOverrideAttributes</c>'s
+    /// unconditional <c>MethodAttributes.Public</c>). Any other shape keeps
+    /// the name collision but is reported as an incompatible override
+    /// (GS0487) rather than silently accepted.
+    /// </summary>
+    private static bool IsCompatibleDataToStringOverride(
+        int explicitParameterCount,
+        TypeSymbol returnType,
+        RefKind returnRefKind,
+        bool isAsync,
+        bool isUnsafe,
+        ImmutableArray<TypeParameterSymbol> methodTypeParameters,
+        Accessibility accessibility)
+    {
+        return explicitParameterCount == 0
+            && returnType == TypeSymbol.String
+            && returnRefKind == RefKind.None
+            && !isAsync
+            && !isUnsafe
+            && methodTypeParameters.IsDefaultOrEmpty
+            && accessibility == Accessibility.Public;
     }
 
     private bool IsSamePackageNonAggregateReceiver(TypeClauseSyntax receiverSyntax, TypeSymbol receiverType, PackageSymbol package)
