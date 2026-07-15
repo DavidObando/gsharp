@@ -17,20 +17,24 @@ namespace GSharp.Compiler.Tests.Emit;
 /// <c>__explicit_&lt;Interface&gt;__&lt;Member&gt;</c> mangled convention
 /// correctly satisfied a NON-generic interface member, but was not recognized
 /// when the interface was GENERIC — the class was wrongly reported as not
-/// implementing the interface method (GS0187).
+/// implementing the interface method (GS0187). ADR-0149 later replaced the
+/// mangled convention with the <c>func (InterfaceType) Member(...)</c>
+/// qualifier clause this test now exercises; the underlying generic-interface
+/// fixes below remain in effect for the new syntax too.
 /// <para>
-/// Two defects were fixed. (1) The binder-side
-/// <c>DeclarationBinder.QualifyInterfaceName</c> included the generic
-/// type-parameter suffix (<c>ICallback[T, TResult]</c>) in the name it matched
-/// against the mangled component, while cs2gs formats that component with
-/// <c>SymbolDisplayGenericsOptions.None</c> (simple name only); the suffix is
-/// now stripped so the names match. (2) The emitter's
-/// <c>EmitExplicitInterfaceMethodImpls</c> looked for the linked interface
-/// member on the interface DEFINITION's method table, but for a constructed
-/// generic interface the linked member is the SUBSTITUTED instance on the
-/// constructed interface — so no <c>MethodImpl</c> row was emitted and the
-/// type failed to load. The emitter now matches the constructed instance's
-/// methods and maps back to the open slot for token resolution.
+/// Two defects were fixed. (1) The binder-side interface-target resolution
+/// must match a clause's bound type against the SAME (canonical) instance
+/// already recorded in the implementer's <c>StructSymbol.Interfaces</c> —
+/// structurally, not just by reference — since a constructed generic
+/// interface (<c>ICallback[T, TResult]</c>) is not interned; two independent
+/// bindings of the same constructed interface are different object
+/// instances. (2) The emitter's <c>EmitExplicitInterfaceMethodImpls</c>
+/// looked for the linked interface member on the interface DEFINITION's
+/// method table, but for a constructed generic interface the linked member is
+/// the SUBSTITUTED instance on the constructed interface — so no
+/// <c>MethodImpl</c> row was emitted and the type failed to load. The emitter
+/// now matches the constructed instance's methods and maps back to the open
+/// slot for token resolution.
 /// </para>
 /// <para>The non-generic path (issue #2010) is intentionally unchanged.</para>
 /// </summary>
@@ -44,7 +48,7 @@ public class Issue2181GenericExplicitInterfaceImplEmitTests
         }
 
         open class Callback[T, TResult] : ICallback[T, TResult] {
-            private func __explicit_Oahu_Aux_ICallback__Interact(value T) TResult -> OnInteract(value)
+            private func (ICallback[T, TResult]) Interact(value T) TResult -> OnInteract(value)
 
             protected open func OnInteract(value T) TResult {
                 return default(TResult)
@@ -66,7 +70,7 @@ public class Issue2181GenericExplicitInterfaceImplEmitTests
         }
 
         open class Callback2 : ICallback2 {
-            private func __explicit_Oahu_Aux_ICallback2__Interact(value int32) string -> OnInteract(value)
+            private func (ICallback2) Interact(value int32) string -> OnInteract(value)
 
             protected open func OnInteract(value int32) string {
                 return "base"
@@ -100,13 +104,17 @@ public class Issue2181GenericExplicitInterfaceImplEmitTests
 
             Assert.True(foundCallback, "expected to find the generic Callback type");
 
-            // The mangled explicit-impl body survives as its own MethodDef.
-            int mangledBodies = callback.GetMethods()
+            // ADR-0149: the explicit-impl body survives as its own MethodDef,
+            // under its synthesized (collision-free) metadata name
+            // ("<Package>.<Interface>[<TypeParams>].<Member>" — the OPEN
+            // generic interface's own type-parameter names, since this
+            // clause is declared directly on the open generic class).
+            int explicitBodies = callback.GetMethods()
                 .Select(mh => reader.GetString(reader.GetMethodDefinition(mh).Name))
-                .Count(n => n == "__explicit_Oahu_Aux_ICallback__Interact");
-            Assert.Equal(1, mangledBodies);
+                .Count(n => n == "Oahu.Aux.ICallback[T, TResult].Interact");
+            Assert.Equal(1, explicitBodies);
 
-            // Issue #2181: a MethodImpl row must bind the mangled body to the
+            // Issue #2181: a MethodImpl row must bind the explicit body to the
             // (generic) interface's Interact slot — without it the type fails
             // to load at runtime with a TypeLoadException.
             int methodImplRows = callback.GetMethodImplementations().Count();

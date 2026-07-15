@@ -33,23 +33,26 @@ namespace Cs2Gs.Tests;
 /// </list>
 /// The #1911 fix forced explicit implementations public and dropped
 /// colliding duplicates with an <c>Unsupported</c> diagnostic. Issue #2010
-/// (see <c>Issue2010ExplicitInterfaceImplementationTests</c>) replaces that
-/// with a full-fidelity fix: each explicit implementation is emitted under a
-/// reserved mangled name and bound to its own CLR interface slot via an
-/// explicit <c>MethodImpl</c> row at emit time, so it can keep its
-/// C#-faithful (non-public) visibility and no collision/drop ever occurs.
+/// (see <c>Issue2010ExplicitInterfaceImplementationTests</c>) replaced that
+/// with a full-fidelity fix keyed on a reserved mangled name; issue #2362's
+/// ADR-0149 redesign (see that class's doc comment) replaced the mangled
+/// name with a first-class explicit-interface qualifier clause
+/// (<c>func (IGreeter) Greet()</c>) that keeps the member's own plain source
+/// name — the underlying full-fidelity guarantee (no collision, no drop,
+/// C#-faithful visibility) is unchanged.
 /// </summary>
 public class Issue1911ExplicitInterfaceImplementationTests
 {
     /// <summary>
-    /// A lone explicit interface implementation translates to a mangled-name
-    /// method (`__explicit_IGreeter__Greet`) with C#-faithful (non-public)
-    /// visibility — issue #2010's MethodImpl-based fix fills the interface's
-    /// CLR slot via an explicit MethodImpl row rather than requiring
-    /// public/name-based dispatch.
+    /// A lone explicit interface implementation translates to a method
+    /// carrying an ADR-0149 explicit-interface qualifier clause
+    /// (<c>func (IGreeter) Greet()</c>) with C#-faithful (non-public)
+    /// visibility — the emitter fills the interface's CLR slot via an
+    /// explicit MethodImpl row rather than requiring public/name-based
+    /// dispatch.
     /// </summary>
     [Fact]
-    public void LoneExplicitImplementation_TranslatesToMangledNameMethod()
+    public void LoneExplicitImplementation_TranslatesToExplicitInterfaceClauseMethod()
     {
         (CompilationUnit unit, TranslationContext context) = Translate(@"
 namespace Corpus.Issue1911
@@ -69,7 +72,7 @@ namespace Corpus.Issue1911
 }");
         string printed = GSharpPrinter.Print(unit);
 
-        Assert.Contains("__explicit_Corpus_Issue1911_IGreeter__Greet() string {", printed, StringComparison.Ordinal);
+        Assert.Contains("private func (IGreeter) Greet() string {", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(
             context.Diagnostics,
             d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("explicit interface", StringComparison.OrdinalIgnoreCase));
@@ -81,10 +84,10 @@ namespace Corpus.Issue1911
     /// <c>corpus/grid/G06-Types-Console</c> grid fixture (its
     /// <c>ExplicitInterfaceSpecifierFixture</c>) migrates fully green —
     /// translate, compile, ilverify, and stdout parity all pass — proving the
-    /// mangled-name/MethodImpl fix at the real <c>gsc</c>/<c>ilverify</c>
-    /// level, not just in-memory translation. Gated on the compiler artifact
-    /// and the <c>dotnet-ilverify</c> tool being present, like the other e2e
-    /// tests.
+    /// ADR-0149 explicit-interface-clause fix at the real
+    /// <c>gsc</c>/<c>ilverify</c> level, not just in-memory translation.
+    /// Gated on the compiler artifact and the <c>dotnet-ilverify</c> tool
+    /// being present, like the other e2e tests.
     /// </summary>
     [Fact]
     public async Task G06TypesConsole_MigratesGreen_EndToEnd()

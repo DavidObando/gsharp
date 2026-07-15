@@ -88,6 +88,41 @@ public sealed class EventSymbol : Symbol
     public Syntax.BlockStatementSyntax RaiseBodySyntax { get; set; }
 
     /// <summary>
+    /// Gets or sets the in-compilation (G#) interface member this event
+    /// explicitly implements (ADR-0149, generalizing the #2010/#2362
+    /// explicit-interface convention from methods/properties to events for
+    /// the first time). Set when the event carries a dedicated
+    /// explicit-interface qualifier clause (<c>event (IFoo) Changed T</c>,
+    /// ADR-0149) whose bound interface type —
+    /// see <see cref="ExplicitInterfaceClauseTarget"/> — declares a member
+    /// with this event's own plain name and a matching handler type. Mirrors
+    /// <see cref="PropertySymbol.ExplicitInterfaceMember"/>: the emitter
+    /// resolves this event's add/remove accessor methods to a MethodDef or
+    /// (for a constructed generic interface) a MemberRef/TypeSpec token and
+    /// binds a <c>MethodImpl</c> row per accessor so the CLR routes interface
+    /// dispatch to this event's own distinct accessor bodies. Defaults to
+    /// <see langword="null"/> for ordinary events.
+    /// </summary>
+    public EventSymbol ExplicitInterfaceMember { get; set; }
+
+    /// <summary>
+    /// Gets a value indicating whether this event's declaration carries a
+    /// dedicated explicit-interface qualifier clause (ADR-0149) — a purely
+    /// syntactic fact known immediately at declaration time, before
+    /// <see cref="ExplicitInterfaceClauseTarget"/> is resolved against the
+    /// containing type's implemented interfaces.
+    /// </summary>
+    public bool HasExplicitInterfaceClause => Declaration?.HasExplicitInterfaceClause == true;
+
+    /// <summary>
+    /// Gets or sets the <see cref="InterfaceSymbol"/> the explicit-interface
+    /// qualifier clause (<see cref="HasExplicitInterfaceClause"/>) resolves
+    /// to, bound by <see cref="Binding.DeclarationBinder.ResolveExplicitInterfaceClauses"/>.
+    /// <c>null</c> until resolved.
+    /// </summary>
+    public InterfaceSymbol ExplicitInterfaceClauseTarget { get; set; }
+
+    /// <summary>
     /// ADR-0105 Phase 2 — re-points this (reused) event at the declaration node
     /// of a freshly-parsed syntax tree whose event signature and accessor shape
     /// are byte-identical to the previous one (a body-only edit). The caller is

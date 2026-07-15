@@ -171,6 +171,23 @@ internal sealed partial class ExpressionBinder
                 return new BoundEventSubscriptionExpression(null, boundReceiver, userStruct, ev, userHandler, isAdd);
             }
 
+            // ADR-0149 follow-up (issue #2370): event subscription through an
+            // INTERFACE-typed receiver (`b: IFoo; b.Changed += h`). Interfaces
+            // could always declare events, but no call-site binding ever
+            // consulted an interface owner here — mirrors the struct branch
+            // immediately above (TypeMemberModel.TryGetEvent already walks
+            // InterfaceSymbol.SelfAndAllBaseInterfaces internally; only the
+            // receiver-type gate below was missing). Dispatches via
+            // `callvirt` through the interface's own add_X/remove_X slot
+            // (EmitUserEventSubscription resolves it through
+            // ResolveUserInterfaceInstanceMethodToken, which also parents the
+            // token at the constructed TypeSpec for a generic interface).
+            if (isEventCapableOperator && boundReceiver.Type is InterfaceSymbol userIface && TypeMemberModel.TryGetEvent(userIface, eventName, out var ifaceEv))
+            {
+                var ifaceHandler = BindEventSubscriptionHandler(syntax.Value, ifaceEv.Type);
+                return new BoundEventSubscriptionExpression(null, boundReceiver, userIface, ifaceEv, ifaceHandler, isAdd);
+            }
+
             receiverClrType = boundReceiver.Type?.ClrType;
             if (receiverClrType == null)
             {

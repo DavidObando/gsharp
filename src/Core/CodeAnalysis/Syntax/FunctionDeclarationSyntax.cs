@@ -15,6 +15,9 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     private SyntaxToken staticModifier;
     private SyntaxToken returnRefModifier;
     private SyntaxToken unsafeModifier;
+    private SyntaxToken explicitInterfaceOpenParenToken;
+    private TypeClauseSyntax explicitInterfaceType;
+    private SyntaxToken explicitInterfaceCloseParenToken;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FunctionDeclarationSyntax"/> class.
@@ -253,6 +256,52 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets a value indicating whether this declaration carries a Go-style receiver clause (Phase 3.B.6 extension function).</summary>
     public bool IsExtension => Receiver != null;
+
+    /// <summary>
+    /// Gets or sets the optional open parenthesis introducing a dedicated
+    /// explicit-interface-implementation qualifier clause, e.g. <c>func (IFoo) M(...)</c>
+    /// (ADR-0149). Distinct from <see cref="ReceiverOpenParenthesisToken"/> — this is a
+    /// single-type qualifier, not a name+type extension receiver. Assigned by the parser;
+    /// <see langword="null"/> for an ordinary or extension function.
+    /// </summary>
+    public SyntaxToken ExplicitInterfaceOpenParenthesisToken
+    {
+        get => explicitInterfaceOpenParenToken;
+        set
+        {
+            explicitInterfaceOpenParenToken = value;
+            InvalidateCachedSpan();
+        }
+    }
+
+    /// <summary>
+    /// Gets or sets the interface type referenced by the explicit-interface qualifier
+    /// clause (ADR-0149), e.g. the <c>IFoo</c> in <c>func (IFoo) M(...)</c>. Assigned by
+    /// the parser; <see langword="null"/> when no clause is present.
+    /// </summary>
+    public TypeClauseSyntax ExplicitInterfaceType
+    {
+        get => explicitInterfaceType;
+        set
+        {
+            explicitInterfaceType = value;
+            InvalidateCachedSpan();
+        }
+    }
+
+    /// <summary>Gets or sets the optional close parenthesis terminating the explicit-interface qualifier clause (ADR-0149).</summary>
+    public SyntaxToken ExplicitInterfaceCloseParenthesisToken
+    {
+        get => explicitInterfaceCloseParenToken;
+        set
+        {
+            explicitInterfaceCloseParenToken = value;
+            InvalidateCachedSpan();
+        }
+    }
+
+    /// <summary>Gets a value indicating whether this declaration carries an explicit-interface qualifier clause (ADR-0149).</summary>
+    public bool HasExplicitInterfaceClause => ExplicitInterfaceType != null;
 
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.FunctionDeclaration;
