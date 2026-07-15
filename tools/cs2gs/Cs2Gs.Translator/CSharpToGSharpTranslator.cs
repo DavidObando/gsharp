@@ -6209,24 +6209,46 @@ public sealed class CSharpToGSharpTranslator
             bool leftConst = this.context.SemanticModel.GetConstantValue(binary.Left).HasValue;
             bool rightConst = this.context.SemanticModel.GetConstantValue(binary.Right).HasValue;
 
-            // Prefer the minimal, faithful form: a constant literal is retyped to the
-            // other (non-constant) operand's G# type so both operands share a type
-            // (e.g. `channelCount == (2 as uint16?)`).
-            if (rightConst && !leftConst)
+            // Prefer the minimal, faithful form: a constant expression is retyped to
+            // the other (non-constant) operand's G# type so both operands share a
+            // type (e.g. `channelCount == (2 as uint16?)`). This mirrors C#'s
+            // constant-expression narrowing conversions (C# §10.2.11), which are
+            // defined ONLY between integral types (int/long constants narrowing to
+            // a smaller/differently-signed integral type) — never between a
+            // floating-point/decimal type and an integral type. Issue #2352: a
+            // `double`/`float`/`decimal` constant (including one folded from a
+            // compile-time-constant sub-expression, e.g. `1.0 * 2.0`) must NEVER be
+            // narrowed down to the other operand's integral type this way — nor may
+            // a floating-point/decimal non-constant operand's declared type be used
+            // to narrow an integral constant, since C# binary numeric promotion
+            // always widens the integral side to match float/double/decimal,
+            // regardless of which side happens to be a constant. Restricting this
+            // branch to "both operands are integral" routes every
+            // floating-point/decimal combination through the converted-type-driven
+            // logic below instead, which always follows Roslyn's own promotion
+            // direction.
+            bool leftIsIntegral = IsIntegralNumericKind(leftUnderlying);
+            bool rightIsIntegral = IsIntegralNumericKind(rightUnderlying);
+
+            if (rightConst && !leftConst && leftIsIntegral && rightIsIntegral)
             {
                 right = this.CoerceOperandTo(right, leftType);
                 return new BinaryExpression(left, op, right);
             }
 
-            if (leftConst && !rightConst)
+            if (leftConst && !rightConst && leftIsIntegral && rightIsIntegral)
             {
                 left = this.CoerceOperandTo(left, rightType);
                 return new BinaryExpression(left, op, right);
             }
 
-            // Neither (or both) operand is a constant literal: convert each operand
-            // that C# promoted (its declared type differs from the common converted
-            // type) to that common type.
+            // Neither (or both) operand is a constant expression, or one side is a
+            // floating-point/decimal type: convert each operand that C# promoted
+            // (its declared type differs from the common converted type) to that
+            // common type. Roslyn's `ConvertedType` always reflects the correct C#
+            // binary numeric promotion direction here — including widening an
+            // integral non-constant operand up to a constant's floating-point type
+            // (issue #2352) — independent of which side is a compile-time constant.
             ITypeSymbol leftConverted = this.context.GetTypeInfo(binary.Left).ConvertedType;
             ITypeSymbol rightConverted = this.context.GetTypeInfo(binary.Right).ConvertedType;
 
@@ -6952,6 +6974,30 @@ public sealed class CSharpToGSharpTranslator
                     return true;
                 default:
                     return false;
+            }
+        }
+
+        // Reports whether a numeric underlying kind (as classified by
+        // <see cref="TryGetNumericKind"/>) is an INTEGRAL type — i.e. every numeric
+        // primitive except the three floating-point/decimal kinds (`float`,
+        // `double`, `decimal`). Issue #2352: C#'s constant-expression narrowing
+        // conversions (C# §10.2.11) — the rule that lets cs2gs retype a constant
+        // operand to the OTHER operand's (narrower or differently-signed) numeric
+        // type instead of widening the non-constant operand — are defined only
+        // between integral types. This gate keeps that retyping confined to
+        // integral↔integral combinations so a `float`/`double`/`decimal` constant
+        // (or non-constant) operand always instead follows the converted-type-driven
+        // widening below, matching C#'s actual binary numeric promotion.
+        private static bool IsIntegralNumericKind(SpecialType underlying)
+        {
+            switch (underlying)
+            {
+                case SpecialType.System_Single:
+                case SpecialType.System_Double:
+                case SpecialType.System_Decimal:
+                    return false;
+                default:
+                    return true;
             }
         }
 
