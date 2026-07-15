@@ -146,8 +146,14 @@ func f(arr []int32) {
         Assert.Contains(result.Diagnostics, d => d.Id == "GS0219");
     }
 
+    // Issue #2350: this async function contains no `await` at all, so `s`
+    // is never live across a suspension point — replacing the old coarse
+    // "any by-ref-like local in any async function" rule
+    // (RefStructAsyncLivenessAnalyzer) with sound per-local liveness now
+    // permits it. See Issue2350AsyncRefStructLivenessTests for the full
+    // suite of safe/unsafe liveness scenarios this fix covers.
     [Fact]
-    public void RefStruct_LocalInAsyncFunction_Reports_GS0219()
+    public void RefStruct_LocalInAsyncFunctionWithNoAwait_IsPermitted()
     {
         var source = @"
 import System
@@ -158,7 +164,7 @@ async func f(arr []int32) Task[int32] {
 }
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0219");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0219");
     }
 
     [Fact]

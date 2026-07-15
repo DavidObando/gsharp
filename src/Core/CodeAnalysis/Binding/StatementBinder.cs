@@ -1418,21 +1418,34 @@ internal sealed class StatementBinder
         }
 
         // Issue #367: a by-ref-like (`ref struct`) local is legal in an ordinary
-        // function, but an async function or an iterator hoists every local into
-        // a heap-allocated state machine, which the CLR forbids for a by-ref-like
-        // type. A top-level (global) variable is emitted as a static field, which
-        // is likewise heap-rooted and forbidden. Reject the declaration in those
+        // function, but an iterator hoists every local into a heap-allocated
+        // state machine, which the CLR forbids for a by-ref-like type. A
+        // top-level (global) variable is emitted as a static field, which is
+        // likewise heap-rooted and forbidden. Reject the declaration in those
         // contexts.
+        //
+        // Issue #2350: an async function's state machine also hoists locals,
+        // but — unlike an iterator — it is legal for a by-ref-like local to
+        // appear there as long as it never needs to survive an `await`
+        // suspension point (the CLR forbids a by-ref-like *field*, but the
+        // async lowering already never hoists such a local into one — see
+        // AsyncCaptureWalker — so it is only unsafe when live across a
+        // suspension). That is a per-local dataflow question this syntax-only
+        // check cannot answer, so the coarse "any by-ref-like local in any
+        // async function" rejection that used to live here has been replaced
+        // by RefStructAsyncLivenessAnalyzer, which runs after lowering (see
+        // its call sites in Binder.cs) and reports ReportByRefLikeEscape only
+        // for a local actually proven live across a suspension (including via
+        // unsafe try/finally interaction).
         if (TypeSymbol.IsByRefLike(variableType))
         {
             if (function == null || function.IsTopLevelEntryPoint)
             {
                 Diagnostics.ReportByRefLikeEscape(syntax.Identifier.Location, variableType, "be declared as a top-level variable (it would be emitted as a heap-rooted static field)");
             }
-            else if (function.IsAsync || isIteratorReturnType(function.Type))
+            else if (!function.IsAsync && isIteratorReturnType(function.Type))
             {
-                var context = function.IsAsync ? "an async function" : "an iterator";
-                Diagnostics.ReportByRefLikeEscape(syntax.Identifier.Location, variableType, $"be declared as a local in {context} (it would be hoisted into the state machine)");
+                Diagnostics.ReportByRefLikeEscape(syntax.Identifier.Location, variableType, "be declared as a local in an iterator (it would be hoisted into the state machine)");
             }
         }
 
