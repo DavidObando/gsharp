@@ -976,14 +976,38 @@ internal sealed class ConversionClassifier
         }
 
         var openParamType = openParams[paramIndex].ParameterType;
-        if (openParamType.IsGenericParameter
-            && openParamType.DeclaringMethod == null
-            && openParamType.GenericParameterPosition < imported.TypeArguments.Length)
+        if (openParamType.IsByRef)
         {
-            return imported.TypeArguments[openParamType.GenericParameterPosition];
+            openParamType = openParamType.GetElementType();
         }
 
-        return null;
+        if (openParamType == null)
+        {
+            return null;
+        }
+
+        // Issue #2365: the bare-slot check above only covers a parameter whose
+        // OWN type IS the declaring type's generic parameter directly (`!0` of
+        // `List[T].Add(!0)`). A parameter that merely MENTIONS that type
+        // parameter nested inside a constructed generic — e.g.
+        // `Expression<Func<TColumns,object>>` on
+        // `CreateTableBuilder[TColumns].PrimaryKey` — falls through unhandled,
+        // so the closed CLR shape (`Expression<Func<object,object>>`) is used
+        // as the conversion target, erasing the lambda's expression-tree
+        // delegate to `object` even though the earlier delegate-rebind step
+        // (see `TryBuildSymbolicDelegateTargetForMethodParam`) already
+        // recovered the correct symbolic literal shape. Recover the full
+        // substituted shape via the same general recursive projection used by
+        // the method-type-argument sibling below
+        // (<see cref="TrySubstituteParameterTypeFromMethodTypeArgs"/>), which
+        // already understands arrays, tuples, nullable, and arbitrarily nested
+        // constructed generics (delegates, `Expression&lt;&gt;`, ...).
+        var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openParamType, openDef, imported.TypeArguments);
+        return mapped != null
+            && mapped != TypeSymbol.Error
+            && (TypeSymbol.ContainsTypeParameter(mapped) || TypeSymbol.ContainsSameCompilationUserType(mapped))
+            ? mapped
+            : null;
     }
 
     /// <summary>

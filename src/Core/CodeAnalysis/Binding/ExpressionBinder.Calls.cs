@@ -2135,6 +2135,24 @@ internal sealed partial class ExpressionBinder
     /// generic parameters.
     /// </summary>
     private static bool TryResolveOpenStaticMethod(Type openDefinition, MethodInfo closedMethod, out MethodInfo openMethod)
+        => TryResolveOpenMethodByToken(openDefinition, closedMethod, BindingFlags.Static, out openMethod);
+
+    /// <summary>
+    /// Issue #2365: instance-method sibling of <see cref="TryResolveOpenStaticMethod"/>.
+    /// Resolves the open generic <em>type</em> definition's INSTANCE method
+    /// corresponding to <paramref name="closedMethod"/> (a non-generic instance
+    /// method reflected off a constructed generic receiver, e.g.
+    /// <c>CreateTableBuilder&lt;object&gt;.PrimaryKey</c>) by metadata-token
+    /// identity, yielding the open shape (e.g. <c>CreateTableBuilder&lt;&gt;.PrimaryKey</c>)
+    /// whose parameter types are stated in terms of the type's own open generic
+    /// parameters. This lets a delegate/expression-tree parameter that closes
+    /// over the DECLARING TYPE's type parameter (rather than a method-level one)
+    /// recover its symbolic shape even though the method itself is not generic.
+    /// </summary>
+    private static bool TryResolveOpenInstanceMethod(Type openDefinition, MethodInfo closedMethod, out MethodInfo openMethod)
+        => TryResolveOpenMethodByToken(openDefinition, closedMethod, BindingFlags.Instance, out openMethod);
+
+    private static bool TryResolveOpenMethodByToken(Type openDefinition, MethodInfo closedMethod, BindingFlags kindFlag, out MethodInfo openMethod)
     {
         openMethod = null;
         if (openDefinition == null || closedMethod == null)
@@ -2144,7 +2162,7 @@ internal sealed partial class ExpressionBinder
 
         try
         {
-            foreach (var candidate in openDefinition.GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+            foreach (var candidate in openDefinition.GetMethods(kindFlag | BindingFlags.Public | BindingFlags.NonPublic))
             {
                 if (candidate.MetadataToken == closedMethod.MetadataToken && candidate.Module == closedMethod.Module)
                 {
@@ -2181,7 +2199,16 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var invoke = openParameterType.GetMethodSafe("Invoke");
+        // Issue #2365: an `Expression<TDelegate>` parameter is not itself a
+        // delegate (it exposes no `Invoke`), so unwrap it to the wrapped open
+        // delegate type first, mirroring the identical unwrap in the
+        // method-parameter sibling <see cref="TryBuildSymbolicDelegateTargetForMethodParam"/>.
+        if (MemberLookup.TryGetExpressionTreeDelegateType(openParameterType, out var unwrappedParameterType))
+        {
+            openParameterType = unwrappedParameterType;
+        }
+
+        var invoke = openParameterType?.GetMethodSafe("Invoke");
         if (invoke == null)
         {
             return false;
@@ -2202,20 +2229,29 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// Issue #1512: builds a symbolic <see cref="FunctionTypeSymbol"/> for a
-    /// lambda argument bound to a generic CLR/imported method whose delegate
-    /// parameter mentions a method type parameter (e.g.
-    /// <c>Task.ContinueWith&lt;TResult&gt;(Func&lt;Task,TResult&gt;)</c>). The
-    /// CLOSED method's parameter is type-erased (<c>Func&lt;Task,object&gt;</c>),
+    /// Issue #1512 / #2365: builds a symbolic <see cref="FunctionTypeSymbol"/> for
+    /// a lambda argument bound to a CLR/imported method whose delegate (or
+    /// <c>Expression&lt;TDelegate&gt;</c>-wrapped delegate) parameter mentions a
+    /// generic type parameter — either a METHOD-level one (e.g.
+    /// <c>Task.ContinueWith&lt;TResult&gt;(Func&lt;Task,TResult&gt;)</c>, #1512) or
+    /// the DECLARING TYPE's own type parameter closed over by a symbolic
+    /// receiver on a non-generic method (e.g.
+    /// <c>CreateTableBuilder&lt;TColumns&gt;.PrimaryKey(Expression&lt;Func&lt;TColumns,object&gt;&gt;)</c>,
+    /// #2365). The CLOSED method's parameter is type-erased
+    /// (<c>Expression&lt;Func&lt;object,object&gt;&gt;</c> / <c>Func&lt;Task,object&gt;</c>),
     /// which would force the lambda's bound function type — and therefore its
-    /// synthesized return — to <c>object</c>, so the delegate emits as
-    /// <c>Func&lt;Task,object&gt;</c> instead of <c>Func&lt;Task,T&gt;</c>. This
-    /// recovers the real shape by substituting the inferred symbolic method type
-    /// arguments (and any receiver-level type arguments) through the OPEN
-    /// method's delegate parameter via <see cref="MemberLookup.MapOpenClrTypeToSymbolic(Type, Type, ImmutableArray{TypeSymbol}, MethodInfo, ImmutableArray{TypeSymbol})"/>.
-    /// Returns <see langword="false"/> (deferring to the erased target) when the
-    /// parameter is not a delegate, the method is not generic, or no recovered
-    /// position contains a type parameter / same-compilation user type.
+    /// synthesized return/parameter shape — to <c>object</c>, producing an
+    /// unverifiable delegate. This recovers the real shape by substituting the
+    /// inferred symbolic method type arguments AND/OR the receiver's symbolic
+    /// type arguments through the OPEN method's delegate parameter via
+    /// <see cref="MemberLookup.MapOpenClrTypeToSymbolic(Type, Type, ImmutableArray{TypeSymbol}, MethodInfo, ImmutableArray{TypeSymbol})"/>,
+    /// unwrapping an <c>Expression&lt;TDelegate&gt;</c> parameter shape to its
+    /// inner delegate first so both direct-delegate and expression-tree targets
+    /// share the same recovery path. Returns <see langword="false"/> (deferring
+    /// to the erased target) when neither the method nor the receiver carries a
+    /// symbolic type argument, the parameter is not a delegate/expression-tree
+    /// shape, or no recovered position contains a type parameter /
+    /// same-compilation user type.
     /// </summary>
     private static bool TryBuildSymbolicDelegateTargetForMethodParam(
         MethodInfo closedMethod,
@@ -2225,11 +2261,29 @@ internal sealed partial class ExpressionBinder
         out FunctionTypeSymbol target)
     {
         target = null;
-        if (closedMethod == null
-            || !closedMethod.IsGenericMethod
-            || symbolicMethodTypeArgs.IsDefaultOrEmpty
-            || !symbolicMethodTypeArgs.Any(s => s != null
-                && (TypeSymbol.ContainsTypeParameter(s) || TypeSymbol.ContainsSameCompilationUserType(s))))
+        if (closedMethod == null)
+        {
+            return false;
+        }
+
+        var methodHasSymbolicArgs = closedMethod.IsGenericMethod
+            && !symbolicMethodTypeArgs.IsDefaultOrEmpty
+            && symbolicMethodTypeArgs.Any(s => s != null
+                && (TypeSymbol.ContainsTypeParameter(s) || TypeSymbol.ContainsSameCompilationUserType(s)));
+
+        Type receiverOpenDef = null;
+        ImmutableArray<TypeSymbol> receiverTypeArgs = default;
+        if (receiverType is ImportedTypeSymbol imp && imp.OpenDefinition != null && !imp.TypeArguments.IsDefaultOrEmpty)
+        {
+            receiverOpenDef = imp.OpenDefinition;
+            receiverTypeArgs = imp.TypeArguments;
+        }
+
+        var receiverHasSymbolicArgs = receiverOpenDef != null
+            && receiverTypeArgs.Any(s => s != null
+                && (TypeSymbol.ContainsTypeParameter(s) || TypeSymbol.ContainsSameCompilationUserType(s)));
+
+        if (!methodHasSymbolicArgs && !receiverHasSymbolicArgs)
         {
             return false;
         }
@@ -2238,7 +2292,26 @@ internal sealed partial class ExpressionBinder
         ParameterInfo[] openParams;
         try
         {
-            openMethod = closedMethod.IsGenericMethodDefinition ? closedMethod : closedMethod.GetGenericMethodDefinition();
+            if (closedMethod.IsGenericMethod)
+            {
+                openMethod = closedMethod.IsGenericMethodDefinition ? closedMethod : closedMethod.GetGenericMethodDefinition();
+            }
+            else if (receiverOpenDef != null && !closedMethod.IsStatic
+                && TryResolveOpenInstanceMethod(receiverOpenDef, closedMethod, out var resolvedOpenMethod))
+            {
+                // Issue #2365: the method itself has no generic parameters of
+                // its own — TColumns belongs to the DECLARING TYPE
+                // (`CreateTableBuilder[TColumns]`) — so recover the open shape
+                // from the receiver's open type definition rather than from
+                // `GetGenericMethodDefinition()` (which only applies to
+                // method-level generics).
+                openMethod = resolvedOpenMethod;
+            }
+            else
+            {
+                return false;
+            }
+
             openParams = openMethod.GetParameters();
         }
         catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
@@ -2252,18 +2325,22 @@ internal sealed partial class ExpressionBinder
         }
 
         var openParamType = openParams[paramIndex].ParameterType;
+
+        // Issue #2365: an `Expression<TDelegate>` parameter is not itself a
+        // delegate (it exposes no `Invoke`), so unwrap it to the wrapped open
+        // delegate type first. Both a direct delegate parameter and an
+        // expression-tree-wrapped one recover through the identical
+        // substitution path below; the caller compares the result against the
+        // literal's own (unwrapped) delegate function type either way.
+        if (MemberLookup.TryGetExpressionTreeDelegateType(openParamType, out var unwrappedOpenDelegate))
+        {
+            openParamType = unwrappedOpenDelegate;
+        }
+
         var invoke = openParamType?.GetMethodSafe("Invoke");
         if (invoke == null)
         {
             return false;
-        }
-
-        Type receiverOpenDef = null;
-        ImmutableArray<TypeSymbol> receiverTypeArgs = default;
-        if (receiverType is ImportedTypeSymbol imp && imp.OpenDefinition != null && !imp.TypeArguments.IsDefaultOrEmpty)
-        {
-            receiverOpenDef = imp.OpenDefinition;
-            receiverTypeArgs = imp.TypeArguments;
         }
 
         var invokeParameters = invoke.GetParameters();
