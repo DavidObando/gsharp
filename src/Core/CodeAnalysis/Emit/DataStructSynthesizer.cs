@@ -7,6 +7,7 @@
 using System;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Linq;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
@@ -415,6 +416,26 @@ internal sealed class DataStructSynthesizer
     }
 
     /// <summary>
+    /// Issue #2361: <see langword="true"/> when <paramref name="structSym"/>
+    /// declared a compatible hand-written <c>ToString</c> (the binder only
+    /// ever lets a "ToString"-named method land in
+    /// <see cref="StructSymbol.Methods"/> for an <c>IsData</c> type when its
+    /// shape exactly matches <c>public string ToString()</c> — see
+    /// <c>DeclarationBinder.IsCompatibleDataToStringOverride</c>). Both the
+    /// method-row planner (<c>ReflectionMetadataEmitter.PlanClassMethods</c> /
+    /// <c>PlanStructMethods</c>) and <see cref="EmitDataStructSynthesizedMembers"/>
+    /// call this so the reserved-row count and the emitted member set agree:
+    /// six synthesized rows plus the user's own ToString (emitted through the
+    /// ordinary user-method path) instead of seven synthesized rows.
+    /// </summary>
+    /// <param name="structSym">The data class/struct symbol to check.</param>
+    /// <returns><see langword="true"/> when a compatible user-declared ToString is present.</returns>
+    public static bool HasUserToStringOverride(StructSymbol structSym)
+    {
+        return !structSym.Methods.IsDefaultOrEmpty && structSym.Methods.Any(m => m.Name == "ToString");
+    }
+
+    /// <summary>
     /// Issue #410 / ADR-0029: emits the seven synthesized members for a
     /// <c>data struct</c> type. The MethodDef rows are added in a fixed
     /// order so they align 1:1 with the rows reserved by the method-row
@@ -423,6 +444,14 @@ internal sealed class DataStructSynthesizer
     /// <c>op_Inequality</c>, <c>Deconstruct</c>.
     /// <c>Equals(Name)</c> is emitted first so its MethodDef handle is
     /// available when <c>Equals(object)</c> is emitted.
+    /// Issue #2361: when the type declares a compatible hand-written
+    /// <c>ToString</c> (<see cref="HasUserToStringOverride"/>), the
+    /// synthesized <c>ToString</c> body/row is skipped here — the user's own
+    /// method is emitted through the ordinary user-method path instead,
+    /// taking over that vtable slot (see
+    /// <c>ReflectionMetadataEmitter.EmitFunction</c>'s
+    /// <c>isDataToStringOverride</c> handling for the Virtual/Final
+    /// attributes that make the slot line up with the synthesized siblings).
     /// </summary>
     /// <param name="structSym">The data-struct symbol to emit members for.</param>
     public void EmitDataStructSynthesizedMembers(StructSymbol structSym)
@@ -439,7 +468,17 @@ internal sealed class DataStructSynthesizer
         var equalsTypedHandle = this.EmitDataStructEqualsTyped(structSym);
         this.EmitDataStructEqualsObject(structSym, typeDef, equalsTypedHandle);
         this.EmitDataStructGetHashCode(structSym);
-        this.EmitDataStructToString(structSym);
+
+        // Issue #2361: skip the synthesized ToString body/row when the type
+        // declares a compatible hand-written one — it is emitted through the
+        // ordinary user-method path instead (see EmitClassMethodBodies /
+        // EmitStructMethodBodies), which now reserves only six synthesized
+        // rows for this type (see PlanClassMethods / PlanStructMethods).
+        if (!HasUserToStringOverride(structSym))
+        {
+            this.EmitDataStructToString(structSym);
+        }
+
         this.cache.DataStructOpEqualityHandles[structSym] = this.EmitDataStructEqualityOperator(structSym, isInequality: false);
         this.EmitDataStructEqualityOperator(structSym, isInequality: true);
         this.EmitDataStructDeconstruct(structSym);
@@ -540,12 +579,29 @@ internal sealed class DataStructSynthesizer
     private static MethodAttributes DataObjectOverrideAttributes(StructSymbol structSym)
     {
         var attrs = MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig;
-        if (!structSym.IsClass || (!structSym.IsOpen && !structSym.IsSealedHierarchy))
+        if (IsDataObjectOverrideFinal(structSym))
         {
             attrs |= MethodAttributes.Final;
         }
 
         return attrs;
+    }
+
+    /// <summary>
+    /// Issue #2361: extracted from <see cref="DataObjectOverrideAttributes"/>
+    /// so <c>ReflectionMetadataEmitter.EmitFunction</c> can apply the exact
+    /// same finality rule to a user-declared <c>ToString</c> override on a
+    /// data class/struct (which is emitted through the ordinary user-method
+    /// path, not through this synthesizer) — the vtable-slot lifecycle for
+    /// the "ToString" name must be identical whether the compiler or the
+    /// user wrote the body. See the doc comment on
+    /// <see cref="DataObjectOverrideAttributes"/> for the full rationale.
+    /// </summary>
+    /// <param name="structSym">The data class/struct symbol to check.</param>
+    /// <returns><see langword="true"/> when the slot must be <c>final</c>.</returns>
+    public static bool IsDataObjectOverrideFinal(StructSymbol structSym)
+    {
+        return !structSym.IsClass || (!structSym.IsOpen && !structSym.IsSealedHierarchy);
     }
 
     /// <summary>
