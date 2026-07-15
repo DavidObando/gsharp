@@ -1558,6 +1558,16 @@ internal sealed class DeclarationBinder
             existingNames.Add(f.Name);
         }
 
+        // ADR-0148: a property/event carrying an explicit-interface qualifier
+        // clause (`prop (IFoo) P T`) is exempt from the ordinary "name already
+        // declared" collision below — multiple explicit implementations of
+        // DIFFERENT interfaces legitimately share the same plain member name
+        // (that's the entire point of the clause). Tracks which plain names
+        // were added ONLY via an explicit-clause member, so a later NON-clause
+        // member (or a clause targeting the SAME interface — see GS0491 in
+        // VerifyExplicitInterfaceClauseResolution) still collides normally.
+        var explicitInterfaceClauseNames = new HashSet<string>();
+
         // Issue #1640: methods overload by signature, so a same-named method
         // is not itself a duplicate — but a non-method member (property,
         // event, or field) sharing a method's name IS a collision (CS0102).
@@ -1907,10 +1917,8 @@ internal sealed class DeclarationBinder
                         ValidateInlineDataNilArguments(methodAttributes, methodSymbol.Parameters);
                     }
 
-                    // Issue #2010: a method named per the reserved
-                    // `__explicit_<Interface>__<Member>` mangled convention (the
-                    // form cs2gs synthesizes for a C# explicit interface
-                    // implementation, see CSharpToGSharpTranslator) explicitly
+                    // ADR-0148: a method declared with an explicit-interface
+                    // qualifier clause (`func (IFoo) M(...)`) explicitly
                     // implements one interface member's own distinct body.
                     // Resolution against the actual interface member is
                     // deferred to VerifyInterfaceImplementations — interfaces
@@ -1923,6 +1931,20 @@ internal sealed class DeclarationBinder
                     {
                         if (BoundScope.FunctionSignaturesEqual(existingMethod, methodSymbol))
                         {
+                            // ADR-0148: two methods that share a name and
+                            // parameter shape may legitimately coexist when
+                            // at least one carries an explicit-interface
+                            // qualifier clause — each clause-bearing method
+                            // occupies its own distinct (interface, name)
+                            // slot (verified/deduplicated later by
+                            // VerifyExplicitInterfaceClauseResolution's GS0491
+                            // check), so this is not an ordinary overload
+                            // collision.
+                            if (methodSymbol.HasExplicitInterfaceClause || existingMethod.HasExplicitInterfaceClause)
+                            {
+                                continue;
+                            }
+
                             // Issue #985: permit two same-name/same-parameter
                             // methods that differ only by return type when they
                             // satisfy two DIFFERENT CLR interface slots (a
@@ -2018,11 +2040,34 @@ internal sealed class DeclarationBinder
 
                 var propName = isIndexer ? "Item" : propSyntax.Identifier.Text;
 
-                // Check for duplicate names (fields + methods + other properties)
-                if (methodNames.Contains(propName) || !existingNames.Add(propName))
+                // Check for duplicate names (fields + methods + other properties).
+                // ADR-0148: exempt when either the new property, or ANY
+                // already-declared same-name property, carries an
+                // explicit-interface qualifier clause — a plain (implicitly-
+                // dispatched) property and a purely-explicit-slot property
+                // legitimately share the same source name (that's the exact
+                // Oahu `Authorization`/`IProfile.Authorization` shape this
+                // clause exists for), and so do two explicit clauses
+                // targeting DIFFERENT interfaces. Two explicit clauses that
+                // resolve to the SAME interface member are still caught, just
+                // later — see GS0491 in VerifyExplicitInterfaceClauseResolution,
+                // which has the resolved target identity needed to detect
+                // that specific case. Indexers are always named "Item" (issue
+                // #944 / #2362 follow-up): this also lets a type declare more
+                // than one explicit-interface indexer implementation, closing
+                // a gap the old mangled-name convention only partially covered.
+                var propAlreadyDeclared = existingNames.Contains(propName);
+                var propExemptCollision = propSyntax.HasExplicitInterfaceClause || explicitInterfaceClauseNames.Contains(propName);
+                if (methodNames.Contains(propName) || (propAlreadyDeclared && !propExemptCollision))
                 {
                     Diagnostics.ReportSymbolAlreadyDeclared(propSyntax.Identifier.Location, propName);
                     continue;
+                }
+
+                existingNames.Add(propName);
+                if (propSyntax.HasExplicitInterfaceClause)
+                {
+                    explicitInterfaceClauseNames.Add(propName);
                 }
 
                 var propType = bindTypeClause(propSyntax.Type);
@@ -3070,6 +3115,24 @@ internal sealed class DeclarationBinder
             }
         }
 
+        // ADR-0148: a type that declares an explicit-interface qualifier
+        // clause (`func (X) M(...)` / `prop (X) P T`) but implements NO
+        // interface at all (neither G# nor CLR) would otherwise never reach
+        // ResolveExplicitInterfaceClauses/VerifyExplicitInterfaceClauseResolution
+        // (both driven off pendingInterfaceImplementationChecks) — silently
+        // compiling the clause away as a no-op instead of reporting GS0488/
+        // GS0489. Queue it too, purely so its clause(s) still get resolved
+        // and diagnosed; with zero implemented interfaces, a non-interface
+        // clause type is still caught by GS0488, and any interface type
+        // (valid or not) is correctly rejected by GS0489 ("does not
+        // implement interface X") since structSymbol.Interfaces is empty.
+        if (implementedInterfaces.Count == 0
+            && implementedClrInterfaces.Count == 0
+            && (HasAnyExplicitInterfaceClause(structSymbol.Methods) || HasAnyExplicitInterfaceClause(structSymbol.Properties)))
+        {
+            pendingInterfaceImplementationChecks.Add((syntax, structSymbol));
+        }
+
         // Issue #306: bind standalone user-defined constructors (`init(...)`).
         BindConstructorDeclarations(syntax, structSymbol, package, baseClassSymbol, importedBaseType);
 
@@ -3690,13 +3753,15 @@ internal sealed class DeclarationBinder
             {
                 foreach (var imethod in iface.Methods)
                 {
-                    // Issue #2010: a mangled-name explicit implementation
-                    // (`__explicit_<Interface>__<Member>`) satisfies this slot
-                    // even though its own name never matches `imethod.Name` —
-                    // it was already resolved and linked to `imethod` at
-                    // declaration-binding time. Skip the name-based lookup
-                    // entirely once found; no diagnostic, and the emitter
-                    // binds the slot via `FunctionSymbol.ExplicitInterfaceMember`.
+                    // ADR-0148 (was issue #2010's mangled-name convention): an
+                    // explicit-interface-clause implementation
+                    // (`func (IFoo) M(...)`) satisfies this slot even though
+                    // its own declared name never needs to match `imethod`
+                    // via any string convention — it was already resolved and
+                    // linked to `imethod` by `ResolveExplicitInterfaceClauses`.
+                    // Skip the name-based lookup entirely once found; no
+                    // diagnostic, and the emitter binds the slot via
+                    // `FunctionSymbol.ExplicitInterfaceMember`.
                     if (TryResolveExplicitInterfaceImplementation(structSymbol, iface, imethod) != null)
                     {
                         continue;
@@ -4087,6 +4152,96 @@ internal sealed class DeclarationBinder
             // happens to declare a same-signature method clashes with the
             // helper at the implementation level.
             VerifyPrivateInterfaceHelpersNotOverridden(syntax, structSymbol);
+
+            // ADR-0148: sweep every explicit-interface qualifier clause that
+            // successfully bound a target interface (via
+            // ResolveExplicitInterfaceClauses) for two outstanding problems
+            // the per-interface-member loops above cannot detect on their
+            // own: (a) two members on the same type both explicitly claim
+            // the same (interface, name) slot (GS0491), and (b) a clause
+            // whose target interface has no member matching this
+            // declaration's name/signature/accessor-shape at all (GS0490) —
+            // the loops above only ever *consume* a clause-bearing candidate
+            // when it matches; one that never matches anything is otherwise
+            // silently accepted as an ordinary (non-conforming) member.
+            VerifyExplicitInterfaceClauseResolution(syntax, structSymbol);
+        }
+    }
+
+    /// <summary>
+    /// ADR-0148: reports GS0491 for two explicit-interface-clause members on
+    /// the same type that target the same (interface, member-name) slot, and
+    /// GS0490 for a clause-bearing member whose target interface was
+    /// resolved (by <see cref="ResolveExplicitInterfaceClauses"/>) but which
+    /// never matched any interface member during the per-interface-member
+    /// loops above (i.e. its <c>ExplicitInterfaceMember</c> is still
+    /// unset) — most commonly a signature or accessor-shape mismatch, or a
+    /// name the target interface simply does not declare.
+    /// </summary>
+    private void VerifyExplicitInterfaceClauseResolution(StructDeclarationSyntax syntax, StructSymbol structSymbol)
+    {
+        var seenSlots = new Dictionary<(InterfaceSymbol Iface, string Name), bool>();
+
+        if (!structSymbol.Methods.IsDefaultOrEmpty)
+        {
+            foreach (var method in structSymbol.Methods)
+            {
+                if (!method.HasExplicitInterfaceClause || method.ExplicitInterfaceClauseTarget == null)
+                {
+                    continue;
+                }
+
+                var slot = (method.ExplicitInterfaceClauseTarget, method.Name);
+                if (seenSlots.ContainsKey(slot))
+                {
+                    Diagnostics.ReportDuplicateExplicitInterfaceImplementation(
+                        method.Declaration.Identifier.Location,
+                        method.ExplicitInterfaceClauseTarget.Name,
+                        method.Name);
+                    continue;
+                }
+
+                seenSlots[slot] = true;
+
+                if (method.ExplicitInterfaceMember == null)
+                {
+                    Diagnostics.ReportExplicitInterfaceClauseMemberNotFound(
+                        method.Declaration.Identifier.Location,
+                        method.ExplicitInterfaceClauseTarget.Name,
+                        method.Name);
+                }
+            }
+        }
+
+        if (!structSymbol.Properties.IsDefaultOrEmpty)
+        {
+            foreach (var prop in structSymbol.Properties)
+            {
+                if (!prop.HasExplicitInterfaceClause || prop.ExplicitInterfaceClauseTarget == null)
+                {
+                    continue;
+                }
+
+                var slot = (prop.ExplicitInterfaceClauseTarget, prop.Name);
+                if (seenSlots.ContainsKey(slot))
+                {
+                    Diagnostics.ReportDuplicateExplicitInterfaceImplementation(
+                        prop.Declaration.Identifier.Location,
+                        prop.ExplicitInterfaceClauseTarget.Name,
+                        prop.Name);
+                    continue;
+                }
+
+                seenSlots[slot] = true;
+
+                if (prop.ExplicitInterfaceMember == null)
+                {
+                    Diagnostics.ReportExplicitInterfaceClauseMemberNotFound(
+                        prop.Declaration.Identifier.Location,
+                        prop.ExplicitInterfaceClauseTarget.Name,
+                        prop.Name);
+                }
+            }
         }
     }
 
@@ -7392,17 +7547,19 @@ internal sealed class DeclarationBinder
     }
 
     /// <summary>
-    /// Issue #2010: resolves and links a mangled-name explicit interface
-    /// implementation (see <see cref="TryParseExplicitInterfaceImplName"/>)
-    /// on <paramref name="structSymbol"/> against <paramref name="imethod"/>,
-    /// an abstract member of <paramref name="iface"/>. Returns the linked
-    /// method (setting its <see cref="FunctionSymbol.ExplicitInterfaceMember"/>
-    /// the first time it is resolved) or <see langword="null"/> if no such
-    /// method exists. Resolution happens here — during the deferred
-    /// <see cref="VerifyInterfaceImplementations"/> pass — rather than at
-    /// initial member-binding time, because a class's interfaces may be
-    /// declared later in the same file and their own members are not yet
-    /// bound when the class's own members are first processed.
+    /// ADR-0148: resolves and links a member declared with an explicit-
+    /// interface qualifier clause (<c>func (IFoo) M(...)</c>) on
+    /// <paramref name="structSymbol"/> against <paramref name="imethod"/>, an
+    /// abstract member of <paramref name="iface"/>. Returns the linked method
+    /// (setting its <see cref="FunctionSymbol.ExplicitInterfaceMember"/> the
+    /// first time it is resolved) or <see langword="null"/> if no such method
+    /// exists. Matching requires the candidate's
+    /// <see cref="FunctionSymbol.ExplicitInterfaceClauseTarget"/> (already
+    /// bound by <see cref="ResolveExplicitInterfaceClauses"/>) to be the SAME
+    /// interface as <paramref name="iface"/>, the candidate's own (plain,
+    /// unmangled) name to equal <paramref name="imethod"/>'s name, and the
+    /// signatures to match exactly — mirroring #2010's original mangled-name
+    /// matching rules, minus the string parsing.
     /// </summary>
     private static FunctionSymbol TryResolveExplicitInterfaceImplementation(StructSymbol structSymbol, InterfaceSymbol iface, FunctionSymbol imethod)
     {
@@ -7418,15 +7575,14 @@ internal sealed class DeclarationBinder
                 return candidate;
             }
 
-            if (candidate.ExplicitInterfaceMember != null)
+            if (!candidate.HasExplicitInterfaceClause || candidate.ExplicitInterfaceMember != null)
             {
-                // Already linked to a different interface member.
                 continue;
             }
 
-            if (!TryParseExplicitInterfaceImplName(candidate.Name, out var explicitIfaceName, out var explicitMemberName) ||
-                explicitIfaceName != QualifyInterfaceName(iface) ||
-                explicitMemberName != imethod.Name)
+            if (candidate.ExplicitInterfaceClauseTarget == null ||
+                !TypeSignaturesEquivalent(candidate.ExplicitInterfaceClauseTarget, iface) ||
+                candidate.Name != imethod.Name)
             {
                 continue;
             }
@@ -7451,11 +7607,10 @@ internal sealed class DeclarationBinder
         => method.ExplicitReceiverParameter == null ? method.Parameters : method.Parameters.RemoveAt(0);
 
     /// <summary>
-    /// Issue #2362: extends #2010's mangled-name explicit implementation
-    /// resolution from methods to properties/indexers. Resolves and links a
-    /// mangled-name explicit property implementation (see
-    /// <see cref="TryParseExplicitInterfaceImplName"/>) on
-    /// <paramref name="structSymbol"/> against <paramref name="iprop"/>, an
+    /// ADR-0148 (extending #2010/#2362's resolution to properties/indexers):
+    /// resolves and links a property declared with an explicit-interface
+    /// qualifier clause (<c>prop (IFoo) P T</c> / <c>prop (IFoo) this[...] T</c>)
+    /// on <paramref name="structSymbol"/> against <paramref name="iprop"/>, an
     /// abstract property of <paramref name="iface"/>. Returns the linked
     /// property (setting its <see cref="PropertySymbol.ExplicitInterfaceMember"/>
     /// the first time it is resolved) or <see langword="null"/> if no such
@@ -7482,27 +7637,26 @@ internal sealed class DeclarationBinder
                 return candidate;
             }
 
-            if (candidate.ExplicitInterfaceMember != null)
-            {
-                // Already linked to a different interface member.
-                continue;
-            }
-
-            if (!TryParseExplicitInterfaceImplName(candidate.Name, out var explicitIfaceName, out var explicitMemberName) ||
-                explicitIfaceName != QualifyInterfaceName(iface) ||
-                explicitMemberName != iprop.Name)
+            if (!candidate.HasExplicitInterfaceClause || candidate.ExplicitInterfaceMember != null)
             {
                 continue;
             }
 
-            // Issue #2362: an explicit property implementation is its own
-            // distinct G# member — unlike #985's covariant-return method
-            // bridge, there is no "same name, different return type" slot-
-            // sharing concern here, so the concrete implementation's type
-            // must equal the interface's declared type exactly (after
+            if (candidate.ExplicitInterfaceClauseTarget == null ||
+                !TypeSignaturesEquivalent(candidate.ExplicitInterfaceClauseTarget, iface) ||
+                candidate.Name != iprop.Name)
+            {
+                continue;
+            }
+
+            // ADR-0148 (was issue #2362): an explicit property implementation
+            // is its own distinct G# member — unlike #985's covariant-return
+            // method bridge, there is no "same name, different return type"
+            // slot-sharing concern here, so the concrete implementation's
+            // type must equal the interface's declared type exactly (after
             // substituting the interface's own type parameters, for a
-            // generic interface). The accessor SHAPE (get/set/init) must
-            // also match exactly — valid C# never lets an explicit property
+            // generic interface). The accessor SHAPE (get/set/init) must also
+            // match exactly — valid C# never lets an explicit property
             // implementation declare an accessor the interface doesn't
             // require.
             if (iprop.HasGetter != candidate.HasGetter || iprop.HasSetter != candidate.HasSetter)
@@ -7551,99 +7705,180 @@ internal sealed class DeclarationBinder
     }
 
     /// <summary>
-    /// Namespace/nesting-qualified name of a G# interface, dots sanitized to
-    /// underscores — must stay in sync with the equivalent computation in
-    /// <c>CSharpToGSharpTranslator.QualifyInterfaceName</c>, which builds the
-    /// same string from the pre-translation C# interface symbol. Follow-up
-    /// to issue #2010: bare simple names collided across namespaces
-    /// (<c>Foo.IBar</c> vs <c>Baz.IBar</c>); qualifying by package name (G#'s
-    /// analogue of a C# namespace) plus any containing-type nesting fixes it.
-    /// Issue #2181: the generic-arity/type-argument suffix (e.g. the
-    /// <c>[T, TResult]</c> a constructed generic interface carries in its
-    /// <c>Name</c>) is stripped so the result matches the
-    /// cs2gs-side mangle, which formats the interface component with
-    /// <c>SymbolDisplayGenericsOptions.None</c> (simple name only, no type
-    /// parameters) — otherwise a class's mangled explicit implementation of a
-    /// generic interface method never name-matches its slot.
+    /// ADR-0148: resolves every explicit-interface qualifier clause
+    /// (<see cref="FunctionDeclarationSyntax.ExplicitInterfaceType"/> /
+    /// <see cref="PropertyDeclarationSyntax.ExplicitInterfaceType"/>) declared
+    /// on each pending struct/class's own methods and properties, binding the
+    /// clause's type reference (via the shared <see cref="bindTypeClause"/>
+    /// delegate, with the struct's own type parameters temporarily
+    /// re-established in scope — mirroring the same re-establishment
+    /// <see cref="BindPendingFieldInitializers"/> already performs for a
+    /// similarly deferred pass) to the MATCHING <see cref="InterfaceSymbol"/>
+    /// instance already recorded in <see cref="StructSymbol.Interfaces"/>.
+    /// Matching against the recorded instance (rather than trusting the
+    /// freshly bound one directly) keeps the later
+    /// <see cref="TryResolveExplicitInterfaceImplementation"/> /
+    /// <see cref="TryResolveExplicitInterfacePropertyImplementation"/>
+    /// comparisons sound even though constructed generic interfaces are not
+    /// interned (see <see cref="TypeSignaturesEquivalent(TypeSymbol, TypeSymbol)"/>).
+    /// Must run BEFORE <see cref="VerifyInterfaceImplementations"/> so that
+    /// pass can rely on <see cref="FunctionSymbol.ExplicitInterfaceClauseTarget"/> /
+    /// <see cref="PropertySymbol.ExplicitInterfaceClauseTarget"/> already
+    /// being populated. Reports GS0488 (clause type is not an interface) and
+    /// GS0489 (interface not implemented by the containing type) directly;
+    /// GS0490 (no matching member) and GS0491 (duplicate target) are reported
+    /// by <see cref="VerifyInterfaceImplementations"/>, which already has the
+    /// full per-interface-member matching context needed to detect them.
     /// </summary>
-    private static string QualifyInterfaceName(InterfaceSymbol iface)
+    internal void ResolveExplicitInterfaceClauses()
     {
-        var parts = new List<string>();
-        for (TypeSymbol current = iface; current != null; current = GetContainingType(current))
+        foreach (var (syntax, structSymbol) in pendingInterfaceImplementationChecks)
         {
-            parts.Insert(0, StripGenericSuffix(current.Name));
+            if ((structSymbol.Methods.IsDefaultOrEmpty || !HasAnyExplicitInterfaceClause(structSymbol.Methods)) &&
+                (structSymbol.Properties.IsDefaultOrEmpty || !HasAnyExplicitInterfaceClause(structSymbol.Properties)))
+            {
+                continue;
+            }
+
+            var savedTypeParameters = binderCtx.CurrentTypeParameters;
+            if (!structSymbol.TypeParameters.IsDefaultOrEmpty)
+            {
+                binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
+                foreach (var tp in structSymbol.TypeParameters)
+                {
+                    binderCtx.CurrentTypeParameters[tp.Name] = tp;
+                }
+            }
+
+            try
+            {
+                if (!structSymbol.Methods.IsDefaultOrEmpty)
+                {
+                    foreach (var method in structSymbol.Methods)
+                    {
+                        if (method.HasExplicitInterfaceClause && method.ExplicitInterfaceClauseTarget == null)
+                        {
+                            var target = ResolveExplicitInterfaceClauseTarget(structSymbol, method.Declaration.ExplicitInterfaceType, method.Name);
+                            if (target != null)
+                            {
+                                method.ExplicitInterfaceClauseTarget = target;
+                            }
+                        }
+                    }
+                }
+
+                if (!structSymbol.Properties.IsDefaultOrEmpty)
+                {
+                    foreach (var prop in structSymbol.Properties)
+                    {
+                        if (prop.HasExplicitInterfaceClause && prop.ExplicitInterfaceClauseTarget == null)
+                        {
+                            var target = ResolveExplicitInterfaceClauseTarget(structSymbol, prop.Declaration.ExplicitInterfaceType, prop.Name);
+                            if (target != null)
+                            {
+                                prop.ExplicitInterfaceClauseTarget = target;
+
+                                // A computed property's getter/setter are
+                                // emitted as their OWN FunctionSymbol (see
+                                // MemberDefEmitter.EmitPropertyAccessorBody's
+                                // emitFunction branch), whose own Declaration
+                                // is a PropertyAccessorSyntax with no clause
+                                // of its own — so FunctionSymbol.HasExplicitInterfaceClause
+                                // (Declaration-derived) is never true for it.
+                                // Propagate the resolved target directly onto
+                                // ExplicitInterfaceClauseTarget (a plain
+                                // settable property, not Declaration-derived)
+                                // so ReflectionMetadataEmitter.EmitFunction's
+                                // metadata-name synthesis (keyed off
+                                // ExplicitInterfaceClauseTarget != null, not
+                                // HasExplicitInterfaceClause) also picks up
+                                // the accessor's collision-free name.
+                                if (prop.GetterSymbol != null)
+                                {
+                                    prop.GetterSymbol.ExplicitInterfaceClauseTarget = target;
+                                }
+
+                                if (prop.SetterSymbol != null)
+                                {
+                                    prop.SetterSymbol.ExplicitInterfaceClauseTarget = target;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                binderCtx.CurrentTypeParameters = savedTypeParameters;
+            }
+        }
+    }
+
+    private static bool HasAnyExplicitInterfaceClause(ImmutableArray<FunctionSymbol> methods)
+    {
+        foreach (var m in methods)
+        {
+            if (m.HasExplicitInterfaceClause)
+            {
+                return true;
+            }
         }
 
-        if (!string.IsNullOrEmpty(iface.PackageName))
+        return false;
+    }
+
+    private static bool HasAnyExplicitInterfaceClause(ImmutableArray<PropertySymbol> properties)
+    {
+        foreach (var p in properties)
         {
-            // The package name itself may be dotted (e.g. "Corpus.Grid06"),
-            // mirroring a multi-segment C# namespace — split it into its own
-            // segments rather than inserting one dotted string, or the final
-            // '_' join below would leave a stray '.' in the result.
-            parts.InsertRange(0, iface.PackageName.Split('.'));
+            if (p.HasExplicitInterfaceClause)
+            {
+                return true;
+            }
         }
 
-        return string.Join("_", parts);
+        return false;
     }
 
     /// <summary>
-    /// Issue #2181: returns <paramref name="name"/> with any trailing generic
-    /// type-parameter / type-argument suffix removed — a constructed or open
-    /// generic type's <c>Name</c> is formatted as
-    /// <c>Simple[Arg1, Arg2]</c>, and only the simple leading identifier
-    /// participates in the mangled explicit-interface-implementation name.
+    /// ADR-0148: binds an explicit-interface qualifier clause's type
+    /// reference and validates it names an interface implemented by
+    /// <paramref name="structSymbol"/>, returning the MATCHING entry from
+    /// <see cref="StructSymbol.Interfaces"/> (not the freshly bound instance —
+    /// see <see cref="ResolveExplicitInterfaceClauses"/>). Reports GS0488 when
+    /// the clause type is not an interface, or GS0489 when it is an interface
+    /// the containing type does not implement; returns <see langword="null"/>
+    /// in either case (the caller leaves <c>ExplicitInterfaceClauseTarget</c>
+    /// unset, so the member is treated as unresolved but does not crash
+    /// downstream — <see cref="VerifyInterfaceImplementations"/>'s trailing
+    /// unresolved-clause sweep does not re-report a second diagnostic for it).
     /// </summary>
-    private static string StripGenericSuffix(string name)
+    private InterfaceSymbol ResolveExplicitInterfaceClauseTarget(StructSymbol structSymbol, TypeClauseSyntax clauseTypeSyntax, string memberName)
     {
-        if (string.IsNullOrEmpty(name))
+        var boundType = bindTypeClause(clauseTypeSyntax);
+        if (boundType is not InterfaceSymbol clauseIface)
         {
-            return name;
+            if (boundType != null && boundType != TypeSymbol.Error)
+            {
+                Diagnostics.ReportExplicitInterfaceClauseTypeNotInterface(clauseTypeSyntax.Location, boundType.Name, memberName);
+            }
+
+            return null;
         }
 
-        var bracket = name.IndexOf('[', System.StringComparison.Ordinal);
-        return bracket < 0 ? name : name.Substring(0, bracket);
-    }
-
-    private static TypeSymbol GetContainingType(TypeSymbol type) => type switch
-    {
-        StructSymbol s => s.ContainingType,
-        InterfaceSymbol i => i.ContainingType,
-        EnumSymbol e => e.ContainingType,
-        _ => null,
-    };
-
-    /// <summary>
-    /// Issue #2010: the reserved mangled-name convention a G# method uses to
-    /// mark itself as a specific interface member's explicit implementation:
-    /// <c>__explicit_&lt;InterfaceSimpleName&gt;__&lt;MemberSimpleName&gt;</c>.
-    /// This is a plain identifier — no new grammar — reserved for
-    /// compiler/cs2gs-synthesized use (ADR-0091 rejected a dedicated
-    /// `IFoo.M(this)` syntax for user-facing explicit-impl spelling; this
-    /// convention sidesteps that without adding surface syntax). Both name
-    /// components must be non-empty; the double-underscore separator is
-    /// required so a single-underscore interface/member name doesn't get
-    /// mis-split.
-    /// </summary>
-    internal static bool TryParseExplicitInterfaceImplName(string name, out string interfaceName, out string memberName)
-    {
-        const string Prefix = "__explicit_";
-        interfaceName = null;
-        memberName = null;
-        if (string.IsNullOrEmpty(name) || !name.StartsWith(Prefix, System.StringComparison.Ordinal))
+        if (!structSymbol.Interfaces.IsDefaultOrEmpty)
         {
-            return false;
+            foreach (var candidateIface in structSymbol.Interfaces)
+            {
+                if (TypeSignaturesEquivalent(candidateIface, clauseIface))
+                {
+                    return candidateIface;
+                }
+            }
         }
 
-        var rest = name.Substring(Prefix.Length);
-        var separatorIndex = rest.IndexOf("__", System.StringComparison.Ordinal);
-        if (separatorIndex <= 0 || separatorIndex + 2 >= rest.Length)
-        {
-            return false;
-        }
-
-        interfaceName = rest.Substring(0, separatorIndex);
-        memberName = rest.Substring(separatorIndex + 2);
-        return true;
+        Diagnostics.ReportExplicitInterfaceClauseNotImplemented(clauseTypeSyntax.Location, structSymbol.Name, clauseIface.Name, memberName);
+        return null;
     }
 
     /// <summary>

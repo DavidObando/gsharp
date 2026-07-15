@@ -5113,7 +5113,23 @@ internal sealed class ReflectionMetadataEmitter
                 });
 
         // Synthesized entry point uses the C#-style mangled name; explicit Main / user funcs keep their source name.
-        var methodName = isEntryPoint && function.Declaration is null ? "<Main>$" : function.Name;
+        // ADR-0148: a method declared with an explicit-interface qualifier
+        // clause keeps its plain source name on the FunctionSymbol (for
+        // diagnostics and any ordinary same-type call resolution), but the
+        // emitted CLR metadata name must be collision-free — see
+        // ExplicitInterfaceMetadataNaming's remarks. Checked via
+        // ExplicitInterfaceClauseTarget != null rather than
+        // HasExplicitInterfaceClause (which is Declaration-derived): a
+        // computed property's getter/setter accessor is its OWN
+        // FunctionSymbol whose Declaration is a PropertyAccessorSyntax with
+        // no clause of its own, so only the settable ExplicitInterfaceClauseTarget
+        // (propagated from the owning PropertySymbol by
+        // DeclarationBinder.ResolveExplicitInterfaceClauses) reflects it.
+        var methodName = isEntryPoint && function.Declaration is null
+            ? "<Main>$"
+            : function.ExplicitInterfaceClauseTarget != null
+                ? ExplicitInterfaceMetadataNaming.GetMetadataName(function.Name, function.ExplicitInterfaceClauseTarget)
+                : function.Name;
 
         // The synthesized entry point must remain Public so the runtime can find it.
         var visibility = isEntryPoint && function.Declaration is null

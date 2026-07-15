@@ -365,24 +365,54 @@ public sealed class FunctionSymbol : Symbol
 
     /// <summary>
     /// Gets or sets the in-compilation (G#) interface member this method
-    /// explicitly implements (issue #2010). Set when the method's declared
-    /// name matches the reserved <c>__explicit_&lt;Interface&gt;__&lt;Member&gt;</c>
-    /// mangled-name convention (see
-    /// <see cref="Binding.DeclarationBinder.TryParseExplicitInterfaceImplName"/>)
-    /// and a matching abstract member is found on one of the containing
-    /// type's declared interfaces. Unlike <see cref="ExplicitInterfaceSlot"/>
-    /// (which binds to an external CLR interface resolved via reflection),
-    /// this points at the interface member's own <see cref="FunctionSymbol"/>
-    /// within the same compilation — the emitter resolves it to a MethodDef
-    /// or (for a constructed generic interface) a MemberRef/TypeSpec token
-    /// and binds a <c>MethodImpl</c> row so the CLR routes interface dispatch
-    /// to this method's own distinct body instead of relying on name-based
-    /// virtual dispatch. Because the mangled name is unique per interface,
-    /// two explicit implementations of same-name/same-signature members from
-    /// different interfaces no longer collide (no more GS0264 duplicate, no
-    /// more dropped body). Defaults to <c>null</c> for ordinary methods.
+    /// explicitly implements (issue #2010; property/indexer generalization:
+    /// issue #2362; ADR-0148 rewrites the source-level convention that
+    /// establishes this link). Set when the method carries a dedicated
+    /// explicit-interface qualifier clause (<c>func (IFoo) M(...)</c>, ADR-0148)
+    /// whose bound interface type — see <see cref="ExplicitInterfaceClauseTarget"/> —
+    /// declares a member with this method's own plain name and a matching
+    /// signature. Unlike <see cref="ExplicitInterfaceSlot"/> (which binds to
+    /// an external CLR interface resolved via reflection), this points at the
+    /// interface member's own <see cref="FunctionSymbol"/> within the same
+    /// compilation — the emitter resolves it to a MethodDef or (for a
+    /// constructed generic interface) a MemberRef/TypeSpec token and binds a
+    /// <c>MethodImpl</c> row so the CLR routes interface dispatch to this
+    /// method's own distinct body instead of relying on name-based virtual
+    /// dispatch. Two explicit implementations of same-name/same-signature
+    /// members from different interfaces never collide at the source level —
+    /// see <see cref="ExplicitInterfaceClauseTarget"/> and
+    /// <see cref="Binding.DeclarationBinder.ResolveExplicitInterfaceClauses"/>
+    /// for the duplicate-declaration carve-out — even though the emitter must
+    /// still synthesize a CLR-unique metadata name for the MethodDef (the
+    /// source/diagnostic name stays the plain declared name). Defaults to
+    /// <c>null</c> for ordinary methods.
     /// </summary>
     public FunctionSymbol ExplicitInterfaceMember { get; set; }
+
+    /// <summary>
+    /// Gets a value indicating whether this method's declaration carries a
+    /// dedicated explicit-interface qualifier clause (<c>func (IFoo) M(...)</c>,
+    /// ADR-0148) — a purely syntactic fact known immediately at declaration
+    /// time, before <see cref="ExplicitInterfaceClauseTarget"/> is resolved
+    /// against the containing type's implemented interfaces. Members with
+    /// this flag set are exempt from the ordinary duplicate-overload-signature
+    /// check (ADR-0063 §11): an explicit-interface member is never expected to
+    /// share the plain concrete API surface, so it may coexist with (or, once
+    /// resolved, with another explicit member targeting a different
+    /// interface) a same-name/same-signature member.
+    /// </summary>
+    public bool HasExplicitInterfaceClause => Declaration?.HasExplicitInterfaceClause == true;
+
+    /// <summary>
+    /// Gets or sets the <see cref="InterfaceSymbol"/> the explicit-interface
+    /// qualifier clause (<see cref="HasExplicitInterfaceClause"/>) resolves
+    /// to, bound by <see cref="Binding.DeclarationBinder.ResolveExplicitInterfaceClauses"/>
+    /// once the containing type's interface list is fully known. <c>null</c>
+    /// until resolved, and remains <c>null</c> if the clause's type does not
+    /// bind to an interface implemented by the containing type (a diagnostic
+    /// is reported in that case).
+    /// </summary>
+    public InterfaceSymbol ExplicitInterfaceClauseTarget { get; set; }
 
     /// <summary>Gets a value indicating whether this function is a P/Invoke stub (ADR-0086).</summary>
     public bool IsPInvoke => PInvokeMetadata != null;

@@ -5056,6 +5056,74 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
             DiagnosticSeverity.Error);
     }
 
+    /// <summary>
+    /// ADR-0148: GS0488 — an explicit-interface qualifier clause
+    /// (<c>func (X) M(...)</c> / <c>prop (X) P T</c> / <c>event (X) E T</c>)
+    /// referenced a type that is not an interface.
+    /// </summary>
+    /// <param name="location">The source location of the clause's type reference.</param>
+    /// <param name="typeName">The display name of the non-interface type.</param>
+    /// <param name="memberName">The declared member name.</param>
+    public void ReportExplicitInterfaceClauseTypeNotInterface(TextLocation location, string typeName, string memberName)
+    {
+        Report(
+            location,
+            "GS0488",
+            $"'{typeName}' is not an interface; the explicit-interface qualifier clause on '{memberName}' must reference an interface type.",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0148: GS0489 — an explicit-interface qualifier clause referenced an
+    /// interface the containing type does not implement.
+    /// </summary>
+    /// <param name="location">The source location of the clause's type reference.</param>
+    /// <param name="containingTypeName">The containing class/struct name.</param>
+    /// <param name="interfaceName">The referenced interface's name.</param>
+    /// <param name="memberName">The declared member name.</param>
+    public void ReportExplicitInterfaceClauseNotImplemented(TextLocation location, string containingTypeName, string interfaceName, string memberName)
+    {
+        Report(
+            location,
+            "GS0489",
+            $"'{containingTypeName}' does not implement interface '{interfaceName}'; the explicit-interface qualifier clause on '{memberName}' requires an implemented interface.",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0148: GS0490 — an explicit-interface qualifier clause's interface
+    /// is implemented, but no member on it matches the declared name,
+    /// signature, or accessor shape.
+    /// </summary>
+    /// <param name="location">The source location of the declared member.</param>
+    /// <param name="interfaceName">The referenced interface's name.</param>
+    /// <param name="memberName">The declared member name.</param>
+    public void ReportExplicitInterfaceClauseMemberNotFound(TextLocation location, string interfaceName, string memberName)
+    {
+        Report(
+            location,
+            "GS0490",
+            $"'{interfaceName}' has no member '{memberName}' matching this declaration's signature/accessor shape.",
+            DiagnosticSeverity.Error);
+    }
+
+    /// <summary>
+    /// ADR-0148: GS0491 — two members of the same containing type both carry
+    /// an explicit-interface qualifier clause that resolves to the same
+    /// interface member.
+    /// </summary>
+    /// <param name="location">The source location of the second (duplicate) declaration.</param>
+    /// <param name="interfaceName">The shared target interface's name.</param>
+    /// <param name="memberName">The shared target member name.</param>
+    public void ReportDuplicateExplicitInterfaceImplementation(TextLocation location, string interfaceName, string memberName)
+    {
+        Report(
+            location,
+            "GS0491",
+            $"'{interfaceName}.{memberName}' is already explicitly implemented elsewhere in this type.",
+            DiagnosticSeverity.Error);
+    }
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

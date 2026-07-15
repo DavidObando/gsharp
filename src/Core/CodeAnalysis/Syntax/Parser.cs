@@ -2809,13 +2809,26 @@ public class Parser
     {
         var propKeyword = MatchToken(SyntaxKind.IdentifierToken); // consumes "prop"
 
+        // ADR-0148: optional explicit-interface qualifier clause
+        // `prop (IFoo) P T` / `prop (IFoo) this[...] T`. Properties/indexers
+        // have no competing receiver-clause grammar, so any `(` here
+        // unambiguously starts this clause.
+        SyntaxToken explicitIfaceOpenParen = null;
+        TypeClauseSyntax explicitIfaceType = null;
+        SyntaxToken explicitIfaceCloseParen = null;
+        if (Current.Kind == SyntaxKind.OpenParenthesisToken)
+        {
+            (explicitIfaceOpenParen, explicitIfaceType, explicitIfaceCloseParen) = ParseExplicitInterfaceClause();
+        }
+
         // ADR-0118: indexer member — `prop this[<params>] T { get; set }`.
         // The property name is replaced by the contextual `this` keyword
         // followed by a bracketed index-parameter list.
         if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "this"
             && Peek(1).Kind == SyntaxKind.OpenSquareBracketToken)
         {
-            return ParseIndexerDeclaration(accessibilityModifier, openModifier, overrideModifier, propKeyword);
+            return ParseIndexerDeclaration(accessibilityModifier, openModifier, overrideModifier, propKeyword)
+                .WithExplicitInterfaceClause(explicitIfaceOpenParen, explicitIfaceType, explicitIfaceCloseParen);
         }
 
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
@@ -2836,7 +2849,8 @@ public class Parser
                 type,
                 openBrace,
                 accessors,
-                closeBrace);
+                closeBrace)
+                .WithExplicitInterfaceClause(explicitIfaceOpenParen, explicitIfaceType, explicitIfaceCloseParen);
         }
 
         if (Current.Kind == SyntaxKind.RightArrowToken)
@@ -2855,7 +2869,8 @@ public class Parser
                 type,
                 synthOpenBrace,
                 ImmutableArray.Create(getAccessor),
-                synthCloseBrace);
+                synthCloseBrace)
+                .WithExplicitInterfaceClause(explicitIfaceOpenParen, explicitIfaceType, explicitIfaceCloseParen);
         }
 
         // Bare auto-property: prop Name Type
@@ -2869,7 +2884,8 @@ public class Parser
             type,
             openBraceToken: null,
             accessors: ImmutableArray<PropertyAccessorSyntax>.Empty,
-            closeBraceToken: null);
+            closeBraceToken: null)
+            .WithExplicitInterfaceClause(explicitIfaceOpenParen, explicitIfaceType, explicitIfaceCloseParen);
     }
 
     // ADR-0118: parse the indexer member form `prop this[<params>] T { get; set }`.
@@ -2952,6 +2968,18 @@ public class Parser
         SyntaxToken overrideModifier)
     {
         var eventKeyword = MatchToken(SyntaxKind.IdentifierToken); // consumes "event"
+
+        // ADR-0148: optional explicit-interface qualifier clause
+        // `event (IFoo) Changed T`. Events have no competing receiver-clause
+        // grammar, so any `(` here unambiguously starts this clause.
+        SyntaxToken explicitIfaceOpenParen = null;
+        TypeClauseSyntax explicitIfaceType = null;
+        SyntaxToken explicitIfaceCloseParen = null;
+        if (Current.Kind == SyntaxKind.OpenParenthesisToken)
+        {
+            (explicitIfaceOpenParen, explicitIfaceType, explicitIfaceCloseParen) = ParseExplicitInterfaceClause();
+        }
+
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         var type = ParseTypeClause();
 
@@ -2970,7 +2998,8 @@ public class Parser
                 type,
                 openBrace,
                 accessors,
-                closeBrace);
+                closeBrace)
+                .WithExplicitInterfaceClause(explicitIfaceOpenParen, explicitIfaceType, explicitIfaceCloseParen);
         }
 
         // Field-like event: event Name Type
@@ -2984,7 +3013,8 @@ public class Parser
             type,
             openBraceToken: null,
             accessors: ImmutableArray<EventAccessorSyntax>.Empty,
-            closeBraceToken: null);
+            closeBraceToken: null)
+            .WithExplicitInterfaceClause(explicitIfaceOpenParen, explicitIfaceType, explicitIfaceCloseParen);
     }
 
     private ImmutableArray<EventAccessorSyntax> ParseEventAccessors()
@@ -3286,6 +3316,18 @@ public class Parser
     {
         var functionKeyword = MatchToken(SyntaxKind.FuncKeyword);
 
+        SyntaxToken explicitIfaceOpenParen = null;
+        TypeClauseSyntax explicitIfaceType = null;
+        SyntaxToken explicitIfaceCloseParen = null;
+
+        // ADR-0148: optional explicit-interface qualifier clause `func (IFoo) M(...)`.
+        // Checked BEFORE the receiver clause since both start with `(' IdentifierToken;
+        // see LooksLikeExplicitInterfaceClause for the disambiguation rule.
+        if (Current.Kind == SyntaxKind.OpenParenthesisToken && LooksLikeExplicitInterfaceClause())
+        {
+            (explicitIfaceOpenParen, explicitIfaceType, explicitIfaceCloseParen) = ParseExplicitInterfaceClause();
+        }
+
         SyntaxToken receiverOpenParen = null;
         ParameterSyntax receiver = null;
         SyntaxToken receiverCloseParen = null;
@@ -3294,7 +3336,7 @@ public class Parser
         // `func ( recv RecvType ) Name(...)`. We only consume it when the
         // tokens unambiguously look like a receiver: open paren, identifier,
         // a type clause, close paren, followed by an identifier (the name).
-        if (Current.Kind == SyntaxKind.OpenParenthesisToken && LooksLikeReceiverClause())
+        if (explicitIfaceType == null && Current.Kind == SyntaxKind.OpenParenthesisToken && LooksLikeReceiverClause())
         {
             receiverOpenParen = MatchToken(SyntaxKind.OpenParenthesisToken);
             receiver = ParseParameter();
@@ -3361,6 +3403,9 @@ public class Parser
         decl.SemicolonBodyToken = semicolonBody;
         decl.IsConversionOperator = isConversionOperator;
         decl.ConversionIsExplicit = conversionIsExplicit;
+        decl.ExplicitInterfaceOpenParenthesisToken = explicitIfaceOpenParen;
+        decl.ExplicitInterfaceType = explicitIfaceType;
+        decl.ExplicitInterfaceCloseParenthesisToken = explicitIfaceCloseParen;
         return decl;
     }
 
@@ -3771,6 +3816,75 @@ public class Parser
         }
 
         return false;
+    }
+
+    // ADR-0148: a dedicated explicit-interface-implementation qualifier clause
+    // `(InterfaceType)` immediately after a member keyword (`func`, `prop`,
+    // `event`) — e.g. `func (IFoo) M(...)`, `prop (IFoo) P T`,
+    // `prop (IFoo) this[...] T`, `event (IFoo) Changed T`. Reused across all
+    // three member kinds via ParseOptionalExplicitInterfaceClause so the
+    // grammar/parse logic lives in exactly one place.
+    //
+    // For `prop`/`event` there is no competing grammar (properties and events
+    // never had a receiver-clause concept), so any `(` immediately following
+    // the member keyword unambiguously starts this clause. For `func`, the
+    // clause must be distinguished from the pre-existing Go-style receiver
+    // clause (`func (recv RecvType) Name(...)`, ADR-0019): both start with
+    // `(` IdentifierToken, so `LooksLikeExplicitInterfaceClause` must run
+    // BEFORE `LooksLikeReceiverClause` and only claims the `(` when the token
+    // right after the first identifier continues the SAME single type
+    // reference — a qualified-name `.`, a generic-argument `[`, or the
+    // immediate close `)` — rather than starting a second, distinct type
+    // (which signals a receiver's "name Type" pair, e.g. `(recv IFoo)`).
+    //
+    // A single-token lookahead at the position right after the identifier is
+    // NOT sufficient: `Identifier [` is ambiguous between a generic-argument
+    // list on THAT SAME identifier (`IFoo[T]`, a one-type-reference explicit
+    // interface clause) and the start of a receiver's array-shaped type,
+    // where the identifier is the receiver NAME and `[...]T` is a SEPARATE,
+    // second type (`(self []T)`, `(self [3]T)`). Both shapes begin with the
+    // token sequence `(` Identifier `[`, so peeking only one token past the
+    // identifier cannot tell them apart — speculatively scan a full type
+    // clause instead (see below).
+    private bool LooksLikeExplicitInterfaceClause()
+    {
+        if (Peek(0).Kind != SyntaxKind.OpenParenthesisToken)
+        {
+            return false;
+        }
+
+        if (Peek(1).Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        // Speculatively scan a single type clause starting right after the
+        // `(`, reusing the same scanner already used to disambiguate generic
+        // call sites elsewhere (TryScanTypeClause). An explicit-interface
+        // clause contains EXACTLY one type reference — `IFoo`, `Ns.IFoo`, or
+        // `IFoo[T]` — with nothing else before the closing `)`, so we only
+        // commit to this interpretation when the scan succeeds AND lands
+        // exactly on the closing `)` with nothing left over. A receiver's
+        // array-shaped type (`self []T`, `self [3]T`) fails this scan
+        // because `self` scans as a complete type on its own (a plain
+        // identifier with no generic-argument list, since `[]`/`[3]` is not
+        // a valid generic-argument list) and the scan position would then
+        // land on `[`, not `)` — correctly falling through to the
+        // receiver-clause heuristic instead.
+        var pos = 1;
+        return TryScanTypeClause(ref pos) && Peek(pos).Kind == SyntaxKind.CloseParenthesisToken;
+    }
+
+    // ADR-0148: parses `(InterfaceType)` when present. The caller has already
+    // confirmed (via LooksLikeExplicitInterfaceClause for `func`, or simply by
+    // checking for `(` for `prop`/`event`, which have no competing grammar)
+    // that the current token starts this clause.
+    private (SyntaxToken OpenParen, TypeClauseSyntax Type, SyntaxToken CloseParen) ParseExplicitInterfaceClause()
+    {
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var type = ParseTypeClause();
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        return (openParen, type, closeParen);
     }
 
     private bool LooksLikeReceiverClause()

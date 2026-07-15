@@ -14,14 +14,21 @@ namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
 /// Issue #2362: extends the issue #2010/#2181 explicit-interface-METHOD
-/// mangled-name + CLR <c>MethodImpl</c> bridge to PROPERTIES (and, via a
-/// collision-drop-only fallback, indexers). A mangled property name
-/// (<c>__explicit_&lt;Interface&gt;__&lt;Member&gt;</c>) is linked by the
-/// binder to the specific interface property it implements
+/// <c>func (IFoo) M(...)</c> qualifier clause (ADR-0148) + CLR
+/// <c>MethodImpl</c> bridge to PROPERTIES (and, via a collision-drop-only
+/// fallback, indexers). A property declared with the <c>prop (IFoo) P T</c>
+/// qualifier clause is linked by the binder to the specific interface
+/// property it implements
 /// (<see cref="GSharp.Core.CodeAnalysis.Symbols.PropertySymbol.ExplicitInterfaceMember"/>)
 /// and the emitter binds a CLR <c>MethodImpl</c> row per accessor (getter
 /// and/or setter) via <c>ReflectionMetadataEmitter.EmitExplicitInterfacePropertyMethodImpls</c>,
-/// mirroring <c>EmitStaticVirtualPropertyMethodImpls</c> (ADR-0089/#1019).
+/// mirroring <c>EmitStaticVirtualPropertyMethodImpls</c> (ADR-0089/#1019). The
+/// declared member name stays the plain source name (e.g. <c>Greeting</c>)
+/// for both the public and explicit property — only the synthesized CLR
+/// metadata name (<c>&lt;Package&gt;.&lt;Interface&gt;.&lt;Member&gt;</c>,
+/// e.g. <c>GapCheck.IGreeter.Greeting</c>, and likewise for its
+/// <c>get_</c>/<c>set_</c> accessors) differs, keeping the rows
+/// collision-free.
 /// </summary>
 public class Issue2362ExplicitInterfacePropertyEmitTests
 {
@@ -35,7 +42,7 @@ public class Issue2362ExplicitInterfacePropertyEmitTests
         class Host : IGreeter {
             prop Greeting string -> "public-hi"
 
-            private prop __explicit_GapCheck_IGreeter__Greeting string -> "explicit-hi"
+            private prop (IGreeter) Greeting string -> "explicit-hi"
         }
         """;
 
@@ -51,7 +58,7 @@ public class Issue2362ExplicitInterfacePropertyEmitTests
 
             TypeDefinition host = FindType(reader, "Host");
 
-            int getterCount = CountMethodsNamed(reader, host, "get___explicit_GapCheck_IGreeter__Greeting");
+            int getterCount = CountMethodsNamed(reader, host, "GapCheck.IGreeter.get_Greeting");
             Assert.Equal(1, getterCount);
 
             int methodImplRows = CountMethodImplRows(reader, host);
@@ -88,7 +95,7 @@ public class Issue2362ExplicitInterfacePropertyEmitTests
         class Counter : ICounter {
             prop Count int32 { get; set; }
 
-            private prop __explicit_GapCheck_ICounter__Count int32 {
+            private prop (ICounter) Count int32 {
                 get { return Count * 10 }
                 set { Count = value }
             }
@@ -107,8 +114,8 @@ public class Issue2362ExplicitInterfacePropertyEmitTests
 
             TypeDefinition counter = FindType(reader, "Counter");
 
-            Assert.Equal(1, CountMethodsNamed(reader, counter, "get___explicit_GapCheck_ICounter__Count"));
-            Assert.Equal(1, CountMethodsNamed(reader, counter, "set___explicit_GapCheck_ICounter__Count"));
+            Assert.Equal(1, CountMethodsNamed(reader, counter, "GapCheck.ICounter.get_Count"));
+            Assert.Equal(1, CountMethodsNamed(reader, counter, "GapCheck.ICounter.set_Count"));
 
             // One MethodImpl row per accessor (getter + setter).
             Assert.Equal(2, CountMethodImplRows(reader, counter));
@@ -149,7 +156,7 @@ public class Issue2362ExplicitInterfacePropertyEmitTests
         class IntBox : IBox[int32] {
             prop Value int32 -> 42
 
-            private prop __explicit_GapCheck_IBox__Value int32 -> 99
+            private prop (IBox[int32]) Value int32 -> 99
         }
         """;
 
@@ -165,7 +172,7 @@ public class Issue2362ExplicitInterfacePropertyEmitTests
 
             TypeDefinition intBox = FindType(reader, "IntBox");
 
-            Assert.Equal(1, CountMethodsNamed(reader, intBox, "get___explicit_GapCheck_IBox__Value"));
+            Assert.Equal(1, CountMethodsNamed(reader, intBox, "GapCheck.IBox[int32].get_Value"));
             Assert.Equal(1, CountMethodImplRows(reader, intBox));
         }
         finally
@@ -211,13 +218,13 @@ public class Issue2362ExplicitInterfacePropertyEmitTests
             prop Authorization Authorization { get; set; }
             prop Token Token { get; set; }
 
-            private prop __explicit_Oahu_Core_IProfile__Authorization Authorization -> Authorization
-            private prop __explicit_Oahu_Core_IProfile__Token Token -> Token
+            private prop (IProfile) Authorization Authorization -> Authorization
+            private prop (IProfile) Token Token -> Token
         }
         """;
 
     [Fact]
-    public void OahuProfileShape_Compiles_EmitsFourMangledPropertiesAndMethodImplRows_IlVerifies()
+    public void OahuProfileShape_Compiles_EmitsFourQualifiedPropertiesAndMethodImplRows_IlVerifies()
     {
         var dllPath = CompileLibrary(OahuProfileReproSource);
         try
@@ -228,8 +235,8 @@ public class Issue2362ExplicitInterfacePropertyEmitTests
 
             TypeDefinition profile = FindType(reader, "Profile");
 
-            Assert.Equal(1, CountMethodsNamed(reader, profile, "get___explicit_Oahu_Core_IProfile__Authorization"));
-            Assert.Equal(1, CountMethodsNamed(reader, profile, "get___explicit_Oahu_Core_IProfile__Token"));
+            Assert.Equal(1, CountMethodsNamed(reader, profile, "Oahu.Core.IProfile.get_Authorization"));
+            Assert.Equal(1, CountMethodsNamed(reader, profile, "Oahu.Core.IProfile.get_Token"));
             Assert.Equal(1, CountMethodsNamed(reader, profile, "get_Authorization"));
             Assert.Equal(1, CountMethodsNamed(reader, profile, "get_Token"));
 

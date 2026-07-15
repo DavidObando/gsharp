@@ -169,7 +169,10 @@ internal sealed class MemberDefEmitter
 
             var propDef = this.emitCtx.Metadata.AddProperty(
                 attributes: PropertyAttributes.None,
-                name: this.emitCtx.Metadata.GetOrAddString(prop.Name),
+                name: this.emitCtx.Metadata.GetOrAddString(
+                    prop.HasExplicitInterfaceClause
+                        ? ExplicitInterfaceMetadataNaming.GetMetadataName(prop.Name, prop.ExplicitInterfaceClauseTarget)
+                        : prop.Name),
                 signature: this.emitCtx.Metadata.GetOrAddBlob(propertySignature));
 
             if (firstPropDef.IsNil)
@@ -329,10 +332,19 @@ internal sealed class MemberDefEmitter
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final;
         }
 
+        // ADR-0148: a property declared with an explicit-interface qualifier
+        // clause needs a collision-free metadata name for its getter, same
+        // rationale as ExplicitInterfaceMetadataNaming's remarks (two
+        // explicit implementations sharing a plain property name would
+        // otherwise also share the identical "get_Name" accessor name).
+        var getterName = prop.HasExplicitInterfaceClause
+            ? "get_" + ExplicitInterfaceMetadataNaming.GetMetadataName(prop.Name, prop.ExplicitInterfaceClauseTarget)
+            : $"get_{prop.Name}";
+
         return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString($"get_{prop.Name}"),
+            name: this.emitCtx.Metadata.GetOrAddString(getterName),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: this.nextParameterHandle());
@@ -404,10 +416,15 @@ internal sealed class MemberDefEmitter
             name: this.emitCtx.Metadata.GetOrAddString(prop.SetterParameterName ?? "value"),
             sequenceNumber: 1);
 
+        // ADR-0148: see the matching comment in EmitPropertyGetter.
+        var setterName = prop.HasExplicitInterfaceClause
+            ? "set_" + ExplicitInterfaceMetadataNaming.GetMetadataName(prop.Name, prop.ExplicitInterfaceClauseTarget)
+            : $"set_{prop.Name}";
+
         return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString($"set_{prop.Name}"),
+            name: this.emitCtx.Metadata.GetOrAddString(setterName),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: firstParamHandle);

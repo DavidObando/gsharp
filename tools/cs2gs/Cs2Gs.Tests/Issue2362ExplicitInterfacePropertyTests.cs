@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
@@ -23,23 +24,32 @@ namespace Cs2Gs.Tests;
 /// <c>Token</c>, <c>DeviceInfo</c>, <c>CustomerInfo</c>) all shaped exactly
 /// like <see cref="ExactOahuProfileShape_AllFourPropertiesSurvive"/> below.
 /// <para>
-/// This extends the issue #2010/#2181 explicit-interface-METHOD convention
-/// (reserved <c>__explicit_&lt;Interface&gt;__&lt;Member&gt;</c> mangled name +
-/// CLR <c>MethodImpl</c> bridge) to properties: a G# USER interface's explicit
-/// property implementation is emitted under its own mangled name (so it never
-/// collides with the public concrete sibling), and gsc's binder links it to
-/// the specific interface property it implements
-/// (<c>PropertySymbol.ExplicitInterfaceMember</c>); the emitter binds a CLR
-/// <c>MethodImpl</c> row per accessor. An EXTERNAL/BCL interface's explicit
-/// property implementation still uses the pre-existing #1911-style
-/// forced-public, collision-drop-with-diagnostic fallback (mangling isn't
-/// applicable there, exactly like the method case).
+/// This originally extended the issue #2010/#2181 explicit-interface-METHOD
+/// convention (reserved <c>__explicit_&lt;Interface&gt;__&lt;Member&gt;</c>
+/// mangled name + CLR <c>MethodImpl</c> bridge) to properties. The ADR-0148
+/// redesign replaces the mangled name with a first-class explicit-interface
+/// qualifier clause: a G# USER interface's explicit property implementation
+/// is emitted under its own PLAIN source name carrying a
+/// <c>(InterfaceType)</c> clause immediately after the <c>prop</c> keyword
+/// (e.g. <c>prop (IProfile) Authorization Authorization</c>), so it never
+/// collides with the public concrete sibling (disambiguated by the clause,
+/// not by name); gsc's binder resolves the clause's interface type directly
+/// and links it to the specific interface property it implements
+/// (<c>PropertySymbol.ExplicitInterfaceClauseTarget</c>); the emitter binds a
+/// CLR <c>MethodImpl</c> row per accessor. An EXTERNAL/BCL interface's
+/// explicit property implementation still uses the pre-existing #1911-style
+/// forced-public, collision-drop-with-diagnostic fallback (no G# interface
+/// exists there to name in a clause, exactly like the method case).
 /// </para>
 /// <para>
-/// Indexers cannot be mangled at all (a G# indexer's identity is structurally
-/// fixed to <c>this[...]</c>/CLR <c>Item</c>, ADR-0118) — every explicit
-/// indexer implementation, user or external, uses the collision-drop
-/// fallback; see <see cref="ExplicitIndexerImplementation_CollidesWithPublicIndexer_DropsWithDiagnostic"/>.
+/// Indexers cannot use the clause today — not because of a syntax
+/// limitation (the AST/parser/printer support the clause uniformly for
+/// properties and indexers alike), but because G# interfaces cannot declare
+/// an indexer MEMBER at all (a separate, pre-existing gsc limitation), so
+/// there is never an interface-side indexer member to resolve a clause
+/// against. Every explicit indexer implementation, user or external, still
+/// uses the collision-drop fallback; see
+/// <see cref="ExplicitIndexerImplementation_CollidesWithPublicIndexer_DropsWithDiagnostic"/>.
 /// </para>
 /// </summary>
 public class Issue2362ExplicitInterfacePropertyTests
@@ -49,9 +59,9 @@ public class Issue2362ExplicitInterfacePropertyTests
     /// <c>src/Oahu.Core/Interfaces.cs</c> and <c>src/Oahu.Core/Profile.cs</c>):
     /// four get-only expression-bodied explicit interface property
     /// implementations, each coexisting with a same-named public concrete
-    /// property. All four must survive translation as distinct, mangled,
-    /// non-colliding G# properties — this is the primary regression this fix
-    /// addresses (previously GS0102 four times over).
+    /// property. All four must survive translation as distinct, clause-
+    /// qualified, non-colliding G# properties — this is the primary
+    /// regression this fix addresses (previously GS0102 four times over).
     /// </summary>
     [Fact]
     public void ExactOahuProfileShape_AllFourPropertiesSurvive()
@@ -88,16 +98,18 @@ namespace Corpus.Issue2362
         string printed = GSharpPrinter.Print(unit);
 
         TypeDeclaration profile = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Profile");
-        var propertyNames = profile.Members.OfType<PropertyDeclaration>().Select(p => p.Name).ToList();
+        List<PropertyDeclaration> properties = profile.Members.OfType<PropertyDeclaration>().ToList();
 
-        Assert.Contains("Authorization", propertyNames);
-        Assert.Contains("Token", propertyNames);
-        Assert.Contains("DeviceInfo", propertyNames);
-        Assert.Contains("CustomerInfo", propertyNames);
-        Assert.Contains("__explicit_Corpus_Issue2362_IProfile__Authorization", propertyNames);
-        Assert.Contains("__explicit_Corpus_Issue2362_IProfile__Token", propertyNames);
-        Assert.Contains("__explicit_Corpus_Issue2362_IProfile__DeviceInfo", propertyNames);
-        Assert.Contains("__explicit_Corpus_Issue2362_IProfile__CustomerInfo", propertyNames);
+        // Every property keeps its own plain source name — four PUBLIC
+        // (no clause) and four EXPLICIT (clause-qualified) entries sharing
+        // the same four names.
+        foreach (string name in new[] { "Authorization", "Token", "DeviceInfo", "CustomerInfo" })
+        {
+            List<PropertyDeclaration> withName = properties.Where(p => p.Name == name).ToList();
+            Assert.Equal(2, withName.Count);
+            Assert.Contains(withName, p => p.ExplicitInterfaceType == null);
+            Assert.Contains(withName, p => p.ExplicitInterfaceType is NamedTypeReference n && n.Name == "IProfile");
+        }
 
         Assert.DoesNotContain(
             context.Diagnostics,
@@ -106,14 +118,15 @@ namespace Corpus.Issue2362
     }
 
     /// <summary>
-    /// A single get-only explicit interface property implementation is
-    /// mangled and demoted to G# <c>private</c> visibility (matching Roslyn's
-    /// own <c>Accessibility.Private</c> for an explicit impl, and C#'s "not
-    /// publicly callable by name" semantics) — mirroring the method-level
-    /// convention's <c>MapVisibility</c> fallthrough exactly.
+    /// A single get-only explicit interface property implementation carries
+    /// the ADR-0148 clause and is demoted to G# <c>private</c> visibility
+    /// (matching Roslyn's own <c>Accessibility.Private</c> for an explicit
+    /// impl, and C#'s "not publicly callable by name" semantics) — mirroring
+    /// the method-level convention's <c>MapVisibility</c> fallthrough
+    /// exactly.
     /// </summary>
     [Fact]
-    public void SingleExplicitPropertyImplementation_MangledAndPrivate()
+    public void SingleExplicitPropertyImplementation_ClauseQualifiedAndPrivate()
     {
         (CompilationUnit unit, TranslationContext context) = Translate(@"
 namespace Corpus.Issue2362
@@ -130,17 +143,19 @@ namespace Corpus.Issue2362
 }");
         TypeDeclaration host = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Host");
         PropertyDeclaration prop = host.Members.OfType<PropertyDeclaration>()
-            .Single(p => p.Name == "__explicit_Corpus_Issue2362_IGreeter__Greeting");
+            .Single(p => p.Name == "Greeting" && p.ExplicitInterfaceType != null);
 
         Assert.Equal(Visibility.Private, prop.Visibility);
+        Assert.True(prop.ExplicitInterfaceType is NamedTypeReference n && n.Name == "IGreeter");
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
     }
 
     /// <summary>
     /// An explicit property implementation coexisting with a same-signature
     /// public property of the same name no longer collides at all: the
-    /// public property keeps its plain name, the explicit implementation
-    /// gets its own mangled name — both survive.
+    /// public property keeps its plain name with no clause, the explicit
+    /// implementation gets its own explicit-interface qualifier clause —
+    /// both survive.
     /// </summary>
     [Fact]
     public void ExplicitPropertyImplementationCoexistingWithPublicProperty_BothSurvive()
@@ -161,21 +176,23 @@ namespace Corpus.Issue2362
     }
 }");
         TypeDeclaration loudHost = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "LoudHost");
-        var names = loudHost.Members.OfType<PropertyDeclaration>().Select(p => p.Name).ToList();
+        List<PropertyDeclaration> greetings = loudHost.Members.OfType<PropertyDeclaration>().Where(p => p.Name == "Greeting").ToList();
 
-        Assert.Contains("Greeting", names);
-        Assert.Contains("__explicit_Corpus_Issue2362_IGreeter__Greeting", names);
+        Assert.Equal(2, greetings.Count);
+        Assert.Contains(greetings, p => p.ExplicitInterfaceType == null);
+        Assert.Contains(greetings, p => p.ExplicitInterfaceType is NamedTypeReference n && n.Name == "IGreeter");
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
     }
 
     /// <summary>
     /// Two explicit implementations of the SAME-NAME, SAME-SHAPE property
     /// from two DIFFERENT user interfaces (a same-name diamond, no public
-    /// sibling) both survive as two distinct mangled-name properties — no
-    /// GS0102, no drop, no diagnostic.
+    /// sibling) both survive as two distinct clause-qualified properties
+    /// sharing the same plain source name — no GS0102, no drop, no
+    /// diagnostic.
     /// </summary>
     [Fact]
-    public void TwoCollidingExplicitPropertyImplementations_BothSurviveAsDistinctMangledProperties()
+    public void TwoCollidingExplicitPropertyImplementations_BothSurviveWithDistinctClauses()
     {
         (CompilationUnit unit, TranslationContext context) = Translate(@"
 namespace Corpus.Issue2362
@@ -199,19 +216,22 @@ namespace Corpus.Issue2362
 }");
         string printed = GSharpPrinter.Print(unit);
         TypeDeclaration multi = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Multi");
-        var names = multi.Members.OfType<PropertyDeclaration>().Select(p => p.Name).ToList();
+        List<PropertyDeclaration> values = multi.Members.OfType<PropertyDeclaration>().Where(p => p.Name == "Value").ToList();
 
-        Assert.Contains("__explicit_Corpus_Issue2362_IFoo__Value", names);
-        Assert.Contains("__explicit_Corpus_Issue2362_IBar__Value", names);
+        Assert.Equal(2, values.Count);
+        Assert.Contains(values, p => p.ExplicitInterfaceType is NamedTypeReference n && n.Name == "IFoo");
+        Assert.Contains(values, p => p.ExplicitInterfaceType is NamedTypeReference n && n.Name == "IBar");
+        Assert.Contains("(IFoo) Value", printed, StringComparison.Ordinal);
+        Assert.Contains("(IBar) Value", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
         AssertRoundTripParses(printed);
     }
 
     /// <summary>
     /// A get/set explicit property implementation preserves BOTH accessors
-    /// under the mangled name — an accessor-shape mismatch (only get, or
-    /// only set) would break the binder's exact-shape match, so this proves
-    /// full get+set fidelity survives translation.
+    /// under its clause-qualified declaration — an accessor-shape mismatch
+    /// (only get, or only set) would break the binder's exact-shape match,
+    /// so this proves full get+set fidelity survives translation.
     /// </summary>
     [Fact]
     public void GetSetExplicitPropertyImplementation_PreservesBothAccessors()
@@ -236,23 +256,23 @@ namespace Corpus.Issue2362
     }
 }");
         TypeDeclaration counter = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Counter");
-        PropertyDeclaration mangled = counter.Members.OfType<PropertyDeclaration>()
-            .Single(p => p.Name == "__explicit_Corpus_Issue2362_ICounter__Count");
+        PropertyDeclaration clauseQualified = counter.Members.OfType<PropertyDeclaration>()
+            .Single(p => p.Name == "Count" && p.ExplicitInterfaceType != null);
 
-        Assert.Contains(mangled.Accessors, a => a.Kind == AccessorKind.Get);
-        Assert.Contains(mangled.Accessors, a => a.Kind == AccessorKind.Set);
+        Assert.Contains(clauseQualified.Accessors, a => a.Kind == AccessorKind.Get);
+        Assert.Contains(clauseQualified.Accessors, a => a.Kind == AccessorKind.Set);
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
     }
 
     /// <summary>
     /// An explicit property implementation satisfying a member INHERITED
     /// through a derived interface (rather than declared directly on the
-    /// interface the class lists) still resolves and mangles correctly —
-    /// <c>TryResolveExplicitInterfacePropertyImplementation</c> must walk the
-    /// full <c>structSymbol.Interfaces</c> set (which includes every
-    /// transitively-required interface, not just the ones written directly
-    /// in the class's base-type list), matching the analogous method-level
-    /// behavior.
+    /// interface the class lists) still resolves and carries the correct
+    /// clause — <c>TryResolveExplicitInterfacePropertyImplementation</c>
+    /// must walk the full <c>structSymbol.Interfaces</c> set (which includes
+    /// every transitively-required interface, not just the ones written
+    /// directly in the class's base-type list), matching the analogous
+    /// method-level behavior.
     /// <para>
     /// NOTE: Roslyn's <c>ExplicitInterfaceImplementations</c> can in
     /// principle report MORE than one entry for a single method/property
@@ -267,7 +287,7 @@ namespace Corpus.Issue2362
     /// </para>
     /// </summary>
     [Fact]
-    public void ExplicitPropertyImplementationOfInheritedInterfaceMember_ResolvesAndMangles()
+    public void ExplicitPropertyImplementationOfInheritedInterfaceMember_ResolvesAndCarriesClause()
     {
         (CompilationUnit unit, TranslationContext context) = Translate(@"
 namespace Corpus.Issue2362
@@ -289,7 +309,8 @@ namespace Corpus.Issue2362
         TypeDeclaration impl = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Impl");
         PropertyDeclaration prop = impl.Members.OfType<PropertyDeclaration>().Single();
 
-        Assert.Equal("__explicit_Corpus_Issue2362_IBase__Value", prop.Name);
+        Assert.Equal("Value", prop.Name);
+        Assert.True(prop.ExplicitInterfaceType is NamedTypeReference n && n.Name == "IBase");
         Assert.Equal(Visibility.Private, prop.Visibility);
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
     }
@@ -297,9 +318,11 @@ namespace Corpus.Issue2362
     /// <summary>
     /// An explicit implementation of an EXTERNAL (BCL) interface PROPERTY
     /// still uses the pre-existing #1911-style forced-public,
-    /// collision-drop-with-diagnostic fallback: mangling only applies to G#
-    /// USER interfaces. Colliding with a same-name/same-shape public property
-    /// drops the explicit one with an Unsupported diagnostic.
+    /// collision-drop-with-diagnostic fallback: the ADR-0148 clause only
+    /// applies to G# USER interfaces (there being no G# <c>interface</c>
+    /// declaration for an external CLR interface to name in a clause).
+    /// Colliding with a same-name/same-shape public property drops the
+    /// explicit one with an Unsupported diagnostic.
     /// </summary>
     [Fact]
     public void ExternalInterfaceExplicitPropertyImplementation_CollidesWithPublicProperty_DropsWithDiagnostic()
@@ -322,7 +345,8 @@ namespace Corpus.Issue2362
         var names = row.Members.OfType<PropertyDeclaration>().Where(p => !p.IsIndexer).Select(p => p.Name).ToList();
 
         // Only the surviving (public) property remains — the explicit one
-        // was dropped, since mangling never applies to an external interface.
+        // was dropped, since the ADR-0148 clause never applies to an
+        // external interface.
         Assert.Single(names);
         Assert.Equal("Error", names[0]);
         Assert.Contains(
@@ -357,17 +381,18 @@ namespace Corpus.Issue2362
 
         Assert.Equal("Error", errorProp.Name);
         Assert.Equal(Visibility.Default, errorProp.Visibility);
+        Assert.Null(errorProp.ExplicitInterfaceType);
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
     }
 
-
     /// <summary>
-    /// An explicit interface INDEXER implementation cannot be mangled at all
-    /// (G# indexer identity is structurally fixed to <c>this[...]</c>, ADR-0118).
-    /// When it collides with a same-shape public indexer, it is dropped with
-    /// an Unsupported diagnostic — the collision-drop fallback applies to
-    /// indexers regardless of whether the interface is a G# user interface or
-    /// external, since mangling is never an option for them.
+    /// An explicit interface INDEXER implementation cannot use the ADR-0148
+    /// clause today (G# interfaces cannot declare indexer members — a
+    /// separate, pre-existing gsc limitation). When it collides with a
+    /// same-shape public indexer, it is dropped with an Unsupported
+    /// diagnostic — the collision-drop fallback applies to indexers
+    /// regardless of whether the interface is a G# user interface or
+    /// external, since the clause is never resolvable for them.
     /// </summary>
     [Fact]
     public void ExplicitIndexerImplementation_CollidesWithPublicIndexer_DropsWithDiagnostic()
@@ -400,7 +425,7 @@ namespace Corpus.Issue2362
 
     /// <summary>
     /// An explicit interface indexer implementation with NO colliding
-    /// sibling survives (forced public, since it cannot be mangled).
+    /// sibling survives (forced public, since the clause cannot be used).
     /// </summary>
     [Fact]
     public void ExplicitIndexerImplementation_NoCollision_SurvivesForcedPublic()
@@ -422,17 +447,20 @@ namespace Corpus.Issue2362
         PropertyDeclaration indexer = container.Members.OfType<PropertyDeclaration>().Single(p => p.IsIndexer);
 
         Assert.Equal(Visibility.Default, indexer.Visibility);
+        Assert.Null(indexer.ExplicitInterfaceType);
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
     }
 
     /// <summary>
     /// Two same-simple-name interfaces declared in DIFFERENT namespaces
-    /// mangle their explicit property implementations to DISTINCT names
-    /// (namespace-qualified, not bare simple name) — mirroring the
-    /// method-level fix's namespace-qualification guarantee exactly.
+    /// disambiguate their explicit property implementations via the
+    /// clause's fully namespace-qualified interface type reference (e.g.
+    /// <c>(NsA.IBar)</c> vs. <c>(NsB.IBar)</c>) — mirroring the method-level
+    /// fix's namespace-qualification guarantee exactly, while both
+    /// implementations keep the exact same plain source name (<c>V</c>).
     /// </summary>
     [Fact]
-    public void TwoSameSimpleNameInterfacesFromDifferentNamespaces_MangleDistinctly()
+    public void TwoSameSimpleNameInterfacesFromDifferentNamespaces_ClausesDisambiguate()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
         {
@@ -474,13 +502,14 @@ namespace Corpus.Issue2362
         LoadedDocument document = project.Documents.Single(d => d.FilePath == "Multi.cs");
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        string printed = GSharpPrinter.Print(unit);
 
         TypeDeclaration multi = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Multi");
-        var names = multi.Members.OfType<PropertyDeclaration>().Select(p => p.Name).ToList();
+        List<PropertyDeclaration> vProps = multi.Members.OfType<PropertyDeclaration>().Where(p => p.Name == "V").ToList();
 
-        Assert.Equal(2, names.Distinct(StringComparer.Ordinal).Count());
-        Assert.Contains(names, n => n.StartsWith("__explicit_NsA_IBar__V", StringComparison.Ordinal));
-        Assert.Contains(names, n => n.StartsWith("__explicit_NsB_IBar__V", StringComparison.Ordinal));
+        Assert.Equal(2, vProps.Count);
+        Assert.Contains("(NsA.IBar) V", printed, StringComparison.Ordinal);
+        Assert.Contains("(NsB.IBar) V", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(
             context.Diagnostics,
             d => d.Severity == TranslationSeverity.Unsupported);

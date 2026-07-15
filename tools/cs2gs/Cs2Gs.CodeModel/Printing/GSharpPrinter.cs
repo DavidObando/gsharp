@@ -1476,11 +1476,27 @@ public static class GSharpPrinter
         if (property.IsIndexer)
         {
             // ADR-0118: render the canonical indexer header `prop this[...] T`.
-            sb.Append($"prop this[{RenderParameterList(property.IndexerParameters)}] {RenderType(property.Type)}");
+            // ADR-0148: an explicit-interface qualifier clause renders
+            // immediately after the `prop` keyword, before `this`.
+            sb.Append("prop ");
+            if (property.ExplicitInterfaceType != null)
+            {
+                sb.Append($"({RenderType(property.ExplicitInterfaceType)}) ");
+            }
+
+            sb.Append($"this[{RenderParameterList(property.IndexerParameters)}] {RenderType(property.Type)}");
         }
         else
         {
-            sb.Append($"prop {property.Name} {RenderType(property.Type)}");
+            // ADR-0148: an explicit-interface qualifier clause renders
+            // immediately after the `prop` keyword, before the member name.
+            sb.Append("prop ");
+            if (property.ExplicitInterfaceType != null)
+            {
+                sb.Append($"({RenderType(property.ExplicitInterfaceType)}) ");
+            }
+
+            sb.Append($"{property.Name} {RenderType(property.Type)}");
         }
 
         if (property.ExpressionBody != null)
@@ -1567,6 +1583,15 @@ public static class GSharpPrinter
         if (method.Receiver != null)
         {
             sb.Append($"({method.Receiver.Name} {RenderType(method.Receiver.Type)}) ");
+        }
+        else if (method.ExplicitInterfaceType != null)
+        {
+            // ADR-0148: an explicit-interface qualifier clause renders
+            // immediately after the `func` keyword, before the member name —
+            // the same physical slot as the receiver clause above (the two
+            // are mutually exclusive; a C# method is never both an
+            // extension method and an explicit interface implementation).
+            sb.Append($"({RenderType(method.ExplicitInterfaceType)}) ");
         }
 
         sb.Append(method.Name);

@@ -121,6 +121,15 @@ public sealed class PropertyDeclaration : GMember
     /// <param name="attributes">The property attributes.</param>
     /// <param name="indexerParameters">The index parameters for an indexer member (ADR-0118); empty for an ordinary property.</param>
     /// <param name="expressionBody">The optional single-statement arrow body for an expression-bodied read-only property/indexer (issue #1278 / ADR-0131); when set the member renders as <c>prop Name T -&gt; expr</c>.</param>
+    /// <param name="explicitInterfaceType">
+    /// ADR-0148: the resolved explicit-interface qualifier clause type, or
+    /// <see langword="null"/> for an ordinary property. When set, the
+    /// property renders as <c>prop (InterfaceType) Name T</c> (or
+    /// <c>prop (InterfaceType) this[...] T</c> for an indexer) — see
+    /// <c>GSharpPrinter.RenderProperty</c>.
+    /// Mutually exclusive with any receiver-clause concept (properties have
+    /// no receiver clause of their own to begin with).
+    /// </param>
     public PropertyDeclaration(
         string name,
         GTypeReference type,
@@ -130,7 +139,8 @@ public sealed class PropertyDeclaration : GMember
         bool isOverride = false,
         IReadOnlyList<AttributeUse> attributes = null,
         IReadOnlyList<Parameter> indexerParameters = null,
-        GStatement expressionBody = null)
+        GStatement expressionBody = null,
+        GTypeReference explicitInterfaceType = null)
     {
         Name = name;
         Type = type;
@@ -141,6 +151,7 @@ public sealed class PropertyDeclaration : GMember
         Attributes = attributes ?? new List<AttributeUse>();
         IndexerParameters = indexerParameters ?? new List<Parameter>();
         ExpressionBody = expressionBody;
+        ExplicitInterfaceType = explicitInterfaceType;
     }
 
     /// <summary>Gets the property name.</summary>
@@ -176,6 +187,12 @@ public sealed class PropertyDeclaration : GMember
     /// read-only member <c>prop Name T -&gt; expr</c> rather than an accessor list.
     /// </summary>
     public GStatement ExpressionBody { get; }
+
+    /// <summary>
+    /// Gets the ADR-0148 explicit-interface qualifier clause type, or
+    /// <see langword="null"/> for an ordinary property.
+    /// </summary>
+    public GTypeReference ExplicitInterfaceType { get; }
 }
 
 /// <summary>
@@ -207,6 +224,15 @@ public sealed class MethodDeclaration : GMember
     /// modifier (<c>func F(...) ref T { return ref lvalue }</c>, issue #490 /
     /// ADR-0060) — mapped from a C# ref-returning method (issue #1900).
     /// </param>
+    /// <param name="explicitInterfaceType">
+    /// ADR-0148: the resolved explicit-interface qualifier clause type, or
+    /// <see langword="null"/> for an ordinary method. When set, the method
+    /// renders as <c>func (InterfaceType) Name(...)</c> — see
+    /// <c>GSharpPrinter.RenderMethod</c>.
+    /// Mutually exclusive with <paramref name="receiver"/>: a C# method
+    /// cannot be both an extension method and an explicit interface
+    /// implementation, so callers never set both.
+    /// </param>
     public MethodDeclaration(
         string name,
         IReadOnlyList<Parameter> parameters = null,
@@ -220,7 +246,8 @@ public sealed class MethodDeclaration : GMember
         bool isAsync = false,
         IReadOnlyList<AttributeUse> attributes = null,
         GStatement expressionBody = null,
-        bool isRefReturn = false)
+        bool isRefReturn = false,
+        GTypeReference explicitInterfaceType = null)
     {
         Name = name;
         Parameters = parameters ?? new List<Parameter>();
@@ -235,6 +262,7 @@ public sealed class MethodDeclaration : GMember
         Attributes = attributes ?? new List<AttributeUse>();
         ExpressionBody = expressionBody;
         IsRefReturn = isRefReturn;
+        ExplicitInterfaceType = explicitInterfaceType;
     }
 
     /// <summary>Gets the method name.</summary>
@@ -282,6 +310,12 @@ public sealed class MethodDeclaration : GMember
     /// G#'s <c>ref</c> return modifier (issue #1900).
     /// </summary>
     public bool IsRefReturn { get; }
+
+    /// <summary>
+    /// Gets the ADR-0148 explicit-interface qualifier clause type, or
+    /// <see langword="null"/> for an ordinary method.
+    /// </summary>
+    public GTypeReference ExplicitInterfaceType { get; }
 }
 
 /// <summary>

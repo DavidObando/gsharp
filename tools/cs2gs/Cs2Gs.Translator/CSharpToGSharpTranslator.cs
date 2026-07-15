@@ -697,22 +697,6 @@ public sealed class CSharpToGSharpTranslator
         // integer; `decimal` is a widening target of every integral source. Used by
         // the call-site argument coercion (issue #1281) to drop a redundant explicit
         // conversion when gsc already widens the operand implicitly.
-
-        /// <summary>
-        /// Namespace/nesting-qualified name of an interface type, with every
-        /// '.' replaced by '_' so the result is a single valid identifier
-        /// segment (must stay in sync with the equivalent computation in
-        /// <c>DeclarationBinder.TryResolveExplicitInterfaceImplementation</c>,
-        /// which reconstructs the same string from the G# side as
-        /// <c>PackageName + "." + Name</c>, and with the file-level namespace
-        /// flattening in <see cref="ResolvePackage"/> that determines what a
-        /// translated interface's G# package name actually is).
-        /// </summary>
-        private static readonly SymbolDisplayFormat QualifiedInterfaceNameFormat = new SymbolDisplayFormat(
-            typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
-            genericsOptions: SymbolDisplayGenericsOptions.None,
-            globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Omitted);
-
         private static readonly Dictionary<SpecialType, HashSet<SpecialType>> NumericWideningTargets = new()
         {
             [SpecialType.System_SByte] = new() { SpecialType.System_Int16, SpecialType.System_Int32, SpecialType.System_Int64, SpecialType.System_IntPtr, SpecialType.System_Single, SpecialType.System_Double, SpecialType.System_Decimal },
@@ -3400,26 +3384,27 @@ public sealed class CSharpToGSharpTranslator
                 return (null, false);
             }
 
-            // Issue #1911 / #2010: C# `string IGreeter.Greet() { ... }` (explicit
-            // interface implementation) has no direct G# surface syntax (ADR-0091
-            // rejected an `IFoo.M(this)` spelling for conflating with G#'s
-            // existing extension-function sugar).
+            // Issue #1911 / #2010 / ADR-0148: C# `string IGreeter.Greet() { ... }`
+            // (explicit interface implementation) has no direct G# surface
+            // syntax spelled as an ordinary member name (ADR-0091 rejected an
+            // `IFoo.M(this)` spelling for conflating with G#'s existing
+            // extension-function sugar).
             //
             // When the implemented interface is a G# USER interface (declared in
             // this same C# source, so it translates to a G# `interface`), the
             // explicit implementation is emitted as its own distinct G# method
-            // under a reserved mangled name (`__explicit_<Interface>__<Member>`,
-            // see MangleExplicitInterfaceImplName below) instead of collapsing
-            // same-name/same-signature explicit implementations of different
-            // interfaces onto a single surviving body (the #1911 fix, which
-            // silently dropped the rest). gsc's binder recognizes this
-            // convention and links the method to the specific interface member
-            // it implements; the emitter binds a CLR `MethodImpl` row so each
-            // interface's dispatch slot routes to its own body (reusing the
-            // ADR-0089 static-virtual / issue #985 bridge machinery). Since the
-            // mangled name embeds the interface's own name, two explicit
-            // implementations of the same member from different user interfaces
-            // never collide — no drop, no diagnostic, full fidelity.
+            // carrying an ADR-0148 explicit-interface qualifier clause
+            // (`func (IGreeter) Greet(...)`), keeping its own plain member name
+            // (`Greet`) — NOT a mangled name. gsc's binder resolves the clause's
+            // interface type directly, verifies it is an implemented interface
+            // with a matching member signature, and binds a CLR `MethodImpl` row
+            // so each interface's dispatch slot routes to its own body (reusing
+            // the ADR-0089 static-virtual / issue #985 bridge machinery). Since
+            // the clause names the interface directly (not by mangling into the
+            // identifier), two explicit implementations of the same member from
+            // different user interfaces never collide on name — no drop, no
+            // diagnostic, full fidelity, and each keeps its unqualified source
+            // name for diagnostics/reflection/display.
             //
             // When the implemented interface is an EXTERNAL (BCL/imported) CLR
             // interface, this new mechanism does not apply — the existing #985
@@ -3428,9 +3413,10 @@ public sealed class CSharpToGSharpTranslator
             // alongside `IEnumerator<T> GetEnumerator()`), and it keys on the
             // method keeping its ORIGINAL (un-mangled) simple name plus a
             // return-type-only signature difference from its public sibling.
-            // Mangling would break that pre-existing, narrower bridge, so the
-            // #1911 "force public, drop on exact-signature collision" handling
-            // is preserved unchanged for external interfaces.
+            // Adding a clause would not help there (no G# `interface` exists for
+            // an external CLR interface to name in G# source), so the #1911
+            // "force public, drop on exact-signature collision" handling is
+            // preserved unchanged for external interfaces.
             bool isExplicitInterfaceImpl = symbol != null && symbol.ExplicitInterfaceImplementations.Length > 0;
 
             // Issue #2010 follow-up: Roslyn's ExplicitInterfaceImplementations
@@ -3438,15 +3424,14 @@ public sealed class CSharpToGSharpTranslator
             // member also satisfies an inherited/re-declared same-signature
             // member on a BASE interface (e.g. `void IBar.M(){}` where
             // `interface IBar : IFoo` and IFoo already declares `M`). The
-            // mangled-name + CLR-MethodImpl scheme below wires exactly ONE
-            // interface slot per mangled method, so it only applies when
-            // there is a SINGLE entry and it is a G# user interface. Any
-            // other shape (mixed user+external, or >1 user entries) falls
-            // back to the pre-#2010 (#1911) named/forced-public path: the
-            // method keeps its plain name, and gsc's ordinary implicit
-            // name+signature interface-dispatch matching then satisfies
-            // every entry uniformly (no explicit MethodImpl row needed) —
-            // lossier (loses C#'s "not publicly callable by name"
+            // clause-based scheme below wires exactly ONE interface slot per
+            // method, so it only applies when there is a SINGLE entry and it
+            // is a G# user interface. Any other shape (mixed user+external, or
+            // >1 user entries) falls back to the pre-#2010 (#1911) named/forced-
+            // public path: the method keeps its plain name with no clause, and
+            // gsc's ordinary implicit name+signature interface-dispatch matching
+            // then satisfies every entry uniformly (no explicit MethodImpl row
+            // needed) — lossier (loses C#'s "not publicly callable by name"
             // semantics) but correct, and consistent with the existing
             // external-interface handling.
             bool isUserInterfaceExplicitImpl = isExplicitInterfaceImpl &&
@@ -3460,9 +3445,9 @@ public sealed class CSharpToGSharpTranslator
                 string multiEntryMessage =
                     $"explicit interface implementation '{FormatExplicitInterfaceName(symbol)}' satisfies more than one " +
                     $"G# user interface member in one C# declaration ({names}), likely via interface inheritance " +
-                    "(a base interface re-declaring the same signature). The issue #2010 mangled-name + CLR MethodImpl " +
-                    "scheme only wires a single interface slot per mangled method, so this falls back to the #1911 " +
-                    "named/forced-public path instead of mangling — the method keeps its plain name and every " +
+                    "(a base interface re-declaring the same signature). The ADR-0148 explicit-interface-clause " +
+                    "scheme only wires a single interface slot per method, so this falls back to the #1911 " +
+                    "named/forced-public path instead of a clause — the method keeps its plain name and every " +
                     "interface's slot is satisfied via ordinary implicit name+signature dispatch (known gap: the " +
                     "method becomes publicly callable by name, unlike real C# explicit-impl semantics).";
                 this.context.Report(new TranslationDiagnostic(
@@ -3477,14 +3462,15 @@ public sealed class CSharpToGSharpTranslator
                     string message =
                         $"explicit interface implementation '{symbol.ContainingType.Name}.{FormatExplicitInterfaceName(symbol)}' " +
                         $"shares its name and signature with '{symbol.ContainingType.Name}.{FormatSiblingName(survivor)}'; " +
-                        "G# has no explicit-interface-implementation surface (ADR-0091), so the two C# methods cannot both " +
-                        "be emitted (would be an exact-signature duplicate, GS0264). This declaration is dropped in favor " +
-                        "of the surviving sibling, which already satisfies the interface by name; if the surviving " +
-                        "sibling's body differs from this dropped declaration's body, any C# call through the " +
-                        "interface-typed reference that previously reached this body now silently observes the surviving " +
-                        "method's body instead (semantic loss, known gap, issue #1911). This diagnostic covers only " +
-                        "EXTERNAL/BCL interfaces — a same-signature collision between two G# user-interface explicit " +
-                        "implementations is fully supported (issue #2010, mangled-name + CLR MethodImpl).";
+                        "G# has no explicit-interface-implementation surface for EXTERNAL interfaces (ADR-0091), so the " +
+                        "two C# methods cannot both be emitted (would be an exact-signature duplicate, GS0264). This " +
+                        "declaration is dropped in favor of the surviving sibling, which already satisfies the interface " +
+                        "by name; if the surviving sibling's body differs from this dropped declaration's body, any C# " +
+                        "call through the interface-typed reference that previously reached this body now silently " +
+                        "observes the surviving method's body instead (semantic loss, known gap, issue #1911). This " +
+                        "diagnostic covers only EXTERNAL/BCL interfaces — a same-signature collision between two G# " +
+                        "user-interface explicit implementations is fully supported (issue #2010/#2362, ADR-0148 " +
+                        "explicit-interface clause).";
                     this.context.Report(new TranslationDiagnostic(
                         nameof(SyntaxKind.MethodDeclaration), message, node.GetLocation(), TranslationSeverity.Unsupported));
 
@@ -3492,8 +3478,12 @@ public sealed class CSharpToGSharpTranslator
                 }
             }
 
-            string mangledExplicitName = isUserInterfaceExplicitImpl
-                ? MangleExplicitInterfaceImplName(symbol.ExplicitInterfaceImplementations[0])
+            // ADR-0148: the resolved explicit-interface qualifier clause type
+            // for a G# user-interface explicit implementation, or null for an
+            // ordinary method / an external-interface explicit implementation
+            // (which keeps the pre-#2010 name-based dispatch, no clause).
+            GTypeReference explicitInterfaceType = isUserInterfaceExplicitImpl
+                ? this.typeMapper.Map(symbol.ExplicitInterfaceImplementations[0].ContainingType, this.context, node.GetLocation())
                 : null;
 
             Receiver receiver = null;
@@ -3629,15 +3619,15 @@ public sealed class CSharpToGSharpTranslator
                 body = null;
             }
 
-            // Issue #2010: a G# user-interface explicit implementation now
-            // emits under its mangled name (`__explicit_<Interface>__<Member>`)
-            // and is bound to its own CLR interface slot via an explicit
-            // MethodImpl row at emit time — it no longer relies on name-based
-            // virtual dispatch, so it can keep C#'s own `private`-equivalent
-            // visibility (Roslyn reports `DeclaredAccessibility` as `Private`:
-            // no accessibility keyword, unreachable through the class type).
-            // This matches C# semantics, where an explicit impl is not
-            // publicly callable by the type name.
+            // Issue #2010/#2362, ADR-0148: a G# user-interface explicit
+            // implementation now emits its own plain-named method carrying an
+            // explicit-interface qualifier clause and is bound to its own CLR
+            // interface slot via an explicit MethodImpl row at emit time — it
+            // no longer relies on name-based virtual dispatch, so it can keep
+            // C#'s own `private`-equivalent visibility (Roslyn reports
+            // `DeclaredAccessibility` as `Private`: no accessibility keyword,
+            // unreachable through the class type). This matches C# semantics,
+            // where an explicit impl is not publicly callable by the type name.
             //
             // Issue #1911: an EXTERNAL (BCL/imported) interface explicit
             // implementation still relies on the pre-existing name-based
@@ -3650,7 +3640,7 @@ public sealed class CSharpToGSharpTranslator
                 : MapVisibility(symbol, this.context, node);
 
             var method = new MethodDeclaration(
-                mangledExplicitName ?? SanitizeIdentifier(node.Identifier.Text),
+                SanitizeIdentifier(node.Identifier.Text),
                 parameters: parameters,
                 returnType: returnType,
                 body: body,
@@ -3662,41 +3652,11 @@ public sealed class CSharpToGSharpTranslator
                 isAsync: symbol != null && symbol.IsAsync,
                 attributes: this.MapAttributes(node.AttributeLists),
                 expressionBody: arrowBody,
+                explicitInterfaceType: explicitInterfaceType,
                 isRefReturn: symbol != null && symbol.ReturnsByRef);
 
             return (method, isStatic);
         }
-
-        /// <summary>
-        /// Issue #2010: mangles an explicit interface implementation's name
-        /// into the reserved <c>__explicit_&lt;Interface&gt;__&lt;Member&gt;</c>
-        /// convention gsc's binder recognizes (see
-        /// <c>DeclarationBinder.TryParseExplicitInterfaceImplName</c>).
-        ///
-        /// Issue #2362: generalized from <c>IMethodSymbol</c> to <c>ISymbol</c>
-        /// so this same mangling logic is shared, verbatim, between explicit
-        /// interface METHODS (<see cref="TranslateMethod"/>, which resolves
-        /// <c>symbol.ExplicitInterfaceImplementations[0]</c> itself and passes
-        /// it in directly) and explicit interface PROPERTIES/indexers
-        /// (<see cref="TranslateProperty"/>/<see cref="TranslateIndexer"/>,
-        /// which do the same against <c>IPropertySymbol.ExplicitInterfaceImplementations</c>).
-        /// Only <c>ContainingType</c>/<c>Name</c> are read, both declared on
-        /// <c>ISymbol</c> itself, so no method-specific member is needed.
-        /// </summary>
-        /// <param name="explicitMember">
-        /// The single resolved explicit-interface-implementation target (e.g.
-        /// <c>symbol.ExplicitInterfaceImplementations[0]</c>). Callers must
-        /// only invoke this when there is exactly one such entry.
-        /// </param>
-        private static string MangleExplicitInterfaceImplName(ISymbol explicitMember)
-        {
-            string interfaceName = SanitizeIdentifier(QualifyInterfaceName(explicitMember.ContainingType));
-            string memberName = SanitizeIdentifier(explicitMember.Name);
-            return $"__explicit_{interfaceName}__{memberName}";
-        }
-
-        private static string QualifyInterfaceName(INamedTypeSymbol interfaceType)
-            => interfaceType.ToDisplayString(QualifiedInterfaceNameFormat).Replace('.', '_');
 
         /// <summary>
         /// Issue #1911: finds the sibling method on the same containing type that
@@ -3708,8 +3668,9 @@ public sealed class CSharpToGSharpTranslator
         /// same-signature sibling, or it is the earliest-declared one among a set
         /// of same-signature explicit implementations). Only invoked for an
         /// EXTERNAL (BCL/imported) interface explicit implementation — a G#
-        /// user-interface explicit implementation (issue #2010) is mangled to a
-        /// unique name and never collides in the first place.
+        /// user-interface explicit implementation (issue #2010/#2362, ADR-0148)
+        /// carries its own explicit-interface qualifier clause and never
+        /// collides on name in the first place.
         /// </summary>
         /// <remarks>
         /// A plain public method always wins over any explicit implementation
@@ -4187,14 +4148,14 @@ public sealed class CSharpToGSharpTranslator
         {
             var symbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
 
-            // Issue #2362: explicit interface PROPERTY implementations get the
-            // exact same treatment as explicit interface METHODS (issues
+            // Issue #2362, ADR-0148: explicit interface PROPERTY implementations
+            // get the exact same treatment as explicit interface METHODS (issues
             // #1911/#2010/#2181) — see the extensive comment on this same
             // decision tree in TranslateMethod, which this mirrors verbatim
-            // (mangled-name + CLR MethodImpl bridge for a G# USER interface;
-            // forced-public collision-drop fallback for an EXTERNAL/BCL
-            // interface). The property-specific difference: there is no
-            // covariant-return "bridge" mechanism for properties (issue #985
+            // (explicit-interface qualifier clause + CLR MethodImpl bridge for a
+            // G# USER interface; forced-public collision-drop fallback for an
+            // EXTERNAL/BCL interface). The property-specific difference: there is
+            // no covariant-return "bridge" mechanism for properties (issue #985
             // has no property analogue), so collision detection never exempts
             // a type mismatch — see FindPriorCollidingSiblingProperty.
             bool isExplicitInterfacePropertyImpl = symbol != null && symbol.ExplicitInterfaceImplementations.Length > 0;
@@ -4210,9 +4171,9 @@ public sealed class CSharpToGSharpTranslator
                 string multiEntryMessage =
                     $"explicit interface property implementation '{FormatExplicitInterfacePropertyName(symbol)}' satisfies " +
                     $"more than one G# user interface member in one C# declaration ({names}), likely via interface " +
-                    "inheritance (a base interface re-declaring the same property). The issue #2010/#2362 mangled-name + " +
-                    "CLR MethodImpl scheme only wires a single interface slot per mangled property, so this falls back to " +
-                    "the #1911-style named/forced-public path instead of mangling — the property keeps its plain name " +
+                    "inheritance (a base interface re-declaring the same property). The ADR-0148 explicit-interface-clause " +
+                    "scheme only wires a single interface slot per property, so this falls back to " +
+                    "the #1911-style named/forced-public path instead of a clause — the property keeps its plain name " +
                     "and every interface's slot is satisfied via ordinary implicit name+signature dispatch (known gap: " +
                     "the property becomes publicly callable by name, unlike real C# explicit-impl semantics).";
                 this.context.Report(new TranslationDiagnostic(
@@ -4227,14 +4188,15 @@ public sealed class CSharpToGSharpTranslator
                     string message =
                         $"explicit interface property implementation '{symbol.ContainingType.Name}.{FormatExplicitInterfacePropertyName(symbol)}' " +
                         $"shares its name and signature with '{symbol.ContainingType.Name}.{FormatSiblingPropertyName(propertySurvivor)}'; " +
-                        "G# has no explicit-interface-implementation surface (ADR-0091), so the two C# properties cannot both " +
-                        "be emitted (would be an exact-signature duplicate, GS0102). This declaration is dropped in favor " +
-                        "of the surviving sibling, which already satisfies the interface by name; if the surviving " +
-                        "sibling's accessors differ from this dropped declaration's, any C# access through the " +
-                        "interface-typed reference that previously reached this property now silently observes the " +
-                        "surviving property instead (semantic loss, known gap, issue #1911 analogue). This diagnostic " +
-                        "covers only EXTERNAL/BCL interfaces — a same-signature collision between two G# user-interface " +
-                        "explicit property implementations is fully supported (issue #2362, mangled-name + CLR MethodImpl).";
+                        "G# has no explicit-interface-implementation surface for EXTERNAL interfaces (ADR-0091), so the " +
+                        "two C# properties cannot both be emitted (would be an exact-signature duplicate, GS0102). This " +
+                        "declaration is dropped in favor of the surviving sibling, which already satisfies the interface " +
+                        "by name; if the surviving sibling's accessors differ from this dropped declaration's, any C# " +
+                        "access through the interface-typed reference that previously reached this property now " +
+                        "silently observes the surviving property instead (semantic loss, known gap, issue #1911 " +
+                        "analogue). This diagnostic covers only EXTERNAL/BCL interfaces — a same-signature collision " +
+                        "between two G# user-interface explicit property implementations is fully supported (issue " +
+                        "#2362, ADR-0148 explicit-interface clause).";
                     this.context.Report(new TranslationDiagnostic(
                         nameof(SyntaxKind.PropertyDeclaration), message, node.GetLocation(), TranslationSeverity.Unsupported));
 
@@ -4242,8 +4204,12 @@ public sealed class CSharpToGSharpTranslator
                 }
             }
 
-            string mangledExplicitPropertyName = isUserInterfaceExplicitPropertyImpl
-                ? MangleExplicitInterfaceImplName(symbol.ExplicitInterfaceImplementations[0])
+            // ADR-0148: the resolved explicit-interface qualifier clause type
+            // for a G# user-interface explicit property implementation, or null
+            // otherwise (ordinary property, or external-interface explicit
+            // implementation, which keeps the pre-#2010 name-based dispatch).
+            GTypeReference explicitInterfacePropertyType = isUserInterfaceExplicitPropertyImpl
+                ? this.typeMapper.Map(symbol.ExplicitInterfaceImplementations[0].ContainingType, this.context, node.GetLocation())
                 : null;
 
             bool isStatic = symbol != null && symbol.IsStatic;
@@ -4306,28 +4272,30 @@ public sealed class CSharpToGSharpTranslator
             // members carry no `open` modifier (ADR-0115 §B.6).
             bool isOpen = this.IsMemberEmittedOpen(symbol, isOverride);
 
-            // Issue #2362: see the matching visibility comment in TranslateMethod
-            // for the full rationale — a G# user-interface explicit property
-            // implementation (mangled name + CLR MethodImpl) keeps C#'s own
-            // `private`-equivalent visibility (Roslyn reports `Private`, mapped
-            // straight through by MapVisibility); an EXTERNAL/BCL interface
-            // explicit property implementation still relies on name-based
-            // dispatch and must stay forced-public (`Visibility.Default`, which
-            // for a class-member position IS public per ADR-0115 §B.10) or
-            // ilverify would reject the missing interface method.
+            // Issue #2362, ADR-0148: see the matching visibility comment in
+            // TranslateMethod for the full rationale — a G# user-interface
+            // explicit property implementation (explicit-interface clause + CLR
+            // MethodImpl) keeps C#'s own `private`-equivalent visibility
+            // (Roslyn reports `Private`, mapped straight through by
+            // MapVisibility); an EXTERNAL/BCL interface explicit property
+            // implementation still relies on name-based dispatch and must stay
+            // forced-public (`Visibility.Default`, which for a class-member
+            // position IS public per ADR-0115 §B.10) or ilverify would reject
+            // the missing interface method.
             Visibility explicitInterfacePropertyVisibility = isExplicitInterfacePropertyImpl && !isUserInterfaceExplicitPropertyImpl
                 ? Visibility.Default
                 : MapVisibility(symbol, this.context, node);
 
             var property = new PropertyDeclaration(
-                mangledExplicitPropertyName ?? SanitizeIdentifier(node.Identifier.Text),
+                SanitizeIdentifier(node.Identifier.Text),
                 type,
                 accessors: accessors,
                 visibility: explicitInterfacePropertyVisibility,
                 isOpen: isOpen,
                 isOverride: isOverride,
                 attributes: this.MapAttributes(node.AttributeLists),
-                expressionBody: arrowBody);
+                expressionBody: arrowBody,
+                explicitInterfaceType: explicitInterfacePropertyType);
 
             return (property, isStatic, backingField);
         }
@@ -4426,17 +4394,24 @@ public sealed class CSharpToGSharpTranslator
             var symbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
             bool isStatic = symbol != null && symbol.IsStatic;
 
-            // Issue #2362: unlike an ordinary property or a method, a G#
-            // indexer's identity is structurally fixed to `this[...]`/CLR
-            // `Item` (PropertyDeclarationSyntax.IsIndexer is purely
-            // `ThisKeyword != null` — see ADR-0118) — it can never carry a
-            // distinct mangled name, so the #2010/#2362 mangled-name + CLR
-            // MethodImpl bridge is not possible for ANY explicit interface
-            // indexer implementation, user or external alike. Every explicit
-            // indexer implementation instead uses the same collision-drop
-            // fallback the #1911 method/property conventions use for
-            // EXTERNAL interfaces only — here applied uniformly, and
-            // reported as a known, permanent (not merely deferred) gap.
+            // Issue #2362, ADR-0148: unlike an ordinary property or a method, a
+            // G# indexer implementing an explicit interface member cannot use
+            // the ADR-0148 explicit-interface qualifier clause today — not
+            // because indexers can't syntactically carry the clause (the AST/
+            // parser/printer support it uniformly via
+            // <see cref="PropertyDeclaration.ExplicitInterfaceType"/>), but
+            // because G# interfaces cannot declare an indexer MEMBER at all
+            // (a separate, pre-existing gsc limitation — DeclarationBinder
+            // unconditionally rejects any `this[...]` property inside an
+            // `interface` block, GS0371). With no interface-side indexer
+            // member to ever resolve a clause against, emitting one here would
+            // only trade today's semantic-loss fallback for a guaranteed
+            // GS0490 ("no matching member") compile failure. Every explicit
+            // indexer implementation therefore still uses the same
+            // collision-drop fallback the #1911 method/property conventions
+            // use for EXTERNAL interfaces only — here applied uniformly, and
+            // reported as a known, permanent (pending separate interface-
+            // indexer support) gap.
             bool isExplicitInterfaceIndexerImpl = symbol != null && symbol.ExplicitInterfaceImplementations.Length > 0;
             if (isExplicitInterfaceIndexerImpl)
             {
@@ -4446,13 +4421,14 @@ public sealed class CSharpToGSharpTranslator
                     string message =
                         $"explicit interface indexer implementation '{symbol.ContainingType.Name}.{FormatExplicitInterfacePropertyName(symbol)}' " +
                         $"shares its parameter shape with '{symbol.ContainingType.Name}.{FormatSiblingPropertyName(indexerSurvivor)}'; " +
-                        "G# indexer identity is structurally fixed to `this[...]` (ADR-0118) with no room for a distinct " +
-                        "mangled name (unlike issue #2010/#2362's method/property bridge), so the two C# indexers cannot " +
-                        "both be emitted (would be an exact-signature duplicate, GS0102). This declaration is dropped in " +
-                        "favor of the surviving sibling, which already satisfies the interface by parameter shape; if the " +
-                        "surviving sibling's accessors differ from this dropped declaration's, any C# access through the " +
-                        "interface-typed reference that previously reached this indexer now silently observes the " +
-                        "surviving indexer instead (semantic loss, known permanent gap — indexers cannot be mangled).";
+                        "G# interfaces cannot declare indexer members (a separate, pre-existing gsc limitation), so the " +
+                        "ADR-0148 explicit-interface clause has no interface-side member to resolve against for an " +
+                        "indexer, and the two C# indexers cannot both be emitted (would be an exact-signature " +
+                        "duplicate, GS0102). This declaration is dropped in favor of the surviving sibling, which " +
+                        "already satisfies the interface by parameter shape; if the surviving sibling's accessors " +
+                        "differ from this dropped declaration's, any C# access through the interface-typed reference " +
+                        "that previously reached this indexer now silently observes the surviving indexer instead " +
+                        "(semantic loss, known permanent gap pending interface-indexer support).";
                     this.context.Report(new TranslationDiagnostic(
                         nameof(SyntaxKind.IndexerDeclaration), message, node.GetLocation(), TranslationSeverity.Unsupported));
 
@@ -4496,9 +4472,10 @@ public sealed class CSharpToGSharpTranslator
             // or has no colliding sibling at all) still needs the same forced-
             // public visibility the #1911 external-interface method/property
             // bridge uses — its slot is filled purely by name+parameter-shape
-            // dispatch (there being no mangled-name alternative), which
-            // requires public visibility or ilverify rejects the missing
-            // interface method.
+            // dispatch (there being no explicit-interface-clause alternative
+            // for indexers today, per the comment above), which requires
+            // public visibility or ilverify rejects the missing interface
+            // method.
             Visibility indexerVisibility = isExplicitInterfaceIndexerImpl
                 ? Visibility.Default
                 : MapVisibility(symbol, this.context, node);
