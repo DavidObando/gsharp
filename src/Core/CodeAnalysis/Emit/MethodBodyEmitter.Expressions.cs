@@ -643,10 +643,52 @@ internal sealed partial class MethodBodyEmitter
             case decimal m:
                 this.EmitDecimalLiteral(m);
                 break;
+            case MethodInfo method:
+                // Issue #2373: expression-tree lowering (ExpressionTreeLowerer)
+                // passes a CLR operator/user MethodInfo as a literal-typed
+                // argument to Expression factories (Expression.Equal(l, r,
+                // liftToNull, method), Expression.Add(l, r, method), the
+                // string-concat Add(l, r, method) overload, ...). A MethodInfo
+                // cannot be embedded as a metadata constant directly; rebuild
+                // it at run time the same way the C# compiler does: `ldtoken
+                // method [, ldtoken declaringType] ; call
+                // MethodBase.GetMethodFromHandle(...) ; castclass MethodInfo`.
+                this.EmitMethodInfoLiteral(method);
+                break;
             default:
                 throw new NotSupportedException(
                     $"Literal of CLR type '{literal.Value?.GetType()}' is not yet supported.");
         }
+    }
+
+    private void EmitMethodInfoLiteral(MethodInfo method)
+    {
+        this.il.OpCode(ILOpCode.Ldtoken);
+        this.il.Token(this.outer.GetMethodEntityHandle(method));
+
+        // The CLR requires the 2-arg GetMethodFromHandle(RuntimeMethodHandle,
+        // RuntimeTypeHandle) overload whenever the declaring type is a
+        // generic instantiation (e.g. a user operator on `Money<Currency>`);
+        // the 1-arg overload throws ArgumentException at run time for those.
+        // A generic-type-DEFINITION declaring type never occurs here because
+        // operator methods are only ever reached through a closed (fully
+        // substituted) receiver type.
+        if (method.DeclaringType is { IsGenericType: true } declaringType)
+        {
+            this.il.OpCode(ILOpCode.Ldtoken);
+            this.il.Token(this.outer.GetTypeReference(declaringType));
+            this.il.Call(this.outer.wellKnown.GetMethodFromHandleWithDeclaringTypeReference());
+        }
+        else
+        {
+            this.il.Call(this.outer.wellKnown.GetMethodFromHandleReference());
+        }
+
+        // GetMethodFromHandle returns MethodBase; every caller of this helper
+        // needs the more specific MethodInfo (constructors never reach here —
+        // Stream C only resolves public static operator methods).
+        this.il.OpCode(ILOpCode.Castclass);
+        this.il.Token(this.outer.GetTypeReference(typeof(MethodInfo)));
     }
 
     // ADR-0044 decimal literal lowering. IL has no `ldc.decimal`, so each
