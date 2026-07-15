@@ -1251,6 +1251,10 @@ public sealed class Binder
                     // 'ref'-arg unassigned-before-read checks.
                     RefKindDefiniteAssignmentAnalyzer.Analyze(lowered, function, binder.Diagnostics);
 
+                    // Issue #2350: by-ref-like locals are only legal in an
+                    // async function body when never live across an `await`.
+                    RefStructAsyncLivenessAnalyzer.Analyze(lowered, function, binder.Diagnostics);
+
                     return (lowered, binder.Diagnostics.ToImmutableArray());
                 }));
 
@@ -1295,6 +1299,10 @@ public sealed class Binder
                     {
                         binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
                     }
+
+                    // Issue #2350: by-ref-like locals are only legal in an
+                    // async function body when never live across an `await`.
+                    RefStructAsyncLivenessAnalyzer.Analyze(lowered, method, binder.Diagnostics);
 
                     return (lowered, binder.Diagnostics.ToImmutableArray());
                 }));
@@ -1780,6 +1788,10 @@ public sealed class Binder
                 binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
             }
 
+            // Issue #2350: by-ref-like locals are only legal in an async
+            // function body when never live across an `await`.
+            RefStructAsyncLivenessAnalyzer.Analyze(lowered, method, binder.Diagnostics);
+
             return (lowered, binder.Diagnostics.ToImmutableArray());
         }));
 
@@ -1823,6 +1835,10 @@ public sealed class Binder
             {
                 binder.Diagnostics.ReportAllPathsMustReturn(bodySyntax.OpenBraceToken.Location);
             }
+
+            // Issue #2350: by-ref-like locals are only legal in an async
+            // function body when never live across an `await`.
+            RefStructAsyncLivenessAnalyzer.Analyze(lowered, accessor, binder.Diagnostics);
 
             return (lowered, binder.Diagnostics.ToImmutableArray());
         }));
@@ -1869,6 +1885,10 @@ public sealed class Binder
                 binder.Diagnostics.ReportAllPathsMustReturn(allPathsReturnLocation.Value);
             }
 
+            // Issue #2350: by-ref-like locals are only legal in an async
+            // function body when never live across an `await`.
+            RefStructAsyncLivenessAnalyzer.Analyze(lowered, member, binder.Diagnostics);
+
             return (lowered, binder.Diagnostics.ToImmutableArray());
         }));
 
@@ -1909,6 +1929,10 @@ public sealed class Binder
             {
                 binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
             }
+
+            // Issue #2350: by-ref-like locals are only legal in an async
+            // function body when never live across an `await`.
+            RefStructAsyncLivenessAnalyzer.Analyze(lowered, method, binder.Diagnostics);
 
             return (lowered, binder.Diagnostics.ToImmutableArray());
         }));
