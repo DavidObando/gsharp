@@ -1593,6 +1593,27 @@ internal sealed class ReflectionMetadataEmitter
                 var removeHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                 MethodDefinitionHandle? raiseHandle = ev.RaiseMethodSymbol != null ? MetadataTokens.MethodDefinitionHandle(methodRow++) : null;
                 this.cache.EventAccessorHandles[ev] = (addHandle, removeHandle, raiseHandle);
+
+                // ADR-0149: register the interface event's own add/remove/
+                // raise FunctionSymbols against their planned MethodDef rows,
+                // mirroring the property accessor registration above — this
+                // is what lets EmitExplicitInterfaceEventMethodImpls resolve
+                // the interface-side MethodImpl target token for an explicit
+                // event implementation (`event (IFoo) Changed T`).
+                if (ev.AddMethodSymbol != null)
+                {
+                    this.cache.MethodHandles[ev.AddMethodSymbol] = addHandle;
+                }
+
+                if (ev.RemoveMethodSymbol != null)
+                {
+                    this.cache.MethodHandles[ev.RemoveMethodSymbol] = removeHandle;
+                }
+
+                if (ev.RaiseMethodSymbol != null && raiseHandle.HasValue)
+                {
+                    this.cache.MethodHandles[ev.RaiseMethodSymbol] = raiseHandle.Value;
+                }
             }
 
             // ADR-0089 / issue #1030: plan the .cctor row for an interface that
@@ -2837,6 +2858,11 @@ internal sealed class ReflectionMetadataEmitter
             // Issue #248: emit abstract accessor MethodDefs + PropertyDef rows for interface properties.
             this.memberDefEmitter.EmitInterfacePropertyAccessors(i);
 
+            // ADR-0149 (issue #944 follow-up): mirror EmitDefaultMemberAttributeIfIndexer
+            // (struct/class-side) for an interface that declares its own
+            // indexer contract.
+            this.EmitDefaultMemberAttributeIfIndexer(i);
+
             // ADR-0052: emit abstract accessor MethodDefs + EventDef rows for interface events.
             this.memberDefEmitter.EmitInterfaceEventAccessors(i);
 
@@ -3017,6 +3043,10 @@ internal sealed class ReflectionMetadataEmitter
             // Issue #2362: emit MethodImpl rows for mangled-name explicit
             // interface property implementations (accessor methods).
             this.EmitExplicitInterfacePropertyMethodImpls(c);
+
+            // ADR-0149: emit MethodImpl rows for explicit-interface-clause
+            // event implementations (add/remove/raise accessors).
+            this.EmitExplicitInterfaceEventMethodImpls(c);
         }
 
         foreach (var c in topClasses)
@@ -3115,6 +3145,10 @@ internal sealed class ReflectionMetadataEmitter
             // Issue #2362: emit MethodImpl rows for mangled-name explicit
             // interface property implementations (accessor methods).
             this.EmitExplicitInterfacePropertyMethodImpls(s);
+
+            // ADR-0149: emit MethodImpl rows for explicit-interface-clause
+            // event implementations (add/remove/raise accessors).
+            this.EmitExplicitInterfaceEventMethodImpls(s);
         }
 
         foreach (var s in topStructs)
@@ -5132,9 +5166,22 @@ internal sealed class ReflectionMetadataEmitter
                 : function.Name;
 
         // The synthesized entry point must remain Public so the runtime can find it.
+        // ADR-0149: an explicit-interface qualifier clause member is ALWAYS
+        // private in CLR metadata, exactly like C#'s explicit interface
+        // implementations (which don't even accept an accessibility
+        // modifier in source — CS0106) — it is reachable only through
+        // interface dispatch (via the MethodImpl row bound elsewhere), never
+        // by an ordinary same-type call or external caller. This overrides
+        // whatever accessibility the member's declaration happens to carry
+        // (defaulting to Public like any other member with no modifier)
+        // and applies uniformly to methods and to property/event accessor
+        // FunctionSymbols reached through this same shared emission path.
+        var effectiveAccessibility = function.ExplicitInterfaceClauseTarget != null
+            ? Accessibility.Private
+            : function.Accessibility;
         var visibility = isEntryPoint && function.Declaration is null
             ? MethodAttributes.Public
-            : AccessibilityMap.ToMethodVisibility(function.Accessibility, AccessibilityMap.IsTopLevelProgramMember(function));
+            : AccessibilityMap.ToMethodVisibility(effectiveAccessibility, AccessibilityMap.IsTopLevelProgramMember(function));
 
         // Instance methods omit MethodAttributes.Static. Phase 3.B.3 sub-step 3
         // models open/override per ADR-0017 for classes:
@@ -8166,6 +8213,50 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         if (!this.cache.StructTypeDefs.TryGetValue(structSym, out var typeDefHandle))
+        {
+            return;
+        }
+
+        this.customAttrEncoder.EmitStringAttribute(
+            typeDefHandle,
+            "System.Reflection.DefaultMemberAttribute",
+            typeof(System.Reflection.DefaultMemberAttribute),
+            "Item");
+    }
+
+    /// <summary>
+    /// ADR-0149 (issue #944 follow-up): interface-side counterpart of
+    /// <see cref="EmitDefaultMemberAttributeIfIndexer(StructSymbol)"/> — an
+    /// interface that declares its own indexer contract (<c>prop this[…] T</c>)
+    /// gets the same <see cref="System.Reflection.DefaultMemberAttribute"/>
+    /// on its TypeDef, so reflection-based indexed access
+    /// (<c>Type.GetProperty("Item")</c> / <c>PropertyInfo.GetValue(obj, args)</c>)
+    /// and the C#-style <c>obj[i]</c> syntax work identically whether the
+    /// static type is the interface or a concrete implementer.
+    /// </summary>
+    private void EmitDefaultMemberAttributeIfIndexer(InterfaceSymbol ifaceSym)
+    {
+        if (ifaceSym.Properties.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        var hasIndexer = false;
+        foreach (var prop in ifaceSym.Properties)
+        {
+            if (prop.IsIndexer)
+            {
+                hasIndexer = true;
+                break;
+            }
+        }
+
+        if (!hasIndexer)
+        {
+            return;
+        }
+
+        if (!this.cache.InterfaceTypeDefs.TryGetValue(ifaceSym, out var typeDefHandle))
         {
             return;
         }
@@ -12245,6 +12336,104 @@ internal sealed class ReflectionMetadataEmitter
                     if (setterDecl.HasValue)
                     {
                         this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Setter.Value, setterDecl.Value);
+                    }
+                }
+
+                break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// ADR-0149: emit <c>MethodImpl</c> rows for explicit-interface-clause
+    /// EVENT implementations (<c>event (IFoo) Changed T</c>) — the event-level
+    /// counterpart of <see cref="EmitExplicitInterfacePropertyMethodImpls"/>,
+    /// generalizing the #2362 explicit-implementation convention to events
+    /// for the first time. An event whose
+    /// <see cref="EventSymbol.ExplicitInterfaceMember"/> is set explicitly
+    /// implements one specific in-compilation interface event; its add/
+    /// remove (and, if present, raise) accessors are bridged into that
+    /// interface's abstract slots via one <c>MethodImpl</c> row per accessor,
+    /// exactly mirroring the property function's generic-aware token
+    /// resolution.
+    /// </summary>
+    /// <param name="structSymbol">The implementing class or struct.</param>
+    private void EmitExplicitInterfaceEventMethodImpls(StructSymbol structSymbol)
+    {
+        if (structSymbol == null || structSymbol.Events.IsDefaultOrEmpty || structSymbol.Interfaces.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        if (!this.cache.StructTypeDefs.TryGetValue(structSymbol, out var implTypeDef))
+        {
+            return;
+        }
+
+        foreach (var ev in structSymbol.Events)
+        {
+            var ifaceMember = ev.ExplicitInterfaceMember;
+            if (ifaceMember == null)
+            {
+                continue;
+            }
+
+            if (!this.cache.EventAccessorHandles.TryGetValue(ev, out var implAccessors))
+            {
+                continue;
+            }
+
+            foreach (var iface in structSymbol.Interfaces)
+            {
+                // ADR-0149 (mirrors #2362's property resolution): interface
+                // Events, like Properties, are never substituted onto a
+                // constructed generic instance (InterfaceSymbol.TryResolveMembers),
+                // so ExplicitInterfaceMember is always linked against the OPEN
+                // definition's event — match against `defIface.Events` here.
+                var defIface = iface.Definition ?? iface;
+                if (defIface.Events.IsDefaultOrEmpty || !defIface.Events.Contains(ifaceMember))
+                {
+                    continue;
+                }
+
+                var isGenericIface = IsUserGenericInterfaceReference(iface);
+
+                if (ifaceMember.AddMethodSymbol != null)
+                {
+                    EntityHandle? addDecl = isGenericIface
+                        ? this.ResolveUserInterfaceInstanceMethodToken(iface, ifaceMember.AddMethodSymbol)
+                        : this.cache.MethodHandles.TryGetValue(ifaceMember.AddMethodSymbol, out var addDefHandle)
+                            ? addDefHandle
+                            : (EntityHandle?)null;
+                    if (addDecl.HasValue)
+                    {
+                        this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Add, addDecl.Value);
+                    }
+                }
+
+                if (ifaceMember.RemoveMethodSymbol != null)
+                {
+                    EntityHandle? removeDecl = isGenericIface
+                        ? this.ResolveUserInterfaceInstanceMethodToken(iface, ifaceMember.RemoveMethodSymbol)
+                        : this.cache.MethodHandles.TryGetValue(ifaceMember.RemoveMethodSymbol, out var removeDefHandle)
+                            ? removeDefHandle
+                            : (EntityHandle?)null;
+                    if (removeDecl.HasValue)
+                    {
+                        this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Remove, removeDecl.Value);
+                    }
+                }
+
+                if (ifaceMember.RaiseMethodSymbol != null && implAccessors.Raise.HasValue)
+                {
+                    EntityHandle? raiseDecl = isGenericIface
+                        ? this.ResolveUserInterfaceInstanceMethodToken(iface, ifaceMember.RaiseMethodSymbol)
+                        : this.cache.MethodHandles.TryGetValue(ifaceMember.RaiseMethodSymbol, out var raiseDefHandle)
+                            ? raiseDefHandle
+                            : (EntityHandle?)null;
+                    if (raiseDecl.HasValue)
+                    {
+                        this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Raise.Value, raiseDecl.Value);
                     }
                 }
 

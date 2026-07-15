@@ -455,13 +455,23 @@ public sealed class EventDeclaration : GMember
     /// <param name="attributes">The event attributes.</param>
     /// <param name="addBody">The explicit <c>add</c> accessor body, or <see langword="null"/> for a field-like event.</param>
     /// <param name="removeBody">The explicit <c>remove</c> accessor body, or <see langword="null"/> for a field-like event.</param>
+    /// <param name="explicitInterfaceType">
+    /// ADR-0149: the resolved explicit-interface qualifier clause type, or
+    /// <see langword="null"/> for an ordinary event. When set, the event
+    /// renders as <c>event (InterfaceType) Name T</c> — see
+    /// <c>GSharpPrinter.RenderEvent</c>. C# only allows an explicit interface
+    /// event implementation to use the custom add/remove accessor form (never
+    /// field-like), so this is only ever set alongside non-null
+    /// <paramref name="addBody"/>/<paramref name="removeBody"/>.
+    /// </param>
     public EventDeclaration(
         string name,
         GTypeReference type,
         Visibility visibility = Visibility.Default,
         IReadOnlyList<AttributeUse> attributes = null,
         BlockStatement addBody = null,
-        BlockStatement removeBody = null)
+        BlockStatement removeBody = null,
+        GTypeReference explicitInterfaceType = null)
     {
         Name = name;
         Type = type;
@@ -469,6 +479,7 @@ public sealed class EventDeclaration : GMember
         Attributes = attributes ?? new List<AttributeUse>();
         AddBody = addBody;
         RemoveBody = removeBody;
+        ExplicitInterfaceType = explicitInterfaceType;
     }
 
     /// <summary>Gets the event name.</summary>
@@ -497,4 +508,10 @@ public sealed class EventDeclaration : GMember
 
     /// <summary>Gets a value indicating whether this event has explicit add/remove accessor bodies.</summary>
     public bool HasExplicitAccessors => AddBody != null || RemoveBody != null;
+
+    /// <summary>
+    /// Gets the resolved explicit-interface qualifier clause type (ADR-0149),
+    /// or <see langword="null"/> for an ordinary event.
+    /// </summary>
+    public GTypeReference ExplicitInterfaceType { get; }
 }

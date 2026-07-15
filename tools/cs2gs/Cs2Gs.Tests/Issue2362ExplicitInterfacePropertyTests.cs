@@ -42,14 +42,20 @@ namespace Cs2Gs.Tests;
 /// exists there to name in a clause, exactly like the method case).
 /// </para>
 /// <para>
-/// Indexers cannot use the clause today — not because of a syntax
-/// limitation (the AST/parser/printer support the clause uniformly for
-/// properties and indexers alike), but because G# interfaces cannot declare
-/// an indexer MEMBER at all (a separate, pre-existing gsc limitation), so
-/// there is never an interface-side indexer member to resolve a clause
-/// against. Every explicit indexer implementation, user or external, still
-/// uses the collision-drop fallback; see
-/// <see cref="ExplicitIndexerImplementation_CollidesWithPublicIndexer_DropsWithDiagnostic"/>.
+/// Indexers now use the SAME clause-based convention as properties: a G#
+/// USER interface's explicit indexer implementation is emitted under its own
+/// plain source form (<c>this[...]</c>) carrying a <c>(InterfaceType)</c>
+/// clause immediately after the <c>prop</c> keyword, since G# interfaces can
+/// now declare an indexer member (<c>prop this[...] T</c> is no longer
+/// rejected inside an <c>interface</c> block — a prerequisite gsc binder fix
+/// landed alongside this translator change). An EXTERNAL/BCL interface's
+/// explicit indexer implementation still uses the pre-existing #1911-style
+/// forced-public, collision-drop-with-diagnostic fallback (no G# interface
+/// exists there to name in a clause), exactly like properties; see
+/// <see cref="ExternalInterfaceExplicitPropertyImplementation_CollidesWithPublicProperty_DropsWithDiagnostic"/>
+/// for the property-level equivalent and
+/// <see cref="ExplicitIndexerImplementation_UserInterface_CollidesWithPublicIndexer_BothSurviveWithDistinctClauses"/>
+/// below for the indexer-level clause-based coexistence case.
 /// </para>
 /// </summary>
 public class Issue2362ExplicitInterfacePropertyTests
@@ -395,7 +401,7 @@ namespace Corpus.Issue2362
     /// external, since the clause is never resolvable for them.
     /// </summary>
     [Fact]
-    public void ExplicitIndexerImplementation_CollidesWithPublicIndexer_DropsWithDiagnostic()
+    public void ExplicitIndexerImplementation_UserInterface_CollidesWithPublicIndexer_BothSurviveWithDistinctClauses()
     {
         (CompilationUnit unit, TranslationContext context) = Translate(@"
 namespace Corpus.Issue2362
@@ -412,23 +418,36 @@ namespace Corpus.Issue2362
         string IIndexed.this[int i] => ""explicit-"" + i;
     }
 }");
+        string printed = GSharpPrinter.Print(unit);
+
         TypeDeclaration container = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Container");
         var indexers = container.Members.OfType<PropertyDeclaration>().Where(p => p.IsIndexer).ToList();
 
-        // Only the surviving (public) indexer remains — the explicit one was
-        // dropped.
-        Assert.Single(indexers);
+        // Both the public and the explicit indexer survive — the G# USER
+        // interface IIndexed lets the explicit one resolve via the
+        // `(IIndexed)` clause instead of colliding/dropping.
+        Assert.Equal(2, indexers.Count);
+        Assert.Contains(indexers, p => p.ExplicitInterfaceType == null && p.Visibility == Visibility.Default);
         Assert.Contains(
+            indexers,
+            p => p.ExplicitInterfaceType is NamedTypeReference n
+                && n.Name == "IIndexed"
+                && p.Visibility == Visibility.Private);
+
+        Assert.DoesNotContain(
             context.Diagnostics,
-            d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("indexer", StringComparison.OrdinalIgnoreCase));
+            d => d.Severity == TranslationSeverity.Unsupported);
+        AssertRoundTripParses(printed);
     }
 
     /// <summary>
     /// An explicit interface indexer implementation with NO colliding
-    /// sibling survives (forced public, since the clause cannot be used).
+    /// sibling still resolves via the clause against the G# USER interface
+    /// (rather than the older forced-public/no-clause fallback, which only
+    /// applies to EXTERNAL/BCL interfaces).
     /// </summary>
     [Fact]
-    public void ExplicitIndexerImplementation_NoCollision_SurvivesForcedPublic()
+    public void ExplicitIndexerImplementation_UserInterface_NoCollision_ClauseQualifiedAndPrivate()
     {
         (CompilationUnit unit, TranslationContext context) = Translate(@"
 namespace Corpus.Issue2362
@@ -446,9 +465,48 @@ namespace Corpus.Issue2362
         TypeDeclaration container = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Container");
         PropertyDeclaration indexer = container.Members.OfType<PropertyDeclaration>().Single(p => p.IsIndexer);
 
-        Assert.Equal(Visibility.Default, indexer.Visibility);
-        Assert.Null(indexer.ExplicitInterfaceType);
+        Assert.Equal(Visibility.Private, indexer.Visibility);
+        Assert.True(indexer.ExplicitInterfaceType is NamedTypeReference n && n.Name == "IIndexed");
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+    }
+
+    /// <summary>
+    /// An EXTERNAL/BCL interface has no G# declaration to name in a clause,
+    /// so its explicit indexer implementation still uses the pre-existing
+    /// #1911-style collision-drop-with-diagnostic fallback — exactly
+    /// mirroring <see cref="ExternalInterfaceExplicitPropertyImplementation_CollidesWithPublicProperty_DropsWithDiagnostic"/>.
+    /// <see cref="System.ComponentModel.IDataErrorInfo"/> conveniently
+    /// declares both a property (<c>Error</c>) and an indexer
+    /// (<c>this[string columnName]</c>), letting the same corpus exercise
+    /// both member kinds' EXTERNAL-interface fallback side by side.
+    /// </summary>
+    [Fact]
+    public void ExplicitIndexerImplementation_ExternalInterface_CollidesWithPublicIndexer_DropsWithDiagnostic()
+    {
+        (CompilationUnit unit, TranslationContext context) = Translate(@"
+using System.ComponentModel;
+
+namespace Corpus.Issue2362
+{
+    public class Row : IDataErrorInfo
+    {
+        public string Error => """";
+
+        public string this[string columnName] => ""public-"" + columnName;
+
+        string IDataErrorInfo.this[string columnName] => ""explicit-"" + columnName;
+    }
+}");
+        TypeDeclaration row = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Row");
+        var indexers = row.Members.OfType<PropertyDeclaration>().Where(p => p.IsIndexer).ToList();
+
+        // Only the surviving (public) indexer remains — the explicit one was
+        // dropped, since the ADR-0149 clause never applies to an external
+        // interface, exactly mirroring the property-level fallback.
+        Assert.Single(indexers);
+        Assert.Contains(
+            context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("indexer", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>

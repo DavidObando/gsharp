@@ -188,18 +188,18 @@ class Both : IFoo, IBaz {
     }
 
     [Fact]
-    public void IndexerExplicitInterfaceClause_ParsesAndBinds_ButInterfacesCannotDeclareIndexersYet()
+    public void IndexerExplicitInterfaceClause_TargetsInterfaceWithoutIndexer_ReportsGS0494()
     {
-        // ADR-0118/#944: G# interfaces cannot declare indexer members at all
-        // (a pre-existing, unrelated scope boundary — DeclarationBinder
-        // rejects any `prop this[...]` inside an `interface` block outright,
-        // regardless of accessor bodies). That means an explicit-interface
-        // qualifier clause on a CLASS indexer (`prop (X) this[...] T`) can
-        // never find a matching interface member today. This test confirms
-        // the ADR-0149 grammar/parser/binder plumbing for indexers is
-        // forward-compatible and fails cleanly with GS0494 ("no matching
-        // member") — not a parser error, crash, or wrong diagnostic — should
-        // interface indexers ever be supported later.
+        // ADR-0149 (issue #944 follow-up): G# interfaces CAN now declare
+        // indexer members — the pre-existing DeclarationBinder rejection of
+        // any `prop this[...]` inside an `interface` block has been removed.
+        // This test now exercises the ordinary "clause targets an interface
+        // with no matching member" case (GS0494) using an interface that
+        // legitimately has no indexer at all (`IEmpty` only declares
+        // `func Marker()`), confirming that case is unaffected by the new
+        // interface-indexer support. See
+        // <see cref="IndexerExplicitInterfaceClause_TargetsInterfaceIndexer_NoDiagnostics"/>
+        // for the new, fully-supported end-to-end resolution.
         var source = @"
 package P
 
@@ -217,6 +217,176 @@ class Store : IEmpty {
 ";
         var diagnostics = GetDiagnostics(source);
         Assert.Contains(diagnostics, d => d.Id == "GS0494");
+    }
+
+    [Fact]
+    public void IndexerExplicitInterfaceClause_TargetsInterfaceIndexer_NoDiagnostics()
+    {
+        // ADR-0149 (issue #944 follow-up): an interface CAN now declare its
+        // own indexer contract, and a class's explicit-interface-clause
+        // indexer resolves against it exactly like any other explicit member.
+        var source = @"
+package P
+
+interface IRepo {
+    prop this[key string] int32 { get; set }
+}
+
+class Store : IRepo {
+    private prop (IRepo) this[key string] int32 {
+        get { return 1 }
+        set { }
+    }
+}
+";
+        var diagnostics = GetDiagnostics(source);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void TwoIndexersDifferentInterfaces_ShareParameterShape_NoDiagnostics()
+    {
+        // ADR-0149 (issue #944 follow-up): two explicit-interface indexer
+        // implementations sharing the exact same parameter shape (both
+        // `this[string]`) but targeting DIFFERENT interfaces must coexist —
+        // exactly like the property/method coexistence case above — closing
+        // the gap the old mangled-name convention only partially covered.
+        var source = @"
+package P
+
+interface IRepoA {
+    prop this[key string] int32 { get; set }
+}
+
+interface IRepoB {
+    prop this[key string] int32 { get; set }
+}
+
+class Store : IRepoA, IRepoB {
+    private prop (IRepoA) this[key string] int32 {
+        get { return 1 }
+        set { }
+    }
+
+    private prop (IRepoB) this[key string] int32 {
+        get { return 2 }
+        set { }
+    }
+}
+";
+        var diagnostics = GetDiagnostics(source);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void EventExplicitInterfaceClause_TargetsInterfaceWithNoMatchingMember_ReportsGS0494()
+    {
+        // ADR-0149: generalizes the method/property/indexer clause-resolution
+        // sweep to events for the first time.
+        var source = @"
+package P
+
+interface IFoo {
+    event Changed () -> void
+}
+
+interface IBar {
+    event Other () -> void
+}
+
+class Impl : IFoo, IBar {
+    event (IFoo) Changed () -> void { add { } remove { } }
+
+    private event (IBar) Missing () -> void { add { } remove { } }
+}
+";
+        var diagnostics = GetDiagnostics(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0494");
+    }
+
+    [Fact]
+    public void EventExplicitInterfaceClause_TargetsInterfaceEvent_NoDiagnostics()
+    {
+        var source = @"
+package P
+
+interface IFoo {
+    event Changed () -> void
+}
+
+class Impl : IFoo {
+    event (IFoo) Changed () -> void { add { } remove { } }
+}
+";
+        var diagnostics = GetDiagnostics(source);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void TwoEventsClaimSameInterfaceSlot_ReportsGS0495()
+    {
+        var source = @"
+package P
+
+interface IFoo {
+    event Changed () -> void
+}
+
+class Impl : IFoo {
+    event (IFoo) Changed () -> void { add { } remove { } }
+
+    private event (IFoo) Changed () -> void { add { } remove { } }
+}
+";
+        var diagnostics = GetDiagnostics(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0495");
+    }
+
+    [Fact]
+    public void PublicEventAndExplicitClauseEvent_ShareSourceName_NoDiagnostics()
+    {
+        // Event-level counterpart of the Authorization/IProfile property
+        // coexistence case above — a plain, implicitly dispatched event and a
+        // purely-explicit-slot event may share the same declared source name.
+        var source = @"
+package P
+
+interface IFoo {
+    event Changed () -> void
+}
+
+class Impl : IFoo {
+    event Changed () -> void { add { } remove { } }
+
+    private event (IFoo) Changed () -> void { add { } remove { } }
+}
+";
+        var diagnostics = GetDiagnostics(source);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void TwoExplicitEventClausesTargetingDifferentInterfaces_ShareSourceName_NoDiagnostics()
+    {
+        var source = @"
+package P
+
+interface IFoo {
+    event Bar () -> void
+}
+
+interface IBaz {
+    event Bar () -> void
+}
+
+class Both : IFoo, IBaz {
+    private event (IFoo) Bar () -> void { add { } remove { } }
+
+    private event (IBaz) Bar () -> void { add { } remove { } }
+}
+";
+        var diagnostics = GetDiagnostics(source);
+        Assert.Empty(diagnostics);
     }
 
     [Fact]

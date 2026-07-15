@@ -3122,6 +3122,71 @@ public sealed class CSharpToGSharpTranslator
             // identifier in the C# source, so it round-trips unchanged).
             var symbol = this.context.GetDeclaredSymbol(node) as IEventSymbol;
 
+            // ADR-0149 (issue #2362 follow-up): generalizes the method/property/
+            // indexer explicit-interface qualifier clause to events for the first
+            // time — a C# explicit event implementation
+            // (`event Handler IFoo.Changed { add; remove; }`) maps to
+            // `event (IFoo) Changed T` for a G# USER interface, using the same
+            // clause + CLR MethodImpl bridge as every other member kind. Only the
+            // custom add/remove accessor form (this method) can carry an explicit
+            // interface specifier in C# — a field-like event never can — so
+            // TranslateEventField needs no matching change. An EXTERNAL/BCL
+            // interface explicit event implementation still falls back to the
+            // #1911-style forced-public name-based dispatch.
+            bool isExplicitInterfaceEventImpl = symbol != null && symbol.ExplicitInterfaceImplementations.Length > 0;
+
+            bool isUserInterfaceExplicitEventImpl = isExplicitInterfaceEventImpl &&
+                symbol.ExplicitInterfaceImplementations.Length == 1 &&
+                symbol.ExplicitInterfaceImplementations[0].ContainingType.Locations.Any(l => l.IsInSource);
+
+            if (isExplicitInterfaceEventImpl && symbol.ExplicitInterfaceImplementations.Length > 1 &&
+                symbol.ExplicitInterfaceImplementations.All(e => e.ContainingType.Locations.Any(l => l.IsInSource)))
+            {
+                string names = string.Join(", ", symbol.ExplicitInterfaceImplementations.Select(e => e.ContainingType.Name));
+                string multiEntryMessage =
+                    $"explicit interface event implementation '{FormatExplicitInterfaceEventName(symbol)}' satisfies " +
+                    $"more than one G# user interface member in one C# declaration ({names}), likely via interface " +
+                    "inheritance (a base interface re-declaring the same event). The ADR-0149 explicit-interface-clause " +
+                    "scheme only wires a single interface slot per event, so this falls back to " +
+                    "the #1911-style named/forced-public path instead of a clause — the event keeps its plain name " +
+                    "and every interface's slot is satisfied via ordinary implicit name+signature dispatch (known gap: " +
+                    "the event becomes publicly subscribable by name, unlike real C# explicit-impl semantics).";
+                this.context.Report(new TranslationDiagnostic(
+                    nameof(SyntaxKind.EventDeclaration), multiEntryMessage, node.GetLocation(), TranslationSeverity.Info));
+            }
+
+            if (isExplicitInterfaceEventImpl && !isUserInterfaceExplicitEventImpl)
+            {
+                IEventSymbol eventSurvivor = FindPriorCollidingSiblingEvent(symbol, node);
+                if (eventSurvivor != null)
+                {
+                    string message =
+                        $"explicit interface event implementation '{symbol.ContainingType.Name}.{FormatExplicitInterfaceEventName(symbol)}' " +
+                        $"shares its name with '{symbol.ContainingType.Name}.{FormatSiblingEventName(eventSurvivor)}'; " +
+                        "G# has no explicit-interface-implementation surface for EXTERNAL interfaces (ADR-0091), so the " +
+                        "two C# events cannot both be emitted (would be an exact-signature duplicate, GS0102). This " +
+                        "declaration is dropped in favor of the surviving sibling, which already satisfies the interface " +
+                        "by name; if the surviving sibling's accessors differ from this dropped declaration's, any C# " +
+                        "subscription through the interface-typed reference that previously reached this event now " +
+                        "silently observes the surviving event instead (semantic loss, known gap, issue #1911 " +
+                        "analogue). This diagnostic covers only EXTERNAL/BCL interfaces — a same-signature collision " +
+                        "between two G# user-interface explicit event implementations is fully supported (issue " +
+                        "#2362 follow-up, ADR-0149 explicit-interface clause).";
+                    this.context.Report(new TranslationDiagnostic(
+                        nameof(SyntaxKind.EventDeclaration), message, node.GetLocation(), TranslationSeverity.Unsupported));
+
+                    return (null, false);
+                }
+            }
+
+            // ADR-0149: the resolved explicit-interface qualifier clause type for
+            // a G# user-interface explicit event implementation, or null
+            // otherwise (ordinary event, or external-interface explicit
+            // implementation, which keeps the pre-#2010 name-based dispatch).
+            GTypeReference explicitInterfaceEventType = isUserInterfaceExplicitEventImpl
+                ? this.typeMapper.Map(symbol.ExplicitInterfaceImplementations[0].ContainingType, this.context, node.GetLocation())
+                : null;
+
             GTypeReference type = symbol != null
                 ? this.typeMapper.MapEventType(
                     symbol.Type.WithNullableAnnotation(NullableAnnotation.NotAnnotated),
@@ -3141,13 +3206,26 @@ public sealed class CSharpToGSharpTranslator
                 ? this.TranslateBody(removeAccessor, $"'remove' accessor of event '{node.Identifier.Text}'")
                 : new BlockStatement(new List<GStatement>());
 
+            // ADR-0149: see the matching visibility comment in
+            // TranslatePropertyDeclaration for the full rationale — a G#
+            // user-interface explicit event implementation (explicit-interface
+            // clause + CLR MethodImpl) keeps C#'s own `private`-equivalent
+            // visibility; an EXTERNAL/BCL interface explicit event
+            // implementation still relies on name-based dispatch and must stay
+            // forced-public (`Visibility.Default`) or ilverify would reject the
+            // missing interface method.
+            Visibility eventVisibility = isExplicitInterfaceEventImpl && !isUserInterfaceExplicitEventImpl
+                ? Visibility.Default
+                : MapVisibility(symbol, this.context, node);
+
             var declaration = new EventDeclaration(
                 SanitizeIdentifier(node.Identifier.Text),
                 type,
-                MapVisibility(symbol, this.context, node),
+                eventVisibility,
                 this.MapAttributes(node.AttributeLists),
                 addBody,
-                removeBody);
+                removeBody,
+                explicitInterfaceType: explicitInterfaceEventType);
 
             return (declaration, symbol != null && symbol.IsStatic);
         }
@@ -3920,6 +3998,96 @@ public sealed class CSharpToGSharpTranslator
         }
 
         /// <summary>
+        /// ADR-0149 (issue #2362 follow-up): event counterpart of
+        /// <see cref="FindPriorCollidingSiblingProperty"/> — an event has no
+        /// parameter list to disambiguate overloads by, so the match is purely
+        /// on effective simple name (mirrors <see cref="FindPriorCollidingSibling"/>
+        /// for methods, minus the arity/type-parameter comparison).
+        /// </summary>
+        private static IEventSymbol FindPriorCollidingSiblingEvent(IEventSymbol explicitImplementation, EventDeclarationSyntax node)
+        {
+            INamedTypeSymbol containingType = explicitImplementation.ContainingType;
+            if (containingType == null)
+            {
+                return null;
+            }
+
+            string simpleName = explicitImplementation.ExplicitInterfaceImplementations[0].Name;
+            int selfPosition = node.SpanStart;
+
+            IEventSymbol bestPublicCandidate = null;
+            IEventSymbol bestExplicitCandidate = null;
+            int bestExplicitPosition = int.MaxValue;
+
+            foreach (ISymbol member in containingType.GetMembers())
+            {
+                if (member is not IEventSymbol candidate ||
+                    SymbolEqualityComparer.Default.Equals(candidate, explicitImplementation) ||
+                    EffectiveSimpleEventName(candidate) != simpleName)
+                {
+                    continue;
+                }
+
+                if (candidate.ExplicitInterfaceImplementations.Length == 0)
+                {
+                    bestPublicCandidate = candidate;
+                    continue;
+                }
+
+                int candidatePosition = candidate.DeclaringSyntaxReferences.FirstOrDefault()?.Span.Start ?? int.MaxValue;
+                if (candidatePosition < bestExplicitPosition)
+                {
+                    bestExplicitCandidate = candidate;
+                    bestExplicitPosition = candidatePosition;
+                }
+            }
+
+            // A plain public event always wins over an explicit implementation.
+            if (bestPublicCandidate != null)
+            {
+                return bestPublicCandidate;
+            }
+
+            // Among explicit implementations only, the earliest-declared one
+            // wins; this declaration yields only if some other explicit impl is
+            // strictly earlier.
+            if (bestExplicitCandidate != null && bestExplicitPosition < selfPosition)
+            {
+                return bestExplicitCandidate;
+            }
+
+            return null;
+        }
+
+        private static string EffectiveSimpleEventName(IEventSymbol ev)
+        {
+            return ev.ExplicitInterfaceImplementations.Length > 0
+                ? ev.ExplicitInterfaceImplementations[0].Name
+                : ev.Name;
+        }
+
+        /// <summary>
+        /// ADR-0149 (issue #2362 follow-up): event counterpart of
+        /// <see cref="FormatSiblingPropertyName"/>.
+        /// </summary>
+        private static string FormatSiblingEventName(IEventSymbol sibling)
+        {
+            return sibling.ExplicitInterfaceImplementations.Length > 0
+                ? FormatExplicitInterfaceEventName(sibling)
+                : sibling.Name;
+        }
+
+        /// <summary>
+        /// ADR-0149 (issue #2362 follow-up): event counterpart of
+        /// <see cref="FormatExplicitInterfacePropertyName"/>.
+        /// </summary>
+        private static string FormatExplicitInterfaceEventName(IEventSymbol symbol)
+        {
+            ISymbol explicitInterfaceMember = symbol.ExplicitInterfaceImplementations[0];
+            return $"{explicitInterfaceMember.ContainingType.Name}.{explicitInterfaceMember.Name}";
+        }
+
+        /// <summary>
         /// Whether <paramref name="kind"/> is a C# 14 instance compound-assignment
         /// operator token (<c>op_AdditionAssignment</c> and siblings).
         /// </summary>
@@ -4394,26 +4562,40 @@ public sealed class CSharpToGSharpTranslator
             var symbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
             bool isStatic = symbol != null && symbol.IsStatic;
 
-            // Issue #2362, ADR-0149: unlike an ordinary property or a method, a
-            // G# indexer implementing an explicit interface member cannot use
-            // the ADR-0149 explicit-interface qualifier clause today — not
-            // because indexers can't syntactically carry the clause (the AST/
-            // parser/printer support it uniformly via
-            // <see cref="PropertyDeclaration.ExplicitInterfaceType"/>), but
-            // because G# interfaces cannot declare an indexer MEMBER at all
-            // (a separate, pre-existing gsc limitation — DeclarationBinder
-            // unconditionally rejects any `this[...]` property inside an
-            // `interface` block, GS0371). With no interface-side indexer
-            // member to ever resolve a clause against, emitting one here would
-            // only trade today's semantic-loss fallback for a guaranteed
-            // GS0494 ("no matching member") compile failure. Every explicit
-            // indexer implementation therefore still uses the same
-            // collision-drop fallback the #1911 method/property conventions
-            // use for EXTERNAL interfaces only — here applied uniformly, and
-            // reported as a known, permanent (pending separate interface-
-            // indexer support) gap.
+            // ADR-0149 (issue #944 follow-up): G# interfaces can now declare an
+            // indexer MEMBER (the prior gsc limitation — DeclarationBinder
+            // unconditionally rejecting `this[...]` inside an `interface` body
+            // — has been removed), so an indexer implementing a G# USER
+            // interface member now uses the exact same explicit-interface
+            // qualifier clause (`prop (IFoo) this[...] T`) as an ordinary
+            // property or method (issue #2010 / #2362 / ADR-0149), instead of
+            // the #1911-style forced-public collision-drop fallback. That
+            // fallback is now reserved for EXTERNAL/BCL interfaces only,
+            // mirroring TranslatePropertyDeclaration exactly.
             bool isExplicitInterfaceIndexerImpl = symbol != null && symbol.ExplicitInterfaceImplementations.Length > 0;
-            if (isExplicitInterfaceIndexerImpl)
+
+            bool isUserInterfaceExplicitIndexerImpl = isExplicitInterfaceIndexerImpl &&
+                symbol.ExplicitInterfaceImplementations.Length == 1 &&
+                symbol.ExplicitInterfaceImplementations[0].ContainingType.Locations.Any(l => l.IsInSource);
+
+            if (isExplicitInterfaceIndexerImpl && symbol.ExplicitInterfaceImplementations.Length > 1 &&
+                symbol.ExplicitInterfaceImplementations.All(e => e.ContainingType.Locations.Any(l => l.IsInSource)))
+            {
+                string names = string.Join(", ", symbol.ExplicitInterfaceImplementations.Select(e => e.ContainingType.Name));
+                string multiEntryMessage =
+                    $"explicit interface indexer implementation '{FormatExplicitInterfacePropertyName(symbol)}' satisfies " +
+                    $"more than one G# user interface member in one C# declaration ({names}), likely via interface " +
+                    "inheritance (a base interface re-declaring the same indexer). The ADR-0149 explicit-interface-clause " +
+                    "scheme only wires a single interface slot per indexer, so this falls back to " +
+                    "the #1911-style named/forced-public path instead of a clause — the indexer keeps its plain \"this[]\" " +
+                    "form and every interface's slot is satisfied via ordinary implicit signature dispatch (known gap: " +
+                    "the indexer becomes publicly callable through any interface reference, unlike real C# explicit-impl " +
+                    "semantics).";
+                this.context.Report(new TranslationDiagnostic(
+                    nameof(SyntaxKind.IndexerDeclaration), multiEntryMessage, node.GetLocation(), TranslationSeverity.Info));
+            }
+
+            if (isExplicitInterfaceIndexerImpl && !isUserInterfaceExplicitIndexerImpl)
             {
                 IPropertySymbol indexerSurvivor = FindPriorCollidingSiblingProperty(symbol, node);
                 if (indexerSurvivor != null)
@@ -4421,20 +4603,29 @@ public sealed class CSharpToGSharpTranslator
                     string message =
                         $"explicit interface indexer implementation '{symbol.ContainingType.Name}.{FormatExplicitInterfacePropertyName(symbol)}' " +
                         $"shares its parameter shape with '{symbol.ContainingType.Name}.{FormatSiblingPropertyName(indexerSurvivor)}'; " +
-                        "G# interfaces cannot declare indexer members (a separate, pre-existing gsc limitation), so the " +
-                        "ADR-0149 explicit-interface clause has no interface-side member to resolve against for an " +
-                        "indexer, and the two C# indexers cannot both be emitted (would be an exact-signature " +
-                        "duplicate, GS0102). This declaration is dropped in favor of the surviving sibling, which " +
-                        "already satisfies the interface by parameter shape; if the surviving sibling's accessors " +
-                        "differ from this dropped declaration's, any C# access through the interface-typed reference " +
-                        "that previously reached this indexer now silently observes the surviving indexer instead " +
-                        "(semantic loss, known permanent gap pending interface-indexer support).";
+                        "G# has no explicit-interface-implementation surface for EXTERNAL interfaces (ADR-0091), so the " +
+                        "two C# indexers cannot both be emitted (would be an exact-signature duplicate, GS0102). This " +
+                        "declaration is dropped in favor of the surviving sibling, which already satisfies the interface " +
+                        "by parameter shape; if the surviving sibling's accessors differ from this dropped declaration's, " +
+                        "any C# access through the interface-typed reference that previously reached this indexer now " +
+                        "silently observes the surviving indexer instead (semantic loss, known gap, issue #1911 " +
+                        "analogue). This diagnostic covers only EXTERNAL/BCL interfaces — a same-signature collision " +
+                        "between two G# user-interface explicit indexer implementations is fully supported (issue " +
+                        "#944 follow-up, ADR-0149 explicit-interface clause).";
                     this.context.Report(new TranslationDiagnostic(
                         nameof(SyntaxKind.IndexerDeclaration), message, node.GetLocation(), TranslationSeverity.Unsupported));
 
                     return (null, false);
                 }
             }
+
+            // ADR-0149: the resolved explicit-interface qualifier clause type
+            // for a G# user-interface explicit indexer implementation, or null
+            // otherwise (ordinary indexer, or external-interface explicit
+            // implementation, which keeps the pre-#2010 name-based dispatch).
+            GTypeReference explicitInterfaceIndexerType = isUserInterfaceExplicitIndexerImpl
+                ? this.typeMapper.Map(symbol.ExplicitInterfaceImplementations[0].ContainingType, this.context, node.GetLocation())
+                : null;
 
             GTypeReference type = symbol != null
                 ? this.typeMapper.Map(symbol.Type, this.context, node.GetLocation())
@@ -4467,16 +4658,17 @@ public sealed class CSharpToGSharpTranslator
             bool isOverride = symbol != null && symbol.IsOverride && !OverridesExternalBaseProperty(symbol);
             bool isOpen = this.IsMemberEmittedOpen(symbol, isOverride);
 
-            // Issue #2362: an explicit interface indexer implementation that
-            // survives the collision-drop check above (i.e. IS the survivor,
-            // or has no colliding sibling at all) still needs the same forced-
-            // public visibility the #1911 external-interface method/property
-            // bridge uses — its slot is filled purely by name+parameter-shape
-            // dispatch (there being no explicit-interface-clause alternative
-            // for indexers today, per the comment above), which requires
-            // public visibility or ilverify rejects the missing interface
-            // method.
-            Visibility indexerVisibility = isExplicitInterfaceIndexerImpl
+            // ADR-0149: see the matching visibility comment in
+            // TranslatePropertyDeclaration for the full rationale — a G#
+            // user-interface explicit indexer implementation (explicit-
+            // interface clause + CLR MethodImpl) keeps C#'s own
+            // `private`-equivalent visibility (Roslyn reports `Private`,
+            // mapped straight through by MapVisibility); an EXTERNAL/BCL
+            // interface explicit indexer implementation still relies on
+            // name+parameter-shape dispatch and must stay forced-public
+            // (`Visibility.Default`) or ilverify would reject the missing
+            // interface method.
+            Visibility indexerVisibility = isExplicitInterfaceIndexerImpl && !isUserInterfaceExplicitIndexerImpl
                 ? Visibility.Default
                 : MapVisibility(symbol, this.context, node);
 
@@ -4489,7 +4681,8 @@ public sealed class CSharpToGSharpTranslator
                 isOverride: isOverride,
                 attributes: this.MapAttributes(node.AttributeLists),
                 indexerParameters: indexParameters,
-                expressionBody: arrowBody);
+                expressionBody: arrowBody,
+                explicitInterfaceType: explicitInterfaceIndexerType);
 
             return (property, isStatic);
         }

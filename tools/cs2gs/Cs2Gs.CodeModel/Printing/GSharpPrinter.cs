@@ -1403,7 +1403,14 @@ public static class GSharpPrinter
     private static string RenderEvent(EventDeclaration declaration, int indent)
     {
         var pad = Indent(indent);
-        var header = $"{RenderAttributeBlock(declaration.Attributes, indent)}{pad}{RenderVisibility(declaration.Visibility)}event {declaration.Name} {RenderType(declaration.Type)}";
+
+        // ADR-0149: an explicit-interface qualifier clause renders
+        // immediately after the `event` keyword, before the member name —
+        // mirrors RenderProperty/RenderMethod exactly.
+        var explicitClause = declaration.ExplicitInterfaceType != null
+            ? $"({RenderType(declaration.ExplicitInterfaceType)}) "
+            : string.Empty;
+        var header = $"{RenderAttributeBlock(declaration.Attributes, indent)}{pad}{RenderVisibility(declaration.Visibility)}event {explicitClause}{declaration.Name} {RenderType(declaration.Type)}";
         if (!declaration.HasExplicitAccessors)
         {
             return header;
