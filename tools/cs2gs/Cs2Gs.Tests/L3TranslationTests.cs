@@ -375,12 +375,13 @@ namespace Demo
     }
 
     /// <summary>
-    /// ADR-0115 §B.4: a fieldless C# record (typically an <c>abstract record</c>
-    /// hierarchy base) maps to a plain <c>class</c> — a G# <c>data</c> type
-    /// requires at least one field (GS0104) — and is marked <c>open</c> when
-    /// subclassed; the C# <c>abstract</c> modifier and the synthesized
-    /// <c>IEquatable&lt;Self&gt;</c> interface are dropped (a class cannot name
-    /// itself in its own base list).
+    /// ADR-0115 §B.4: a fieldless C# record with NO positional parameter list
+    /// at all (<c>record ShapeBase;</c>, as opposed to an explicit-but-empty
+    /// <c>record ShapeBase();</c> — see issue #2363, which preserves `data
+    /// class` for the latter) maps to a plain <c>class</c>, and is marked
+    /// <c>open</c> when subclassed; the C# <c>abstract</c> modifier and the
+    /// synthesized <c>IEquatable&lt;Self&gt;</c> interface are dropped (a
+    /// class cannot name itself in its own base list).
     /// </summary>
     [Fact]
     public void FieldlessRecord_MapsToOpenClass()
