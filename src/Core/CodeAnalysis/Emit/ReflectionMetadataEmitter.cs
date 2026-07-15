@@ -1663,12 +1663,21 @@ internal sealed class ReflectionMetadataEmitter
             // reservation and EmitClassMethodBodies' matching emit call,
             // which must run in the same relative order (before
             // user-declared methods) so the MethodDef rows line up.
-            // Issue #2363: a zero-field data class skips Deconstruct (six
-            // rows instead of seven) — see DataStructSynthesizer.HasZeroSynthesisFields
+            // Issue #2363: a zero-field data class skips Deconstruct (one
+            // fewer row) — see DataStructSynthesizer.HasZeroSynthesisFields
             // and EmitDataStructSynthesizedMembers's matching skip.
+            // Issue #2361: when the class declares a compatible hand-written
+            // ToString, one fewer row is reserved here too — the "ToString"
+            // row is instead reserved by the ordinary c.Methods loop below,
+            // matching DataStructSynthesizer.EmitDataStructSynthesizedMembers
+            // skipping the synthesized ToString body in that case. The two
+            // skips are independent and compose (a zero-field data class
+            // with a user ToString override reserves five rows).
             if (c.IsData)
             {
-                methodRow += DataStructSynthesizer.HasZeroSynthesisFields(c) ? 6 : 7;
+                methodRow += 7
+                    - (DataStructSynthesizer.HasZeroSynthesisFields(c) ? 1 : 0)
+                    - (DataStructSynthesizer.HasUserToStringOverride(c) ? 1 : 0);
             }
 
             if (!c.Methods.IsDefaultOrEmpty)
@@ -1798,9 +1807,17 @@ internal sealed class ReflectionMetadataEmitter
             {
                 // Issue #410 / ADR-0029: data structs synthesize 7 MethodDef
                 // rows: Equals(object), Equals(Name), GetHashCode, ToString,
+                // Issue #410 / ADR-0029: data structs synthesize 7 MethodDef
+                // rows: Equals(object), Equals(Name), GetHashCode, ToString,
                 // op_Equality, op_Inequality, Deconstruct. Issue #2363: a
-                // zero-field data struct skips Deconstruct (6 rows instead).
-                methodRow += DataStructSynthesizer.HasZeroSynthesisFields(s) ? 6 : 7;
+                // zero-field data struct skips Deconstruct (one fewer row).
+                // Issue #2361: one fewer row also when the struct declares a
+                // compatible hand-written ToString — see the matching
+                // class-side comment in PlanClassMethods above. The two
+                // skips compose independently.
+                methodRow += 7
+                    - (DataStructSynthesizer.HasZeroSynthesisFields(s) ? 1 : 0)
+                    - (DataStructSynthesizer.HasUserToStringOverride(s) ? 1 : 0);
 
                 // Rubber-duck follow-up to issue #2224: an anonymous-class
                 // literal's synthesized type has no plain fields (only
@@ -5127,6 +5144,22 @@ internal sealed class ReflectionMetadataEmitter
             var receiverStruct = function.ReceiverType as StructSymbol;
             var receiverIsValueType = receiverStruct != null && !receiverStruct.IsClass;
             var receiverIsInterface = function.ReceiverType is InterfaceSymbol;
+
+            // Issue #2361: a user-declared "ToString" on a data class/struct
+            // suppresses the synthesized ToString (see
+            // DataStructSynthesizer.HasUserToStringOverride /
+            // EmitDataStructSynthesizedMembers) and must take over its exact
+            // CLR vtable slot instead of getting a brand-new one — otherwise
+            // polymorphic dispatch through a base-typed reference would still
+            // resolve to System.Object.ToString (or, for a derived data
+            // class, the base's synthesized/user ToString would stop being
+            // re-overridable). The binder only ever lets a "ToString"-named
+            // method reach an IsData type's Methods list when its shape
+            // exactly matches the synthesized one (see
+            // DeclarationBinder.IsCompatibleDataToStringOverride), so no
+            // extra shape check is needed here.
+            bool isDataToStringOverride = receiverStruct != null && receiverStruct.IsData && function.Name == "ToString";
+
             if (receiverIsInterface && function.Accessibility != Accessibility.Private)
             {
                 // ADR-0085 / issue #726: an instance method whose receiver is
@@ -5148,15 +5181,15 @@ internal sealed class ReflectionMetadataEmitter
                 //
                 // Fall through — no further attribute stamping needed.
             }
-            else if (!receiverIsValueType || MethodInfoHelpers.RequiresVirtualOnValueType(function, receiverStruct))
+            else if (isDataToStringOverride || !receiverIsValueType || MethodInfoHelpers.RequiresVirtualOnValueType(function, receiverStruct))
             {
                 methodAttrs |= MethodAttributes.Virtual;
-                if (!function.IsOverride)
+                if (!function.IsOverride && !isDataToStringOverride)
                 {
                     methodAttrs |= MethodAttributes.NewSlot;
                 }
 
-                if (!function.IsOpen)
+                if (isDataToStringOverride ? DataStructSynthesizer.IsDataObjectOverrideFinal(receiverStruct) : !function.IsOpen)
                 {
                     methodAttrs |= MethodAttributes.Final;
                 }

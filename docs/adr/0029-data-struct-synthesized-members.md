@@ -35,7 +35,7 @@ A `data struct Name { F1 T1; F2 T2; … }` declaration emits the same CLR `Value
 Additional rules:
 
 - A `data struct` MUST have at least one field. Diagnostic on the empty form: `'data struct' requires at least one field; use 'struct' instead.`
-- The user **may not** hand-write any of the six synthesized members on a `data struct`. Diagnostic: `Member 'Name.Equals' is synthesized for 'data struct'; remove the declaration.` This avoids the "did the user intend to override the synthesized one?" ambiguity. (Phase 6+ may relax this if a user-visible `partial` story emerges; the present rule is the conservative one.)
+- The user **may not** hand-write any of the six synthesized members on a `data struct`. Diagnostic: `Member 'Name.Equals' is synthesized for 'data struct'; remove the declaration.` This avoids the "did the user intend to override the synthesized one?" ambiguity. (Phase 6+ may relax this if a user-visible `partial` story emerges; the present rule is the conservative one. **Update:** see "Amendment 2026-07-15" below — `ToString` alone is now relaxed under a strict shape-compatibility check.)
 - Field accessibility modifiers (`public` / `internal` / `private` per ADR-0014) are allowed but **the synthesized methods see every field**. A `private` field on a `data struct` is still part of its identity and `ToString`. A user who wants opacity should pick `struct`, not `data struct`. Documented.
 - The `data` keyword is **context-sensitive**: it is only a keyword immediately before `struct` in a top-level type-declaration position; everywhere else it is an ordinary identifier (so users may still name a variable `data`).
 
@@ -71,3 +71,20 @@ Neutral:
 - **Synthesize `IEquatable<Name>` interface implementation explicitly**: deferred. The `Equals(Name)` overload + operator pair already satisfies the C# pattern; emitting the interface adds a TypeRef row and complicates Phase 3 emit for marginal interop benefit. Phase 6's full interface story can revisit.
 - **Skip `Deconstruct` until Phase 4+**: rejected. The cost is one `MethodDef` row per data struct; the benefit is that Phase 4 destructuring becomes a parser-only change.
 - **`ToString` format `{ F1 = v1, F2 = v2 }` (C# record style)**: rejected. The Kotlin form `Name(F1=v1, F2=v2)` matches `Point(X=3, Y=4)` in the README's "GSharp is Go shape" vibe better than the braces.
+
+## Amendment 2026-07-15: `ToString` user-override relaxation (#2361)
+
+Issue #2361 found that `cs2gs` faithfully translates a C# `record`/`record struct` with an explicit `ToString` override into a G# `data class`/`data struct` with an in-body `ToString` method — which the original "no hand-written synthesized members" rule unconditionally rejected with GS0232. Since `cs2gs` cannot omit or rewrite a user's C# override without losing behavior, every migrated record with a custom `ToString` (e.g. `Oahu.Core.ProfileKey`/`ProfileKeyEx`, `Oahu.Cli.Tui.Tokens.SemanticColor`) was unmigratable.
+
+**Relaxation, scoped narrowly to `ToString` only.** The other five synthesized members (`Equals(object)`, `Equals(Name)`, `GetHashCode`, `op_Equality`/`op_Inequality`, `Deconstruct`) remain unconditionally forbidden — hand-writing any of them is still GS0232. A user-declared `ToString` is now permitted, but only if it exactly matches the synthesized member's shape: `public string ToString()`, zero parameters, returns `string`, not `static`/`async`/`unsafe`, no type parameters. A declaration with the name `ToString` that does not match this shape (wrong arity, wrong return type, `async`, generic, non-`public`) is rejected with the new diagnostic **GS0487** ("incompatible `ToString` override") rather than GS0232, since the intent is clearly to override `ToString` but the shape is invalid.
+
+When a compatible user `ToString` is present:
+
+- The synthesizer skips emitting `EmitDataStructToString`; the emitter's row planner (`PlanClassMethods`/`PlanStructMethods`) reserves 6 `MethodDef` rows instead of 7 to keep row-count planning in lockstep.
+- The user's `ToString` reuses the same vtable slot the synthesized version would have used (`ReuseSlot`, not `NewSlot`) — for both `data class` and `data struct` — so polymorphic dispatch through a base-typed reference still resolves to the most-derived override, exactly as if the compiler had synthesized it. `MethodInfoHelpers.RequiresVirtualOnValueType` is bypassed for this case so a `data struct`'s user `ToString` is still marked `Virtual` (data structs' synthesized members are already virtual-callable via `Equals`/`GetHashCode`, so this is consistent).
+- `Final`-ness follows the same rule as the synthesized members (`DataStructSynthesizer.IsDataObjectOverrideFinal`): non-`open` data classes and all data structs still get `Final`; `open` data classes do not, allowing a derived data class to declare its own compatible `ToString` and call `base.ToString()`.
+
+**Deferred/out of scope, not fixed by this amendment:**
+
+- A receiver-clause (`func (p T) ToString() string`) declaration only reaches this new check when `T` is in the *same* package (an "owned type" receiver clause, which already emits a GS0314 warning steering users toward the in-body form). A receiver-clause `ToString` on a genuinely cross-package/imported data type is bound as an ordinary extension function and never reaches the data-type reservation logic at all — consistent with G#'s extension-function design (extension functions cannot participate in virtual dispatch), not a defect.
+- Plain (non-`data`) classes' hand-written `ToString` overrides still always get a new vtable slot unless the G# `override` keyword resolves against a matching base declaration; this pre-existing limitation is unrelated to data types and is not addressed here.
