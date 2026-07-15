@@ -17,6 +17,18 @@ public static class ReplHost
 {
     public static int Run()
     {
+        // The TUI renders Unicode glyphs (box-drawing rules, status dots, prompt
+        // chevrons, ellipses). On Windows the console defaults to a legacy OEM code
+        // page that lacks these, rendering them as '?'. Force UTF-8 before any output.
+        try
+        {
+            Console.OutputEncoding = System.Text.Encoding.UTF8;
+        }
+        catch
+        {
+            // Output is redirected or the encoding can't be changed; ignore.
+        }
+
         var engine = new SessionEngine();
         var tabs = new List<ITabScreen>
         {
