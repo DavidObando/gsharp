@@ -252,6 +252,57 @@ internal sealed class ConversionClassifier
         return BindConversion(syntax.Location, expression, type, allowExplicit);
     }
 
+    /// <summary>Binds an explicit ADR-0148 spread projection.</summary>
+    /// <param name="diagnosticLocation">The source location for conversion diagnostics.</param>
+    /// <param name="expression">The spread source.</param>
+    /// <param name="targetType">The concrete target type.</param>
+    /// <param name="strict">Whether every writable target slot must be covered.</param>
+    /// <param name="explicitValues">Explicit target values keyed by exact member name.</param>
+    /// <param name="explicitOrder">Explicit member names in lexical evaluation order.</param>
+    /// <returns>The lowered projection expression.</returns>
+    public BoundExpression BindStructuralProjection(
+        TextLocation diagnosticLocation,
+        BoundExpression expression,
+        TypeSymbol targetType,
+        bool strict,
+        IReadOnlyDictionary<string, BoundExpression> explicitValues,
+        ImmutableArray<string> explicitOrder)
+        => BindStructuralProjectionCore(
+            diagnosticLocation,
+            expression,
+            targetType,
+            strict,
+            explicitValues,
+            explicitOrder);
+
+    /// <summary>Checks whether an implicit user conversion should outrank structural projection.</summary>
+    /// <param name="sourceType">The source type.</param>
+    /// <param name="targetType">The target type.</param>
+    /// <returns><see langword="true"/> when a symbolic or CLR conversion operator applies.</returns>
+    public bool HasUserDefinedImplicitConversion(TypeSymbol sourceType, TypeSymbol targetType)
+        => HasUserDefinedImplicitConversionForTypes(sourceType, targetType);
+
+    /// <summary>Checks the symbolic and CLR implicit conversion operators for a type pair.</summary>
+    /// <param name="sourceType">The source type.</param>
+    /// <param name="targetType">The target type.</param>
+    /// <returns><see langword="true"/> when an implicit conversion operator applies.</returns>
+    public static bool HasUserDefinedImplicitConversionForTypes(TypeSymbol sourceType, TypeSymbol targetType)
+    {
+        if (TryResolveUserDefinedSymbolConversion(sourceType, targetType, allowExplicit: false, out _))
+        {
+            return true;
+        }
+
+        return sourceType?.ClrType != null
+            && targetType?.ClrType != null
+            && ClrOperatorResolution.TryResolveConversion(
+                sourceType.ClrType,
+                targetType.ClrType,
+                allowExplicit: false,
+                out _,
+                out _);
+    }
+
     /// <summary>
     /// Core <c>BindConversion</c> overload: classifies the conversion from
     /// <paramref name="expression"/>'s static type to <paramref name="type"/>,
@@ -471,7 +522,25 @@ internal sealed class ConversionClassifier
 
             if (expression.Type != TypeSymbol.Error && type != TypeSymbol.Error)
             {
-                Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type);
+                if (!StructuralProjectionPlanner.TryCreate(
+                    expression.Type,
+                    type,
+                    strict: true,
+                    explicitMemberNames: null,
+                    out _,
+                    out var projectionFailure)
+                    && !string.IsNullOrEmpty(projectionFailure))
+                {
+                    Diagnostics.ReportStructuralProjectionFailure(
+                        diagnosticLocation,
+                        expression.Type,
+                        type,
+                        projectionFailure);
+                }
+                else
+                {
+                    Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type);
+                }
             }
 
             return new BoundErrorExpression(null);
@@ -485,6 +554,36 @@ internal sealed class ConversionClassifier
         if (conversion.IsIdentity)
         {
             return expression;
+        }
+
+        if (conversion.IsStructuralProjection)
+        {
+            if (TryResolveUserDefinedSymbolConversion(expression.Type, type, allowExplicit, out var projectionUserConvOp))
+            {
+                var converted = projectionUserConvOp.Parameters.Length == 1
+                    ? BindConversion(diagnosticLocation, expression, projectionUserConvOp.Parameters[0].Type, allowExplicit)
+                    : expression;
+                return new BoundCallExpression(null, projectionUserConvOp, ImmutableArray.Create(converted));
+            }
+
+            if (expression.Type?.ClrType != null && type?.ClrType != null
+                && ClrOperatorResolution.TryResolveConversion(
+                    expression.Type.ClrType,
+                    type.ClrType,
+                    allowExplicit,
+                    out var projectionConvMethod,
+                    out _))
+            {
+                return new BoundClrConversionCallExpression(null, expression, projectionConvMethod, type);
+            }
+
+            return BindStructuralProjectionCore(
+                diagnosticLocation,
+                expression,
+                type,
+                strict: true,
+                explicitValues: null,
+                explicitOrder: default);
         }
 
         // Issue #367: a by-ref-like (`ref struct`) value boxes when converted to
@@ -823,7 +922,12 @@ internal sealed class ConversionClassifier
                         var location = call != null && sourceIndex >= 0 && sourceIndex < call.Arguments.Count
                             ? call.Arguments[sourceIndex].Location
                             : call?.Location ?? default;
-                        rebound = BindConversion(location, argument, targetType, allowExplicit: true);
+                        var parameterConversion = Conversion.Classify(argument.Type, targetType);
+                        rebound = BindConversion(
+                            location,
+                            argument,
+                            targetType,
+                            allowExplicit: !parameterConversion.IsStructuralProjection);
                     }
                     else if (argument.Type != targetType
                         && TryApplyUserDefinedImplicitArgumentConversion(argument, targetType, out var udcArg))
@@ -2284,5 +2388,287 @@ internal sealed class ConversionClassifier
             expression.Syntax,
             ImmutableArray.Create<BoundStatement>(declaration),
             rebuilt);
+    }
+
+    private BoundExpression BindStructuralProjectionCore(
+        TextLocation diagnosticLocation,
+        BoundExpression expression,
+        TypeSymbol targetType,
+        bool strict,
+        IReadOnlyDictionary<string, BoundExpression> explicitValues,
+        ImmutableArray<string> explicitOrder)
+    {
+        var explicitNames = explicitValues == null
+            ? null
+            : new HashSet<string>(explicitValues.Keys, StringComparer.Ordinal);
+        if (!StructuralProjectionPlanner.TryCreate(
+            expression.Type,
+            targetType,
+            strict,
+            explicitNames,
+            out var plan,
+            out var failure))
+        {
+            if (expression.Type != TypeSymbol.Error && targetType != TypeSymbol.Error)
+            {
+                if (!string.IsNullOrEmpty(failure))
+                {
+                    Diagnostics.ReportStructuralProjectionFailure(
+                        diagnosticLocation,
+                        expression.Type,
+                        targetType,
+                        failure);
+                }
+                else
+                {
+                    Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, targetType);
+                }
+            }
+
+            return new BoundErrorExpression(expression.Syntax);
+        }
+
+        var sourceTemp = new LocalVariableSymbol(
+            $"<projectionSource{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
+            isReadOnly: true,
+            expression.Type);
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        statements.Add(new BoundVariableDeclaration(expression.Syntax, sourceTemp, expression));
+
+        Dictionary<string, BoundExpression> explicitReads = null;
+        if (explicitValues != null)
+        {
+            explicitReads = new Dictionary<string, BoundExpression>(StringComparer.Ordinal);
+            foreach (var name in explicitOrder)
+            {
+                if (!explicitValues.TryGetValue(name, out var value) || explicitReads.ContainsKey(name))
+                {
+                    continue;
+                }
+
+                var explicitTemp = new LocalVariableSymbol(
+                    $"<projectionOverride{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
+                    isReadOnly: true,
+                    value.Type);
+                statements.Add(new BoundVariableDeclaration(value.Syntax, explicitTemp, value));
+                explicitReads.Add(name, new BoundVariableExpression(value.Syntax, explicitTemp));
+            }
+        }
+
+        var constructorArguments = ImmutableArray.CreateBuilder<BoundExpression>(plan.ConstructorSlots.Length);
+        foreach (var slot in plan.ConstructorSlots)
+        {
+            constructorArguments.Add(BindStructuralProjectionSlot(
+                diagnosticLocation,
+                expression.Syntax,
+                sourceTemp,
+                slot,
+                explicitReads));
+        }
+
+        if (plan.Construction.Kind == StructuralProjectionConstructionKind.UserDefault
+            && !plan.Construction.UserType.IsClass)
+        {
+            var initializers = ImmutableArray.CreateBuilder<BoundFieldInitializer>(plan.InitializerSlots.Length);
+            var initializedFields = new HashSet<FieldSymbol>();
+            foreach (var slot in plan.InitializerSlots)
+            {
+                var value = BindStructuralProjectionSlot(
+                    diagnosticLocation,
+                    expression.Syntax,
+                    sourceTemp,
+                    slot,
+                    explicitReads);
+                initializers.Add(slot.TargetField != null
+                    ? new BoundFieldInitializer(slot.TargetField, value)
+                    : new BoundFieldInitializer(slot.TargetProperty, value));
+                if (slot.TargetField != null)
+                {
+                    initializedFields.Add(slot.TargetField);
+                }
+                else if (slot.TargetProperty?.BackingField != null)
+                {
+                    initializedFields.Add(slot.TargetProperty.BackingField);
+                }
+            }
+
+            foreach (var field in plan.Construction.UserType.Fields)
+            {
+                if (initializedFields.Contains(field))
+                {
+                    continue;
+                }
+
+                if (TryGetStructuralProjectionFieldInitializer(
+                    plan.Construction.UserType,
+                    field,
+                    out var initializer))
+                {
+                    initializers.Add(new BoundFieldInitializer(field, initializer));
+                }
+                else if (field.Type == TypeSymbol.String)
+                {
+                    initializers.Add(new BoundFieldInitializer(
+                        field,
+                        new BoundLiteralExpression(expression.Syntax, string.Empty, TypeSymbol.String)));
+                }
+            }
+
+            var literal = new BoundStructLiteralExpression(expression.Syntax, plan.Construction.UserType, initializers.ToImmutable());
+            return new BoundBlockExpression(expression.Syntax, statements.ToImmutable(), literal);
+        }
+
+        BoundExpression construction = plan.Construction.Kind switch
+        {
+            StructuralProjectionConstructionKind.UserDefault => new BoundConstructorCallExpression(
+                expression.Syntax,
+                plan.Construction.UserType,
+                ImmutableArray<BoundExpression>.Empty),
+            StructuralProjectionConstructionKind.UserPrimary => new BoundConstructorCallExpression(
+                expression.Syntax,
+                plan.Construction.UserType,
+                constructorArguments.ToImmutable()),
+            StructuralProjectionConstructionKind.UserExplicit => new BoundConstructorCallExpression(
+                expression.Syntax,
+                plan.Construction.UserType,
+                constructorArguments.ToImmutable(),
+                plan.Construction.UserConstructor),
+            StructuralProjectionConstructionKind.ClrConstructor => new BoundClrConstructorCallExpression(
+                expression.Syntax,
+                targetType.ClrType,
+                plan.Construction.ClrConstructor,
+                constructorArguments.ToImmutable(),
+                targetType),
+            StructuralProjectionConstructionKind.ClrDefaultValue => new BoundDefaultExpression(expression.Syntax, targetType),
+            _ => throw new InvalidOperationException("Unsupported structural projection construction."),
+        };
+
+        if (plan.InitializerSlots.IsDefaultOrEmpty)
+        {
+            return new BoundBlockExpression(expression.Syntax, statements.ToImmutable(), construction);
+        }
+
+        var targetTemp = new LocalVariableSymbol(
+            $"<projectionTarget{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
+            isReadOnly: false,
+            targetType);
+        statements.Add(new BoundVariableDeclaration(expression.Syntax, targetTemp, construction));
+        foreach (var slot in plan.InitializerSlots)
+        {
+            var receiver = new BoundVariableExpression(expression.Syntax, targetTemp);
+            var value = BindStructuralProjectionSlot(
+                diagnosticLocation,
+                expression.Syntax,
+                sourceTemp,
+                slot,
+                explicitReads);
+            BoundExpression assignment;
+            if (slot.TargetField != null)
+            {
+                assignment = new BoundFieldAssignmentExpression(
+                    expression.Syntax,
+                    targetTemp,
+                    slot.TargetDeclaringType,
+                    slot.TargetField,
+                    value);
+            }
+            else if (slot.TargetProperty != null)
+            {
+                assignment = new BoundPropertyAssignmentExpression(
+                    expression.Syntax,
+                    receiver,
+                    slot.TargetDeclaringType,
+                    slot.TargetProperty,
+                    value);
+            }
+            else
+            {
+                assignment = new BoundClrPropertyAssignmentExpression(
+                    expression.Syntax,
+                    receiver,
+                    slot.TargetClrMember,
+                    value,
+                    slot.TargetType);
+            }
+
+            statements.Add(new BoundExpressionStatement(expression.Syntax, assignment));
+        }
+
+        return new BoundBlockExpression(
+            expression.Syntax,
+            statements.ToImmutable(),
+            new BoundVariableExpression(expression.Syntax, targetTemp));
+    }
+
+    private static bool TryGetStructuralProjectionFieldInitializer(
+        StructSymbol type,
+        FieldSymbol field,
+        out BoundExpression initializer)
+    {
+        if (type.InstanceFieldInitializers.TryGetValue(field, out initializer))
+        {
+            return true;
+        }
+
+        if (type.Definition != null)
+        {
+            foreach (var candidate in type.Definition.InstanceFieldInitializers)
+            {
+                if (string.Equals(candidate.Key.Name, field.Name, StringComparison.Ordinal))
+                {
+                    initializer = candidate.Value;
+                    return true;
+                }
+            }
+        }
+
+        initializer = null;
+        return false;
+    }
+
+    private BoundExpression BindStructuralProjectionSlot(
+        TextLocation diagnosticLocation,
+        SyntaxNode syntax,
+        VariableSymbol sourceTemp,
+        StructuralProjectionSlot slot,
+        IReadOnlyDictionary<string, BoundExpression> explicitReads)
+    {
+        if (slot.Source == null)
+        {
+            if (explicitReads != null && explicitReads.TryGetValue(slot.Name, out var explicitRead))
+            {
+                return explicitRead;
+            }
+
+            if (slot.UserDefaultParameter != null)
+            {
+                return OverloadResolver.CreateOptionalUserDefaultArgument(slot.UserDefaultParameter);
+            }
+
+            if (slot.ClrDefaultParameter != null)
+            {
+                return CreateOptionalDefaultArgument(slot.ClrDefaultParameter);
+            }
+
+            throw new InvalidOperationException($"Structural projection slot '{slot.Name}' has no value.");
+        }
+
+        var source = slot.Source;
+        var receiver = new BoundVariableExpression(syntax, sourceTemp);
+        BoundExpression read;
+        if (source.Field != null)
+        {
+            read = new BoundFieldAccessExpression(syntax, receiver, source.DeclaringType, source.Field);
+        }
+        else if (source.Property != null)
+        {
+            read = new BoundPropertyAccessExpression(syntax, receiver, source.DeclaringType, source.Property);
+        }
+        else
+        {
+            read = new BoundClrPropertyAccessExpression(syntax, receiver, source.ClrMember, source.Type);
+        }
+
+        return BindConversion(diagnosticLocation, read, slot.TargetType);
     }
 }

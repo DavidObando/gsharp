@@ -1530,7 +1530,7 @@ internal sealed class OverloadResolver
     /// separately, but they still rank strictly better than the numeric/
     /// delegate special cases ranked worse below.
     /// </summary>
-    private static OverloadResolution.ImplicitConversionKind ClassifyUserArgumentConversionKind(TypeSymbol argType, TypeSymbol paramType)
+    private OverloadResolution.ImplicitConversionKind ClassifyUserArgumentConversionKind(TypeSymbol argType, TypeSymbol paramType)
     {
         if (argType == null || paramType == null)
         {
@@ -1540,6 +1540,13 @@ internal sealed class OverloadResolver
         if (argType == paramType)
         {
             return OverloadResolution.ImplicitConversionKind.Identity;
+        }
+
+        if (Conversion.Classify(argType, paramType).IsStructuralProjection)
+        {
+            return conversions.HasUserDefinedImplicitConversion(argType, paramType)
+                ? OverloadResolution.ImplicitConversionKind.UserDefinedImplicit
+                : OverloadResolution.ImplicitConversionKind.StructuralProjection;
         }
 
         if (paramType is NullableTypeSymbol nullableParam && argType == nullableParam.UnderlyingType)

@@ -21,18 +21,27 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="typeIdentifier">The struct type identifier.</param>
     /// <param name="openBraceToken">The opening brace.</param>
+    /// <param name="spreadToken">The optional leading ellipsis.</param>
+    /// <param name="spreadExpression">The optional spread source.</param>
+    /// <param name="spreadSeparatorToken">The optional separator after the spread source.</param>
     /// <param name="initializers">The field initializers.</param>
     /// <param name="closeBraceToken">The closing brace.</param>
     public StructLiteralExpressionSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken typeIdentifier,
         SyntaxToken openBraceToken,
+        SyntaxToken spreadToken,
+        ExpressionSyntax spreadExpression,
+        SyntaxToken spreadSeparatorToken,
         SeparatedSyntaxList<FieldInitializerSyntax> initializers,
         SyntaxToken closeBraceToken)
         : base(syntaxTree)
     {
         TypeIdentifier = typeIdentifier;
         OpenBraceToken = openBraceToken;
+        SpreadToken = spreadToken;
+        SpreadExpression = spreadExpression;
+        SpreadSeparatorToken = spreadSeparatorToken;
         Initializers = initializers;
         CloseBraceToken = closeBraceToken;
     }
@@ -45,6 +54,15 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
 
     /// <summary>Gets the opening brace.</summary>
     public SyntaxToken OpenBraceToken { get; }
+
+    /// <summary>Gets the optional leading <c>...</c> token.</summary>
+    public SyntaxToken SpreadToken { get; }
+
+    /// <summary>Gets the optional source expression whose public shape is projected.</summary>
+    public ExpressionSyntax SpreadExpression { get; }
+
+    /// <summary>Gets the comma separating the spread from explicit overrides, when present.</summary>
+    public SyntaxToken SpreadSeparatorToken { get; }
 
     /// <summary>Gets the field initializers.</summary>
     public SeparatedSyntaxList<FieldInitializerSyntax> Initializers { get; }
