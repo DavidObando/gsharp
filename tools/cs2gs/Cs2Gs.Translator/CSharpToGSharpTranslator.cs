@@ -13308,6 +13308,16 @@ public sealed class CSharpToGSharpTranslator
 
         private GExpression TranslateMemberAccess(MemberAccessExpressionSyntax member)
         {
+            // Issue #2351: a bare (non-invoked) reference to an extension
+            // method's method group (e.g. assigned to a delegate) never goes
+            // through TranslateInvocation, so track its declaring namespace
+            // here too — otherwise a file relying on an implicit/global
+            // `using` for that namespace would translate with no import.
+            if (this.context.GetSymbolInfo(member).Symbol is IMethodSymbol { IsExtensionMethod: true } memberExtMethod)
+            {
+                this.typeMapper.TrackExtensionMethodNamespace(memberExtMethod);
+            }
+
             // Issue #1879: a C# 14 extension-block member is declared on a
             // synthetic marker type (`INamedTypeSymbol.IsExtension`); rewrite its
             // call sites to the real emitted G# shape before falling into the
@@ -14406,6 +14416,19 @@ public sealed class CSharpToGSharpTranslator
         {
             GExpression target;
             IReadOnlyList<GTypeReference> typeArguments = null;
+
+            // Issue #2351: an extension-method call site (reduced instance
+            // form, unreduced static form, or a bare sibling static call)
+            // names no type, so it never flows through
+            // CSharpTypeMapper.TrackShortenedNamespace (issue #2211's
+            // type-import tracking). Track its declaring namespace here so an
+            // import is still synthesized when the file relies on an
+            // implicit/global `using` for it (e.g. `<ImplicitUsings>enable`
+            // supplying `System.Linq`).
+            if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol { IsExtensionMethod: true } invocationExtMethod)
+            {
+                this.typeMapper.TrackExtensionMethodNamespace(invocationExtMethod);
+            }
 
             // Issue #1893: `grid.GetLength(k)` against a genuine multi-dim array
             // (Rank > 1) has no meaning on the flat backing array gsc actually
