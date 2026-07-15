@@ -183,13 +183,20 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
-    /// Reports that a <c>data struct</c> was declared with no fields (ADR-0029).
+    /// Reports that a <c>data class</c>/<c>data struct</c> was declared with
+    /// no fields. Zero-field data types are supported as of issue #2363 (see
+    /// ADR-0029); this diagnostic is retained for source/API stability in
+    /// case a future invalid zero-field shape needs to be rejected, and
+    /// reports the actual declaration kind ("class" or "struct") rather than
+    /// unconditionally naming it a "struct".
     /// </summary>
     /// <param name="location">The text location of the struct identifier.</param>
     /// <param name="name">The struct name.</param>
-    public void ReportEmptyDataStruct(TextLocation location, string name)
+    /// <param name="isClass">True if the declaration is a <c>class</c>; false if it is a <c>struct</c>.</param>
+    public void ReportEmptyDataStruct(TextLocation location, string name, bool isClass)
     {
-        var message = $"'data struct {name}' requires at least one field; use 'struct' instead.";
+        var kind = isClass ? "class" : "struct";
+        var message = $"'data {kind} {name}' requires at least one field; use '{kind}' instead.";
         Report(location, "GS0104", message);
     }
 

@@ -61,7 +61,7 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0101 | Error | Parameter already declared. | Two parameters share the same name. |
 | GS0102 | Error | Symbol already declared. | A variable or function name is used twice in the same scope. |
 | GS0103 | Error | Method receiver must be a struct or class declared in the same package. | Receiver type is a built-in or external type. |
-| GS0104 | Error | `data struct` requires at least one field. | `data struct Foo {}` — use `struct` instead. |
+| GS0104 | Error | Reserved; not currently emitted. Zero-field `data class`/`data struct` declarations are supported (issue #2363, ADR-0029) with trivial equality/hash/ToString/copy semantics and no synthesized `Deconstruct`. | — |
 | GS0105 | Error | `inline struct` requires exactly one field. | `inline struct Foo { a int; b int }` has two fields. |
 | GS0106 | Error | `inline` cannot be combined with `data`. | `inline data struct Foo { … }` is not legal. (Historical: the `record` keyword was removed by; pre-removal this diagnostic also covered `inline record`.) |
 | GS0107 | Error | `inline struct` cannot be combined with `open`. | `open inline struct Foo { … }` is not legal. |

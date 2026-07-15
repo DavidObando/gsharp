@@ -1663,9 +1663,12 @@ internal sealed class ReflectionMetadataEmitter
             // reservation and EmitClassMethodBodies' matching emit call,
             // which must run in the same relative order (before
             // user-declared methods) so the MethodDef rows line up.
+            // Issue #2363: a zero-field data class skips Deconstruct (six
+            // rows instead of seven) — see DataStructSynthesizer.HasZeroSynthesisFields
+            // and EmitDataStructSynthesizedMembers's matching skip.
             if (c.IsData)
             {
-                methodRow += 7;
+                methodRow += DataStructSynthesizer.HasZeroSynthesisFields(c) ? 6 : 7;
             }
 
             if (!c.Methods.IsDefaultOrEmpty)
@@ -1795,8 +1798,9 @@ internal sealed class ReflectionMetadataEmitter
             {
                 // Issue #410 / ADR-0029: data structs synthesize 7 MethodDef
                 // rows: Equals(object), Equals(Name), GetHashCode, ToString,
-                // op_Equality, op_Inequality, Deconstruct.
-                methodRow += 7;
+                // op_Equality, op_Inequality, Deconstruct. Issue #2363: a
+                // zero-field data struct skips Deconstruct (6 rows instead).
+                methodRow += DataStructSynthesizer.HasZeroSynthesisFields(s) ? 6 : 7;
 
                 // Rubber-duck follow-up to issue #2224: an anonymous-class
                 // literal's synthesized type has no plain fields (only
