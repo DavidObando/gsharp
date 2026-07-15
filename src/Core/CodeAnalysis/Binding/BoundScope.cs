@@ -25,6 +25,17 @@ public sealed class BoundScope
     private ImmutableArray<string>.Builder typeAliasKeys;
     private ImmutableArray<FunctionSymbol>.Builder extensionFunctions;
 
+    // Issue #2342 follow-up: per-storage-key override recording the
+    // DECLARING package of a plain `type Name = Target` alias (see
+    // DeclarationBinder.BindTypeAliasDeclaration and
+    // TryDeclareTypeAlias(string, TypeSymbol, string)), keyed by the exact
+    // same key used in `typeAliases`. Populated only for plain alias
+    // declarations that pass an explicit declaringPackageName; struct/enum/
+    // interface/delegate declarations leave their key unregistered here since
+    // their stored value already carries accurate package identity
+    // intrinsically (see TypePackageName).
+    private ImmutableDictionary<string, string>.Builder aliasDeclaringPackages;
+
     // Issue #2224: lazily created only on the root scope of whatever chain
     // this scope belongs to. Every Binder in a single BindGlobalScope/
     // BindProgram pass shares the same root-scope chain (it's threaded in as
@@ -33,6 +44,11 @@ public sealed class BoundScope
     // lambdas — unify against one shape cache, mirroring Roslyn's
     // per-compilation anonymous-type cache.
     private AnonymousTypeCache anonymousTypeCache;
+
+    // Issue #2342: the ambient "current declaring package" (see
+    // SetCurrentDeclaringPackage), lazily set/cleared only on the root scope
+    // of the chain, exactly like anonymousTypeCache above.
+    private string currentDeclaringPackageName;
 
     private Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol> richAnonymousClassMap;
 
@@ -151,12 +167,37 @@ public sealed class BoundScope
         }
 
         functions ??= ImmutableDictionary.CreateBuilder<string, ImmutableArray<FunctionSymbol>.Builder>();
-        if (!functions.TryGetValue(function.Name, out var bucket))
+        functionKeys ??= ImmutableArray.CreateBuilder<string>();
+
+        // Issue #2342 follow-up: a top-level function's overload set is scoped
+        // to its DECLARING PACKAGE, mirroring TryDeclareTypeAlias. The plain
+        // (unqualified) name key is a first-come-first-served slot: whichever
+        // package's function is declared first under a given simple name
+        // keeps it, so unrelated packages continue to resolve every OTHER
+        // (non-colliding) function by simple name exactly as before (packages
+        // are not real import boundaries — see the class-level scoping notes
+        // on IsSameDeclarationScope). A second, same-simple-name function
+        // declared by a DIFFERENT package is not a genuine duplicate overload;
+        // it is retained under its own package-qualified bucket instead of
+        // being merged into (and duplicate-checked against) a foreign
+        // package's overload set. Two functions from the SAME package (or two
+        // built-ins, both with a null Package) still share one bucket and
+        // still enforce the existing signature-uniqueness rule.
+        var key = function.Name;
+        var incomingPackage = function.Package?.Name;
+        if (functions.TryGetValue(key, out var bucket)
+            && bucket.Count > 0
+            && !string.Equals(bucket[0].Package?.Name, incomingPackage, StringComparison.Ordinal))
+        {
+            key = PackageQualifiedName(incomingPackage, function.Name);
+            functions.TryGetValue(key, out bucket);
+        }
+
+        if (bucket == null)
         {
             bucket = ImmutableArray.CreateBuilder<FunctionSymbol>();
-            functions.Add(function.Name, bucket);
-            functionKeys ??= ImmutableArray.CreateBuilder<string>();
-            functionKeys.Add(function.Name);
+            functions.Add(key, bucket);
+            functionKeys.Add(key);
         }
         else
         {
@@ -196,17 +237,28 @@ public sealed class BoundScope
             return ImmutableArray<FunctionSymbol>.Empty;
         }
 
-        ImmutableArray<FunctionSymbol>.Builder builder = null;
-        for (var s = this; s != null; s = s.Parent)
+        // Issue #2342 follow-up: when the body currently being bound belongs
+        // to a known declaring package (see SetCurrentDeclaringPackage), and
+        // that package declared its OWN function(s) under this simple name
+        // (see TryDeclareFunction's package-qualified fallback bucket),
+        // resolve to that package's own overload set rather than falling
+        // through to whichever package's homonym happens to occupy the plain
+        // name key. A package that does not declare its own function under
+        // this name still sees every OTHER (non-colliding) function by simple
+        // name via the plain-key fallback below, preserving the pre-existing
+        // "one flat namespace" visibility for non-conflicting names.
+        var currentPackage = GetCurrentDeclaringPackage();
+        if (currentPackage != null)
         {
-            if (s.functions != null && s.functions.TryGetValue(name, out var bucket) && bucket.Count > 0)
+            var ownKey = PackageQualifiedName(currentPackage, name);
+            var ownBucket = CollectFunctionBucket(ownKey);
+            if (!ownBucket.IsDefaultOrEmpty)
             {
-                builder ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
-                builder.AddRange(bucket);
+                return ownBucket;
             }
         }
 
-        return builder == null ? ImmutableArray<FunctionSymbol>.Empty : builder.ToImmutable();
+        return CollectFunctionBucket(name);
     }
 
     /// <summary>
@@ -286,7 +338,38 @@ public sealed class BoundScope
         extensionFunctions ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
         extensionFunctionsByName ??= ImmutableDictionary.CreateBuilder<string, ImmutableArray<FunctionSymbol>.Builder>();
 
-        if (extensionFunctionsByName.TryGetValue(function.Name, out var bucket))
+        // Issue #2342 follow-up: mirror TryDeclareFunction's package-scoped
+        // overload-bucket rule for extension functions. An extension's
+        // identity triple (receiverType, name, signature) already keeps two
+        // DIFFERENT user-defined receiver types from different packages from
+        // ever colliding — they are distinct TypeSymbol instances even when
+        // same-named (see #2342) — but two packages that both declare an
+        // extension on a SHARED receiver type (a primitive, an imported/BCL
+        // type, or any other type with no per-package identity of its own)
+        // under the same simple name and signature previously collided as a
+        // spurious GS0264 duplicate. The plain name key remains
+        // first-come-first-served across packages — extensions, like free
+        // functions, are broadly visible by design (packages are not import
+        // boundaries) — so unrelated packages continue to resolve every
+        // OTHER (non-colliding) extension by simple name exactly as before.
+        // A same-name, same-signature extension declared by a DIFFERENT
+        // package than the bucket's first entry is not a genuine duplicate;
+        // it is retained under its own package-qualified bucket instead of
+        // being merged into (and duplicate-checked against) a foreign
+        // package's overload set. Two extensions from the SAME package (or
+        // two with a null Package) still share one bucket and still enforce
+        // the existing signature-uniqueness rule.
+        var key = function.Name;
+        var incomingPackage = function.Package?.Name;
+        if (extensionFunctionsByName.TryGetValue(key, out var bucket)
+            && bucket.Count > 0
+            && !string.Equals(bucket[0].Package?.Name, incomingPackage, StringComparison.Ordinal))
+        {
+            key = PackageQualifiedName(incomingPackage, function.Name);
+            extensionFunctionsByName.TryGetValue(key, out bucket);
+        }
+
+        if (bucket != null)
         {
             foreach (var existing in bucket)
             {
@@ -300,7 +383,7 @@ public sealed class BoundScope
         else
         {
             bucket = ImmutableArray.CreateBuilder<FunctionSymbol>();
-            extensionFunctionsByName.Add(function.Name, bucket);
+            extensionFunctionsByName.Add(key, bucket);
         }
 
         extensionFunctions.Add(function);
@@ -344,115 +427,33 @@ public sealed class BoundScope
     {
         function = null;
 
+        // Issue #2342 follow-up: when the body currently being bound belongs
+        // to a known declaring package (see SetCurrentDeclaringPackage), and
+        // that package owns its OWN package-qualified bucket for `name` (see
+        // TryDeclareExtensionFunction's package-qualified fallback bucket),
+        // prefer a match from that bucket over a foreign package's same-name,
+        // same-signature homonym that occupies the plain simple-name key. A
+        // package that does not declare its own colliding extension under
+        // this name still sees every extension by simple name via the plain
+        // bucket fallback below, preserving the pre-existing "broadly
+        // visible" behavior for non-conflicting extension names.
+        var currentPackage = GetCurrentDeclaringPackage();
+        if (currentPackage != null
+            && extensionFunctionsByName != null
+            && extensionFunctionsByName.TryGetValue(PackageQualifiedName(currentPackage, name), out var ownBucket)
+            && TryFindExtensionInBucket(ownBucket, receiverType, out function))
+        {
+            return true;
+        }
+
         // Issue #1680: probe the name-keyed bucket instead of scanning every
         // extension declared in this scope. A scope with no extensions named
         // `name` is skipped in O(1) instead of an O(extensions) miss.
         if (extensionFunctionsByName != null
-            && extensionFunctionsByName.TryGetValue(name, out var bucket))
+            && extensionFunctionsByName.TryGetValue(name, out var bucket)
+            && TryFindExtensionInBucket(bucket, receiverType, out function))
         {
-            foreach (var ext in bucket)
-            {
-                if (ReceiverMatches(ext.ExtensionReceiverType, receiverType))
-                {
-                    function = ext;
-                    return true;
-                }
-            }
-
-            // Issue #773 / ADR-0084 §L2 follow-up: an extension whose
-            // receiver type carries one of the function's own type
-            // parameters (e.g. `(self sequence[T])`, `(self IEnumerable[T])`,
-            // `(self T?)`, `(self Dictionary[K, V])`) is never reference-
-            // equal to a concrete call-site receiver. Fall back to receiver
-            // inference: try to unify the declared open receiver with the
-            // call-site type and accept the candidate when every type
-            // parameter that appears in the receiver gets bound.
-            //
-            // ADR-0097 / issue #775: when multiple candidates unify against
-            // the same receiver type (e.g. one carrying `[T class]` and one
-            // carrying `[T struct]`), the constraint check decides the
-            // winner. We collect every unifiable candidate, drop those
-            // whose constraints are violated by the inferred substitution,
-            // and prefer the most specific (struct > class > unconstrained)
-            // surviving candidate. Mutually-incomparable cases fall through
-            // to the first declared candidate so the call site is not
-            // silently ambiguous (the existing GS0160 will surface from the
-            // call-binding path if applicable).
-            FunctionSymbol candidate = null;
-            int candidateSpecificity = -1;
-            foreach (var ext in bucket)
-            {
-                if (ext.TypeParameters.IsDefaultOrEmpty)
-                {
-                    continue;
-                }
-
-                if (ext.ExtensionReceiverType == null || ext.ExtensionReceiverType == TypeSymbol.Error)
-                {
-                    continue;
-                }
-
-                if (!ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters))
-                {
-                    continue;
-                }
-
-                if (!TryUnifyAndCheckConstraints(ext, receiverType, out var specificity))
-                {
-                    continue;
-                }
-
-                if (candidate == null || specificity > candidateSpecificity)
-                {
-                    candidate = ext;
-                    candidateSpecificity = specificity;
-                }
-            }
-
-            if (candidate != null)
-            {
-                function = candidate;
-                return true;
-            }
-
-            // Issue #1548: no exact and no generic-unification match in this
-            // scope. Broaden to implicitly-convertible (subtype) receivers: a
-            // declared receiver `R` is applicable when the call-site receiver
-            // `S` is implicitly convertible to `R` (identity/implicit-reference/
-            // boxing). Among applicable candidates pick the MOST specific
-            // (most-derived) declared receiver so this singular path stays
-            // deterministic (e.g. `string` beats `object`); ties fall back to
-            // declaration order.
-            FunctionSymbol subtypeCandidate = null;
-            var subtypeSpecificity = -1;
-            foreach (var ext in bucket)
-            {
-                if (!ext.TypeParameters.IsDefaultOrEmpty
-                    && ext.ExtensionReceiverType != null
-                    && ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters))
-                {
-                    // Open receivers are handled by the unification pass above.
-                    continue;
-                }
-
-                if (!ReceiverConvertible(ext.ExtensionReceiverType, receiverType))
-                {
-                    continue;
-                }
-
-                var specificity = ReceiverConvertibilitySpecificity(bucket, ext.ExtensionReceiverType);
-                if (subtypeCandidate == null || specificity > subtypeSpecificity)
-                {
-                    subtypeCandidate = ext;
-                    subtypeSpecificity = specificity;
-                }
-            }
-
-            if (subtypeCandidate != null)
-            {
-                function = subtypeCandidate;
-                return true;
-            }
+            return true;
         }
 
         return Parent?.TryLookupExtensionFunction(receiverType, name, out function) ?? false;
@@ -479,57 +480,26 @@ public sealed class BoundScope
     /// <returns>The matching extension overloads, or an empty array when none match.</returns>
     public ImmutableArray<FunctionSymbol> TryLookupExtensionFunctions(TypeSymbol receiverType, string name)
     {
-        ImmutableArray<FunctionSymbol>.Builder builder = null;
-        for (var s = this; s != null; s = s.Parent)
+        // Issue #2342 follow-up: mirror TryLookupFunctions' ambient-package
+        // preference. If the body currently being bound belongs to a known
+        // declaring package and that package owns its OWN package-qualified
+        // bucket for `name` (populated only when a cross-package collision
+        // occurred — see TryDeclareExtensionFunction), resolve to that
+        // package's own matching overloads rather than mixing in a foreign
+        // package's same-name, same-signature homonym. A package with no
+        // colliding extension under this name still sees every OTHER
+        // extension by simple name via the plain-key fallback below.
+        var currentPackage = GetCurrentDeclaringPackage();
+        if (currentPackage != null)
         {
-            // Issue #1680: probe the name-keyed bucket instead of scanning every
-            // extension declared in this scope; scopes with no extension named
-            // `name` are skipped in O(1).
-            if (s.extensionFunctionsByName == null
-                || !s.extensionFunctionsByName.TryGetValue(name, out var bucket))
+            var ownMatches = CollectExtensionFunctionMatches(PackageQualifiedName(currentPackage, name), receiverType);
+            if (!ownMatches.IsDefaultOrEmpty)
             {
-                continue;
-            }
-
-            foreach (var ext in bucket)
-            {
-                var matches = ReceiverMatches(ext.ExtensionReceiverType, receiverType);
-                if (!matches
-                    && !ext.TypeParameters.IsDefaultOrEmpty
-                    && ext.ExtensionReceiverType != null
-                    && ext.ExtensionReceiverType != TypeSymbol.Error
-                    && ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters)
-                    && TryUnifyAndCheckConstraints(ext, receiverType, out _))
-                {
-                    matches = true;
-                }
-
-                // Issue #1548: broaden to implicitly-convertible (subtype)
-                // receivers with a CONCRETE declared receiver type. Open
-                // receivers (those mentioning the function's own type
-                // parameters) are handled by the unification pass above; a
-                // concrete `R` is applicable whenever the call-site receiver is
-                // implicitly convertible to it. Every applicable candidate is
-                // collected so the caller's overload resolution — which scores
-                // the receiver as parameter 0 — picks the most specific one.
-                if (!matches
-                    && (ext.TypeParameters.IsDefaultOrEmpty
-                        || ext.ExtensionReceiverType == null
-                        || !ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters))
-                    && ReceiverConvertible(ext.ExtensionReceiverType, receiverType))
-                {
-                    matches = true;
-                }
-
-                if (matches)
-                {
-                    builder ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
-                    builder.Add(ext);
-                }
+                return ownMatches;
             }
         }
 
-        return builder == null ? ImmutableArray<FunctionSymbol>.Empty : builder.ToImmutable();
+        return CollectExtensionFunctionMatches(name, receiverType);
     }
 
     /// <summary>Gets the extension functions declared in this scope (Phase 3.B.6).</summary>
@@ -546,6 +516,24 @@ public sealed class BoundScope
     {
         if (name != null && symbols != null && symbols.TryGetValue(name, out var symbol))
         {
+            // Issue #2342 follow-up: `symbols[name]` only ever holds the
+            // FIRST top-level function ever declared under this simple name
+            // (see TryDeclareFunction), regardless of which package declared
+            // it. When a body from a known declaring package is currently
+            // being bound and that package owns its OWN overload bucket for
+            // `name` (see TryLookupFunctions), prefer that package's own
+            // function so a bare-name reference resolves to the caller's own
+            // declaration rather than an unrelated package's same-named
+            // function that merely happened to be declared first.
+            if (symbol is FunctionSymbol && GetCurrentDeclaringPackage() != null)
+            {
+                var ownOverloads = TryLookupFunctions(name);
+                if (!ownOverloads.IsDefaultOrEmpty && !ReferenceEquals(ownOverloads[0], symbol))
+                {
+                    return ownOverloads[0];
+                }
+            }
+
             return symbol;
         }
 
@@ -732,6 +720,35 @@ public sealed class BoundScope
     /// <param name="target">The underlying type.</param>
     /// <returns>Whether the alias was declared (false if the name was already taken).</returns>
     public bool TryDeclareTypeAlias(string name, TypeSymbol target)
+        => TryDeclareTypeAlias(name, target, declaringPackageName: null);
+
+    /// <summary>
+    /// Tries to declare a type alias, with an explicit declaring-package
+    /// identity for the alias itself.
+    /// </summary>
+    /// <param name="name">The alias name.</param>
+    /// <param name="target">The underlying type.</param>
+    /// <param name="declaringPackageName">
+    /// Issue #2342 follow-up: the package that DECLARES this alias (see
+    /// <see cref="DeclarationBinder.BindTypeAliasDeclaration(GSharp.Core.CodeAnalysis.Syntax.TypeAliasDeclarationSyntax, PackageSymbol)"/>),
+    /// or <see langword="null"/>. A plain <c>type Name = Target</c> alias has
+    /// no dedicated symbol of its own — <c>target</c> IS the aliased type —
+    /// so, absent this override, its package identity would have to be
+    /// inferred (best-effort) from whatever package <c>target</c> itself
+    /// belongs to (see <see cref="TypePackageName"/>), which is <see
+    /// langword="null"/> for a primitive/imported/BCL/anonymous target and
+    /// therefore indistinguishable between two unrelated packages that each
+    /// alias such a target under the same simple name. Passing the alias's
+    /// OWN declaring package here gives it a stable identity independent of
+    /// the target, so two same-simple-name aliases in different packages
+    /// coexist (like any other top-level declaration under #2342) even when
+    /// their targets have no package identity of their own — or share one.
+    /// Callers declaring a real symbol (struct/enum/interface/delegate) pass
+    /// <see langword="null"/>: their <paramref name="target"/> already
+    /// carries accurate, stable package identity intrinsically.
+    /// </param>
+    /// <returns>Whether the alias was declared (false if the name was already taken).</returns>
+    public bool TryDeclareTypeAlias(string name, TypeSymbol target, string declaringPackageName)
     {
         if (name == null)
         {
@@ -746,25 +763,56 @@ public sealed class BoundScope
         if (!TypeAliasVisible(key))
         {
             AddTypeAlias(key, target);
+            RegisterAliasDeclaringPackage(key, declaringPackageName);
             return true;
         }
 
-        // Issue #1080: a name clash on the simple (arity-bearing) key is only a
-        // genuine duplicate — GS0102 — when both types live in the SAME
-        // declaration scope (both top-level, or both nested in the SAME
-        // enclosing type). A nested type must NOT collide with a package-level
-        // type of the same simple name, nor with a nested type of a DIFFERENT
-        // enclosing type. Such non-conflicting types coexist: the package-level
-        // (top-level) type keeps the simple key so it stays resolvable by simple
-        // name, while the nested "loser" is retained under its containing-type-
-        // qualified key (so emit — which enumerates the stored values — still
-        // produces its TypeDef).
+        // Issue #1080 / #2342: a name clash on the simple (arity-bearing) key is
+        // only a genuine duplicate — GS0102 — when both types live in the SAME
+        // declaration scope: both nested in the SAME enclosing type, or both
+        // top-level AND in the SAME package. A nested type must NOT collide with
+        // a top-level type of the same simple name, nor with a nested type of a
+        // DIFFERENT enclosing type (#1080); and two top-level types of the same
+        // simple name in DIFFERENT packages/namespaces are not duplicates either
+        // (#2342) — a single compilation-wide flat scope must not defeat package
+        // isolation. Such non-conflicting types coexist: whichever type already
+        // owns the simple key keeps it so it stays resolvable by simple name,
+        // while the "loser" is retained under a distinct fallback key (the
+        // containing-type-qualified key for a nested-vs-top-level clash, or a
+        // package-qualified key for a top-level-vs-top-level clash across
+        // packages) — emit, which enumerates all stored values regardless of
+        // key, still produces its TypeDef.
         var existing = TryGetTypeAliasInChain(key, out var existingValue) ? existingValue : null;
         var targetEnclosing = TypeContainingType(target);
         var existingEnclosing = TypeContainingType(existing);
-        if (IsSameDeclarationScope(existingEnclosing, targetEnclosing))
+        if (IsSameDeclarationScope(existing, target, key, declaringPackageName))
         {
             return false;
+        }
+
+        // Issue #2342: both declarations reach here as TOP-LEVEL (no enclosing
+        // type) — a same-package top-level clash was already rejected above by
+        // IsSameDeclarationScope — so they belong to DIFFERENT packages. Neither
+        // is more "top-level" than the other, so (unlike the nested-vs-top-level
+        // case below) the already-declared type keeps the simple key undisturbed
+        // and the incoming type is retained under a package-qualified key. Both
+        // stay resolvable (the qualified key is still enumerated at emit time)
+        // without moving state the first declaration may already be referenced
+        // by.
+        if (targetEnclosing == null && existingEnclosing == null)
+        {
+            var targetPackage = declaringPackageName ?? TypePackageName(target);
+            var packageQualifiedKey = MangleArity(PackageQualifiedName(targetPackage, name), arity);
+            if (TypeAliasVisible(packageQualifiedKey))
+            {
+                // Same simple name AND same package-qualified key: a genuine
+                // duplicate (e.g. three-plus same-named packages colliding).
+                return false;
+            }
+
+            AddTypeAlias(packageQualifiedKey, target);
+            RegisterAliasDeclaringPackage(packageQualifiedKey, declaringPackageName);
+            return true;
         }
 
         // Prefer the top-level type as the owner of the simple key. If a nested
@@ -780,7 +828,13 @@ public sealed class BoundScope
             }
 
             AddTypeAlias(existingQualifiedKey, existing);
+            if (TryGetAliasDeclaringPackageInChain(key, out var carriedOverPackage))
+            {
+                RegisterAliasDeclaringPackage(existingQualifiedKey, carriedOverPackage);
+            }
+
             SetTypeAliasOverride(key, target);
+            RegisterAliasDeclaringPackage(key, declaringPackageName);
             return true;
         }
 
@@ -795,6 +849,7 @@ public sealed class BoundScope
         }
 
         AddTypeAlias(qualifiedKey, target);
+        RegisterAliasDeclaringPackage(qualifiedKey, declaringPackageName);
         return true;
     }
 
@@ -853,6 +908,35 @@ public sealed class BoundScope
             return false;
         }
 
+        // Issue #2342: when a "current declaring package" is set (the body of a
+        // top-level declaration belonging to that package is being bound — see
+        // <see cref="SetCurrentDeclaringPackage"/>), prefer that package's OWN
+        // type over an unrelated package's same-named homonym occupying the
+        // plain simple key. Without this, a package whose top-level type LOST
+        // the plain-simple-key "race" against another package's same-named
+        // type (see <see cref="TryDeclareTypeAlias(string, TypeSymbol, string)"/>) could never resolve ITS
+        // OWN type by simple name from within its own code — the exact
+        // "AnonymousType0 declared independently in two packages" shape from
+        // the real Oahu.Data migration corpus.
+        var currentPackage = GetCurrentDeclaringPackage();
+        if (currentPackage != null)
+        {
+            if (preferredArity > 0)
+            {
+                var ownArityKey = MangleArity(PackageQualifiedName(currentPackage, name), preferredArity);
+                if (TryGetTypeAliasInChain(ownArityKey, out type))
+                {
+                    return true;
+                }
+            }
+
+            var ownKey = PackageQualifiedName(currentPackage, name);
+            if (TryGetTypeAliasInChain(ownKey, out type))
+            {
+                return true;
+            }
+        }
+
         if (preferredArity > 0)
         {
             var key = MangleArity(name, preferredArity);
@@ -894,7 +978,7 @@ public sealed class BoundScope
     /// Issue #1174: resolves a nested type by its enclosing <paramref name="container"/>
     /// and simple <paramref name="simpleName"/>, rather than by global simple
     /// name. This is required when a top-level type shares the nested type's
-    /// simple name: per <see cref="TryDeclareTypeAlias"/>, the top-level homonym
+    /// simple name: per <see cref="TryDeclareTypeAlias(string, TypeSymbol, string)"/>, the top-level homonym
     /// keeps the simple key while the nested type is retained under its
     /// containing-type-qualified key (e.g. <c>"C.E"</c>). A plain
     /// <see cref="TryLookupTypeAlias(string, out TypeSymbol)"/> of the simple
@@ -1053,6 +1137,34 @@ public sealed class BoundScope
         => Parent != null ? Parent.GetAnonymousTypeCache() : anonymousTypeCache ??= new AnonymousTypeCache();
 
     /// <summary>
+    /// Issue #2342: sets the package name of the top-level (or nested) type or
+    /// function declaration whose body/initializers are CURRENTLY being bound,
+    /// so <see cref="TryLookupTypeAlias(string, int, out TypeSymbol)"/> can
+    /// prefer that package's own type over a same-simple-name homonym declared
+    /// in a different package. Stored at the root of this scope's chain
+    /// (mirroring <see cref="GetAnonymousTypeCache"/>) since one shared
+    /// <see cref="BoundScope"/> instance is used for the whole compilation.
+    /// Pass <see langword="null"/> to clear (no ambient package preference —
+    /// the pre-#2342 behavior). Returns the PREVIOUS value so a caller can
+    /// restore it once the body finishes binding (nesting-safe: a top-level
+    /// declaration's nested types/functions always share its own package, so
+    /// they never need their own inner set/restore).
+    /// </summary>
+    /// <param name="packageName">The package name to make ambient for lookup, or <see langword="null"/> to clear it.</param>
+    /// <returns>The previous ambient package name.</returns>
+    internal string SetCurrentDeclaringPackage(string packageName)
+    {
+        if (Parent != null)
+        {
+            return Parent.SetCurrentDeclaringPackage(packageName);
+        }
+
+        var previous = currentDeclaringPackageName;
+        currentDeclaringPackageName = packageName;
+        return previous;
+    }
+
+    /// <summary>
     /// Gets the per-compile-pass map from a "rich" anonymous-object literal
     /// (one carrying a base/interface clause, methods, or events — ADR-0146 /
     /// issue #2243) to its desugared, compiler-synthesized backing
@@ -1063,6 +1175,14 @@ public sealed class BoundScope
     /// <returns>The shared rich-anonymous-object map for this scope's chain.</returns>
     internal Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol> GetRichAnonymousClassMap()
         => Parent != null ? Parent.GetRichAnonymousClassMap() : richAnonymousClassMap ??= new Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol>();
+
+    /// <summary>
+    /// Issue #2342: gets the ambient "current declaring package" set by
+    /// <see cref="SetCurrentDeclaringPackage"/>, or <see langword="null"/> when
+    /// none is set.
+    /// </summary>
+    private string GetCurrentDeclaringPackage()
+        => Parent != null ? Parent.GetCurrentDeclaringPackage() : currentDeclaringPackageName;
 
     /// <summary>
     /// Adds a brand-new type-alias key, not previously visible anywhere in the
@@ -1080,7 +1200,7 @@ public sealed class BoundScope
 
     /// <summary>
     /// Overrides the value of a type-alias key that already exists somewhere in
-    /// the scope chain (the eviction/promotion case in <see cref="TryDeclareTypeAlias"/>).
+    /// the scope chain (the eviction/promotion case in <see cref="TryDeclareTypeAlias(string, TypeSymbol, string)"/>).
     /// Only overwrites the value at this scope; it does not move the key's
     /// declaration-order position (which was fixed when the key was first
     /// introduced by <see cref="AddTypeAlias"/>) and does not mutate the
@@ -1090,6 +1210,47 @@ public sealed class BoundScope
     {
         typeAliases ??= ImmutableDictionary.CreateBuilder<string, TypeSymbol>();
         typeAliases[key] = target;
+    }
+
+    /// <summary>
+    /// Issue #2342 follow-up: records that the type-alias entry stored under
+    /// <paramref name="key"/> was declared by <paramref name="declaringPackageName"/>
+    /// (a plain <c>type Name = Target</c> alias — see
+    /// <see cref="TryDeclareTypeAlias(string, TypeSymbol, string)"/>). A no-op
+    /// when <paramref name="declaringPackageName"/> is <see langword="null"/>
+    /// (the caller is declaring a real symbol, not a plain alias).
+    /// </summary>
+    private void RegisterAliasDeclaringPackage(string key, string declaringPackageName)
+    {
+        if (declaringPackageName == null)
+        {
+            return;
+        }
+
+        aliasDeclaringPackages ??= ImmutableDictionary.CreateBuilder<string, string>();
+        aliasDeclaringPackages[key] = declaringPackageName;
+    }
+
+    /// <summary>
+    /// Issue #2342 follow-up: looks up the recorded alias-declaring-package
+    /// override for <paramref name="key"/> (see <see cref="RegisterAliasDeclaringPackage"/>),
+    /// walking the Parent chain the same way <see cref="TryGetTypeAliasInChain"/>
+    /// does. Returns <see langword="false"/> when the entry at <paramref name="key"/>
+    /// is a real symbol (no override was ever registered for it) rather than a
+    /// plain alias.
+    /// </summary>
+    private bool TryGetAliasDeclaringPackageInChain(string key, out string declaringPackageName)
+    {
+        for (var s = this; s != null; s = s.Parent)
+        {
+            if (s.aliasDeclaringPackages != null && s.aliasDeclaringPackages.TryGetValue(key, out declaringPackageName))
+            {
+                return true;
+            }
+        }
+
+        declaringPackageName = null;
+        return false;
     }
 
     /// <summary>Whether <paramref name="key"/> is visible anywhere in this scope chain.</summary>
@@ -1148,6 +1309,219 @@ public sealed class BoundScope
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Issue #2342 follow-up: collects every function stored under the exact
+    /// storage <paramref name="key"/> across this scope's Parent chain (the
+    /// same walking behavior <see cref="TryLookupFunctions"/> always used,
+    /// factored out so it can be tried against either a package-qualified key
+    /// or the plain simple-name key).
+    /// </summary>
+    /// <param name="key">The exact function-table storage key.</param>
+    /// <returns>The overload set stored under <paramref name="key"/>, or empty.</returns>
+    private ImmutableArray<FunctionSymbol> CollectFunctionBucket(string key)
+    {
+        ImmutableArray<FunctionSymbol>.Builder builder = null;
+        for (var s = this; s != null; s = s.Parent)
+        {
+            if (s.functions != null && s.functions.TryGetValue(key, out var bucket) && bucket.Count > 0)
+            {
+                builder ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
+                builder.AddRange(bucket);
+            }
+        }
+
+        return builder == null ? ImmutableArray<FunctionSymbol>.Empty : builder.ToImmutable();
+    }
+
+    /// <summary>
+    /// Issue #2342 follow-up: runs the exact-match / generic-receiver-
+    /// unification / implicit-conversion (subtype) three-phase extension
+    /// match documented on <see cref="TryLookupExtensionFunction"/> against a
+    /// single already-resolved bucket, factored out so the same matching
+    /// logic can be tried against either a package-qualified bucket or the
+    /// plain simple-name bucket without duplicating the phases.
+    /// </summary>
+    /// <param name="bucket">The extension-function bucket to search.</param>
+    /// <param name="receiverType">The static type of the call receiver.</param>
+    /// <param name="function">The matching extension function, when found.</param>
+    /// <returns>True when an extension function in <paramref name="bucket"/> matches.</returns>
+    private bool TryFindExtensionInBucket(ImmutableArray<FunctionSymbol>.Builder bucket, TypeSymbol receiverType, out FunctionSymbol function)
+    {
+        function = null;
+
+        foreach (var ext in bucket)
+        {
+            if (ReceiverMatches(ext.ExtensionReceiverType, receiverType))
+            {
+                function = ext;
+                return true;
+            }
+        }
+
+        // Issue #773 / ADR-0084 §L2 follow-up: an extension whose receiver
+        // type carries one of the function's own type parameters (e.g.
+        // `(self sequence[T])`, `(self IEnumerable[T])`, `(self T?)`,
+        // `(self Dictionary[K, V])`) is never reference-equal to a concrete
+        // call-site receiver. Fall back to receiver inference: try to unify
+        // the declared open receiver with the call-site type and accept the
+        // candidate when every type parameter that appears in the receiver
+        // gets bound.
+        //
+        // ADR-0097 / issue #775: when multiple candidates unify against the
+        // same receiver type (e.g. one carrying `[T class]` and one carrying
+        // `[T struct]`), the constraint check decides the winner. We collect
+        // every unifiable candidate, drop those whose constraints are
+        // violated by the inferred substitution, and prefer the most
+        // specific (struct > class > unconstrained) surviving candidate.
+        // Mutually-incomparable cases fall through to the first declared
+        // candidate so the call site is not silently ambiguous (the existing
+        // GS0160 will surface from the call-binding path if applicable).
+        FunctionSymbol candidate = null;
+        int candidateSpecificity = -1;
+        foreach (var ext in bucket)
+        {
+            if (ext.TypeParameters.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            if (ext.ExtensionReceiverType == null || ext.ExtensionReceiverType == TypeSymbol.Error)
+            {
+                continue;
+            }
+
+            if (!ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters))
+            {
+                continue;
+            }
+
+            if (!TryUnifyAndCheckConstraints(ext, receiverType, out var specificity))
+            {
+                continue;
+            }
+
+            if (candidate == null || specificity > candidateSpecificity)
+            {
+                candidate = ext;
+                candidateSpecificity = specificity;
+            }
+        }
+
+        if (candidate != null)
+        {
+            function = candidate;
+            return true;
+        }
+
+        // Issue #1548: no exact and no generic-unification match in this
+        // bucket. Broaden to implicitly-convertible (subtype) receivers: a
+        // declared receiver `R` is applicable when the call-site receiver `S`
+        // is implicitly convertible to `R` (identity/implicit-reference/
+        // boxing). Among applicable candidates pick the MOST specific
+        // (most-derived) declared receiver so this singular path stays
+        // deterministic (e.g. `string` beats `object`); ties fall back to
+        // declaration order.
+        FunctionSymbol subtypeCandidate = null;
+        var subtypeSpecificity = -1;
+        foreach (var ext in bucket)
+        {
+            if (!ext.TypeParameters.IsDefaultOrEmpty
+                && ext.ExtensionReceiverType != null
+                && ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters))
+            {
+                // Open receivers are handled by the unification pass above.
+                continue;
+            }
+
+            if (!ReceiverConvertible(ext.ExtensionReceiverType, receiverType))
+            {
+                continue;
+            }
+
+            var specificity = ReceiverConvertibilitySpecificity(bucket, ext.ExtensionReceiverType);
+            if (subtypeCandidate == null || specificity > subtypeSpecificity)
+            {
+                subtypeCandidate = ext;
+                subtypeSpecificity = specificity;
+            }
+        }
+
+        if (subtypeCandidate != null)
+        {
+            function = subtypeCandidate;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #2342 follow-up: collects every extension-function overload
+    /// stored under the exact storage <paramref name="key"/> across this
+    /// scope's Parent chain that matches <paramref name="receiverType"/> (the
+    /// same walking behavior <see cref="TryLookupExtensionFunctions"/> always
+    /// used, factored out so it can be tried against either a
+    /// package-qualified key or the plain simple-name key). Honours the same
+    /// three dispatch phases as <see cref="TryFindExtensionInBucket"/> —
+    /// exact-match, generic-receiver unification (issue #773/#775), and
+    /// implicit-conversion (subtype) broadening (issue #1548) — but collects
+    /// every applicable candidate instead of stopping at the first.
+    /// </summary>
+    /// <param name="key">The exact extension-function table storage key.</param>
+    /// <param name="receiverType">The static type of the call receiver.</param>
+    /// <returns>The matching extension overloads, or an empty array when none match.</returns>
+    private ImmutableArray<FunctionSymbol> CollectExtensionFunctionMatches(string key, TypeSymbol receiverType)
+    {
+        ImmutableArray<FunctionSymbol>.Builder builder = null;
+        for (var s = this; s != null; s = s.Parent)
+        {
+            if (s.extensionFunctionsByName == null
+                || !s.extensionFunctionsByName.TryGetValue(key, out var bucket))
+            {
+                continue;
+            }
+
+            foreach (var ext in bucket)
+            {
+                var matches = ReceiverMatches(ext.ExtensionReceiverType, receiverType);
+                if (!matches
+                    && !ext.TypeParameters.IsDefaultOrEmpty
+                    && ext.ExtensionReceiverType != null
+                    && ext.ExtensionReceiverType != TypeSymbol.Error
+                    && ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters)
+                    && TryUnifyAndCheckConstraints(ext, receiverType, out _))
+                {
+                    matches = true;
+                }
+
+                // Issue #1548: broaden to implicitly-convertible (subtype)
+                // receivers with a CONCRETE declared receiver type. Open
+                // receivers (those mentioning the function's own type
+                // parameters) are handled by the unification pass above; a
+                // concrete `R` is applicable whenever the call-site receiver is
+                // implicitly convertible to it. Every applicable candidate is
+                // collected so the caller's overload resolution — which scores
+                // the receiver as parameter 0 — picks the most specific one.
+                if (!matches
+                    && (ext.TypeParameters.IsDefaultOrEmpty
+                        || ext.ExtensionReceiverType == null
+                        || !ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters))
+                    && ReceiverConvertible(ext.ExtensionReceiverType, receiverType))
+                {
+                    matches = true;
+                }
+
+                if (matches)
+                {
+                    builder ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
+                    builder.Add(ext);
+                }
+            }
+        }
+
+        return builder == null ? ImmutableArray<FunctionSymbol>.Empty : builder.ToImmutable();
     }
 
     /// <summary>
@@ -1383,12 +1757,60 @@ public sealed class BoundScope
         => ReferenceEquals(TypeContainingType(type), container);
 
     /// <summary>
-    /// Issue #1080: two type declarations share a declaration scope when both
-    /// are top-level (no enclosing type) or both are nested directly in the
-    /// SAME enclosing type. Only same-scope same-name types are duplicates.
+    /// Issue #2342: returns the declaring package name of a top-level user type
+    /// symbol, generalized across every symbol kind that shares the top-level
+    /// type/alias tables (classes/data classes and structs via
+    /// <see cref="StructSymbol"/>, enums, interfaces, and named delegates), or
+    /// <c>null</c> when the symbol carries no package identity. A plain
+    /// <c>type Name = ...</c> alias (<see cref="DeclarationBinder.BindTypeAliasDeclaration"/>)
+    /// has no dedicated symbol of its own — <c>target</c> IS the aliased type —
+    /// so its "package" for duplicate-detection purposes is, as a best effort,
+    /// whatever package the aliased type itself belongs to (or <c>null</c> for
+    /// an imported/BCL/primitive alias target, preserving prior same-scope
+    /// behavior for those).
     /// </summary>
-    private static bool IsSameDeclarationScope(TypeSymbol a, TypeSymbol b)
-        => a == null ? b == null : ReferenceEquals(a, b);
+    private static string TypePackageName(TypeSymbol type) => type switch
+    {
+        StructSymbol s => s.PackageName,
+        EnumSymbol e => e.PackageName,
+        InterfaceSymbol i => i.PackageName,
+        DelegateTypeSymbol d => d.PackageName,
+        _ => null,
+    };
+
+    /// <summary>
+    /// Issue #1080 / #2342: two type declarations share a declaration scope —
+    /// and are therefore a genuine GS0102 duplicate on a simple-name clash —
+    /// when both are nested directly in the SAME enclosing type, or both are
+    /// top-level (no enclosing type) AND declared in the SAME package. Two
+    /// top-level declarations of the same simple name in DIFFERENT packages no
+    /// longer share a scope: package identity, not one flat compilation-wide
+    /// table, decides top-level uniqueness. Package identity for the
+    /// already-stored <paramref name="existing"/> value prefers a registered
+    /// alias-declaring-package override at <paramref name="key"/> (see
+    /// <see cref="TryGetAliasDeclaringPackageInChain"/>) over the best-effort
+    /// <see cref="TypePackageName"/> inference from the value itself; package
+    /// identity for the incoming <paramref name="target"/> prefers the caller-
+    /// supplied <paramref name="targetDeclaringPackageOverride"/> the same way.
+    /// This is what gives a plain <c>type Name = Target</c> alias a stable
+    /// declaring-package identity independent of whatever package (if any) its
+    /// target happens to belong to.
+    /// </summary>
+    private bool IsSameDeclarationScope(TypeSymbol existing, TypeSymbol target, string key, string targetDeclaringPackageOverride)
+    {
+        var existingEnclosing = TypeContainingType(existing);
+        var targetEnclosing = TypeContainingType(target);
+        if (existingEnclosing == null && targetEnclosing == null)
+        {
+            var existingPackage = TryGetAliasDeclaringPackageInChain(key, out var existingOverride)
+                ? existingOverride
+                : TypePackageName(existing);
+            var targetPackage = targetDeclaringPackageOverride ?? TypePackageName(target);
+            return string.Equals(existingPackage, targetPackage, StringComparison.Ordinal);
+        }
+
+        return ReferenceEquals(existingEnclosing, targetEnclosing);
+    }
 
     /// <summary>
     /// Issue #1080: builds the containing-type-qualified dotted name of a type
@@ -1409,6 +1831,21 @@ public sealed class BoundScope
         parts.Reverse();
         return string.Join(".", parts);
     }
+
+    /// <summary>
+    /// Issue #2342: builds the package-qualified fallback storage-key segment
+    /// for a top-level type — <c>packageName + "#" + simpleName</c> — used when
+    /// two top-level declarations share a simple (arity-mangled) name but
+    /// belong to different packages. <c>'#'</c> cannot appear in a gsharp
+    /// identifier or in a package name (both are lexed from
+    /// letter/digit/underscore identifier tokens — optionally dot-joined for a
+    /// package name — see <see cref="GSharp.Core.CodeAnalysis.Syntax.Lexer"/>),
+    /// nor in the dotted containing-type-qualified key format produced by
+    /// <see cref="QualifiedTypeName"/>, so this key space never collides with
+    /// either of those.
+    /// </summary>
+    private static string PackageQualifiedName(string packageName, string simpleName)
+        => (packageName ?? string.Empty) + "#" + simpleName;
 
     /// <summary>
     /// Issue #1051: parses a composite storage key, reporting whether it names

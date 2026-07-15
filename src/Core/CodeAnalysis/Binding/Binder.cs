@@ -723,6 +723,25 @@ public sealed class Binder
             packageByTree[tree] = packageSymbol;
         }
 
+        // Issue #2342: runs `action` with `pkg`'s name set as the ambient
+        // "current declaring package" (see `BoundScope.SetCurrentDeclaringPackage`)
+        // so a type-alias lookup started from within `action` prefers that
+        // package's own same-simple-name type over an unrelated package's
+        // homonym, then restores the previous ambient value. Used to wrap
+        // every per-declaration shell/body binding call below.
+        void RunWithPackage(PackageSymbol pkg, Action action)
+        {
+            var previousPackage = binder.scope.SetCurrentDeclaringPackage(pkg?.Name);
+            try
+            {
+                action();
+            }
+            finally
+            {
+                binder.scope.SetCurrentDeclaringPackage(previousPackage);
+            }
+        }
+
         var importDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
                                  .OfType<ImportSyntax>();
         foreach (var import in importDeclarations)
@@ -734,8 +753,9 @@ public sealed class Binder
                                                .OfType<TypeAliasDeclarationSyntax>();
         foreach (var typeAlias in typeAliasDeclarations)
         {
+            var owningPackage = packageByTree[typeAlias.SyntaxTree];
             binder.declarations.ValidateTopLevelProtected(typeAlias.AccessibilityModifier);
-            binder.declarations.BindTypeAliasDeclaration(typeAlias);
+            RunWithPackage(owningPackage, () => binder.declarations.BindTypeAliasDeclaration(typeAlias, owningPackage));
         }
 
         // ADR-0059 / issue #255: declare named delegate types BEFORE
@@ -747,7 +767,7 @@ public sealed class Binder
         {
             var owningPackage = packageByTree[delegateSyntax.SyntaxTree];
             binder.declarations.ValidateTopLevelProtected(delegateSyntax.AccessibilityModifier);
-            binder.declarations.BindDelegateDeclaration(delegateSyntax, owningPackage);
+            RunWithPackage(owningPackage, () => binder.declarations.BindDelegateDeclaration(delegateSyntax, owningPackage));
         }
 
         var interfaceDeclarations = PartialTypeMerger.MergeInterfaces(
@@ -765,7 +785,8 @@ public sealed class Binder
         {
             var owningPackage = packageByTree[ifaceSyntax.SyntaxTree];
             binder.declarations.ValidateTopLevelProtected(ifaceSyntax.AccessibilityModifier);
-            var sym = binder.declarations.DeclareInterfaceSymbol(ifaceSyntax, owningPackage);
+            InterfaceSymbol sym = null;
+            RunWithPackage(owningPackage, () => sym = binder.declarations.DeclareInterfaceSymbol(ifaceSyntax, owningPackage));
             if (sym != null)
             {
                 declaredInterfaces.Add((ifaceSyntax, sym));
@@ -778,7 +799,7 @@ public sealed class Binder
         {
             var owningPackage = packageByTree[enumSyntax.SyntaxTree];
             binder.declarations.ValidateTopLevelProtected(enumSyntax.AccessibilityModifier);
-            binder.declarations.BindEnumDeclaration(enumSyntax, owningPackage);
+            RunWithPackage(owningPackage, () => binder.declarations.BindEnumDeclaration(enumSyntax, owningPackage));
         }
 
         // Issue #973: declare all struct/class type-name shells first (phase 1),
@@ -815,17 +836,23 @@ public sealed class Binder
         {
             var owningPackage = packageByTree[structSyntax.SyntaxTree];
             binder.declarations.ValidateTopLevelProtected(structSyntax.AccessibilityModifier);
-            var structSymbol = binder.declarations.DeclareStructShell(structSyntax, owningPackage);
+            StructSymbol structSymbol = null;
+            RunWithPackage(owningPackage, () =>
+            {
+                structSymbol = binder.declarations.DeclareStructShell(structSyntax, owningPackage);
+                if (structSymbol != null)
+                {
+                    // Issue #1069: declare the type-name shells of any nested types
+                    // (recursively) right after the enclosing shell, so a sibling
+                    // member signature can forward-reference a nested type by name.
+                    // The bodies are bound later in phase 2 (BindNestedTypeBodies).
+                    binder.declarations.DeclareNestedTypeShells(structSyntax, structSymbol, owningPackage);
+                }
+            });
             if (structSymbol != null)
             {
                 declaredStructs.Add((structSyntax, structSymbol));
                 syntheticDeclToSymbol[structSyntax] = structSymbol;
-
-                // Issue #1069: declare the type-name shells of any nested types
-                // (recursively) right after the enclosing shell, so a sibling
-                // member signature can forward-reference a nested type by name.
-                // The bodies are bound later in phase 2 (BindNestedTypeBodies).
-                binder.declarations.DeclareNestedTypeShells(structSyntax, structSymbol, owningPackage);
             }
         }
 
@@ -844,7 +871,7 @@ public sealed class Binder
         foreach (var (structSyntax, structSymbol) in declaredStructs)
         {
             var owningPackage = packageByTree[structSyntax.SyntaxTree];
-            binder.declarations.BindStructDeclarationBody(structSyntax, owningPackage, structSymbol);
+            RunWithPackage(owningPackage, () => binder.declarations.BindStructDeclarationBody(structSyntax, owningPackage, structSymbol));
         }
 
         // Issue #1085 / #1194: base-constructor-initializer and field-initializer
@@ -867,7 +894,7 @@ public sealed class Binder
         foreach (var (ifaceSyntax, ifaceSymbol) in declaredInterfaces)
         {
             var owningPackage = packageByTree[ifaceSyntax.SyntaxTree];
-            binder.declarations.BindInterfaceMembers(ifaceSyntax, ifaceSymbol, owningPackage);
+            RunWithPackage(owningPackage, () => binder.declarations.BindInterfaceMembers(ifaceSyntax, ifaceSymbol, owningPackage));
         }
 
         var functionDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
@@ -876,7 +903,7 @@ public sealed class Binder
         {
             var owningPackage = packageByTree[function.SyntaxTree];
             binder.declarations.ValidateTopLevelProtected(function.AccessibilityModifier);
-            binder.declarations.BindFunctionDeclaration(function, owningPackage);
+            RunWithPackage(owningPackage, () => binder.declarations.BindFunctionDeclaration(function, owningPackage));
         }
 
         // Issue #1085 / #1194: now that every type body is bound (explicit
@@ -1208,7 +1235,7 @@ public sealed class Binder
                     continue;
                 }
 
-                var loweredBody = BindBodyWithCache(cache, dirtyTrees, function, function.Declaration.Body, diagnostics, () =>
+                var loweredBody = BindBodyWithPackage(parentScope, function.Package?.Name, () => BindBodyWithCache(cache, dirtyTrees, function, function.Declaration.Body, diagnostics, () =>
                 {
                     var binder = new Binder(parentScope, function);
                     var body = binder.statements.BindStatement(function.Declaration.Body);
@@ -1225,7 +1252,7 @@ public sealed class Binder
                     RefKindDefiniteAssignmentAnalyzer.Analyze(lowered, function, binder.Diagnostics);
 
                     return (lowered, binder.Diagnostics.ToImmutableArray());
-                });
+                }));
 
                 functionBodies.Add(function, loweredBody);
             }
@@ -1257,7 +1284,7 @@ public sealed class Binder
                     continue;
                 }
 
-                var loweredBody = BindBodyWithCache(cache, dirtyTrees, method, method.Declaration.Body, diagnostics, () =>
+                var loweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, () => BindBodyWithCache(cache, dirtyTrees, method, method.Declaration.Body, diagnostics, () =>
                 {
                     var binder = new Binder(parentScope, method);
                     var body = binder.statements.BindStatement(method.Declaration.Body);
@@ -1270,7 +1297,7 @@ public sealed class Binder
                     }
 
                     return (lowered, binder.Diagnostics.ToImmutableArray());
-                });
+                }));
 
                 functionBodies.Add(method, loweredBody);
             }
@@ -1407,7 +1434,7 @@ public sealed class Binder
                     continue;
                 }
 
-                var ctorLoweredBody = BindBodyWithCache(cache, dirtyTrees, ctor.Function, ctor.Declaration.Body, diagnostics, () =>
+                var ctorLoweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, () => BindBodyWithCache(cache, dirtyTrees, ctor.Function, ctor.Declaration.Body, diagnostics, () =>
                 {
                     var ctorBinder = new Binder(parentScope, ctor.Function);
                     var ctorBody = ctorBinder.statements.BindStatement(ctor.Declaration.Body);
@@ -1422,7 +1449,7 @@ public sealed class Binder
 
                     var lowered = Lowerer.Lower(ctorBody, structSym);
                     return (lowered, ctorBinder.Diagnostics.ToImmutableArray());
-                });
+                }));
                 functionBodies.Add(ctor.Function, ctorLoweredBody);
             }
         }
@@ -1692,6 +1719,35 @@ public sealed class Binder
     }
 
     /// <summary>
+    /// Issue #2342: runs <paramref name="bind"/> with <paramref name="packageName"/>
+    /// set as <paramref name="parentScope"/>'s ambient "current declaring
+    /// package" (see <see cref="BoundScope.SetCurrentDeclaringPackage"/>) for
+    /// the duration of a single member-body bind, restoring the previous
+    /// value afterwards. This lets an unqualified type-alias reference inside
+    /// the body (e.g. a data-class object literal such as
+    /// <c>AnonymousType0{...}</c>) prefer its OWN declaring package's
+    /// same-simple-name type over an unrelated package's homonym — the
+    /// ambiguity that arises when two packages each independently synthesize
+    /// a type with the same simple name (the Oahu.Data EF-migration shape).
+    /// </summary>
+    /// <param name="parentScope">The scope whose ambient declaring-package is set for the duration of the call.</param>
+    /// <param name="packageName">The declaring package of the member whose body is about to be bound, or <see langword="null"/> when unknown.</param>
+    /// <param name="bind">Performs the member-body bind/lower work.</param>
+    /// <returns>The lowered body produced by <paramref name="bind"/>.</returns>
+    private static BoundBlockStatement BindBodyWithPackage(BoundScope parentScope, string packageName, Func<BoundBlockStatement> bind)
+    {
+        var previousPackage = parentScope.SetCurrentDeclaringPackage(packageName);
+        try
+        {
+            return bind();
+        }
+        finally
+        {
+            parentScope.SetCurrentDeclaringPackage(previousPackage);
+        }
+    }
+
+    /// <summary>
     /// ADR-0105 (Phase 1) helper for the four structurally identical interface
     /// member-body bind loops (default-interface methods, static-virtual
     /// defaults, and private instance/static helpers). Each lowers without a
@@ -1712,7 +1768,7 @@ public sealed class Binder
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement>.Builder functionBodies,
         ImmutableArray<Diagnostic>.Builder diagnostics)
     {
-        var loweredBody = BindBodyWithCache(cache, dirtyTrees, method, method.Declaration.Body, diagnostics, () =>
+        var loweredBody = BindBodyWithPackage(parentScope, method.Package?.Name, () => BindBodyWithCache(cache, dirtyTrees, method, method.Declaration.Body, diagnostics, () =>
         {
             var binder = new Binder(parentScope, method);
             var body = binder.statements.BindStatement(method.Declaration.Body);
@@ -1725,7 +1781,7 @@ public sealed class Binder
             }
 
             return (lowered, binder.Diagnostics.ToImmutableArray());
-        });
+        }));
 
         functionBodies.Add(method, loweredBody);
     }
@@ -1756,7 +1812,7 @@ public sealed class Binder
         ImmutableArray<Diagnostic>.Builder diagnostics,
         bool requireAllPathsReturn)
     {
-        var loweredBody = BindBodyWithCache(cache, dirtyTrees, accessor, bodySyntax, diagnostics, () =>
+        var loweredBody = BindBodyWithPackage(parentScope, accessor.Package?.Name, () => BindBodyWithCache(cache, dirtyTrees, accessor, bodySyntax, diagnostics, () =>
         {
             var binder = new Binder(parentScope, accessor);
             var body = binder.statements.BindStatement(bodySyntax);
@@ -1769,7 +1825,7 @@ public sealed class Binder
             }
 
             return (lowered, binder.Diagnostics.ToImmutableArray());
-        });
+        }));
 
         functionBodies.Add(accessor, loweredBody);
     }
@@ -1801,7 +1857,7 @@ public sealed class Binder
         ImmutableArray<Diagnostic>.Builder diagnostics,
         TextLocation? allPathsReturnLocation = null)
     {
-        var loweredBody = BindBodyWithCache(cache, dirtyTrees, member, bodySyntax, diagnostics, () =>
+        var loweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, () => BindBodyWithCache(cache, dirtyTrees, member, bodySyntax, diagnostics, () =>
         {
             var binder = new Binder(parentScope, member);
             var body = binder.statements.BindStatement(bodySyntax);
@@ -1814,7 +1870,7 @@ public sealed class Binder
             }
 
             return (lowered, binder.Diagnostics.ToImmutableArray());
-        });
+        }));
 
         functionBodies.Add(member, loweredBody);
     }
@@ -1842,7 +1898,7 @@ public sealed class Binder
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement>.Builder functionBodies,
         ImmutableArray<Diagnostic>.Builder diagnostics)
     {
-        var loweredBody = BindBodyWithCache(cache, dirtyTrees, method, method.Declaration.Body, diagnostics, () =>
+        var loweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, () => BindBodyWithCache(cache, dirtyTrees, method, method.Declaration.Body, diagnostics, () =>
         {
             var binder = new Binder(parentScope, method);
             var body = binder.statements.BindStatement(method.Declaration.Body);
@@ -1855,7 +1911,7 @@ public sealed class Binder
             }
 
             return (lowered, binder.Diagnostics.ToImmutableArray());
-        });
+        }));
 
         functionBodies.Add(method, loweredBody);
     }
@@ -1893,18 +1949,26 @@ public sealed class Binder
             StaticOwnerType = structSym,
         };
 
-        var binder = new Binder(parentScope, context);
-        var boundBlocks = ImmutableArray.CreateBuilder<BoundStatement>();
-        foreach (var initBlock in initBlocks)
+        var previousPackage = parentScope.SetCurrentDeclaringPackage(structSym.PackageName);
+        try
         {
-            boundBlocks.Add(binder.statements.BindStatement(initBlock.Body));
-        }
+            var binder = new Binder(parentScope, context);
+            var boundBlocks = ImmutableArray.CreateBuilder<BoundStatement>();
+            foreach (var initBlock in initBlocks)
+            {
+                boundBlocks.Add(binder.statements.BindStatement(initBlock.Body));
+            }
 
-        binder.statements.FinalizeUserLabels();
-        var combined = new BoundBlockStatement(null, boundBlocks.ToImmutable());
-        var lowered = Lowerer.Lower(combined, structSym);
-        diagnostics.AddRange(binder.Diagnostics.ToImmutableArray());
-        structSym.SetStaticInitializerStatements(lowered.Statements);
+            binder.statements.FinalizeUserLabels();
+            var combined = new BoundBlockStatement(null, boundBlocks.ToImmutable());
+            var lowered = Lowerer.Lower(combined, structSym);
+            diagnostics.AddRange(binder.Diagnostics.ToImmutableArray());
+            structSym.SetStaticInitializerStatements(lowered.Statements);
+        }
+        finally
+        {
+            parentScope.SetCurrentDeclaringPackage(previousPackage);
+        }
     }
 
     /// <summary>

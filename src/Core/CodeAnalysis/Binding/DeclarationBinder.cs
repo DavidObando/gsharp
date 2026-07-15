@@ -182,7 +182,18 @@ internal sealed class DeclarationBinder
     private FunctionSymbol function => getCurrentFunction();
 #pragma warning restore SA1300
 
-    internal void BindTypeAliasDeclaration(TypeAliasDeclarationSyntax syntax)
+    /// <summary>
+    /// Binds a plain <c>type Name = Target</c> alias declaration.
+    /// </summary>
+    /// <param name="syntax">The alias declaration syntax.</param>
+    /// <param name="package">
+    /// Issue #2342 follow-up: the package that declares this alias, giving it
+    /// a stable declaring-package identity for top-level duplicate detection
+    /// (see <see cref="BoundScope.TryDeclareTypeAlias(string, TypeSymbol, string)"/>)
+    /// independent of whatever package (if any) the aliased target itself
+    /// belongs to.
+    /// </param>
+    internal void BindTypeAliasDeclaration(TypeAliasDeclarationSyntax syntax, PackageSymbol package)
     {
         var name = syntax.Identifier.Text;
 
@@ -210,7 +221,7 @@ internal sealed class DeclarationBinder
             "a type alias declaration",
             System.AttributeTargets.Class);
 
-        if (!scope.TryDeclareTypeAlias(name, aliasedType))
+        if (!scope.TryDeclareTypeAlias(name, aliasedType, package?.Name))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
         }
@@ -2930,12 +2941,22 @@ internal sealed class DeclarationBinder
         var fieldInitInstanceInitializers = pendingInstanceInitializers;
         var fieldInitFields = fields.ToImmutable();
         var fieldInitPrimaryCtorParameters = primaryCtorParameters;
+        var fieldInitPackageName = package?.Name;
         pendingFieldInitializerBindings.Add(() =>
         {
             var savedFieldInitScope = scope;
             var savedFieldInitTypeParameters = binderCtx.CurrentTypeParameters;
             var savedFieldInitFunction = getCurrentFunction();
             scope = fieldInitScope;
+
+            // Issue #2342: a deferred field initializer is bound long after the
+            // outer per-declaration package-scoped RunWithPackage wrap
+            // (Binder.BindGlobalScope) has already unwound, so re-establish
+            // this type's OWN owning package as the ambient lookup preference
+            // for the duration of this closure — otherwise an unqualified type
+            // reference in the initializer could resolve against an unrelated
+            // package's same-simple-name homonym.
+            var savedFieldInitPackage = scope.SetCurrentDeclaringPackage(fieldInitPackageName);
 
             // Issue #2111: a static field/property initializer is bound outside
             // any function body, so no "current function" is established. The
@@ -2975,6 +2996,7 @@ internal sealed class DeclarationBinder
             }
             finally
             {
+                scope.SetCurrentDeclaringPackage(savedFieldInitPackage);
                 scope = savedFieldInitScope;
                 binderCtx.CurrentTypeParameters = savedFieldInitTypeParameters;
                 setCurrentFunction(savedFieldInitFunction);
@@ -7699,12 +7721,18 @@ internal sealed class DeclarationBinder
         {
             var outerScope = scope;
             scope = capturedScope;
+
+            // Issue #2342: re-establish this type's OWN owning package as the
+            // ambient lookup preference (see field-initializer closure above
+            // for the full rationale) for the duration of this deferred bind.
+            var savedPackage = scope.SetCurrentDeclaringPackage(structSymbol.PackageName);
             try
             {
                 BindBaseConstructorInitializerCore(syntax, structSymbol, baseClassSymbol, importedBaseType, primaryCtorParameters);
             }
             finally
             {
+                scope.SetCurrentDeclaringPackage(savedPackage);
                 scope = outerScope;
             }
         });
@@ -8467,12 +8495,19 @@ internal sealed class DeclarationBinder
             {
                 var outerScope = scope;
                 scope = capturedScope;
+
+                // Issue #2342: re-establish this type's OWN owning package as
+                // the ambient lookup preference (see field-initializer closure
+                // above for the full rationale) for the duration of this
+                // deferred bind.
+                var savedPackage = scope.SetCurrentDeclaringPackage(structSymbol.PackageName);
                 try
                 {
                     BindConstructorBaseInitializerCore(ctorSyntax, constructorSymbol, ctorFunction, structSymbol, baseClassSymbol, importedBaseType);
                 }
                 finally
                 {
+                    scope.SetCurrentDeclaringPackage(savedPackage);
                     scope = outerScope;
                 }
             });
