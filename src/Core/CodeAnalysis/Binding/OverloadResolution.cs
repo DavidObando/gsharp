@@ -711,6 +711,32 @@ internal static class OverloadResolution
     }
 
     /// <summary>
+    /// Issue #2347: returns <see langword="true"/> when <paramref name="argument"/>
+    /// is a method-group reference (either a same-compilation user-function
+    /// group or an imported/CLR one) that has not yet been resolved to a single
+    /// concrete method — i.e. its shape depends entirely on the eventual target
+    /// delegate signature, which is not known until overload resolution (and any
+    /// generic type-argument inference) has picked a candidate. Such an argument
+    /// carries <see cref="TypeSymbol.Error"/> as its natural type. Recognising
+    /// this shape lets every CLR call-binding path (constructors, static/instance
+    /// methods, extension methods, constrained interface/object-member calls)
+    /// defer it the same way an untyped arrow lambda is deferred — contributing
+    /// no CLR type to the argument-type vector fed to <see cref="Resolve{T}"/>
+    /// (so generic inference and applicability fall back to the other
+    /// arguments) — and then resolving it against the winning candidate's actual
+    /// parameter type afterwards via <c>ConversionClassifier.BindConversion</c>.
+    /// This is what makes a bare method group (e.g. <c>Char.IsAsciiHexDigit</c>)
+    /// behave like the equivalent lambda when passed to an imported generic
+    /// extension method (e.g. <c>Enumerable.All&lt;TSource&gt;</c>), instead of
+    /// only working for same-compilation generic functions.
+    /// </summary>
+    /// <param name="argument">The bound argument expression to inspect.</param>
+    /// <returns><see langword="true"/> when the argument is an unresolved method group.</returns>
+    public static bool IsUnresolvedMethodGroupArgument(BoundExpression argument) =>
+        argument is BoundMethodGroupExpression { FunctionType: null }
+            || argument is BoundClrMethodGroupExpression { ResolvedMethod: null };
+
+    /// <summary>
     /// Issue #506: returns <see langword="true"/> when <paramref name="parameter"/>
     /// is the trailing <c>params T[]</c> parameter — i.e. carries the
     /// <see cref="ParamArrayAttribute"/> marker and is a single-dimensional

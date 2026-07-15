@@ -979,8 +979,20 @@ internal sealed partial class ExpressionBinder
 
             if (t == null && boundArguments[i].Type != TypeSymbol.Null)
             {
-                argsAllTyped = false;
-                break;
+                // Issue #2347: an unresolved method group (e.g. a bare BCL
+                // static method passed where a delegate-typed constructor
+                // parameter is expected) carries no CLR type yet — its shape
+                // depends on the constructor overload eventually chosen.
+                // Defer it exactly like an untyped lambda (leave the argTypes
+                // slot null so generic inference/applicability fall back to
+                // the other arguments) instead of aborting resolution
+                // outright; it is resolved against the winning constructor's
+                // parameter type afterwards by BindClrParameterConversions.
+                if (!OverloadResolution.IsUnresolvedMethodGroupArgument(boundArguments[i]))
+                {
+                    argsAllTyped = false;
+                    break;
+                }
             }
 
             if (boundArguments[i].Type is StructSymbol { IsClass: true })
@@ -3662,8 +3674,21 @@ internal sealed partial class ExpressionBinder
                 var t = GetEffectiveArgumentClrTypeForOverloadResolution(arguments[i].Type);
                 if (t == null && arguments[i].Type != TypeSymbol.Null)
                 {
-                    argsAllTyped = false;
-                    break;
+                    // Issue #2347: a bare method group (e.g. a static BCL
+                    // method or another CLR method reference) passed to a
+                    // generic static/instance method has no fixed CLR type
+                    // until the target delegate parameter is known. Defer it
+                    // like an untyped lambda — leave the argTypes slot null
+                    // so applicability/generic inference proceed using the
+                    // other arguments — instead of aborting the whole
+                    // candidate set; it is resolved against the winning
+                    // overload's parameter type afterwards by
+                    // BindClrParameterConversions.
+                    if (!OverloadResolution.IsUnresolvedMethodGroupArgument(arguments[i]))
+                    {
+                        argsAllTyped = false;
+                        break;
+                    }
                 }
 
                 if (arguments[i].Type is StructSymbol { IsClass: true })
@@ -4624,7 +4649,14 @@ internal sealed partial class ExpressionBinder
             var t = GetEffectiveArgumentClrTypeForOverloadResolution(arguments[i].Type);
             if (t == null && arguments[i].Type != TypeSymbol.Null)
             {
-                return false;
+                // Issue #2347: defer an unresolved method-group argument (see
+                // TryBindImportedExtensionCall) instead of failing outright;
+                // BindClrParameterConversions resolves it once the candidate
+                // (and its parameter type) is known.
+                if (!OverloadResolution.IsUnresolvedMethodGroupArgument(arguments[i]))
+                {
+                    return false;
+                }
             }
 
             if (arguments[i].Type is StructSymbol { IsClass: true })
@@ -4886,11 +4918,24 @@ internal sealed partial class ExpressionBinder
             var t = GetEffectiveArgumentClrTypeForOverloadResolution(arguments[i].Type);
             if (t == null && arguments[i].Type != TypeSymbol.Null)
             {
-                // Issue #833: argument may carry an open TP (e.g. `T`,
-                // `[]T`). Project to an erased shape so resolution can run.
-                if (!MemberLookup.TryProjectErasedClrType(arguments[i].Type, out t))
+                // Issue #2347: a bare method group passed as a generic
+                // extension-method argument (e.g. `key.All(Char.IsAsciiHexDigit)`)
+                // has no fixed CLR type until the extension candidate's target
+                // delegate parameter is known — defer it exactly like an
+                // untyped lambda (leave the argTypes slot null so generic
+                // inference/applicability resolve TSource from the receiver
+                // and the other arguments) instead of failing the whole
+                // extension-call candidate. It is resolved against the
+                // winning candidate's (possibly generic-inferred) parameter
+                // type afterwards by BindClrParameterConversions.
+                if (!OverloadResolution.IsUnresolvedMethodGroupArgument(arguments[i]))
                 {
-                    return false;
+                    // Issue #833: argument may carry an open TP (e.g. `T`,
+                    // `[]T`). Project to an erased shape so resolution can run.
+                    if (!MemberLookup.TryProjectErasedClrType(arguments[i].Type, out t))
+                    {
+                        return false;
+                    }
                 }
             }
 
@@ -6404,7 +6449,12 @@ internal sealed partial class ExpressionBinder
             var t = GetEffectiveArgumentClrTypeForOverloadResolution(arguments[i].Type);
             if (t == null && arguments[i].Type != TypeSymbol.Null)
             {
-                return false;
+                // Issue #2347: defer an unresolved method-group argument (see
+                // TryBindImportedExtensionCall) instead of failing outright.
+                if (!OverloadResolution.IsUnresolvedMethodGroupArgument(arguments[i]))
+                {
+                    return false;
+                }
             }
 
             argTypes[i] = t;
@@ -6522,7 +6572,12 @@ internal sealed partial class ExpressionBinder
             var t = GetEffectiveArgumentClrTypeForOverloadResolution(arguments[i].Type);
             if (t == null && arguments[i].Type != TypeSymbol.Null)
             {
-                return false;
+                // Issue #2347: defer an unresolved method-group argument (see
+                // TryBindImportedExtensionCall) instead of failing outright.
+                if (!OverloadResolution.IsUnresolvedMethodGroupArgument(arguments[i]))
+                {
+                    return false;
+                }
             }
 
             argTypes[i] = t;
@@ -6636,7 +6691,12 @@ internal sealed partial class ExpressionBinder
             var t = GetEffectiveArgumentClrTypeForOverloadResolution(arguments[i].Type);
             if (t == null && arguments[i].Type != TypeSymbol.Null)
             {
-                return false;
+                // Issue #2347: defer an unresolved method-group argument (see
+                // TryBindImportedExtensionCall) instead of failing outright.
+                if (!OverloadResolution.IsUnresolvedMethodGroupArgument(arguments[i]))
+                {
+                    return false;
+                }
             }
 
             argTypes[i] = t;

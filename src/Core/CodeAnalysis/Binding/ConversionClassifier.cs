@@ -644,7 +644,8 @@ internal sealed class ConversionClassifier
                         rebound = new BoundDefaultExpression(argument.Syntax, defTargetType);
                     }
                 }
-                else if (!parameterType.IsByRef && argument.Type != TypeSymbol.Error)
+                else if (!parameterType.IsByRef
+                    && (argument.Type != TypeSymbol.Error || OverloadResolution.IsUnresolvedMethodGroupArgument(argument)))
                 {
                     // ADR-0087 §3 R5 / issue #765: when the call dispatches
                     // through a constructed CLR generic whose type arguments
@@ -671,8 +672,17 @@ internal sealed class ConversionClassifier
                     // delegate is `Func<Task,object>` and fails ilverify at the
                     // call's `newobj`. Only applied to function-literal arguments
                     // so non-lambda argument coercion is unaffected.
+                    // Issue #2347: an unresolved method group (deferred through
+                    // overload resolution the same way a lambda is deferred, see
+                    // OverloadResolution.IsUnresolvedMethodGroupArgument) needs
+                    // the identical symbolic-target recovery — its resolved
+                    // MethodInfo is picked below against whichever delegate
+                    // target is recovered here, so a generic method whose
+                    // delegate parameter closes over the method's own (still
+                    // open) type argument must see the symbolic shape too.
                     if (substituted == null
-                        && argument is BoundFunctionLiteralExpression)
+                        && (argument is BoundFunctionLiteralExpression
+                            || OverloadResolution.IsUnresolvedMethodGroupArgument(argument)))
                     {
                         substituted = TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs);
                     }
@@ -784,8 +794,23 @@ internal sealed class ConversionClassifier
                     var isExpressionTreeLiteralTarget = argument is BoundFunctionLiteralExpression
                         && MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(targetType, out _);
 
+                    // Issue #2347: an unresolved method group's natural type is
+                    // the Error sentinel (see
+                    // OverloadResolution.IsUnresolvedMethodGroupArgument), so
+                    // Conversion.Classify below — which deliberately treats
+                    // Error as convertible to nothing, to avoid cascading
+                    // diagnostics — never reports it as convertible to the
+                    // resolved delegate parameter. Route it through
+                    // BindConversion directly instead: that is exactly the
+                    // mechanism (ConversionClassifier.BindClrMethodGroupConversion
+                    // / BindUserMethodGroupConversion) that picks the single
+                    // MethodInfo/function overload matching targetType's
+                    // Invoke signature, the same way it already does for a
+                    // user-defined generic function's method-group argument.
+                    var isUnresolvedMethodGroupTarget = OverloadResolution.IsUnresolvedMethodGroupArgument(argument);
+
                     if (argument.Type != targetType
-                        && (Conversion.Classify(argument.Type, targetType).Exists || isExpressionTreeLiteralTarget)
+                        && (Conversion.Classify(argument.Type, targetType).Exists || isExpressionTreeLiteralTarget || isUnresolvedMethodGroupTarget)
                         && NeedsBindClrParameterConversion(argument.Type, parameterType, substituted))
                     {
                         // Issue #506: the source-argument list may not align with
