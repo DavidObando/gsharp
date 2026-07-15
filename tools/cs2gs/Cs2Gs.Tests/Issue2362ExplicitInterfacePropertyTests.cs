@@ -26,7 +26,7 @@ namespace Cs2Gs.Tests;
 /// <para>
 /// This originally extended the issue #2010/#2181 explicit-interface-METHOD
 /// convention (reserved <c>__explicit_&lt;Interface&gt;__&lt;Member&gt;</c>
-/// mangled name + CLR <c>MethodImpl</c> bridge) to properties. The ADR-0148
+/// mangled name + CLR <c>MethodImpl</c> bridge) to properties. The ADR-0149
 /// redesign replaces the mangled name with a first-class explicit-interface
 /// qualifier clause: a G# USER interface's explicit property implementation
 /// is emitted under its own PLAIN source name carrying a
@@ -119,7 +119,7 @@ namespace Corpus.Issue2362
 
     /// <summary>
     /// A single get-only explicit interface property implementation carries
-    /// the ADR-0148 clause and is demoted to G# <c>private</c> visibility
+    /// the ADR-0149 clause and is demoted to G# <c>private</c> visibility
     /// (matching Roslyn's own <c>Accessibility.Private</c> for an explicit
     /// impl, and C#'s "not publicly callable by name" semantics) — mirroring
     /// the method-level convention's <c>MapVisibility</c> fallthrough
@@ -318,7 +318,7 @@ namespace Corpus.Issue2362
     /// <summary>
     /// An explicit implementation of an EXTERNAL (BCL) interface PROPERTY
     /// still uses the pre-existing #1911-style forced-public,
-    /// collision-drop-with-diagnostic fallback: the ADR-0148 clause only
+    /// collision-drop-with-diagnostic fallback: the ADR-0149 clause only
     /// applies to G# USER interfaces (there being no G# <c>interface</c>
     /// declaration for an external CLR interface to name in a clause).
     /// Colliding with a same-name/same-shape public property drops the
@@ -345,7 +345,7 @@ namespace Corpus.Issue2362
         var names = row.Members.OfType<PropertyDeclaration>().Where(p => !p.IsIndexer).Select(p => p.Name).ToList();
 
         // Only the surviving (public) property remains — the explicit one
-        // was dropped, since the ADR-0148 clause never applies to an
+        // was dropped, since the ADR-0149 clause never applies to an
         // external interface.
         Assert.Single(names);
         Assert.Equal("Error", names[0]);
@@ -386,7 +386,7 @@ namespace Corpus.Issue2362
     }
 
     /// <summary>
-    /// An explicit interface INDEXER implementation cannot use the ADR-0148
+    /// An explicit interface INDEXER implementation cannot use the ADR-0149
     /// clause today (G# interfaces cannot declare indexer members — a
     /// separate, pre-existing gsc limitation). When it collides with a
     /// same-shape public indexer, it is dropped with an Unsupported

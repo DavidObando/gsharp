@@ -17,7 +17,7 @@ namespace GSharp.Compiler.Tests.Emit;
 /// <c>__explicit_&lt;Interface&gt;__&lt;Member&gt;</c> mangled convention
 /// correctly satisfied a NON-generic interface member, but was not recognized
 /// when the interface was GENERIC — the class was wrongly reported as not
-/// implementing the interface method (GS0187). ADR-0148 later replaced the
+/// implementing the interface method (GS0187). ADR-0149 later replaced the
 /// mangled convention with the <c>func (InterfaceType) Member(...)</c>
 /// qualifier clause this test now exercises; the underlying generic-interface
 /// fixes below remain in effect for the new syntax too.
@@ -104,7 +104,7 @@ public class Issue2181GenericExplicitInterfaceImplEmitTests
 
             Assert.True(foundCallback, "expected to find the generic Callback type");
 
-            // ADR-0148: the explicit-impl body survives as its own MethodDef,
+            // ADR-0149: the explicit-impl body survives as its own MethodDef,
             // under its synthesized (collision-free) metadata name
             // ("<Package>.<Interface>[<TypeParams>].<Member>" — the OPEN
             // generic interface's own type-parameter names, since this

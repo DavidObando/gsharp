@@ -5072,7 +5072,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <summary>
-    /// ADR-0148: GS0488 — an explicit-interface qualifier clause
+    /// ADR-0149: GS0492 — an explicit-interface qualifier clause
     /// (<c>func (X) M(...)</c> / <c>prop (X) P T</c> / <c>event (X) E T</c>)
     /// referenced a type that is not an interface.
     /// </summary>
@@ -5083,13 +5083,13 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     {
         Report(
             location,
-            "GS0488",
+            "GS0492",
             $"'{typeName}' is not an interface; the explicit-interface qualifier clause on '{memberName}' must reference an interface type.",
             DiagnosticSeverity.Error);
     }
 
     /// <summary>
-    /// ADR-0148: GS0489 — an explicit-interface qualifier clause referenced an
+    /// ADR-0149: GS0493 — an explicit-interface qualifier clause referenced an
     /// interface the containing type does not implement.
     /// </summary>
     /// <param name="location">The source location of the clause's type reference.</param>
@@ -5100,13 +5100,13 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     {
         Report(
             location,
-            "GS0489",
+            "GS0493",
             $"'{containingTypeName}' does not implement interface '{interfaceName}'; the explicit-interface qualifier clause on '{memberName}' requires an implemented interface.",
             DiagnosticSeverity.Error);
     }
 
     /// <summary>
-    /// ADR-0148: GS0490 — an explicit-interface qualifier clause's interface
+    /// ADR-0149: GS0494 — an explicit-interface qualifier clause's interface
     /// is implemented, but no member on it matches the declared name,
     /// signature, or accessor shape.
     /// </summary>
@@ -5117,13 +5117,13 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     {
         Report(
             location,
-            "GS0490",
+            "GS0494",
             $"'{interfaceName}' has no member '{memberName}' matching this declaration's signature/accessor shape.",
             DiagnosticSeverity.Error);
     }
 
     /// <summary>
-    /// ADR-0148: GS0491 — two members of the same containing type both carry
+    /// ADR-0149: GS0495 — two members of the same containing type both carry
     /// an explicit-interface qualifier clause that resolves to the same
     /// interface member.
     /// </summary>
@@ -5134,7 +5134,7 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
     {
         Report(
             location,
-            "GS0491",
+            "GS0495",
             $"'{interfaceName}.{memberName}' is already explicitly implemented elsewhere in this type.",
             DiagnosticSeverity.Error);
     }

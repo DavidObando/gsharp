@@ -5113,7 +5113,7 @@ internal sealed class ReflectionMetadataEmitter
                 });
 
         // Synthesized entry point uses the C#-style mangled name; explicit Main / user funcs keep their source name.
-        // ADR-0148: a method declared with an explicit-interface qualifier
+        // ADR-0149: a method declared with an explicit-interface qualifier
         // clause keeps its plain source name on the FunctionSymbol (for
         // diagnostics and any ordinary same-type call resolution), but the
         // emitted CLR metadata name must be collision-free — see

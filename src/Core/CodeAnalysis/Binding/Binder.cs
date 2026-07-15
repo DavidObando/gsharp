@@ -917,7 +917,7 @@ public sealed class Binder
 
         binder.declarations.ExpandStructInterfaceClosures();
 
-        // ADR-0148: bind every explicit-interface qualifier clause
+        // ADR-0149: bind every explicit-interface qualifier clause
         // (`func (IFoo) M(...)` / `prop (IFoo) P T`) to its target interface
         // before VerifyInterfaceImplementations resolves them against each
         // interface's own abstract members.

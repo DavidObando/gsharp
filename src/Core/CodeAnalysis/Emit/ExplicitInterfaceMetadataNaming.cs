@@ -7,7 +7,7 @@ using GSharp.Core.CodeAnalysis.Symbols;
 namespace GSharp.Core.CodeAnalysis.Emit;
 
 /// <summary>
-/// ADR-0148: an explicit-interface qualifier clause (<c>func (IFoo) M(...)</c>
+/// ADR-0149: an explicit-interface qualifier clause (<c>func (IFoo) M(...)</c>
 /// / <c>prop (IFoo) P T</c>) keeps its declared, source-visible name plain —
 /// diagnostics, reflection <c>Name</c> lookups by the ordinary member name,
 /// and hand-authored G# source never see anything but <c>M</c> / <c>P</c>.
@@ -22,7 +22,7 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// (<c>Interface.Member</c>, or <c>Package.Interface.Member</c> when the
 /// interface has a package/namespace) that is unique per (interface, member)
 /// slot — the same uniqueness key <see cref="DiagnosticBag.ReportDuplicateExplicitInterfaceImplementation"/>
-/// (GS0491) already enforces at the source level, so within a single valid
+/// (GS0495) already enforces at the source level, so within a single valid
 /// compilation this synthesized name can never collide with another such
 /// synthesized name, nor (since it always contains at least one <c>.</c>,
 /// which no plain G# identifier can contain) with any ordinary member's name.
@@ -35,7 +35,7 @@ internal static class ExplicitInterfaceMetadataNaming
     /// member, or <paramref name="memberName"/> itself unchanged when
     /// <paramref name="target"/> is <see langword="null"/> (not an explicit
     /// implementation, or not yet resolved — the latter only for a program
-    /// that already has a GS0488/GS0489 error and will not reach emit).
+    /// that already has a GS0492/GS0493 error and will not reach emit).
     /// </summary>
     /// <param name="memberName">The declared (plain, source-visible) member name.</param>
     /// <param name="target">The resolved explicit-interface clause target, or <see langword="null"/>.</param>

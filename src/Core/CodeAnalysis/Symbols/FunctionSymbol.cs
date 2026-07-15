@@ -366,9 +366,9 @@ public sealed class FunctionSymbol : Symbol
     /// <summary>
     /// Gets or sets the in-compilation (G#) interface member this method
     /// explicitly implements (issue #2010; property/indexer generalization:
-    /// issue #2362; ADR-0148 rewrites the source-level convention that
+    /// issue #2362; ADR-0149 rewrites the source-level convention that
     /// establishes this link). Set when the method carries a dedicated
-    /// explicit-interface qualifier clause (<c>func (IFoo) M(...)</c>, ADR-0148)
+    /// explicit-interface qualifier clause (<c>func (IFoo) M(...)</c>, ADR-0149)
     /// whose bound interface type — see <see cref="ExplicitInterfaceClauseTarget"/> —
     /// declares a member with this method's own plain name and a matching
     /// signature. Unlike <see cref="ExplicitInterfaceSlot"/> (which binds to
@@ -392,7 +392,7 @@ public sealed class FunctionSymbol : Symbol
     /// <summary>
     /// Gets a value indicating whether this method's declaration carries a
     /// dedicated explicit-interface qualifier clause (<c>func (IFoo) M(...)</c>,
-    /// ADR-0148) — a purely syntactic fact known immediately at declaration
+    /// ADR-0149) — a purely syntactic fact known immediately at declaration
     /// time, before <see cref="ExplicitInterfaceClauseTarget"/> is resolved
     /// against the containing type's implemented interfaces. Members with
     /// this flag set are exempt from the ordinary duplicate-overload-signature

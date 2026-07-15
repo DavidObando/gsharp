@@ -260,7 +260,7 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// <summary>
     /// Gets or sets the optional open parenthesis introducing a dedicated
     /// explicit-interface-implementation qualifier clause, e.g. <c>func (IFoo) M(...)</c>
-    /// (ADR-0148). Distinct from <see cref="ReceiverOpenParenthesisToken"/> — this is a
+    /// (ADR-0149). Distinct from <see cref="ReceiverOpenParenthesisToken"/> — this is a
     /// single-type qualifier, not a name+type extension receiver. Assigned by the parser;
     /// <see langword="null"/> for an ordinary or extension function.
     /// </summary>
@@ -276,7 +276,7 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
 
     /// <summary>
     /// Gets or sets the interface type referenced by the explicit-interface qualifier
-    /// clause (ADR-0148), e.g. the <c>IFoo</c> in <c>func (IFoo) M(...)</c>. Assigned by
+    /// clause (ADR-0149), e.g. the <c>IFoo</c> in <c>func (IFoo) M(...)</c>. Assigned by
     /// the parser; <see langword="null"/> when no clause is present.
     /// </summary>
     public TypeClauseSyntax ExplicitInterfaceType
@@ -289,7 +289,7 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
         }
     }
 
-    /// <summary>Gets or sets the optional close parenthesis terminating the explicit-interface qualifier clause (ADR-0148).</summary>
+    /// <summary>Gets or sets the optional close parenthesis terminating the explicit-interface qualifier clause (ADR-0149).</summary>
     public SyntaxToken ExplicitInterfaceCloseParenthesisToken
     {
         get => explicitInterfaceCloseParenToken;
@@ -300,7 +300,7 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
         }
     }
 
-    /// <summary>Gets a value indicating whether this declaration carries an explicit-interface qualifier clause (ADR-0148).</summary>
+    /// <summary>Gets a value indicating whether this declaration carries an explicit-interface qualifier clause (ADR-0149).</summary>
     public bool HasExplicitInterfaceClause => ExplicitInterfaceType != null;
 
     /// <inheritdoc/>

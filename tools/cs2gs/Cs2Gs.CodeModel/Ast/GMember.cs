@@ -122,7 +122,7 @@ public sealed class PropertyDeclaration : GMember
     /// <param name="indexerParameters">The index parameters for an indexer member (ADR-0118); empty for an ordinary property.</param>
     /// <param name="expressionBody">The optional single-statement arrow body for an expression-bodied read-only property/indexer (issue #1278 / ADR-0131); when set the member renders as <c>prop Name T -&gt; expr</c>.</param>
     /// <param name="explicitInterfaceType">
-    /// ADR-0148: the resolved explicit-interface qualifier clause type, or
+    /// ADR-0149: the resolved explicit-interface qualifier clause type, or
     /// <see langword="null"/> for an ordinary property. When set, the
     /// property renders as <c>prop (InterfaceType) Name T</c> (or
     /// <c>prop (InterfaceType) this[...] T</c> for an indexer) — see
@@ -189,7 +189,7 @@ public sealed class PropertyDeclaration : GMember
     public GStatement ExpressionBody { get; }
 
     /// <summary>
-    /// Gets the ADR-0148 explicit-interface qualifier clause type, or
+    /// Gets the ADR-0149 explicit-interface qualifier clause type, or
     /// <see langword="null"/> for an ordinary property.
     /// </summary>
     public GTypeReference ExplicitInterfaceType { get; }
@@ -225,7 +225,7 @@ public sealed class MethodDeclaration : GMember
     /// ADR-0060) — mapped from a C# ref-returning method (issue #1900).
     /// </param>
     /// <param name="explicitInterfaceType">
-    /// ADR-0148: the resolved explicit-interface qualifier clause type, or
+    /// ADR-0149: the resolved explicit-interface qualifier clause type, or
     /// <see langword="null"/> for an ordinary method. When set, the method
     /// renders as <c>func (InterfaceType) Name(...)</c> — see
     /// <c>GSharpPrinter.RenderMethod</c>.
@@ -312,7 +312,7 @@ public sealed class MethodDeclaration : GMember
     public bool IsRefReturn { get; }
 
     /// <summary>
-    /// Gets the ADR-0148 explicit-interface qualifier clause type, or
+    /// Gets the ADR-0149 explicit-interface qualifier clause type, or
     /// <see langword="null"/> for an ordinary method.
     /// </summary>
     public GTypeReference ExplicitInterfaceType { get; }

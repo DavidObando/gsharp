@@ -1,4 +1,4 @@
-// <copyright file="Adr0148ExplicitInterfaceClauseBinderTests.cs" company="GSharp">
+// <copyright file="Adr0149ExplicitInterfaceClauseBinderTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -11,7 +11,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// ADR-0148: binder-level diagnostics for the explicit-interface qualifier
+/// ADR-0149: binder-level diagnostics for the explicit-interface qualifier
 /// clause (<c>func (X) M(...)</c> / <c>prop (X) P T</c> / <c>prop (X)
 /// this[...] T</c>), plus the coexistence and indexer behaviors the clause
 /// enables. See <c>Issue2010ExplicitInterfaceImplEmitTests</c>,
@@ -21,10 +21,10 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// clause; these tests focus on <see cref="GSharp.Core.CodeAnalysis.Binding.DeclarationBinder.ResolveExplicitInterfaceClauses"/>
 /// and <c>VerifyExplicitInterfaceClauseResolution</c>'s own diagnostics.
 /// </summary>
-public class Adr0148ExplicitInterfaceClauseBinderTests
+public class Adr0149ExplicitInterfaceClauseBinderTests
 {
     [Fact]
-    public void ClauseReferencesNonInterfaceType_ReportsGS0488()
+    public void ClauseReferencesNonInterfaceType_ReportsGS0492()
     {
         var source = @"
 package P
@@ -36,11 +36,11 @@ class Host {
 }
 ";
         var diagnostics = GetDiagnostics(source);
-        Assert.Contains(diagnostics, d => d.Id == "GS0488");
+        Assert.Contains(diagnostics, d => d.Id == "GS0492");
     }
 
     [Fact]
-    public void PropertyClauseReferencesNonInterfaceType_ReportsGS0488()
+    public void PropertyClauseReferencesNonInterfaceType_ReportsGS0492()
     {
         var source = @"
 package P
@@ -52,11 +52,11 @@ class Host {
 }
 ";
         var diagnostics = GetDiagnostics(source);
-        Assert.Contains(diagnostics, d => d.Id == "GS0488");
+        Assert.Contains(diagnostics, d => d.Id == "GS0492");
     }
 
     [Fact]
-    public void ClauseReferencesUnimplementedInterface_ReportsGS0489()
+    public void ClauseReferencesUnimplementedInterface_ReportsGS0493()
     {
         var source = @"
 package P
@@ -76,11 +76,11 @@ class Host : IBar {
 }
 ";
         var diagnostics = GetDiagnostics(source);
-        Assert.Contains(diagnostics, d => d.Id == "GS0489");
+        Assert.Contains(diagnostics, d => d.Id == "GS0493");
     }
 
     [Fact]
-    public void ClauseReferencesInterfaceWithNoMatchingMember_ReportsGS0490()
+    public void ClauseReferencesInterfaceWithNoMatchingMember_ReportsGS0494()
     {
         var source = @"
 package P
@@ -96,11 +96,11 @@ class Impl : IFoo {
 }
 ";
         var diagnostics = GetDiagnostics(source);
-        Assert.Contains(diagnostics, d => d.Id == "GS0490");
+        Assert.Contains(diagnostics, d => d.Id == "GS0494");
     }
 
     [Fact]
-    public void TwoMembersClaimSameInterfaceSlot_ReportsGS0491()
+    public void TwoMembersClaimSameInterfaceSlot_ReportsGS0495()
     {
         var source = @"
 package P
@@ -116,11 +116,11 @@ class Impl : IFoo {
 }
 ";
         var diagnostics = GetDiagnostics(source);
-        Assert.Contains(diagnostics, d => d.Id == "GS0491");
+        Assert.Contains(diagnostics, d => d.Id == "GS0495");
     }
 
     [Fact]
-    public void TwoPropertiesClaimSameInterfaceSlot_ReportsGS0491()
+    public void TwoPropertiesClaimSameInterfaceSlot_ReportsGS0495()
     {
         var source = @"
 package P
@@ -136,7 +136,7 @@ class Impl : IFoo {
 }
 ";
         var diagnostics = GetDiagnostics(source);
-        Assert.Contains(diagnostics, d => d.Id == "GS0491");
+        Assert.Contains(diagnostics, d => d.Id == "GS0495");
     }
 
     [Fact]
@@ -145,7 +145,7 @@ class Impl : IFoo {
         // The exact Oahu Authorization/IProfile shape: a plain, implicitly
         // dispatched property and a purely-explicit-slot property may share
         // the same declared source name — this is the entire point of the
-        // clause (ADR-0148) and must not be flagged as a duplicate member.
+        // clause (ADR-0149) and must not be flagged as a duplicate member.
         var source = @"
 package P
 
@@ -196,8 +196,8 @@ class Both : IFoo, IBaz {
         // regardless of accessor bodies). That means an explicit-interface
         // qualifier clause on a CLASS indexer (`prop (X) this[...] T`) can
         // never find a matching interface member today. This test confirms
-        // the ADR-0148 grammar/parser/binder plumbing for indexers is
-        // forward-compatible and fails cleanly with GS0490 ("no matching
+        // the ADR-0149 grammar/parser/binder plumbing for indexers is
+        // forward-compatible and fails cleanly with GS0494 ("no matching
         // member") — not a parser error, crash, or wrong diagnostic — should
         // interface indexers ever be supported later.
         var source = @"
@@ -216,14 +216,14 @@ class Store : IEmpty {
 }
 ";
         var diagnostics = GetDiagnostics(source);
-        Assert.Contains(diagnostics, d => d.Id == "GS0490");
+        Assert.Contains(diagnostics, d => d.Id == "GS0494");
     }
 
     [Fact]
     public void OrdinaryDuplicatePlainProperties_StillReportsSymbolAlreadyDeclared()
     {
         // Two ordinary (non-clause) same-name properties must still be
-        // rejected as a duplicate — the ADR-0148 coexistence exemption must
+        // rejected as a duplicate — the ADR-0149 coexistence exemption must
         // not weaken this unrelated, pre-existing check.
         var source = @"
 package P

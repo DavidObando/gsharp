@@ -35,7 +35,7 @@ namespace Cs2Gs.Tests;
 /// colliding duplicates with an <c>Unsupported</c> diagnostic. Issue #2010
 /// (see <c>Issue2010ExplicitInterfaceImplementationTests</c>) replaced that
 /// with a full-fidelity fix keyed on a reserved mangled name; issue #2362's
-/// ADR-0148 redesign (see that class's doc comment) replaced the mangled
+/// ADR-0149 redesign (see that class's doc comment) replaced the mangled
 /// name with a first-class explicit-interface qualifier clause
 /// (<c>func (IGreeter) Greet()</c>) that keeps the member's own plain source
 /// name — the underlying full-fidelity guarantee (no collision, no drop,
@@ -45,7 +45,7 @@ public class Issue1911ExplicitInterfaceImplementationTests
 {
     /// <summary>
     /// A lone explicit interface implementation translates to a method
-    /// carrying an ADR-0148 explicit-interface qualifier clause
+    /// carrying an ADR-0149 explicit-interface qualifier clause
     /// (<c>func (IGreeter) Greet()</c>) with C#-faithful (non-public)
     /// visibility — the emitter fills the interface's CLR slot via an
     /// explicit MethodImpl row rather than requiring public/name-based
@@ -84,7 +84,7 @@ namespace Corpus.Issue1911
     /// <c>corpus/grid/G06-Types-Console</c> grid fixture (its
     /// <c>ExplicitInterfaceSpecifierFixture</c>) migrates fully green —
     /// translate, compile, ilverify, and stdout parity all pass — proving the
-    /// ADR-0148 explicit-interface-clause fix at the real
+    /// ADR-0149 explicit-interface-clause fix at the real
     /// <c>gsc</c>/<c>ilverify</c> level, not just in-memory translation.
     /// Gated on the compiler artifact and the <c>dotnet-ilverify</c> tool
     /// being present, like the other e2e tests.

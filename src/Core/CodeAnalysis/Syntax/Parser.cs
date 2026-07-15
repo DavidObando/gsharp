@@ -2809,7 +2809,7 @@ public class Parser
     {
         var propKeyword = MatchToken(SyntaxKind.IdentifierToken); // consumes "prop"
 
-        // ADR-0148: optional explicit-interface qualifier clause
+        // ADR-0149: optional explicit-interface qualifier clause
         // `prop (IFoo) P T` / `prop (IFoo) this[...] T`. Properties/indexers
         // have no competing receiver-clause grammar, so any `(` here
         // unambiguously starts this clause.
@@ -2969,7 +2969,7 @@ public class Parser
     {
         var eventKeyword = MatchToken(SyntaxKind.IdentifierToken); // consumes "event"
 
-        // ADR-0148: optional explicit-interface qualifier clause
+        // ADR-0149: optional explicit-interface qualifier clause
         // `event (IFoo) Changed T`. Events have no competing receiver-clause
         // grammar, so any `(` here unambiguously starts this clause.
         SyntaxToken explicitIfaceOpenParen = null;
@@ -3320,7 +3320,7 @@ public class Parser
         TypeClauseSyntax explicitIfaceType = null;
         SyntaxToken explicitIfaceCloseParen = null;
 
-        // ADR-0148: optional explicit-interface qualifier clause `func (IFoo) M(...)`.
+        // ADR-0149: optional explicit-interface qualifier clause `func (IFoo) M(...)`.
         // Checked BEFORE the receiver clause since both start with `(' IdentifierToken;
         // see LooksLikeExplicitInterfaceClause for the disambiguation rule.
         if (Current.Kind == SyntaxKind.OpenParenthesisToken && LooksLikeExplicitInterfaceClause())
@@ -3818,7 +3818,7 @@ public class Parser
         return false;
     }
 
-    // ADR-0148: a dedicated explicit-interface-implementation qualifier clause
+    // ADR-0149: a dedicated explicit-interface-implementation qualifier clause
     // `(InterfaceType)` immediately after a member keyword (`func`, `prop`,
     // `event`) — e.g. `func (IFoo) M(...)`, `prop (IFoo) P T`,
     // `prop (IFoo) this[...] T`, `event (IFoo) Changed T`. Reused across all
@@ -3875,7 +3875,7 @@ public class Parser
         return TryScanTypeClause(ref pos) && Peek(pos).Kind == SyntaxKind.CloseParenthesisToken;
     }
 
-    // ADR-0148: parses `(InterfaceType)` when present. The caller has already
+    // ADR-0149: parses `(InterfaceType)` when present. The caller has already
     // confirmed (via LooksLikeExplicitInterfaceClause for `func`, or simply by
     // checking for `(` for `prop`/`event`, which have no competing grammar)
     // that the current token starts this clause.

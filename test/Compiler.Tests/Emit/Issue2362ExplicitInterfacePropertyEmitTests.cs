@@ -14,7 +14,7 @@ namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
 /// Issue #2362: extends the issue #2010/#2181 explicit-interface-METHOD
-/// <c>func (IFoo) M(...)</c> qualifier clause (ADR-0148) + CLR
+/// <c>func (IFoo) M(...)</c> qualifier clause (ADR-0149) + CLR
 /// <c>MethodImpl</c> bridge to PROPERTIES (and, via a collision-drop-only
 /// fallback, indexers). A property declared with the <c>prop (IFoo) P T</c>
 /// qualifier clause is linked by the binder to the specific interface

@@ -1558,13 +1558,13 @@ internal sealed class DeclarationBinder
             existingNames.Add(f.Name);
         }
 
-        // ADR-0148: a property/event carrying an explicit-interface qualifier
+        // ADR-0149: a property/event carrying an explicit-interface qualifier
         // clause (`prop (IFoo) P T`) is exempt from the ordinary "name already
         // declared" collision below — multiple explicit implementations of
         // DIFFERENT interfaces legitimately share the same plain member name
         // (that's the entire point of the clause). Tracks which plain names
         // were added ONLY via an explicit-clause member, so a later NON-clause
-        // member (or a clause targeting the SAME interface — see GS0491 in
+        // member (or a clause targeting the SAME interface — see GS0495 in
         // VerifyExplicitInterfaceClauseResolution) still collides normally.
         var explicitInterfaceClauseNames = new HashSet<string>();
 
@@ -1917,7 +1917,7 @@ internal sealed class DeclarationBinder
                         ValidateInlineDataNilArguments(methodAttributes, methodSymbol.Parameters);
                     }
 
-                    // ADR-0148: a method declared with an explicit-interface
+                    // ADR-0149: a method declared with an explicit-interface
                     // qualifier clause (`func (IFoo) M(...)`) explicitly
                     // implements one interface member's own distinct body.
                     // Resolution against the actual interface member is
@@ -1931,13 +1931,13 @@ internal sealed class DeclarationBinder
                     {
                         if (BoundScope.FunctionSignaturesEqual(existingMethod, methodSymbol))
                         {
-                            // ADR-0148: two methods that share a name and
+                            // ADR-0149: two methods that share a name and
                             // parameter shape may legitimately coexist when
                             // at least one carries an explicit-interface
                             // qualifier clause — each clause-bearing method
                             // occupies its own distinct (interface, name)
                             // slot (verified/deduplicated later by
-                            // VerifyExplicitInterfaceClauseResolution's GS0491
+                            // VerifyExplicitInterfaceClauseResolution's GS0495
                             // check), so this is not an ordinary overload
                             // collision.
                             if (methodSymbol.HasExplicitInterfaceClause || existingMethod.HasExplicitInterfaceClause)
@@ -2041,7 +2041,7 @@ internal sealed class DeclarationBinder
                 var propName = isIndexer ? "Item" : propSyntax.Identifier.Text;
 
                 // Check for duplicate names (fields + methods + other properties).
-                // ADR-0148: exempt when either the new property, or ANY
+                // ADR-0149: exempt when either the new property, or ANY
                 // already-declared same-name property, carries an
                 // explicit-interface qualifier clause — a plain (implicitly-
                 // dispatched) property and a purely-explicit-slot property
@@ -2050,7 +2050,7 @@ internal sealed class DeclarationBinder
                 // clause exists for), and so do two explicit clauses
                 // targeting DIFFERENT interfaces. Two explicit clauses that
                 // resolve to the SAME interface member are still caught, just
-                // later — see GS0491 in VerifyExplicitInterfaceClauseResolution,
+                // later — see GS0495 in VerifyExplicitInterfaceClauseResolution,
                 // which has the resolved target identity needed to detect
                 // that specific case. Indexers are always named "Item" (issue
                 // #944 / #2362 follow-up): this also lets a type declare more
@@ -3115,16 +3115,16 @@ internal sealed class DeclarationBinder
             }
         }
 
-        // ADR-0148: a type that declares an explicit-interface qualifier
+        // ADR-0149: a type that declares an explicit-interface qualifier
         // clause (`func (X) M(...)` / `prop (X) P T`) but implements NO
         // interface at all (neither G# nor CLR) would otherwise never reach
         // ResolveExplicitInterfaceClauses/VerifyExplicitInterfaceClauseResolution
         // (both driven off pendingInterfaceImplementationChecks) — silently
-        // compiling the clause away as a no-op instead of reporting GS0488/
-        // GS0489. Queue it too, purely so its clause(s) still get resolved
+        // compiling the clause away as a no-op instead of reporting GS0492/
+        // GS0493. Queue it too, purely so its clause(s) still get resolved
         // and diagnosed; with zero implemented interfaces, a non-interface
-        // clause type is still caught by GS0488, and any interface type
-        // (valid or not) is correctly rejected by GS0489 ("does not
+        // clause type is still caught by GS0492, and any interface type
+        // (valid or not) is correctly rejected by GS0493 ("does not
         // implement interface X") since structSymbol.Interfaces is empty.
         if (implementedInterfaces.Count == 0
             && implementedClrInterfaces.Count == 0
@@ -3753,7 +3753,7 @@ internal sealed class DeclarationBinder
             {
                 foreach (var imethod in iface.Methods)
                 {
-                    // ADR-0148 (was issue #2010's mangled-name convention): an
+                    // ADR-0149 (was issue #2010's mangled-name convention): an
                     // explicit-interface-clause implementation
                     // (`func (IFoo) M(...)`) satisfies this slot even though
                     // its own declared name never needs to match `imethod`
@@ -4153,14 +4153,14 @@ internal sealed class DeclarationBinder
             // helper at the implementation level.
             VerifyPrivateInterfaceHelpersNotOverridden(syntax, structSymbol);
 
-            // ADR-0148: sweep every explicit-interface qualifier clause that
+            // ADR-0149: sweep every explicit-interface qualifier clause that
             // successfully bound a target interface (via
             // ResolveExplicitInterfaceClauses) for two outstanding problems
             // the per-interface-member loops above cannot detect on their
             // own: (a) two members on the same type both explicitly claim
-            // the same (interface, name) slot (GS0491), and (b) a clause
+            // the same (interface, name) slot (GS0495), and (b) a clause
             // whose target interface has no member matching this
-            // declaration's name/signature/accessor-shape at all (GS0490) —
+            // declaration's name/signature/accessor-shape at all (GS0494) —
             // the loops above only ever *consume* a clause-bearing candidate
             // when it matches; one that never matches anything is otherwise
             // silently accepted as an ordinary (non-conforming) member.
@@ -4169,9 +4169,9 @@ internal sealed class DeclarationBinder
     }
 
     /// <summary>
-    /// ADR-0148: reports GS0491 for two explicit-interface-clause members on
+    /// ADR-0149: reports GS0495 for two explicit-interface-clause members on
     /// the same type that target the same (interface, member-name) slot, and
-    /// GS0490 for a clause-bearing member whose target interface was
+    /// GS0494 for a clause-bearing member whose target interface was
     /// resolved (by <see cref="ResolveExplicitInterfaceClauses"/>) but which
     /// never matched any interface member during the per-interface-member
     /// loops above (i.e. its <c>ExplicitInterfaceMember</c> is still
@@ -7547,7 +7547,7 @@ internal sealed class DeclarationBinder
     }
 
     /// <summary>
-    /// ADR-0148: resolves and links a member declared with an explicit-
+    /// ADR-0149: resolves and links a member declared with an explicit-
     /// interface qualifier clause (<c>func (IFoo) M(...)</c>) on
     /// <paramref name="structSymbol"/> against <paramref name="imethod"/>, an
     /// abstract member of <paramref name="iface"/>. Returns the linked method
@@ -7607,7 +7607,7 @@ internal sealed class DeclarationBinder
         => method.ExplicitReceiverParameter == null ? method.Parameters : method.Parameters.RemoveAt(0);
 
     /// <summary>
-    /// ADR-0148 (extending #2010/#2362's resolution to properties/indexers):
+    /// ADR-0149 (extending #2010/#2362's resolution to properties/indexers):
     /// resolves and links a property declared with an explicit-interface
     /// qualifier clause (<c>prop (IFoo) P T</c> / <c>prop (IFoo) this[...] T</c>)
     /// on <paramref name="structSymbol"/> against <paramref name="iprop"/>, an
@@ -7649,7 +7649,7 @@ internal sealed class DeclarationBinder
                 continue;
             }
 
-            // ADR-0148 (was issue #2362): an explicit property implementation
+            // ADR-0149 (was issue #2362): an explicit property implementation
             // is its own distinct G# member — unlike #985's covariant-return
             // method bridge, there is no "same name, different return type"
             // slot-sharing concern here, so the concrete implementation's
@@ -7705,7 +7705,7 @@ internal sealed class DeclarationBinder
     }
 
     /// <summary>
-    /// ADR-0148: resolves every explicit-interface qualifier clause
+    /// ADR-0149: resolves every explicit-interface qualifier clause
     /// (<see cref="FunctionDeclarationSyntax.ExplicitInterfaceType"/> /
     /// <see cref="PropertyDeclarationSyntax.ExplicitInterfaceType"/>) declared
     /// on each pending struct/class's own methods and properties, binding the
@@ -7724,9 +7724,9 @@ internal sealed class DeclarationBinder
     /// Must run BEFORE <see cref="VerifyInterfaceImplementations"/> so that
     /// pass can rely on <see cref="FunctionSymbol.ExplicitInterfaceClauseTarget"/> /
     /// <see cref="PropertySymbol.ExplicitInterfaceClauseTarget"/> already
-    /// being populated. Reports GS0488 (clause type is not an interface) and
-    /// GS0489 (interface not implemented by the containing type) directly;
-    /// GS0490 (no matching member) and GS0491 (duplicate target) are reported
+    /// being populated. Reports GS0492 (clause type is not an interface) and
+    /// GS0493 (interface not implemented by the containing type) directly;
+    /// GS0494 (no matching member) and GS0495 (duplicate target) are reported
     /// by <see cref="VerifyInterfaceImplementations"/>, which already has the
     /// full per-interface-member matching context needed to detect them.
     /// </summary>
@@ -7841,12 +7841,12 @@ internal sealed class DeclarationBinder
     }
 
     /// <summary>
-    /// ADR-0148: binds an explicit-interface qualifier clause's type
+    /// ADR-0149: binds an explicit-interface qualifier clause's type
     /// reference and validates it names an interface implemented by
     /// <paramref name="structSymbol"/>, returning the MATCHING entry from
     /// <see cref="StructSymbol.Interfaces"/> (not the freshly bound instance —
-    /// see <see cref="ResolveExplicitInterfaceClauses"/>). Reports GS0488 when
-    /// the clause type is not an interface, or GS0489 when it is an interface
+    /// see <see cref="ResolveExplicitInterfaceClauses"/>). Reports GS0492 when
+    /// the clause type is not an interface, or GS0493 when it is an interface
     /// the containing type does not implement; returns <see langword="null"/>
     /// in either case (the caller leaves <c>ExplicitInterfaceClauseTarget</c>
     /// unset, so the member is treated as unresolved but does not crash

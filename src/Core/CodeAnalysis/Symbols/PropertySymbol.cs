@@ -130,10 +130,10 @@ public sealed class PropertySymbol : Symbol
     /// <summary>
     /// Gets or sets the in-compilation (G#) interface member this property
     /// explicitly implements (issue #2362, extending the #2010 convention
-    /// from methods to properties/indexers; ADR-0148 rewrites the
+    /// from methods to properties/indexers; ADR-0149 rewrites the
     /// source-level convention that establishes this link). Set when the
     /// property carries a dedicated explicit-interface qualifier clause
-    /// (<c>prop (IFoo) P T</c> / <c>prop (IFoo) this[...] T</c>, ADR-0148)
+    /// (<c>prop (IFoo) P T</c> / <c>prop (IFoo) this[...] T</c>, ADR-0149)
     /// whose bound interface type — see <see cref="ExplicitInterfaceClauseTarget"/> —
     /// declares a member with this property's own plain name and a matching
     /// accessor shape. Mirrors <see cref="FunctionSymbol.ExplicitInterfaceMember"/>:
@@ -153,7 +153,7 @@ public sealed class PropertySymbol : Symbol
 
     /// <summary>
     /// Gets a value indicating whether this property's declaration carries a
-    /// dedicated explicit-interface qualifier clause (ADR-0148) — a purely
+    /// dedicated explicit-interface qualifier clause (ADR-0149) — a purely
     /// syntactic fact known immediately at declaration time, before
     /// <see cref="ExplicitInterfaceClauseTarget"/> is resolved against the
     /// containing type's implemented interfaces.

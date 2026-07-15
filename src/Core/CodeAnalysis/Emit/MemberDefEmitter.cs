@@ -332,7 +332,7 @@ internal sealed class MemberDefEmitter
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final;
         }
 
-        // ADR-0148: a property declared with an explicit-interface qualifier
+        // ADR-0149: a property declared with an explicit-interface qualifier
         // clause needs a collision-free metadata name for its getter, same
         // rationale as ExplicitInterfaceMetadataNaming's remarks (two
         // explicit implementations sharing a plain property name would
@@ -416,7 +416,7 @@ internal sealed class MemberDefEmitter
             name: this.emitCtx.Metadata.GetOrAddString(prop.SetterParameterName ?? "value"),
             sequenceNumber: 1);
 
-        // ADR-0148: see the matching comment in EmitPropertyGetter.
+        // ADR-0149: see the matching comment in EmitPropertyGetter.
         var setterName = prop.HasExplicitInterfaceClause
             ? "set_" + ExplicitInterfaceMetadataNaming.GetMetadataName(prop.Name, prop.ExplicitInterfaceClauseTarget)
             : $"set_{prop.Name}";

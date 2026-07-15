@@ -24,7 +24,7 @@ namespace Cs2Gs.Tests;
 /// <para>
 /// This fix instead preserves full fidelity, zero drops: every explicit
 /// interface implementation is emitted as its own G# method carrying an
-/// ADR-0148 explicit-interface qualifier clause (issue #2362 redesign;
+/// ADR-0149 explicit-interface qualifier clause (issue #2362 redesign;
 /// originally a reserved <c>__explicit_&lt;Interface&gt;__&lt;Member&gt;</c>
 /// mangled name) that gsc's binder recognizes and links to the specific
 /// interface member it implements (<c>FunctionSymbol.ExplicitInterfaceClauseTarget</c>);
@@ -147,7 +147,7 @@ namespace Corpus.Issue2010
     /// namespaces (<c>NsA.IBar</c> and <c>NsB.IBar</c>) previously mangled
     /// to the identical <c>__explicit_IBar__M</c> name (bare simple name),
     /// producing a hard GS0264 duplicate-signature collision instead of the
-    /// intended per-interface distinctness. Under the ADR-0148 clause
+    /// intended per-interface distinctness. Under the ADR-0149 clause
     /// redesign, each explicit implementation's clause carries the
     /// interface's own fully namespace-qualified type reference (e.g.
     /// <c>(NsA.IBar)</c> vs. <c>(NsB.IBar)</c>), so the two implementations

@@ -15,7 +15,7 @@ namespace GSharp.Compiler.Tests.Emit;
 /// <summary>
 /// Issue #2010 (follow-up to #1911 / PR #1994): a C# explicit interface
 /// implementation (<c>string IFoo.Bar() { ... }</c>) has no G# spelling
-/// (ADR-0091 rejected an `IFoo.M(this)` surface syntax; ADR-0148 later
+/// (ADR-0091 rejected an `IFoo.M(this)` surface syntax; ADR-0149 later
 /// introduced the dedicated <c>func (IFoo) M(...)</c> qualifier clause this
 /// test now exercises). The #1911 fix collapsed two same-name/same-signature
 /// explicit implementations of DIFFERENT interfaces onto a single surviving
@@ -24,7 +24,7 @@ namespace GSharp.Compiler.Tests.Emit;
 /// <para>
 /// This fix instead lets each explicit implementation keep its own distinct
 /// body as a separate G# method declared with the
-/// <c>func (InterfaceType) Member(...)</c> qualifier clause (ADR-0148). The
+/// <c>func (InterfaceType) Member(...)</c> qualifier clause (ADR-0149). The
 /// binder links each such method to the specific interface member it
 /// implements (<see cref="GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol.ExplicitInterfaceMember"/>)
 /// and the emitter binds an explicit CLR <c>MethodImpl</c> row (mirroring the
@@ -84,7 +84,7 @@ public class Issue2010ExplicitInterfaceImplEmitTests
 
             Assert.True(foundBoth, "expected to find the Both type");
 
-            // (1) Two distinct MethodDef rows survive — no drop. ADR-0148:
+            // (1) Two distinct MethodDef rows survive — no drop. ADR-0149:
             // the CLR metadata name is synthesized as
             // "<Package>.<Interface>.<Member>" ("GapCheck.IFoo.Bar" /
             // "GapCheck.IBaz.Bar") for uniqueness, even though the declared

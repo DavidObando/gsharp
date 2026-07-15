@@ -1476,7 +1476,7 @@ public static class GSharpPrinter
         if (property.IsIndexer)
         {
             // ADR-0118: render the canonical indexer header `prop this[...] T`.
-            // ADR-0148: an explicit-interface qualifier clause renders
+            // ADR-0149: an explicit-interface qualifier clause renders
             // immediately after the `prop` keyword, before `this`.
             sb.Append("prop ");
             if (property.ExplicitInterfaceType != null)
@@ -1488,7 +1488,7 @@ public static class GSharpPrinter
         }
         else
         {
-            // ADR-0148: an explicit-interface qualifier clause renders
+            // ADR-0149: an explicit-interface qualifier clause renders
             // immediately after the `prop` keyword, before the member name.
             sb.Append("prop ");
             if (property.ExplicitInterfaceType != null)
@@ -1586,7 +1586,7 @@ public static class GSharpPrinter
         }
         else if (method.ExplicitInterfaceType != null)
         {
-            // ADR-0148: an explicit-interface qualifier clause renders
+            // ADR-0149: an explicit-interface qualifier clause renders
             // immediately after the `func` keyword, before the member name —
             // the same physical slot as the receiver clause above (the two
             // are mutually exclusive; a C# method is never both an

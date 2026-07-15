@@ -89,11 +89,11 @@ public sealed class EventSymbol : Symbol
 
     /// <summary>
     /// Gets or sets the in-compilation (G#) interface member this event
-    /// explicitly implements (ADR-0148, generalizing the #2010/#2362
+    /// explicitly implements (ADR-0149, generalizing the #2010/#2362
     /// explicit-interface convention from methods/properties to events for
     /// the first time). Set when the event carries a dedicated
     /// explicit-interface qualifier clause (<c>event (IFoo) Changed T</c>,
-    /// ADR-0148) whose bound interface type —
+    /// ADR-0149) whose bound interface type —
     /// see <see cref="ExplicitInterfaceClauseTarget"/> — declares a member
     /// with this event's own plain name and a matching handler type. Mirrors
     /// <see cref="PropertySymbol.ExplicitInterfaceMember"/>: the emitter
@@ -107,7 +107,7 @@ public sealed class EventSymbol : Symbol
 
     /// <summary>
     /// Gets a value indicating whether this event's declaration carries a
-    /// dedicated explicit-interface qualifier clause (ADR-0148) — a purely
+    /// dedicated explicit-interface qualifier clause (ADR-0149) — a purely
     /// syntactic fact known immediately at declaration time, before
     /// <see cref="ExplicitInterfaceClauseTarget"/> is resolved against the
     /// containing type's implemented interfaces.

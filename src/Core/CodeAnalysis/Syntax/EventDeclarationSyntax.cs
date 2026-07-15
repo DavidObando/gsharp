@@ -94,7 +94,7 @@ public sealed class EventDeclarationSyntax : SyntaxNode
     /// <summary>
     /// Gets or sets the optional open parenthesis introducing a dedicated
     /// explicit-interface-implementation qualifier clause, e.g. <c>event (IFoo) Changed T</c>
-    /// (ADR-0148). Assigned by the parser; <see langword="null"/> for an ordinary event.
+    /// (ADR-0149). Assigned by the parser; <see langword="null"/> for an ordinary event.
     /// </summary>
     public SyntaxToken ExplicitInterfaceOpenParenthesisToken
     {
@@ -108,7 +108,7 @@ public sealed class EventDeclarationSyntax : SyntaxNode
 
     /// <summary>
     /// Gets or sets the interface type referenced by the explicit-interface qualifier
-    /// clause (ADR-0148). Assigned by the parser; <see langword="null"/> when no clause is present.
+    /// clause (ADR-0149). Assigned by the parser; <see langword="null"/> when no clause is present.
     /// </summary>
     public TypeClauseSyntax ExplicitInterfaceType
     {
@@ -120,7 +120,7 @@ public sealed class EventDeclarationSyntax : SyntaxNode
         }
     }
 
-    /// <summary>Gets or sets the optional close parenthesis terminating the explicit-interface qualifier clause (ADR-0148).</summary>
+    /// <summary>Gets or sets the optional close parenthesis terminating the explicit-interface qualifier clause (ADR-0149).</summary>
     public SyntaxToken ExplicitInterfaceCloseParenthesisToken
     {
         get => explicitInterfaceCloseParenToken;
@@ -131,7 +131,7 @@ public sealed class EventDeclarationSyntax : SyntaxNode
         }
     }
 
-    /// <summary>Gets a value indicating whether this declaration carries an explicit-interface qualifier clause (ADR-0148).</summary>
+    /// <summary>Gets a value indicating whether this declaration carries an explicit-interface qualifier clause (ADR-0149).</summary>
     public bool HasExplicitInterfaceClause => ExplicitInterfaceType != null;
 
     /// <summary>Attaches the given annotation list to this event declaration and returns this same instance for fluent parser use.</summary>
@@ -145,7 +145,7 @@ public sealed class EventDeclarationSyntax : SyntaxNode
     }
 
     /// <summary>
-    /// ADR-0148: attaches a parsed explicit-interface qualifier clause (or no-ops when
+    /// ADR-0149: attaches a parsed explicit-interface qualifier clause (or no-ops when
     /// <paramref name="type"/> is <see langword="null"/>). Returns this same instance for
     /// fluent parser use.
     /// </summary>
