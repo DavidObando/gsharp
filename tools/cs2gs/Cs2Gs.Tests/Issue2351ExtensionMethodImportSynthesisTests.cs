@@ -46,12 +46,16 @@ namespace Cs2Gs.Tests;
 public class Issue2351ExtensionMethodImportSynthesisTests
 {
     [Fact]
-    public void RealOahuExportCheckShape_ImplicitLinqUsing_SynthesizesImport()
+    public void RealOahuExportCheckShape_ImplicitLinqUsing_SynthesizesImportAndCompilesEndToEnd()
     {
         // Mirrors the exact reported shape: Oahu.Diagnostics' ExportCheck.cs has
         // NO `using System.Linq;` of its own (ImplicitUsings supplies it via a
         // separate, SDK-generated GlobalUsings.g.cs file) and calls the bare
-        // method-group form `key.All(char.IsAsciiHexDigit)`.
+        // method-group form `key.All(char.IsAsciiHexDigit)`. Now that issue
+        // #2347 (imported/BCL method-group-to-delegate inference across
+        // generic extension methods) is fixed, this exact shape compiles
+        // end-to-end with the real gsc, proving the import synthesized by
+        // THIS fix is sufficient on its own for the call to resolve.
         string printed = TranslateNamed(
             "ExportCheck.cs",
             ("ExportCheck.cs", @"
@@ -69,16 +73,17 @@ namespace Oahu.Diagnostics.Checks
 
         Assert.Equal(1, CountOccurrences(printed, "import System.Linq"));
         Assert.Contains("key.All(", printed);
+        AssertCompiles(printed);
     }
 
     [Fact]
     public void LambdaEquivalentShape_MissingLinqUsing_SynthesizesImportAndCompilesEndToEnd()
     {
         // Same missing-using shape as the Oahu repro, but with an equivalent
-        // lambda predicate instead of the bare method-group form — this avoids
-        // relying on the SEPARATE method-group-inference fix (issue #2347) so
-        // this test proves, with the REAL gsc, that the import synthesized by
-        // THIS fix alone is sufficient for the call to resolve end-to-end.
+        // lambda predicate instead of the bare method-group form. Kept
+        // alongside the bare-method-group end-to-end test above to prove the
+        // import-synthesis fix is independently sufficient regardless of
+        // which predicate spelling is used.
         string printed = TranslateNamed(
             "Checker.cs",
             ("Checker.cs", @"
