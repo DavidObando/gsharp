@@ -9475,9 +9475,17 @@ public class Parser
             }
 
             var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
-            var initializers = ParseStructLiteralInitializers();
+            var (spreadToken, spreadExpression, spreadSeparator, initializers) = ParseStructLiteralInitializers();
             var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
-            var literal = new StructLiteralExpressionSyntax(syntaxTree, identifier, openBrace, initializers, closeBrace);
+            var literal = new StructLiteralExpressionSyntax(
+                syntaxTree,
+                identifier,
+                openBrace,
+                spreadToken,
+                spreadExpression,
+                spreadSeparator,
+                initializers,
+                closeBrace);
             literal.TypeArgumentList = typeArguments;
             return literal;
         }
@@ -9523,6 +9531,11 @@ public class Parser
     {
         var k1 = Peek(1).Kind;
         if (k1 == SyntaxKind.CloseBraceToken)
+        {
+            return false;
+        }
+
+        if (k1 == SyntaxKind.EllipsisToken)
         {
             return false;
         }
@@ -10845,9 +10858,14 @@ public class Parser
     private bool IsStructLiteralFollowingBrace(int braceOffsetPlusOne)
     {
         // braceOffsetPlusOne is the offset of the token AFTER the '{'. A struct
-        // literal is either empty (`}`) or starts with `Identifier :` (a field init).
+        // literal is empty (`}`), starts with a spread, or starts with `Identifier :`.
         var k0 = Peek(braceOffsetPlusOne).Kind;
         if (k0 == SyntaxKind.CloseBraceToken)
+        {
+            return true;
+        }
+
+        if (k0 == SyntaxKind.EllipsisToken)
         {
             return true;
         }
@@ -10889,13 +10907,39 @@ public class Parser
     {
         var typeIdentifier = MatchToken(SyntaxKind.IdentifierToken);
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
-        var initializers = ParseStructLiteralInitializers();
+        var (spreadToken, spreadExpression, spreadSeparator, initializers) = ParseStructLiteralInitializers();
         var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
-        return new StructLiteralExpressionSyntax(syntaxTree, typeIdentifier, openBrace, initializers, closeBrace);
+        return new StructLiteralExpressionSyntax(
+            syntaxTree,
+            typeIdentifier,
+            openBrace,
+            spreadToken,
+            spreadExpression,
+            spreadSeparator,
+            initializers,
+            closeBrace);
     }
 
-    private SeparatedSyntaxList<FieldInitializerSyntax> ParseStructLiteralInitializers()
+    private (
+        SyntaxToken SpreadToken,
+        ExpressionSyntax SpreadExpression,
+        SyntaxToken SpreadSeparator,
+        SeparatedSyntaxList<FieldInitializerSyntax> Initializers)
+        ParseStructLiteralInitializers()
     {
+        SyntaxToken spreadToken = null;
+        ExpressionSyntax spreadExpression = null;
+        SyntaxToken spreadSeparator = null;
+        if (Current.Kind == SyntaxKind.EllipsisToken)
+        {
+            spreadToken = MatchToken(SyntaxKind.EllipsisToken);
+            spreadExpression = ParseExpression();
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                spreadSeparator = MatchToken(SyntaxKind.CommaToken);
+            }
+        }
+
         var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
         var parseNext = Current.Kind != SyntaxKind.CloseBraceToken;
         while (parseNext &&
@@ -10913,7 +10957,11 @@ public class Parser
             }
         }
 
-        return new SeparatedSyntaxList<FieldInitializerSyntax>(nodesAndSeparators.ToImmutable());
+        return (
+            spreadToken,
+            spreadExpression,
+            spreadSeparator,
+            new SeparatedSyntaxList<FieldInitializerSyntax>(nodesAndSeparators.ToImmutable()));
     }
 
     private FieldInitializerSyntax ParseFieldInitializer()

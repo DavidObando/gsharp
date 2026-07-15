@@ -1624,6 +1624,8 @@ public sealed class Evaluator
             }
         }
 
+        ApplyClassFieldInitializers(sv, node.StructType);
+
         foreach (var init in node.Initializers)
         {
             // Issue #1211: a composite-literal entry may target a settable
@@ -1829,6 +1831,8 @@ public sealed class Evaluator
             }
         }
 
+        ApplyClassFieldInitializers(sv, node.StructType);
+
         // Issue #306: a class declaring an explicit `init(...)` constructor runs
         // its bound body with `this`, the constructor parameters, and the class
         // fields in scope. The base initializer (when GSharp) is forwarded first,
@@ -1951,6 +1955,30 @@ public sealed class Evaluator
         }
 
         return sv;
+    }
+
+    private void ApplyClassFieldInitializers(StructValue value, StructSymbol type)
+    {
+        if (!type.IsClass)
+        {
+            return;
+        }
+
+        var hierarchy = new Stack<StructSymbol>();
+        for (var current = type; current != null; current = current.BaseClass)
+        {
+            hierarchy.Push(current);
+        }
+
+        while (hierarchy.Count > 0)
+        {
+            var current = hierarchy.Pop();
+            var initializerOwner = current.Definition ?? current;
+            foreach (var initializer in initializerOwner.InstanceFieldInitializers)
+            {
+                value.Fields[initializer.Key.Name] = EvaluateExpression(initializer.Value);
+            }
+        }
     }
 
     /// <summary>

@@ -272,10 +272,9 @@ internal static class SmartCastStability
         // Issue #1636: a candidate distinct from the declared type is a genuine
         // subtype narrowing when it implicitly converts to the declared type
         // (candidate → declared): every candidate value is already usable as
-        // declared. `Conversion.Classify` encodes the full class/interface/
-        // base-type lattice (class → base class, class → implemented interface,
-        // interface → base interface, struct → interface, etc.).
-        var toDeclared = Conversion.Classify(candidate, declared);
+        // declared. Structural projection constructs a new value and therefore
+        // is not a runtime subtype relation; exclude it from type-test narrowing.
+        var toDeclared = Conversion.ClassifyNonStructural(candidate, declared);
         if (toDeclared.Exists && toDeclared.IsImplicit)
         {
             return true;

@@ -34,16 +34,32 @@ public sealed class Conversion
     /// </summary>
     public static readonly Conversion Explicit = new Conversion(exists: true, isIdentity: false, isImplicit: false);
 
+    /// <summary>
+    /// ADR-0148: a safe structural projection that constructs a new concrete
+    /// target through its public constructor/member surface.
+    /// </summary>
+    public static readonly Conversion StructuralProjection = new Conversion(
+        exists: true,
+        isIdentity: false,
+        isImplicit: true,
+        isStructuralProjection: true);
+
     // Issue #1482: the implicit numeric-widening lattice and the numeric
     // primitive set now live in the single authoritative
     // `NumericWideningLattice` helper. Conversion classification and overload
     // "better conversion" ranking both query that one table so they cannot
     // drift apart (they previously disagreed about native-int widening).
     private Conversion(bool exists, bool isIdentity, bool isImplicit)
+        : this(exists, isIdentity, isImplicit, isStructuralProjection: false)
+    {
+    }
+
+    private Conversion(bool exists, bool isIdentity, bool isImplicit, bool isStructuralProjection)
     {
         Exists = exists;
         IsIdentity = isIdentity;
         IsImplicit = isImplicit;
+        IsStructuralProjection = isStructuralProjection;
     }
 
     /// <summary>
@@ -61,6 +77,9 @@ public sealed class Conversion
     /// </summary>
     public bool IsImplicit { get; }
 
+    /// <summary>Gets a value indicating whether this conversion constructs a target through ADR-0148 structural projection.</summary>
+    public bool IsStructuralProjection { get; }
+
     /// <summary>
     /// Gets a value indicating whether the conversion is explicit or not.
     /// </summary>
@@ -73,6 +92,24 @@ public sealed class Conversion
     /// <param name="to">To type.</param>
     /// <returns>The conversion mapping between the two types.</returns>
     public static Conversion Classify(TypeSymbol from, TypeSymbol to)
+        => ClassifyCore(from, to, allowStructuralProjection: true);
+
+    /// <summary>
+    /// Classifies only pre-ADR-0148 conversions. Projection planning uses this
+    /// to keep member conversion non-recursive.
+    /// </summary>
+    /// <param name="from">The source type.</param>
+    /// <param name="to">The target type.</param>
+    /// <returns>The non-structural conversion.</returns>
+    internal static Conversion ClassifyNonStructural(TypeSymbol from, TypeSymbol to)
+        => ClassifyCore(from, to, allowStructuralProjection: false);
+
+    /// <summary>Classifies a conversion, optionally including structural projection.</summary>
+    /// <param name="from">The source type.</param>
+    /// <param name="to">The target type.</param>
+    /// <param name="allowStructuralProjection">Whether structural projection is eligible.</param>
+    /// <returns>The classified conversion.</returns>
+    internal static Conversion ClassifyCore(TypeSymbol from, TypeSymbol to, bool allowStructuralProjection)
     {
         if (from == to)
         {
@@ -1085,6 +1122,11 @@ public sealed class Conversion
             && ClrTypeUtilities.IsAssignableByName(to.ClrType, from.ClrType))
         {
             return Conversion.Implicit;
+        }
+
+        if (allowStructuralProjection && StructuralProjectionPlanner.CanProject(from, to))
+        {
+            return Conversion.StructuralProjection;
         }
 
         return Conversion.None;

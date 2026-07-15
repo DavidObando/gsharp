@@ -908,6 +908,11 @@ internal sealed partial class ExpressionBinder
         StructSymbol resolvedDefinition,
         ImmutableArray<TypeSymbol> enclosingTypeArguments = default)
     {
+        if (syntax.SpreadExpression != null)
+        {
+            return BindStructuralSpreadLiteral(syntax, resolvedDefinition, enclosingTypeArguments);
+        }
+
         var typeName = syntax.TypeIdentifier.Text;
 
         StructSymbol structSymbol = null;
@@ -1252,6 +1257,121 @@ internal sealed partial class ExpressionBinder
 
         var litResult = new BoundVariableExpression(syntax, litTemp);
         return new BoundBlockExpression(syntax, bracedStatements.ToImmutable(), litResult);
+    }
+
+    private BoundExpression BindStructuralSpreadLiteral(
+        StructLiteralExpressionSyntax syntax,
+        StructSymbol resolvedDefinition,
+        ImmutableArray<TypeSymbol> enclosingTypeArguments)
+    {
+        var emptyTargetSyntax = new StructLiteralExpressionSyntax(
+            syntax.SyntaxTree,
+            syntax.TypeIdentifier,
+            syntax.OpenBraceToken,
+            spreadToken: null,
+            spreadExpression: null,
+            spreadSeparatorToken: null,
+            new SeparatedSyntaxList<FieldInitializerSyntax>(ImmutableArray<SyntaxNode>.Empty),
+            syntax.CloseBraceToken)
+        {
+            TypeArgumentList = syntax.TypeArgumentList,
+        };
+
+        var boundTarget = BindStructLiteralExpression(emptyTargetSyntax, resolvedDefinition, enclosingTypeArguments);
+        var source = BindExpression(syntax.SpreadExpression);
+        if (boundTarget is BoundErrorExpression)
+        {
+            foreach (var initializer in syntax.Initializers)
+            {
+                _ = BindExpression(initializer.Value);
+            }
+
+            return new BoundErrorExpression(syntax);
+        }
+
+        var explicitNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var initializer in syntax.Initializers)
+        {
+            explicitNames.Add(initializer.FieldIdentifier.Text);
+        }
+
+        if (!StructuralProjectionPlanner.TryCreate(
+            source.Type,
+            boundTarget.Type,
+            strict: false,
+            explicitNames,
+            out var plan,
+            out _))
+        {
+            var failedValues = new Dictionary<string, BoundExpression>(StringComparer.Ordinal);
+            var failedOrder = ImmutableArray.CreateBuilder<string>(syntax.Initializers.Count);
+            foreach (var initializer in syntax.Initializers)
+            {
+                failedValues[initializer.FieldIdentifier.Text] = BindExpression(initializer.Value);
+                failedOrder.Add(initializer.FieldIdentifier.Text);
+            }
+
+            return conversions.BindStructuralProjection(
+                syntax.SpreadExpression.Location,
+                source,
+                boundTarget.Type,
+                strict: false,
+                explicitValues: failedValues,
+                explicitOrder: failedOrder.ToImmutable());
+        }
+
+        var slotTypes = new Dictionary<string, TypeSymbol>(StringComparer.Ordinal);
+        foreach (var slot in plan.ConstructorSlots.Concat(plan.InitializerSlots))
+        {
+            slotTypes[slot.Name] = slot.TargetType;
+        }
+
+        var values = new Dictionary<string, BoundExpression>(StringComparer.Ordinal);
+        var order = ImmutableArray.CreateBuilder<string>(syntax.Initializers.Count);
+        foreach (var initializer in syntax.Initializers)
+        {
+            var name = initializer.FieldIdentifier.Text;
+            if (values.ContainsKey(name))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(initializer.FieldIdentifier.Location, name);
+                _ = BindExpression(initializer.Value);
+                continue;
+            }
+
+            if (!slotTypes.TryGetValue(name, out var slotType))
+            {
+                _ = BindExpression(initializer.Value);
+                Diagnostics.ReportStructuralProjectionFailure(
+                    initializer.FieldIdentifier.Location,
+                    source.Type,
+                    boundTarget.Type,
+                    $"Explicit initializer '{name}' does not name a public construction or writable member slot.");
+                continue;
+            }
+
+            if (initializer.Value is CollectionInitializerExpressionSyntax { Target: null } collection)
+            {
+                BindCollectionElementsForDiagnostics(collection);
+                Diagnostics.ReportStructuralProjectionFailure(
+                    initializer.FieldIdentifier.Location,
+                    source.Type,
+                    boundTarget.Type,
+                    $"Explicit projection initializer '{name}' requires an expression value.");
+                continue;
+            }
+
+            var value = BindExpression(initializer.Value);
+            values.Add(name, conversions.BindConversion(initializer.Value.Location, value, slotType));
+            order.Add(name);
+        }
+
+        return conversions.BindStructuralProjection(
+            syntax.SpreadExpression.Location,
+            source,
+            boundTarget.Type,
+            strict: false,
+            explicitValues: values,
+            explicitOrder: order.ToImmutable());
     }
 
     /// <summary>

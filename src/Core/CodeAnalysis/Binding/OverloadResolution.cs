@@ -174,6 +174,12 @@ internal static class OverloadResolution
         /// so an exact identity or widening match always wins when applicable.
         /// </summary>
         ConstantNarrowing = 13,
+
+        /// <summary>
+        /// ADR-0148 structural projection. Ranked worse than every nominal,
+        /// built-in, and user-defined implicit conversion.
+        /// </summary>
+        StructuralProjection = 14,
     }
 
     /// <summary>
@@ -644,7 +650,11 @@ internal static class OverloadResolution
     /// this call's candidates. Threaded as a parameter for the same reentrancy/
     /// concurrency reason as <paramref name="supplementaryInterfaceCheck"/>.
     /// </param>
-    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs = null, Func<Type, Type> projectTypeArgument = null, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null)
+    /// <param name="structuralProjectionArgumentCheck">
+    /// Optional binder callback that recognizes an argument's symbolic object
+    /// shape as projectable to a candidate CLR parameter type.
+    /// </param>
+    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs = null, Func<Type, Type> projectTypeArgument = null, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null, Func<int, Type, bool> structuralProjectionArgumentCheck = null)
         where T : MethodBase
     {
         var applicable = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)>();
@@ -668,7 +678,7 @@ internal static class OverloadResolution
             // rest.
             try
             {
-                EvaluateCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, interpolatedStringArgs, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck);
+                EvaluateCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, interpolatedStringArgs, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck, structuralProjectionArgumentCheck);
             }
             catch (Exception ex) when (IsMetadataLoadFailure(ex))
             {
@@ -687,7 +697,7 @@ internal static class OverloadResolution
             {
                 try
                 {
-                    EvaluateExpandedParamsCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck);
+                    EvaluateExpandedParamsCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck, structuralProjectionArgumentCheck);
                 }
                 catch (Exception ex) when (IsMetadataLoadFailure(ex))
                 {
@@ -2045,7 +2055,7 @@ internal static class OverloadResolution
     /// so the per-candidate work can be guarded against reflection load
     /// failures (issue #321) without disturbing the surrounding control flow.
     /// </summary>
-    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null)
+    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null, Func<int, Type, bool> structuralProjectionArgumentCheck = null)
         where T : MethodBase
     {
         {
@@ -2268,6 +2278,11 @@ internal static class OverloadResolution
                         // correctly-typed literal before emit.
                         conv = ImplicitConversionKind.ConstantNarrowing;
                     }
+                    else if (structuralProjectionArgumentCheck != null
+                        && structuralProjectionArgumentCheck(i, paramTypes[i]))
+                    {
+                        conv = ImplicitConversionKind.StructuralProjection;
+                    }
                     else
                     {
                         ok = false;
@@ -2298,7 +2313,7 @@ internal static class OverloadResolution
     /// applicability check in <see cref="EvaluateCandidate"/> but rewrites the
     /// trailing parameter type to the element type for ranking purposes.
     /// </summary>
-    private static void EvaluateExpandedParamsCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null)
+    private static void EvaluateExpandedParamsCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null, Func<int, Type, bool> structuralProjectionArgumentCheck = null)
         where T : MethodBase
     {
         T candidate = rawCandidate;
@@ -2486,7 +2501,15 @@ internal static class OverloadResolution
             var conv = ClassifyImplicit(target, argTypes[i], supplementaryInterfaceCheck);
             if (conv == ImplicitConversionKind.None)
             {
-                return;
+                if (structuralProjectionArgumentCheck != null
+                    && structuralProjectionArgumentCheck(i, target))
+                {
+                    conv = ImplicitConversionKind.StructuralProjection;
+                }
+                else
+                {
+                    return;
+                }
             }
 
             conversions[i] = conv;

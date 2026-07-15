@@ -2095,4 +2095,33 @@ internal sealed partial class ExpressionBinder
             return IsImplicitConstantNarrowingArgument(boundArguments[argIndex], TypeSymbol.FromClrType(clrParameterType));
         };
     }
+
+    // ADR-0148: imported overload resolution works on CLR Type surrogates and
+    // cannot see a G# argument's symbolic public shape. Supply that context as
+    // a call-local applicability callback; by-ref parameters remain excluded.
+    internal static Func<int, System.Type, bool> MakeStructuralProjectionArgumentCheck(
+        IReadOnlyList<BoundExpression> boundArguments,
+        int argumentOffset = 0)
+    {
+        if (boundArguments == null)
+        {
+            return null;
+        }
+
+        return (index, clrParameterType) =>
+        {
+            var argIndex = index - argumentOffset;
+            if (argIndex < 0
+                || argIndex >= boundArguments.Count
+                || clrParameterType == null
+                || clrParameterType.IsByRef)
+            {
+                return false;
+            }
+
+            return StructuralProjectionPlanner.CanProject(
+                boundArguments[argIndex].Type,
+                TypeSymbol.FromClrType(clrParameterType));
+        };
+    }
 }

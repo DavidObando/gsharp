@@ -1923,9 +1923,38 @@ public sealed class StructSymbol : TypeSymbol
             foreach (var f in source)
             {
                 var newType = SubstituteTypeForConstruction(f.Type, subst, mapClrType);
-                builder.Add(ReferenceEquals(newType, f.Type)
-                    ? f
-                    : new FieldSymbol(f.Name, newType, f.Accessibility));
+                if (ReferenceEquals(newType, f.Type))
+                {
+                    builder.Add(f);
+                    continue;
+                }
+
+                var substituted = new FieldSymbol(
+                    f.Name,
+                    newType,
+                    f.Accessibility,
+                    f.IsReadOnly,
+                    f.IsStatic,
+                    f.IsConst,
+                    f.IsEventBackingField);
+                if (f.IsConst)
+                {
+                    substituted.SetConstantValue(f.ConstantValue);
+                }
+
+                if (f.ExplicitOffset is int offset)
+                {
+                    substituted.SetExplicitOffset(offset);
+                }
+
+                if (f.IsFixedBuffer)
+                {
+                    substituted.SetFixedBuffer(
+                        SubstituteTypeForConstruction(f.FixedBufferElementType, subst, mapClrType),
+                        f.FixedBufferLength);
+                }
+
+                builder.Add(substituted);
             }
 
             result = builder.MoveToImmutable();
