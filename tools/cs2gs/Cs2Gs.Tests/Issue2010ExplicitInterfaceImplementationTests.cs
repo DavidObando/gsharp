@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
@@ -22,16 +23,18 @@ namespace Cs2Gs.Tests;
 /// behavior, but still losing a distinct body.
 /// <para>
 /// This fix instead preserves full fidelity, zero drops: every explicit
-/// interface implementation is emitted as its own G# method under a reserved
-/// mangled name (<c>__explicit_&lt;Interface&gt;__&lt;Member&gt;</c>) that
-/// gsc's binder recognizes and links to the specific interface member it
-/// implements (<c>FunctionSymbol.ExplicitInterfaceMember</c>); the emitter
-/// binds a CLR <c>MethodImpl</c> row per implementation (reusing the
-/// ADR-0089 static-virtual / issue #985 bridge machinery) so each
+/// interface implementation is emitted as its own G# method carrying an
+/// ADR-0149 explicit-interface qualifier clause (issue #2362 redesign;
+/// originally a reserved <c>__explicit_&lt;Interface&gt;__&lt;Member&gt;</c>
+/// mangled name) that gsc's binder recognizes and links to the specific
+/// interface member it implements (<c>FunctionSymbol.ExplicitInterfaceClauseTarget</c>);
+/// the emitter binds a CLR <c>MethodImpl</c> row per implementation (reusing
+/// the ADR-0089 static-virtual / issue #985 bridge machinery) so each
 /// interface's dispatch slot routes to its own distinct method body. Since
-/// the mangled name embeds the interface's own name, two explicit
-/// implementations of the same member from different interfaces never
-/// collide — no GS0264, no drop, no diagnostic.
+/// the clause names the interface directly (not by encoding it into the
+/// member's own identifier), two explicit implementations of the same
+/// member from different interfaces never collide — no GS0264, no drop, no
+/// diagnostic, and each keeps its unqualified source name.
 /// </para>
 /// </summary>
 public class Issue2010ExplicitInterfaceImplementationTests
@@ -39,12 +42,12 @@ public class Issue2010ExplicitInterfaceImplementationTests
     /// <summary>
     /// Two explicit implementations of the SAME-NAME, SAME-SIGNATURE member
     /// from two DIFFERENT interfaces (a same-name diamond, no public sibling)
-    /// both survive translation as two distinct mangled-name methods — the
-    /// #1911 "de-duplicate to one survivor + Unsupported diagnostic" gap no
-    /// longer applies.
+    /// both survive translation as two distinct methods, each carrying its
+    /// own explicit-interface qualifier clause — the #1911 "de-duplicate to
+    /// one survivor + Unsupported diagnostic" gap no longer applies.
     /// </summary>
     [Fact]
-    public void TwoCollidingExplicitImplementations_BothSurviveAsDistinctMangledMethods()
+    public void TwoCollidingExplicitImplementations_BothSurviveWithDistinctClauses()
     {
         (CompilationUnit unit, TranslationContext context) = Translate(@"
 namespace Corpus.Issue2010
@@ -75,8 +78,12 @@ namespace Corpus.Issue2010
         string printed = GSharpPrinter.Print(unit);
 
         TypeDeclaration multi = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Multi");
-        Assert.Contains(multi.Members.OfType<MethodDeclaration>(), m => m.Name == "__explicit_Corpus_Issue2010_IGreeter__Greet");
-        Assert.Contains(multi.Members.OfType<MethodDeclaration>(), m => m.Name == "__explicit_Corpus_Issue2010_IWelcomer__Greet");
+        List<MethodDeclaration> greetMethods = multi.Members.OfType<MethodDeclaration>().Where(m => m.Name == "Greet").ToList();
+        Assert.Equal(2, greetMethods.Count);
+        Assert.Contains(greetMethods, m => m.ExplicitInterfaceType is NamedTypeReference n && n.Name == "IGreeter");
+        Assert.Contains(greetMethods, m => m.ExplicitInterfaceType is NamedTypeReference n && n.Name == "IWelcomer");
+        Assert.Contains("(IGreeter) Greet", printed, StringComparison.Ordinal);
+        Assert.Contains("(IWelcomer) Greet", printed, StringComparison.Ordinal);
         Assert.Contains("hi", printed, StringComparison.Ordinal);
         Assert.Contains("welcome", printed, StringComparison.Ordinal);
 
@@ -89,8 +96,11 @@ namespace Corpus.Issue2010
     /// <summary>
     /// An explicit implementation coexisting with a same-signature public
     /// method of the same name no longer collides at all: the public method
-    /// keeps its plain name, and the explicit implementation gets its own
-    /// mangled name and its own body — both survive.
+    /// keeps its plain name with no clause, and the explicit implementation
+    /// gets its own explicit-interface qualifier clause and its own body —
+    /// both survive as two distinct methods that happen to share a source
+    /// name (disambiguated at the CLR level by the clause-driven MethodImpl
+    /// binding, not by name).
     /// </summary>
     [Fact]
     public void ExplicitImplementationCoexistingWithPublicMethod_BothSurvive()
@@ -119,8 +129,10 @@ namespace Corpus.Issue2010
         string printed = GSharpPrinter.Print(unit);
 
         TypeDeclaration loudHost = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "LoudHost");
-        Assert.Contains(loudHost.Members.OfType<MethodDeclaration>(), m => m.Name == "Greet");
-        Assert.Contains(loudHost.Members.OfType<MethodDeclaration>(), m => m.Name == "__explicit_Corpus_Issue2010_IGreeter__Greet");
+        List<MethodDeclaration> greetMethods = loudHost.Members.OfType<MethodDeclaration>().Where(m => m.Name == "Greet").ToList();
+        Assert.Equal(2, greetMethods.Count);
+        Assert.Contains(greetMethods, m => m.ExplicitInterfaceType == null);
+        Assert.Contains(greetMethods, m => m.ExplicitInterfaceType is NamedTypeReference n && n.Name == "IGreeter");
         Assert.Contains("hello-public", printed, StringComparison.Ordinal);
         Assert.Contains("hello-explicit", printed, StringComparison.Ordinal);
 
@@ -135,12 +147,15 @@ namespace Corpus.Issue2010
     /// namespaces (<c>NsA.IBar</c> and <c>NsB.IBar</c>) previously mangled
     /// to the identical <c>__explicit_IBar__M</c> name (bare simple name),
     /// producing a hard GS0264 duplicate-signature collision instead of the
-    /// intended per-interface distinctness. The mangle now embeds the
-    /// interface's namespace-qualified name, so the two implementations
-    /// mangle to distinct names and both survive.
+    /// intended per-interface distinctness. Under the ADR-0149 clause
+    /// redesign, each explicit implementation's clause carries the
+    /// interface's own fully namespace-qualified type reference (e.g.
+    /// <c>(NsA.IBar)</c> vs. <c>(NsB.IBar)</c>), so the two implementations
+    /// are unambiguous even though both keep the exact same plain member
+    /// name (<c>M</c>).
     /// </summary>
     [Fact]
-    public void TwoSameSimpleNameInterfacesFromDifferentNamespaces_MangleDistinctly()
+    public void TwoSameSimpleNameInterfacesFromDifferentNamespaces_ClausesDisambiguate()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
         {
@@ -191,13 +206,13 @@ namespace Corpus.Issue2010
         string printed = GSharpPrinter.Print(unit);
 
         TypeDeclaration multi = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Multi");
-        var mangledNames = multi.Members.OfType<MethodDeclaration>().Select(m => m.Name).ToList();
+        List<MethodDeclaration> mMethods = multi.Members.OfType<MethodDeclaration>().Where(m => m.Name == "M").ToList();
 
-        // The two mangled names must be DISTINCT — this is the regression this
-        // fix addresses (previously both would be "__explicit_IBar__M").
-        Assert.Equal(2, mangledNames.Distinct(StringComparer.Ordinal).Count());
-        Assert.Contains(mangledNames, n => n.StartsWith("__explicit_NsA_IBar__M", StringComparison.Ordinal));
-        Assert.Contains(mangledNames, n => n.StartsWith("__explicit_NsB_IBar__M", StringComparison.Ordinal));
+        // Both keep the SAME plain source name ("M") — disambiguation is via
+        // the clause's interface type, not the member name.
+        Assert.Equal(2, mMethods.Count);
+        Assert.Contains("(NsA.IBar) M", printed, StringComparison.Ordinal);
+        Assert.Contains("(NsB.IBar) M", printed, StringComparison.Ordinal);
         Assert.Contains("from-a", printed, StringComparison.Ordinal);
         Assert.Contains("from-b", printed, StringComparison.Ordinal);
 

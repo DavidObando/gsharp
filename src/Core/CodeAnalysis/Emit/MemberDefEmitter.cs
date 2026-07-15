@@ -169,7 +169,10 @@ internal sealed class MemberDefEmitter
 
             var propDef = this.emitCtx.Metadata.AddProperty(
                 attributes: PropertyAttributes.None,
-                name: this.emitCtx.Metadata.GetOrAddString(prop.Name),
+                name: this.emitCtx.Metadata.GetOrAddString(
+                    prop.HasExplicitInterfaceClause
+                        ? ExplicitInterfaceMetadataNaming.GetMetadataName(prop.Name, prop.ExplicitInterfaceClauseTarget)
+                        : prop.Name),
                 signature: this.emitCtx.Metadata.GetOrAddBlob(propertySignature));
 
             if (firstPropDef.IsNil)
@@ -298,7 +301,13 @@ internal sealed class MemberDefEmitter
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => this.encodeTypeSymbol(r.Type(), prop.Type), _ => { });
 
-        var methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig;
+        // ADR-0149: an explicit-interface qualifier clause property (whether
+        // an auto-property, reaching this fallback path, or an indexer,
+        // which always has a computed body and so never reaches this path)
+        // is ALWAYS private in CLR metadata — see the matching remark on
+        // ReflectionMetadataEmitter.EmitFunction's effectiveAccessibility.
+        var methodAttrs = (prop.HasExplicitInterfaceClause ? MethodAttributes.Private : MethodAttributes.Public)
+            | MethodAttributes.SpecialName | MethodAttributes.HideBySig;
         if (prop.IsVirtual)
         {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
@@ -312,11 +321,36 @@ internal sealed class MemberDefEmitter
             // Issue #248: implicit interface implementation requires Virtual | NewSlot.
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
         }
+        else if (prop.ExplicitInterfaceMember != null)
+        {
+            // Issue #2362: a mangled-name explicit interface property
+            // implementation is bound to its interface slot purely via an
+            // explicit MethodImpl row (see
+            // EmitExplicitInterfacePropertyMethodImpls) — its accessor's own
+            // name never matches the interface member's name, so
+            // PropertyImplicitlyImplementsInterface (a name-based check)
+            // never fires for it. Per ECMA-335 §II.10.3.3, a MethodImpl body
+            // method must be virtual; Final additionally prevents a derived
+            // class from accidentally overriding this synthetic accessor by
+            // name (it has no natural override point, exactly like the
+            // #2010 mangled explicit method convention's own methods, which
+            // get Virtual | NewSlot | Final unconditionally via EmitFunction).
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final;
+        }
+
+        // ADR-0149: a property declared with an explicit-interface qualifier
+        // clause needs a collision-free metadata name for its getter, same
+        // rationale as ExplicitInterfaceMetadataNaming's remarks (two
+        // explicit implementations sharing a plain property name would
+        // otherwise also share the identical "get_Name" accessor name).
+        var getterName = prop.HasExplicitInterfaceClause
+            ? "get_" + ExplicitInterfaceMetadataNaming.GetMetadataName(prop.Name, prop.ExplicitInterfaceClauseTarget)
+            : $"get_{prop.Name}";
 
         return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString($"get_{prop.Name}"),
+            name: this.emitCtx.Metadata.GetOrAddString(getterName),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: this.nextParameterHandle());
@@ -358,7 +392,11 @@ internal sealed class MemberDefEmitter
                 },
                 ps => this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type));
 
-        var methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig;
+        // ADR-0149: see the matching visibility comment in EmitPropertyGetter
+        // — an explicit-interface qualifier clause property is always
+        // private in CLR metadata.
+        var methodAttrs = (prop.HasExplicitInterfaceClause ? MethodAttributes.Private : MethodAttributes.Public)
+            | MethodAttributes.SpecialName | MethodAttributes.HideBySig;
         if (prop.IsVirtual)
         {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
@@ -372,6 +410,14 @@ internal sealed class MemberDefEmitter
             // Issue #248: implicit interface implementation requires Virtual | NewSlot.
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
         }
+        else if (prop.ExplicitInterfaceMember != null)
+        {
+            // Issue #2362: see the matching comment in EmitPropertyGetter —
+            // the setter half of a mangled-name explicit interface property
+            // implementation needs the same Virtual | NewSlot | Final promotion
+            // so its MethodImpl row (emitted separately) is ECMA-335-valid.
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final;
+        }
 
         // Emit a Parameter row for "value" so the setter has a named parameter.
         var firstParamHandle = this.nextParameterHandle();
@@ -380,10 +426,15 @@ internal sealed class MemberDefEmitter
             name: this.emitCtx.Metadata.GetOrAddString(prop.SetterParameterName ?? "value"),
             sequenceNumber: 1);
 
+        // ADR-0149: see the matching comment in EmitPropertyGetter.
+        var setterName = prop.HasExplicitInterfaceClause
+            ? "set_" + ExplicitInterfaceMetadataNaming.GetMetadataName(prop.Name, prop.ExplicitInterfaceClauseTarget)
+            : $"set_{prop.Name}";
+
         return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString($"set_{prop.Name}"),
+            name: this.emitCtx.Metadata.GetOrAddString(setterName),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: firstParamHandle);
@@ -719,12 +770,24 @@ internal sealed class MemberDefEmitter
         {
             foreach (var iface in structSym.Interfaces)
             {
-                if (iface.Properties.IsDefaultOrEmpty)
+                // ADR-0149 follow-up (issue #2370): Properties is never
+                // substituted onto a CONSTRUCTED generic interface instance
+                // (see InterfaceSymbol.TryResolveMembers — only
+                // Methods/StaticMethods/PrivateMethods/StaticPrivateMethods
+                // are substituted), so `iface.Properties` is empty for e.g.
+                // `IWatchable[int32]`. Resolve against `iface.Definition ??
+                // iface` (a no-op for a non-generic interface) so an
+                // ordinary (implicit) property implementation of a GENERIC
+                // interface still gets promoted to Virtual|NewSlot instead
+                // of silently staying non-virtual and failing to satisfy the
+                // interface slot at the CLR level.
+                var defIface = iface.Definition ?? iface;
+                if (defIface.Properties.IsDefaultOrEmpty)
                 {
                     continue;
                 }
 
-                foreach (var ifaceProp in iface.Properties)
+                foreach (var ifaceProp in defIface.Properties)
                 {
                     if (ifaceProp.Name == prop.Name)
                     {
@@ -773,12 +836,17 @@ internal sealed class MemberDefEmitter
 
         foreach (var iface in structSym.Interfaces)
         {
-            if (iface.Events.IsDefaultOrEmpty)
+            // ADR-0149 follow-up (issue #2370): see the matching comment in
+            // PropertyImplicitlyImplementsInterface — Events is likewise
+            // never substituted onto a constructed generic interface
+            // instance, so this must resolve against the open Definition.
+            var defIface = iface.Definition ?? iface;
+            if (defIface.Events.IsDefaultOrEmpty)
             {
                 continue;
             }
 
-            foreach (var ifaceEvent in iface.Events)
+            foreach (var ifaceEvent in defIface.Events)
             {
                 if (ifaceEvent.Name == ev.Name)
                 {
@@ -1049,7 +1117,14 @@ internal sealed class MemberDefEmitter
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
             .Parameters(1, r => r.Void(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), ev.Type));
 
-        var methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig;
+        // ADR-0149: an explicit-interface qualifier clause field-like event's
+        // add_ accessor is always private in CLR metadata (mirrors the
+        // property getter/setter fix above); a custom (non-field-like)
+        // explicit event's add accessor instead returns early above via
+        // EmitFunction, whose own effectiveAccessibility already enforces
+        // this, so this fallback only needs to cover the field-like case.
+        var methodAttrs = (ev.HasExplicitInterfaceClause ? MethodAttributes.Private : MethodAttributes.Public)
+            | MethodAttributes.SpecialName | MethodAttributes.HideBySig;
         if (ev.IsVirtual)
         {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
@@ -1062,6 +1137,13 @@ internal sealed class MemberDefEmitter
         {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
         }
+        else if (ev.ExplicitInterfaceMember != null)
+        {
+            // ADR-0149: mirrors the property MethodImpl-bridge promotion —
+            // a MethodImpl body method must be Virtual per ECMA-335 §II.10.3.3;
+            // Final additionally prevents an accidental by-name override.
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final;
+        }
 
         var firstParamHandle = this.nextParameterHandle();
         this.emitCtx.Metadata.AddParameter(
@@ -1069,10 +1151,16 @@ internal sealed class MemberDefEmitter
             name: this.emitCtx.Metadata.GetOrAddString("value"),
             sequenceNumber: 1);
 
+        // ADR-0149: a collision-free metadata name, mirroring
+        // EmitPropertyGetter/Setter's getterName/setterName synthesis.
+        var addName = ev.HasExplicitInterfaceClause
+            ? "add_" + ExplicitInterfaceMetadataNaming.GetMetadataName(ev.Name, ev.ExplicitInterfaceClauseTarget)
+            : $"add_{ev.Name}";
+
         return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString($"add_{ev.Name}"),
+            name: this.emitCtx.Metadata.GetOrAddString(addName),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: firstParamHandle);
@@ -1114,7 +1202,9 @@ internal sealed class MemberDefEmitter
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
             .Parameters(1, r => r.Void(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), ev.Type));
 
-        var methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig;
+        // ADR-0149: see the matching visibility comment in EmitEventAddAccessor.
+        var methodAttrs = (ev.HasExplicitInterfaceClause ? MethodAttributes.Private : MethodAttributes.Public)
+            | MethodAttributes.SpecialName | MethodAttributes.HideBySig;
         if (ev.IsVirtual)
         {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
@@ -1127,6 +1217,11 @@ internal sealed class MemberDefEmitter
         {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
         }
+        else if (ev.ExplicitInterfaceMember != null)
+        {
+            // ADR-0149: see the matching comment in EmitEventAddAccessor.
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final;
+        }
 
         var firstParamHandle = this.nextParameterHandle();
         this.emitCtx.Metadata.AddParameter(
@@ -1134,10 +1229,15 @@ internal sealed class MemberDefEmitter
             name: this.emitCtx.Metadata.GetOrAddString("value"),
             sequenceNumber: 1);
 
+        // ADR-0149: see the matching comment in EmitEventAddAccessor.
+        var removeName = ev.HasExplicitInterfaceClause
+            ? "remove_" + ExplicitInterfaceMetadataNaming.GetMetadataName(ev.Name, ev.ExplicitInterfaceClauseTarget)
+            : $"remove_{ev.Name}";
+
         return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString($"remove_{ev.Name}"),
+            name: this.emitCtx.Metadata.GetOrAddString(removeName),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: firstParamHandle);
@@ -1189,7 +1289,12 @@ internal sealed class MemberDefEmitter
                 }
             });
 
-        var methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig;
+        // ADR-0149: see the matching visibility comment in EmitEventAddAccessor
+        // (this fallback is reached only when MetadataOnly suppresses the
+        // EmitFunction path above, or when there is genuinely no raise
+        // accessor body — a raise accessor is always user-provided).
+        var methodAttrs = (ev.HasExplicitInterfaceClause ? MethodAttributes.Private : MethodAttributes.Public)
+            | MethodAttributes.SpecialName | MethodAttributes.HideBySig;
         if (isStatic)
         {
             methodAttrs |= MethodAttributes.Static;
@@ -1202,6 +1307,10 @@ internal sealed class MemberDefEmitter
         {
             methodAttrs |= MethodAttributes.Virtual;
         }
+        else if (ev.ExplicitInterfaceMember != null)
+        {
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final;
+        }
 
         var firstParamHandle = this.nextParameterHandle();
         for (int i = 0; i < paramCount; i++)
@@ -1212,10 +1321,15 @@ internal sealed class MemberDefEmitter
                 sequenceNumber: i + 1);
         }
 
+        // ADR-0149: see the matching comment in EmitEventAddAccessor.
+        var raiseName = ev.HasExplicitInterfaceClause
+            ? "raise_" + ExplicitInterfaceMetadataNaming.GetMetadataName(ev.Name, ev.ExplicitInterfaceClauseTarget)
+            : $"raise_{ev.Name}";
+
         return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString($"raise_{ev.Name}"),
+            name: this.emitCtx.Metadata.GetOrAddString(raiseName),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: firstParamHandle);
@@ -1285,7 +1399,20 @@ internal sealed class MemberDefEmitter
                 {
                     var sigBlob = new BlobBuilder();
                     new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: !prop.IsStatic)
-                        .Parameters(0, r => this.encodeTypeSymbol(r.Type(), prop.Type), _ => { });
+                        .Parameters(
+                            prop.Parameters.Length,
+                            r => this.encodeTypeSymbol(r.Type(), prop.Type),
+                            ps =>
+                            {
+                                // ADR-0149 (issue #944 follow-up): an abstract
+                                // interface indexer getter carries its index
+                                // parameters ahead of the return type, exactly
+                                // like a struct/class indexer getter.
+                                foreach (var indexParam in prop.Parameters)
+                                {
+                                    this.encodeTypeSymbol(ps.AddParameter().Type(), indexParam.Type);
+                                }
+                            });
 
                     var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
                         | MethodAttributes.Virtual | MethodAttributes.Abstract
@@ -1321,10 +1448,23 @@ internal sealed class MemberDefEmitter
                 {
                     var sigBlob = new BlobBuilder();
                     new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: !prop.IsStatic)
-                        .Parameters(1, r => r.Void(), ps =>
-                        {
-                            this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type);
-                        });
+                        .Parameters(
+                            prop.Parameters.Length + 1,
+                            r => r.Void(),
+                            ps =>
+                            {
+                                // ADR-0149 (issue #944 follow-up): an abstract
+                                // interface indexer setter carries its index
+                                // parameters ahead of the trailing `value`
+                                // parameter, exactly like a struct/class
+                                // indexer setter.
+                                foreach (var indexParam in prop.Parameters)
+                                {
+                                    this.encodeTypeSymbol(ps.AddParameter().Type(), indexParam.Type);
+                                }
+
+                                this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type);
+                            });
 
                     var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
                         | MethodAttributes.Virtual | MethodAttributes.Abstract
@@ -1346,9 +1486,32 @@ internal sealed class MemberDefEmitter
 
             // Emit PropertyDef row.
             var propertySignature = new BlobBuilder();
-            new BlobEncoder(propertySignature)
-                .PropertySignature(isInstanceProperty: !prop.IsStatic)
-                .Parameters(0, returnType => this.encodeTypeSymbol(returnType.Type(), prop.Type), parameters => { });
+            if (prop.IsIndexer && !prop.Parameters.IsDefaultOrEmpty)
+            {
+                // ADR-0118 / ADR-0149 (issue #944 follow-up): an interface
+                // indexer's PropertyDef signature carries its index parameter
+                // types too, mirroring the struct/class indexer PropertyDef
+                // emission above (EmitPropertyGetter/Setter's sibling path).
+                var indexParams = prop.Parameters;
+                new BlobEncoder(propertySignature)
+                    .PropertySignature(isInstanceProperty: !prop.IsStatic)
+                    .Parameters(
+                        indexParams.Length,
+                        returnType => this.encodeTypeSymbol(returnType.Type(), prop.Type),
+                        parameters =>
+                        {
+                            foreach (var indexParam in indexParams)
+                            {
+                                this.encodeTypeSymbol(parameters.AddParameter().Type(), indexParam.Type);
+                            }
+                        });
+            }
+            else
+            {
+                new BlobEncoder(propertySignature)
+                    .PropertySignature(isInstanceProperty: !prop.IsStatic)
+                    .Parameters(0, returnType => this.encodeTypeSymbol(returnType.Type(), prop.Type), parameters => { });
+            }
 
             var propDef = this.emitCtx.Metadata.AddProperty(
                 attributes: PropertyAttributes.None,

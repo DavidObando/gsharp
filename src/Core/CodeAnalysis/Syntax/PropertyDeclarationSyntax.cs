@@ -14,6 +14,9 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     // Backing field for the property the parser assigns after construction. Its setter
     // invalidates the node's cached span (issue #1675).
     private SyntaxToken staticModifier;
+    private SyntaxToken explicitInterfaceOpenParenToken;
+    private TypeClauseSyntax explicitInterfaceType;
+    private SyntaxToken explicitInterfaceCloseParenToken;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PropertyDeclarationSyntax"/> class.
@@ -91,6 +94,51 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     /// <summary>Gets a value indicating whether this property carries a <c>shared</c> static modifier (ADR-0089 / issue #1019).</summary>
     public bool HasStaticModifier => StaticModifier != null;
 
+    /// <summary>
+    /// Gets or sets the optional open parenthesis introducing a dedicated
+    /// explicit-interface-implementation qualifier clause, e.g. <c>prop (IFoo) P T</c> or
+    /// <c>prop (IFoo) this[...] T</c> (ADR-0149). Assigned by the parser; <see langword="null"/>
+    /// for an ordinary property/indexer.
+    /// </summary>
+    public SyntaxToken ExplicitInterfaceOpenParenthesisToken
+    {
+        get => explicitInterfaceOpenParenToken;
+        set
+        {
+            explicitInterfaceOpenParenToken = value;
+            InvalidateCachedSpan();
+        }
+    }
+
+    /// <summary>
+    /// Gets or sets the interface type referenced by the explicit-interface qualifier
+    /// clause (ADR-0149), e.g. the <c>IFoo</c> in <c>prop (IFoo) P T</c>. Assigned by the
+    /// parser; <see langword="null"/> when no clause is present.
+    /// </summary>
+    public TypeClauseSyntax ExplicitInterfaceType
+    {
+        get => explicitInterfaceType;
+        set
+        {
+            explicitInterfaceType = value;
+            InvalidateCachedSpan();
+        }
+    }
+
+    /// <summary>Gets or sets the optional close parenthesis terminating the explicit-interface qualifier clause (ADR-0149).</summary>
+    public SyntaxToken ExplicitInterfaceCloseParenthesisToken
+    {
+        get => explicitInterfaceCloseParenToken;
+        set
+        {
+            explicitInterfaceCloseParenToken = value;
+            InvalidateCachedSpan();
+        }
+    }
+
+    /// <summary>Gets a value indicating whether this declaration carries an explicit-interface qualifier clause (ADR-0149).</summary>
+    public bool HasExplicitInterfaceClause => ExplicitInterfaceType != null;
+
     /// <summary>Gets the identifier token whose text is <c>prop</c>.</summary>
     public SyntaxToken PropKeyword { get; }
 
@@ -134,6 +182,28 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     {
         Annotations = annotations.IsDefault ? ImmutableArray<AnnotationSyntax>.Empty : annotations;
         InvalidateCachedSpan();
+        return this;
+    }
+
+    /// <summary>
+    /// ADR-0149: attaches a parsed explicit-interface qualifier clause (or no-ops when
+    /// <paramref name="type"/> is <see langword="null"/>). Returns this same instance for
+    /// fluent parser use.
+    /// </summary>
+    /// <param name="openParen">The open parenthesis token, or <see langword="null"/> when no clause is present.</param>
+    /// <param name="type">The interface type clause, or <see langword="null"/> when no clause is present.</param>
+    /// <param name="closeParen">The close parenthesis token, or <see langword="null"/> when no clause is present.</param>
+    /// <returns>This same <see cref="PropertyDeclarationSyntax"/>.</returns>
+    internal PropertyDeclarationSyntax WithExplicitInterfaceClause(SyntaxToken openParen, TypeClauseSyntax type, SyntaxToken closeParen)
+    {
+        if (type == null)
+        {
+            return this;
+        }
+
+        ExplicitInterfaceOpenParenthesisToken = openParen;
+        ExplicitInterfaceType = type;
+        ExplicitInterfaceCloseParenthesisToken = closeParen;
         return this;
     }
 

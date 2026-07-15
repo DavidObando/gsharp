@@ -18,7 +18,7 @@ public sealed class BoundEventSubscriptionExpression : BoundExpression
     public BoundEventSubscriptionExpression(
         SyntaxNode syntax,
         BoundExpression receiver,
-        StructSymbol structType,
+        TypeSymbol structType,
         EventSymbol eventSymbol,
         BoundExpression handler,
         bool isAdd)
@@ -33,7 +33,14 @@ public sealed class BoundEventSubscriptionExpression : BoundExpression
 
     public BoundExpression Receiver { get; }
 
-    public StructSymbol StructType { get; }
+    /// <summary>
+    /// Gets the event's static owner type: a <see cref="StructSymbol"/> for
+    /// the ordinary struct/class case, or an <see cref="InterfaceSymbol"/>
+    /// (ADR-0149 follow-up, issue #2370) when the subscription is reached
+    /// through an interface-typed receiver (<c>b: IFoo; b.Changed += h</c>),
+    /// dispatching via the interface's own add/remove slot.
+    /// </summary>
+    public TypeSymbol StructType { get; }
 
     public EventSymbol Event { get; }
 

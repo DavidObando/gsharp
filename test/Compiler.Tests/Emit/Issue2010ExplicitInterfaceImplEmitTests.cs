@@ -15,19 +15,24 @@ namespace GSharp.Compiler.Tests.Emit;
 /// <summary>
 /// Issue #2010 (follow-up to #1911 / PR #1994): a C# explicit interface
 /// implementation (<c>string IFoo.Bar() { ... }</c>) has no G# spelling
-/// (ADR-0091 rejected an `IFoo.M(this)` surface syntax). The #1911 fix
-/// collapsed two same-name/same-signature explicit implementations of
-/// DIFFERENT interfaces onto a single surviving method body (dropping the
-/// other, reported via an <c>Unsupported</c> diagnostic).
+/// (ADR-0091 rejected an `IFoo.M(this)` surface syntax; ADR-0149 later
+/// introduced the dedicated <c>func (IFoo) M(...)</c> qualifier clause this
+/// test now exercises). The #1911 fix collapsed two same-name/same-signature
+/// explicit implementations of DIFFERENT interfaces onto a single surviving
+/// method body (dropping the other, reported via an <c>Unsupported</c>
+/// diagnostic).
 /// <para>
 /// This fix instead lets each explicit implementation keep its own distinct
-/// body as a separate G# method whose name follows the reserved
-/// <c>__explicit_&lt;Interface&gt;__&lt;Member&gt;</c> mangled convention. The
+/// body as a separate G# method declared with the
+/// <c>func (InterfaceType) Member(...)</c> qualifier clause (ADR-0149). The
 /// binder links each such method to the specific interface member it
 /// implements (<see cref="GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol.ExplicitInterfaceMember"/>)
 /// and the emitter binds an explicit CLR <c>MethodImpl</c> row (mirroring the
 /// ADR-0089 static-virtual / issue #985 bridge machinery) so each interface's
 /// dispatch slot routes to its own method body — full fidelity, zero drops.
+/// The declared member name stays the plain <c>Bar</c> for both — only the
+/// synthesized CLR metadata name (<c>IFoo.Bar</c> / <c>IBaz.Bar</c>) differs,
+/// keeping the two MethodDef rows collision-free.
 /// </para>
 /// </summary>
 public class Issue2010ExplicitInterfaceImplEmitTests
@@ -44,11 +49,11 @@ public class Issue2010ExplicitInterfaceImplEmitTests
         }
 
         class Both : IFoo, IBaz {
-            func __explicit_GapCheck_IFoo__Bar() string {
+            func (IFoo) Bar() string {
                 return "foo"
             }
 
-            func __explicit_GapCheck_IBaz__Bar() string {
+            func (IBaz) Bar() string {
                 return "baz"
             }
         }
@@ -79,18 +84,22 @@ public class Issue2010ExplicitInterfaceImplEmitTests
 
             Assert.True(foundBoth, "expected to find the Both type");
 
-            // (1) Two distinct MethodDef rows survive — no drop.
+            // (1) Two distinct MethodDef rows survive — no drop. ADR-0149:
+            // the CLR metadata name is synthesized as
+            // "<Package>.<Interface>.<Member>" ("GapCheck.IFoo.Bar" /
+            // "GapCheck.IBaz.Bar") for uniqueness, even though the declared
+            // source name ("Bar") is identical for both.
             int fooBody = 0;
             int bazBody = 0;
             foreach (var mh in both.GetMethods())
             {
                 var md = reader.GetMethodDefinition(mh);
                 var name = reader.GetString(md.Name);
-                if (name == "__explicit_GapCheck_IFoo__Bar")
+                if (name == "GapCheck.IFoo.Bar")
                 {
                     fooBody++;
                 }
-                else if (name == "__explicit_GapCheck_IBaz__Bar")
+                else if (name == "GapCheck.IBaz.Bar")
                 {
                     bazBody++;
                 }
@@ -99,7 +108,7 @@ public class Issue2010ExplicitInterfaceImplEmitTests
             Assert.Equal(1, fooBody);
             Assert.Equal(1, bazBody);
 
-            // (2) Two MethodImpl rows binding each mangled method to its own
+            // (2) Two MethodImpl rows binding each method to its own
             // interface's Bar() slot.
             int methodImplRows = 0;
             foreach (var miHandle in both.GetMethodImplementations())

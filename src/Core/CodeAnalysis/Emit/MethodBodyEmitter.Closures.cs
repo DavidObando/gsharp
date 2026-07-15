@@ -546,9 +546,27 @@ internal sealed partial class MethodBodyEmitter
 
         if (this.outer.cache.EventAccessorHandles.TryGetValue(node.Event, out var accessorHandles))
         {
+            var accessorMethodSymbol = node.IsAdd ? node.Event.AddMethodSymbol : node.Event.RemoveMethodSymbol;
+
+            // ADR-0149 follow-up (issue #2370): a generic-interface-typed
+            // receiver (`b: IWatchable[int32]; b.Changed += h`) must reach
+            // the add/remove accessor through a MemberRef parented at the
+            // constructed TypeSpec, exactly like EmitUserInstanceCall's
+            // generic-interface call path — the bare MethodDef planned
+            // above is only valid for the OPEN interface definition.
+            if (node.StructType is InterfaceSymbol ifaceOwner
+                && ReflectionMetadataEmitter.IsUserGenericInterfaceReference(ifaceOwner)
+                && accessorMethodSymbol != null)
+            {
+                var accessorToken = this.outer.ResolveUserInterfaceInstanceMethodToken(ifaceOwner, accessorMethodSymbol);
+                this.il.OpCode(ILOpCode.Callvirt);
+                this.il.Token(accessorToken);
+                return;
+            }
+
             var accessorHandle = node.IsAdd ? accessorHandles.Add : accessorHandles.Remove;
             bool isStatic = node.Receiver == null;
-            bool isVirtual = !isStatic && (node.Event.IsVirtual || node.Event.IsOverride);
+            bool isVirtual = !isStatic && (node.StructType is InterfaceSymbol || node.Event.IsVirtual || node.Event.IsOverride);
             this.il.OpCode(isVirtual ? ILOpCode.Callvirt : ILOpCode.Call);
             this.il.Token(accessorHandle);
         }

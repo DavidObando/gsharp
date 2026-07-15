@@ -923,6 +923,17 @@ operators `+ - | & ^ << >>`; parenthesized sub-expressions; and references to
 already-declared sibling members by bare name. Anything else (a function call,
 a non-sibling identifier, a floating-point literal, …) is rejected with GS0467.
 
+## Explicit-interface qualifier clause (GS0492–GS0495)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0492 | Error | An explicit-interface qualifier clause (`func (X) M(...)` / `prop (X) P T` / `event (X) E T`) references a type that is not an interface. |
+| GS0493 | Error | An explicit-interface qualifier clause references an interface the containing type does not implement. |
+| GS0494 | Error | An explicit-interface qualifier clause's interface is implemented, but no member on it matches the declared name, signature, or accessor shape. |
+| GS0495 | Error | Two members of the same containing type both carry an explicit-interface qualifier clause that resolves to the same interface member. |
+
+ADR-0149 adds a dedicated qualifier clause for explicit interface implementations: `func (IFoo) M(...) T { ... }`, `prop (IFoo) P T { ... }`, `prop (IFoo) this[i int32] T { ... }`, and the analogous `event (IFoo) E T` form. Unlike an ordinary member, the qualifier's interface type must be one of the containing type's implemented interfaces (GS0493) and must be an interface at all (GS0492), and the declared member must exactly match one of that interface's members by name, parameter/accessor shape (GS0494). Two clauses on the same containing type that resolve to the *same* interface member are rejected as a duplicate implementation (GS0495) — this is distinct from two *different* explicit implementations (of different interface members, or the same simple name under different interfaces) sharing a plain source name, which is the entire point of the feature and is explicitly permitted.
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |

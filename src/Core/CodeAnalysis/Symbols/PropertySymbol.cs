@@ -128,6 +128,47 @@ public sealed class PropertySymbol : Symbol
     public Syntax.BlockStatementSyntax SetterBodySyntax { get; set; }
 
     /// <summary>
+    /// Gets or sets the in-compilation (G#) interface member this property
+    /// explicitly implements (issue #2362, extending the #2010 convention
+    /// from methods to properties/indexers; ADR-0149 rewrites the
+    /// source-level convention that establishes this link). Set when the
+    /// property carries a dedicated explicit-interface qualifier clause
+    /// (<c>prop (IFoo) P T</c> / <c>prop (IFoo) this[...] T</c>, ADR-0149)
+    /// whose bound interface type — see <see cref="ExplicitInterfaceClauseTarget"/> —
+    /// declares a member with this property's own plain name and a matching
+    /// accessor shape. Mirrors <see cref="FunctionSymbol.ExplicitInterfaceMember"/>:
+    /// the emitter resolves this property's getter/setter accessor methods to a
+    /// MethodDef or (for a constructed generic interface) a
+    /// MemberRef/TypeSpec token and binds a <c>MethodImpl</c> row per
+    /// accessor so the CLR routes interface dispatch to this property's own
+    /// distinct accessor bodies instead of relying on name-based virtual
+    /// dispatch. An explicit property implementation never collides with a
+    /// same-named public concrete property (the #2362 defect) because
+    /// explicit-clause members are exempt from the plain duplicate-name check
+    /// — see <see cref="HasExplicitInterfaceClause"/> and
+    /// <see cref="Binding.DeclarationBinder.ResolveExplicitInterfaceClauses"/>.
+    /// Defaults to <see langword="null"/> for ordinary properties.
+    /// </summary>
+    public PropertySymbol ExplicitInterfaceMember { get; set; }
+
+    /// <summary>
+    /// Gets a value indicating whether this property's declaration carries a
+    /// dedicated explicit-interface qualifier clause (ADR-0149) — a purely
+    /// syntactic fact known immediately at declaration time, before
+    /// <see cref="ExplicitInterfaceClauseTarget"/> is resolved against the
+    /// containing type's implemented interfaces.
+    /// </summary>
+    public bool HasExplicitInterfaceClause => Declaration?.HasExplicitInterfaceClause == true;
+
+    /// <summary>
+    /// Gets or sets the <see cref="InterfaceSymbol"/> the explicit-interface
+    /// qualifier clause (<see cref="HasExplicitInterfaceClause"/>) resolves
+    /// to, bound by <see cref="Binding.DeclarationBinder.ResolveExplicitInterfaceClauses"/>.
+    /// <c>null</c> until resolved.
+    /// </summary>
+    public InterfaceSymbol ExplicitInterfaceClauseTarget { get; set; }
+
+    /// <summary>
     /// ADR-0105 Phase 2 — re-points this (reused) property at the declaration
     /// node of a freshly-parsed syntax tree whose property signature and
     /// accessor shape are byte-identical to the previous one (a body-only edit).
