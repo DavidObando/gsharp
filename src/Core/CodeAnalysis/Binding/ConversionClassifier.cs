@@ -1851,7 +1851,26 @@ internal sealed class ConversionClassifier
             return true;
         }
 
-        return from.ClrType != targetParameterType;
+        // Issue #2348 (see also #835): a raw reference-equality check here
+        // spuriously requires a conversion whenever `from.ClrType` is a
+        // well-known primitive singleton (`TypeSymbol.String`,
+        // `TypeSymbol.Object`, … — always the host process's real
+        // `typeof(T)`, see e.g. `TypeSymbol.String = new
+        // TypeSymbol("string", typeof(string))`) while `targetParameterType`
+        // was reflected through a `MetadataLoadContext`-backed
+        // ReferenceResolver (the resolver gsc's real compile paths use, via
+        // `ReferenceResolver.WithReferences`): the two `Type` instances
+        // denote the identical logical type but are distinct objects, so
+        // `!=` wrongly returns true. That spurious conversion wraps the
+        // argument in a `BoundConversionExpression`, which in turn defeats
+        // the `[NotNullWhen]`/`[MaybeNullWhen]` narrowing classifiers'
+        // bare-`BoundVariableExpression` check — silently dropping flow
+        // narrowing for every imported-CLR-method guard compiled outside a
+        // real-reflection host (i.e. every real `gsc` build). Use the
+        // existing cross-ReferenceResolver identity helper (already relied
+        // on by `OverloadResolution.ClassifyImplicit`) instead of a raw
+        // reference comparison.
+        return !ClrTypeUtilities.AreSame(from.ClrType, targetParameterType);
     }
 
     // Issue #1150: a func/arrow literal's natural numeric return type
