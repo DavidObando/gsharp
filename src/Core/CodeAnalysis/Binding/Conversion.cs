@@ -129,6 +129,31 @@ public sealed class Conversion
             return Conversion.Identity;
         }
 
+        // Issue #2354 follow-up: a generic G# class's own `this` parameter is
+        // bound with the OPEN generic definition as its type (`TypeArguments`
+        // empty, `IsGenericDefinition == true` — see FunctionSymbol.ThisParameter
+        // / DeclarationBinder's `receiverType: structSymbol`), while a
+        // self-referential member-signature type written explicitly in source
+        // (e.g. a method declared `func Self() Box[T]` inside `class Box[T]`)
+        // is bound through the ordinary type-clause binder, which calls
+        // `StructSymbol.Construct(definition, [T])` — a DIFFERENT StructSymbol
+        // instance whose `TypeArguments` is the class's own type parameter list
+        // spelled out explicitly. Both denote the exact same type (an open
+        // self-instantiation), but `StructSymbol` has no structural
+        // Equals/== override (reference identity only), so `return this` inside
+        // such a method previously failed with a confusing self-referential
+        // `GS0155 "Cannot convert type 'Box' to 'Box'"`. Recognize the two
+        // shapes as identical here: same `Definition`, and each side's
+        // "effective" type-argument list — defaulting an open definition's
+        // (empty) `TypeArguments` to its own `TypeParameters` — pairwise
+        // convert as identity (recursing through `Classify` itself so a nested
+        // self-reference, e.g. `Wrapper[Box[T]]`, also unwinds correctly).
+        if (from is StructSymbol fromSelfStruct && to is StructSymbol toSelfStruct
+            && AreSameConstructedStructIdentity(fromSelfStruct, toSelfStruct))
+        {
+            return Conversion.Identity;
+        }
+
         // Issue #1018: the bottom (`never`) type of a throw-expression is
         // implicitly convertible to ANY target type — a throw never yields a
         // value, so it satisfies any target without a runtime conversion.
@@ -495,10 +520,32 @@ public sealed class Conversion
             }
         }
 
-        // Phase 3.C.2: nil literal is never assignable to a non-nullable type.
+        // Phase 3.C.2 (generalized by issue #2354 follow-up): nil literal is
+        // never assignable to a non-nullable VALUE type — a struct/value-kind
+        // type genuinely needs an explicit `T?` (CLR `Nullable<T>`) wrapper to
+        // carry a null, and that diagnostic must be preserved. A non-nullable
+        // G#-DECLARED reference type — a `class` or an interface — or a
+        // reference-constrained type parameter is ALWAYS nullable at the CLR
+        // level regardless of whether the source spells its slot with an
+        // explicit `?` — the IL value is already `ldnull` either way (see
+        // MethodBodyEmitter.EmitConversion). Previously every one of these
+        // reference-capable targets rejected a bare `return nil` /
+        // `let x T = nil` with a misleading `GS0155`, forcing callers to widen
+        // to `T?` even when the declared type was already a reference type.
+        //
+        // Deliberately narrower than `IsReferenceLikeTarget` (which also
+        // matches ANY CLR-backed reference type, e.g. `string`, `object`, or a
+        // function/delegate/sequence type): those already participate in G#'s
+        // dedicated nullable-narrowing / smart-cast tracking (issue #2159) and
+        // its explicit-`?`-required arrow-function-type rule (issue #715),
+        // both of which rely on a bare (non-`?`) slot of one of THOSE kinds
+        // still rejecting `nil` outright. Widening the rule to cover them too
+        // would silently defeat that narrowing-invalidation diagnostic and the
+        // arrow-function-type's deliberate strictness — so only the
+        // G#-declared-type-or-constraint arm below is relaxed.
         if (from == TypeSymbol.Null && !(to is NullableTypeSymbol))
         {
-            return Conversion.None;
+            return IsNilAssignableWithoutNullableWrapper(to) ? Conversion.Implicit : Conversion.None;
         }
 
         // ADR-0102 follow-up / issue #818: two anonymous function types that
@@ -1210,6 +1257,152 @@ public sealed class Conversion
         }
 
         return AreTypeArgumentsEquivalent(imported.TypeArguments[0], slice.ElementType);
+    }
+
+    /// <summary>
+    /// True when <paramref name="type"/> is a reference-capable type for
+    /// conversion purposes — a G# interface, a G# <c>class</c> (as opposed to
+    /// a value-kind <c>struct</c>), a reference-constrained type parameter, or
+    /// any other CLR-backed reference type (e.g. <c>object</c>, an imported
+    /// class). Shared by <see cref="Classify"/> (to admit an implicit
+    /// <c>nil -&gt;</c> conversion for issue #2354's follow-up — a
+    /// non-nullable reference-capable type is always nullable at the CLR
+    /// level, unlike a genuine value type which still requires an explicit
+    /// <c>T?</c>) and by <c>MethodBodyEmitter.EmitConversion</c> (so emission
+    /// recognizes exactly the same set of targets as an `ldnull` no-op,
+    /// instead of re-deriving its own narrower subset).
+    /// </summary>
+    /// <param name="type">The candidate type.</param>
+    /// <returns><see langword="true"/> when <paramref name="type"/> is reference-capable.</returns>
+    internal static bool IsReferenceLikeTarget(TypeSymbol type)
+    {
+        if (type is InterfaceSymbol)
+        {
+            return true;
+        }
+
+        if (type is StructSymbol { IsClass: true })
+        {
+            return true;
+        }
+
+        // Issue #2188: a reference-constrained type parameter (`[T class …]`,
+        // i.e. `HasReferenceTypeConstraint`, or a class-base constraint such as
+        // `[T Box]`) is PROVABLY a reference type. It therefore participates in
+        // the reference-conversion arms exactly like any other reference type:
+        // `T -> object`/`T? -> object?`, `T -> Base`/`T? -> Base?`, and
+        // `T -> IFace`/`T? -> IFace?` for any interface in its constraint set.
+        // The type parameter carries no `ClrType` during binding (it is an open
+        // VAR/MVAR), so the CLR-backing check below cannot recognise it — this
+        // arm supplies the missing classification. Unconstrained and
+        // value-type-constrained parameters are intentionally excluded (their
+        // `T?` erases to `Nullable<T>`, a value type), so they keep their
+        // value-type conversion rules.
+        if (IsReferenceConstrainedTypeParameter(type))
+        {
+            return true;
+        }
+
+        // Imported / CLR-backed types are reference-like when the CLR backing
+        // is a class or interface (not a value type, pointer, or by-ref). User
+        // value structs carry a null ClrType during binding and fall through.
+        if (type?.ClrType is { } clrBacking)
+        {
+            return !clrBacking.IsValueType && !clrBacking.IsPointer && !clrBacking.IsByRef;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #2354 follow-up: true when a bare (non-<c>?</c>) <paramref
+    /// name="type"/> should accept an implicit <c>nil -></c> conversion
+    /// without requiring an explicit <c>T?</c> wrapper. Deliberately
+    /// NARROWER than <see cref="IsReferenceLikeTarget"/>: only a G#-declared
+    /// reference type — a <c>class</c> (<see cref="StructSymbol"/> with
+    /// <see cref="StructSymbol.IsClass"/>) or an <see cref="InterfaceSymbol"/>
+    /// — or a reference-constrained type parameter qualifies. A general
+    /// CLR-backed reference type reached only through
+    /// <see cref="IsReferenceLikeTarget"/>'s final <c>ClrType</c> fallback
+    /// (e.g. <c>string</c>, <c>object</c>, or a function/delegate/sequence
+    /// type) is intentionally EXCLUDED here: those already participate in
+    /// G#'s dedicated nullable-narrowing / smart-cast tracking (issue #2159)
+    /// and the arrow-function-type's deliberate explicit-<c>?</c>-required
+    /// rule (issue #715), both of which rely on a bare slot of one of those
+    /// kinds still rejecting <c>nil</c> to detect narrowing invalidation /
+    /// enforce the annotation. Only the new G#-declared-type-or-constraint
+    /// case was ever spuriously over-restrictive.
+    /// </summary>
+    /// <param name="type">The candidate (non-nullable-wrapper) target type.</param>
+    /// <returns><see langword="true"/> when <c>nil</c> converts to <paramref name="type"/> without a <c>T?</c> wrapper.</returns>
+    internal static bool IsNilAssignableWithoutNullableWrapper(TypeSymbol type)
+    {
+        return type is InterfaceSymbol
+            || type is StructSymbol { IsClass: true }
+            || IsReferenceConstrainedTypeParameter(type);
+    }
+
+    /// <summary>
+    /// Issue #2354 follow-up: true when <paramref name="from"/> and
+    /// <paramref name="to"/> denote the exact same (possibly self-referential,
+    /// possibly open-generic) G# <see cref="StructSymbol"/> type, even though
+    /// they may be two non-reference-equal instances. This normalizes the
+    /// asymmetry between an OPEN generic definition (whose
+    /// <see cref="StructSymbol.TypeArguments"/> is empty by construction —
+    /// e.g. the type used for a generic class's own <c>this</c> parameter) and
+    /// the SAME type spelled out explicitly with its own type parameters as
+    /// arguments (e.g. a member signature written <c>Box[T]</c> inside
+    /// <c>class Box[T]</c>, which binds through
+    /// <see cref="StructSymbol.Construct"/>). Both must share the same
+    /// <see cref="StructSymbol.Definition"/>, and every type-argument slot
+    /// (defaulting an open definition's missing arguments to its own
+    /// <see cref="StructSymbol.TypeParameters"/>) must itself convert as
+    /// identity — recursing through <see cref="Classify"/> so a nested
+    /// self-reference (e.g. <c>Wrapper[Box[T]]</c>) also unwinds correctly.
+    /// </summary>
+    /// <param name="from">The source struct/class type.</param>
+    /// <param name="to">The target struct/class type.</param>
+    /// <returns><see langword="true"/> when both sides denote the same type.</returns>
+    internal static bool AreSameConstructedStructIdentity(StructSymbol from, StructSymbol to)
+    {
+        if (from == null || to == null || !ReferenceEquals(from.Definition, to.Definition))
+        {
+            return false;
+        }
+
+        var fromArgs = from.TypeArguments.IsDefaultOrEmpty
+            ? from.TypeParameters.CastArray<TypeSymbol>()
+            : from.TypeArguments;
+        var toArgs = to.TypeArguments.IsDefaultOrEmpty
+            ? to.TypeParameters.CastArray<TypeSymbol>()
+            : to.TypeArguments;
+
+        if (fromArgs.IsDefaultOrEmpty && toArgs.IsDefaultOrEmpty)
+        {
+            // Non-generic struct/class: same Definition already suffices.
+            return true;
+        }
+
+        if (fromArgs.Length != toArgs.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < fromArgs.Length; i++)
+        {
+            if (fromArgs[i] == toArgs[i])
+            {
+                continue;
+            }
+
+            var slotConversion = Classify(fromArgs[i], toArgs[i]);
+            if (!slotConversion.Exists || !slotConversion.IsIdentity)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -2020,46 +2213,6 @@ public sealed class Conversion
         // shared ClrTypeUtilities.IsEnumSafe helper so every enum-reflection
         // call site in the binder/emitter shares one guard.
         return type?.ClrType.IsEnumSafe() == true;
-    }
-
-    private static bool IsReferenceLikeTarget(TypeSymbol type)
-    {
-        if (type is InterfaceSymbol)
-        {
-            return true;
-        }
-
-        if (type is StructSymbol { IsClass: true })
-        {
-            return true;
-        }
-
-        // Issue #2188: a reference-constrained type parameter (`[T class …]`,
-        // i.e. `HasReferenceTypeConstraint`, or a class-base constraint such as
-        // `[T Box]`) is PROVABLY a reference type. It therefore participates in
-        // the reference-conversion arms exactly like any other reference type:
-        // `T -> object`/`T? -> object?`, `T -> Base`/`T? -> Base?`, and
-        // `T -> IFace`/`T? -> IFace?` for any interface in its constraint set.
-        // The type parameter carries no `ClrType` during binding (it is an open
-        // VAR/MVAR), so the CLR-backing check below cannot recognise it — this
-        // arm supplies the missing classification. Unconstrained and
-        // value-type-constrained parameters are intentionally excluded (their
-        // `T?` erases to `Nullable<T>`, a value type), so they keep their
-        // value-type conversion rules.
-        if (IsReferenceConstrainedTypeParameter(type))
-        {
-            return true;
-        }
-
-        // Imported / CLR-backed types are reference-like when the CLR backing
-        // is a class or interface (not a value type, pointer, or by-ref). User
-        // value structs carry a null ClrType during binding and fall through.
-        if (type?.ClrType is { } clrBacking)
-        {
-            return !clrBacking.IsValueType && !clrBacking.IsPointer && !clrBacking.IsByRef;
-        }
-
-        return false;
     }
 
     /// <summary>

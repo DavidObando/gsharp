@@ -1124,37 +1124,129 @@ public sealed class ReferenceResolver : IDisposable
     }
 
     /// <summary>
-    /// Returns <see langword="true"/> when the host assembly path looks like a
+    /// Returns <see langword="true"/> when the assembly path looks like a
     /// .NET BCL / runtime assembly the user is likely to expect transitively
     /// when they pass a single user reference (e.g. <c>System.Runtime</c>,
     /// <c>System.Collections</c>, <c>Microsoft.CSharp</c>, <c>mscorlib</c>,
-    /// <c>netstandard</c>). Non-runtime host assemblies (test runners, user
-    /// libraries already loaded into the host's AppDomain) are excluded so
-    /// the user-visible reference set in <see cref="WithReferences(IEnumerable{string})"/>
-    /// stays scoped to the surface the user actually opted into.
+    /// <c>netstandard</c>). Non-runtime assemblies (test runners, user
+    /// libraries, third-party NuGet packages already loaded into the host's
+    /// AppDomain) are excluded so the user-visible reference set in
+    /// <see cref="WithReferences(IEnumerable{string})"/> stays scoped to the
+    /// surface the user actually opted into.
     /// </summary>
-    /// <param name="hostPath">Absolute path to a host TPA entry.</param>
+    /// <remarks>
+    /// Issue #2345 follow-up: this was previously a pure filename-prefix
+    /// check, and "Microsoft." is not a reserved runtime prefix — plenty of
+    /// third-party NuGet packages ship under it (e.g.
+    /// <c>Microsoft.EntityFrameworkCore.Relational</c>,
+    /// <c>Microsoft.Extensions.*</c>, <c>Microsoft.Data.Sqlite</c>). When a
+    /// caller's *only* references happened to be such packages, every one of
+    /// them was misclassified as "already BCL", so
+    /// <see cref="WithReferences(IEnumerable{string})"/> skipped augmenting the
+    /// user-visible reference set with the host's actual BCL assemblies. Core
+    /// types like <c>System.Int32</c> were then unresolvable by name (only
+    /// reachable through the <see cref="MetadataLoadContext"/> resolver's
+    /// closure, not the user-visible <see cref="Assemblies"/> index), later
+    /// surfacing as an opaque <see cref="InvalidOperationException"/> from
+    /// <see cref="MapClrTypeToReferences(Type)"/> ("Unable to project CLR type
+    /// 'System.Int32'").
+    /// <para>
+    /// The unambiguous BCL/runtime prefixes (<c>System.*</c>, <c>mscorlib</c>,
+    /// <c>netstandard</c>, <c>WindowsBase</c>) are reserved by the runtime and
+    /// are still recognized by name alone — no third-party package may claim
+    /// them. <c>Microsoft.*</c>, however, is only trusted as BCL/runtime when
+    /// the assembly's on-disk path additionally confirms it comes from a
+    /// shared framework or reference-pack directory (e.g.
+    /// <c>.../shared/Microsoft.NETCore.App/&lt;version&gt;/Microsoft.CSharp.dll</c>
+    /// or
+    /// <c>.../packs/Microsoft.NETCore.App.Ref/&lt;version&gt;/ref/&lt;tfm&gt;/Microsoft.Win32.Primitives.dll</c>)
+    /// — a layout convention of the dotnet host/SDK install contract that is
+    /// stable across Windows/Linux/macOS and install locations, unlike a
+    /// NuGet package's cache path (<c>.../packages/&lt;id&gt;/&lt;version&gt;/lib/&lt;tfm&gt;/...</c>).
+    /// This preserves real framework assemblies (e.g. <c>Microsoft.CSharp</c>,
+    /// <c>Microsoft.Win32.Primitives</c>, <c>Microsoft.VisualBasic.Core</c>) as
+    /// BCL/runtime while excluding same-named-prefix third-party packages.
+    /// </para>
+    /// </remarks>
+    /// <param name="assemblyPath">Absolute path to a candidate assembly (a host TPA entry or a user-supplied reference).</param>
     /// <returns><see langword="true"/> when the path's file-name simple name
-    /// matches a known BCL / runtime prefix.</returns>
-    private static bool IsBclOrRuntimeAssemblyPath(string hostPath)
+    /// matches a known BCL / runtime prefix, and — for the ambiguous
+    /// <c>Microsoft.*</c> prefix — the path also confirms a trusted shared
+    /// framework or reference-pack location.</returns>
+    private static bool IsBclOrRuntimeAssemblyPath(string assemblyPath)
     {
-        if (string.IsNullOrEmpty(hostPath))
+        if (string.IsNullOrEmpty(assemblyPath))
         {
             return false;
         }
 
-        var simple = Path.GetFileNameWithoutExtension(hostPath);
+        var simple = Path.GetFileNameWithoutExtension(assemblyPath);
         if (string.IsNullOrEmpty(simple))
         {
             return false;
         }
 
-        return simple.StartsWith("System.", StringComparison.OrdinalIgnoreCase)
+        if (simple.StartsWith("System.", StringComparison.OrdinalIgnoreCase)
             || simple.Equals("System", StringComparison.OrdinalIgnoreCase)
-            || simple.StartsWith("Microsoft.", StringComparison.OrdinalIgnoreCase)
             || simple.Equals("mscorlib", StringComparison.OrdinalIgnoreCase)
             || simple.Equals("netstandard", StringComparison.OrdinalIgnoreCase)
-            || simple.Equals("WindowsBase", StringComparison.OrdinalIgnoreCase);
+            || simple.Equals("WindowsBase", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return simple.StartsWith("Microsoft.", StringComparison.OrdinalIgnoreCase)
+            && IsUnderSharedFrameworkOrReferencePackDirectory(assemblyPath);
+    }
+
+    /// <summary>
+    /// Issue #2345 follow-up: reports whether <paramref name="assemblyPath"/>
+    /// physically resides under a dotnet shared-framework directory (e.g.
+    /// <c>dotnet/shared/Microsoft.NETCore.App/&lt;version&gt;/...</c>) or a
+    /// reference-pack directory (e.g.
+    /// <c>dotnet/packs/Microsoft.NETCore.App.Ref/&lt;version&gt;/ref/&lt;tfm&gt;/...</c>).
+    /// Both are well-known, install-location-independent segments of the
+    /// dotnet SDK/runtime layout contract (present verbatim on Windows, Linux,
+    /// and macOS regardless of where <c>DOTNET_ROOT</c> points), so matching a
+    /// literal <c>shared</c> or <c>packs</c> path *segment* — rather than
+    /// searching for a specific root — reliably distinguishes genuine
+    /// framework/runtime assemblies from same-named third-party NuGet
+    /// packages, whose cache layout (<c>packages/&lt;id&gt;/&lt;version&gt;/lib/&lt;tfm&gt;/...</c>)
+    /// never contains either segment.
+    /// </summary>
+    /// <param name="assemblyPath">Absolute or relative path to the candidate assembly.</param>
+    /// <returns><see langword="true"/> when a <c>shared</c> or <c>packs</c> path segment is present.</returns>
+    private static bool IsUnderSharedFrameworkOrReferencePackDirectory(string assemblyPath)
+    {
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(assemblyPath);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+        catch (PathTooLongException)
+        {
+            return false;
+        }
+
+        var normalized = fullPath.Replace('\\', '/');
+        foreach (var segment in normalized.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (segment.Equals("shared", StringComparison.OrdinalIgnoreCase)
+                || segment.Equals("packs", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static IEnumerable<string> GetHostTrustedPlatformAssemblies()

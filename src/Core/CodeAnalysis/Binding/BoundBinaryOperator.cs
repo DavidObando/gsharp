@@ -520,6 +520,22 @@ public sealed record BoundBinaryOperator
             return true;
         }
 
+        // Issue #2354 follow-up: a non-nullable G# `class` (as opposed to a
+        // value-kind `struct`) is likewise always a CLR reference type at
+        // the IL layer — the exact same rationale as the interface arm
+        // immediately above. Without this arm, `box == nil` / `box != nil`
+        // reported GS0129 for a bare class-typed operand even though the
+        // binder now admits `return nil` / `let x Box = nil` for the same
+        // type (Conversion.Classify's reference-like `nil ->` rule), an
+        // inconsistent pair of restrictions on the very same reference
+        // value. `Conversion.IsReferenceLikeTarget`'s `StructSymbol {
+        // IsClass: true }` arm is the shared predicate for this exact
+        // check; reuse it here directly.
+        if (nullableOrUnderlying is StructSymbol { IsClass: true })
+        {
+            return true;
+        }
+
         // Issue #2300: an open type parameter (`T`) whose constraint does
         // not guarantee a non-nullable value type — i.e. unconstrained,
         // class-constrained, or interface-constrained — may be
