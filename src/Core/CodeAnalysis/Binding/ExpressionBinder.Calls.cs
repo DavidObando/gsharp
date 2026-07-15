@@ -1024,7 +1024,8 @@ internal sealed partial class ExpressionBinder
                 interpolatedStringArgs: ComputeInterpolatedStringArgFlags(syntax.Arguments, boundArguments.Count),
                 argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
                 supplementaryInterfaceCheck: supplementaryInterfaceCheck,
-                constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(boundArguments));
+                constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(boundArguments),
+                structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(boundArguments));
             switch (resolution.Outcome)
             {
                 case OverloadResolution.ResolutionOutcome.Resolved:
@@ -3938,7 +3939,8 @@ internal sealed partial class ExpressionBinder
                     ComputeInterpolatedStringArgFlags(ce.Arguments, arguments.Length),
                     argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
                     supplementaryInterfaceCheck: supplementaryInterfaceCheck,
-                    constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments));
+                    constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
+                    structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments));
                 switch (resolution.Outcome)
                 {
                     case OverloadResolution.ResolutionOutcome.Resolved:
@@ -4904,7 +4906,8 @@ internal sealed partial class ExpressionBinder
             ComputeInterpolatedStringArgFlags(ce.Arguments, arguments.Length),
             argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
-            constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments));
+            constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
+            structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments));
 
         switch (resolution.Outcome)
         {
@@ -5220,7 +5223,8 @@ internal sealed partial class ExpressionBinder
             ComputeInterpolatedStringArgFlags(ce.Arguments, argTypes.Length, receiverArgCount: 1),
             argumentNames: extensionArgumentNames,
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
-            constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments, argumentOffset: 1));
+            constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments, argumentOffset: 1),
+            structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments, argumentOffset: 1));
 
         switch (resolution.Outcome)
         {
@@ -6694,7 +6698,8 @@ internal sealed partial class ExpressionBinder
             scope.References.MapClrTypeToReferences,
             interpolatedStringArgs,
             argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
-            constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments));
+            constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
+            structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments));
         if (resolution.Outcome != OverloadResolution.ResolutionOutcome.Resolved)
         {
             return false;

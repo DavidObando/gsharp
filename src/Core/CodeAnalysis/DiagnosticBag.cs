@@ -930,6 +930,21 @@ public sealed class DiagnosticBag : IEnumerable<Diagnostic>
         Report(location, "GS0155", message);
     }
 
+    /// <summary>Reports why a requested structural projection is unsafe or incomplete.</summary>
+    /// <param name="location">The projection source location.</param>
+    /// <param name="fromType">The source type.</param>
+    /// <param name="toType">The target type.</param>
+    /// <param name="reason">The compile-time planning failure.</param>
+    public void ReportStructuralProjectionFailure(
+        TextLocation location,
+        TypeSymbol fromType,
+        TypeSymbol toType,
+        string reason)
+    {
+        var message = $"Cannot project type '{fromType}' to '{toType}': {reason}";
+        Report(location, "GS0490", message);
+    }
+
     /// <summary>
     /// Reports that there's no implicit conversion from one type to the other.
     /// </summary>
