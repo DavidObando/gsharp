@@ -3355,6 +3355,23 @@ internal sealed class OverloadResolver
 
                 hasErrors = true;
             }
+            else
+            {
+                // Issue #2364: the fixed-arity/non-optional primary-constructor
+                // path validated that the argument-to-parameter conversion was
+                // implicit above, but never actually bound it — the emitter
+                // then received the raw, unconverted argument and had no way
+                // to compensate (`MethodBodyEmitter.EmitConstructorCall` just
+                // emits each bound argument as-is). This silently dropped every
+                // non-identity implicit conversion (nullable wrapping, integral/
+                // floating widening, user-defined implicit conversions, etc.)
+                // at a primary-constructor call site, producing unverifiable IL
+                // (ilverify `StackUnexpected`) despite a clean compile. Mirror
+                // the sibling paths that already do this correctly:
+                // `BindExplicitConstructorCallExpression`'s equivalent loop and
+                // the `primaryHasOptional` branch above in this same method.
+                boundArguments[i] = conversions.BindConversion(parameterSyntax[i].Location, argument, parameter.Type);
+            }
         }
 
         if (hasErrors)
