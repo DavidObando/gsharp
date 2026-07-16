@@ -1052,16 +1052,31 @@ internal sealed class ConversionClassifier
         TypeSymbol receiverType,
         ImmutableArray<TypeSymbol> symbolicMethodTypeArgs = default)
     {
+        // Issue #2385: the receiver type-argument gate below previously only
+        // matched a same-compilation user type when it was DIRECTLY a
+        // StructSymbol/InterfaceSymbol/EnumSymbol/DelegateTypeSymbol (or
+        // nested inside another ImportedTypeSymbol). A same-compilation
+        // struct/enum WRAPPED in Nullable<T> (e.g. `List[Point?]` — the
+        // receiver type argument is a NullableTypeSymbol over the struct, not
+        // the struct itself) matched none of those cases, so the gate bailed
+        // out (`return null`) before ever attempting the substitution. The
+        // call then fell back to the erased CLR parameter type (`object`),
+        // misclassifying the argument as a boxing conversion and emitting an
+        // invalid `box`/`ldnull` sequence against a value-type
+        // `Nullable<T>` generic parameter slot (InvalidProgramException at
+        // runtime — see #2385). `TypeSymbol.ContainsSameCompilationUserType`
+        // is the general, already-established predicate for exactly this
+        // shape (it recurses through NullableTypeSymbol/SliceTypeSymbol/
+        // ArrayTypeSymbol/TupleTypeSymbol/nested ImportedTypeSymbol
+        // uniformly — the same predicate reused to fix the analogous #2381
+        // async-return-erasure bug), and is a structural superset of the old
+        // ad hoc list, so replacing it here also generalizes to
+        // same-compilation enums and array/tuple-wrapped shapes used as a
+        // generic type argument.
         if (method == null
             || receiverType is not ImportedTypeSymbol imported
             || imported.TypeArguments.IsDefaultOrEmpty
-            || !imported.TypeArguments.Any(arg =>
-                arg is StructSymbol
-                || arg is InterfaceSymbol
-                || arg is EnumSymbol
-                || arg is DelegateTypeSymbol
-                || (arg is ImportedTypeSymbol nested && nested.HasTypeParameterArgument == false
-                    && !nested.TypeArguments.IsDefaultOrEmpty)))
+            || !imported.TypeArguments.Any(TypeSymbol.ContainsSameCompilationUserType))
         {
             return null;
         }
