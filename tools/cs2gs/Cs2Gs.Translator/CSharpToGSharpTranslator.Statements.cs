@@ -75,7 +75,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                     foreach (AssignmentExpressionSyntax node in initializerEmbedded)
                     {
-                        this.suppressedAssignments.Add(node);
+                        this.state.SuppressedAssignments.Add(node);
                     }
 
                     try
@@ -90,7 +90,7 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         foreach (AssignmentExpressionSyntax node in initializerEmbedded)
                         {
-                            this.suppressedAssignments.Remove(node);
+                            this.state.SuppressedAssignments.Remove(node);
                         }
                     }
                 }
@@ -108,10 +108,10 @@ public sealed partial class CSharpToGSharpTranslator
                 if (!hasExplicitType &&
                     declarator.Initializer?.Value is IdentifierNameSyntax or MemberAccessExpressionSyntax &&
                     this.context.GetSymbolInfo(declarator.Initializer.Value).Symbol is { } rhsAliasSymbol &&
-                    this.multiDimArrays.TryGetValue(rhsAliasSymbol, out MultiDimArrayInfo aliasedInfo) &&
+                    this.state.MultiDimArrays.TryGetValue(rhsAliasSymbol, out MultiDimArrayInfo aliasedInfo) &&
                     this.context.GetDeclaredSymbol(declarator) is { } declaredAliasSymbol)
                 {
-                    this.multiDimArrays[declaredAliasSymbol] = aliasedInfo;
+                    this.state.MultiDimArrays[declaredAliasSymbol] = aliasedInfo;
                 }
 
                 // Issue #1894: a local's declared type normally only reaches
@@ -729,7 +729,7 @@ public sealed partial class CSharpToGSharpTranslator
         // through to report the same gap uniformly.
         private void ReportIfIndexOrRangeTypedDesignation(SingleVariableDesignationSyntax designation)
         {
-            if (designation == null || !this.reportedIndexRangeDesignations.Add(designation))
+            if (designation == null || !this.state.ReportedIndexRangeDesignations.Add(designation))
             {
                 return;
             }
@@ -1291,9 +1291,9 @@ public sealed partial class CSharpToGSharpTranslator
             // exception type and message (ADR-0115 §B).
             if (throwStatement.Expression == null)
             {
-                if (this.currentCatchVariable != null)
+                if (this.state.CurrentCatchVariable != null)
                 {
-                    return new ThrowStatement(new IdentifierExpression(this.currentCatchVariable));
+                    return new ThrowStatement(new IdentifierExpression(this.state.CurrentCatchVariable));
                 }
 
                 this.context.ReportUnsupported(
@@ -1378,8 +1378,8 @@ public sealed partial class CSharpToGSharpTranslator
                     exceptionType = new NamedTypeReference("Exception");
                 }
 
-                string previousCatch = this.currentCatchVariable;
-                this.currentCatchVariable = variableName;
+                string previousCatch = this.state.CurrentCatchVariable;
+                this.state.CurrentCatchVariable = variableName;
                 try
                 {
                     BlockStatement body = this.TranslateBlock(catchClause.Block);
@@ -1410,7 +1410,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
                 finally
                 {
-                    this.currentCatchVariable = previousCatch;
+                    this.state.CurrentCatchVariable = previousCatch;
                 }
             }
 
@@ -1474,8 +1474,8 @@ public sealed partial class CSharpToGSharpTranslator
                     ? SanitizeIdentifier(clause.Declaration.Identifier.Text)
                     : sharedBinder;
 
-                string previousCatch = this.currentCatchVariable;
-                this.currentCatchVariable = originalName;
+                string previousCatch = this.state.CurrentCatchVariable;
+                this.state.CurrentCatchVariable = originalName;
                 BlockStatement body;
                 GExpression filter = null;
                 try
@@ -1488,7 +1488,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
                 finally
                 {
-                    this.currentCatchVariable = previousCatch;
+                    this.state.CurrentCatchVariable = previousCatch;
                 }
 
                 // Re-bind this clause's own catch-variable name to the shared
@@ -1783,8 +1783,8 @@ public sealed partial class CSharpToGSharpTranslator
                     this.context.GetSymbolInfo(receiverId).Symbol is { IsStatic: false } receiverSymbol &&
                     receiverSymbol.Kind is SymbolKind.Property or SymbolKind.Field)
                 {
-                    GExpression qualifier = this.currentReceiverName != null
-                        ? new IdentifierExpression(this.currentReceiverName)
+                    GExpression qualifier = this.state.CurrentReceiverName != null
+                        ? new IdentifierExpression(this.state.CurrentReceiverName)
                         : new ThisExpression();
                     GExpression qualifiedReceiver = new MemberAccessExpression(
                         qualifier, SanitizeIdentifier(receiverId.Identifier.Text));
@@ -1803,7 +1803,7 @@ public sealed partial class CSharpToGSharpTranslator
                     this.ReceiverIsNullableReferenceFieldOrProperty(member.Expression) ||
                     (member.Expression is IdentifierNameSyntax hoistedId &&
                      this.context.GetSymbolInfo(hoistedId).Symbol is { } hoistedSymbol &&
-                     this.hoistedNullableGuardLocals.Contains(hoistedSymbol)))
+                     this.state.HoistedNullableGuardLocals.Contains(hoistedSymbol)))
                 {
                     return new MemberAccessExpression(
                         new NonNullAssertionExpression(this.TranslateExpression(member.Expression)),
@@ -1943,7 +1943,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             foreach (PostfixUnaryExpressionSyntax node in embedded)
             {
-                this.suppressedPostfix.Add(node);
+                this.state.SuppressedPostfix.Add(node);
             }
 
             List<GStatement> statements;
@@ -1955,7 +1955,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 foreach (PostfixUnaryExpressionSyntax node in embedded)
                 {
-                    this.suppressedPostfix.Remove(node);
+                    this.state.SuppressedPostfix.Remove(node);
                 }
             }
 

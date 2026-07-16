@@ -30,13 +30,13 @@ public sealed partial class CSharpToGSharpTranslator
         /// <returns>The collected top-level declarations (possibly empty).</returns>
         public IReadOnlyList<GMember> DrainPendingTopLevel()
         {
-            if (this.pendingTopLevelDeclarations.Count == 0)
+            if (this.state.PendingTopLevelDeclarations.Count == 0)
             {
                 return System.Array.Empty<GMember>();
             }
 
-            var drained = new List<GMember>(this.pendingTopLevelDeclarations);
-            this.pendingTopLevelDeclarations.Clear();
+            var drained = new List<GMember>(this.state.PendingTopLevelDeclarations);
+            this.state.PendingTopLevelDeclarations.Clear();
             return drained;
         }
 
@@ -178,7 +178,7 @@ public sealed partial class CSharpToGSharpTranslator
                             && entryPoint.Parameters[0].Name != "args";
                         if (renamedArgs)
                         {
-                            this.patternBindings[entryPoint.Parameters[0]] = new IdentifierExpression("args");
+                            this.state.PatternBindings[entryPoint.Parameters[0]] = new IdentifierExpression("args");
                         }
 
                         BlockStatement body = this.TranslateBody(method, $"entry point '{entryPoint.Name}'");
@@ -186,7 +186,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                         if (renamedArgs)
                         {
-                            this.patternBindings.Remove(entryPoint.Parameters[0]);
+                            this.state.PatternBindings.Remove(entryPoint.Parameters[0]);
                         }
 
                         break;
@@ -263,7 +263,7 @@ public sealed partial class CSharpToGSharpTranslator
             bool renamedArgs = argsParameter != null && argsParameter.Name != "args";
             if (renamedArgs)
             {
-                this.patternBindings[argsParameter] = new IdentifierExpression("args");
+                this.state.PatternBindings[argsParameter] = new IdentifierExpression("args");
             }
 
             var funcs = new List<GNode>();
@@ -291,7 +291,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 if (renamedArgs)
                 {
-                    this.patternBindings.Remove(argsParameter);
+                    this.state.PatternBindings.Remove(argsParameter);
                 }
             }
 
@@ -996,18 +996,18 @@ public sealed partial class CSharpToGSharpTranslator
             // nested type declaration's recursive `VisitAggregate` call (below,
             // via `TranslateMember`) never leaks its helpers into this
             // (enclosing) type, and vice versa.
-            List<MethodDeclaration> outerSynthHelpers = this.pendingSynthHelpers;
-            int outerSynthHelperCounter = this.synthHelperCounter;
-            this.pendingSynthHelpers = new List<MethodDeclaration>();
-            this.synthHelperCounter = 0;
+            List<MethodDeclaration> outerSynthHelpers = this.state.PendingSynthHelpers;
+            int outerSynthHelperCounter = this.state.SynthHelperCounter;
+            this.state.PendingSynthHelpers = new List<MethodDeclaration>();
+            this.state.SynthHelperCounter = 0;
             try
             {
                 return this.VisitAggregateCore(node, kind.Value, symbol, otherParts);
             }
             finally
             {
-                this.pendingSynthHelpers = outerSynthHelpers;
-                this.synthHelperCounter = outerSynthHelperCounter;
+                this.state.PendingSynthHelpers = outerSynthHelpers;
+                this.state.SynthHelperCounter = outerSynthHelperCounter;
             }
         }
 
@@ -1181,7 +1181,7 @@ public sealed partial class CSharpToGSharpTranslator
             // invocation itself added are removed. Without this, a nested type's
             // exit would wipe the outer type's not-yet-consumed folded fields.
             var staticFieldInitializersSnapshot = new HashSet<ISymbol>(
-                this.staticFieldInitializers.Keys, SymbolEqualityComparer.Default);
+                this.state.StaticFieldInitializers.Keys, SymbolEqualityComparer.Default);
             this.CollectStaticFieldInitializers(mergedMembers, symbol);
 
             var instanceMembers = new List<GMember>();
@@ -1202,7 +1202,7 @@ public sealed partial class CSharpToGSharpTranslator
                     if (translated is MethodDeclaration { Receiver: not null } opMethod &&
                         opMethod.Name.StartsWith("operator ", System.StringComparison.Ordinal))
                     {
-                        this.pendingTopLevelDeclarations.Add(translated);
+                        this.state.PendingTopLevelDeclarations.Add(translated);
                         continue;
                     }
 
@@ -1213,7 +1213,7 @@ public sealed partial class CSharpToGSharpTranslator
                         !isStatic &&
                         translated is MethodDeclaration { Receiver: not null })
                     {
-                        this.pendingTopLevelDeclarations.Add(translated);
+                        this.state.PendingTopLevelDeclarations.Add(translated);
                         continue;
                     }
 
@@ -1226,7 +1226,7 @@ public sealed partial class CSharpToGSharpTranslator
                     if (isStaticClass &&
                         translated is MethodDeclaration { Receiver: not null })
                     {
-                        this.pendingTopLevelDeclarations.Add(translated);
+                        this.state.PendingTopLevelDeclarations.Add(translated);
                         continue;
                     }
 
@@ -1256,7 +1256,7 @@ public sealed partial class CSharpToGSharpTranslator
             // constructors above (see `pendingSynthHelpers`) — always private
             // static, so they join the `shared { }` block alongside the type's
             // other static members.
-            sharedMembers.AddRange(this.pendingSynthHelpers);
+            sharedMembers.AddRange(this.state.PendingSynthHelpers);
 
             // OD-T1: if get-only auto-property initializers needed to move into a
             // constructor but the type declares no designated instance constructor,
@@ -1284,11 +1284,11 @@ public sealed partial class CSharpToGSharpTranslator
             // Issue #1729 (mode 4): remove only the entries this invocation added
             // (see snapshot above), not the whole shared dictionary — an enclosing
             // type may still have not-yet-consumed folded fields pending.
-            foreach (ISymbol key in this.staticFieldInitializers.Keys.ToList())
+            foreach (ISymbol key in this.state.StaticFieldInitializers.Keys.ToList())
             {
                 if (!staticFieldInitializersSnapshot.Contains(key))
                 {
-                    this.staticFieldInitializers.Remove(key);
+                    this.state.StaticFieldInitializers.Remove(key);
                 }
             }
 
@@ -1568,8 +1568,8 @@ public sealed partial class CSharpToGSharpTranslator
             var fieldInitializers = new Dictionary<string, GExpression>();
             var residualInitStatements = new List<GStatement>();
 
-            SyntaxNode previousScope = this.currentBodyScope;
-            this.currentBodyScope = ctor;
+            SyntaxNode previousScope = this.state.CurrentBodyScope;
+            this.state.CurrentBodyScope = ctor;
             try
             {
                 foreach (StatementSyntax statement in ctor.Body.Statements)
@@ -1695,7 +1695,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
             finally
             {
-                this.currentBodyScope = previousScope;
+                this.state.CurrentBodyScope = previousScope;
             }
 
             // Every constructor parameter must be consumed by exactly one direct

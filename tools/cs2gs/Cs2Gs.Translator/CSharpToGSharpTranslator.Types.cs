@@ -87,8 +87,8 @@ public sealed partial class CSharpToGSharpTranslator
             // branches below instead open their OWN fresh seam via
             // <see cref="WithSpillSeam"/> (rather than being suspended outright),
             // since they have no per-statement seam of their own to fall back on.
-            List<GStatement> outerSpillPrologue = this.pendingSpillPrologue;
-            this.pendingSpillPrologue = null;
+            List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
+            this.state.PendingSpillPrologue = null;
 
             // Issue #1736: a lambda is its own mutability/reference-scan scope,
             // regardless of WHERE the lambda appears. `currentBodyScope` drives
@@ -107,8 +107,8 @@ public sealed partial class CSharpToGSharpTranslator
             // lambda is already inside a normal body: the narrower scope is a
             // subset of the enclosing one that still contains the lambda's own
             // reassignments, so nothing that worked before regresses.
-            SyntaxNode previousBodyScope = this.currentBodyScope;
-            this.currentBodyScope = lambda;
+            SyntaxNode previousBodyScope = this.state.CurrentBodyScope;
+            this.state.CurrentBodyScope = lambda;
             try
             {
                 if (lambda.Body is BlockSyntax block)
@@ -143,8 +143,8 @@ public sealed partial class CSharpToGSharpTranslator
                 // become block-bodied to host the spill's `let`, ending in an
                 // explicit `return`.
                 var spillPrologue = new List<GStatement>();
-                List<GStatement> savedSeam = this.pendingSpillPrologue;
-                this.pendingSpillPrologue = spillPrologue;
+                List<GStatement> savedSeam = this.state.PendingSpillPrologue;
+                this.state.PendingSpillPrologue = spillPrologue;
                 GExpression expressionBody;
                 try
                 {
@@ -152,7 +152,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
                 finally
                 {
-                    this.pendingSpillPrologue = savedSeam;
+                    this.state.PendingSpillPrologue = savedSeam;
                 }
 
                 if (spillPrologue.Count == 0)
@@ -165,8 +165,8 @@ public sealed partial class CSharpToGSharpTranslator
             }
             finally
             {
-                this.pendingSpillPrologue = outerSpillPrologue;
-                this.currentBodyScope = previousBodyScope;
+                this.state.PendingSpillPrologue = outerSpillPrologue;
+                this.state.CurrentBodyScope = previousBodyScope;
             }
         }
 
@@ -365,7 +365,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 foreach ((ISymbol symbol, GExpression replacement) in bindings)
                 {
-                    this.patternBindings[symbol] = replacement;
+                    this.state.PatternBindings[symbol] = replacement;
                 }
 
                 GExpression guard;
@@ -389,7 +389,7 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     foreach ((ISymbol symbol, _) in bindings)
                     {
-                        this.patternBindings.Remove(symbol);
+                        this.state.PatternBindings.Remove(symbol);
                     }
                 }
 
@@ -480,7 +480,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 foreach ((ISymbol symbol, GExpression replacement) in bindings)
                 {
-                    this.patternBindings[symbol] = replacement;
+                    this.state.PatternBindings[symbol] = replacement;
                 }
 
                 GExpression guard;
@@ -497,7 +497,7 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     foreach ((ISymbol symbol, _) in bindings)
                     {
-                        this.patternBindings.Remove(symbol);
+                        this.state.PatternBindings.Remove(symbol);
                     }
                 }
 
@@ -588,7 +588,7 @@ public sealed partial class CSharpToGSharpTranslator
                             // scoped to this label only.
                             foreach ((ISymbol symbol, GExpression replacement) in bindings)
                             {
-                                this.patternBindings[symbol] = replacement;
+                                this.state.PatternBindings[symbol] = replacement;
                             }
 
                             GExpression guard;
@@ -610,7 +610,7 @@ public sealed partial class CSharpToGSharpTranslator
                             {
                                 foreach ((ISymbol symbol, _) in bindings)
                                 {
-                                    this.patternBindings.Remove(symbol);
+                                    this.state.PatternBindings.Remove(symbol);
                                 }
                             }
 
@@ -728,7 +728,7 @@ public sealed partial class CSharpToGSharpTranslator
                     return new ForTupleInStatement(names, iterable, body);
                 }
 
-                string pair = $"__decon{this.deconCounter++}";
+                string pair = $"__decon{this.state.DeconCounter++}";
                 var statements = new List<GStatement>(body.Statements.Count + 1)
                 {
                     new TupleDeconstructionStatement(
@@ -1252,9 +1252,9 @@ public sealed partial class CSharpToGSharpTranslator
 
                     GExpression memberAccess = new MemberAccessExpression(
                         new IdentifierExpression(designator), SanitizeIdentifier(memberName));
-                    var bindingsBefore = new HashSet<ISymbol>(this.patternBindings.Keys, SymbolEqualityComparer.Default);
+                    var bindingsBefore = new HashSet<ISymbol>(this.state.PatternBindings.Keys, SymbolEqualityComparer.Default);
                     GExpression memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern, isNestedPatternMember: true);
-                    foreach (ISymbol added in this.patternBindings.Keys.ToList())
+                    foreach (ISymbol added in this.state.PatternBindings.Keys.ToList())
                     {
                         if (!bindingsBefore.Contains(added))
                         {
@@ -1265,7 +1265,7 @@ public sealed partial class CSharpToGSharpTranslator
                             // the caller's install/remove-around-guard-and-body
                             // scoping (mirroring the `is`-expression pattern
                             // above) cleans it up like every other arm binding.
-                            bindings.Add((added, this.patternBindings[added]));
+                            bindings.Add((added, this.state.PatternBindings[added]));
                         }
                     }
 
@@ -1375,15 +1375,15 @@ public sealed partial class CSharpToGSharpTranslator
             // tuple shape that would only surface as an opaque GS0159 much
             // later, at G# bind time. Save/restore to stay correct for a
             // (rare) query nested inside this one's lambda bodies.
-            QueryExpressionSyntax previousQueryNode = this.currentQueryNode;
-            this.currentQueryNode = query;
+            QueryExpressionSyntax previousQueryNode = this.state.CurrentQueryNode;
+            this.state.CurrentQueryNode = query;
             try
             {
                 current = this.LowerQueryBody(query.Body, scope, current);
             }
             finally
             {
-                this.currentQueryNode = previousQueryNode;
+                this.state.CurrentQueryNode = previousQueryNode;
             }
 
             return current;
@@ -1762,7 +1762,7 @@ public sealed partial class CSharpToGSharpTranslator
             // only surface as an opaque GS0159 much later at G# bind time) and
             // still emit the best-effort shape so a single query with one
             // over-wide scope doesn't block translating the rest of the file.
-            if (scope.Count > 7 && this.currentQueryNode != null)
+            if (scope.Count > 7 && this.state.CurrentQueryNode != null)
             {
                 string scopeMessage =
                     $"Query scope has grown to {scope.Count} range variables ({string.Join(", ", scope.Select(v => v.Name))}); " +
@@ -1772,7 +1772,7 @@ public sealed partial class CSharpToGSharpTranslator
                 this.context.Report(new TranslationDiagnostic(
                     nameof(QueryExpressionSyntax),
                     scopeMessage,
-                    this.currentQueryNode.GetLocation(),
+                    this.state.CurrentQueryNode.GetLocation(),
                     TranslationSeverity.Unsupported));
             }
 
@@ -1785,7 +1785,7 @@ public sealed partial class CSharpToGSharpTranslator
             string tupleParamName;
             do
             {
-                tupleParamName = $"__q{this.queryScopeCounter++}";
+                tupleParamName = $"__q{this.state.QueryScopeCounter++}";
             }
             while (scope.Any(v => v.Name == tupleParamName) || this.IsNameVisibleAtCurrentQuery(tupleParamName));
 
@@ -1803,13 +1803,13 @@ public sealed partial class CSharpToGSharpTranslator
         // not just the query's own range variables (`scope`).
         private bool IsNameVisibleAtCurrentQuery(string name)
         {
-            if (this.currentQueryNode == null)
+            if (this.state.CurrentQueryNode == null)
             {
                 return false;
             }
 
             return this.context.SemanticModel
-                .LookupSymbols(this.currentQueryNode.SpanStart, name: name)
+                .LookupSymbols(this.state.CurrentQueryNode.SpanStart, name: name)
                 .Length > 0;
         }
     }

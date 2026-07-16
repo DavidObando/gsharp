@@ -54,7 +54,7 @@ public sealed partial class CSharpToGSharpTranslator
                 Optional<object> constantDimIndex =
                     this.context.SemanticModel.GetConstantValue(invocation.ArgumentList.Arguments[0].Expression);
                 if (receiverSymbol != null &&
-                    this.multiDimArrays.TryGetValue(receiverSymbol, out MultiDimArrayInfo getLengthInfo) &&
+                    this.state.MultiDimArrays.TryGetValue(receiverSymbol, out MultiDimArrayInfo getLengthInfo) &&
                     constantDimIndex.HasValue &&
                     constantDimIndex.Value is int dimIndex &&
                     dimIndex >= 0 &&
@@ -390,7 +390,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             result = null;
 
-            if (this.pendingSpillPrologue == null
+            if (this.state.PendingSpillPrologue == null
                 || conditionalAccess.WhenNotNull is not InvocationExpressionSyntax invocation
                 || invocation.Expression is not MemberBindingExpressionSyntax binding
                 || binding.Name.Identifier.Text != "Invoke")

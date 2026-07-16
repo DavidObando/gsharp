@@ -56,7 +56,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             foreach (AssignmentExpressionSyntax node in embedded)
             {
-                this.suppressedAssignments.Add(node);
+                this.state.SuppressedAssignments.Add(node);
             }
 
             List<GStatement> main;
@@ -68,7 +68,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 foreach (AssignmentExpressionSyntax node in embedded)
                 {
-                    this.suppressedAssignments.Remove(node);
+                    this.state.SuppressedAssignments.Remove(node);
                 }
             }
 
@@ -91,15 +91,15 @@ public sealed partial class CSharpToGSharpTranslator
             // embedded assignment hoists into below — rather than the enclosing
             // statement's own ambient prologue, so both kinds of hoist land in
             // the same list in evaluation order.
-            List<GStatement> outerSpillPrologue = this.pendingSpillPrologue;
-            this.pendingSpillPrologue = prologue;
+            List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
+            this.state.PendingSpillPrologue = prologue;
             try
             {
                 return this.TranslateConditionWithHoistCore(expression, prologue);
             }
             finally
             {
-                this.pendingSpillPrologue = outerSpillPrologue;
+                this.state.PendingSpillPrologue = outerSpillPrologue;
             }
         }
 
@@ -118,7 +118,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             foreach (AssignmentExpressionSyntax node in embedded)
             {
-                this.suppressedAssignments.Add(node);
+                this.state.SuppressedAssignments.Add(node);
             }
 
             try
@@ -129,7 +129,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 foreach (AssignmentExpressionSyntax node in embedded)
                 {
-                    this.suppressedAssignments.Remove(node);
+                    this.state.SuppressedAssignments.Remove(node);
                 }
             }
         }
@@ -502,7 +502,7 @@ public sealed partial class CSharpToGSharpTranslator
             Dictionary<ExpressionSyntax, GExpression> captured = this.CaptureDeconstructionStorageTargets(leftTuple, statements);
             List<GExpression> values = this.LowerTuplePattern(leftTuple, this.TranslateExpression(right), forceRealTemps: true, statements, captured);
             GExpression value = new TupleLiteralExpression(values);
-            this.tupleAssignmentValues[leftTuple] = value;
+            this.state.TupleAssignmentValues[leftTuple] = value;
             return (statements, value);
         }
 
@@ -590,7 +590,7 @@ public sealed partial class CSharpToGSharpTranslator
                     (targetExpr is TupleExpressionSyntax nestedDiscardCheck
                         ? !this.IsAllDiscardTuple(nestedDiscardCheck)
                         : !this.IsDeconstructionDiscard(targetExpr));
-                temps.Add(needsRealTemp ? $"__decon{this.deconCounter++}" : "_");
+                temps.Add(needsRealTemp ? $"__decon{this.state.DeconCounter++}" : "_");
             }
 
             // Spill the WHOLE right-hand side in one native decon-binding.
@@ -786,12 +786,12 @@ public sealed partial class CSharpToGSharpTranslator
         // see <see cref="TranslateLambda"/>/<see cref="TranslateLocalFunction"/>)
         // the operand is conservatively left embedded as-is rather than spilled
         // into an unrelated scope.
-        private GExpression SpillOperand(GExpression operand) => this.SpillOperand(operand, this.pendingSpillPrologue);
+        private GExpression SpillOperand(GExpression operand) => this.SpillOperand(operand, this.state.PendingSpillPrologue);
 
         // As above, but for a call site that CAN be reached from a "null-seam"
         // expression context — a field/property initializer or a
         // base(...)/this(...) constructor-initializer argument (issue #1731
-        // N1) — where `this.pendingSpillPrologue` is null and G#'s grammar has
+        // N1) — where `this.state.PendingSpillPrologue` is null and G#'s grammar has
         // no expression-only way to host a spill `let`: a bare block-with-
         // trailing-expression is only legal directly inside a lambda arrow
         // body or an if/else branch (not a field initializer or a `base`/
@@ -812,18 +812,18 @@ public sealed partial class CSharpToGSharpTranslator
         // (compiling, if diagnostically-flagged) output.
         private GExpression SpillOperand(GExpression operand, SyntaxNode operandSyntaxForDiagnostic)
         {
-            if (this.pendingSpillPrologue != null || IsTrivialOperand(operand))
+            if (this.state.PendingSpillPrologue != null || IsTrivialOperand(operand))
             {
                 return this.SpillOperand(operand);
             }
 
-            if (this.pendingHelperCaptures != null)
+            if (this.state.PendingHelperCaptures != null)
             {
-                string paramName = $"__p{this.pendingHelperCaptures.Count}";
+                string paramName = $"__p{this.state.PendingHelperCaptures.Count}";
                 GTypeReference type = operandSyntaxForDiagnostic is ExpressionSyntax operandExpression
                     ? this.ResolveExpressionType(operandExpression)
                     : null;
-                this.pendingHelperCaptures.Add(
+                this.state.PendingHelperCaptures.Add(
                     (paramName, operand, type ?? new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType)));
                 return new IdentifierExpression(paramName);
             }
@@ -858,7 +858,7 @@ public sealed partial class CSharpToGSharpTranslator
         // helper runs the pattern/range-slice logic against the parameter.
         private GExpression TranslateNullSeamExpression(ExpressionSyntax expression, INamedTypeSymbol containingType)
         {
-            if (this.pendingSpillPrologue != null)
+            if (this.state.PendingSpillPrologue != null)
             {
                 return this.TranslateExpression(expression);
             }
@@ -884,7 +884,7 @@ public sealed partial class CSharpToGSharpTranslator
             SeparatedSyntaxList<ArgumentSyntax> arguments,
             IMethodSymbol ctorSymbol)
         {
-            if (this.pendingSpillPrologue != null || arguments.Any(a => a.NameColon != null))
+            if (this.state.PendingSpillPrologue != null || arguments.Any(a => a.NameColon != null))
             {
                 return this.TranslateArguments(arguments);
             }
@@ -997,7 +997,7 @@ public sealed partial class CSharpToGSharpTranslator
             INamedTypeSymbol containingType,
             List<(string Name, GExpression Operand, GTypeReference Type)> preSeededCaptures = null)
         {
-            List<(string Name, GExpression Operand, GTypeReference Type)> outerCaptures = this.pendingHelperCaptures;
+            List<(string Name, GExpression Operand, GTypeReference Type)> outerCaptures = this.state.PendingHelperCaptures;
             var captures = new List<(string Name, GExpression Operand, GTypeReference Type)>();
             if (preSeededCaptures != null)
             {
@@ -1005,7 +1005,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             int preSeedCount = captures.Count;
-            this.pendingHelperCaptures = captures;
+            this.state.PendingHelperCaptures = captures;
             GExpression body;
             try
             {
@@ -1013,7 +1013,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
             finally
             {
-                this.pendingHelperCaptures = outerCaptures;
+                this.state.PendingHelperCaptures = outerCaptures;
             }
 
             if (captures.Count == preSeedCount)
@@ -1042,14 +1042,14 @@ public sealed partial class CSharpToGSharpTranslator
                 captures.Skip(preSeedCount).Select(c => c.Name), StringComparer.Ordinal);
             if (captures.Any(c => ContainsIdentifierReference(c.Operand, paramNames)))
             {
-                this.pendingHelperCaptures = null;
+                this.state.PendingHelperCaptures = null;
                 try
                 {
                     return translate();
                 }
                 finally
                 {
-                    this.pendingHelperCaptures = outerCaptures;
+                    this.state.PendingHelperCaptures = outerCaptures;
                 }
             }
 
@@ -1057,7 +1057,7 @@ public sealed partial class CSharpToGSharpTranslator
             List<Parameter> parameters = captures
                 .Select(c => new Parameter(c.Name, c.Type))
                 .ToList();
-            this.pendingSynthHelpers.Add(new MethodDeclaration(
+            this.state.PendingSynthHelpers.Add(new MethodDeclaration(
                 helperName,
                 parameters,
                 returnType,
@@ -1126,10 +1126,10 @@ public sealed partial class CSharpToGSharpTranslator
             string name;
             do
             {
-                name = $"__init{this.synthHelperCounter++}";
+                name = $"__init{this.state.SynthHelperCounter++}";
             }
             while (existingNames.Contains(name) ||
-                this.pendingSynthHelpers.Any(h => h.Name == name));
+                this.state.PendingSynthHelpers.Any(h => h.Name == name));
 
             return name;
         }
@@ -1146,7 +1146,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return operand;
             }
 
-            string temp = $"__spill{this.spillCounter++}";
+            string temp = $"__spill{this.state.SpillCounter++}";
             prologue.Add(new LocalDeclarationStatement(BindingKind.Let, temp, type: null, initializer: operand));
             return new IdentifierExpression(temp);
         }
@@ -1187,9 +1187,9 @@ public sealed partial class CSharpToGSharpTranslator
         // the ambient seam is restored (mirrors <see cref="TranslateStatement"/>).
         private IReadOnlyList<GStatement> WithSpillSeam(Func<IReadOnlyList<GStatement>> translate)
         {
-            List<GStatement> outerSpillPrologue = this.pendingSpillPrologue;
+            List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
             var spillPrologue = new List<GStatement>();
-            this.pendingSpillPrologue = spillPrologue;
+            this.state.PendingSpillPrologue = spillPrologue;
             try
             {
                 IReadOnlyList<GStatement> core = translate();
@@ -1204,7 +1204,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
             finally
             {
-                this.pendingSpillPrologue = outerSpillPrologue;
+                this.state.PendingSpillPrologue = outerSpillPrologue;
             }
         }
 
@@ -1256,8 +1256,8 @@ public sealed partial class CSharpToGSharpTranslator
             // ambient seam is suspended for the body's translation; each statement
             // inside a block body still opens its own fresh seam via
             // <see cref="TranslateStatement"/>.
-            List<GStatement> outerSpillPrologue = this.pendingSpillPrologue;
-            this.pendingSpillPrologue = null;
+            List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
+            this.state.PendingSpillPrologue = null;
             LambdaExpression lambda;
             try
             {
@@ -1288,7 +1288,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
             finally
             {
-                this.pendingSpillPrologue = outerSpillPrologue;
+                this.state.PendingSpillPrologue = outerSpillPrologue;
             }
 
             // Issue #1886: a generic local function (`T First<T>(a, b) { ... }`)

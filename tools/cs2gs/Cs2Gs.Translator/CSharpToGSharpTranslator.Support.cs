@@ -77,45 +77,6 @@ public sealed partial class CSharpToGSharpTranslator
                 new List<GStatement>();
         }
 
-        // Issue #1743: equality for the (symbol, scope) cache key used by
-        // <see cref="IsSymbolReassigned"/>/<see cref="IsUsedAsNullable"/>'s
-        // memoization. Symbols compare via the Roslyn-recommended
-        // <see cref="SymbolEqualityComparer.Default"/>; scope nodes compare by
-        // reference (the same `SyntaxNode` instance is what every call site
-        // passes for a given symbol).
-        private sealed class SymbolScopeKeyComparer : IEqualityComparer<(ISymbol Symbol, SyntaxNode Scope)>
-        {
-            public static readonly SymbolScopeKeyComparer Instance = new SymbolScopeKeyComparer();
-
-            public bool Equals((ISymbol Symbol, SyntaxNode Scope) x, (ISymbol Symbol, SyntaxNode Scope) y) =>
-                SymbolEqualityComparer.Default.Equals(x.Symbol, y.Symbol) &&
-                ReferenceEquals(x.Scope, y.Scope);
-
-            public int GetHashCode((ISymbol Symbol, SyntaxNode Scope) obj) =>
-                HashCode.Combine(
-                    SymbolEqualityComparer.Default.GetHashCode(obj.Symbol),
-                    System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj.Scope));
-        }
-
-        // Issue #1893: per-declared-symbol record of a flat-lowered multi-dim
-        // array's per-dimension size expressions. See the field comment on
-        // <see cref="multiDimArrays"/> for the full rationale.
-        private sealed class MultiDimArrayInfo
-        {
-            public MultiDimArrayInfo(IReadOnlyList<GExpression> dimensionSizes)
-            {
-                this.DimensionSizes = dimensionSizes;
-            }
-
-            /// <summary>
-            /// Gets the per-dimension size expressions, outermost dimension
-            /// first, each safe to reference repeatedly (a hoisted `let`
-            /// identifier or a compile-time-constant literal — never a raw
-            /// expression that could re-run a side effect).
-            /// </summary>
-            public IReadOnlyList<GExpression> DimensionSizes { get; }
-        }
-
         // Issue #1971: groups extended property subpatterns (`{ A.B: 0, A.C: 1 }`,
         // parsed as `ExpressionColon`) sharing a leftmost identifier prefix so
         // <see cref="TranslateRecursivePattern"/> can merge them into ONE nested

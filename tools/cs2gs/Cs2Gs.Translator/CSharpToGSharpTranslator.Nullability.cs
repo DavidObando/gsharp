@@ -38,13 +38,13 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             var key = (symbol, scope);
-            if (this.usedAsNullableCache.TryGetValue(key, out bool cached))
+            if (this.state.UsedAsNullableCache.TryGetValue(key, out bool cached))
             {
                 return cached;
             }
 
             bool result = this.ComputeIsUsedAsNullable(symbol, scope);
-            this.usedAsNullableCache[key] = result;
+            this.state.UsedAsNullableCache[key] = result;
             return result;
         }
 

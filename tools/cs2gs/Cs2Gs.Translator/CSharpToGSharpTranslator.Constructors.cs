@@ -420,7 +420,7 @@ public sealed partial class CSharpToGSharpTranslator
                         assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
                         this.context.GetSymbolInfo(assignment.Left).Symbol is IFieldSymbol field)
                     {
-                        this.staticFieldInitializers[field] = this.TranslateExpression(assignment.Right);
+                        this.state.StaticFieldInitializers[field] = this.TranslateExpression(assignment.Right);
                     }
                 }
             }
@@ -1084,8 +1084,8 @@ public sealed partial class CSharpToGSharpTranslator
         /// <returns>The translated block.</returns>
         private BlockStatement TranslateBody(SyntaxNode bodyOwner, string description)
         {
-            SyntaxNode previousScope = this.currentBodyScope;
-            this.currentBodyScope = bodyOwner;
+            SyntaxNode previousScope = this.state.CurrentBodyScope;
+            this.state.CurrentBodyScope = bodyOwner;
             try
             {
                 BlockStatement body = this.TranslateBodyCore(bodyOwner, description);
@@ -1093,7 +1093,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
             finally
             {
-                this.currentBodyScope = previousScope;
+                this.state.CurrentBodyScope = previousScope;
             }
         }
 
@@ -1547,9 +1547,9 @@ public sealed partial class CSharpToGSharpTranslator
         // always gets its own independent seam rather than sharing this one.
         private IEnumerable<GStatement> TranslateStatement(StatementSyntax statement)
         {
-            List<GStatement> outerSpillPrologue = this.pendingSpillPrologue;
+            List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
             var spillPrologue = new List<GStatement>();
-            this.pendingSpillPrologue = spillPrologue;
+            this.state.PendingSpillPrologue = spillPrologue;
             try
             {
                 List<GStatement> core = this.TranslateStatementCore(statement).ToList();
@@ -1564,7 +1564,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
             finally
             {
-                this.pendingSpillPrologue = outerSpillPrologue;
+                this.state.PendingSpillPrologue = outerSpillPrologue;
             }
         }
 
@@ -1678,7 +1678,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                     foreach (AssignmentExpressionSyntax node in returnEmbedded)
                     {
-                        this.suppressedAssignments.Add(node);
+                        this.state.SuppressedAssignments.Add(node);
                     }
 
                     GExpression returnValue;
@@ -1690,7 +1690,7 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         foreach (AssignmentExpressionSyntax node in returnEmbedded)
                         {
-                            this.suppressedAssignments.Remove(node);
+                            this.state.SuppressedAssignments.Remove(node);
                         }
                     }
 

@@ -312,15 +312,15 @@ public sealed partial class CSharpToGSharpTranslator
             // iteration — NOT in the enclosing loop STATEMENT's own prologue (that
             // would evaluate the operand once, before the loop, instead of once
             // per iteration as C# does).
-            List<GStatement> outerSpillPrologue = this.pendingSpillPrologue;
-            this.pendingSpillPrologue = into;
+            List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
+            this.state.PendingSpillPrologue = into;
             try
             {
                 this.HoistLoopConditionClauseCore(clause, into);
             }
             finally
             {
-                this.pendingSpillPrologue = outerSpillPrologue;
+                this.state.PendingSpillPrologue = outerSpillPrologue;
             }
         }
 
@@ -342,7 +342,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 foreach (AssignmentExpressionSyntax node in embedded)
                 {
-                    this.suppressedAssignments.Add(node);
+                    this.state.SuppressedAssignments.Add(node);
                 }
 
                 try
@@ -353,7 +353,7 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     foreach (AssignmentExpressionSyntax node in embedded)
                     {
-                        this.suppressedAssignments.Remove(node);
+                        this.state.SuppressedAssignments.Remove(node);
                     }
                 }
 
@@ -374,7 +374,7 @@ public sealed partial class CSharpToGSharpTranslator
             ILocalSymbol mainBinder = this.FindMainPatternBinder(isPattern.Pattern);
             string hoistName = mainBinder != null
                 ? SanitizeIdentifier(mainBinder.Name)
-                : $"__scrutinee{this.loopHoistCounter++}";
+                : $"__scrutinee{this.state.LoopHoistCounter++}";
 
             BindingKind binding = mainBinder != null && this.IsLocalReassigned(mainBinder)
                 ? BindingKind.Var
@@ -389,7 +389,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 if (!SymbolEqualityComparer.Default.Equals(binder, mainBinder))
                 {
-                    this.patternBindings[binder] = idExpr;
+                    this.state.PatternBindings[binder] = idExpr;
                 }
             }
 
@@ -603,7 +603,7 @@ public sealed partial class CSharpToGSharpTranslator
             // Record that this pattern variable is now a nullable G# local so an
             // assignment-LHS use inside the guard is null-forgiven (gsc narrows
             // reads but not write receivers).
-            this.hoistedNullableGuardLocals.Add(patternSymbol);
+            this.state.HoistedNullableGuardLocals.Add(patternSymbol);
 
             // `var t T? = receiver as T` when the leaked variable is reassigned
             // anywhere in the body (C# allows it); otherwise an immutable `let`.
@@ -695,7 +695,7 @@ public sealed partial class CSharpToGSharpTranslator
         // body-walk in <see cref="IsLocalReassigned"/>.
         private bool IsSymbolReferencedOutside(ISymbol symbol, SyntaxNode excludedSubtree)
         {
-            SyntaxNode scope = this.currentBodyScope;
+            SyntaxNode scope = this.state.CurrentBodyScope;
             if (scope == null)
             {
                 return false;
@@ -882,18 +882,18 @@ public sealed partial class CSharpToGSharpTranslator
             // A value-position assignment in the condition (`if ((x = f()) > 0)`,
             // `if (x = f())`) is hoisted into a preceding assignment statement — it
             // runs once, exactly where C# would evaluate it (issue #1723).
-            var bindingsBefore = new HashSet<ISymbol>(this.patternBindings.Keys, SymbolEqualityComparer.Default);
+            var bindingsBefore = new HashSet<ISymbol>(this.state.PatternBindings.Keys, SymbolEqualityComparer.Default);
             var conditionPrologue = new List<GStatement>();
             GExpression condition = GuardBlockCondition(
                 this.TranslateConditionWithHoist(ifStatement.Condition, conditionPrologue));
 
             BlockStatement then = this.TranslateStatementAsBlock(ifStatement.Statement);
 
-            foreach (ISymbol added in this.patternBindings.Keys.ToList())
+            foreach (ISymbol added in this.state.PatternBindings.Keys.ToList())
             {
                 if (!bindingsBefore.Contains(added))
                 {
-                    this.patternBindings.Remove(added);
+                    this.state.PatternBindings.Remove(added);
                 }
             }
 
@@ -1294,7 +1294,7 @@ public sealed partial class CSharpToGSharpTranslator
             // rejected by gsc with GS9005 ("Cannot take address of constant").
             // Delegate to the general symbol walk, which already covers the
             // `ref`/`out` argument case, so both paths stay consistent.
-            return this.IsSymbolReassigned(local, this.currentBodyScope);
+            return this.IsSymbolReassigned(local, this.state.CurrentBodyScope);
         }
 
         private bool BindsTo(ExpressionSyntax expression, ISymbol target)
@@ -1347,13 +1347,13 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             var key = (symbol, scope);
-            if (this.symbolReassignedCache.TryGetValue(key, out bool cached))
+            if (this.state.SymbolReassignedCache.TryGetValue(key, out bool cached))
             {
                 return cached;
             }
 
             bool result = this.ComputeIsSymbolReassigned(symbol, scope);
-            this.symbolReassignedCache[key] = result;
+            this.state.SymbolReassignedCache[key] = result;
             return result;
         }
 

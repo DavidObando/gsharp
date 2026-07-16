@@ -321,7 +321,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // marks this node suppressed; reading it here means the write
                     // already happened, so the expression's value is just the
                     // (now up-to-date) target (issue #1723).
-                    if (this.suppressedAssignments.Contains(nestedAssignment))
+                    if (this.state.SuppressedAssignments.Contains(nestedAssignment))
                     {
                         // A deconstruction assignment (`(a, b) = ...`) has no
                         // single "target" to read back — LowerTupleAssignmentForValue
@@ -330,7 +330,7 @@ public sealed partial class CSharpToGSharpTranslator
                         // than trying to read `nestedAssignment.Left` (a tuple
                         // TARGET pattern, not a value expression) (issue #1974).
                         if (nestedAssignment.Left is TupleExpressionSyntax leftTuplePattern &&
-                            this.tupleAssignmentValues.TryGetValue(leftTuplePattern, out GExpression cachedTupleValue))
+                            this.state.TupleAssignmentValues.TryGetValue(leftTuplePattern, out GExpression cachedTupleValue))
                         {
                             return cachedTupleValue;
                         }
@@ -397,7 +397,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // enclosing statement seam already hoisted the mutation into a
                     // trailing statement, the node is suppressed here and reads as
                     // its pre-increment value (ADR-0115 §B).
-                    if (this.suppressedPostfix.Contains(postfixValue))
+                    if (this.state.SuppressedPostfix.Contains(postfixValue))
                     {
                         return this.TranslateExpression(postfixValue.Operand);
                     }
@@ -588,7 +588,7 @@ public sealed partial class CSharpToGSharpTranslator
                     if (declaration.Designation is SingleVariableDesignationSyntax single &&
                         this.context.GetDeclaredSymbol(single) is { } boundSymbol)
                     {
-                        this.patternBindings[boundSymbol] =
+                        this.state.PatternBindings[boundSymbol] =
                             this.BuildPatternNarrowingReplacement(receiver, receiverSyntax, declaration.Type);
                     }
 
@@ -616,7 +616,7 @@ public sealed partial class CSharpToGSharpTranslator
                     if (varPattern.Designation is SingleVariableDesignationSyntax varSingle &&
                         this.context.GetDeclaredSymbol(varSingle) is { } varBound)
                     {
-                        this.patternBindings[varBound] = receiver;
+                        this.state.PatternBindings[varBound] = receiver;
                     }
                     else if (varPattern.Designation is ParenthesizedVariableDesignationSyntax)
                     {
@@ -722,7 +722,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 case VarPatternSyntax { Designation: SingleVariableDesignationSyntax variable }
                     when this.context.GetDeclaredSymbol(variable) is { } boundSymbol:
-                    this.patternBindings[boundSymbol] = BuildSliceExpression(receiver, prefixCount, suffixCount);
+                    this.state.PatternBindings[boundSymbol] = BuildSliceExpression(receiver, prefixCount, suffixCount);
                     return null;
 
                 case VarPatternSyntax { Designation: DiscardDesignationSyntax }:
@@ -737,7 +737,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // A typed slice capture (`.. T rest`) can only ever narrow to
                     // the slice's own `[]T` type, so the (redundant) type check is
                     // dropped — same bind-only treatment as the `var` capture above.
-                    this.patternBindings[declBoundSymbol] = BuildSliceExpression(receiver, prefixCount, suffixCount);
+                    this.state.PatternBindings[declBoundSymbol] = BuildSliceExpression(receiver, prefixCount, suffixCount);
                     return null;
 
                 default:
@@ -894,7 +894,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (recursive.Designation is SingleVariableDesignationSyntax recVar &&
                 this.context.GetDeclaredSymbol(recVar) is { } recBound)
             {
-                this.patternBindings[recBound] =
+                this.state.PatternBindings[recBound] =
                     this.BuildPatternNarrowingReplacement(receiver, receiverSyntax, recursive.Type);
             }
 
@@ -1282,7 +1282,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (designation is SingleVariableDesignationSyntax variable &&
                 this.context.GetDeclaredSymbol(variable) is { } boundSymbol)
             {
-                this.patternBindings[boundSymbol] = receiver;
+                this.state.PatternBindings[boundSymbol] = receiver;
             }
         }
 
@@ -1386,7 +1386,7 @@ public sealed partial class CSharpToGSharpTranslator
         /// <c>new T[,]{{...}}</c>) that is the DIRECT initializer of a tracked
         /// local declaration to a single flat backing array of length
         /// <c>d0*d1*...</c>. Registers <paramref name="declaredSymbol"/> in
-        /// <see cref="multiDimArrays"/> so later <c>x[i, j, ...]</c> element
+        /// <see cref="DocumentTranslationState.MultiDimArrays"/> so later <c>x[i, j, ...]</c> element
         /// access and <c>x.GetLength(k)</c> calls can rebuild the row-major flat
         /// index / per-dimension size instead of the original bug's silent 1-D
         /// collapse (dropped indices). Runtime-sized dimensions (<c>new T[rows,
@@ -1449,7 +1449,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (declaredSymbol != null)
             {
-                this.multiDimArrays[declaredSymbol] = new MultiDimArrayInfo(dimensionSizes);
+                this.state.MultiDimArrays[declaredSymbol] = new MultiDimArrayInfo(dimensionSizes);
             }
 
             return flatArrayExpression;
@@ -1487,9 +1487,9 @@ public sealed partial class CSharpToGSharpTranslator
         /// tracked flat-lowered multi-dim array to the faithful row-major flat
         /// index <c>grid[((r * dim1) + c) * ... ]</c>, using every index (the
         /// original bug dropped every index past the first). An access whose
-        /// receiver was not tracked by <see cref="multiDimArrays"/> (e.g. a
+        /// receiver was not tracked by <see cref="DocumentTranslationState.MultiDimArrays"/> (e.g. a
         /// field, parameter, or return value — see the deliberate scope note on
-        /// <see cref="multiDimArrays"/>) reports the loud gap instead of
+        /// <see cref="DocumentTranslationState.MultiDimArrays"/>) reports the loud gap instead of
         /// silently collapsing to 1-D.
         /// <para>
         /// Issue #1954: a flat index that is in range overall
@@ -1509,7 +1509,7 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression target = this.TranslateReceiverWithNullForgiveness(elementAccess.Expression);
             ISymbol receiverSymbol = this.context.GetSymbolInfo(elementAccess.Expression).Symbol;
             if (receiverSymbol == null ||
-                !this.multiDimArrays.TryGetValue(receiverSymbol, out MultiDimArrayInfo info) ||
+                !this.state.MultiDimArrays.TryGetValue(receiverSymbol, out MultiDimArrayInfo info) ||
                 info.DimensionSizes.Count != rank)
             {
                 string elementAccessGapMessage =
@@ -1763,7 +1763,7 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateSpreadCollectionExpression(
             CollectionExpressionSyntax collection, GTypeReference elementType, bool isConstructibleClassTarget)
         {
-            if (this.pendingSpillPrologue == null)
+            if (this.state.PendingSpillPrologue == null)
             {
                 string message =
                     "a collection-expression spread element here has no enclosing statement to host the " +
@@ -1773,8 +1773,8 @@ public sealed partial class CSharpToGSharpTranslator
                 return new IdentifierExpression("nil");
             }
 
-            string temp = $"__spread{this.spreadCounter++}";
-            this.pendingSpillPrologue.Add(new LocalDeclarationStatement(
+            string temp = $"__spread{this.state.SpreadCounter++}";
+            this.state.PendingSpillPrologue.Add(new LocalDeclarationStatement(
                 BindingKind.Let,
                 temp,
                 type: null,
@@ -1792,14 +1792,14 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     GExpression source = this.CoerceSpreadSource(
                         spread.Expression, this.TranslateExpression(spread.Expression), targetElementSymbol, elementType);
-                    this.pendingSpillPrologue.Add(new ExpressionStatement(new InvocationExpression(
+                    this.state.PendingSpillPrologue.Add(new ExpressionStatement(new InvocationExpression(
                         new MemberAccessExpression(new IdentifierExpression(temp), "AddRange"),
                         new List<GExpression> { source })));
                 }
                 else
                 {
                     var expressionElement = (ExpressionElementSyntax)element;
-                    this.pendingSpillPrologue.Add(new ExpressionStatement(new InvocationExpression(
+                    this.state.PendingSpillPrologue.Add(new ExpressionStatement(new InvocationExpression(
                         new MemberAccessExpression(new IdentifierExpression(temp), "Add"),
                         new List<GExpression> { this.CoerceCollectionElement(expressionElement.Expression, elementType) })));
                 }

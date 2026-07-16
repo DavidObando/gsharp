@@ -721,7 +721,7 @@ public sealed partial class CSharpToGSharpTranslator
                     initializer = lifted;
                 }
                 else if (symbol != null &&
-                    this.staticFieldInitializers.TryGetValue(symbol, out GExpression staticLifted))
+                    this.state.StaticFieldInitializers.TryGetValue(symbol, out GExpression staticLifted))
                 {
                     // Issue #1729 (mode 1): a folded `static` constructor
                     // (`static T() { Field = value; }`) runs *after* the field's own
@@ -975,10 +975,10 @@ public sealed partial class CSharpToGSharpTranslator
             List<TypeParameter> typeParameters = this.MapMethodTypeParameters(symbol);
 
             bool hasBody = node.Body != null || node.ExpressionBody != null;
-            string previousReceiver = this.currentReceiverName;
+            string previousReceiver = this.state.CurrentReceiverName;
             if (selfQualifyBody)
             {
-                this.currentReceiverName = receiver.Name;
+                this.state.CurrentReceiverName = receiver.Name;
             }
 
             BlockStatement body;
@@ -990,7 +990,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
             finally
             {
-                this.currentReceiverName = previousReceiver;
+                this.state.CurrentReceiverName = previousReceiver;
             }
 
             // ADR-0122 / issue #1014: a C# `unsafe` method body is an unsafe
@@ -1862,7 +1862,7 @@ public sealed partial class CSharpToGSharpTranslator
                 taken.UnionWith(primaryCtorParamNames);
             }
 
-            taken.UnionWith(this.fieldKeywordBackingFieldNames.Values);
+            taken.UnionWith(this.state.FieldKeywordBackingFieldNames.Values);
 
             string candidate = baseName;
             for (int suffix = 2; taken.Contains(candidate); suffix++)
@@ -1870,7 +1870,7 @@ public sealed partial class CSharpToGSharpTranslator
                 candidate = baseName + suffix;
             }
 
-            this.fieldKeywordBackingFieldNames[symbol] = candidate;
+            this.state.FieldKeywordBackingFieldNames[symbol] = candidate;
             return candidate;
         }
 

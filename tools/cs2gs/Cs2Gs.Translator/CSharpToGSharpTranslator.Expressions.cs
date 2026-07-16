@@ -32,7 +32,7 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateFieldExpression(FieldExpressionSyntax fieldExpression)
         {
             if (this.context.GetSymbolInfo(fieldExpression).Symbol is IFieldSymbol { AssociatedSymbol: IPropertySymbol owner } &&
-                this.fieldKeywordBackingFieldNames.TryGetValue(owner, out string backingName))
+                this.state.FieldKeywordBackingFieldNames.TryGetValue(owner, out string backingName))
             {
                 return new IdentifierExpression(backingName);
             }
@@ -48,9 +48,9 @@ public sealed partial class CSharpToGSharpTranslator
             // A switch-expression property-pattern binding (`Circle { Radius: var r }`)
             // has no G# equivalent; references to the bound local are rewritten to a
             // member access on the arm's type-pattern designator (`circle.Radius`).
-            if (this.patternBindings.Count > 0 &&
+            if (this.state.PatternBindings.Count > 0 &&
                 this.context.GetSymbolInfo(identifier).Symbol is { } boundSymbol &&
-                this.patternBindings.TryGetValue(boundSymbol, out GExpression replacement))
+                this.state.PatternBindings.TryGetValue(boundSymbol, out GExpression replacement))
             {
                 return replacement;
             }
@@ -59,14 +59,14 @@ public sealed partial class CSharpToGSharpTranslator
             // reference to an instance member carries an implicit C# `this`; a
             // top-level receiver-clause `func` has no implicit receiver, so the
             // reference must be made explicit through the receiver (`self.X`).
-            if (this.currentReceiverName != null)
+            if (this.state.CurrentReceiverName != null)
             {
                 ISymbol symbol = this.context.GetSymbolInfo(identifier).Symbol;
                 if (symbol is { IsStatic: false } &&
                     symbol.Kind is SymbolKind.Field or SymbolKind.Property or SymbolKind.Method)
                 {
                     return new MemberAccessExpression(
-                        new IdentifierExpression(this.currentReceiverName),
+                        new IdentifierExpression(this.state.CurrentReceiverName),
                         SanitizeIdentifier(identifier.Identifier.Text));
                 }
             }
