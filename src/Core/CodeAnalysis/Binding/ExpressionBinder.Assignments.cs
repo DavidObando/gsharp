@@ -511,29 +511,13 @@ internal sealed partial class ExpressionBinder
                 selectorLocation: syntax.Receiver.Location);
         }
 
-        // Stream B: imported class name on LHS → static field/property write.
-        // Probe the import table FIRST so we don't shadow with a variable lookup
-        // diagnostic.
-        if (scope.TryLookupImportedClass(receiverName, declaration: null, out var importedClass))
-        {
-            var staticValue = BindExpression(syntax.Value);
-            if (!importedClass.TryLookupMember(syntax.FieldIdentifier.Text, ne: null, out var staticMember))
-            {
-                Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
-                return new BoundErrorExpression(null);
-            }
-
-            if (!TryGetWritableClrMember(staticMember, out var staticTargetType, out var staticTargetSymbol, out var staticWritable))
-            {
-                Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
-                return new BoundErrorExpression(null);
-            }
-
-            _ = staticWritable;
-            _ = staticTargetType;
-            var staticConverted = conversions.BindConversion(syntax.Value.Location, staticValue, staticTargetSymbol);
-            return new BoundClrPropertyAssignmentExpression(null, receiver: null, staticMember, staticConverted, staticTargetSymbol);
-        }
+        // Issue #2394: check the same-compilation SOURCE type (struct/
+        // interface) receiver BEFORE the imported-CLR-class receiver, so a
+        // same-simple-name imported CLR type visible via SOME OTHER file's
+        // import (imports are compilation-wide, not file-scoped) cannot win
+        // over the receiver's own compilation's source type. Matches
+        // Binder.LookupType's precedence and the read-path fix in
+        // BindAccessorExpression.
 
         // ADR-0053: user-defined struct/class type → static field write.
         if (scope.TryLookupTypeAlias(receiverName, out var typeAlias) && typeAlias is StructSymbol userStruct)
@@ -590,6 +574,31 @@ internal sealed partial class ExpressionBinder
 
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
             return new BoundErrorExpression(null);
+        }
+
+        // Stream B: imported class name on LHS → static field/property write.
+        // Probe the import table after the source-type checks above so we
+        // don't shadow with a variable lookup diagnostic, but still let an
+        // in-compilation source type win over a same-named imported CLR type.
+        if (scope.TryLookupImportedClass(receiverName, declaration: null, out var importedClass))
+        {
+            var staticValue = BindExpression(syntax.Value);
+            if (!importedClass.TryLookupMember(syntax.FieldIdentifier.Text, ne: null, out var staticMember))
+            {
+                Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
+                return new BoundErrorExpression(null);
+            }
+
+            if (!TryGetWritableClrMember(staticMember, out var staticTargetType, out var staticTargetSymbol, out var staticWritable))
+            {
+                Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
+                return new BoundErrorExpression(null);
+            }
+
+            _ = staticWritable;
+            _ = staticTargetType;
+            var staticConverted = conversions.BindConversion(syntax.Value.Location, staticValue, staticTargetSymbol);
+            return new BoundClrPropertyAssignmentExpression(null, receiver: null, staticMember, staticConverted, staticTargetSymbol);
         }
 
         var variable = BindVariableReference(receiverName, syntax.Receiver.Location);

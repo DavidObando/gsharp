@@ -74,13 +74,15 @@ internal sealed partial class ExpressionBinder
         BoundExpression boundReceiver = null;
         Type receiverClrType = null;
         BindingFlags flags;
-        if (accessor.LeftPart is NameExpressionSyntax leftName
-            && scope.TryLookupImportedClass(leftName.IdentifierToken.Text, leftName, out var importedClass))
-        {
-            receiverClrType = importedClass.ClassType;
-            flags = BindingFlags.Public | BindingFlags.Static;
-        }
-        else if (accessor.LeftPart is NameExpressionSyntax staticLeftName
+
+        // Issue #2394: check the same-compilation SOURCE type (struct/
+        // interface) receiver BEFORE the imported-CLR-class receiver, matching
+        // Binder.LookupType's precedence. Without this, a same-simple-name
+        // imported CLR type visible via SOME OTHER file's import (imports are
+        // compilation-wide, not file-scoped) could win over the receiver's
+        // own compilation's source type for a static event/field compound
+        // assignment, mirroring the BindAccessorExpression read-path bug.
+        if (accessor.LeftPart is NameExpressionSyntax staticLeftName
             && scope.TryLookupTypeAlias(staticLeftName.IdentifierToken.Text, out var staticTypeAlias)
             && staticTypeAlias is StructSymbol staticStruct)
         {
@@ -120,6 +122,12 @@ internal sealed partial class ExpressionBinder
 
             Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName);
             return new BoundErrorExpression(null);
+        }
+        else if (accessor.LeftPart is NameExpressionSyntax leftName
+            && scope.TryLookupImportedClass(leftName.IdentifierToken.Text, leftName, out var importedClass))
+        {
+            receiverClrType = importedClass.ClassType;
+            flags = BindingFlags.Public | BindingFlags.Static;
         }
         else if ((accessor.LeftPart is IndexExpressionSyntax || accessor.LeftPart is GenericNameExpressionSyntax)
             && TryResolveConstructedGenericTypeReceiver(
