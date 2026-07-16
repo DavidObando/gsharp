@@ -178,7 +178,12 @@ internal sealed class SlotPlanner
     public void CollectNullableValueTypeCoalesces(BoundStatement root, List<BoundBinaryExpression> sink)
         => new NullableValueTypeCoalesceCollector(sink).Visit(root);
 
-    public void CollectLiftedBinaryOperators(BoundStatement root, List<BoundBinaryExpression> sink)
+    // Issue #2388: widened from `List<BoundBinaryExpression>` to
+    // `List<BoundExpression>` so the same collector/slot machinery also
+    // catches a nullable-lifted `BoundClrBinaryOperatorExpression` (Stream
+    // C/D custom-equality operators on `Nullable<T>` operands), not just the
+    // built-in operator table's `BoundBinaryExpression` shape.
+    public void CollectLiftedBinaryOperators(BoundStatement root, List<BoundExpression> sink)
         => new LiftedBinaryOperatorCollector(sink).Visit(root);
 
     public void CollectNullableNumericWideningConversions(BoundStatement root, List<BoundConversionExpression> sink)
@@ -1513,9 +1518,9 @@ internal sealed class SlotPlanner
     // per-node slot bundle.
     private sealed class LiftedBinaryOperatorCollector : BoundTreeWalker
     {
-        private readonly List<BoundBinaryExpression> sink;
+        private readonly List<BoundExpression> sink;
 
-        public LiftedBinaryOperatorCollector(List<BoundBinaryExpression> sink)
+        public LiftedBinaryOperatorCollector(List<BoundExpression> sink)
         {
             this.sink = sink;
         }
@@ -1528,6 +1533,40 @@ internal sealed class SlotPlanner
             }
 
             base.VisitBinaryExpression(node);
+        }
+
+        // Issue #2388: a Stream C/D custom-operator call
+        // (BoundClrBinaryOperatorExpression) needs the identical LhsSlot /
+        // RhsSlot spill-and-HasValue-branch treatment as the built-in
+        // operator table's BoundBinaryExpression above when its operands
+        // were nullable-lifted by TryLiftNullableClrOperatorOperands (both
+        // sides converted to a matching Nullable<T>). Sharing the sink /
+        // slot dictionary lets EmitClrBinaryOperator reuse the exact same
+        // LiftedBinarySlots lookup as EmitBinary.
+        protected override void VisitClrBinaryOperatorExpression(BoundClrBinaryOperatorExpression node)
+        {
+            if (IsLiftedValueTypeClrBinary(node))
+            {
+                this.sink.Add(node);
+            }
+
+            base.VisitClrBinaryOperatorExpression(node);
+        }
+
+        private static bool IsLiftedValueTypeClrBinary(BoundClrBinaryOperatorExpression node)
+        {
+            // The binder only ever produces this node with BOTH operands
+            // already Nullable<T>-converted when lifting applies (mixed-mode
+            // wraps the bare side); a plain (non-lifted) Stream C/D call site
+            // never has a NullableTypeSymbol operand at all. Nil comparisons
+            // (`T? == nil`) never reach Stream C/D in the first place — the
+            // built-in IsNullCompare arm binds those directly as a plain
+            // BoundBinaryExpression before Stream C/D is even attempted — so
+            // there is no Form-2 "nil" case to mirror here, unlike
+            // IsLiftedValueTypeBinary above.
+            return node.Left.Type is NullableTypeSymbol left
+                && (left.UnderlyingType?.ClrType is { IsValueType: true } || left.UnderlyingType is StructSymbol)
+                && node.Right.Type is NullableTypeSymbol;
         }
 
         private static bool IsLiftedValueTypeBinary(BoundBinaryExpression node)

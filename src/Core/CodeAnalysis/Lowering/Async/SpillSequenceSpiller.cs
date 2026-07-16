@@ -502,11 +502,16 @@ public static class SpillSequenceSpiller
                         clrPropAssign.Value,
                         (recv, val) => new BoundClrPropertyAssignmentExpression(null, recv, clrPropAssign.Member, val, clrPropAssign.Type));
                 case BoundClrBinaryOperatorExpression clrBinary:
+                    // Issue #2388: preserve whichever of Method (imported CLR
+                    // type) / Function (nullable-lifted same-compilation
+                    // struct operator) the original node carried.
                     return SpillTwoOperand(
                         clrBinary,
                         clrBinary.Left,
                         clrBinary.Right,
-                        (l, r) => new BoundClrBinaryOperatorExpression(null, clrBinary.OperatorKind, l, r, clrBinary.Method, clrBinary.Type));
+                        (l, r) => clrBinary.Function != null
+                            ? new BoundClrBinaryOperatorExpression(null, clrBinary.OperatorKind, l, r, clrBinary.Function, clrBinary.Type)
+                            : new BoundClrBinaryOperatorExpression(null, clrBinary.OperatorKind, l, r, clrBinary.Method, clrBinary.Type));
                 case BoundClrUnaryOperatorExpression clrUnary:
                     return SpillOneOperand(
                         clrUnary,

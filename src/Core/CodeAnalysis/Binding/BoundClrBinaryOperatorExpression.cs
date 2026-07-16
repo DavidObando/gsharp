@@ -12,21 +12,48 @@ using GSharp.Core.CodeAnalysis.Syntax;
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 /// <summary>
-/// User-defined binary operator on an imported CLR type, resolved to a
-/// public static <see cref="MethodInfo"/> with C#-style operator name
-/// (e.g. <c>op_Addition</c>, <c>op_Equality</c>). Stream C lets GSharp source
-/// write <c>a + b</c> against operator-bearing CLR types such as
-/// <c>TimeSpan</c>, <c>BigInteger</c>, or <c>System.Numerics.Vector2</c>.
+/// User-defined binary operator resolved to a public static operator method,
+/// identified by C#-style operator name (e.g. <c>op_Addition</c>,
+/// <c>op_Equality</c>). Stream C lets GSharp source write <c>a + b</c>
+/// against operator-bearing CLR types such as <c>TimeSpan</c>,
+/// <c>BigInteger</c>, or <c>System.Numerics.Vector2</c>, resolved via
+/// <see cref="Method"/> (a reflection <see cref="MethodInfo"/>).
 /// </summary>
+/// <remarks>
+/// Issue #2388: this node is ALSO reused for the nullable-lifted form of a
+/// same-compilation struct's Stream D user-defined operator (<c>func (a T)
+/// operator ==(b T) bool</c>) when one or both operands are a value-type
+/// <c>Nullable&lt;T&gt;</c> — that scenario has no reflection
+/// <see cref="MethodInfo"/> available at bind time (the declaring struct is
+/// still <see cref="System.Reflection.Emit.TypeBuilder"/>-backed), so
+/// <see cref="Function"/> carries the same-compilation
+/// <see cref="FunctionSymbol"/> instead. Exactly one of <see cref="Method"/>
+/// / <see cref="Function"/> is non-null. Sharing one node type lets the
+/// nullable-lifting machinery in <c>SlotPlanner</c> /
+/// <c>MethodBodyEmitter.Operators</c> (<c>LiftedBinarySlots</c> /
+/// <c>EmitLiftedNullableClrBinary</c>) drive both the imported-CLR-type and
+/// same-compilation-struct cases uniformly.
+/// </remarks>
 public sealed class BoundClrBinaryOperatorExpression : BoundExpression
 {
     public BoundClrBinaryOperatorExpression(SyntaxNode syntax, SyntaxKind operatorKind, BoundExpression left, BoundExpression right, MethodInfo method, TypeSymbol resultType)
+        : this(syntax, operatorKind, left, right, method, null, resultType)
+    {
+    }
+
+    public BoundClrBinaryOperatorExpression(SyntaxNode syntax, SyntaxKind operatorKind, BoundExpression left, BoundExpression right, Symbols.FunctionSymbol function, TypeSymbol resultType)
+        : this(syntax, operatorKind, left, right, null, function, resultType)
+    {
+    }
+
+    private BoundClrBinaryOperatorExpression(SyntaxNode syntax, SyntaxKind operatorKind, BoundExpression left, BoundExpression right, MethodInfo method, Symbols.FunctionSymbol function, TypeSymbol resultType)
         : base(syntax)
     {
         OperatorKind = operatorKind;
         Left = left;
         Right = right;
         Method = method;
+        Function = function;
         Type = resultType;
     }
 
@@ -36,7 +63,16 @@ public sealed class BoundClrBinaryOperatorExpression : BoundExpression
 
     public BoundExpression Right { get; }
 
+    /// <summary>Gets the resolved imported-CLR-type operator method, or <see langword="null"/> when <see cref="Function"/> is used instead.</summary>
     public MethodInfo Method { get; }
+
+    /// <summary>
+    /// Gets the resolved same-compilation struct operator function (issue
+    /// #2388), used for the nullable-lifted Stream D case instead of
+    /// <see cref="Method"/>. <see langword="null"/> for the ordinary
+    /// (imported-CLR-type or non-nullable Stream D) shape.
+    /// </summary>
+    public Symbols.FunctionSymbol Function { get; }
 
     public override TypeSymbol Type { get; }
 

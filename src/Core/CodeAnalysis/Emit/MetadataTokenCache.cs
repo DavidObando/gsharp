@@ -181,6 +181,20 @@ internal sealed class MetadataTokenCache
         = new Dictionary<TypeSymbol, MemberReferenceHandle>();
 
     /// <summary>
+    /// Gets the cache mapping a user-defined value-type underlying
+    /// (<see cref="EnumSymbol"/> or value-kind <see cref="StructSymbol"/>) to
+    /// the <see cref="MemberReferenceHandle"/> for
+    /// <c>System.Nullable`1&lt;T&gt;::get_HasValue()</c> (issue #2388). Mirrors
+    /// <see cref="NullableUserValueTypeGetValueMemberRefs"/>; used to
+    /// HasValue-branch a nullable-lifted Stream C/D custom-operator call
+    /// over a same-compilation struct, where no real CLR
+    /// <see cref="System.Type"/> exists to drive the reflection-based
+    /// <see cref="WellKnownReferences.GetNullableGetHasValueReference"/>.
+    /// </summary>
+    public Dictionary<TypeSymbol, MemberReferenceHandle> NullableUserValueTypeGetHasValueMemberRefs { get; }
+        = new Dictionary<TypeSymbol, MemberReferenceHandle>();
+
+    /// <summary>
     /// Gets the cache mapping a <see cref="FieldInfo"/> to its
     /// <see cref="MemberReferenceHandle"/>.
     /// </summary>

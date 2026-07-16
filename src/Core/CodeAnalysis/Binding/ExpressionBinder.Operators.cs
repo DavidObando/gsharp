@@ -1437,6 +1437,85 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Issue #2388: true for the six comparison operators whose C# lifted
+    /// form always yields a plain (non-nullable) <c>bool</c> — <c>nil == nil</c>
+    /// is true, a HasValue mismatch is false/true, and two present operands
+    /// unwrap and delegate to the underlying operator. Every other
+    /// Stream C/D operator (arithmetic, bitwise) lifts to <c>Nullable&lt;R&gt;</c>
+    /// instead, propagating a "no value" operand as a null result.
+    /// </summary>
+    private static bool IsClrOperatorLiftedToBool(SyntaxKind opKind) => opKind switch
+    {
+        SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken
+            or SyntaxKind.LessToken or SyntaxKind.LessOrEqualsToken
+            or SyntaxKind.GreaterToken or SyntaxKind.GreaterOrEqualsToken => true,
+        _ => false,
+    };
+
+    /// <summary>
+    /// Issue #2388: when a Stream C/D binary operator resolves against a
+    /// value-type operand that is (or should be) wrapped in a nullable
+    /// <c>Nullable&lt;T&gt;</c> — either operand is already
+    /// <see cref="NullableTypeSymbol"/>, or the OTHER operand is — lifts both
+    /// operands up to a matching <c>Nullable&lt;T&gt;</c> (mixed-mode: the
+    /// bare non-nullable side is wrapped) and computes the operator's lifted
+    /// result type. Returns <see langword="false"/> when no lifting applies
+    /// (plain non-nullable call site, unchanged behavior).
+    /// </summary>
+    /// <param name="opKind">The operator token.</param>
+    /// <param name="left">The bound left operand; replaced with its <c>Nullable&lt;T&gt;</c>-converted form when lifting applies.</param>
+    /// <param name="right">The bound right operand; replaced with its <c>Nullable&lt;T&gt;</c>-converted form when lifting applies.</param>
+    /// <param name="leftLocation">The left operand's source location (for the wrapping conversion).</param>
+    /// <param name="rightLocation">The right operand's source location (for the wrapping conversion).</param>
+    /// <param name="naturalResultType">The operator's own (non-lifted) result type.</param>
+    /// <param name="liftedResultType">The lifted result type: <c>bool</c> for comparisons, <c>Nullable&lt;naturalResultType&gt;</c> otherwise.</param>
+    /// <returns><see langword="true"/> when lifting applies and <paramref name="left"/>/<paramref name="right"/>/<paramref name="liftedResultType"/> were updated.</returns>
+    private bool TryLiftNullableClrOperatorOperands(
+        SyntaxKind opKind,
+        ref BoundExpression left,
+        ref BoundExpression right,
+        TextLocation leftLocation,
+        TextLocation rightLocation,
+        TypeSymbol naturalResultType,
+        out TypeSymbol liftedResultType)
+    {
+        liftedResultType = null;
+
+        bool leftIsNullableValueType = left.Type is NullableTypeSymbol leftNullable
+            && leftNullable.UnderlyingType?.ClrType is { IsValueType: true };
+        bool rightIsNullableValueType = right.Type is NullableTypeSymbol rightNullable
+            && rightNullable.UnderlyingType?.ClrType is { IsValueType: true };
+
+        // A struct-typed same-compilation operand has no static ClrType, so
+        // the `IsValueType: true` check above never matches it directly —
+        // detect that shape via NullableTypeSymbol alone (any nullable
+        // wrapper) so `MyStruct? == MyStruct?` (Stream D) also lifts.
+        bool leftIsNullableStruct = left.Type is NullableTypeSymbol leftStructNullable
+            && leftStructNullable.UnderlyingType is StructSymbol;
+        bool rightIsNullableStruct = right.Type is NullableTypeSymbol rightStructNullable
+            && rightStructNullable.UnderlyingType is StructSymbol;
+
+        leftIsNullableValueType |= leftIsNullableStruct;
+        rightIsNullableValueType |= rightIsNullableStruct;
+
+        if (!leftIsNullableValueType && !rightIsNullableValueType)
+        {
+            return false;
+        }
+
+        var leftLiftedType = leftIsNullableValueType ? (NullableTypeSymbol)left.Type : NullableTypeSymbol.Get(left.Type);
+        var rightLiftedType = rightIsNullableValueType ? (NullableTypeSymbol)right.Type : NullableTypeSymbol.Get(right.Type);
+
+        left = conversions.BindConversion(leftLocation, left, leftLiftedType);
+        right = conversions.BindConversion(rightLocation, right, rightLiftedType);
+
+        liftedResultType = IsClrOperatorLiftedToBool(opKind)
+            ? (TypeSymbol)TypeSymbol.Bool
+            : NullableTypeSymbol.Get(naturalResultType);
+        return true;
+    }
+
+    /// <summary>
     /// Issue #1554: shared fallback that resolves a binary operator via the
     /// user-defined operator path (Stream D) and then the CLR <c>op_*</c> path
     /// (Stream C), in that order, for both the plain binary expression
@@ -1469,15 +1548,28 @@ internal sealed partial class ExpressionBinder
         // the operator's first formal parameter (Parameters[0], so binary ops
         // have Parameters.Length == 2 regardless of which operand declared
         // the operator).
+        //
+        // Issue #2388: the lookup unwraps a `Nullable<T>` operand to `T` so a
+        // custom-equality struct's operator is found even when compared as
+        // `T? == T?` — without the unwrap, `left.Type is StructSymbol` never
+        // matches a `NullableTypeSymbol` and the comparison fell straight
+        // through to an "operator undefined" diagnostic (GS0129).
         var userOpName = OperatorNames.TryGetBinaryName(opKind);
         if (userOpName != null)
         {
+            var leftStructType = left.Type is NullableTypeSymbol leftNullableForStruct
+                ? leftNullableForStruct.UnderlyingType as StructSymbol
+                : left.Type as StructSymbol;
+            var rightStructType = right.Type is NullableTypeSymbol rightNullableForStruct
+                ? rightNullableForStruct.UnderlyingType as StructSymbol
+                : right.Type as StructSymbol;
+
             FunctionSymbol userOp = null;
-            if (left.Type is StructSymbol leftStruct && TypeMemberModel.TryGetStaticMethodIncludingInherited(leftStruct, userOpName, out var leftOp))
+            if (leftStructType != null && TypeMemberModel.TryGetStaticMethodIncludingInherited(leftStructType, userOpName, out var leftOp))
             {
                 userOp = leftOp;
             }
-            else if (right.Type is StructSymbol rightStruct && TypeMemberModel.TryGetStaticMethodIncludingInherited(rightStruct, userOpName, out var rightOp))
+            else if (rightStructType != null && TypeMemberModel.TryGetStaticMethodIncludingInherited(rightStructType, userOpName, out var rightOp))
             {
                 userOp = rightOp;
             }
@@ -1492,6 +1584,11 @@ internal sealed partial class ExpressionBinder
 
             if (userOp != null && userOp.Parameters.Length == 2)
             {
+                if (TryLiftNullableClrOperatorOperands(opKind, ref left, ref right, leftLocation, rightLocation, userOp.Type, out var liftedResultType))
+                {
+                    return new BoundClrBinaryOperatorExpression(null, opKind, left, right, userOp, liftedResultType);
+                }
+
                 var convertedLeft = conversions.BindConversion(leftLocation, left, userOp.Parameters[0].Type);
                 var convertedRight = conversions.BindConversion(rightLocation, right, userOp.Parameters[1].Type);
                 return new BoundCallExpression(null, userOp, ImmutableArray.Create(convertedLeft, convertedRight));
@@ -1503,6 +1600,27 @@ internal sealed partial class ExpressionBinder
         if ((left.Type?.ClrType != null || right.Type?.ClrType != null)
             && ClrOperatorResolution.TryResolveBinary(opKind, left.Type, right.Type, out var clrMethod, out ambiguous))
         {
+            // Issue #2388: `ClrOperatorResolution` matches on
+            // `TypeSymbol.ClrType`, which for a `NullableTypeSymbol` wrapping
+            // a value type is already the UNDERLYING CLR type (see
+            // `NullableTypeSymbol`'s constructor) — so this lookup "succeeds"
+            // for `DateTime? == DateTime?` too, resolving
+            // `DateTime.op_Equality(DateTime, DateTime)` even though the
+            // bound operands remain `Nullable<DateTime>`-typed. Emitting
+            // `EmitExpression(left); EmitExpression(right); call` then left a
+            // `Nullable<T>` on the stack where the callee expects a bare `T`
+            // — exactly the ilverify `StackUnexpected` this issue reports.
+            // Detect that shape here and lift both operands (mixed-mode: wrap
+            // a bare non-nullable side) so the emitter's lifted-binary slot
+            // machinery (`LiftedBinarySlots` / `EmitLiftedNullableClrBinary`)
+            // spills, HasValue-branches, and unwraps before calling the
+            // resolved method — mirroring exactly how the built-in operator
+            // table already lifts `int32? + int32?` et al.
+            if (TryLiftNullableClrOperatorOperands(opKind, ref left, ref right, leftLocation, rightLocation, TypeSymbol.FromClrType(clrMethod.ReturnType), out var liftedClrResultType))
+            {
+                return new BoundClrBinaryOperatorExpression(null, opKind, left, right, clrMethod, liftedClrResultType);
+            }
+
             return new BoundClrBinaryOperatorExpression(
                 null,
                 opKind,

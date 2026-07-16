@@ -3970,7 +3970,7 @@ internal sealed class ReflectionMetadataEmitter
         private readonly Dictionary<BoundStackAllocExpression, int> stackAllocResultSlots = new();
         private readonly Dictionary<BoundExpression, int> indexAssignmentValueSlots = new();
         private readonly Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes = new();
-        private readonly Dictionary<BoundBinaryExpression, LiftedBinarySlots> liftedBinarySlots = new();
+        private readonly Dictionary<BoundExpression, LiftedBinarySlots> liftedBinarySlots = new();
         private readonly Dictionary<BoundBinaryExpression, int> nullableCoalesceSpillSlots = new();
         private readonly Dictionary<VariableSymbol, object> constValues = new();
 
@@ -10226,6 +10226,54 @@ internal sealed class ReflectionMetadataEmitter
             name: this.emitCtx.Metadata.GetOrAddString("get_Value"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         this.cache.NullableUserValueTypeGetValueMemberRefs[underlying] = handle;
+        return handle;
+    }
+
+    /// <summary>
+    /// Issue #2388: gets a MemberRef for
+    /// <c>System.Nullable`1&lt;T&gt;::get_HasValue()</c> where <c>T</c> is a
+    /// user-declared value type emitted in this assembly (a value-kind
+    /// <see cref="StructSymbol"/> or an <see cref="EnumSymbol"/>). Mirrors
+    /// <see cref="GetNullableGetValueMemberRefForUserValueType"/> exactly,
+    /// except the getter returns <c>bool</c> instead of <c>!0</c>. Needed to
+    /// HasValue-branch a nullable-lifted Stream C/D custom-operator call
+    /// (e.g. a same-compilation struct's <c>operator ==</c>) over
+    /// <c>Nullable&lt;UserStruct&gt;</c> operands, where no real CLR
+    /// <see cref="System.Type"/> exists at emit time to resolve the
+    /// reflection-based <see cref="WellKnownReferences.GetNullableGetHasValueReference"/>.
+    /// </summary>
+    /// <param name="nullableOfUserVt">A <c>Nullable&lt;T&gt;</c> over a user value type (enum or value struct).</param>
+    /// <returns>The <c>get_HasValue()</c> MemberRef.</returns>
+    internal MemberReferenceHandle GetNullableGetHasValueMemberRefForUserValueType(NullableTypeSymbol nullableOfUserVt)
+    {
+        if (nullableOfUserVt == null || !NullableLifting.RequiresSymbolicNullableGetValue(nullableOfUserVt))
+        {
+            throw new InvalidOperationException(
+                "GetNullableGetHasValueMemberRefForUserValueType requires Nullable<user enum, value struct, or struct-constrained type parameter>.");
+        }
+
+        var underlying = nullableOfUserVt.UnderlyingType;
+        if (this.cache.NullableUserValueTypeGetHasValueMemberRefs.TryGetValue(underlying, out var cached))
+        {
+            return cached;
+        }
+
+        var parentBlob = new BlobBuilder();
+        this.EncodeTypeSymbol(new BlobEncoder(parentBlob).TypeSpecificationSignature(), nullableOfUserVt);
+        var parent = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob));
+
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                parameterCount: 0,
+                returnType: r => r.Type().Boolean(),
+                parameters: _ => { });
+
+        var handle = this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString("get_HasValue"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        this.cache.NullableUserValueTypeGetHasValueMemberRefs[underlying] = handle;
         return handle;
     }
 
