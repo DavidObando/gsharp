@@ -303,7 +303,7 @@ internal sealed class StateMachineEmitter
         /// state machine's leading type parameters mirror the enclosing generic
         /// type's parameters, so a method type parameter maps to the slot
         /// offset by the enclosing class type-parameter count. Used by
-        /// <see cref="ReflectionMetadataEmitter.activeIteratorStateMachineRemap"/>.
+        /// <see cref="GenericRemapState.ActiveIteratorStateMachineRemap"/>.
         /// </summary>
         public Dictionary<TypeParameterSymbol, int> BuildRemap()
         {

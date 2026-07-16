@@ -1294,7 +1294,7 @@ internal sealed class TypeDefEmitter
             // auto-property (with no declared initializer) needs the
             // synthesized `""` zero-value fallback — otherwise it would keep
             // the CLR default `null`, diverging from the interpreter.
-            if (ReflectionMetadataEmitter.NeedsInstanceFieldInitializerStatements(classSym))
+            if (ConstructorBodyEmitter.NeedsInstanceFieldInitializerStatements(classSym))
             {
                 bodyOffset = this.emitClassDefaultConstructorBodyBytes(classSym, baseCtorToken);
             }
@@ -1380,7 +1380,7 @@ internal sealed class TypeDefEmitter
             // TypeSpec-parented MemberRef (the callback uses
             // ResolveFieldToken; the inline path below uses bare
             // FieldDefs which fail ilverify on a self-instantiation).
-            if (ReflectionMetadataEmitter.NeedsInstanceFieldInitializerStatements(classSym)
+            if (ConstructorBodyEmitter.NeedsInstanceFieldInitializerStatements(classSym)
                 || ReflectionMetadataEmitter.IsUserGenericTypeReference(classSym))
             {
                 bodyOffset = this.emitClassPrimaryConstructorBodyBytes(classSym, baseCtorToken);

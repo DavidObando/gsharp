@@ -58,9 +58,9 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// The assembly-level orchestrators
 /// (<c>EmitReferenceAssemblyAttribute</c>,
 /// <c>EmitAssemblyInteropAttributes</c>, <c>EmitDebuggableAttribute</c>,
-/// <c>EmitNullableContextAttribute</c>) stay on
-/// <see cref="ReflectionMetadataEmitter"/>: they are called once each
-/// from <c>EmitCore</c> and forward into this encoder for the actual
+/// <c>EmitNullableContextAttribute</c>) moved onto
+/// <see cref="AssemblyAttributeEmitter"/> in PR-E-13: they are called once
+/// each from <c>EmitCore</c> and forward into this encoder for the actual
 /// blob writes.
 /// </para>
 /// </remarks>

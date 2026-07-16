@@ -116,7 +116,7 @@ internal sealed partial class MethodBodyEmitter
         this.il.LoadLocal(pinnedSlot);
         this.il.LoadConstantI4(0);
         this.il.OpCode(ILOpCode.Ldelema);
-        this.il.Token(this.outer.GetElementTypeToken(elementType));
+        this.il.Token(this.outer.memberRefs.GetElementTypeToken(elementType));
         this.il.OpCode(ILOpCode.Conv_u);
         this.il.StoreLocal(pointerSlot);
 
@@ -142,7 +142,7 @@ internal sealed partial class MethodBodyEmitter
         var offsetGetter = typeof(System.Runtime.CompilerServices.RuntimeHelpers)
             .GetProperty("OffsetToStringData")!
             .GetGetMethod()!;
-        this.il.Call(this.outer.GetMethodReference(offsetGetter));
+        this.il.Call(this.outer.memberRefs.GetMethodReference(offsetGetter));
         this.il.OpCode(ILOpCode.Add);            // address + OffsetToStringData = &s[0]
 
         this.il.MarkLabel(skipLabel);
@@ -178,7 +178,7 @@ internal sealed partial class MethodBodyEmitter
         this.il.StoreLocal(sourceSlot);
         this.il.LoadLocalAddress(sourceSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.GetMethodReference(getPinnableReference)); // -> T&
+        this.il.Token(this.outer.memberRefs.GetMethodReference(getPinnableReference)); // -> T&
         this.il.StoreLocal(pinnedSlot);          // T& pinned = ref
         this.il.LoadLocal(pinnedSlot);
         this.il.OpCode(ILOpCode.Conv_u);
@@ -287,7 +287,7 @@ internal sealed partial class MethodBodyEmitter
             // at emit time, so fall back to the emitter's user-defined type registry
             // via GetElementTypeToken (which handles both CLR-backed and source-defined
             // types) instead of dereferencing ClrType directly.
-            var catchTypeHandle = this.outer.GetElementTypeToken(clause.ExceptionType);
+            var catchTypeHandle = this.outer.memberRefs.GetElementTypeToken(clause.ExceptionType);
             this.il.ControlFlowBuilder.AddCatchRegion(tryStart, tryEnd, handlerStart, handlerEnd, catchTypeHandle);
         }
     }
@@ -336,14 +336,14 @@ internal sealed partial class MethodBodyEmitter
                 new[] { typeof(Action) });
         }
 
-        this.il.Call(this.outer.GetMethodEntityHandle(run));
+        this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(run));
 
         if (hasScope)
         {
             var listType = typeof(List<System.Threading.Tasks.Task>);
             var add = listType.GetMethod(nameof(List<System.Threading.Tasks.Task>.Add), new[] { typeof(System.Threading.Tasks.Task) });
             this.il.OpCode(ILOpCode.Callvirt);
-            this.il.Token(this.outer.GetMethodReference(add));
+            this.il.Token(this.outer.memberRefs.GetMethodReference(add));
         }
         else
         {
@@ -396,7 +396,7 @@ internal sealed partial class MethodBodyEmitter
             this.il.OpCode(ILOpCode.Ldftn);
             this.il.Token(invokeHandle);
             this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(this.outer.GetCtorReference(funcTaskCtor));
+            this.il.Token(this.outer.memberRefs.GetCtorReference(funcTaskCtor));
         }
         else
         {
@@ -404,7 +404,7 @@ internal sealed partial class MethodBodyEmitter
             this.il.OpCode(ILOpCode.Ldftn);
             this.il.Token(invokeHandle);
             this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(this.outer.GetCtorReference(actionCtor));
+            this.il.Token(this.outer.memberRefs.GetCtorReference(actionCtor));
         }
     }
 
@@ -416,11 +416,11 @@ internal sealed partial class MethodBodyEmitter
         var ctsCtor = typeof(System.Threading.CancellationTokenSource).GetConstructor(Type.EmptyTypes);
 
         this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(this.outer.GetCtorReference(listCtor));
+        this.il.Token(this.outer.memberRefs.GetCtorReference(listCtor));
         this.il.StoreLocal(slots.Tasks);
 
         this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(this.outer.GetCtorReference(ctsCtor));
+        this.il.Token(this.outer.memberRefs.GetCtorReference(ctsCtor));
         this.il.StoreLocal(slots.Cts);
 
         var tryStart = this.il.DefineLabel();
@@ -470,7 +470,7 @@ internal sealed partial class MethodBodyEmitter
             Type.EmptyTypes);
         this.il.LoadLocal(slots.Cts);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(cancel));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(cancel));
         this.il.OpCode(ILOpCode.Rethrow);
         this.il.MarkLabel(catchEnd);
 
@@ -480,7 +480,7 @@ internal sealed partial class MethodBodyEmitter
             Type.EmptyTypes);
         this.il.LoadLocal(slots.Cts);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(dispose));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(dispose));
         this.il.OpCode(ILOpCode.Endfinally);
         this.il.MarkLabel(disposeEnd);
         this.il.MarkLabel(afterNested);
@@ -490,7 +490,7 @@ internal sealed partial class MethodBodyEmitter
             innerTryEnd,
             catchStart,
             catchEnd,
-            (EntityHandle)this.outer.GetTypeReference(typeof(Exception)));
+            (EntityHandle)this.outer.memberRefs.GetTypeReference(typeof(Exception)));
         this.il.ControlFlowBuilder.AddFinallyRegion(outerTryStart, disposeStart, disposeStart, disposeEnd);
     }
 
@@ -510,14 +510,14 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.LoadLocal(slots.Tasks);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(toArray));
-        this.il.Call(this.outer.GetMethodEntityHandle(whenAll));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(toArray));
+        this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(whenAll));
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(getAwaiter));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(getAwaiter));
         this.il.StoreLocal(slots.Awaiter);
         this.il.LoadLocalAddress(slots.Awaiter);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.GetMethodReference(getResult));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(getResult));
     }
 
     private void EmitSelectStatement(BoundSelectStatement node)
@@ -596,10 +596,10 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.LoadLocal(slots.ChannelSlots[index]);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(getReader));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(getReader));
         this.il.LoadLocalAddress(slots.OutSlots[index]);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(tryRead));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(tryRead));
         this.il.Branch(ILOpCode.Brfalse, closedLabel);
         this.EmitStatement(arm.Body);
         this.il.Branch(ILOpCode.Br, endLabel);
@@ -607,11 +607,11 @@ internal sealed partial class MethodBodyEmitter
         this.il.MarkLabel(closedLabel);
         this.il.LoadLocal(slots.ChannelSlots[index]);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(getReader));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(getReader));
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(completion));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(completion));
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(isCompleted));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(isCompleted));
         this.il.Branch(ILOpCode.Brfalse, nextLabel);
         this.EmitZeroInit(slots.OutSlots[index], chType.ElementType, elementClr);
         this.EmitStatement(arm.Body);
@@ -635,10 +635,10 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.LoadLocal(slots.ChannelSlots[index]);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(getWriter));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(getWriter));
         this.il.LoadLocal(slots.ValueSlots[index]);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(tryWrite));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(tryWrite));
         this.il.Branch(ILOpCode.Brfalse, nextLabel);
         this.EmitStatement(arm.Body);
         this.il.Branch(ILOpCode.Br, endLabel);
@@ -667,7 +667,7 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.LoadConstantI4(waitCount);
         this.il.OpCode(ILOpCode.Newarr);
-        this.il.Token(this.outer.GetElementTypeToken(taskType));
+        this.il.Token(this.outer.memberRefs.GetElementTypeToken(taskType));
         this.il.StoreLocal(slots.TasksSlot);
 
         var taskIndex = 0;
@@ -687,15 +687,15 @@ internal sealed partial class MethodBodyEmitter
         }
 
         this.il.LoadLocal(slots.TasksSlot);
-        this.il.Call(this.outer.GetMethodEntityHandle(whenAny));
+        this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(whenAny));
         this.il.StoreLocal(slots.WhenAnyTaskSlot);
         this.il.LoadLocal(slots.WhenAnyTaskSlot);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(getAwaiter));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(getAwaiter));
         this.il.StoreLocal(slots.WhenAnyAwaiterSlot);
         this.il.LoadLocalAddress(slots.WhenAnyAwaiterSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.GetMethodReference(getResult));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(getResult));
         this.il.StoreLocal(slots.CompletedTaskSlot);
     }
 
@@ -716,10 +716,10 @@ internal sealed partial class MethodBodyEmitter
                 new[] { typeof(System.Threading.CancellationToken) });
             this.il.LoadLocal(slots.ChannelSlots[index]);
             this.il.OpCode(ILOpCode.Callvirt);
-            this.il.Token(this.outer.GetMethodReference(getWriter));
+            this.il.Token(this.outer.memberRefs.GetMethodReference(getWriter));
             this.EmitCancellationTokenNone();
             this.il.OpCode(ILOpCode.Callvirt);
-            this.il.Token(this.outer.GetMethodReference(waitToWrite));
+            this.il.Token(this.outer.memberRefs.GetMethodReference(waitToWrite));
         }
         else
         {
@@ -730,16 +730,16 @@ internal sealed partial class MethodBodyEmitter
                 new[] { typeof(System.Threading.CancellationToken) });
             this.il.LoadLocal(slots.ChannelSlots[index]);
             this.il.OpCode(ILOpCode.Callvirt);
-            this.il.Token(this.outer.GetMethodReference(getReader));
+            this.il.Token(this.outer.memberRefs.GetMethodReference(getReader));
             this.EmitCancellationTokenNone();
             this.il.OpCode(ILOpCode.Callvirt);
-            this.il.Token(this.outer.GetMethodReference(waitToRead));
+            this.il.Token(this.outer.memberRefs.GetMethodReference(waitToRead));
         }
 
         this.il.StoreLocal(slots.WaitValueTaskSlot);
         this.il.LoadLocalAddress(slots.WaitValueTaskSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.GetMethodReference(asTask));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(asTask));
     }
 
     private void EmitChannelSendStatement(BoundChannelSendStatement node)
@@ -760,24 +760,24 @@ internal sealed partial class MethodBodyEmitter
 
         this.EmitExpression(node.Channel);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(getWriter));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(getWriter));
 
         this.EmitExpression(node.Value);
         this.EmitCancellationTokenNone();
 
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(writeAsync));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(writeAsync));
 
         this.il.StoreLocal(vtSlot);
         this.il.LoadLocalAddress(vtSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.GetMethodReference(asTaskNonGeneric));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(asTaskNonGeneric));
 
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(getAwaiter));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(getAwaiter));
         this.il.StoreLocal(taSlot);
         this.il.LoadLocalAddress(taSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.GetMethodReference(getResult));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(getResult));
     }
 }

@@ -241,4 +241,19 @@ internal sealed class EmitContext
     /// parameter type on synthesized delegate constructors.
     /// </summary>
     public Type CoreIntPtrType { get; set; }
+
+    /// <summary>
+    /// Gets or sets the declaring type whose synthesized static constructor
+    /// (<c>.cctor</c>) is currently being planned/emitted, or
+    /// <see langword="null"/> when a normal method (or an instance
+    /// <c>.ctor</c>) is being emitted. Issue #1525: taking the address of an
+    /// <c>initonly</c> static field (<c>ldsflda</c>) is only verifiable inside
+    /// that field's declaring type-initializer; the receiver-addressability
+    /// predicate <see cref="ReflectionMetadataEmitter.IsStaticFieldAddressLegalHere"/>
+    /// consults this to decide whether a static readonly value-type field
+    /// receiver must be spilled to a temp (defensive copy) instead of addressed
+    /// in place. Set for the duration of a synthesized <c>.cctor</c> body by
+    /// <c>ConstructorBodyEmitter</c> (PR-E-15).
+    /// </summary>
+    public Symbol CurrentStaticConstructorOwner { get; set; }
 }

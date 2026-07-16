@@ -1,0 +1,1437 @@
+// <copyright file="CSharpToGSharpTranslator.Expressions.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+using System;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Globalization;
+using System.Linq;
+using Cs2Gs.CodeModel.Ast;
+using Cs2Gs.CodeModel.Printing;
+using Cs2Gs.Translator.Loading;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
+using Microsoft.CodeAnalysis.Text;
+
+namespace Cs2Gs.Translator;
+
+public sealed partial class CSharpToGSharpTranslator
+{
+    private sealed partial class DeclarationVisitor
+    {
+        // Issue #1907: C#14's `field` contextual keyword inside a property
+        // accessor is a distinct Roslyn node (FieldExpressionSyntax, NOT an
+        // IdentifierNameSyntax) that binds to the compiler-synthesized backing
+        // field of the enclosing property. TranslateProperty registers a real G#
+        // field name for it before translating any accessor body, so by the time
+        // this runs the lookup always succeeds for a property that legitimately
+        // uses `field`.
+        private GExpression TranslateFieldExpression(FieldExpressionSyntax fieldExpression)
+        {
+            if (this.context.GetSymbolInfo(fieldExpression).Symbol is IFieldSymbol { AssociatedSymbol: IPropertySymbol owner } &&
+                this.state.FieldKeywordBackingFieldNames.TryGetValue(owner, out string backingName))
+            {
+                return new IdentifierExpression(backingName);
+            }
+
+            this.context.ReportUnsupported(
+                fieldExpression,
+                "the C#14 `field` keyword could not be resolved to its property's synthesized backing field (ADR-0115 §B).");
+            return new IdentifierExpression("nil");
+        }
+
+        private GExpression TranslateIdentifierName(IdentifierNameSyntax identifier)
+        {
+            // A switch-expression property-pattern binding (`Circle { Radius: var r }`)
+            // has no G# equivalent; references to the bound local are rewritten to a
+            // member access on the arm's type-pattern designator (`circle.Radius`).
+            if (this.state.PatternBindings.Count > 0 &&
+                this.context.GetSymbolInfo(identifier).Symbol is { } boundSymbol &&
+                this.state.PatternBindings.TryGetValue(boundSymbol, out GExpression replacement))
+            {
+                return replacement;
+            }
+
+            // Inside a lifted owned-struct receiver method (issue #938) a bare
+            // reference to an instance member carries an implicit C# `this`; a
+            // top-level receiver-clause `func` has no implicit receiver, so the
+            // reference must be made explicit through the receiver (`self.X`).
+            if (this.state.CurrentReceiverName != null)
+            {
+                ISymbol symbol = this.context.GetSymbolInfo(identifier).Symbol;
+                if (symbol is { IsStatic: false } &&
+                    symbol.Kind is SymbolKind.Field or SymbolKind.Property or SymbolKind.Method)
+                {
+                    return new MemberAccessExpression(
+                        new IdentifierExpression(this.state.CurrentReceiverName),
+                        SanitizeIdentifier(identifier.Identifier.Text));
+                }
+            }
+
+            // A C# bare sibling static field/property reference (`FfAc3ChannelsTab`)
+            // carries an implicit type qualifier. A G# top-level `func` (e.g. a
+            // lifted extension method whose former `static class` keeps the field
+            // in a `shared { }` block) or `shared` body has no implicit type scope,
+            // so the reference must be qualified through the owning type
+            // (`Ec3Extensions.FfAc3ChannelsTab`) — the field/property analog of the
+            // bare static-call rule (ADR-0115 §B.18). Without this the binder reports
+            // GS0125 (the name is not in scope at top level).
+            if (this.context.GetSymbolInfo(identifier).Symbol is
+                    { IsStatic: true, Kind: SymbolKind.Field or SymbolKind.Property } staticMember &&
+                staticMember.ContainingType is { TypeKind: TypeKind.Class or TypeKind.Struct } owner &&
+                !owner.IsImplicitlyDeclared &&
+                !this.IsStaticUsingTarget(owner) &&
+                !SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, this.entryType?.OriginalDefinition))
+            {
+                return new MemberAccessExpression(
+                    this.StaticQualifierReceiver(owner, identifier.GetLocation()),
+                    SanitizeIdentifier(identifier.Identifier.Text));
+            }
+
+            return new IdentifierExpression(SanitizeIdentifier(identifier.Identifier.Text));
+        }
+
+        // Builds the receiver expression used to qualify a bare sibling static
+        // member reference through its owning type. For a non-generic owner this is
+        // a plain identifier (`Owner`); for a GENERIC owner it must carry the type
+        // arguments (`Owner[T]`) so it does not collide with a sibling non-generic
+        // type of the same simple name (e.g. `static class TreeDecomposition` beside
+        // `class TreeDecomposition<T>`), which would otherwise bind the arity-0 type
+        // and report GS0158 for members that live only on the generic type.
+        private GExpression StaticQualifierReceiver(INamedTypeSymbol owner, Location location)
+        {
+            if (owner.IsGenericType)
+            {
+                return new TypeExpression(this.typeMapper.Map(owner, this.context, location));
+            }
+
+            // Issue #2009: route the non-generic case through the same
+            // `CSharpTypeMapper.QualifiedTypeName` logic the generic branch above
+            // already uses (via `Map`), rather than the owner's bare simple name.
+            // A top-level owner still prints as its bare (sanitized) name, but a
+            // NESTED owner — e.g. the containing class of a C# 14 `extension`
+            // block declared inside another type, or nested arbitrarily deep — is
+            // qualified through its containing-type chain (`Outer.Inner`) whenever
+            // its simple name collides with another source type, matching the
+            // qualification the generic path already gets. Without this, a bare
+            // nested owner name can bind the wrong homonymous type (or fail to
+            // resolve at all) at the call site.
+            GTypeReference mapped = this.typeMapper.Map(owner, this.context, location);
+            string qualifiedName = mapped is NamedTypeReference named ? named.Name : owner.Name;
+            return new IdentifierExpression(qualifiedName);
+        }
+
+        private GExpression TranslateLiteral(LiteralExpressionSyntax literal)
+        {
+            switch (literal.Kind())
+            {
+                case SyntaxKind.NumericLiteralExpression:
+                    // Preserve the original literal spelling (ADR-0115 §B.12): G#
+                    // has no implicit numeric promotion, so a C# `2.0` must stay
+                    // `2.0` (not collapse to `2`, which would be int32 and fail
+                    // `int32 * float64`); hex such as `0xFF0000` is likewise kept
+                    // verbatim. The bound type still classifies the literal kind.
+                    object value = literal.Token.Value;
+                    if (value is float or double or decimal)
+                    {
+                        return LiteralExpression.Float(literal.Token.Text);
+                    }
+
+                    // C# applies an implicit int->double/float promotion at a
+                    // call site (e.g. `M(30)` where the parameter is `double`).
+                    // G# has no such implicit promotion, so the emitter would push
+                    // an int32 where a float64 is expected and produce invalid IL
+                    // (ilverify StackUnexpected). Honor the bound `ConvertedType`
+                    // and emit a float literal so the value matches its target
+                    // type (ADR-0115 §B.12).
+                    if (this.IsConvertedToFloatingPoint(literal))
+                    {
+                        return LiteralExpression.Float(this.ToFloatLiteralText(literal.Token.Value));
+                    }
+
+                    return LiteralExpression.Int(this.NormalizeIntegerLiteralText(literal));
+
+                case SyntaxKind.StringLiteralExpression:
+                    return LiteralExpression.String(literal.Token.ValueText);
+
+                case SyntaxKind.Utf8StringLiteralExpression:
+                    // A UTF-8 string literal `"x"u8` is a `ReadOnlySpan<byte>` of
+                    // the UTF-8 encoding of the text. G# has no `u8` suffix, so emit
+                    // the canonical byte slice literal `[]uint8{ … }` (ADR-0115 §B).
+                    return new ArrayLiteralExpression(
+                        new NamedTypeReference("uint8"),
+                        System.Text.Encoding.UTF8.GetBytes(literal.Token.ValueText)
+                            .Select(b => (GExpression)LiteralExpression.Int($"0x{b:X2}"))
+                            .ToList());
+
+                case SyntaxKind.CharacterLiteralExpression:
+                    return LiteralExpression.Char(literal.Token.ValueText);
+
+                case SyntaxKind.TrueLiteralExpression:
+                    return LiteralExpression.Bool(true);
+
+                case SyntaxKind.FalseLiteralExpression:
+                    return LiteralExpression.Bool(false);
+
+                case SyntaxKind.NullLiteralExpression:
+                    return LiteralExpression.Null();
+
+                case SyntaxKind.DefaultLiteralExpression:
+                    // The target-typed `default` literal maps to G# `default(T)`
+                    // for the converted (target) type when that type is known, so
+                    // the value is self-typed. A bare typeless `default` relies on
+                    // surrounding context for its type, but common positions supply
+                    // none: an inferred `var retval = default` (the C# type was
+                    // erased to the initializer's natural type, which for `default`
+                    // is the target type, so the local-declaration path omits the
+                    // clause and infers — yet bare `default` has nothing to infer
+                    // from) surfaces GS0362. Emitting `default(T)` keeps it valid
+                    // everywhere (ADR-0100). Falls back to bare `default` only when
+                    // the type is genuinely unavailable.
+                    return new DefaultValueExpression(this.ResolveExpressionType(literal));
+
+                default:
+                    this.context.ReportUnsupported(
+                        literal,
+                        $"literal '{literal.Kind()}' has no canonical G# form yet; emitted nil (ADR-0115 §B.12).");
+                    return LiteralExpression.Null();
+            }
+        }
+
+        // C# infers the type of a suffix-less integer literal from its value: a
+        // hex constant such as `0xD800000000000000` is implicitly `ulong`. G#'s
+        // lexer instead defaults to int32/int64 and rejects an out-of-range
+        // literal (GS0004), so when the bound value requires a wider/unsigned
+        // type we append the matching G# suffix (`L`, `UL`, `U`).
+        private string NormalizeIntegerLiteralText(LiteralExpressionSyntax literal)
+        {
+            string text = literal.Token.Text;
+            object value = literal.Token.Value;
+
+            // Respect an explicit suffix already present in the source spelling.
+            if (text.Length > 0 && (text[text.Length - 1] is 'u' or 'U' or 'l' or 'L'))
+            {
+                return text;
+            }
+
+            switch (value)
+            {
+                case ulong:
+                    return text + "UL";
+                case long l when l > int.MaxValue || l < int.MinValue:
+                    return text + "L";
+                case uint u when u > int.MaxValue:
+                    return text + "U";
+                default:
+                    return text;
+            }
+        }
+
+        private bool IsConvertedToFloatingPoint(LiteralExpressionSyntax literal)
+        {
+            TypeInfo info = this.context.GetTypeInfo(literal);
+            ITypeSymbol original = info.Type;
+            ITypeSymbol converted = info.ConvertedType;
+            if (converted is null || SymbolEqualityComparer.Default.Equals(original, converted))
+            {
+                return false;
+            }
+
+            bool originalIsIntegral = original is { SpecialType: SpecialType.System_SByte
+                or SpecialType.System_Byte or SpecialType.System_Int16 or SpecialType.System_UInt16
+                or SpecialType.System_Int32 or SpecialType.System_UInt32 or SpecialType.System_Int64
+                or SpecialType.System_UInt64 };
+            bool convertedIsFloat = converted.SpecialType is SpecialType.System_Single
+                or SpecialType.System_Double;
+            return originalIsIntegral && convertedIsFloat;
+        }
+
+        private string ToFloatLiteralText(object value)
+        {
+            // The token's *spelling* can be hex (`0xFF`), binary (`0b1010`),
+            // digit-separated (`1_000`), or suffixed (`30L`); appending ".0" to
+            // that raw text either produces an invalid G# float (`0xFF.0`,
+            // `30L.0`) or silently misses cases that already contain a stray
+            // 'e'/'E' hex digit (`0xAE`). Deriving the text from the token's
+            // already-parsed *value* instead sidesteps spelling entirely: format
+            // the numeric value as decimal and ensure it carries a fractional
+            // part so the G# lexer classifies it as float64.
+            double number = Convert.ToDouble(value, CultureInfo.InvariantCulture);
+            string text = number.ToString("R", CultureInfo.InvariantCulture);
+            return text.IndexOfAny(new[] { '.', 'e', 'E' }) >= 0 ? text : text + ".0";
+        }
+
+        /// <summary>
+        /// Translates a C# anonymous object creation (<c>new { A = 1, B = 2 }</c>)
+        /// to a G# composite literal constructing a synthesized <c>data
+        /// class</c> (<c>AnonymousType0{A: 1, B: 2}</c>, issue #2282). See
+        /// <see cref="CSharpTypeMapper.GetOrCreateAnonymousDataClass"/> for why
+        /// a synthesized, shape-deduplicated data class supersedes both the
+        /// original positional-tuple lowering (issue #1934, which dropped
+        /// member names) and the intermediate <c>object { }</c> anonymous-value
+        /// literal (issue #2224, which cannot be spelled as an explicit TYPE —
+        /// e.g. a lambda parameter's type inferred from another lambda's
+        /// anonymous-typed return value, issue #2282's actual repro shape). A
+        /// user-declared struct/class composite literal — unlike a tuple
+        /// literal — is explicitly legal inside an expression-tree lambda, so
+        /// this remains safe even when the anonymous type is constructed
+        /// inside one. Each member's type annotation is the C# compiler's own
+        /// inferred anonymous-type property type, written out explicitly — G#
+        /// (unlike C#) has no type inference at this syntax position.
+        /// </summary>
+        private GExpression TranslateAnonymousObjectCreation(AnonymousObjectCreationExpressionSyntax anonymous)
+        {
+            this.context.Report(new TranslationDiagnostic(
+                nameof(SyntaxKind.AnonymousObjectCreationExpression),
+                "anonymous object creation 'new { ... }' maps to a G# composite literal constructing a synthesized 'data class' (issue #2282); gsc reuses the same synthesized type for every structurally-identical anonymous-type shape, preserving named-member access at both the construction site and any type-position use.",
+                anonymous.GetLocation(),
+                TranslationSeverity.Info));
+
+            GTypeReference syntheticType = this.context.GetTypeInfo(anonymous).Type is INamedTypeSymbol anonymousType
+                ? this.typeMapper.GetOrCreateAnonymousDataClass(anonymousType, this.context, anonymous.GetLocation())
+                : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+
+            var fieldInitializers = anonymous.Initializers
+                .Select(i => new FieldInitializer(AnonymousMemberName(i), this.TranslateExpression(i.Expression)))
+                .ToList();
+
+            return new CompositeLiteralExpression(syntheticType, fieldInitializers);
+        }
+
+        /// <summary>
+        /// Resolves an anonymous-object member's projected name: the explicit
+        /// <c>Name = expr</c> form carries it directly; otherwise (C# member-name
+        /// inference, e.g. <c>new { x.Id }</c> or <c>new { id }</c>) it is the
+        /// simple identifier of the initializer expression (a bare identifier or
+        /// the last segment of a member access) — the same rule the C# compiler
+        /// uses to name the synthesized anonymous-type property.
+        /// </summary>
+        /// <param name="declarator">The anonymous-object member declarator.</param>
+        /// <returns>The projected member name.</returns>
+        private static string AnonymousMemberName(AnonymousObjectMemberDeclaratorSyntax declarator)
+        {
+            if (declarator.NameEquals != null)
+            {
+                return declarator.NameEquals.Name.Identifier.Text;
+            }
+
+            return declarator.Expression switch
+            {
+                IdentifierNameSyntax id => id.Identifier.Text,
+                MemberAccessExpressionSyntax member => member.Name.Identifier.Text,
+                MemberBindingExpressionSyntax memberBinding => memberBinding.Name.Identifier.Text,
+                _ => throw new InvalidOperationException(
+                    $"anonymous-object member at {declarator.GetLocation()} has no explicit name and no inferable name (expression kind {declarator.Expression.Kind()})."),
+            };
+        }
+
+        private GExpression TranslateMemberAccess(MemberAccessExpressionSyntax member)
+        {
+            // Issue #2351: a bare (non-invoked) reference to an extension
+            // method's method group (e.g. assigned to a delegate) never goes
+            // through TranslateInvocation, so track its declaring namespace
+            // here too — otherwise a file relying on an implicit/global
+            // `using` for that namespace would translate with no import.
+            if (this.context.GetSymbolInfo(member).Symbol is IMethodSymbol { IsExtensionMethod: true } memberExtMethod)
+            {
+                this.typeMapper.TrackExtensionMethodNamespace(memberExtMethod);
+            }
+
+            // Issue #1879: a C# 14 extension-block member is declared on a
+            // synthetic marker type (`INamedTypeSymbol.IsExtension`); rewrite its
+            // call sites to the real emitted G# shape before falling into the
+            // generic member-access translation below.
+            if (this.context.GetSymbolInfo(member).Symbol is { } extSymbol
+                && TryGetExtensionBlockOwner(extSymbol, out INamedTypeSymbol extOwner))
+            {
+                if (extSymbol.IsStatic)
+                {
+                    // A static extension member is accessed through the EXTENDED
+                    // type's name (`string.Repeat(...)`, `string.Meaning`), but is
+                    // emitted as a plain static member of the declaring class (no
+                    // receiver-clause form exists for statics, ADR-0115 §B.19).
+                    // Rewrite the qualifier to the real owner; the (predefined- or
+                    // named-type) qualifier syntax on the C# side carries no value
+                    // to translate. Issue #2009: use the same fully-qualified
+                    // (nested-type-aware, generic-aware) owner receiver as a bare
+                    // sibling static call/member (`StaticQualifierReceiver`),
+                    // rather than the owner's bare simple name — a bare name is
+                    // wrong when the extension block's containing class is nested
+                    // inside another type or shares its simple name with another
+                    // source type elsewhere in the compilation.
+                    return new MemberAccessExpression(
+                        this.StaticQualifierReceiver(extOwner, member.GetLocation()),
+                        SanitizeIdentifier(member.Name.Identifier.Text));
+                }
+
+                if (extSymbol is IPropertySymbol)
+                {
+                    // `nameof(word.DoubledLength)` binds to the very same property
+                    // symbol as an ordinary read, but `nameof` takes a name
+                    // reference, not a value (G#'s NameOfExpression parses its
+                    // argument as a plain expression and the binder rejects
+                    // anything but a name/member-access/generic-name). Wrapping
+                    // in a zero-arg call here would print `nameof(word.DoubledLength())`,
+                    // which re-parses as a call and is rejected — leave the bare
+                    // member access; its printed name is exactly the lowered
+                    // func's name, so `nameof` still resolves correctly.
+                    if (member.Parent is ArgumentSyntax nameOfArgument && IsNameOfArgument(nameOfArgument))
+                    {
+                        return new MemberAccessExpression(
+                            this.TranslateExpression(member.Expression),
+                            SanitizeIdentifier(member.Name.Identifier.Text));
+                    }
+
+                    // An instance extension property has no receiver-clause form
+                    // in G#'s `prop` grammar and is lowered to a get-only
+                    // receiver-clause `func` of the same name (ADR-0115 §B.19);
+                    // a bare property read becomes a zero-argument call.
+                    GExpression extReceiver = this.TranslateReceiverWithNullForgiveness(member.Expression);
+                    return new InvocationExpression(
+                        new MemberAccessExpression(extReceiver, SanitizeIdentifier(member.Name.Identifier.Text)),
+                        new List<GExpression>(),
+                        null);
+                }
+
+                // An instance extension METHOD needs no rewrite: it is emitted as
+                // a receiver-clause `func`, which is invoked with the same
+                // `receiver.Method(args)` call syntax as the C# source (exactly
+                // like a classic `this T x` extension method), so it falls
+                // through to the generic member-access translation below.
+            }
+
+            // Member access on a bare-identifier element access (`values[i].M`)
+            // previously hit a G# parser ambiguity (#942); that gap is now fixed,
+            // so the construct translates through the normal member-access path.
+            //
+            // When the member binds to an extension method whose `this` parameter
+            // is itself nullable (`this T? x`), the method is *meant* to be invoked
+            // on a possibly-null receiver and handles null internally (e.g.
+            // `Ac4DsiV1.SampleRate()` over `static int? SampleRate(this Ac4DsiV1?)`).
+            // Forgiving the receiver to non-null (`Ac4DsiV1!!`) changes its static
+            // type to the non-null `Ac4DsiV1`, which gsc's extension-method lookup
+            // does not match against the `Ac4DsiV1?` `this` slot (GS0159). Keep the
+            // declared-nullable receiver so the extension resolves.
+            // A C# nullable *value* type (`T?` lowering to `System.Nullable<T>`)
+            // exposes `.Value` and `.HasValue`, but G# models a value-type `T?`
+            // directly (no `Nullable<T>` member surface) and relies on Kotlin-style
+            // smart-casts, so those members do not exist on the G# side. Rewrite
+            // them to the idiomatic G# equivalents (#914):
+            //   * `x.Value`    -> `x!!`      (assert non-null, matching C#'s throw-
+            //                                 if-null semantics; harmless once the
+            //                                 local is already smart-cast-narrowed).
+            //   * `x.HasValue` -> `x != nil` (a plain null test on the raw receiver).
+            // Guard on the receiver's *declared* type being `System.Nullable<T>` so
+            // a user type with a member literally named `Value`/`HasValue` is
+            // unaffected. Nullable *reference* types (`string?`) have a non-
+            // `Nullable<T>` receiver type and are likewise left alone.
+            if (this.context.GetTypeInfo(member.Expression).Type is { } receiverType
+                && receiverType.OriginalDefinition?.SpecialType == SpecialType.System_Nullable_T)
+            {
+                switch (member.Name.Identifier.Text)
+                {
+                    case "Value":
+                        return new NonNullAssertionExpression(this.TranslateExpression(member.Expression));
+                    case "HasValue":
+                        // Parenthesize the null test so it composes correctly
+                        // under any surrounding operator. C# `!x.HasValue` would
+                        // otherwise translate to `!x != nil`, which G# parses as
+                        // `(!x) != nil` (GS0128); `!(x != nil)` is always correct.
+                        return new ParenthesizedExpression(
+                            new BinaryExpression(this.TranslateExpression(member.Expression), "!=", LiteralExpression.Null()));
+                }
+            }
+
+            // Issue #2282 (was #2224, #1934): an anonymous-typed receiver (`new
+            // { ... }`) is a C# reference type, so the flow-based passes below
+            // would otherwise wrap it in a G# `!!` non-null assertion. The
+            // receiver now lowers to a composite literal constructing a
+            // synthesized `data class` — skip forgiveness for anonymous-type
+            // receivers regardless: a `new { ... }` expression's own value can
+            // never be null, so wrapping it would be meaningless (and,
+            // historically, hit a gsc IL-emission gap for the earlier
+            // value-type-based lowering this replaces).
+            bool receiverIsAnonymousType =
+                this.context.GetTypeInfo(member.Expression).Type is { IsAnonymousType: true };
+
+            GExpression target = this.MemberBindsToNullableThisExtension(member) || receiverIsAnonymousType
+                ? this.TranslateExpression(member.Expression)
+                : this.TranslateReceiverWithNullForgiveness(member.Expression);
+            string memberName = member.Name.Identifier.Text;
+
+            // Issue #1905: C# pointer member access (`p->X`) and plain member
+            // access (`p.X`) both parse as MemberAccessExpressionSyntax,
+            // distinguished only by member.Kind() (PointerMemberAccessExpression
+            // for `->`). gsc rejects a bare `p.X` on a pointer receiver
+            // (GS0158) — but gsc's own G# grammar already has a native `->`
+            // operator (sugar for `(*p).X`, ADR-0122 §4 / issue #1034) that its
+            // parser desugars at parse time. Printing the arrow directly reuses
+            // that existing, already-correct G# feature: it handles field,
+            // property, and method-call receivers, chains (`a->b->c`, each
+            // `->` recursing through this method) and lvalue targets
+            // identically to `.`. (The hand-written `(*p).X` form the arrow
+            // desugars to also round-trips as a *read*, but gsc's parser fails
+            // to re-parse that explicit parenthesized form as an *assignment
+            // target* — a separate, narrower parser gap the native `->` sugar
+            // avoids entirely.)
+            bool isArrow = member.IsKind(SyntaxKind.PointerMemberAccessExpression);
+
+            // A C# tuple element access (`item.Name`, `item.Price`) lowers to the
+            // positional G# tuple field `.Item1`/`.Item2`, because G# tuples are
+            // positional and carry no element names (ADR-0115 §B.4). The default
+            // `.ItemN` access already resolves; only named-element access needs the
+            // rewrite, detected via the bound tuple-element field symbol.
+            if (this.context.GetSymbolInfo(member).Symbol is IFieldSymbol field &&
+                field.ContainingType is { IsTupleType: true })
+            {
+                IFieldSymbol positional = field.CorrespondingTupleField ?? field;
+                memberName = positional.Name;
+            }
+
+            // Issue #2282 (was #2224): an anonymous-typed value (`new { A = 1,
+            // B = 2 }`) now lowers to a composite literal constructing a
+            // synthesized `data class` whose primary-constructor parameters
+            // preserve real member names — no rewrite needed; `x.A` stays
+            // `x.A` on the G# side, exactly like the C# anonymous-type property.
+            return new MemberAccessExpression(target, SanitizeIdentifier(memberName), isArrow);
+        }
+
+        /// <summary>
+        /// Translates a member- or element-access <paramref name="recv"/> receiver,
+        /// wrapping it in G#'s postfix non-null assertion (<c>recv!!</c>) when the
+        /// receiver is <em>declared</em> nullable (a <c>T?</c> reference type or
+        /// nullable array) yet Roslyn's nullable <em>flow</em> analysis has proven
+        /// it non-null at this site (e.g. after a guard such as
+        /// <c>if (o.Child == null) return;</c>).
+        /// </summary>
+        /// <remarks>
+        /// C# uses flow-sensitive null analysis, so a guarded nullable property or
+        /// field chain reads as non-null afterwards. G# follows Kotlin-style
+        /// smart-casts that narrow only <em>local</em> variables, never
+        /// property/field-access chains, so emitting <c>Moov.TextTrack.Mdia</c>
+        /// where <c>TextTrack</c> is <c>TrakBox?</c> is rejected with GS0158 (member
+        /// access on a <c>T?</c> receiver) or GS0116 (indexing a <c>T?</c> receiver).
+        /// Reusing Roslyn's own proof, the assertion <c>!!</c> re-establishes the
+        /// non-null fact the guard already proved (#914). The assertion is harmless
+        /// on an already-non-null receiver, but the predicate below stays precise to
+        /// keep the output faithful.
+        /// </remarks>
+        /// <param name="recv">The immediate receiver expression (left of the
+        /// <c>.</c> or <c>[</c>).</param>
+        /// <returns>The translated receiver, wrapped in
+        /// <see cref="NonNullAssertionExpression"/> when flow-proven non-null.</returns>
+        private GExpression TranslateReceiverWithNullForgiveness(ExpressionSyntax recv)
+        {
+            GExpression translated = this.TranslateExpression(recv);
+
+            if (this.ReceiverNeedsNullForgiveness(recv)
+                || this.ReceiverIsNullableReferenceFieldOrProperty(recv))
+            {
+                translated = new NonNullAssertionExpression(translated);
+            }
+
+            return ParenthesizeIfBareNumericLiteral(translated);
+        }
+
+        // ADR-0054: G#'s parser never chains postfix member/index/call access
+        // directly onto a numeric-literal token (`42.ToString()`, `7.Squared()`)
+        // because the lexer would otherwise have to guess whether `.` starts a
+        // float's fractional part or a member access; the grammar resolves this by
+        // simply disallowing the chain and requiring `(42).ToString()` instead. Any
+        // receiver that renders as a bare int/float literal — decimal, hex, octal,
+        // binary, or suffixed (`L`/`UL`/`F`/`D`/`M`) — therefore needs parentheses
+        // wherever it is used as a member-access/call receiver; a non-literal
+        // receiver (identifier, call, existing parenthesized expression, etc.) is
+        // left untouched. A prefix unary on a numeric literal (`-5`, `+5`, `~5`)
+        // still renders with a trailing numeric token, so it is treated the same
+        // (e.g. `"x=" + -5` -> `(-5).ToString()`).
+        private static bool IsBareNumericLiteral(GExpression expr) =>
+            expr is LiteralExpression { Kind: LiteralKind.Int or LiteralKind.Float }
+            || (expr is UnaryExpression u && IsBareNumericLiteral(u.Operand));
+
+        private static GExpression ParenthesizeIfBareNumericLiteral(GExpression expr) =>
+            IsBareNumericLiteral(expr) ? new ParenthesizedExpression(expr) : expr;
+
+        /// <summary>
+        /// True when a member-/element-access <paramref name="recv"/> receiver is a
+        /// nullable-reference <em>field</em> or <em>property</em> (declared <c>T?</c>
+        /// or promoted to nullable, issue #1072) and therefore always needs a G#
+        /// <c>!!</c> assertion — independent of Roslyn flow state.
+        /// </summary>
+        /// <remarks>
+        /// Unlike a local variable, G#'s Kotlin-style smart-casts never narrow a
+        /// property/field-access chain, so <c>field.Member</c> / <c>field[i]</c> on a
+        /// <c>T?</c> field is rejected (GS0158/GS0116) no matter what null-guard
+        /// precedes it. The Oahu corpus compiles nullable-<em>disabled</em>, so
+        /// Roslyn's flow analysis reports these receivers as oblivious (never
+        /// flow-state <c>NotNull</c>) and the flow-driven
+        /// <see cref="ReceiverNeedsNullForgiveness"/> pass leaves them bare.
+        /// Asserting <c>field!!.Member</c> both compiles and preserves C#'s
+        /// throw-on-null semantics for the same access (a null field would
+        /// <c>NullReferenceException</c> in C# too). Locals/parameters keep the
+        /// flow-proven path, since G# does smart-cast them; comparison operands and
+        /// <c>?.</c> receivers are routed elsewhere and never reach this pass.
+        /// </remarks>
+        private bool ReceiverIsNullableReferenceFieldOrProperty(ExpressionSyntax recv)
+        {
+            if (recv is PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
+                or ThisExpressionSyntax
+                or BaseExpressionSyntax
+                or LiteralExpressionSyntax
+                or ConditionalAccessExpressionSyntax)
+            {
+                return false;
+            }
+
+            ISymbol symbol = this.context.GetSymbolInfo(recv).Symbol;
+
+            // Issue #2113: in a nullable-OBLIVIOUS compilation the whole-program
+            // taint analysis may promote a LOCAL or PARAMETER receiver to `T?`.
+            // gsc smart-casts locals only after a flow-proven guard (inert under
+            // oblivious metadata), so an unguarded `x.Member` / `x[i]` / `for … in
+            // x` on such a receiver is rejected (GS0158/GS0116). Assert `x!!` to
+            // both compile and preserve C#'s throw-on-null semantics for the same
+            // access. Gated to oblivious so nullable-enabled projects (whose
+            // locals gsc DOES smart-cast) keep their flow-driven path untouched.
+            if (this.IsObliviousCompilation()
+                && symbol is ILocalSymbol or IParameterSymbol
+                && this.ShouldPromoteToNullableReference(symbol))
+            {
+                return true;
+            }
+
+            // Issue #2113 follow-up: a value produced by an EXTERNAL (metadata)
+            // member compiled WITHOUT a nullable context is oblivious — Roslyn
+            // reports its reference-type return/type as `NullableAnnotation.None`
+            // — and gsc maps every such oblivious external reference type to `T?`.
+            // A method-call/property/field receiver like `searcher.Get()` (from an
+            // unannotated package, e.g. System.Management) is therefore rejected on
+            // `recv.Member` / `recv[i]` / `for … in recv` (GS0158/GS0116) even
+            // though C# accepts it (it would `NullReferenceException` on null just
+            // the same). Assert `recv!!` to compile and preserve that throw-on-null
+            // behavior. Gated to oblivious so nullable-enabled projects — whose
+            // external refs carry real annotations — are untouched.
+            if (this.IsObliviousCompilation()
+                && (IsObliviousExternalNullableMember(symbol)
+                    || this.LocalInitializedFromObliviousExternalNullable(symbol)))
+            {
+                return true;
+            }
+
+            ITypeSymbol declared = symbol switch
+            {
+                IPropertySymbol property => property.Type,
+                IFieldSymbol field => field.Type,
+                _ => null,
+            };
+
+            if (declared is not { IsReferenceType: true })
+            {
+                return false;
+            }
+
+            return declared.NullableAnnotation == NullableAnnotation.Annotated
+                || this.ShouldPromoteToNullableReference(symbol);
+        }
+
+        // Issue #2113: true for a nullable-oblivious compilation
+        // (NullableContextOptions.Disable) — the only mode in which the
+        // whole-program taint analysis runs and its declaration/receiver
+        // adjustments apply. A nullable-enabled compilation is byte-identical to
+        // pre-#2113 behavior.
+        private bool IsObliviousCompilation() =>
+            this.context.Compilation.Options.NullableContextOptions == NullableContextOptions.Disable;
+
+        // Issue #2113 follow-up: true when <paramref name="symbol"/> is an EXTERNAL
+        // (metadata) method/property/field whose reference-type return/type is
+        // oblivious (<c>NullableAnnotation.None</c>, i.e. the declaring assembly was
+        // compiled without a nullable context, e.g. System.Management). gsc maps
+        // every such oblivious external reference type to <c>T?</c>, so a value
+        // read from one is nullable from gsc's point of view. Restricted to
+        // external symbols because a SOURCE symbol in an oblivious compilation is
+        // also <c>None</c> but its nullability is decided by the whole-program
+        // taint analysis instead, not treated as unconditionally nullable.
+        private static bool IsObliviousExternalNullableMember(ISymbol symbol)
+        {
+            if (symbol is not (IMethodSymbol or IPropertySymbol or IFieldSymbol)
+                || !symbol.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+            {
+                return false;
+            }
+
+            // Use the member's ORIGINAL (unsubstituted) return/type: gsc maps a
+            // member to `T?` based on the nullable context of the assembly that
+            // DECLARES it, not on a type argument the consumer supplies. An
+            // annotated BCL member like `IReadOnlyList<T>.this[int]` returns the
+            // type parameter `T` (excluded below), so `list[i]` stays non-null even
+            // in oblivious consumer code — only a member whose own declared return
+            // is a concrete oblivious reference type (e.g. System.Management's
+            // `ManagementObjectSearcher.Get()` -> `ManagementObjectCollection`) is
+            // treated as nullable.
+            ISymbol original = symbol.OriginalDefinition;
+            ITypeSymbol type = original switch
+            {
+                IMethodSymbol m => m.ReturnType,
+                IPropertySymbol p => p.Type,
+                IFieldSymbol f => f.Type,
+                _ => null,
+            };
+
+            return type is { IsReferenceType: true }
+                and not ITypeParameterSymbol
+                && type.NullableAnnotation == NullableAnnotation.None;
+        }
+
+        // Issue #2113 follow-up: true when <paramref name="symbol"/> is a `let`
+        // local whose type is inferred from an initializer that reads an oblivious
+        // external nullable member (e.g. `let coll = searcher.Get()`). gsc infers
+        // such a local as `T?`, so a `coll.Member` / `for … in coll` use needs a
+        // `!!` — but promoting the local's DECLARATION to `T?` cascades
+        // nullable-conversion errors at its other (non-null) uses, so the
+        // assertion is applied only here at the receiver/foreach-source use site.
+        private bool LocalInitializedFromObliviousExternalNullable(ISymbol symbol)
+        {
+            if (symbol is not ILocalSymbol local)
+            {
+                return false;
+            }
+
+            foreach (SyntaxReference reference in local.DeclaringSyntaxReferences)
+            {
+                if (reference.GetSyntax() is VariableDeclaratorSyntax { Initializer.Value: { } initializer }
+                    && IsObliviousExternalNullableMember(
+                        this.context.GetSymbolInfo(initializer).Symbol))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        // True when <paramref name="member"/> binds to an extension method whose
+        // (reduced) `this` parameter is nullable-annotated (`this T? x`). Such a
+        // method is designed to accept a null receiver, so the translated call must
+        // keep the declared-nullable receiver rather than forgive it to non-null.
+        private bool MemberBindsToNullableThisExtension(MemberAccessExpressionSyntax member)
+        {
+            if (this.context.GetSymbolInfo(member).Symbol is not IMethodSymbol method)
+            {
+                return false;
+            }
+
+            IMethodSymbol unreduced = method.ReducedFrom ?? method;
+            if (!unreduced.IsExtensionMethod || unreduced.Parameters.Length == 0)
+            {
+                return false;
+            }
+
+            IParameterSymbol thisParameter = unreduced.Parameters[0];
+            return thisParameter.Type.IsReferenceType
+                ? thisParameter.NullableAnnotation == NullableAnnotation.Annotated
+                : thisParameter.Type.OriginalDefinition?.SpecialType == SpecialType.System_Nullable_T;
+        }
+
+        // Issue #1354: a value-position read (a `return` expression or a
+        // conditional-expression arm) of a declared-`T?`/promoted-to-`T?` symbol
+        // that Roslyn's flow analysis has narrowed to non-null needs a `!!`
+        // assertion to satisfy a non-null target. G# does not smart-cast
+        // property/field chains, so unlike the receiver pass this also covers
+        // bare reads consumed as values (`return Continuation` /
+        // `cond ? a : Continuation`). The shared <see cref="ReceiverNeedsNullForgiveness"/>
+        // predicate already excludes null-comparison operands (flow there is not
+        // NotNull), `?.` receivers, `this`/`base`, and literals.
+        private GExpression TranslateValueWithNullForgiveness(ExpressionSyntax value)
+        {
+            GExpression translated = this.TranslateExpression(value);
+
+            if (this.ReceiverNeedsNullForgiveness(value))
+            {
+                return new NonNullAssertionExpression(translated);
+            }
+
+            return translated;
+        }
+
+        /// <summary>
+        /// Determines whether <paramref name="recv"/> is a declared-nullable
+        /// reference receiver that Roslyn's flow analysis has narrowed to non-null,
+        /// and therefore needs a G# <c>!!</c> assertion (see
+        /// <see cref="TranslateReceiverWithNullForgiveness"/>).
+        /// </summary>
+        private bool ReceiverNeedsNullForgiveness(ExpressionSyntax recv)
+        {
+            // `expr!` already lowers to a `NonNullAssertionExpression`; never
+            // double-assert. `this`/`base`, a null literal, and a `?.` conditional
+            // access receiver are handled by their own paths and are not
+            // declared-nullable property/field chains.
+            if (recv is PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
+                or ThisExpressionSyntax
+                or BaseExpressionSyntax
+                or LiteralExpressionSyntax
+                or ConditionalAccessExpressionSyntax)
+            {
+                return false;
+            }
+
+            // Issue #2164: the classic lazy-singleton pattern initializes a
+            // nullable static/instance field (or auto-property) under a null
+            // guard (`if (F == null) { F = new(); } ... return F;` / `F ??= …;`),
+            // so `F` is provably non-null at every use dominated by the guard.
+            // gsc (by design, Kotlin-style) smart-casts only LOCALS, never
+            // fields/properties, so the guarded read `T? -> T` is rejected
+            // (GS0155). The migrated corpus is nullable-OBLIVIOUS, so Roslyn's
+            // flow state is empty and the flow-based path below never fires;
+            // detect the guard from SYNTAX and assert `F!!` instead.
+            if (this.IsLazyInitGuardedFieldUse(recv))
+            {
+                return true;
+            }
+
+            // Issue #2202: `if (F == null) {…} else { …F… }` / `F == null ? … : …F…`
+            // (and the negated forms) narrow `F` to non-null on the guarded
+            // branch — same syntactic-guard rationale as the lazy-init case
+            // above, for a plain null-check guard instead of a lazy-init one.
+            if (this.IsNullGuardNarrowedFieldUse(recv))
+            {
+                return true;
+            }
+
+            // Issue #2202: a nullable-tainted field/property read in an UNGUARDED
+            // arm of a conditional/switch expression, when that conditional is the
+            // (possibly parenthesized) body of a property/method whose return type
+            // was deliberately kept non-null by the oblivious analyzer's
+            // property-contract / forwarding-exclusion guardrail (#1354 / #2167),
+            // AND a sibling arm in the same conditional IS narrowed by a null-check
+            // guard. The original C# accepted this implicitly (oblivious, no
+            // enforcement); cs2gs keeps the declared return non-null and the sibling
+            // is already forgiven, so forgiving this arm too is the minimal
+            // assertion needed to compile the property without regressing safety.
+            if (this.IsUnguardedSiblingOfNullGuardedArmInReturnPreservingBody(recv))
+            {
+                return true;
+            }
+
+            // Issue #2202: a call (or property/field read) whose result comes from
+            // an EXTERNAL (metadata) member compiled without a nullable context is
+            // oblivious — Roslyn reports its reference-type return/type as
+            // `NullableAnnotation.None` — and gsc maps every such oblivious
+            // external reference type to `T?` (see ClrNullability.cs). When such a
+            // value appears as a return/expression-body result in an oblivious
+            // compilation, gsc will require `T?` but the C# source assigned no
+            // nullability (oblivious); assert `!!` to bridge the gap. This mirrors
+            // the RECEIVER-position handling in ReceiverIsNullableReferenceFieldOrProperty
+            // (issue #2113) but for VALUE positions (return statements, expression
+            // bodies). Restricted to oblivious compilations so nullable-enabled
+            // projects — whose external refs carry real annotations — are untouched.
+            if (this.IsObliviousCompilation()
+                && IsObliviousExternalNullableMember(this.context.GetSymbolInfo(recv).Symbol))
+            {
+                return true;
+            }
+
+            // Flow analysis must have proven the receiver non-null at this site.
+            if (this.context.GetTypeInfo(recv).Nullability.FlowState != NullableFlowState.NotNull)
+            {
+                return false;
+            }
+
+            ISymbol symbol = this.context.GetSymbolInfo(recv).Symbol;
+
+            // Static member access (`Type.StaticMember`) and namespace-qualified
+            // names carry a type/namespace receiver, not a value: never assert.
+            if (symbol is ITypeSymbol or INamespaceSymbol or null)
+            {
+                return false;
+            }
+
+            // Inspect the receiver's *declared* type. The flow-collapsed
+            // `Nullability.Annotation` reports NotAnnotated once flow proves
+            // non-null, so it cannot distinguish a declared `T?` from a `T`; the
+            // declaring symbol's type is the reliable source.
+            ITypeSymbol declared = symbol switch
+            {
+                IPropertySymbol property => property.Type,
+                IFieldSymbol field => field.Type,
+                ILocalSymbol local => local.Type,
+                IParameterSymbol parameter => parameter.Type,
+                IMethodSymbol method => method.ReturnType,
+                _ => null,
+            };
+
+            // Focus on the GS0158/GS0116 cases: nullable reference types and
+            // nullable arrays. Nullable value types (`int?`) take the `.Value`/
+            // `.HasValue` path and are left untouched.
+            if (declared is not { IsReferenceType: true })
+            {
+                return false;
+            }
+
+            // A declared-nullable receiver (`T?`) flow-proven non-null needs `!!`.
+            // A declared non-null receiver that this pass PROMOTED to `T?`
+            // (issue #1072: null-checked param/field/local) is rendered nullable
+            // too, so its flow-proven uses need the same assertion for consistency.
+            return declared.NullableAnnotation == NullableAnnotation.Annotated
+                || this.ShouldPromoteToNullableReference(symbol);
+        }
+
+        // Issue #2164: true when <paramref name="recv"/> reads a nullable
+        // (`T?`) field/property that is lazily initialized under a dominating
+        // null guard, so it is provably non-null here and needs an explicit
+        // `!!` (gsc never smart-casts fields/properties). The decision is purely
+        // syntactic because the migrated corpus compiles nullable-oblivious.
+        private bool IsLazyInitGuardedFieldUse(ExpressionSyntax recv)
+        {
+            if (!this.TryGetEmittedNullableFieldOrProperty(recv, out ISymbol symbol))
+            {
+                return false;
+            }
+
+            return this.IsDominatedByLazyInitGuard(recv, symbol);
+        }
+
+        // Issue #2202: shared prerequisite for the lazy-init-guard and
+        // null-check-guard `!!` heuristics below — <paramref name="recv"/> must
+        // be a bare/qualified read of a field or property that G# actually
+        // emits as `T?` (declared nullable, or promoted to nullable by the
+        // oblivious taint analysis). A read that is itself the LHS of an
+        // assignment, the operand of a null comparison, or a `nameof` argument
+        // is handled by other paths and is never a value read a guard narrows.
+        private bool TryGetEmittedNullableFieldOrProperty(ExpressionSyntax recv, out ISymbol symbol)
+        {
+            symbol = this.context.GetSymbolInfo(recv).Symbol;
+            if (symbol is not (IFieldSymbol or IPropertySymbol))
+            {
+                symbol = null;
+                return false;
+            }
+
+            // The field/property must be emitted `T?` in G# — either declared
+            // nullable or promoted to nullable by this translator (the taint
+            // analysis / #1072 null-usage rules). Otherwise there is no `T? -> T`
+            // to forgive and asserting `!!` on a non-null value is wrong.
+            ITypeSymbol declared = symbol switch
+            {
+                IFieldSymbol field => field.Type,
+                IPropertySymbol property => property.Type,
+                _ => null,
+            };
+
+            if (declared is not { IsReferenceType: true })
+            {
+                symbol = null;
+                return false;
+            }
+
+            bool emittedNullable = declared.NullableAnnotation == NullableAnnotation.Annotated
+                || this.ShouldPromoteToNullableReference(symbol);
+            if (!emittedNullable)
+            {
+                symbol = null;
+                return false;
+            }
+
+            return true;
+        }
+
+        // Walks outward from the statement containing <paramref name="use"/> to
+        // the enclosing accessor/method boundary, looking for a preceding
+        // statement (in the same block or an enclosing one, e.g. a `lock` body)
+        // that lazily initializes <paramref name="symbol"/> to a non-null value.
+        // Because a lazy-init guard leaves `symbol` non-null on BOTH the taken
+        // and skipped paths, every later use it dominates is non-null.
+        private bool IsDominatedByLazyInitGuard(ExpressionSyntax use, ISymbol symbol)
+        {
+            StatementSyntax useStatement = use.FirstAncestorOrSelf<StatementSyntax>();
+            if (useStatement == null)
+            {
+                return false;
+            }
+
+            for (SyntaxNode node = useStatement; node != null; node = node.Parent)
+            {
+                if (node.Parent is BlockSyntax block)
+                {
+                    foreach (StatementSyntax statement in block.Statements)
+                    {
+                        if (statement == node)
+                        {
+                            break;
+                        }
+
+                        if (this.IsLazyInitGuardStatement(statement, symbol))
+                        {
+                            return true;
+                        }
+                    }
+                }
+
+                // Stop at the enclosing accessor / method / local-function body:
+                // dominance across a member boundary is not analyzed here.
+                if (node is AccessorDeclarationSyntax
+                    or BaseMethodDeclarationSyntax
+                    or LocalFunctionStatementSyntax
+                    or AnonymousFunctionExpressionSyntax
+                    or ArrowExpressionClauseSyntax)
+                {
+                    break;
+                }
+            }
+
+            return false;
+        }
+
+        // True when <paramref name="statement"/> is one of the lazy-init guard
+        // shapes that leaves <paramref name="symbol"/> non-null afterwards:
+        //   • `if (F == null) { F = expr; }` / `if (F is null) { F = expr; }`
+        //   • `F ??= expr;`
+        // (`expr` must not itself be a `null` literal). Lock-wrapped variants are
+        // covered because the enclosing walk descends into the `lock` body block.
+        private bool IsLazyInitGuardStatement(StatementSyntax statement, ISymbol symbol)
+        {
+            switch (statement)
+            {
+                case IfStatementSyntax ifStatement
+                    when this.IsNullCheckOf(ifStatement.Condition, symbol):
+                    return this.AssignsSymbolNonNull(ifStatement.Statement, symbol);
+
+                case ExpressionStatementSyntax { Expression: AssignmentExpressionSyntax coalesce }
+                    when coalesce.IsKind(SyntaxKind.CoalesceAssignmentExpression)
+                    && this.BindsTo(coalesce.Left, symbol)
+                    && !IsNullOrSuppressedNull(coalesce.Right):
+                    return true;
+
+                default:
+                    return false;
+            }
+        }
+
+        // `F == null` / `null == F` / `F is null` (the null-path condition of a
+        // lazy-init guard), where `F` binds to <paramref name="symbol"/>.
+        private bool IsNullCheckOf(ExpressionSyntax condition, ISymbol symbol)
+        {
+            condition = StripParentheses(condition);
+
+            switch (condition)
+            {
+                case BinaryExpressionSyntax binary
+                    when binary.IsKind(SyntaxKind.EqualsExpression):
+                    return (IsNullLiteral(binary.Right) && this.BindsTo(binary.Left, symbol))
+                        || (IsNullLiteral(binary.Left) && this.BindsTo(binary.Right, symbol));
+
+                case IsPatternExpressionSyntax isPattern
+                    when this.BindsTo(isPattern.Expression, symbol):
+                    return IsNullConstantPattern(isPattern.Pattern)
+                        && isPattern.Pattern is not UnaryPatternSyntax;
+
+                default:
+                    return false;
+            }
+        }
+
+        // `F != null` / `null != F` / `F is not null` — the negation of
+        // <see cref="IsNullCheckOf"/>, where `F` binds to <paramref name="symbol"/>.
+        private bool IsNonNullCheckOf(ExpressionSyntax condition, ISymbol symbol)
+        {
+            condition = StripParentheses(condition);
+
+            switch (condition)
+            {
+                case BinaryExpressionSyntax binary
+                    when binary.IsKind(SyntaxKind.NotEqualsExpression):
+                    return (IsNullLiteral(binary.Right) && this.BindsTo(binary.Left, symbol))
+                        || (IsNullLiteral(binary.Left) && this.BindsTo(binary.Right, symbol));
+
+                case IsPatternExpressionSyntax isPattern
+                    when this.BindsTo(isPattern.Expression, symbol):
+                    return IsNullConstantPattern(isPattern.Pattern)
+                        && isPattern.Pattern is UnaryPatternSyntax;
+
+                default:
+                    return false;
+            }
+        }
+
+        // Issue #2202: true when <paramref name="use"/> reads a nullable
+        // (`T?`) field/property from within the branch of an enclosing
+        // `if (F == null) {…} else { …F… }` / `if (F != null) { …F… }` statement
+        // or `F == null ? … : …F…` / `F != null ? …F… : …` conditional expression
+        // whose condition directly null-checks that same field/property — so
+        // `F` is provably non-null on that branch, and gsc (by design,
+        // Kotlin-style) never smart-casts fields/properties across the guard.
+        // The migrated corpus is nullable-oblivious, so Roslyn's own flow state
+        // is empty and the flow-based check below never proves this; the guard
+        // is instead detected from SYNTAX, mirroring
+        // <see cref="IsLazyInitGuardedFieldUse"/>.
+        private bool IsNullGuardNarrowedFieldUse(ExpressionSyntax use)
+        {
+            if (!this.TryGetEmittedNullableFieldOrProperty(use, out ISymbol symbol))
+            {
+                return false;
+            }
+
+            for (SyntaxNode node = use; node != null; node = node.Parent)
+            {
+                switch (node.Parent)
+                {
+                    // An `else` branch's statement is nested one level deeper
+                    // than the `if` itself — its direct parent is the
+                    // `ElseClauseSyntax`, not the `IfStatementSyntax`.
+                    case ElseClauseSyntax elseClause
+                        when elseClause.Parent is IfStatementSyntax ifStatement
+                            && node == elseClause.Statement
+                            && this.IsNullCheckOf(ifStatement.Condition, symbol):
+                        return true;
+
+                    case IfStatementSyntax ifStatement
+                        when node == ifStatement.Statement
+                            && this.IsNonNullCheckOf(ifStatement.Condition, symbol):
+                        return true;
+
+                    case ConditionalExpressionSyntax ternary
+                        when node == ternary.WhenFalse
+                            && this.IsNullCheckOf(ternary.Condition, symbol):
+                        return true;
+
+                    case ConditionalExpressionSyntax ternary
+                        when node == ternary.WhenTrue
+                            && this.IsNonNullCheckOf(ternary.Condition, symbol):
+                        return true;
+                }
+
+                // Stop at the enclosing accessor / method / local-function /
+                // lambda / arrow-body boundary: a guard cannot narrow a use
+                // across a member boundary.
+                if (node is AccessorDeclarationSyntax
+                    or BaseMethodDeclarationSyntax
+                    or LocalFunctionStatementSyntax
+                    or AnonymousFunctionExpressionSyntax
+                    or ArrowExpressionClauseSyntax)
+                {
+                    break;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Issue #2202: true when <paramref name="use"/> reads a nullable-tainted
+        /// field/property as an UNGUARDED arm of a conditional/switch expression
+        /// whose enclosing property/method return type was deliberately preserved
+        /// non-null (the oblivious-analyzer's property-contract / forwarding-
+        /// exclusion guardrail, issues #1354 / #2167), AND at least one sibling arm
+        /// in the same conditional is provably null-guarded (via
+        /// <see cref="IsNullGuardNarrowedFieldUse"/>).
+        /// </summary>
+        /// <remarks>
+        /// Scoping constraints that prevent this from becoming a blanket forgiveness:
+        /// <list type="bullet">
+        ///   <item>Oblivious compilation only (nullable-enabled projects untouched).</item>
+        ///   <item><paramref name="use"/> must be a field/property emitted <c>T?</c>.</item>
+        ///   <item>The conditional must be the (possibly parenthesized / return-wrapped)
+        ///     entire body of the enclosing property/method.</item>
+        ///   <item>The enclosing property/method's return type must NOT be promoted to
+        ///     nullable — only the deliberate "return kept non-null" pattern qualifies.</item>
+        ///   <item>A sibling arm must already be narrowed by a null-check guard — so
+        ///     this rule fires only in the specific forwarding-two-nullable-properties
+        ///     pattern where one is already proven safe and the other is trusted by
+        ///     the original C# (oblivious) code.</item>
+        /// </list>
+        /// </remarks>
+        private bool IsUnguardedSiblingOfNullGuardedArmInReturnPreservingBody(ExpressionSyntax use)
+        {
+            if (!this.IsObliviousCompilation())
+            {
+                return false;
+            }
+
+            if (!this.TryGetEmittedNullableFieldOrProperty(use, out _))
+            {
+                return false;
+            }
+
+            // Walk upward (stripping parentheses) to find the enclosing
+            // ConditionalExpressionSyntax or SwitchExpressionSyntax whose arm
+            // this use belongs to, and confirm that the use IS an arm (not the
+            // condition / governing expression).
+            (ExpressionSyntax conditional, ExpressionSyntax[] siblingArms) =
+                this.FindEnclosingConditionalAndSiblings(use);
+            if (conditional == null)
+            {
+                return false;
+            }
+
+            // At least one sibling arm must be narrowed by a null-check guard
+            // (i.e., it would get `!!` from `IsNullGuardNarrowedFieldUse`). This
+            // ensures we only fire for the two-property-forwarding pattern where
+            // one arm is already proven safe — not an arbitrary unguarded value.
+            bool anySiblingGuarded = false;
+            foreach (ExpressionSyntax sibling in siblingArms)
+            {
+                ExpressionSyntax stripped = StripParentheses(sibling);
+                if (this.TryGetEmittedNullableFieldOrProperty(stripped, out ISymbol siblingSymbol)
+                    && this.IsSiblingArmNullGuarded(stripped, siblingSymbol, conditional))
+                {
+                    anySiblingGuarded = true;
+                    break;
+                }
+            }
+
+            if (!anySiblingGuarded)
+            {
+                return false;
+            }
+
+            // The conditional must be the (possibly parenthesized / return-wrapped)
+            // entire body of an enclosing property or method, and that member's
+            // return type must NOT be promoted to nullable by the oblivious
+            // analyzer (i.e., it was deliberately kept non-null).
+            return this.IsBodyOfReturnPreservingMember(conditional);
+        }
+
+        // Walks outward from <paramref name="use"/> through parentheses to find
+        // the nearest enclosing ConditionalExpressionSyntax or
+        // SwitchExpressionSyntax whose arm the use belongs to. Returns the
+        // conditional and the sibling arms (all arms EXCEPT the one containing
+        // <paramref name="use"/>). Returns (null, null) if not found.
+        private (ExpressionSyntax Conditional, ExpressionSyntax[] Siblings)
+            FindEnclosingConditionalAndSiblings(ExpressionSyntax use)
+        {
+            for (SyntaxNode node = use; node != null; node = node.Parent)
+            {
+                switch (node.Parent)
+                {
+                    case ConditionalExpressionSyntax ternary:
+                        if (node == ternary.WhenTrue || IsDescendantOfArmViaParens(use, ternary.WhenTrue))
+                        {
+                            return (ternary, new[] { ternary.WhenFalse });
+                        }
+
+                        if (node == ternary.WhenFalse || IsDescendantOfArmViaParens(use, ternary.WhenFalse))
+                        {
+                            return (ternary, new[] { ternary.WhenTrue });
+                        }
+
+                        // The use is in the condition, not an arm.
+                        return (null, null);
+
+                    case SwitchExpressionSyntax switchExpr:
+                        var siblings = new List<ExpressionSyntax>();
+                        bool found = false;
+                        foreach (SwitchExpressionArmSyntax arm in switchExpr.Arms)
+                        {
+                            if (arm.Expression == node || IsDescendantOfArmViaParens(use, arm.Expression))
+                            {
+                                found = true;
+                            }
+                            else
+                            {
+                                siblings.Add(arm.Expression);
+                            }
+                        }
+
+                        return found ? (switchExpr, siblings.ToArray()) : (null, null);
+                }
+
+                // Stop at member boundary.
+                if (node is AccessorDeclarationSyntax
+                    or BaseMethodDeclarationSyntax
+                    or LocalFunctionStatementSyntax
+                    or AnonymousFunctionExpressionSyntax
+                    or ArrowExpressionClauseSyntax)
+                {
+                    break;
+                }
+            }
+
+            return (null, null);
+        }
+
+        // True when <paramref name="descendant"/> is nested inside
+        // <paramref name="arm"/> through parenthesized expressions only.
+        private static bool IsDescendantOfArmViaParens(SyntaxNode descendant, ExpressionSyntax arm)
+        {
+            for (SyntaxNode node = descendant; node != null; node = node.Parent)
+            {
+                if (node == arm)
+                {
+                    return true;
+                }
+
+                if (node.Parent is not ParenthesizedExpressionSyntax && node != descendant)
+                {
+                    return false;
+                }
+            }
+
+            return false;
+        }
+
+        // True when <paramref name="armExpr"/> (a field/property read in a sibling
+        // arm) is narrowed by the null-check guard in the enclosing
+        // <paramref name="conditional"/>. Mirrors the specific-case logic of
+        // <see cref="IsNullGuardNarrowedFieldUse"/> but checks against a known
+        // conditional rather than walking upward.
+        private bool IsSiblingArmNullGuarded(
+            ExpressionSyntax armExpr,
+            ISymbol symbol,
+            ExpressionSyntax conditional)
+        {
+            if (conditional is ConditionalExpressionSyntax ternary)
+            {
+                // WhenFalse position guarded by `X == null ? … : X` / `X is null ? … : X`
+                if (armExpr == StripParentheses(ternary.WhenFalse)
+                    && this.IsNullCheckOf(ternary.Condition, symbol))
+                {
+                    return true;
+                }
+
+                // WhenTrue position guarded by `X != null ? X : …` / `X is not null ? X : …`
+                if (armExpr == StripParentheses(ternary.WhenTrue)
+                    && this.IsNonNullCheckOf(ternary.Condition, symbol))
+                {
+                    return true;
+                }
+            }
+
+            // Switch expressions do not have a single condition narrowing a
+            // specific arm in the same way; leave unsupported for now.
+            return false;
+        }
+
+        // True when <paramref name="conditional"/> is the (possibly parenthesized
+        // / return-wrapped) entire body of a property or method whose declared
+        // return type was NOT promoted to nullable by the oblivious-nullability
+        // analyzer — i.e., the analyzer deliberately preserved it non-null.
+        private bool IsBodyOfReturnPreservingMember(ExpressionSyntax conditional)
+        {
+            // Walk up through parentheses and a single return statement to reach
+            // the enclosing arrow-body / accessor / method boundary.
+            SyntaxNode node = conditional;
+            while (node.Parent is ParenthesizedExpressionSyntax)
+            {
+                node = node.Parent;
+            }
+
+            ISymbol enclosingMember = null;
+
+            // Case 1: arrow-expression body `=> expr`
+            if (node.Parent is ArrowExpressionClauseSyntax arrow)
+            {
+                enclosingMember = arrow.Parent switch
+                {
+                    PropertyDeclarationSyntax p => this.context.GetDeclaredSymbol(p),
+                    IndexerDeclarationSyntax i => this.context.GetDeclaredSymbol(i),
+                    MethodDeclarationSyntax m => this.context.GetDeclaredSymbol(m),
+                    AccessorDeclarationSyntax acc
+                        when acc.Parent?.Parent is BasePropertyDeclarationSyntax bp
+                        => this.context.GetDeclaredSymbol(bp),
+                    _ => null,
+                };
+            }
+            else if (node.Parent is ReturnStatementSyntax ret)
+            {
+                // Case 2: `return expr;` inside a block-bodied getter/method —
+                // walk up from the return statement to the enclosing member.
+                enclosingMember = this.FindEnclosingPropertyOrMethodSymbol(ret);
+            }
+
+            if (enclosingMember == null)
+            {
+                return false;
+            }
+
+            // The member's return type must be reference-typed and NOT promoted
+            // to nullable — confirming the analyzer deliberately kept it non-null.
+            ITypeSymbol returnType = enclosingMember switch
+            {
+                IPropertySymbol p => p.Type,
+                IMethodSymbol m => m.ReturnType,
+                _ => null,
+            };
+
+            if (returnType is not { IsReferenceType: true })
+            {
+                return false;
+            }
+
+            if (returnType.NullableAnnotation == NullableAnnotation.Annotated)
+            {
+                return false;
+            }
+
+            // If the oblivious analyzer DID promote this member to nullable,
+            // the return type is already `T?` and forgiving the arm is unnecessary
+            // (and would be wrong — the caller expects nullable).
+            return !this.ShouldPromoteToNullableReference(enclosingMember);
+        }
+
+        // Walks up from a return statement to find the enclosing property (via a
+        // `get` accessor) or method symbol. Stops at nested scope boundaries
+        // (lambdas, local functions). Returns null if not found.
+        private ISymbol FindEnclosingPropertyOrMethodSymbol(ReturnStatementSyntax ret)
+        {
+            for (SyntaxNode walk = ret.Parent; walk != null; walk = walk.Parent)
+            {
+                switch (walk)
+                {
+                    case AccessorDeclarationSyntax acc
+                        when acc.IsKind(SyntaxKind.GetAccessorDeclaration)
+                            && acc.Parent?.Parent is BasePropertyDeclarationSyntax bp:
+                        return this.context.GetDeclaredSymbol(bp);
+
+                    case MethodDeclarationSyntax m:
+                        return this.context.GetDeclaredSymbol(m);
+
+                    case LocalFunctionStatementSyntax:
+                    case AnonymousFunctionExpressionSyntax:
+                        return null;
+                }
+            }
+
+            return null;
+        }
+
+        // True when <paramref name="body"/> (a lazy-init guard's then-branch)
+        // contains an assignment of a non-null value to <paramref name="symbol"/>.
+        private bool AssignsSymbolNonNull(StatementSyntax body, ISymbol symbol)
+        {
+            if (body == null)
+            {
+                return false;
+            }
+
+            foreach (AssignmentExpressionSyntax assignment in
+                body.DescendantNodesAndSelf().OfType<AssignmentExpressionSyntax>())
+            {
+                if (!assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                    && !assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression))
+                {
+                    continue;
+                }
+
+                if (this.BindsTo(assignment.Left, symbol)
+                    && !IsNullOrSuppressedNull(assignment.Right))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static ExpressionSyntax StripParentheses(ExpressionSyntax expression)
+        {
+            while (expression is ParenthesizedExpressionSyntax paren)
+            {
+                expression = paren.Expression;
+            }
+
+            return expression;
+        }
+    }
+}

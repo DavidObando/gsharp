@@ -70,7 +70,7 @@ internal sealed partial class MethodBodyEmitter
                 this.il.StoreLocal(userVtSlot);
                 this.il.LoadLocalAddress(userVtSlot);
                 this.il.OpCode(ILOpCode.Call);
-                this.il.Token(this.outer.GetNullableGetValueMemberRefForUserValueType(userVtNullable));
+                this.il.Token(this.outer.memberRefs.GetNullableGetValueMemberRefForUserValueType(userVtNullable));
                 return;
             }
 
@@ -123,7 +123,7 @@ internal sealed partial class MethodBodyEmitter
                         + "check NullableValueTypeUnwrapCollector and the prepass in CollectLocalsAndLabels.");
                 }
 
-                var tpToken = this.outer.GetElementTypeToken(tpOperand);
+                var tpToken = this.outer.memberRefs.GetElementTypeToken(tpOperand);
                 var tpNonNull = this.il.DefineLabel();
 
                 this.EmitExpression(u.Operand);
@@ -214,7 +214,7 @@ internal sealed partial class MethodBodyEmitter
                 if (u.Op.OperandType == TypeSymbol.Decimal)
                 {
                     var neg = typeof(decimal).GetMethod("op_UnaryNegation", new[] { typeof(decimal) });
-                    this.il.Call(this.outer.GetMethodEntityHandle(neg));
+                    this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(neg));
                 }
                 else
                 {
@@ -405,7 +405,7 @@ internal sealed partial class MethodBodyEmitter
                         + "check NullableValueTypeCoalesceCollector and the prepass in CollectLocalsAndLabels.");
                 }
 
-                var tpToken = this.outer.GetElementTypeToken(tpUnderlying);
+                var tpToken = this.outer.memberRefs.GetElementTypeToken(tpUnderlying);
                 var fallback = this.il.DefineLabel();
                 var end = this.il.DefineLabel();
 
@@ -445,7 +445,7 @@ internal sealed partial class MethodBodyEmitter
                         + "check NullableValueTypeCoalesceCollector and the prepass in CollectLocalsAndLabels.");
                 }
 
-                var bareToken = this.outer.GetElementTypeToken(bareTp);
+                var bareToken = this.outer.memberRefs.GetElementTypeToken(bareTp);
                 var fallback = this.il.DefineLabel();
                 var end = this.il.DefineLabel();
 
@@ -498,7 +498,7 @@ internal sealed partial class MethodBodyEmitter
                         + "check NullableValueTypeCoalesceCollector and the prepass in CollectLocalsAndLabels.");
                 }
 
-                var userVtBoxToken = this.outer.GetElementTypeToken(userVtNullable);
+                var userVtBoxToken = this.outer.memberRefs.GetElementTypeToken(userVtNullable);
                 var fallback = this.il.DefineLabel();
                 var end = this.il.DefineLabel();
 
@@ -519,7 +519,7 @@ internal sealed partial class MethodBodyEmitter
                     // Result is the underlying `UserT` — unwrap via get_Value.
                     this.il.LoadLocalAddress(userVtSlot);
                     this.il.OpCode(ILOpCode.Call);
-                    this.il.Token(this.outer.GetNullableGetValueMemberRefForUserValueType(userVtNullable));
+                    this.il.Token(this.outer.memberRefs.GetNullableGetValueMemberRefForUserValueType(userVtNullable));
                 }
 
                 this.il.Branch(ILOpCode.Br, end);
@@ -635,14 +635,14 @@ internal sealed partial class MethodBodyEmitter
             // MemberRef rather than a bare open FieldDef, which ILVerify
             // rejects ("found ref Box<T0>, expected ref Box"). Non-generic
             // inline structs still resolve to the bare FieldDef unchanged.
-            var fieldHandle = this.outer.ResolveFieldToken(inlineStruct, field);
+            var fieldHandle = this.outer.userTokens.ResolveFieldToken(inlineStruct, field);
             this.EmitExpression(b.Left);
             this.il.OpCode(ILOpCode.Ldfld);
             this.il.Token(fieldHandle);
             if (ReflectionMetadataEmitter.IsValueTypeSymbol(field.Type))
             {
                 this.il.OpCode(ILOpCode.Box);
-                this.il.Token(this.outer.GetElementTypeToken(field.Type));
+                this.il.Token(this.outer.memberRefs.GetElementTypeToken(field.Type));
             }
 
             this.EmitExpression(b.Right);
@@ -651,7 +651,7 @@ internal sealed partial class MethodBodyEmitter
             if (ReflectionMetadataEmitter.IsValueTypeSymbol(field.Type))
             {
                 this.il.OpCode(ILOpCode.Box);
-                this.il.Token(this.outer.GetElementTypeToken(field.Type));
+                this.il.Token(this.outer.memberRefs.GetElementTypeToken(field.Type));
             }
 
             this.il.Call(field.Type == TypeSymbol.String ? this.outer.wellKnown.GetStringEqualsReference() : this.outer.wellKnown.GetObjectStaticEqualsReference());
@@ -715,10 +715,10 @@ internal sealed partial class MethodBodyEmitter
         {
             this.EmitExpression(b.Left);
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.GetElementTypeToken(leftTp));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(leftTp));
             this.EmitExpression(b.Right);
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.GetElementTypeToken(rightTp));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(rightTp));
             this.il.Call(this.outer.wellKnown.GetObjectStaticEqualsReference());
             if (b.Op.Kind == BoundBinaryOperatorKind.NotEquals)
             {
@@ -756,7 +756,7 @@ internal sealed partial class MethodBodyEmitter
         {
             this.EmitExpression(tpNilOperand);
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.GetElementTypeToken(tpNilOperand.Type));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(tpNilOperand.Type));
             this.il.OpCode(ILOpCode.Ldnull);
             this.il.OpCode(ILOpCode.Ceq);
             if (b.Op.Kind == BoundBinaryOperatorKind.NotEquals)
@@ -966,7 +966,7 @@ internal sealed partial class MethodBodyEmitter
     {
         this.EmitExpression(operand);
         this.il.OpCode(ILOpCode.Box);
-        this.il.Token(this.outer.GetElementTypeToken(operand.Type));
+        this.il.Token(this.outer.memberRefs.GetElementTypeToken(operand.Type));
     }
 
     // Issue #2188: true when a reference-equality operand is an open type
@@ -989,7 +989,7 @@ internal sealed partial class MethodBodyEmitter
         if (RefEqOperandNeedsBox(operand.Type))
         {
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.GetElementTypeToken(operand.Type));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(operand.Type));
         }
     }
 
@@ -1058,7 +1058,7 @@ internal sealed partial class MethodBodyEmitter
     /// slot (class/unconstrained/interface-constrained T, bare or `?` —
     /// same shape either way) or a <c>Nullable&lt;!!T&gt;</c> value-typed
     /// slot (struct-constrained `T?`) — see
-    /// <see cref="ReflectionMetadataEmitter.GetElementTypeToken"/>. Both
+    /// <see cref="ImportedMemberRefFactory.GetElementTypeToken"/>. Both
     /// shapes need the same `box; ldnull; ceq` lowering for nil-comparison
     /// to be verifier-clean: boxing a reference is a JIT-elided no-op,
     /// while boxing <c>Nullable&lt;T&gt;</c> per ECMA-335 III.4.1 yields a
@@ -1245,7 +1245,7 @@ internal sealed partial class MethodBodyEmitter
             return false;
         }
 
-        this.il.Call(this.outer.GetMethodEntityHandle(op));
+        this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(op));
         return true;
     }
 
@@ -1485,7 +1485,7 @@ internal sealed partial class MethodBodyEmitter
         var ctor = nullableClr.GetConstructor(new[] { nullableInnerArg })
             ?? throw new InvalidOperationException(
                 $"Nullable<{nullableInnerArg.FullName}> has no single-arg constructor.");
-        var nullableToken = this.outer.GetTypeHandleForMember(nullableClr);
+        var nullableToken = this.outer.memberRefs.GetTypeHandleForMember(nullableClr);
 
         var nullBranch = this.il.DefineLabel();
         var end = this.il.DefineLabel();
@@ -1509,7 +1509,7 @@ internal sealed partial class MethodBodyEmitter
         this.il.Token(getValueRhs);
         this.EmitUnderlyingArithmetic(kind, underlying, isChecked);
         this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(this.outer.GetCtorReference(ctor));
+        this.il.Token(this.outer.memberRefs.GetCtorReference(ctor));
         this.il.Branch(ILOpCode.Br, end);
 
         // Null branch: default(Nullable<R>) via initobj + ldloc.
@@ -1669,7 +1669,7 @@ internal sealed partial class MethodBodyEmitter
         this.EmitExpression(op.Left);
         this.EmitExpression(op.Right);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.GetMethodReference(op.Method));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(op.Method));
         this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(op.Method.ReturnType), op.Type);
     }
 
@@ -1841,7 +1841,7 @@ internal sealed partial class MethodBodyEmitter
         var ctor = nullableClr.GetConstructor(new[] { nullableInnerArg })
             ?? throw new InvalidOperationException(
                 $"Nullable<{nullableInnerArg.FullName}> has no single-arg constructor.");
-        var nullableToken = this.outer.GetTypeHandleForMember(nullableClr);
+        var nullableToken = this.outer.memberRefs.GetTypeHandleForMember(nullableClr);
 
         var nullBranch = this.il.DefineLabel();
         var end = this.il.DefineLabel();
@@ -1859,7 +1859,7 @@ internal sealed partial class MethodBodyEmitter
         this.EmitUnwrappedNullableValue(rhsSlot, rightNullable);
         this.EmitCallResolvedClrOrFunctionOperator(op);
         this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(this.outer.GetCtorReference(ctor));
+        this.il.Token(this.outer.memberRefs.GetCtorReference(ctor));
         this.il.Branch(ILOpCode.Br, end);
 
         this.il.MarkLabel(nullBranch);
@@ -1880,14 +1880,14 @@ internal sealed partial class MethodBodyEmitter
     private MemberReferenceHandle GetNullableHasValueRef(NullableTypeSymbol nullable)
     {
         return NullableLifting.IsUserValueTypeNullable(nullable)
-            ? this.outer.GetNullableGetHasValueMemberRefForUserValueType(nullable)
+            ? this.outer.memberRefs.GetNullableGetHasValueMemberRefForUserValueType(nullable)
             : this.outer.wellKnown.GetNullableGetHasValueReference(nullable.UnderlyingType.ClrType);
     }
 
     private MemberReferenceHandle GetNullableValueRef(NullableTypeSymbol nullable)
     {
         return NullableLifting.IsUserValueTypeNullable(nullable)
-            ? this.outer.GetNullableGetValueMemberRefForUserValueType(nullable)
+            ? this.outer.memberRefs.GetNullableGetValueMemberRefForUserValueType(nullable)
             : this.outer.wellKnown.GetNullableGetValueReference(nullable.UnderlyingType.ClrType);
     }
 
@@ -1931,7 +1931,7 @@ internal sealed partial class MethodBodyEmitter
         }
 
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.GetMethodReference(op.Method));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(op.Method));
     }
 
     private void EmitClrUnaryOperator(BoundClrUnaryOperatorExpression op)
@@ -1939,7 +1939,7 @@ internal sealed partial class MethodBodyEmitter
         // Stream C emit parity: user-defined unary operator on a CLR type.
         this.EmitExpression(op.Operand);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.GetMethodReference(op.Method));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(op.Method));
         this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(op.Method.ReturnType), op.Type);
     }
 }

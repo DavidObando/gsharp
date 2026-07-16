@@ -165,7 +165,7 @@ internal static class ImportedAssemblySemantics
             // `[assembly: InternalsVisibleTo(...)]` from a .NET-language
             // producer, or gsc's `@assembly:InternalsVisibleTo("...")`
             // annotation — see
-            // ReflectionMetadataEmitter.EmitFriendAssemblyAttributes). A
+            // Emit.AssemblyAttributeEmitter.EmitFriendAssemblyAttributes). A
             // consumer name is only trusted if the owner actually declared it.
             return Cache.GetValue(assembly, ReadAssemblySemantics).FriendAssemblies.Contains(normalizedConsumer);
         }

@@ -66,7 +66,7 @@ internal sealed partial class MethodBodyEmitter
             this.EmitFunctionLiteral(
                 constructedDelegateLiteral,
                 overrideDelegateType: null,
-                symbolicDelegateCtorRef: this.outer.GetConstructedDelegateCtorRef(constructedDelegateTarget));
+                symbolicDelegateCtorRef: this.outer.memberRefs.GetConstructedDelegateCtorRef(constructedDelegateTarget));
             return;
         }
 
@@ -204,7 +204,7 @@ internal sealed partial class MethodBodyEmitter
             && from == toUserVtNullableLift.UnderlyingType)
         {
             this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(this.outer.GetNullableCtorMemberRefForUserValueType(toUserVtNullableLift));
+            this.il.Token(this.outer.memberRefs.GetNullableCtorMemberRefForUserValueType(toUserVtNullableLift));
             return;
         }
 
@@ -226,7 +226,7 @@ internal sealed partial class MethodBodyEmitter
             if (toValueNullableLift.UnderlyingType is TypeParameterSymbol)
             {
                 this.il.OpCode(ILOpCode.Newobj);
-                this.il.Token(this.outer.GetNullableCtorMemberRefForOpenTypeParameter(toValueNullableLift));
+                this.il.Token(this.outer.memberRefs.GetNullableCtorMemberRefForOpenTypeParameter(toValueNullableLift));
                 return;
             }
 
@@ -252,7 +252,7 @@ internal sealed partial class MethodBodyEmitter
                 ?? throw new InvalidOperationException(
                     $"Nullable<{nullableInnerArg.FullName}> has no single-arg constructor.");
             this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(this.outer.GetCtorReference(ctor));
+            this.il.Token(this.outer.memberRefs.GetCtorReference(ctor));
             return;
         }
 
@@ -338,7 +338,7 @@ internal sealed partial class MethodBodyEmitter
                 ?? throw new InvalidOperationException(
                     $"Nullable<{widenNullableInnerArg.FullName}> has no single-arg constructor.");
             this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(this.outer.GetCtorReference(widenCtor));
+            this.il.Token(this.outer.memberRefs.GetCtorReference(widenCtor));
             return;
         }
 
@@ -383,7 +383,7 @@ internal sealed partial class MethodBodyEmitter
         if ((to?.ClrType.IsSameAs(typeof(object)) == true || IsInterfaceTargetType(to)) && ReflectionMetadataEmitter.IsValueTypeSymbol(from))
         {
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.GetElementTypeToken(from));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(from));
             return;
         }
 
@@ -398,7 +398,7 @@ internal sealed partial class MethodBodyEmitter
                 || valueBoxTarget.IsSameAs(typeof(System.Enum))))
         {
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.GetElementTypeToken(from));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(from));
             return;
         }
 
@@ -425,7 +425,7 @@ internal sealed partial class MethodBodyEmitter
             && (to?.ClrType.IsSameAs(typeof(object)) == true || IsInterfaceTargetType(to)))
         {
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.GetElementTypeToken(from));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(from));
             return;
         }
 
@@ -438,7 +438,7 @@ internal sealed partial class MethodBodyEmitter
             && to?.ClrType != null && to.ClrType.IsValueType)
         {
             this.il.OpCode(ILOpCode.Unbox_any);
-            this.il.Token(this.outer.GetElementTypeToken(to));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(to));
             return;
         }
 
@@ -455,7 +455,7 @@ internal sealed partial class MethodBodyEmitter
                 || (to is NullableTypeSymbol toNullableTp && toNullableTp.UnderlyingType is TypeParameterSymbol)))
         {
             this.il.OpCode(ILOpCode.Unbox_any);
-            this.il.Token(this.outer.GetElementTypeToken(to));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(to));
             return;
         }
 
@@ -465,7 +465,7 @@ internal sealed partial class MethodBodyEmitter
             && !ReflectionMetadataEmitter.IsValueTypeSymbol(to))
         {
             this.il.OpCode(ILOpCode.Castclass);
-            this.il.Token(this.outer.GetElementTypeToken(to));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(to));
             return;
         }
 
@@ -484,7 +484,7 @@ internal sealed partial class MethodBodyEmitter
                 StringComparison.Ordinal))
         {
             this.il.OpCode(ILOpCode.Castclass);
-            this.il.Token(this.outer.GetElementTypeToken(to));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(to));
             return;
         }
 
@@ -503,7 +503,7 @@ internal sealed partial class MethodBodyEmitter
             && ClrOperatorResolution.TryResolveConversion(from.ClrType, to.ClrType, allowExplicit: true, out var userConvMethod, out _))
         {
             this.il.OpCode(ILOpCode.Call);
-            this.il.Token(this.outer.GetMethodReference(userConvMethod));
+            this.il.Token(this.outer.memberRefs.GetMethodReference(userConvMethod));
             return;
         }
 
@@ -522,7 +522,7 @@ internal sealed partial class MethodBodyEmitter
             if (stringCtor != null)
             {
                 this.il.OpCode(ILOpCode.Newobj);
-                this.il.Token(this.outer.GetCtorReference(stringCtor));
+                this.il.Token(this.outer.memberRefs.GetCtorReference(stringCtor));
                 return;
             }
         }
@@ -596,7 +596,7 @@ internal sealed partial class MethodBodyEmitter
         var toCtor = toNullableClr.GetConstructor(new[] { toNullableInnerArg })
             ?? throw new InvalidOperationException(
                 $"Nullable<{toNullableInnerArg.FullName}> has no single-arg constructor.");
-        var toNullableToken = this.outer.GetTypeHandleForMember(toNullableClr);
+        var toNullableToken = this.outer.memberRefs.GetTypeHandleForMember(toNullableClr);
 
         var getHasValue = this.outer.wellKnown.GetNullableGetHasValueReference(fromUnderlyingClr);
         var getValueOrDefault = this.outer.wellKnown.GetNullableGetValueOrDefaultReference(fromUnderlyingClr);
@@ -617,7 +617,7 @@ internal sealed partial class MethodBodyEmitter
         this.il.Token(getValueOrDefault);
         this.TryEmitNumericConversion(fromUnderlying, toUnderlying);
         this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(this.outer.GetCtorReference(toCtor));
+        this.il.Token(this.outer.memberRefs.GetCtorReference(toCtor));
         this.il.Branch(ILOpCode.Br, end);
 
         // Absent: materialise default(Nullable<T2>).
@@ -649,26 +649,26 @@ internal sealed partial class MethodBodyEmitter
         if (expectedType is TypeParameterSymbol expectedTp)
         {
             this.il.OpCode(ILOpCode.Unbox_any);
-            this.il.Token(this.outer.GetElementTypeToken(expectedTp));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(expectedTp));
             return;
         }
 
         if (TypeSymbol.ContainsTypeParameter(expectedType))
         {
             this.il.OpCode(ILOpCode.Unbox_any);
-            this.il.Token(this.outer.GetElementTypeToken(expectedType));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(expectedType));
             return;
         }
 
         if (ReflectionMetadataEmitter.IsValueTypeSymbol(expectedType))
         {
             this.il.OpCode(ILOpCode.Unbox_any);
-            this.il.Token(this.outer.GetElementTypeToken(expectedType));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(expectedType));
             return;
         }
 
         this.il.OpCode(ILOpCode.Castclass);
-        this.il.Token(this.outer.GetElementTypeToken(expectedType));
+        this.il.Token(this.outer.memberRefs.GetElementTypeToken(expectedType));
     }
 
     // ADR-0044 numeric conversions. Maps the from/to CLR pair to the
@@ -801,7 +801,7 @@ internal sealed partial class MethodBodyEmitter
                 return false;
             }
 
-            this.il.Call(this.outer.GetMethodEntityHandle(op));
+            this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(op));
             return true;
         }
 
@@ -833,7 +833,7 @@ internal sealed partial class MethodBodyEmitter
                 return false;
             }
 
-            this.il.Call(this.outer.GetMethodEntityHandle(op));
+            this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(op));
             return true;
         }
 
@@ -1041,7 +1041,7 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.LoadLocalAddress(slot);
         this.il.OpCode(ILOpCode.Initobj);
-        this.il.Token(this.outer.GetElementTypeToken(type));
+        this.il.Token(this.outer.memberRefs.GetElementTypeToken(type));
 
         // Issue #1714: `initobj` zero-inits every field to its CLR default,
         // which is `null` for a `string` field — diverging from the
@@ -1143,7 +1143,7 @@ internal sealed partial class MethodBodyEmitter
         // re-encodes the real type argument (the in-scope type parameter, a
         // VAR/MVAR) into the MethodSpec via the symbolic-argument path.
         var closed = openCreateInstance.MakeGenericMethod(typeof(object));
-        var handle = this.outer.GetMethodEntityHandle(
+        var handle = this.outer.memberRefs.GetMethodEntityHandle(
             closed,
             ImmutableArray.Create<TypeSymbol>(node.TypeParameter));
 
@@ -1157,7 +1157,7 @@ internal sealed partial class MethodBodyEmitter
         // public-static method taking one arg, returning the target type.
         this.EmitExpression(conv.Source);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.GetMethodReference(conv.Method));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(conv.Method));
         this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(conv.Method.ReturnType), conv.Type);
 
         // Issue #663: when the operator returns a non-nullable value type T but the
@@ -1183,7 +1183,7 @@ internal sealed partial class MethodBodyEmitter
                 ?? throw new InvalidOperationException(
                     $"Nullable<{nullableInnerArg.FullName}> has no single-arg constructor.");
             this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(this.outer.GetCtorReference(ctor));
+            this.il.Token(this.outer.memberRefs.GetCtorReference(ctor));
         }
     }
 
@@ -1203,7 +1203,7 @@ internal sealed partial class MethodBodyEmitter
             var initType = gsharpType.ClrType == null
                 ? TypeSymbol.FromClrType(clrType)
                 : gsharpType;
-            this.il.Token(this.outer.GetElementTypeToken(initType));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(initType));
         }
         else
         {

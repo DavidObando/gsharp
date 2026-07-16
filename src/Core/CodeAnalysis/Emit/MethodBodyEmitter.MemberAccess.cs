@@ -273,7 +273,7 @@ internal sealed partial class MethodBodyEmitter
             // honors), structs, etc. `ldelem <token>` works for these
             // because the verifier matches the static element type.
             this.il.OpCode(ILOpCode.Ldelem);
-            this.il.Token(this.outer.GetElementTypeToken(elementType));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(elementType));
         }
     }
 
@@ -321,7 +321,7 @@ internal sealed partial class MethodBodyEmitter
         else
         {
             this.il.OpCode(ILOpCode.Stelem);
-            this.il.Token(this.outer.GetElementTypeToken(elementType));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(elementType));
         }
     }
 
@@ -345,7 +345,7 @@ internal sealed partial class MethodBodyEmitter
         this.EmitExpression(idx.Index);
         this.il.LoadLocalAddress(slot);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(tryGet));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(tryGet));
 
         // Issue #1714: TryGetValue zero-initialises the out V parameter via the
         // CLR default when the key is missing — for V == string that CLR
@@ -401,7 +401,7 @@ internal sealed partial class MethodBodyEmitter
         this.il.OpCode(ILOpCode.Dup);
         this.il.StoreLocal(tmp);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(setItem));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(setItem));
         this.il.LoadLocal(tmp);
     }
 
@@ -439,15 +439,15 @@ internal sealed partial class MethodBodyEmitter
             // ADR-0089 / issue #1030: interface static field read. A generic
             // interface routes through a TypeSpec-parented MemberRef (per
             // construction); a non-generic interface uses the bare FieldDef.
-            fieldHandle = this.outer.ResolveInterfaceFieldToken(fa.InterfaceType, fa.Field);
+            fieldHandle = this.outer.userTokens.ResolveInterfaceFieldToken(fa.InterfaceType, fa.Field);
         }
         else if (fieldContainer != null)
         {
-            fieldHandle = this.outer.ResolveFieldToken(fieldContainer, fa.Field);
+            fieldHandle = this.outer.userTokens.ResolveFieldToken(fieldContainer, fa.Field);
         }
         else if (fa.Receiver?.Type is StructSymbol receiverStruct)
         {
-            fieldHandle = this.outer.ResolveFieldToken(receiverStruct, fa.Field);
+            fieldHandle = this.outer.userTokens.ResolveFieldToken(receiverStruct, fa.Field);
         }
         else if (this.outer.cache.StructFieldDefs.TryGetValue(fa.Field, out var defHandle))
         {
@@ -478,7 +478,7 @@ internal sealed partial class MethodBodyEmitter
         {
             this.EmitExpression(fa.Receiver);
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.GetElementTypeToken(fieldReceiverTp));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(fieldReceiverTp));
             this.il.OpCode(ILOpCode.Ldfld);
             this.il.Token(fieldHandle);
             this.EmitNarrowingCastIfNeeded(fa.Field.Type, fa.NarrowedType);
@@ -546,15 +546,15 @@ internal sealed partial class MethodBodyEmitter
         {
             // ADR-0089 / issue #1030: interface static field write — generic
             // interface via TypeSpec MemberRef, non-generic via bare FieldDef.
-            fieldHandle = this.outer.ResolveInterfaceFieldToken(fas.InterfaceType, fas.Field);
+            fieldHandle = this.outer.userTokens.ResolveInterfaceFieldToken(fas.InterfaceType, fas.Field);
         }
         else if (fieldContainer != null)
         {
-            fieldHandle = this.outer.ResolveFieldToken(fieldContainer, fas.Field);
+            fieldHandle = this.outer.userTokens.ResolveFieldToken(fieldContainer, fas.Field);
         }
         else if (fas.Receiver?.Type is StructSymbol receiverStruct)
         {
-            fieldHandle = this.outer.ResolveFieldToken(receiverStruct, fas.Field);
+            fieldHandle = this.outer.userTokens.ResolveFieldToken(receiverStruct, fas.Field);
         }
         else if (this.outer.cache.StructFieldDefs.TryGetValue(fas.Field, out var defHandle))
         {
@@ -635,7 +635,7 @@ internal sealed partial class MethodBodyEmitter
             if (addressReceiver == null && fas.ReceiverExpression.Type is TypeParameterSymbol fieldExprAssnTp)
             {
                 this.il.OpCode(ILOpCode.Box);
-                this.il.Token(this.outer.GetElementTypeToken(fieldExprAssnTp));
+                this.il.Token(this.outer.memberRefs.GetElementTypeToken(fieldExprAssnTp));
             }
 
             this.EmitExpression(fas.Value);
@@ -678,14 +678,14 @@ internal sealed partial class MethodBodyEmitter
         {
             this.EmitLoadVariable(fas.Receiver);
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.GetElementTypeToken(fieldAssnTp));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(fieldAssnTp));
             this.EmitExpression(fas.Value);
             this.il.OpCode(ILOpCode.Stfld);
             this.il.Token(fieldHandle);
 
             this.EmitLoadVariable(fas.Receiver);
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.GetElementTypeToken(fieldAssnTp));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(fieldAssnTp));
             this.il.OpCode(ILOpCode.Ldfld);
             this.il.Token(fieldHandle);
             return;
@@ -739,7 +739,7 @@ internal sealed partial class MethodBodyEmitter
             this.il.OpCode(ILOpCode.Ldflda);
             this.il.Token(fieldHandle);
             this.il.OpCode(ILOpCode.Initobj);
-            this.il.Token(this.outer.GetElementTypeToken(defaultExpr.Type));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(defaultExpr.Type));
 
             // Leave the assigned value on the stack as the expression result.
             if (!this.TryLoadVariableAddress(fas.Receiver))
@@ -792,7 +792,7 @@ internal sealed partial class MethodBodyEmitter
             access.Property);
         if (getterContainer != null)
         {
-            getterHandle = this.outer.ResolveUserPropertyAccessorToken(getterContainer, access.Property, wantSetter: false);
+            getterHandle = this.outer.userTokens.ResolveUserPropertyAccessorToken(getterContainer, access.Property, wantSetter: false);
         }
         else if (this.outer.cache.PropertyAccessorHandles.TryGetValue(access.Property, out var handles) && handles.Getter.HasValue)
         {
@@ -803,7 +803,7 @@ internal sealed partial class MethodBodyEmitter
             // Issue #2291: a property on an IMPORTED type (e.g. a C# record's
             // auto-property) has no planned PropertyAccessorHandles entry —
             // resolve its getter MethodRef directly off the imported CLR type.
-            getterHandle = this.outer.ResolveUserPropertyAccessorToken(access.StructType as StructSymbol, access.Property, wantSetter: false);
+            getterHandle = this.outer.userTokens.ResolveUserPropertyAccessorToken(access.StructType as StructSymbol, access.Property, wantSetter: false);
         }
         else
         {
@@ -831,7 +831,7 @@ internal sealed partial class MethodBodyEmitter
         {
             this.EmitExpression(access.Receiver);
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.GetElementTypeToken(tpReceiver));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(tpReceiver));
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(getterHandle);
             this.EmitNarrowingCastIfNeeded(access.Property.Type, access.NarrowedType);
@@ -868,7 +868,7 @@ internal sealed partial class MethodBodyEmitter
             assn.Property);
         if (setterContainer != null)
         {
-            setterHandle = this.outer.ResolveUserPropertyAccessorToken(setterContainer, assn.Property, wantSetter: true);
+            setterHandle = this.outer.userTokens.ResolveUserPropertyAccessorToken(setterContainer, assn.Property, wantSetter: true);
         }
         else if (this.outer.cache.PropertyAccessorHandles.TryGetValue(assn.Property, out var handles) && handles.Setter.HasValue)
         {
@@ -878,7 +878,7 @@ internal sealed partial class MethodBodyEmitter
         {
             // Issue #2291: mirrors the getter fallback above for IMPORTED
             // properties with no planned PropertyAccessorHandles entry.
-            setterHandle = this.outer.ResolveUserPropertyAccessorToken(assn.StructType as StructSymbol, assn.Property, wantSetter: true);
+            setterHandle = this.outer.userTokens.ResolveUserPropertyAccessorToken(assn.StructType as StructSymbol, assn.Property, wantSetter: true);
         }
         else
         {
@@ -919,7 +919,7 @@ internal sealed partial class MethodBodyEmitter
         {
             this.EmitExpression(assn.Receiver);
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.GetElementTypeToken(tpAssnReceiver));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(tpAssnReceiver));
             this.EmitExpression(assn.Value);
             this.il.OpCode(ILOpCode.Dup);
             this.il.StoreLocal(valueSlot);
@@ -980,8 +980,8 @@ internal sealed partial class MethodBodyEmitter
                 // expose only a `protected` / `protected internal` getter. Try
                 // the public accessor first (unchanged IL for existing samples),
                 // then fall back to the non-public getter for inherited members.
-                var getter = ReflectionMetadataEmitter.GetTypeBuilderSafePropertyAccessor(property, wantSetter: false)
-                    ?? ReflectionMetadataEmitter.GetTypeBuilderSafePropertyAccessor(property, wantSetter: false, nonPublic: true)
+                var getter = ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(property, wantSetter: false)
+                    ?? ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(property, wantSetter: false, nonPublic: true)
                     ?? throw new InvalidOperationException(
                         $"Property '{property.DeclaringType?.FullName}.{property.Name}' has no accessible getter.");
                 // Issue #671: when the receiver is a symbolic constructed
@@ -993,9 +993,9 @@ internal sealed partial class MethodBodyEmitter
                 // to the plain MemberRef path inside the overload.
                 var getterRef = isStatic
                     ? (access.StaticContainerType != null
-                        ? this.outer.GetMethodEntityHandle(getter, access.StaticContainerType)
-                        : (EntityHandle)this.outer.GetMethodReference(getter))
-                    : this.outer.GetMethodEntityHandle(getter, access.Receiver.Type);
+                        ? this.outer.memberRefs.GetMethodEntityHandle(getter, access.StaticContainerType)
+                        : (EntityHandle)this.outer.memberRefs.GetMethodReference(getter))
+                    : this.outer.memberRefs.GetMethodEntityHandle(getter, access.Receiver.Type);
                 this.il.OpCode(isStatic || receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
                 this.il.Token(getterRef);
 
@@ -1018,7 +1018,7 @@ internal sealed partial class MethodBodyEmitter
                 // a verifier-breaking `unbox.any T` against a value type T
                 // (the stack already holds the substituted `!!0`).
                 if (!isStatic
-                    && this.outer.TryGetSymbolicSubstitutedPropertyReturn(access.Receiver.Type, property, out _))
+                    && this.outer.userTokens.TryGetSymbolicSubstitutedPropertyReturn(access.Receiver.Type, property, out _))
                 {
                     break;
                 }
@@ -1028,7 +1028,7 @@ internal sealed partial class MethodBodyEmitter
                     access.Type);
                 break;
             case FieldInfo field:
-                var fieldRef = this.outer.GetFieldReference(field);
+                var fieldRef = this.outer.memberRefs.GetFieldReference(field);
                 this.il.OpCode(isStatic ? ILOpCode.Ldsfld : ILOpCode.Ldfld);
                 this.il.Token(fieldRef);
                 break;
@@ -1071,8 +1071,8 @@ internal sealed partial class MethodBodyEmitter
                 // Issue #1582: fall back to a non-public setter for an inherited
                 // metadata-base property (public accessor tried first so existing
                 // sample IL is unchanged).
-                var setter = ReflectionMetadataEmitter.GetTypeBuilderSafePropertyAccessor(property, wantSetter: true)
-                    ?? ReflectionMetadataEmitter.GetTypeBuilderSafePropertyAccessor(property, wantSetter: true, nonPublic: true)
+                var setter = ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(property, wantSetter: true)
+                    ?? ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(property, wantSetter: true, nonPublic: true)
                     ?? throw new InvalidOperationException(
                         $"Property '{property.DeclaringType?.FullName}.{property.Name}' has no public setter.");
                 this.il.OpCode(isStatic || receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
@@ -1080,12 +1080,12 @@ internal sealed partial class MethodBodyEmitter
                 // setter MemberRef parent is the constructed symbolic type when
                 // applicable. Falls back to the plain MemberRef path otherwise.
                 this.il.Token(isStatic
-                    ? (EntityHandle)this.outer.GetMethodReference(setter)
-                    : this.outer.GetMethodEntityHandle(setter, assn.Receiver.Type));
+                    ? (EntityHandle)this.outer.memberRefs.GetMethodReference(setter)
+                    : this.outer.memberRefs.GetMethodEntityHandle(setter, assn.Receiver.Type));
                 break;
             case FieldInfo field:
                 this.il.OpCode(isStatic ? ILOpCode.Stsfld : ILOpCode.Stfld);
-                this.il.Token(this.outer.GetFieldReference(field));
+                this.il.Token(this.outer.memberRefs.GetFieldReference(field));
                 break;
             default:
                 throw new NotSupportedException(
@@ -1117,13 +1117,13 @@ internal sealed partial class MethodBodyEmitter
             {
                 this.EmitInstanceReceiver(idx.Target);
                 this.il.OpCode(ILOpCode.Castclass);
-                this.il.Token((EntityHandle)this.outer.GetTypeReference(typeof(System.Collections.IList)));
+                this.il.Token((EntityHandle)this.outer.memberRefs.GetTypeReference(typeof(System.Collections.IList)));
                 this.EmitExpression(idx.Arguments[0]);
                 var iListGetter = typeof(System.Collections.IList)
                     .GetProperty("Item")
                     .GetGetMethod();
                 this.il.OpCode(ILOpCode.Callvirt);
-                this.il.Token(this.outer.GetMethodReference(iListGetter));
+                this.il.Token(this.outer.memberRefs.GetMethodReference(iListGetter));
                 this.EmitErasedObjectReturnWidening(TypeSymbol.Object, idx.Type);
                 return;
             }
@@ -1132,19 +1132,19 @@ internal sealed partial class MethodBodyEmitter
             {
                 this.EmitInstanceReceiver(idx.Target);
                 this.il.OpCode(ILOpCode.Castclass);
-                this.il.Token((EntityHandle)this.outer.GetTypeReference(typeof(System.Collections.IDictionary)));
+                this.il.Token((EntityHandle)this.outer.memberRefs.GetTypeReference(typeof(System.Collections.IDictionary)));
                 this.EmitExpression(idx.Arguments[0]);
                 if (ReflectionMetadataEmitter.IsValueTypeSymbol(idx.Arguments[0].Type))
                 {
                     this.il.OpCode(ILOpCode.Box);
-                    this.il.Token(this.outer.GetElementTypeToken(idx.Arguments[0].Type));
+                    this.il.Token(this.outer.memberRefs.GetElementTypeToken(idx.Arguments[0].Type));
                 }
 
                 var iDictGetter = typeof(System.Collections.IDictionary)
                     .GetProperty("Item")
                     .GetGetMethod();
                 this.il.OpCode(ILOpCode.Callvirt);
-                this.il.Token(this.outer.GetMethodReference(iDictGetter));
+                this.il.Token(this.outer.memberRefs.GetMethodReference(iDictGetter));
                 this.EmitErasedObjectReturnWidening(TypeSymbol.Object, idx.Type);
                 return;
             }
@@ -1157,7 +1157,7 @@ internal sealed partial class MethodBodyEmitter
             this.EmitExpression(arg);
         }
 
-        var getter = ReflectionMetadataEmitter.GetTypeBuilderSafePropertyAccessor(idx.Indexer, wantSetter: false)
+        var getter = ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(idx.Indexer, wantSetter: false)
             ?? throw new InvalidOperationException(
                 $"Indexer on '{idx.Indexer.DeclaringType?.FullName}' has no public getter.");
         var receiverIsValueType = ReflectionMetadataEmitter.IsValueTypeSymbol(idx.Target.Type);
@@ -1165,7 +1165,7 @@ internal sealed partial class MethodBodyEmitter
         // Issue #671: route through the receiver-aware overload so the indexer
         // getter MemberRef parent is the constructed symbolic type when the
         // target is a generic with G# user-defined type arguments.
-        this.il.Token(this.outer.GetMethodEntityHandle(getter, idx.Target.Type));
+        this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(getter, idx.Target.Type));
 
         // Issue #957: when the receiver is a symbolic open-generic container
         // closed over a same-compilation user type (e.g. `List[Item]` where
@@ -1178,7 +1178,7 @@ internal sealed partial class MethodBodyEmitter
         // that already holds a raw `Item` value — an ilverify StackUnexpected
         // and a runtime SIGSEGV. Skip the widening, mirroring the property,
         // instance-method, and imported-call variants.
-        if (this.outer.TryGetSymbolicSubstitutedPropertyReturn(idx.Target.Type, idx.Indexer, out _))
+        if (this.outer.userTokens.TryGetSymbolicSubstitutedPropertyReturn(idx.Target.Type, idx.Indexer, out _))
         {
             return;
         }
@@ -1188,7 +1188,7 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitClrIndexAssignment(BoundClrIndexAssignmentExpression ixa)
     {
-        var setter = ReflectionMetadataEmitter.GetTypeBuilderSafePropertyAccessor(ixa.Indexer, wantSetter: true);
+        var setter = ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(ixa.Indexer, wantSetter: true);
 
         // ADR-0056 §2: span element write. `Span[T]` has no setter; its
         // indexer getter returns `ref T`. Obtain the managed pointer via
@@ -1198,7 +1198,7 @@ internal sealed partial class MethodBodyEmitter
         // get_Item that would re-evaluate the index arguments.
         if (setter == null)
         {
-            var refGetter = ReflectionMetadataEmitter.GetTypeBuilderSafePropertyAccessor(ixa.Indexer, wantSetter: false)
+            var refGetter = ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(ixa.Indexer, wantSetter: false)
                 ?? throw new InvalidOperationException(
                     $"Indexer on '{ixa.Indexer.DeclaringType?.FullName}' has no public setter or getter.");
             BoundExpression receiver = ixa.TargetExpression ?? new BoundVariableExpression(null, ixa.Target);
@@ -1213,7 +1213,7 @@ internal sealed partial class MethodBodyEmitter
 
             this.il.OpCode(ILOpCode.Call);
             // Issue #671: receiver-aware MemberRef for symbolic constructed generics.
-            this.il.Token(this.outer.GetMethodEntityHandle(refGetter, receiver.Type));
+            this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(refGetter, receiver.Type));
             this.EmitExpression(ixa.Value);
             this.il.OpCode(ILOpCode.Dup);
             this.il.StoreLocal(tmp);
@@ -1248,7 +1248,7 @@ internal sealed partial class MethodBodyEmitter
         this.il.StoreLocal(slot);
         this.il.OpCode(targetIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
         // Issue #671: receiver-aware MemberRef for symbolic constructed generics.
-        this.il.Token(this.outer.GetMethodEntityHandle(setter, targetType));
+        this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(setter, targetType));
         this.il.LoadLocal(slot);
     }
 
@@ -1524,7 +1524,7 @@ internal sealed partial class MethodBodyEmitter
 
         this.EmitLoadVariable(bve.Variable);
         this.il.OpCode(ILOpCode.Unbox);
-        this.il.Token(this.outer.GetElementTypeToken(effectiveType));
+        this.il.Token(this.outer.memberRefs.GetElementTypeToken(effectiveType));
         return true;
     }
 
@@ -1602,7 +1602,7 @@ internal sealed partial class MethodBodyEmitter
             fa.Field);
         if (fieldContainer != null)
         {
-            fieldHandle = this.outer.ResolveFieldToken(fieldContainer, fa.Field);
+            fieldHandle = this.outer.userTokens.ResolveFieldToken(fieldContainer, fa.Field);
         }
         else if (this.outer.cache.StructFieldDefs.TryGetValue(fa.Field, out var defHandle))
         {
@@ -1656,7 +1656,7 @@ internal sealed partial class MethodBodyEmitter
     private void EmitLoadElementAddress(TypeSymbol elementType)
     {
         var clrType = elementType?.ClrType ?? typeof(object);
-        var token = this.outer.GetElementTypeToken(elementType ?? TypeSymbol.FromClrType(typeof(object)));
+        var token = this.outer.memberRefs.GetElementTypeToken(elementType ?? TypeSymbol.FromClrType(typeof(object)));
         this.il.OpCode(ILOpCode.Ldelema);
         this.il.Token(token);
     }
@@ -1704,7 +1704,7 @@ internal sealed partial class MethodBodyEmitter
         else if (pointeeType is StructSymbol { IsClass: false } || (clrType != null && clrType.IsValueType))
         {
             this.il.OpCode(ILOpCode.Ldobj);
-            this.il.Token(this.outer.GetElementTypeToken(pointeeType));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(pointeeType));
         }
         else
         {
@@ -1743,7 +1743,7 @@ internal sealed partial class MethodBodyEmitter
         else if (pointeeType is StructSymbol { IsClass: false } || (clrType != null && clrType.IsValueType))
         {
             this.il.OpCode(ILOpCode.Stobj);
-            this.il.Token(this.outer.GetElementTypeToken(pointeeType));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(pointeeType));
         }
         else
         {

@@ -288,11 +288,11 @@ internal sealed partial class MethodBodyEmitter
         if (ReflectionMetadataEmitter.IsValueTypeSymbol(sourceType))
         {
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.GetElementTypeToken(sourceType));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(sourceType));
         }
 
         this.il.OpCode(ILOpCode.Isinst);
-        this.il.Token(this.outer.GetElementTypeToken(tp.TargetType));
+        this.il.Token(this.outer.memberRefs.GetElementTypeToken(tp.TargetType));
         this.il.StoreLocal(scratch);
         this.il.LoadLocal(scratch);
         this.il.Branch(ILOpCode.Brfalse, failLabel);
@@ -319,12 +319,12 @@ internal sealed partial class MethodBodyEmitter
         if (ReflectionMetadataEmitter.IsValueTypeSymbol(tp.TargetType) || tp.TargetType is TypeParameterSymbol)
         {
             this.il.OpCode(ILOpCode.Unbox_any);
-            this.il.Token(this.outer.GetElementTypeToken(tp.TargetType));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(tp.TargetType));
         }
         else if (tp.TargetType?.ClrType.IsSameAs(typeof(object)) != true)
         {
             this.il.OpCode(ILOpCode.Castclass);
-            this.il.Token(this.outer.GetElementTypeToken(tp.TargetType));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(tp.TargetType));
         }
 
         this.EmitStoreVariable(tp.Variable);
@@ -368,7 +368,7 @@ internal sealed partial class MethodBodyEmitter
                     this.il.OpCode(ILOpCode.Ldfld);
                     if (tupleClr == null && arity is >= 2 and <= 7)
                     {
-                        this.il.Token(this.outer.GetTupleFieldReference(tupleType, fieldName));
+                        this.il.Token(this.outer.memberRefs.GetTupleFieldReference(tupleType, fieldName));
                     }
                     else if (tupleClr == null)
                     {
@@ -377,14 +377,14 @@ internal sealed partial class MethodBodyEmitter
                     }
                     else if (tupleClr.IsConstructedGenericType)
                     {
-                        this.il.Token(this.outer.GetFieldReferenceOnConstructedGeneric(tupleClr, fieldName));
+                        this.il.Token(this.outer.memberRefs.GetFieldReferenceOnConstructedGeneric(tupleClr, fieldName));
                     }
                     else
                     {
                         var clrField = tupleClr.GetField(fieldName)
                             ?? throw new InvalidOperationException(
                                 $"ValueTuple type '{tupleClr.FullName}' has no public field '{fieldName}'.");
-                        this.il.Token(this.outer.GetFieldReference(clrField));
+                        this.il.Token(this.outer.memberRefs.GetFieldReference(clrField));
                     }
                 };
 
@@ -565,7 +565,7 @@ internal sealed partial class MethodBodyEmitter
         var slice = (BoundSlicePattern)lp.Elements[sliceIndex];
         if (slice.Variable != null)
         {
-            var elementToken = this.outer.GetElementTypeToken(lp.ElementType);
+            var elementToken = this.outer.memberRefs.GetElementTypeToken(lp.ElementType);
 
             // dst = new T[len - (prefix + suffix)]
             loadValue();
