@@ -601,23 +601,35 @@ public sealed class Conversion
         // `(int32) -> int64` slot) — mirroring C#'s implicit numeric conversion
         // of a lambda body to an expected delegate return type.
         if (from is FunctionTypeSymbol fnFrom && to is FunctionTypeSymbol fnTo
-            && fnFrom.Arity == fnTo.Arity
-            && (fnFrom.ReturnType == fnTo.ReturnType || ReturnTypeWidens(fnFrom.ReturnType, fnTo.ReturnType)))
+            && IsFunctionShapeAssignable(fnFrom, fnTo))
         {
-            var sameShape = true;
-            for (var i = 0; i < fnFrom.Arity; i++)
-            {
-                if (fnFrom.ParameterTypes[i] != fnTo.ParameterTypes[i])
-                {
-                    sameShape = false;
-                    break;
-                }
-            }
+            return Conversion.Implicit;
+        }
 
-            if (sameShape)
-            {
-                return Conversion.Implicit;
-            }
+        // Issue #2375: a constructed CLR delegate (`Func`/`Action`/named
+        // delegate) closed over one or more same-compilation classes/structs
+        // reports a type-erased (widened to `object`) `Invoke` signature via
+        // plain CLR reflection on `to.ClrType` — the real backing type may
+        // still be an in-flight `TypeBuilder` (#313/#939), and separately a
+        // same-compilation parameter/return TypeSymbol has no `ClrType` at
+        // all until emit. Both defeat the purely-reflective
+        // `IsFunctionToDelegateConvertible` check below even though the
+        // shapes are, symbolically, an exact match. When the target's
+        // symbolic `FunctionTypeSymbol` shape can be recovered without
+        // reflection (via `MemberLookup.TryGetDelegateFunctionTypeFromSymbol`,
+        // which substitutes the delegate's own open generic definition against
+        // its recorded symbolic type arguments instead of reflecting on the
+        // possibly-erased `ClrType`), compare structurally against THAT
+        // shape first — this is a strict generalization of the
+        // `fnFrom`/`fnTo` check just above, not an EF- or class-specific
+        // special case, and simply widens which delegate targets can be
+        // resolved without depending on reflection over `ClrType`.
+        if (from is FunctionTypeSymbol fnFromSymbolic
+            && to is not FunctionTypeSymbol
+            && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(to, out var toFnSymbolic)
+            && IsFunctionShapeAssignable(fnFromSymbolic, toFnSymbolic))
+        {
+            return Conversion.Implicit;
         }
 
         // Issue #295: a GSharp function value (a `func` literal or any
@@ -1843,6 +1855,35 @@ public sealed class Conversion
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Issue #2375: structural (symbol-identity-based) shape comparison
+    /// shared by the plain <see cref="FunctionTypeSymbol"/>-to-<see cref="FunctionTypeSymbol"/>
+    /// conversion check and the symbolically-resolved delegate-target check —
+    /// this is safe to use even when one or both sides wrap a same-compilation
+    /// type with no (or an erased) CLR backing.
+    /// </summary>
+    /// <param name="from">The source function-type shape.</param>
+    /// <param name="to">The target function-type shape.</param>
+    /// <returns><see langword="true"/> when the shapes are assignment-compatible.</returns>
+    private static bool IsFunctionShapeAssignable(FunctionTypeSymbol from, FunctionTypeSymbol to)
+    {
+        if (from == null || to == null || from.Arity != to.Arity
+            || !(from.ReturnType == to.ReturnType || ReturnTypeWidens(from.ReturnType, to.ReturnType)))
+        {
+            return false;
+        }
+
+        for (var i = 0; i < from.Arity; i++)
+        {
+            if (from.ParameterTypes[i] != to.ParameterTypes[i])
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>

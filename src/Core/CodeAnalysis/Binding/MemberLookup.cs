@@ -783,7 +783,26 @@ internal sealed class MemberLookup
         {
             // Type-level parameter (declared on a generic type): map through
             // the receiver/container's symbolic TypeArguments.
-            var declaring = openClr.DeclaringType;
+            //
+            // Issue #2375 follow-up: `Type.DeclaringType` for a *method*-level
+            // generic parameter (e.g. `TRelated` of `Builder<TEntity>
+            // .HasOneRequired<TRelated>(...)`) returns the METHOD's declaring
+            // type (`Builder<TEntity>`), not `null` — only `DeclaringMethod`
+            // distinguishes a method-level parameter from a type-level one.
+            // Because a single-type-parameter type and a single-method-type-
+            // parameter method both report `GenericParameterPosition == 0`,
+            // this branch — guarded only by `DeclaringType`/`openDefinition`
+            // matching — previously matched `TRelated` too and returned
+            // `typeArguments[0]` (the receiver's `TEntity` argument, e.g.
+            // `Book`) instead of falling through to the method-level branch
+            // below. That silently substituted the wrong closed type for a
+            // deferred lambda's `Expression<Func<TEntity,TRelated>>`
+            // conversion target, producing invalid IL (`Func<Book,Book>`
+            // instead of `Func<Book,Conversion>`) that ILVerify rejected as
+            // `StackUnexpected`. Require `IsGenericTypeParameter` (equivalently
+            // `DeclaringMethod == null`) so a method-level parameter always
+            // falls through to its own (method-scoped) substitution below.
+            var declaring = openClr.IsGenericTypeParameter ? openClr.DeclaringType : null;
             if (declaring != null && openDefinition != null && !typeArguments.IsDefaultOrEmpty)
             {
                 var declaringDef = declaring.IsGenericTypeDefinition ? declaring : (declaring.IsGenericType ? declaring.GetGenericTypeDefinition() : declaring);
@@ -797,9 +816,12 @@ internal sealed class MemberLookup
                 }
             }
 
-            // Issue #833: method-level parameter (declared on a generic method).
-            // The CLR reports DeclaringMethod != null and DeclaringType == null
-            // for these; substitute via the parallel method-type-args slot.
+            // Issue #833: method-level parameter (declared on a generic
+            // method). `DeclaringMethod` is the only reliable discriminator —
+            // `DeclaringType` is set for these too (to the method's own
+            // declaring type, issue #2375 follow-up above) — so substitute via
+            // the parallel method-type-args slot whenever `DeclaringMethod` is
+            // present, regardless of `DeclaringType`.
             if (openClr.DeclaringMethod != null && !methodTypeArguments.IsDefaultOrEmpty)
             {
                 if (openMethodDefinition == null
@@ -1009,11 +1031,6 @@ internal sealed class MemberLookup
         }
 
         var openMethod = closed.IsGenericMethodDefinition ? closed : closed.GetGenericMethodDefinition();
-        var openReturn = openMethod.ReturnType;
-        if (openReturn == null || openReturn.IsSameAs(typeof(void)))
-        {
-            return null;
-        }
 
         Type receiverOpenDef = null;
         ImmutableArray<TypeSymbol> receiverTypeArgs = default;
@@ -1021,6 +1038,33 @@ internal sealed class MemberLookup
         {
             receiverOpenDef = imp.OpenDefinition;
             receiverTypeArgs = imp.TypeArguments;
+
+            // Issue #2375: `closed.GetGenericMethodDefinition()` only opens the
+            // METHOD's own generic parameters — it leaves the DECLARING TYPE's
+            // type arguments exactly as closed on `closed` (e.g. `object` when
+            // the receiver's own type argument was erased during overload
+            // resolution). For an instance method whose return type references
+            // BOTH a method-level parameter (e.g. `TRelated`) and the
+            // declaring type's own parameter (e.g. `TEntity`, as in
+            // `Builder<TEntity>.WithOne<TRelated>() : DependentBuilder<TRelated,
+            // TEntity>`), this left the second slot permanently erased to
+            // `object` even though the method-level slot recovered correctly.
+            // Re-resolve the truly-open method (both type- and method-level
+            // parameters unbound) from the receiver's OWN open declaring type by
+            // metadata-token match — the same recovery already used by
+            // `ExpressionBinder.Calls.TryGetOpenInstanceMethod` /
+            // `ResolveInstanceReturnTypeFromReceiver`.
+            var reopened = TryGetOpenMethodOnDeclaringType(receiverOpenDef, openMethod);
+            if (reopened != null)
+            {
+                openMethod = reopened;
+            }
+        }
+
+        var openReturn = openMethod.ReturnType;
+        if (openReturn == null || openReturn.IsSameAs(typeof(void)))
+        {
+            return null;
         }
 
         var mapped = MapOpenClrTypeToSymbolic(openReturn, receiverOpenDef, receiverTypeArgs, openMethod, symbolicMethodTypeArgs);
@@ -1350,6 +1394,34 @@ internal sealed class MemberLookup
             case DelegateTypeSymbol del:
                 functionType = del.EquivalentFunctionType;
                 return functionType != null;
+
+            // Issue #2375: a constructed `Func`/`Action`/named-delegate
+            // `ImportedTypeSymbol` closed over a same-compilation class or
+            // struct (e.g. `Func[Book, Conversion]`) carries a deliberately
+            // type-erased closed CLR shape in `ClrType` (#313/#939: the
+            // same-compilation argument is projected onto `object` because
+            // the real CLR type may not exist yet — it can still be a
+            // `TypeBuilder`). Reflecting on `ClrType` via
+            // `TryGetDelegateFunctionType(Type, ...)` below therefore widens
+            // that argument to `object`. When the symbolic
+            // `OpenDefinition`/`TypeArguments` shape (#313 construction) is
+            // available and every argument is fully resolved (no leftover
+            // open <see cref="TypeParameterSymbol"/>), build the
+            // `FunctionTypeSymbol` directly from that symbolic shape instead,
+            // preserving the real argument types. Falls through to the
+            // reflection-based path below for anything that isn't a simple
+            // `Invoke(...)` shape mapping directly onto the delegate's own
+            // generic parameters (e.g. an Invoke signature that nests a type
+            // parameter inside another generic), and for genuinely-open
+            // generic parameters (still-unresolved method type parameters),
+            // which keep their existing (deliberate) `object`-widening
+            // behavior unchanged.
+            case ImportedTypeSymbol imported
+                when imported.OpenDefinition != null
+                    && !imported.TypeArguments.IsDefaultOrEmpty
+                    && !imported.TypeArguments.Any(TypeSymbol.ContainsTypeParameter)
+                    && TryGetDelegateFunctionTypeFromOpenDefinition(imported.OpenDefinition, imported.TypeArguments, out functionType):
+                return true;
             default:
                 return type.ClrType != null && TryGetDelegateFunctionType(type.ClrType, out functionType);
         }
@@ -2422,6 +2494,120 @@ internal sealed class MemberLookup
     /// </summary>
     internal static void ClearCache() => methodsIncludingSelfAndInterfacesCache = new ConditionalWeakTable<Type, System.Collections.Concurrent.ConcurrentDictionary<string, IReadOnlyList<MethodInfo>>>();
 
+    /// <summary>
+    /// Issue #2375: builds the <see cref="FunctionTypeSymbol"/> shape of a
+    /// constructed delegate (<c>Func`N</c>/<c>Action`N</c>/a named delegate)
+    /// directly from its open CLR generic definition and the symbolic type
+    /// arguments it was constructed with (<see cref="ImportedTypeSymbol.OpenDefinition"/>
+    /// / <see cref="ImportedTypeSymbol.TypeArguments"/>), instead of
+    /// reflecting over the (possibly type-erased) closed
+    /// <see cref="TypeSymbol.ClrType"/>. A delegate's <c>Invoke</c> method
+    /// parameters/return map 1:1 onto the delegate type's own open generic
+    /// parameters by position (verified: <c>typeof(Func&lt;,&gt;).GetMethod("Invoke")</c>'s
+    /// parameter/return <see cref="Type"/> instances are reference-equal to
+    /// <c>typeof(Func&lt;,&gt;).GetGenericArguments()</c>), so this only needs to
+    /// substitute each such open-parameter slot with the corresponding entry
+    /// in <paramref name="typeArguments"/>. Returns <see langword="false"/>
+    /// (letting the caller fall back to the reflection-based
+    /// <see cref="TryGetDelegateFunctionType(Type, out FunctionTypeSymbol)"/>)
+    /// for any Invoke slot that is NOT directly one of the delegate's own
+    /// generic parameters (e.g. a named delegate whose Invoke signature nests
+    /// a type parameter inside another generic, such as <c>List&lt;T&gt;</c>) —
+    /// an intentionally conservative scope covering the overwhelmingly common
+    /// <c>Func</c>/<c>Action</c>/simple-named-delegate shape without
+    /// attempting general type substitution.
+    /// </summary>
+    /// <param name="openDefinition">The delegate's open CLR generic definition (e.g. <c>typeof(Func&lt;,&gt;)</c>).</param>
+    /// <param name="typeArguments">The symbolic type arguments the delegate was constructed with.</param>
+    /// <param name="functionType">The matching function-type symbol, on success.</param>
+    /// <returns><see langword="true"/> when every Invoke parameter/return slot could be mapped symbolically.</returns>
+    private static bool TryGetDelegateFunctionTypeFromOpenDefinition(Type openDefinition, ImmutableArray<TypeSymbol> typeArguments, out FunctionTypeSymbol functionType)
+    {
+        functionType = null;
+        if (openDefinition == null
+            || typeArguments.IsDefaultOrEmpty
+            || !openDefinition.IsGenericTypeDefinition
+            || (!ClrTypeUtilities.IsDelegateType(openDefinition)
+                && !string.Equals(openDefinition.BaseType?.FullName, "System.MulticastDelegate", StringComparison.Ordinal)
+                && !(openDefinition.FullName?.StartsWith("System.Func`", StringComparison.Ordinal) == true)
+                && !(openDefinition.FullName?.StartsWith("System.Action`", StringComparison.Ordinal) == true)))
+        {
+            return false;
+        }
+
+        var openGenericParams = openDefinition.GetGenericArguments();
+        if (openGenericParams.Length != typeArguments.Length)
+        {
+            return false;
+        }
+
+        MethodInfo invoke;
+        try
+        {
+            invoke = openDefinition.GetMethod("Invoke");
+        }
+        catch (Exception ex) when (ex is AmbiguousMatchException || ex is NotSupportedException)
+        {
+            return false;
+        }
+
+        if (invoke == null)
+        {
+            return false;
+        }
+
+        static bool TryMapSlot(Type invokeSlotType, Type openDefinitionForSlot, ImmutableArray<TypeSymbol> args, out TypeSymbol mapped)
+        {
+            if (invokeSlotType.IsGenericParameter
+                && ClrTypeUtilities.IsSameAs(invokeSlotType.DeclaringType, openDefinitionForSlot)
+                && invokeSlotType.GenericParameterPosition >= 0
+                && invokeSlotType.GenericParameterPosition < args.Length)
+            {
+                mapped = args[invokeSlotType.GenericParameterPosition];
+                return mapped != null;
+            }
+
+            mapped = null;
+            return false;
+        }
+
+        var parameters = invoke.GetParameters();
+        var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(parameters.Length);
+        var variadicBuilder = ImmutableArray.CreateBuilder<bool>(parameters.Length);
+        var anyVariadic = false;
+        foreach (var parameter in parameters)
+        {
+            if (!TryMapSlot(parameter.ParameterType, openDefinition, typeArguments, out var mappedParam))
+            {
+                return false;
+            }
+
+            parameterTypes.Add(mappedParam);
+
+            // ADR-0102 follow-up / issue #818: mirror TryGetDelegateFunctionType's
+            // variadic-flag handling so a params-shaped named delegate keeps
+            // its call-site pack/pass-through behavior through this path too.
+            var paramArray = parameter.GetCustomAttributesData()
+                .Any(a => string.Equals(a.AttributeType.FullName, "System.ParamArrayAttribute", StringComparison.Ordinal));
+            variadicBuilder.Add(paramArray);
+            anyVariadic |= paramArray;
+        }
+
+        TypeSymbol returnType;
+        if (invoke.ReturnType.IsSameAs(typeof(void)))
+        {
+            returnType = TypeSymbol.Void;
+        }
+        else if (!TryMapSlot(invoke.ReturnType, openDefinition, typeArguments, out returnType))
+        {
+            return false;
+        }
+
+        var variadicFlags = anyVariadic ? variadicBuilder.ToImmutable() : default;
+        functionType = FunctionTypeSymbol.Get(parameterTypes.ToImmutable(), variadicFlags, returnType);
+        return true;
+    }
+
     private bool IsVisibleImportedMethod(MethodBase method)
         => method.IsPublic || (method.IsAssembly && this.binderCtx.References.CanAccessInternalMembers(method.DeclaringType?.Assembly));
 
@@ -2843,6 +3029,54 @@ internal sealed class MemberLookup
         return false;
     }
 
+    /// <summary>
+    /// Issue #2375: locates the counterpart of <paramref name="genericMethod"/>
+    /// (a method already opened at its OWN generic-method-parameter level, e.g.
+    /// via <c>MethodInfo.GetGenericMethodDefinition()</c>) on
+    /// <paramref name="openDeclaringType"/> — the receiver's fully open
+    /// declaring type (all of ITS OWN type parameters unbound too). This
+    /// matters because <c>GetGenericMethodDefinition()</c> only opens the
+    /// method's own type parameters; if the method's DECLARING type was
+    /// already closed (e.g. erased to <c>object</c> by overload resolution),
+    /// the declaring type's arguments remain closed on the result, silently
+    /// corrupting any reference to the declaring type's own type parameter
+    /// inside the method's signature (e.g. a return type like
+    /// <c>DependentBuilder&lt;TRelated, TEntity&gt;</c> would keep `TEntity`
+    /// erased to `object` even after re-opening `TRelated`). Match is by
+    /// metadata token + module, which is stable for methods on a constructed
+    /// generic type.
+    /// </summary>
+    /// <param name="openDeclaringType">The receiver's open generic type definition.</param>
+    /// <param name="genericMethod">The method to re-project onto <paramref name="openDeclaringType"/>.</param>
+    /// <returns>The fully open method, or <see langword="null"/> when no match is found.</returns>
+    private static MethodInfo TryGetOpenMethodOnDeclaringType(Type openDeclaringType, MethodInfo genericMethod)
+    {
+        if (openDeclaringType == null || genericMethod == null)
+        {
+            return null;
+        }
+
+        if (ClrTypeUtilities.AreSame(genericMethod.DeclaringType, openDeclaringType))
+        {
+            return genericMethod;
+        }
+
+        var token = genericMethod.MetadataToken;
+        var module = genericMethod.Module;
+        const BindingFlags bindingFlags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
+        foreach (var candidate in openDeclaringType.GetMethods(bindingFlags))
+        {
+            if (candidate.MetadataToken == token && ReferenceEquals(candidate.Module, module))
+            {
+                return candidate.IsGenericMethodDefinition || !candidate.IsGenericMethod
+                    ? candidate
+                    : candidate.GetGenericMethodDefinition();
+            }
+        }
+
+        return null;
+    }
+
     private static void UnifyForMethodTypeArgs(Type openClr, TypeSymbol actual, MethodInfo openMethod, TypeSymbol[] result)
     {
         if (openClr == null || actual == null)
@@ -2911,6 +3145,30 @@ internal sealed class MemberLookup
                     UnifyForMethodTypeArgs(openArgs[j], imp.TypeArguments[j], openMethod, result);
                 }
 
+                return;
+            }
+
+            // Issue #2375: open formal is `Expression<TDelegate>` and actual is a
+            // G# arrow/lambda (FunctionTypeSymbol) — i.e. a deferred lambda
+            // argument being matched against an expression-tree-wrapped
+            // parameter such as `HasOne<TRelated>(Expression<Func<TEntity,
+            // TRelated>>)`. A lambda literal's bound type is always its bare
+            // `FunctionTypeSymbol` shape (Expression<> wrapping only happens via
+            // a later argument CONVERSION, never as the lambda's own natural
+            // type), so without this unwrap the outer `openArgs.Length == 1`
+            // (Expression`1's own single type argument, the `Func<...>` shape)
+            // never matches the FunctionTypeSymbol pattern below (which expects
+            // `openArgs.Length` to equal the delegate's own parameter/return
+            // arity). Unwrapping one level lets the existing #1334 pattern unify
+            // the inner `Func<TEntity, TRelated>` shape against the lambda's
+            // parameter/return types directly, recovering `TRelated` for a
+            // fully-inferred call (no explicit type argument) whose only
+            // occurrence is the delegate's return position.
+            if (openArgs.Length == 1
+                && actual is FunctionTypeSymbol
+                && string.Equals(openDef.FullName, "System.Linq.Expressions.Expression`1", StringComparison.Ordinal))
+            {
+                UnifyForMethodTypeArgs(openArgs[0], actual, openMethod, result);
                 return;
             }
 

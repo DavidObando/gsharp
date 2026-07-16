@@ -735,7 +735,7 @@ internal sealed class ConversionClassifier
                     // vector so the default lowers against the real type
                     // parameter and emits the verifiable `ldloca; initobj; ldloc`
                     // slot shape uniformly for ref and value instantiations.
-                    var defSubstituted = TrySubstituteParameterTypeFromReceiver(method, paramIndex, receiverType)
+                    var defSubstituted = TrySubstituteParameterTypeFromReceiver(method, paramIndex, receiverType, symbolicMethodTypeArgs)
                         ?? TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs);
                     var defTargetType = defSubstituted ?? TypeSymbol.FromClrType(parameterType);
                     if (defTargetType != null && defTargetType != TypeSymbol.Error)
@@ -760,7 +760,7 @@ internal sealed class ConversionClassifier
                     // verifier-rejecting `box T → !0 expected value` IL
                     // sequence at the call site).
                     var substituted = TrySubstituteParameterTypeFromReceiver(
-                        method, paramIndex, receiverType);
+                        method, paramIndex, receiverType, symbolicMethodTypeArgs);
 
                     // Issue #1512: a lambda argument bound to a generic method's
                     // delegate parameter (e.g. `Func<Task,TResult>`) must convert
@@ -1030,11 +1030,27 @@ internal sealed class ConversionClassifier
     /// <param name="method">The resolved CLR method (may be null).</param>
     /// <param name="paramIndex">Zero-based index into the method's parameter list.</param>
     /// <param name="receiverType">The receiver's bound type symbol.</param>
+    /// <param name="symbolicMethodTypeArgs">Issue #2375: the symbolic method
+    /// type-argument vector (e.g. <c>[Conversion]</c> for
+    /// <c>Builder[Book].HasOneRequired[Conversion](...)</c>), threaded through
+    /// alongside the receiver's own <c>TypeArguments</c> so a parameter type
+    /// that mentions BOTH the declaring generic type's parameter (<c>TEntity</c>)
+    /// AND the method's own type parameter (<c>TRelated</c>) — e.g.
+    /// <c>Expression&lt;Func&lt;TEntity,TRelated&gt;&gt;</c> — is substituted in
+    /// a single pass. Without this, a method-level generic parameter whose
+    /// <see cref="Type.GenericParameterPosition"/> coincides with the
+    /// receiver's own type-parameter position (both commonly <c>0</c> for a
+    /// single-type-parameter type and a single-method-type-parameter method)
+    /// was previously left as an unresolved open <c>!!0</c> reference (or,
+    /// before the companion fix, silently and incorrectly matched against the
+    /// receiver's own argument). May be default/empty when the method is
+    /// non-generic or its type arguments could not be recovered.</param>
     /// <returns>The substituted target symbol or <see langword="null"/>.</returns>
     public static TypeSymbol TrySubstituteParameterTypeFromReceiver(
         MethodInfo method,
         int paramIndex,
-        TypeSymbol receiverType)
+        TypeSymbol receiverType,
+        ImmutableArray<TypeSymbol> symbolicMethodTypeArgs = default)
     {
         if (method == null
             || receiverType is not ImportedTypeSymbol imported
@@ -1106,7 +1122,14 @@ internal sealed class ConversionClassifier
         // (<see cref="TrySubstituteParameterTypeFromMethodTypeArgs"/>), which
         // already understands arrays, tuples, nullable, and arbitrarily nested
         // constructed generics (delegates, `Expression&lt;&gt;`, ...).
-        var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openParamType, openDef, imported.TypeArguments);
+        //
+        // Issue #2375: pass `openMethod`/`symbolicMethodTypeArgs` alongside the
+        // receiver's own `openDef`/`imported.TypeArguments` so a parameter type
+        // that mentions the method's OWN generic parameter (e.g. `TRelated` in
+        // `Expression<Func<TEntity,TRelated>>`) is substituted in the SAME pass
+        // as the receiver's `TEntity` — rather than only ever substituting one
+        // or the other depending on which happens to be tried first.
+        var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openParamType, openDef, imported.TypeArguments, openMethod, symbolicMethodTypeArgs);
         return mapped != null
             && mapped != TypeSymbol.Error
             && (TypeSymbol.ContainsTypeParameter(mapped) || TypeSymbol.ContainsSameCompilationUserType(mapped))
