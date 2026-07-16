@@ -399,7 +399,7 @@ internal sealed class SignatureEncoder
 
             if (ReflectionMetadataEmitter.IsUserGenericTypeReference(structSym))
             {
-                var typeArgs = this.outer.ResolveUserStructTypeSpecArguments(structSym, defSym);
+                var typeArgs = this.outer.userTokens.ResolveUserStructTypeSpecArguments(structSym, defSym);
 
                 var gi = encoder.GenericInstantiation(typeDef, typeArgs.Length, isValueType: !defSym.IsClass);
                 foreach (var arg in typeArgs)

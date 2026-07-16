@@ -245,7 +245,7 @@ internal sealed class ImportedMemberRefFactory
             // tokenise as a TypeSpec, not the bare TypeDef row.
             if (ReflectionMetadataEmitter.IsUserGenericTypeReference(structSym))
             {
-                return this.outer.GetUserStructTypeSpec(structSym);
+                return this.outer.userTokens.GetUserStructTypeSpec(structSym);
             }
 
             if (this.cache.StructTypeDefs.TryGetValue(structSym, out var td))
@@ -2205,7 +2205,7 @@ internal sealed class ImportedMemberRefFactory
         if (builderInfo.Kind == AsyncMethodBuilderKind.Void)
         {
             var voidFn = FunctionTypeSymbol.Get(fnType.ParameterTypes, TypeSymbol.Void);
-            return this.outer.FunctionTypeNeedsSymbolicDelegate(voidFn)
+            return this.outer.userTokens.FunctionTypeNeedsSymbolicDelegate(voidFn)
                 ? this.GetFunctionDelegateCtorRef(voidFn)
                 : (EntityHandle?)null;
         }
@@ -2224,7 +2224,7 @@ internal sealed class ImportedMemberRefFactory
             : ImportedTypeSymbol.Get(taskClrType);
 
         var asyncFn = FunctionTypeSymbol.Get(fnType.ParameterTypes, taskReturn);
-        return this.outer.FunctionTypeNeedsSymbolicDelegate(asyncFn)
+        return this.outer.userTokens.FunctionTypeNeedsSymbolicDelegate(asyncFn)
             ? this.GetFunctionDelegateCtorRef(asyncFn)
             : (EntityHandle?)null;
     }
