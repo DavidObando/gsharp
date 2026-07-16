@@ -893,6 +893,18 @@ internal sealed class LambdaBinder
             package: literal.Function.Package);
         adapterFunction.IsAsync = literal.Function.IsAsync;
 
+        // Issue #2381: propagate the original literal's lexical enclosing
+        // type so a capturing adapter is nested inside the SAME user type as
+        // the literal it replaces (see the closure-nesting rule in
+        // ClosureEmitter.SynthesizeClosures, issue #1335). Without this the
+        // adapter's synthesized FunctionSymbol reports a null
+        // LexicalEnclosingType, so the emitted closure class falls back to a
+        // top-level placement outside the enclosing type's accessibility
+        // domain — an adapter that (like the original literal) reads a
+        // `private`/`protected` member of that type then produces an
+        // unverifiable FieldAccess/MethodAccess IL site.
+        adapterFunction.LexicalEnclosingType = literal.Function.LexicalEnclosingType;
+
         var body = (BoundBlockStatement)new ErasedFunctionLiteralAdapterRewriter(replacementMap, adapterResultType)
             .RewriteStatement(literal.Body);
 
@@ -945,55 +957,57 @@ internal sealed class LambdaBinder
             return element;
         }
 
+        // Issue #1785 / #2026 / #2232 / #2381: a same-compilation user type
+        // anywhere in the element's structure — a bare struct/enum/interface/
+        // delegate, a nullable wrapping one, a tuple element, an array/slice
+        // element (`[]DiagnosticCheck`, `[N]DiagnosticCheck`), or an imported
+        // generic type argument (`List[DiagnosticCheck]`,
+        // `Dictionary[string,DiagnosticCheck]`, arbitrarily nested) — must
+        // route through the symbolic Task<T> construction below rather than
+        // the ordinary reflection-based `taskOpen.MakeGenericType(element.
+        // ClrType)` path further down. Two distinct CLR-type shapes trigger
+        // this, both signalling "not really closed yet":
+        //   - a genuinely null ClrType (bare struct/enum/interface/tuple/
+        //     array/slice — `SliceTypeSymbol`/`ArrayTypeSymbol`'s CLR shape is
+        //     computed ONCE, at construction, as `elementType.ClrType?.
+        //     MakeArrayType()`, so it stays null forever once captured before
+        //     the element's TypeBuilder closes);
+        //   - a NON-null but OBJECT-ERASED ClrType (an imported generic like
+        //     `List<>` closed over a still-building same-compilation argument
+        //     resolves via reflection to `List<object>`, since imported
+        //     generics do not report a null ClrType the way same-compilation
+        //     types do).
+        // `ContainsSameCompilationUserType` (recursing through nullable/
+        // array/slice/tuple/imported-generic wrappers via `GetWrappedTypes`)
+        // and the emitter's `ArgIsSymbolicUserDefined` (the same recursive
+        // shape, reused so the async function's OBSERVABLE return type used
+        // for lambda/delegate target typing — e.g. `Task.Run(() ->
+        // RunAsync())`'s `TResult` inference — matches the REAL closed
+        // generic the kickoff method's CLR signature carries after emission)
+        // together detect both shapes regardless of which one `element.
+        // ClrType` happens to report. A still-OPEN generic type parameter
+        // (e.g. the caller's own `U` substituted in for a generic async
+        // callee's declared return type, or a constructed generic like
+        // `Box[U]`) is handled by the sibling `ContainsTypeParameter` check.
+        if ((TypeSymbol.ContainsSameCompilationUserType(element)
+            || GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.ArgIsSymbolicUserDefined(element)
+            || TypeSymbol.ContainsTypeParameter(element))
+            && Scope.References.TryResolveType(wrapperOpenName, out var symbolicTaskOpen))
+        {
+            // Issue #502 / #320: a user-defined async result type has no CLR
+            // Type yet, so close Task<T> over an object placeholder for
+            // reflection/member lookup while preserving the symbolic result
+            // type for emit-time metadata encoding.
+            var erasedTask = symbolicTaskOpen.MakeGenericType(Scope.References.MapClrTypeToReferences(typeof(object)));
+            return ImportedTypeSymbol.GetConstructed(
+                erasedTask,
+                symbolicTaskOpen,
+                ImmutableArray.Create(element));
+        }
+
         var clr = element.ClrType;
         if (clr == null)
         {
-            // Issue #1785: a nullable same-compilation user type
-            // (`UserStruct?`/`UserEnum?`/`UserClass?`) also has a null ClrType
-            // (its NullableTypeSymbol wraps the struct/enum/class's null
-            // ClrType), so it must widen to `Task<T?>` the same way a bare
-            // user struct/enum/class does below. Symbol-based detection (not
-            // ClrType.IsValueType, which is null for in-flight user types) is
-            // required. Reference-type nullables (`UserClass?`) are included
-            // too — their CLR shape is identical to the bare class, but the
-            // wrapping NullableTypeSymbol still reports a null ClrType and
-            // previously fell through unwrapped, leaving the async function's
-            // observable return type as the bare element instead of
-            // `Task<T?>` (e.g. "Cannot find member Result" at the call site).
-            //
-            // Issue #2026: a still-OPEN generic type parameter (e.g. the
-            // caller's own `U` substituted in for a generic async callee's
-            // declared return type) likewise reports a null ClrType — it is
-            // not yet closed over a concrete CLR type. Route it (and any
-            // type that structurally references a type parameter, e.g. a
-            // constructed generic like `Box[U]`) through the same symbolic
-            // Task<T> construction so the call-site observable return type
-            // stays `Task[U]` instead of silently dropping the Task wrapper.
-            // Issue #2232: a tuple type `(..., UserType, ...)` whose CLR backing
-            // is null because at least one element is a still-in-flight user
-            // type (`TupleTypeSymbol.BuildClrType` returns null unless every
-            // element resolves to a CLR type) must likewise route through the
-            // symbolic Task<T> construction. Otherwise an `async func F() (bool,
-            // UserType)` silently drops its Task wrapper here, so `await F()`
-            // sees the bare tuple and fails with GS0133 "cannot be awaited"
-            // (cascading GS0125 on any deconstructed bindings). A nullable
-            // tuple (`(bool, UserType)?`) is handled the same way.
-            if ((element is StructSymbol or InterfaceSymbol or EnumSymbol or TupleTypeSymbol
-                || (element is NullableTypeSymbol nullableUserVt && nullableUserVt.UnderlyingType is StructSymbol or InterfaceSymbol or EnumSymbol or TupleTypeSymbol)
-                || TypeSymbol.ContainsTypeParameter(element))
-                && Scope.References.TryResolveType(wrapperOpenName, out var symbolicTaskOpen))
-            {
-                // Issue #502 / #320: a user-defined async result type has no CLR
-                // Type yet, so close Task<T> over an object placeholder for
-                // reflection/member lookup while preserving the symbolic result
-                // type for emit-time metadata encoding.
-                var erasedTask = symbolicTaskOpen.MakeGenericType(Scope.References.MapClrTypeToReferences(typeof(object)));
-                return ImportedTypeSymbol.GetConstructed(
-                    erasedTask,
-                    symbolicTaskOpen,
-                    ImmutableArray.Create(element));
-            }
-
             return element;
         }
 
