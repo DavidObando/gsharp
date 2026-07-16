@@ -81,7 +81,18 @@ internal static class MethodInfoHelpers
         if (!structSym.ImplementedClrInterfaces.IsDefaultOrEmpty)
         {
             var callable = CallableParameters(method);
-            var returnClr = method.Type?.ClrType;
+
+            // Issue #2380: use the effective (runtime-shape) CLR type, not the
+            // raw `ClrType` — `NullableTypeSymbol.ClrType` deliberately returns
+            // the *underlying* (unwrapped) type for a value-typed `T?` (see
+            // `NullableLifting.GetEffectiveClrType`'s remarks), so a struct
+            // method whose return or parameter type is `Nullable<T>` never
+            // matched an imported interface method of the same shape and was
+            // never promoted to Virtual|NewSlot via `RequiresVirtualOnValueType`
+            // (ILVerify: "Class implements interface but not method"). The
+            // binder-side `MemberLookup.ClrParamTypeMatchesGenericMethodParam`
+            // already gets this right; this brings the emitter in line with it.
+            var returnClr = NullableLifting.GetEffectiveClrType(method.Type);
             foreach (var ifaceSym in structSym.ImplementedClrInterfaces)
             {
                 // Issue #949: a CLR generic interface closed over a user G# type
@@ -146,7 +157,9 @@ internal static class MethodInfoHelpers
                     var allMatch = true;
                     for (var i = 0; i < clrParams.Length; i++)
                     {
-                        var paramClr = callable[i].Type?.ClrType;
+                        // Issue #2380: same effective-CLR-type fix as `returnClr`
+                        // above, applied per-parameter (e.g. `Find(Guid? id)`).
+                        var paramClr = NullableLifting.GetEffectiveClrType(callable[i].Type);
                         if (paramClr == null || !ClrTypeUtilities.AreSame(paramClr, clrParams[i].ParameterType))
                         {
                             allMatch = false;
