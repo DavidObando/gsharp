@@ -1708,7 +1708,12 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundClrBinaryOperatorExpression(null, node.OperatorKind, left, right, node.Method, node.Type);
+        // Issue #2388: preserve whichever of Method (imported CLR type) /
+        // Function (nullable-lifted same-compilation struct operator) the
+        // original node carried — exactly one is non-null.
+        return node.Function != null
+            ? new BoundClrBinaryOperatorExpression(null, node.OperatorKind, left, right, node.Function, node.Type)
+            : new BoundClrBinaryOperatorExpression(null, node.OperatorKind, left, right, node.Method, node.Type);
     }
 
     /// <summary>Rewrites a CLR unary operator call (Stream C).</summary>

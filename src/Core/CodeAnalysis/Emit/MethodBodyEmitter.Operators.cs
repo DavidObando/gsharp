@@ -1646,15 +1646,292 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitClrBinaryOperator(BoundClrBinaryOperatorExpression op)
     {
+        // Issue #2388: a nullable-lifted call site (either operand
+        // Nullable<T>-wrapped — see TryLiftNullableClrOperatorOperands /
+        // IsLiftedValueTypeClrBinary) was pre-planned into liftedBinarySlots
+        // by SlotPlanner.LiftedBinaryOperatorCollector; falling through to
+        // the naive push-push-call path below would leave a raw
+        // Nullable<T> on the evaluation stack where the resolved operator
+        // expects the bare underlying value — ilverify's StackUnexpected.
+        if (this.liftedBinarySlots.TryGetValue(op, out var liftedSlots))
+        {
+            this.EmitLiftedNullableClrBinary(op, liftedSlots);
+            return;
+        }
+
         // Stream C emit parity: user-defined binary operator on a CLR type.
         // C# operators are public-static methods, so we emit `call` against
         // the resolved MethodInfo with both arguments pushed in source
-        // order.
+        // order. (op.Function is never set on a non-lifted node — the
+        // binder only produces the Function-carrying shape when lifting
+        // applies, so it always has a liftedBinarySlots entry and is
+        // handled above.)
         this.EmitExpression(op.Left);
         this.EmitExpression(op.Right);
         this.il.OpCode(ILOpCode.Call);
         this.il.Token(this.outer.GetMethodReference(op.Method));
         this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(op.Method.ReturnType), op.Type);
+    }
+
+    // Issue #2388: mirrors EmitLiftedNullableBinary's HasValue/get_Value
+    // skeleton, but for a Stream C/D custom-operator call
+    // (BoundClrBinaryOperatorExpression) instead of the built-in operator
+    // table. Because ClrOperatorResolution / the Stream D lookup resolve a
+    // SEPARATE method per operator token (op_Equality vs op_Inequality vs
+    // op_LessThan, ...; see OperatorNames.TryGetBinaryName), the resolved
+    // op.Method/op.Function already IS the exact operator the source wrote
+    // — there is no need to compute `!=` by negating `==`, unlike the
+    // built-in table's EmitLiftedEquality. This lets every comparison kind
+    // share one call-shaped "both present" branch that simply invokes the
+    // resolved method/function; only the "not both present" fallback value
+    // differs (per C# §12.4.8's lifted-equality vs lifted-ordering rules).
+    private void EmitLiftedNullableClrBinary(BoundClrBinaryOperatorExpression op, LiftedBinarySlots slots)
+    {
+        var leftNullable = (NullableTypeSymbol)op.Left.Type;
+        var rightNullable = (NullableTypeSymbol)op.Right.Type;
+        var lhsSlot = slots.LhsSlot;
+        var rhsSlot = slots.RhsSlot;
+
+        if (rhsSlot < 0)
+        {
+            throw new InvalidOperationException(
+                $"Lifted CLR/user binary operator '{op.OperatorKind}': RHS slot missing — a nullable-lifted Stream "
+                + "C/D call site never has a `nil` RHS (see SlotPlanner.IsLiftedValueTypeClrBinary); check "
+                + "LiftedBinaryOperatorCollector.");
+        }
+
+        // Spill both operands.
+        this.EmitExpression(op.Left);
+        this.il.StoreLocal(lhsSlot);
+        this.EmitExpression(op.Right);
+        this.il.StoreLocal(rhsSlot);
+
+        bool isEquality = op.OperatorKind == SyntaxKind.EqualsEqualsToken;
+        bool isInequality = op.OperatorKind == SyntaxKind.BangEqualsToken;
+        bool isOrdering = op.OperatorKind is SyntaxKind.LessToken or SyntaxKind.LessOrEqualsToken
+            or SyntaxKind.GreaterToken or SyntaxKind.GreaterOrEqualsToken;
+
+        if (isEquality || isInequality)
+        {
+            // §12.4.8: a HasValue mismatch (exactly one operand null) is
+            // false for == and true for !=; both-null is true for == and
+            // false for !=; both-present delegates to the resolved
+            // operator (already the correct op_Equality / op_Inequality).
+            this.EmitLiftedClrComparison(
+                op,
+                lhsSlot,
+                rhsSlot,
+                leftNullable,
+                rightNullable,
+                mismatchResult: isInequality,
+                bothAbsentResult: !isInequality);
+            return;
+        }
+
+        if (isOrdering)
+        {
+            // Any missing operand makes every ordering comparison false —
+            // there is no "both empty" special case (unlike equality).
+            this.EmitLiftedClrComparison(
+                op,
+                lhsSlot,
+                rhsSlot,
+                leftNullable,
+                rightNullable,
+                mismatchResult: false,
+                bothAbsentResult: false);
+            return;
+        }
+
+        // Arithmetic / bitwise: produces Nullable<R>. The same-compilation
+        // Function-carrying case has no runtime CLR Type for the result
+        // underlying, so constructing Nullable<R> symbolically (mirroring
+        // GetNullableCtorMemberRefForUserValueType) is deferred — reported
+        // as a known limitation. Imported-CLR arithmetic operators
+        // (op.Method, e.g. DateTime.op_Subtraction) are fully supported.
+        if (op.Function != null)
+        {
+            throw new NotSupportedException(
+                $"Lifted same-compilation arithmetic/bitwise operator '{op.OperatorKind}' on "
+                + $"'{op.Function.Name}' is not yet supported (issue #2388 scoped equality/ordering "
+                + "lifting; symbolic Nullable<R> construction for a same-compilation result type is "
+                + "deferred follow-up work).");
+        }
+
+        this.EmitLiftedClrArithmetic(op, lhsSlot, rhsSlot, slots.ResultSlot, leftNullable, rightNullable);
+    }
+
+    // Both-present branch calls the resolved op.Method / op.Function
+    // directly; the not-both-present branches produce a caller-supplied
+    // constant per operator-family rules (see call sites above).
+    private void EmitLiftedClrComparison(
+        BoundClrBinaryOperatorExpression op,
+        int lhsSlot,
+        int rhsSlot,
+        NullableTypeSymbol leftNullable,
+        NullableTypeSymbol rightNullable,
+        bool mismatchResult,
+        bool bothAbsentResult)
+    {
+        var getHasValueLhs = this.GetNullableHasValueRef(leftNullable);
+        var getHasValueRhs = this.GetNullableHasValueRef(rightNullable);
+
+        var flagsAgreeLabel = this.il.DefineLabel();
+        var bothAbsentLabel = this.il.DefineLabel();
+        var end = this.il.DefineLabel();
+
+        // Compare HasValue flags; if they differ the result is the fixed
+        // mismatch value for this operator family.
+        this.il.LoadLocalAddress(lhsSlot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(getHasValueLhs);
+        this.il.LoadLocalAddress(rhsSlot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(getHasValueRhs);
+        this.il.Branch(ILOpCode.Beq, flagsAgreeLabel);
+
+        this.il.LoadConstantI4(mismatchResult ? 1 : 0);
+        this.il.Branch(ILOpCode.Br, end);
+
+        // Agreed: either both absent (fixed value) or both present (call
+        // the resolved operator on the unwrapped values).
+        this.il.MarkLabel(flagsAgreeLabel);
+        this.il.LoadLocalAddress(lhsSlot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(getHasValueLhs);
+        this.il.Branch(ILOpCode.Brfalse, bothAbsentLabel);
+
+        this.EmitUnwrappedNullableValue(lhsSlot, leftNullable);
+        this.EmitUnwrappedNullableValue(rhsSlot, rightNullable);
+        this.EmitCallResolvedClrOrFunctionOperator(op);
+        this.il.Branch(ILOpCode.Br, end);
+
+        this.il.MarkLabel(bothAbsentLabel);
+        this.il.LoadConstantI4(bothAbsentResult ? 1 : 0);
+
+        this.il.MarkLabel(end);
+    }
+
+    private void EmitLiftedClrArithmetic(
+        BoundClrBinaryOperatorExpression op,
+        int lhsSlot,
+        int rhsSlot,
+        int resultSlot,
+        NullableTypeSymbol leftNullable,
+        NullableTypeSymbol rightNullable)
+    {
+        if (resultSlot < 0)
+        {
+            throw new InvalidOperationException(
+                $"Lifted CLR binary operator '{op.OperatorKind}' produces Nullable<R> but no result slot was "
+                + "pre-allocated; check LiftedBinaryOperatorCollector and the prepass in CollectLocalsAndLabels.");
+        }
+
+        var getHasValueLhs = this.GetNullableHasValueRef(leftNullable);
+        var getHasValueRhs = this.GetNullableHasValueRef(rightNullable);
+
+        var resultUnderlyingClr = op.Method.ReturnType;
+        if (!NullableLifting.TryConstructNullable(this.outer.emitCtx.References, resultUnderlyingClr, out var nullableClr))
+        {
+            throw new InvalidOperationException(
+                $"Cannot construct Nullable<{resultUnderlyingClr.FullName}>: System.Nullable`1 is not resolvable in the reference set.");
+        }
+
+        var nullableInnerArg = nullableClr.GetGenericArguments()[0];
+        var ctor = nullableClr.GetConstructor(new[] { nullableInnerArg })
+            ?? throw new InvalidOperationException(
+                $"Nullable<{nullableInnerArg.FullName}> has no single-arg constructor.");
+        var nullableToken = this.outer.GetTypeHandleForMember(nullableClr);
+
+        var nullBranch = this.il.DefineLabel();
+        var end = this.il.DefineLabel();
+
+        this.il.LoadLocalAddress(lhsSlot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(getHasValueLhs);
+        this.il.LoadLocalAddress(rhsSlot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(getHasValueRhs);
+        this.il.OpCode(ILOpCode.And);
+        this.il.Branch(ILOpCode.Brfalse, nullBranch);
+
+        this.EmitUnwrappedNullableValue(lhsSlot, leftNullable);
+        this.EmitUnwrappedNullableValue(rhsSlot, rightNullable);
+        this.EmitCallResolvedClrOrFunctionOperator(op);
+        this.il.OpCode(ILOpCode.Newobj);
+        this.il.Token(this.outer.GetCtorReference(ctor));
+        this.il.Branch(ILOpCode.Br, end);
+
+        this.il.MarkLabel(nullBranch);
+        this.il.LoadLocalAddress(resultSlot);
+        this.il.OpCode(ILOpCode.Initobj);
+        this.il.Token(nullableToken);
+        this.il.LoadLocal(resultSlot);
+
+        this.il.MarkLabel(end);
+    }
+
+    // Issue #2388: HasValue/Value accessors on Nullable<T> need different
+    // MemberRef construction depending on whether T has a real runtime CLR
+    // Type (imported CLR value type, e.g. DateTime) or is still
+    // TypeBuilder-backed (same-compilation struct/enum) — mirrors the
+    // existing get_Value split already used by the `(v!!)` unwrap operator
+    // (NullableLifting.IsUserValueTypeNullable / RequiresSymbolicNullableGetValue).
+    private MemberReferenceHandle GetNullableHasValueRef(NullableTypeSymbol nullable)
+    {
+        return NullableLifting.IsUserValueTypeNullable(nullable)
+            ? this.outer.GetNullableGetHasValueMemberRefForUserValueType(nullable)
+            : this.outer.wellKnown.GetNullableGetHasValueReference(nullable.UnderlyingType.ClrType);
+    }
+
+    private MemberReferenceHandle GetNullableValueRef(NullableTypeSymbol nullable)
+    {
+        return NullableLifting.IsUserValueTypeNullable(nullable)
+            ? this.outer.GetNullableGetValueMemberRefForUserValueType(nullable)
+            : this.outer.wellKnown.GetNullableGetValueReference(nullable.UnderlyingType.ClrType);
+    }
+
+    private void EmitUnwrappedNullableValue(int slot, NullableTypeSymbol nullable)
+    {
+        this.il.LoadLocalAddress(slot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(this.GetNullableValueRef(nullable));
+    }
+
+    // Dispatches the "both present" call to whichever carrier the node
+    // holds — op.Method (imported CLR type, e.g. DateTime.op_Equality) via
+    // reflection MemberRef, or op.Function (same-compilation struct
+    // operator, e.g. Meters.op_Equality) via the ordinary
+    // FunctionHandles/MethodHandles cache — mirroring the two-cache
+    // fallback used by every other same-compilation call site
+    // (EmitFunctionPointerFromMethod, BoundCallExpression emission).
+    // Generic same-compilation operator functions are out of scope for
+    // this lifted path (deferred follow-up).
+    private void EmitCallResolvedClrOrFunctionOperator(BoundClrBinaryOperatorExpression op)
+    {
+        if (op.Function != null)
+        {
+            if (!this.outer.cache.FunctionHandles.TryGetValue(op.Function, out var fnHandle)
+                && !this.outer.cache.MethodHandles.TryGetValue(op.Function, out fnHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Lifted same-compilation operator '{op.Function.Name}' has no emitted MethodDef.");
+            }
+
+            if (op.Function.IsGeneric && !op.Function.TypeParameters.IsDefaultOrEmpty)
+            {
+                throw new NotSupportedException(
+                    $"Lifted same-compilation operator '{op.Function.Name}' is generic; MethodSpec construction for "
+                    + "a nullable-lifted generic operator call is not yet supported (deferred follow-up).");
+            }
+
+            this.il.OpCode(ILOpCode.Call);
+            this.il.Token(fnHandle);
+            return;
+        }
+
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(this.outer.GetMethodReference(op.Method));
     }
 
     private void EmitClrUnaryOperator(BoundClrUnaryOperatorExpression op)

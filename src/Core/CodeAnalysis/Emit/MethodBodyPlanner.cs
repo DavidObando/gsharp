@@ -338,7 +338,7 @@ internal sealed class MethodBodyPlanner
         Dictionary<BoundExpression, int> receiverSpillSlots,
         Dictionary<BoundExpression, int> indexAssignmentValueSlots,
         Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
-        Dictionary<BoundBinaryExpression, LiftedBinarySlots> liftedBinarySlots,
+        Dictionary<BoundExpression, LiftedBinarySlots> liftedBinarySlots,
         Dictionary<BoundBinaryExpression, int> nullableCoalesceSpillSlots,
         InstructionEncoder il,
         Dictionary<BoundStackAllocExpression, int> stackAllocResultSlots = null)
@@ -653,11 +653,13 @@ internal sealed class MethodBodyPlanner
         // operators additionally need a Nullable<R>-typed result slot for
         // the null-branch `ldloca; initobj Nullable<R>; ldloc` shape;
         // equality / ordering operators return bool and need no result
-        // slot. The slot bundle is keyed by the BoundBinaryExpression
-        // node and stored in liftedBinarySlots so the emitter can look it
-        // up at lowering time. Skip nodes already owned by other
-        // collectors (NullCoalesce uses receiverSpillSlots) to avoid
-        // double allocation.
+        // slot. The slot bundle is keyed by the lifted expression node
+        // (a BoundBinaryExpression from the built-in operator table, or —
+        // issue #2388 — a BoundClrBinaryOperatorExpression from a
+        // nullable-lifted Stream C/D custom operator) and stored in
+        // liftedBinarySlots so the emitter can look it up at lowering time.
+        // Skip nodes already owned by other collectors (NullCoalesce uses
+        // receiverSpillSlots) to avoid double allocation.
         foreach (var lifted in this.CollectLiftedBinaryOperators(body))
         {
             if (liftedBinarySlots.ContainsKey(lifted))
@@ -665,23 +667,28 @@ internal sealed class MethodBodyPlanner
                 continue;
             }
 
+            var (liftedLeft, liftedRight, liftedType) = DecomposeLiftedBinary(lifted);
+
             var lhsSlot = localTypes.Count;
-            localTypes.Add(lifted.Left.Type);
+            localTypes.Add(liftedLeft.Type);
 
             // `value-type Nullable<T> == nil` / `!= nil` only needs an
             // LHS spill slot; the RHS is the `nil` literal (no temp
-            // required) and the result is bool (no result slot).
+            // required) and the result is bool (no result slot). Issue
+            // #2388: a lifted BoundClrBinaryOperatorExpression never has a
+            // `nil` RHS (see IsLiftedValueTypeClrBinary), so this branch is
+            // only ever taken for the built-in-operator-table shape.
             int rhsSlot = -1;
             int resultSlot = -1;
-            if (lifted.Right.Type != TypeSymbol.Null)
+            if (liftedRight.Type != TypeSymbol.Null)
             {
                 rhsSlot = localTypes.Count;
-                localTypes.Add(lifted.Right.Type);
+                localTypes.Add(liftedRight.Type);
 
-                if (lifted.Type is NullableTypeSymbol)
+                if (liftedType is NullableTypeSymbol)
                 {
                     resultSlot = localTypes.Count;
-                    localTypes.Add(lifted.Type);
+                    localTypes.Add(liftedType);
                 }
             }
 
@@ -1319,12 +1326,29 @@ internal sealed class MethodBodyPlanner
     // operand). Arithmetic / bitwise forms additionally need a
     // Nullable<R>-typed result slot so the null branch can initobj a
     // default Nullable<R> and load it as a value.
-    internal IEnumerable<BoundBinaryExpression> CollectLiftedBinaryOperators(BoundNode root)
+    //
+    // Issue #2388: widened to `BoundExpression` so a nullable-lifted Stream
+    // C/D `BoundClrBinaryOperatorExpression` (custom-equality operator on
+    // `Nullable<T>` operands) shares the same slot bundle as the built-in
+    // operator table's `BoundBinaryExpression` shape.
+    internal IEnumerable<BoundExpression> CollectLiftedBinaryOperators(BoundNode root)
     {
-        var sink = new List<BoundBinaryExpression>();
+        var sink = new List<BoundExpression>();
         this.slotPlanner.CollectLiftedBinaryOperators((BoundStatement)root, sink);
         return sink;
     }
+
+    // Issue #2388: a lifted binary node is either the built-in operator
+    // table's BoundBinaryExpression or a nullable-lifted Stream C/D
+    // BoundClrBinaryOperatorExpression; both shapes expose the same
+    // Left/Right/Type triple the slot allocator needs, but neither shares a
+    // common base-class accessor for Left/Right, so decompose explicitly.
+    private static (BoundExpression Left, BoundExpression Right, TypeSymbol Type) DecomposeLiftedBinary(BoundExpression lifted) => lifted switch
+    {
+        BoundBinaryExpression be => (be.Left, be.Right, be.Type),
+        BoundClrBinaryOperatorExpression ce => (ce.Left, ce.Right, ce.Type),
+        _ => throw new InvalidOperationException($"DecomposeLiftedBinary: unexpected lifted binary node kind '{lifted.Kind}'."),
+    };
 
     internal IEnumerable<BoundConversionExpression> CollectNullableNumericWideningConversions(BoundNode root)
     {

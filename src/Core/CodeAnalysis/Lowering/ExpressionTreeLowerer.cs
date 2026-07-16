@@ -885,6 +885,22 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         BoundClrBinaryOperatorExpression expression,
         Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap)
     {
+        // Issue #2388: the nullable-lifted same-compilation struct operator
+        // shape (Function set, Method null) has no reflection MethodInfo
+        // available at lowering time (the declaring struct's operator is
+        // still TypeBuilder-backed) — the `Expression.Equal`/`Expression.Add`
+        // etc. factories all require an actual MethodInfo for a user-defined
+        // operator overload, so this shape cannot yet be lowered into an
+        // expression tree. The imported-CLR-type shape (Method set) is
+        // unaffected: `Expression.Equal(nullableLeft, nullableRight, false,
+        // method)` already performs the Nullable<T> unwrap/lift itself at
+        // expression-tree-compile time, so no change is needed there.
+        if (expression.Method == null)
+        {
+            throw new NotSupportedException(
+                "Expression trees do not yet support a nullable-lifted same-compilation user operator call (issue #2388).");
+        }
+
         var methodName = expression.OperatorKind switch
         {
             SyntaxKind.PlusToken => nameof(System.Linq.Expressions.Expression.Add),

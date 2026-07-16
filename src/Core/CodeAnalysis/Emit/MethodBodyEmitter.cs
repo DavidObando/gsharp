@@ -94,7 +94,7 @@ internal sealed partial class MethodBodyEmitter
     private readonly Dictionary<BoundBinaryExpression, int> nullableCoalesceSpillSlots;
     private readonly Dictionary<BoundExpression, int> indexAssignmentValueSlots;
     private readonly Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes;
-    private readonly Dictionary<BoundBinaryExpression, LiftedBinarySlots> liftedBinarySlots;
+    private readonly Dictionary<BoundExpression, LiftedBinarySlots> liftedBinarySlots;
     private readonly ParameterSymbol structThisParameter;
     private readonly Lowering.Async.AsyncStateMachineFieldMap asyncFieldMap;
     private readonly Lowering.Async.AsyncStateMachinePlan asyncPlan;
@@ -153,7 +153,7 @@ internal sealed partial class MethodBodyEmitter
         Dictionary<BoundExpression, int> receiverSpillSlots,
         Dictionary<BoundExpression, int> indexAssignmentValueSlots,
         Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
-        Dictionary<BoundBinaryExpression, LiftedBinarySlots> liftedBinarySlots = null,
+        Dictionary<BoundExpression, LiftedBinarySlots> liftedBinarySlots = null,
         Dictionary<BoundBinaryExpression, int> nullableCoalesceSpillSlots = null,
         ParameterSymbol structThisParameter = null,
         Lowering.Async.AsyncStateMachineFieldMap asyncFieldMap = null,
@@ -181,7 +181,7 @@ internal sealed partial class MethodBodyEmitter
         this.receiverSpillSlots = receiverSpillSlots;
         this.indexAssignmentValueSlots = indexAssignmentValueSlots;
         this.goEnclosingScopes = goEnclosingScopes;
-        this.liftedBinarySlots = liftedBinarySlots ?? new Dictionary<BoundBinaryExpression, LiftedBinarySlots>();
+        this.liftedBinarySlots = liftedBinarySlots ?? new Dictionary<BoundExpression, LiftedBinarySlots>();
         this.nullableCoalesceSpillSlots = nullableCoalesceSpillSlots ?? new Dictionary<BoundBinaryExpression, int>();
         this.structThisParameter = structThisParameter;
         this.asyncFieldMap = asyncFieldMap;
