@@ -133,6 +133,81 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         return new ImportedTypeSymbol(name, erasedClosedType, openDefinition, typeArguments);
     }
 
+    /// <summary>
+    /// Issue #2381: recursively reconstructs the TRUE closed CLR type for
+    /// this constructed generic, recomputing every type argument's CLR type
+    /// from its CURRENT state rather than trusting the cached (possibly
+    /// erased) <see cref="TypeSymbol.ClrType"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>A constructed <see cref="ImportedTypeSymbol"/> closed over a
+    /// same-compilation class/struct argument (e.g. <c>List[DiagnosticCheck]</c>)
+    /// caches an object-erased shape (<c>List&lt;object&gt;</c>) because, at
+    /// the time <see cref="GetConstructed"/> ran during binding, the
+    /// argument's own CLR type (its emitted <c>TypeBuilder</c>) did not exist
+    /// yet — see <see cref="HasSubstitutableTypeArgument"/>. That erased
+    /// shape is safe for member/index/conversion resolution during binding,
+    /// but is wrong for final metadata (method signatures, generic builder
+    /// instantiation, field types) once the argument's real CLR type is
+    /// available.</para>
+    /// <para>This walks <see cref="OpenDefinition"/> + <see cref="TypeArguments"/>
+    /// and rebuilds the closed type via <see cref="Type.MakeGenericType"/>
+    /// using each argument's CURRENT CLR type, recursing into nested
+    /// constructed generics (e.g. <c>List[List[UserClass]]</c>,
+    /// <c>Dictionary[string, UserClass]</c>) so every level reflects its
+    /// real closed shape. Value-typed nullable arguments are projected
+    /// through <see cref="NullableLifting.GetEffectiveClrType"/> so they
+    /// close over <c>Nullable&lt;T&gt;</c> rather than the bare value type.</para>
+    /// <para>Falls back to the cached (possibly erased) <see cref="TypeSymbol.ClrType"/>
+    /// when reification is not possible: an in-scope type parameter argument
+    /// (<see cref="HasTypeParameterArgument"/>) has no concrete CLR type to
+    /// close over; a nested argument's own CLR type is still unavailable; or
+    /// <see cref="Type.MakeGenericType"/> legitimately rejects the
+    /// reconstructed arguments (CLR generic constraints).</para>
+    /// </remarks>
+    /// <returns>The reconstructed closed CLR type, or the cached (possibly erased) <see cref="TypeSymbol.ClrType"/> when reification is not possible.</returns>
+    public Type ReifyClosedClrType()
+    {
+        if (OpenDefinition == null || TypeArguments.IsDefaultOrEmpty || HasTypeParameterArgument)
+        {
+            return ClrType;
+        }
+
+        var args = new Type[TypeArguments.Length];
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = TypeArguments[i];
+            var argClr = arg switch
+            {
+                ImportedTypeSymbol nestedImported => nestedImported.ReifyClosedClrType(),
+                NullableTypeSymbol => NullableLifting.GetEffectiveClrType(arg),
+                _ => arg?.ClrType,
+            };
+
+            if (argClr == null)
+            {
+                // Some argument still lacks a concrete CLR type (e.g. its own
+                // TypeBuilder has not been created yet); degrade to the
+                // cached erased shape rather than fail outright.
+                return ClrType;
+            }
+
+            args[i] = argClr;
+        }
+
+        try
+        {
+            return OpenDefinition.MakeGenericType(args);
+        }
+        catch (ArgumentException)
+        {
+            // MakeGenericType can legitimately reject the reconstructed
+            // arguments for CLR generic-constraint reasons; degrade to the
+            // erased shape instead of throwing.
+            return ClrType;
+        }
+    }
+
     /// <inheritdoc/>
     public override DocumentationComment GetDocumentation()
     {
