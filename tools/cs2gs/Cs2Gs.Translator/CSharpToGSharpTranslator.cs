@@ -14,6 +14,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
+using Microsoft.CodeAnalysis.Text;
 
 namespace Cs2Gs.Translator;
 
@@ -230,10 +231,43 @@ public sealed class CSharpToGSharpTranslator
         var typeMapper = new CSharpTypeMapper(anonymousTypeRegistry);
         var visitor = new DeclarationVisitor(context, typeMapper, openBases, staticUsingTargets, entryPoint, partialTypeParts, this.preservePartialParts, this.markMergedTypePartial);
 
+        // Issue #2382: a NATIVE C# top-level-statements program (`GlobalStatementSyntax`
+        // members directly under the compilation unit — no enclosing class/method
+        // syntax at all, unlike the explicit-`Main` case handled by `entryType`
+        // below) is recognized by its synthesized entry point's declaring syntax
+        // reference pointing at THIS file's `CompilationUnitSyntax` itself, rather
+        // than at any real method/type declaration. At most one file in a
+        // compilation may contribute top-level statements (ADR-0066 D1 / CS8802),
+        // so this only ever matches one document.
+        List<GlobalStatementSyntax> globalStatements = root.Members.OfType<GlobalStatementSyntax>().ToList();
+        bool hasNativeTopLevelStatements = globalStatements.Count > 0
+            && entryPoint != null
+            && entryPoint.DeclaringSyntaxReferences.Length > 0
+            && entryPoint.DeclaringSyntaxReferences[0].SyntaxTree == root.SyntaxTree
+            && entryPoint.DeclaringSyntaxReferences[0].GetSyntax() is CompilationUnitSyntax;
+
         var members = new List<GNode>();
         var trailingStatements = new List<GNode>();
+
+        if (hasNativeTopLevelStatements)
+        {
+            (IReadOnlyList<GNode> hoistedFuncs, IReadOnlyList<GNode> entryStatements) =
+                visitor.TranslateTopLevelProgram(globalStatements, entryPoint);
+            members.AddRange(hoistedFuncs);
+            trailingStatements.AddRange(entryStatements);
+        }
+
         foreach (MemberDeclarationSyntax member in EnumerateTopLevelDeclarations(root))
         {
+            if (member is GlobalStatementSyntax)
+            {
+                // Already handled in a single pass above (native top-level
+                // statements are not visited one-by-one like an ordinary member —
+                // the whole sequence is translated together so the local-function
+                // capture/hoist analysis can see every sibling statement).
+                continue;
+            }
+
             if (entryType != null
                 && member is TypeDeclarationSyntax typeDecl
                 && context.GetDeclaredSymbol(member) is INamedTypeSymbol declaredType
@@ -1153,6 +1187,93 @@ public sealed class CSharpToGSharpTranslator
             return (funcs, statements);
         }
 
+        /// <summary>
+        /// Issue #2382: translates a native C# top-level-statements program
+        /// (Roslyn's <c>GlobalStatementSyntax</c> members, with no enclosing
+        /// class/method syntax at all — as opposed to <see cref="TranslateEntryType"/>,
+        /// which hoists an EXPLICIT <c>Main</c> method's body) directly to G#
+        /// top-level statements. G# already has native top-level-statement
+        /// support (ADR-0066) with the exact same shape: an implicit <c>args</c>
+        /// binding, top-level <c>await</c>, and a top-level <c>return</c> —
+        /// so the translation is a straight statement-by-statement mapping
+        /// through the SAME <see cref="TranslateStatement"/>/
+        /// <see cref="HoistCallBeforeDeclLocalFunctions(BlockSyntax)"/> seams a
+        /// method body uses, not a second parallel statement translator.
+        /// <para>
+        /// A top-level local function that captures no sibling top-level local
+        /// (and does not read the implicit <c>args</c> parameter) is hoisted
+        /// OUT to its own top-level G# <c>func</c> sibling declaration (see
+        /// <see cref="TranslateTopLevelLocalFunctionAsFunc"/>) — G# funcs are
+        /// pre-declared in binding scope regardless of textual order (ADR-0066),
+        /// so this also gives such a local function unrestricted forward-
+        /// reference support, unlike the ordered `let`-binding fallback used for
+        /// a genuinely capturing local function (which keeps the existing
+        /// call-before-decl hoist behavior, issue #2231).
+        /// </para>
+        /// </summary>
+        /// <param name="globalStatements">Every top-level <c>GlobalStatementSyntax</c> in this file, in source order.</param>
+        /// <param name="entryPoint">The synthesized top-level-statements entry-point method symbol.</param>
+        /// <returns>The hoisted top-level funcs (capture-free local functions) and the entry's top-level statements.</returns>
+        public (IReadOnlyList<GNode> Funcs, IReadOnlyList<GNode> Statements) TranslateTopLevelProgram(
+            IReadOnlyList<GlobalStatementSyntax> globalStatements,
+            IMethodSymbol entryPoint)
+        {
+            this.context.Report(new TranslationDiagnostic(
+                nameof(SyntaxKind.GlobalStatement),
+                "C# native top-level statements are translated directly to G# top-level statements (ADR-0066): a capture-free top-level local function is hoisted to a sibling top-level 'func', and a capturing one keeps its ordered 'let' binding among the statements (issue #2382).",
+                globalStatements[0].GetLocation(),
+                TranslationSeverity.Info));
+
+            List<StatementSyntax> flatStatements = globalStatements.Select(gs => gs.Statement).ToList();
+            TextSpan enclosingSpan = TextSpan.FromBounds(flatStatements[0].SpanStart, flatStatements[^1].Span.End);
+            IReadOnlyList<StatementSyntax> ordered = this.HoistCallBeforeDeclLocalFunctions(flatStatements, enclosingSpan);
+
+            // Issue #1904 (mirrored here): the synthesized top-level entry
+            // point's own implicit parameter is always literally named "args"
+            // (there is no C# source spelling to rename it from — unlike an
+            // explicit `Main(string[] arguments)` — since the parameter is not
+            // written by hand at all), but the rename guard is kept for
+            // defense-in-depth in case a future Roslyn version ever changes
+            // that assumption.
+            IParameterSymbol argsParameter = entryPoint.Parameters.FirstOrDefault();
+            bool renamedArgs = argsParameter != null && argsParameter.Name != "args";
+            if (renamedArgs)
+            {
+                this.patternBindings[argsParameter] = new IdentifierExpression("args");
+            }
+
+            var funcs = new List<GNode>();
+            var statements = new List<GNode>();
+            try
+            {
+                foreach (StatementSyntax statement in ordered)
+                {
+                    if (statement is LocalFunctionStatementSyntax localFunction
+                        && this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol localSymbol
+                        && this.IsTopLevelLocalFunctionCaptureFree(localFunction, argsParameter, enclosingSpan))
+                    {
+                        GMember hoisted = this.TranslateTopLevelLocalFunctionAsFunc(localFunction, localSymbol);
+                        if (hoisted != null)
+                        {
+                            funcs.Add(hoisted);
+                            continue;
+                        }
+                    }
+
+                    statements.AddRange(this.TranslateStatement(statement));
+                }
+            }
+            finally
+            {
+                if (renamedArgs)
+                {
+                    this.patternBindings.Remove(argsParameter);
+                }
+            }
+
+            return (funcs, statements);
+        }
+
         // The set of hard G# keywords (Cs2Gs.Compiler SyntaxFacts.GetKeywordKind).
         // A C# identifier that collides with one of these cannot be emitted bare; it
         // is suffixed with `_` consistently at every declaration and reference site.
@@ -1177,6 +1298,96 @@ public sealed class CSharpToGSharpTranslator
             }
 
             return GSharpReservedWords.Contains(name) ? name + "_" : name;
+        }
+
+        // Issue #2382: whether `localFunction` — declared among the top-level
+        // statements — captures NOTHING from its top-level-statement siblings
+        // (no sibling local, no reference to the implicit `args` parameter).
+        // Such a local function can be hoisted to a genuine, independently
+        // orderable top-level `func` (see <see cref="TranslateTopLevelLocalFunctionAsFunc"/>);
+        // one that DOES capture a sibling must stay an in-place, ordered `let`
+        // binding (the existing <see cref="HoistCallBeforeDeclLocalFunctions(BlockSyntax)"/>
+        // forward-reference reordering already handles that case exactly like
+        // an ordinary method body's captured local function).
+        private bool IsTopLevelLocalFunctionCaptureFree(
+            LocalFunctionStatementSyntax localFunction, IParameterSymbol argsParameter, TextSpan enclosingSpan)
+        {
+            // A `static` local function can never capture in C# (CS8421) — the
+            // language guarantees this shape is already capture-free, so no
+            // body walk is needed.
+            if (localFunction.Modifiers.Any(SyntaxKind.StaticKeyword))
+            {
+                return true;
+            }
+
+            foreach (IdentifierNameSyntax id in localFunction.DescendantNodes().OfType<IdentifierNameSyntax>())
+            {
+                ISymbol symbol = this.context.GetSymbolInfo(id).Symbol;
+
+                if (argsParameter != null && SymbolEqualityComparer.Default.Equals(symbol, argsParameter))
+                {
+                    // References the entry point's own implicit `args` — a
+                    // hoisted top-level `func` is a sibling declaration with no
+                    // implicit access to it, so this must stay an in-place
+                    // closure instead.
+                    return false;
+                }
+
+                if (symbol is not ILocalSymbol local)
+                {
+                    continue;
+                }
+
+                foreach (SyntaxReference reference in local.DeclaringSyntaxReferences)
+                {
+                    SyntaxNode declaration = reference.GetSyntax();
+                    if (localFunction.Span.Contains(declaration.Span))
+                    {
+                        // Its own local (recursion, a nested block, ...) — fine.
+                        continue;
+                    }
+
+                    if (enclosingSpan.Contains(declaration.Span))
+                    {
+                        // Captures a sibling top-level statement's local.
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        // Issue #2382: translates a CAPTURE-FREE top-level local function into
+        // its own top-level G# `func` sibling declaration — reusing the exact
+        // same parameter/return-type/type-parameter mapping and the same
+        // <see cref="TranslateBody"/> seam an ordinary method or the sibling
+        // static methods of an explicit `Main`'s enclosing class already use
+        // (<see cref="TranslateEntryType"/>), rather than the `let`-bound
+        // function-LITERAL form <see cref="TranslateLocalFunction"/> emits for
+        // an in-place/capturing local function.
+        private GMember TranslateTopLevelLocalFunctionAsFunc(LocalFunctionStatementSyntax localFunction, IMethodSymbol symbol)
+        {
+            bool isAsync = localFunction.Modifiers.Any(m => m.IsKind(SyntaxKind.AsyncKeyword));
+            List<Parameter> parameters = this.MapParameters(symbol, localFunction.ParameterList, skipFirst: false);
+            GTypeReference returnType = this.MapDelegateLikeReturnType(symbol, isAsync, localFunction.ReturnType.GetLocation());
+            List<TypeParameter> typeParameters = this.MapMethodTypeParameters(symbol);
+            BlockStatement body = this.TranslateBody(localFunction, $"top-level local function '{localFunction.Identifier.Text}'");
+
+            // A genuine top-level `func` declaration (unlike the function-LITERAL
+            // form a non-hoisted local function lowers to) DOES support G#'s
+            // native `ref` return modifier (ADR-0060/issue #490), so hoisting
+            // incidentally lifts the "ref-returning local function has no
+            // canonical form" gap (issue #1900) that still applies to a
+            // captured/non-hoisted local function.
+            return new MethodDeclaration(
+                SanitizeIdentifier(localFunction.Identifier.Text),
+                parameters,
+                returnType,
+                body,
+                typeParameters,
+                isAsync: isAsync,
+                isRefReturn: symbol.ReturnsByRef);
         }
 
         /// <summary>
@@ -5793,6 +6004,29 @@ public sealed class CSharpToGSharpTranslator
                     }
 
                     break;
+
+                // Issue #2382: a capture-free top-level local function is hoisted
+                // to a genuine top-level `func` (see
+                // <see cref="TranslateTopLevelLocalFunctionAsFunc"/>), which
+                // routes its body through this SAME seam (rather than the
+                // `let`-bound function-literal path <see cref="TranslateLocalFunction"/>
+                // uses for an in-place/captured local function) so a hoisted
+                // local function's body gets identical spill/parameter-shadow/
+                // unsafe handling to an ordinary method's.
+                case LocalFunctionStatementSyntax localFunction:
+                    if (localFunction.Body != null)
+                    {
+                        return this.TranslateBlock(localFunction.Body);
+                    }
+
+                    if (localFunction.ExpressionBody != null)
+                    {
+                        bool returnsVoidLocal =
+                            (this.context.GetDeclaredSymbol(localFunction) as IMethodSymbol)?.ReturnsVoid ?? false;
+                        return this.WrapExpressionBody(localFunction.ExpressionBody.Expression, returnsVoidLocal);
+                    }
+
+                    break;
             }
 
             // No recognizable body; emit an empty parseable block.
@@ -5858,9 +6092,19 @@ public sealed class CSharpToGSharpTranslator
         // than the last sibling local it captures by closure, since G# `let`
         // bindings require captured locals to already be in scope at the
         // binding point (issue #2231).
-        private IReadOnlyList<StatementSyntax> HoistCallBeforeDeclLocalFunctions(BlockSyntax block)
+        private IReadOnlyList<StatementSyntax> HoistCallBeforeDeclLocalFunctions(BlockSyntax block) =>
+            this.HoistCallBeforeDeclLocalFunctions(block.Statements, block.Span);
+
+        // Issue #2382: the C# top-level-statements entry point has no enclosing
+        // `BlockSyntax` (its statements are sibling `GlobalStatementSyntax`
+        // members directly under the compilation unit — see
+        // <see cref="TranslateTopLevelProgram"/>), so the hoist algorithm is
+        // generalized to any flat statement sequence plus the `TextSpan` that
+        // bounds "sibling of this sequence" (a real block's own span, or the
+        // union span of every top-level statement for the synthesized entry).
+        private IReadOnlyList<StatementSyntax> HoistCallBeforeDeclLocalFunctions(
+            IReadOnlyList<StatementSyntax> statements, TextSpan enclosingSpan)
         {
-            SyntaxList<StatementSyntax> statements = block.Statements;
             var localFunctions = statements.OfType<LocalFunctionStatementSyntax>().ToList();
             if (localFunctions.Count == 0)
             {
@@ -5871,7 +6115,7 @@ public sealed class CSharpToGSharpTranslator
             var toHoist = new List<(LocalFunctionStatementSyntax Function, int DeclIndex, int? AnchorIndex)>();
             foreach (LocalFunctionStatementSyntax localFunction in localFunctions)
             {
-                int declIndex = statements.IndexOf(localFunction);
+                int declIndex = IndexOfReference(statements, localFunction);
                 if (this.context.GetDeclaredSymbol(localFunction) is not IMethodSymbol funcSymbol)
                 {
                     continue;
@@ -5899,7 +6143,7 @@ public sealed class CSharpToGSharpTranslator
                     continue;
                 }
 
-                int? barrierIndex = this.SiblingCaptureBarrierIndex(localFunction, block, statements);
+                int? barrierIndex = this.SiblingCaptureBarrierIndex(localFunction, enclosingSpan, statements);
                 int anchorIndex = barrierIndex.HasValue ? barrierIndex.Value + 1 : 0;
                 if (anchorIndex > firstUseIndex)
                 {
@@ -5934,6 +6178,22 @@ public sealed class CSharpToGSharpTranslator
             return reordered;
         }
 
+        // `SyntaxList<T>`/`List<T>` both expose `IndexOf`, but the generalized
+        // `IReadOnlyList<StatementSyntax>` overload above does not — this finds
+        // the same (reference-identity) index for either concrete backing store.
+        private static int IndexOfReference(IReadOnlyList<StatementSyntax> statements, StatementSyntax target)
+        {
+            for (int i = 0; i < statements.Count; i++)
+            {
+                if (ReferenceEquals(statements[i], target))
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
         // Returns the index (within `statements`) of the last statement that
         // declares a local variable captured by `localFunction` from the
         // enclosing block — the `let` binding must not be hoisted above this
@@ -5942,7 +6202,7 @@ public sealed class CSharpToGSharpTranslator
         // function's own locals/parameters don't count — those remain in scope
         // at the front of the block).
         private int? SiblingCaptureBarrierIndex(
-            LocalFunctionStatementSyntax localFunction, BlockSyntax block, SyntaxList<StatementSyntax> statements)
+            LocalFunctionStatementSyntax localFunction, TextSpan enclosingSpan, IReadOnlyList<StatementSyntax> statements)
         {
             int? barrier = null;
             foreach (IdentifierNameSyntax id in localFunction.DescendantNodes().OfType<IdentifierNameSyntax>())
@@ -5964,7 +6224,7 @@ public sealed class CSharpToGSharpTranslator
 
                     // Not a sibling of this block (e.g. an outer-scope local) —
                     // already in scope wherever the `let` binding lands.
-                    if (!block.Span.Contains(declaration.Span))
+                    if (!enclosingSpan.Contains(declaration.Span))
                     {
                         continue;
                     }
