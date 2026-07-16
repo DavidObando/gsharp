@@ -2583,6 +2583,43 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
+        // Issue #2392: the "Phase A" <Program> TypeDef loop below always
+        // emits the entry-point/globals-host package's <Program> TypeDef
+        // FIRST (so its FieldDef range stays monotone — issue #191), no
+        // matter where that package sits in `packages`. MethodDef row
+        // planning must mirror that exact TypeDef order: ECMA-335 requires
+        // TypeDef.MethodList to be non-decreasing down the TypeDef table,
+        // since the CLR (and ilverify/decompilers) derive each TypeDef's
+        // owned method range from consecutive MethodList values. `packages`
+        // is ordered by first-seen syntax tree — itself a function of
+        // build-tool/file enumeration order, not package identity — so
+        // whenever the entry-point package is NOT `packages[0]` (e.g. its
+        // package-less file wasn't bound first), planning ctor/function
+        // rows in that raw order while still emitting its TypeDef first
+        // produces a non-monotone MethodList sequence. The synthesized
+        // entry point (`<Main>$`), hoisted top-level local functions, and
+        // non-capturing top-level lambdas then silently attribute to
+        // whichever OTHER package's <Program> the row-range lookup resolves
+        // to, causing spurious cross-package FieldAccess/MethodAccess
+        // ilverify failures. Reorder here, once, so every package-ordered
+        // loop below (row planning, method-body emission, and the TypeDef
+        // loop itself) shares one entry-point-first order.
+        var programEntryPackage = entryPointPackage ?? (packages.IsDefaultOrEmpty ? null : packages[0]);
+        if (programEntryPackage != null && packages.Length > 0 && packages[0] != programEntryPackage)
+        {
+            var reorderedPackages = ImmutableArray.CreateBuilder<PackageSymbol>(packages.Length);
+            reorderedPackages.Add(programEntryPackage);
+            foreach (var pkg in packages)
+            {
+                if (pkg != programEntryPackage)
+                {
+                    reorderedPackages.Add(pkg);
+                }
+            }
+
+            packages = reorderedPackages.MoveToImmutable();
+        }
+
         // Plan method rows for packages (per-package ctor + functions + entry).
         var packageCtorRows = new Dictionary<PackageSymbol, int>();
         var nextRow = firstPackageCtorRow;
