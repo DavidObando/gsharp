@@ -2882,6 +2882,23 @@ internal sealed class MemberLookup
             return SameTypeSymbol(candidate, symbolicArgs[position]);
         }
 
+        // Issue #2380 follow-up: a contract position of `Nullable<T>` (e.g.
+        // `T? Find()` on `IRepo<T> where T : struct`) is a constructed
+        // generic whose single type argument is the interface's OWN generic
+        // parameter, not an `ImportedTypeSymbol`'s type argument. A G#
+        // candidate satisfying this via `Color?` projects as a
+        // `NullableTypeSymbol`, which the `ImportedTypeSymbol` branch below
+        // does not recognize — it would fall through to the erased
+        // CLR-projected comparison, which fails for same-compilation
+        // `UnderlyingType`s (their `ClrType` is always null). Unwrap both
+        // sides structurally instead.
+        if (openType.IsConstructedGenericType
+            && openType.GetGenericTypeDefinition().IsSameAs(typeof(Nullable<>))
+            && candidate is NullableTypeSymbol nullableCandidate)
+        {
+            return ParameterTypeMatchesSubstituted(nullableCandidate.UnderlyingType, openType.GetGenericArguments()[0], symbolicArgs);
+        }
+
         // Issue #985: the contract position may itself be a *constructed
         // generic* that mentions the interface's generic parameters — e.g.
         // `IEnumerable<T>.GetEnumerator()` returns `IEnumerator<T>`. The erased
