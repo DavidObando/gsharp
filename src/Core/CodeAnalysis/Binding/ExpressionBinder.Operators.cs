@@ -59,18 +59,19 @@ internal sealed partial class ExpressionBinder
         if (boundOperator == null)
         {
             // Stream D: try user-defined `func (a T) operator <op>() R` on the
-            // operand's user type. Same-package methods bind onto the struct
-            // (Phase 6.4); the receiver is Parameters[0] (Parameters.Length==1
-            // for unary ops). Extension-function fallback also covered.
+            // operand's user type. Issue #2377: the operator is a static,
+            // SpecialName `op_*` method on the struct/class (StaticMethods),
+            // NOT an instance method — the receiver-clause `a` is preserved
+            // only as the operator's first formal parameter (Parameters[0],
+            // Parameters.Length==1 for unary ops). Extension-function
+            // fallback (non-owned receiver types) also covered.
             var userOpName = OperatorNames.TryGetUnaryName(syntax.OperatorToken.Kind);
             if (userOpName != null && boundOperand.Type != null)
             {
                 FunctionSymbol userOp = null;
-                bool isStructReceiver = false;
-                if (boundOperand.Type is StructSymbol operandStruct && TypeMemberModel.TryGetMethodIncludingInherited(operandStruct, userOpName, out var structOp))
+                if (boundOperand.Type is StructSymbol operandStruct && TypeMemberModel.TryGetStaticMethodIncludingInherited(operandStruct, userOpName, out var structOp))
                 {
                     userOp = structOp;
-                    isStructReceiver = true;
                 }
                 else if (scope.TryLookupExtensionFunction(boundOperand.Type, userOpName, out var extOp))
                 {
@@ -80,11 +81,6 @@ internal sealed partial class ExpressionBinder
                 if (userOp != null && userOp.Parameters.Length == 1)
                 {
                     var convertedOperand = conversions.BindConversion(syntax.Operand.Location, boundOperand, userOp.Parameters[0].Type);
-                    if (isStructReceiver)
-                    {
-                        return new BoundUserInstanceCallExpression(null, convertedOperand, userOp, ImmutableArray<BoundExpression>.Empty);
-                    }
-
                     return new BoundCallExpression(null, userOp, ImmutableArray.Create(convertedOperand));
                 }
             }
@@ -1467,24 +1463,23 @@ internal sealed partial class ExpressionBinder
         ambiguous = false;
 
         // Stream D: try user-defined `func (a T) operator <op>(b U) R` on
-        // either operand's user type. Same-package operators are bound as
-        // methods on the struct (Phase 6.4); the receiver is at
-        // Parameters[0] (so binary ops have Parameters.Length == 2).
+        // either operand's user type. Issue #2377: the operator is a static,
+        // SpecialName `op_*` method on the struct/class (StaticMethods),
+        // NOT an instance method — the receiver clause is preserved only as
+        // the operator's first formal parameter (Parameters[0], so binary ops
+        // have Parameters.Length == 2 regardless of which operand declared
+        // the operator).
         var userOpName = OperatorNames.TryGetBinaryName(opKind);
         if (userOpName != null)
         {
             FunctionSymbol userOp = null;
-            bool leftIsStructReceiver = false;
-            bool rightIsStructReceiver = false;
-            if (left.Type is StructSymbol leftStruct && TypeMemberModel.TryGetMethodIncludingInherited(leftStruct, userOpName, out var leftOp))
+            if (left.Type is StructSymbol leftStruct && TypeMemberModel.TryGetStaticMethodIncludingInherited(leftStruct, userOpName, out var leftOp))
             {
                 userOp = leftOp;
-                leftIsStructReceiver = true;
             }
-            else if (right.Type is StructSymbol rightStruct && TypeMemberModel.TryGetMethodIncludingInherited(rightStruct, userOpName, out var rightOp))
+            else if (right.Type is StructSymbol rightStruct && TypeMemberModel.TryGetStaticMethodIncludingInherited(rightStruct, userOpName, out var rightOp))
             {
                 userOp = rightOp;
-                rightIsStructReceiver = true;
             }
             else if (left.Type != null && scope.TryLookupExtensionFunction(left.Type, userOpName, out var leftExt))
             {
@@ -1499,16 +1494,6 @@ internal sealed partial class ExpressionBinder
             {
                 var convertedLeft = conversions.BindConversion(leftLocation, left, userOp.Parameters[0].Type);
                 var convertedRight = conversions.BindConversion(rightLocation, right, userOp.Parameters[1].Type);
-                if (leftIsStructReceiver)
-                {
-                    return new BoundUserInstanceCallExpression(null, convertedLeft, userOp, ImmutableArray.Create(convertedRight));
-                }
-
-                if (rightIsStructReceiver)
-                {
-                    return new BoundUserInstanceCallExpression(null, convertedRight, userOp, ImmutableArray.Create(convertedLeft));
-                }
-
                 return new BoundCallExpression(null, userOp, ImmutableArray.Create(convertedLeft, convertedRight));
             }
         }

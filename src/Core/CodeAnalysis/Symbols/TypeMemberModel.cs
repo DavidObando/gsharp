@@ -478,6 +478,38 @@ public static class TypeMemberModel
         return false;
     }
 
+    /// <summary>
+    /// Issue #2377: tries to find the FIRST static method named <paramref name="name"/>
+    /// on <paramref name="type"/>, walking the base chain this-first (declaration order
+    /// within each level). Mirrors <see cref="TryGetMethodIncludingInherited"/> but
+    /// searches <see cref="StructSymbol.StaticMethods"/> instead of the instance
+    /// bucket — used by user-defined operator resolution (Stream D), since a
+    /// receiver-clause operator (`func (a T) operator ...`) now binds as a static,
+    /// SpecialName <c>op_*</c> method on its owning struct/class rather than as an
+    /// instance method, and an operator declared on an <c>open</c> base must still
+    /// be found through a derived operand type.
+    /// </summary>
+    /// <param name="type">The type to resolve against (user-defined struct/class only).</param>
+    /// <param name="name">The method name.</param>
+    /// <param name="method">The found method on success.</param>
+    /// <returns>True if found.</returns>
+    public static bool TryGetStaticMethodIncludingInherited(TypeSymbol type, string name, out FunctionSymbol method)
+    {
+        if (type is StructSymbol structSymbol)
+        {
+            for (var c = structSymbol; c != null; c = c.BaseClass)
+            {
+                if (c.TryGetStaticMethod(name, out method))
+                {
+                    return true;
+                }
+            }
+        }
+
+        method = null;
+        return false;
+    }
+
     private static IEnumerable<Symbol> EnumerateStructMembers(StructSymbol structSymbol, MemberQuery query)
     {
         for (var c = structSymbol; c != null; c = c.BaseClass)

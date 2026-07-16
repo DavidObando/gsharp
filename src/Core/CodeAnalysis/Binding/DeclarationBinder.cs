@@ -6856,6 +6856,63 @@ internal sealed class DeclarationBinder
                     return;
                 }
 
+                // Issue #2377: a receiver-clause binary/unary operator
+                // (`func (a T) operator +(b T) T { … }`) is syntax sugar over
+                // a CLR operator — it must be emitted as the canonical static,
+                // public, SpecialName `op_*` method with NO hidden instance
+                // receiver, exactly like a hand-authored C# `public static T
+                // operator +(T a, T b)`. The receiver clause is preserved as
+                // syntax only: `a` still binds as an ordinary named parameter
+                // (Parameters[0], already added above), so the body sees the
+                // same identifiers as before, but the symbol itself is static
+                // — reusing the exact shape `BindConversionOperatorDeclaration`
+                // already uses for `op_Implicit`/`op_Explicit` above, and the
+                // shape non-owned-receiver ("extension") operators already got
+                // via `FunctionSymbol.IsExtension` — so it round-trips through
+                // the SAME generic static-method emission path (no operator-
+                // specific emitter logic needed) and is discoverable by CLR
+                // consumers and by gsc's own ClrOperatorResolution (Stream C)
+                // reflection fallback after import.
+                if (methodName.StartsWith("op_", StringComparison.Ordinal))
+                {
+                    function = new FunctionSymbol(
+                        methodName,
+                        parameters.ToImmutable(),
+                        type,
+                        syntax,
+                        package,
+                        accessibility,
+                        receiverType: (TypeSymbol)null);
+                    function.TypeParameters = typeParameters;
+                    function.IsUnsafe = syntax.IsUnsafe;
+                    function.ReturnRefKind = returnRefKind;
+                    function.IsStatic = true;
+                    function.StaticOwnerType = methodReceiverStruct;
+                    function.IsSpecialName = true;
+                    Binder.AttachDocumentation(function, syntax);
+                    function.SetAttributes(functionAttributes);
+                    ValidateInlineDataNilArguments(functionAttributes, function.Parameters);
+
+                    // Duplicate-signature detection against existing static
+                    // methods on the receiver (operators live in the static
+                    // method bucket, not the instance one).
+                    foreach (var existingStatic in methodReceiverStruct.StaticMethods)
+                    {
+                        if (BoundScope.FunctionSignaturesEqual(existingStatic, function))
+                        {
+                            Diagnostics.ReportDuplicateOverloadSignature(
+                                syntax.Identifier.Location,
+                                methodName,
+                                Binder.FormatOverloadSignature(function));
+                            return;
+                        }
+                    }
+
+                    methodReceiverStruct.AddStaticMethods(ImmutableArray.Create(function));
+                    PInvokeBinder.ReportMarshalAsOnNonPInvokeFunction(syntax, Diagnostics);
+                    return;
+                }
+
                 function = new FunctionSymbol(
                     methodName,
                     parameters.ToImmutable(),
