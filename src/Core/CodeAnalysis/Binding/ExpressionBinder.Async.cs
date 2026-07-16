@@ -347,7 +347,31 @@ internal sealed partial class ExpressionBinder
             return BindEventSubscriptionHandlerFromBoundAccessor(memberAccess, boundReceiver, targetDelegateType);
         }
 
-        var bound = BindExpression(handlerSyntax);
+        // Issue #2389: an untyped arrow-lambda handler (`Event += (s, e) ->
+        // ...`) must have its omitted parameter types (and, where the body
+        // doesn't already pin one down, its return type) resolved from the
+        // event's declared delegate/function-type shape *before* binding —
+        // mirroring the target-typed lambda inference already applied to
+        // ordinary call arguments and assignments (ADR-0076 / issue #716).
+        // Without this, the fallback `BindExpression(handlerSyntax)` just
+        // below binds the lambda with no target context at all, so any
+        // omitted parameter type reports GS0304 regardless of whether the
+        // event's delegate is a same-compilation function type, a
+        // user-declared named delegate, or an IMPORTED CLR delegate (the
+        // shape reported in #2389 — a typed lambda or a source-defined
+        // delegate shape masked the gap because both already carry/receive
+        // concrete parameter types some other way). Reuse the shared
+        // delegate-target-type resolver (issue #889 /
+        // `MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol`) so this
+        // covers native G# function types, user-declared named delegates,
+        // and imported CLR delegates/events uniformly; the result still
+        // flows through the identical post-bind conversion (issue #2066)
+        // below so the produced literal is reshaped to the event's exact
+        // declared delegate type.
+        var bound = handlerSyntax is LambdaExpressionSyntax lambdaHandlerSyntax
+            && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(targetDelegateType, out var lambdaTargetFunctionType)
+                ? lambdas.BindLambdaExpression(lambdaHandlerSyntax, lambdaTargetFunctionType)
+                : BindExpression(handlerSyntax);
 
         if (bound is BoundClrMethodGroupExpression clrGroup && clrGroup.ResolvedMethod == null)
         {

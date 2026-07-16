@@ -211,6 +211,25 @@ internal sealed partial class ExpressionBinder
             return BindExpression(syntax, targetType);
         }
 
+        // Issue #2389: an untyped arrow-lambda RHS (`f = (s, e) -> ...`)
+        // needs its omitted parameter types resolved from the LHS's declared
+        // delegate/function-type shape *before* binding, exactly like a
+        // `let`/`var` declaration initializer already does (StatementBinder)
+        // — otherwise re-assigning a previously-declared delegate-typed
+        // variable/field with an untyped lambda reports GS0304 even though
+        // the identical lambda works fine as the declaration's own
+        // initializer. Reuse the shared delegate-target-type resolver
+        // (issue #889) so this covers native G# function types,
+        // user-declared named delegates, and imported CLR delegates
+        // uniformly; the conversion performed by the caller below still
+        // reshapes the result to the exact target type.
+        if (targetType != null
+            && syntax is LambdaExpressionSyntax lambdaSyntax
+            && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(targetType, out var lambdaTargetFunctionType))
+        {
+            return lambdas.BindLambdaExpression(lambdaSyntax, lambdaTargetFunctionType);
+        }
+
         return BindExpression(syntax);
     }
 
