@@ -206,6 +206,23 @@ internal sealed class EmitContext
     public Type CoreRuntimeTypeHandleType { get; set; }
 
     /// <summary>
+    /// Gets or sets the BCL <see cref="System.RuntimeMethodHandle"/> type
+    /// resolved from the target framework's <see cref="References"/>.
+    /// Issue #2373: backs emission of a <see cref="System.Reflection.MethodInfo"/>
+    /// runtime constant (<c>ldtoken method ; call
+    /// MethodBase.GetMethodFromHandle</c>) for expression-tree lowering's CLR
+    /// operator-method arguments.
+    /// </summary>
+    public Type CoreRuntimeMethodHandleType { get; set; }
+
+    /// <summary>
+    /// Gets or sets the BCL <see cref="System.Reflection.MethodBase"/> type
+    /// resolved from the target framework's <see cref="References"/>. See
+    /// <see cref="CoreRuntimeMethodHandleType"/>.
+    /// </summary>
+    public Type CoreMethodBaseType { get; set; }
+
+    /// <summary>
     /// Gets or sets the BCL <see cref="Enum"/> type resolved from the target
     /// framework's <see cref="References"/>.
     /// </summary>

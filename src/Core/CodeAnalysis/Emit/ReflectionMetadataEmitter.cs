@@ -879,6 +879,15 @@ internal sealed class ReflectionMetadataEmitter
         this.emitCtx.CoreValueType = this.ResolveCoreType("System.ValueType", typeof(System.ValueType));
         this.emitCtx.CoreSystemType = this.ResolveCoreType("System.Type", typeof(System.Type));
         this.emitCtx.CoreRuntimeTypeHandleType = this.ResolveCoreType("System.RuntimeTypeHandle", typeof(System.RuntimeTypeHandle));
+
+        // Issue #2373: needed to materialise a runtime MethodInfo for a CLR
+        // operator method (op_Equality, op_Addition, ...) passed as an
+        // Expression factory argument (Expression.Equal(l, r, liftToNull,
+        // method), Expression.Add(l, r, method), ...) — see
+        // WellKnownReferences.GetMethodFromHandleReference /
+        // GetMethodFromHandleWithDeclaringTypeReference.
+        this.emitCtx.CoreRuntimeMethodHandleType = this.ResolveCoreType("System.RuntimeMethodHandle", typeof(System.RuntimeMethodHandle));
+        this.emitCtx.CoreMethodBaseType = this.ResolveCoreType("System.Reflection.MethodBase", typeof(System.Reflection.MethodBase));
         this.emitCtx.CoreEnumType = this.ResolveCoreType("System.Enum", typeof(System.Enum));
         // ADR-0059 / issue #255: cache the base type and `IntPtr` parameter
         // type for user-declared named delegate emission.
