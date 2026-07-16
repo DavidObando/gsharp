@@ -100,13 +100,21 @@ internal sealed class ReflectionMetadataEmitter
     // ECMA-335 II.23.3 custom-attribute value blob plus the per-attribute
     // orchestration (EmitBoundAttribute / EmitUserAttributes /
     // EmitStringAttribute / EmitIsReadOnlyAttributeOnParameter /
-    // NextParameterHandle). The four assembly-level orchestrators
-    // (EmitReferenceAssemblyAttribute / EmitAssemblyInteropAttributes /
-    // EmitDebuggableAttribute / EmitNullableContextAttribute) stay on the
-    // root and forward into this encoder. Initialised in EmitCore alongside
-    // wellKnown because it depends on GetTypeReference, which closes over
+    // NextParameterHandle). Initialised in EmitCore alongside wellKnown
+    // because it depends on GetTypeReference, which closes over
     // EmitContext.Core* materialised earlier in EmitCore.
     private CustomAttributeEncoder customAttrEncoder;
+
+    // PR-E-13: AssemblyAttributeEmitter — owns the assembly-level attribute
+    // orchestrators that used to sit on this root (EmitReferenceAssemblyAttribute /
+    // EmitAssemblyInteropAttributes / EmitUserAssemblyAttributes /
+    // EmitFriendAssemblyAttributes / EmitGSharpTypeSemantics /
+    // EmitDebuggableAttribute / EmitNullableContextAttribute) plus
+    // ParseAssemblyVersion, which feeds the Assembly row. Initialised in
+    // EmitCore right after customAttrEncoder because it forwards blob writes
+    // into that encoder and depends on wellKnown / GetTypeReference — same
+    // EmitCore-ordering reason as the other E-* components.
+    private AssemblyAttributeEmitter assemblyAttrs;
 
     // Phase 4 emit parity (E1): synthesized lambda bodies (no captures).
     // Populated by a pre-pass walker over every user function/entry body.
@@ -913,6 +921,19 @@ internal sealed class ReflectionMetadataEmitter
             this.ResolveUserCtorTokenForPrimary,
             this.ResolveUserCtorTokenForDefault,
             this.ResolveUserCtorTokenForExplicit);
+
+        // PR-E-13: AssemblyAttributeEmitter owns the assembly-level attribute
+        // orchestrators and ParseAssemblyVersion. It wires up after
+        // customAttrEncoder because it forwards the string/pair/bound blob
+        // writes into that encoder; GetTypeReference is threaded as a delegate
+        // (same pattern as the encoder itself) so it needs no back-reference
+        // to this emitter.
+        this.assemblyAttrs = new AssemblyAttributeEmitter(
+            this.emitCtx,
+            this.cache,
+            this.wellKnown,
+            this.customAttrEncoder,
+            this.GetTypeReference);
 
         // PR-E-12: MethodBodyPlanner owns the per-body planning orchestrators
         // (CollectLocalsAndLabels and friends) that drive SlotPlanner's
@@ -3429,7 +3450,7 @@ internal sealed class ReflectionMetadataEmitter
 
         var assemblyHandle = this.emitCtx.Metadata.AddAssembly(
             name: this.emitCtx.Metadata.GetOrAddString(assemblyName),
-            version: this.ParseAssemblyVersion(),
+            version: this.assemblyAttrs.ParseAssemblyVersion(),
             culture: default(StringHandle),
             publicKey: default(BlobHandle),
             flags: 0,
@@ -3437,14 +3458,14 @@ internal sealed class ReflectionMetadataEmitter
 
         if (this.emitCtx.MetadataOnly)
         {
-            this.EmitReferenceAssemblyAttribute(assemblyHandle);
+            this.assemblyAttrs.EmitReferenceAssemblyAttribute(assemblyHandle);
         }
 
         // Phase 7.7b: emit cross-language interop attributes for NuGet consumability.
-        this.EmitAssemblyInteropAttributes(assemblyHandle);
+        this.assemblyAttrs.EmitAssemblyInteropAttributes(assemblyHandle);
         if (!this.emitCtx.MetadataOnly && this.emitCtx.Pdb != null)
         {
-            this.EmitDebuggableAttribute(assemblyHandle);
+            this.assemblyAttrs.EmitDebuggableAttribute(assemblyHandle);
         }
 
         // 7. Build the Portable PDB blob FIRST so we can wire its content id
@@ -3594,294 +3615,6 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return sha.GetHashAndReset();
-    }
-
-    /// <summary>
-    /// Marks the assembly with
-    /// <c>System.Runtime.CompilerServices.ReferenceAssemblyAttribute()</c> so
-    /// loaders treat it as metadata-only and refuse to execute its (absent)
-    /// method bodies.
-    /// </summary>
-    private void EmitReferenceAssemblyAttribute(AssemblyDefinitionHandle assemblyHandle)
-    {
-        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.ReferenceAssemblyAttribute", requireExternalVisibility: false, out var resolved)
-            ? resolved
-            : throw new InvalidOperationException(
-                "Reference assembly emit requires System.Runtime.CompilerServices.ReferenceAssemblyAttribute to be resolvable from the supplied references.");
-        var attrTypeRef = this.GetTypeReference(attrType);
-
-        var ctorSig = new BlobBuilder();
-        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
-            .Parameters(0, r => r.Void(), _ => { });
-
-        var ctorRef = this.emitCtx.Metadata.AddMemberReference(
-            attrTypeRef,
-            this.emitCtx.Metadata.GetOrAddString(".ctor"),
-            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
-
-        // Empty fixed/named argument blob: prolog 0x0001 + 0 named args.
-        var valueBlob = new BlobBuilder();
-        valueBlob.WriteUInt16(0x0001);
-        valueBlob.WriteUInt16(0);
-
-        this.emitCtx.Metadata.AddCustomAttribute(
-            parent: assemblyHandle,
-            constructor: ctorRef,
-            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
-    }
-
-    /// <summary>
-    /// Parses <see cref="EmitContext.AssemblyVersionOverride"/> into a <see cref="Version"/> suitable
-    /// for the assembly row. Falls back to <c>1.0.0.0</c> when the string is absent or
-    /// does not parse as a version.
-    /// </summary>
-    private Version ParseAssemblyVersion()
-    {
-        if (string.IsNullOrEmpty(this.emitCtx.AssemblyVersionOverride))
-        {
-            return new Version(1, 0, 0, 0);
-        }
-
-        // NuGet versions can contain pre-release suffixes (e.g. "1.2.3-beta.1").
-        // Extract just the numeric prefix for System.Version.
-        var versionStr = this.emitCtx.AssemblyVersionOverride;
-        var dashIdx = versionStr.IndexOf('-');
-        if (dashIdx >= 0)
-        {
-            versionStr = versionStr.Substring(0, dashIdx);
-        }
-
-        var plusIdx = versionStr.IndexOf('+');
-        if (plusIdx >= 0)
-        {
-            versionStr = versionStr.Substring(0, plusIdx);
-        }
-
-        if (Version.TryParse(versionStr, out var v))
-        {
-            // Pad to four components for ECMA-335 assembly identity.
-            return new Version(
-                Math.Max(v.Major, 0),
-                Math.Max(v.Minor, 0),
-                Math.Max(v.Build, 0),
-                Math.Max(v.Revision, 0));
-        }
-
-        return new Version(1, 0, 0, 0);
-    }
-
-    /// <summary>
-    /// Emits assembly-level attributes required for cross-language interop (C#/F#
-    /// consumability): <c>AssemblyInformationalVersionAttribute</c>,
-    /// <c>AssemblyMetadataAttribute("RepositoryUrl", ...)</c>, and
-    /// <c>NullableContextAttribute(1)</c>.
-    /// </summary>
-    private void EmitAssemblyInteropAttributes(AssemblyDefinitionHandle assemblyHandle)
-    {
-        // Issue #2237: emit every user-declared `@assembly:` attribute
-        // (everything except InternalsVisibleTo, which keeps its dedicated
-        // emission below) first, so the built-in synthesized attributes that
-        // follow can detect — and skip — a type the user already declared
-        // explicitly (e.g. an NBGV-style
-        // `@assembly:AssemblyInformationalVersionAttribute(...)`), avoiding a
-        // duplicate, non-repeatable CustomAttribute row.
-        var userDeclaredAttributeTypeNames = this.EmitUserAssemblyAttributes(assemblyHandle);
-
-        // 1. AssemblyInformationalVersionAttribute — carries the full NuGet
-        // version string including pre-release suffix.
-        if (!string.IsNullOrEmpty(this.emitCtx.AssemblyVersionOverride)
-            && !userDeclaredAttributeTypeNames.Contains("System.Reflection.AssemblyInformationalVersionAttribute"))
-        {
-            this.customAttrEncoder.EmitStringAttribute(
-                assemblyHandle,
-                "System.Reflection.AssemblyInformationalVersionAttribute",
-                typeof(System.Reflection.AssemblyInformationalVersionAttribute),
-                this.emitCtx.AssemblyVersionOverride);
-        }
-
-        this.EmitGSharpTypeSemantics(assemblyHandle);
-
-        // Issue #1929/#1953: producer-declared friend assemblies. Each
-        // `@assembly:InternalsVisibleTo("Foo")` annotation becomes a real
-        // System.Runtime.CompilerServices.InternalsVisibleToAttribute row so
-        // cross-assembly internal access is genuine producer opt-in — no
-        // consumer-side name heuristic (see ImportedAssemblySemantics).
-        this.EmitFriendAssemblyAttributes(assemblyHandle);
-
-        // 2. NullableContextAttribute(1) — declares the assembly's default
-        // nullable context as "annotated" so C# consumers see non-null by
-        // default for GSharp types (GSharp has no null references).
-        this.EmitNullableContextAttribute(assemblyHandle);
-    }
-
-    /// <summary>
-    /// Issue #2237: emits a real <c>CustomAttribute</c> row for every
-    /// file-level <c>@assembly:</c> annotation the binder resolved
-    /// (<see cref="Binding.BoundProgram.AssemblyAttributes"/>) — every
-    /// annotation EXCEPT <c>InternalsVisibleTo</c>, which
-    /// <see cref="EmitFriendAssemblyAttributes"/> already covers. Reuses the
-    /// same generic <see cref="CustomAttributeEncoder.EmitBoundAttribute"/>
-    /// path used for type/method/field-level attributes, so any attribute
-    /// type the compiler can resolve — BCL (<c>AssemblyVersionAttribute</c>,
-    /// <c>AssemblyMetadataAttribute</c>, ...) or a same-compilation
-    /// user-declared attribute type — becomes real assembly metadata,
-    /// achieving parity with C#'s <c>[assembly: ...]</c>.
-    /// </summary>
-    /// <returns>
-    /// The distinct set of emitted attributes' CLR type full names, used by
-    /// <see cref="EmitAssemblyInteropAttributes"/> to avoid emitting a
-    /// duplicate built-in synthesized attribute of the same (non-repeatable)
-    /// type.
-    /// </returns>
-    private ImmutableHashSet<string> EmitUserAssemblyAttributes(AssemblyDefinitionHandle assemblyHandle)
-    {
-        var emitted = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
-        foreach (var attr in this.emitCtx.Program.AssemblyAttributes)
-        {
-            this.customAttrEncoder.EmitBoundAttribute(assemblyHandle, attr);
-            var clrTypeName = attr.AttributeType?.ClrType?.FullName;
-            if (clrTypeName != null)
-            {
-                emitted.Add(clrTypeName);
-            }
-        }
-
-        return emitted.ToImmutable();
-    }
-
-    private void EmitFriendAssemblyAttributes(AssemblyDefinitionHandle assemblyHandle)
-    {
-        foreach (var friend in this.emitCtx.Program.FriendAssemblies)
-        {
-            this.customAttrEncoder.EmitStringAttribute(
-                assemblyHandle,
-                "System.Runtime.CompilerServices.InternalsVisibleToAttribute",
-                typeof(System.Runtime.CompilerServices.InternalsVisibleToAttribute),
-                friend);
-        }
-    }
-
-    private void EmitGSharpTypeSemantics(AssemblyDefinitionHandle assemblyHandle)
-    {
-        foreach (var type in this.emitCtx.Program.Structs)
-        {
-            if (!this.cache.StructTypeDefs.TryGetValue(type, out var handle))
-            {
-                continue;
-            }
-
-            // Value types (`data struct`, or any struct with a primary
-            // constructor) always carry the marker. Issue #2263: a `data class`
-            // must ALSO carry it so a cross-assembly consumer can recover its
-            // data semantics and support `with`/copy — but a plain (non-data)
-            // reference class stays unmarked so it keeps importing as an
-            // ordinary CLR class rather than a semantic aggregate.
-            var isDataClass = type.IsClass && type.IsData;
-            if (!isDataClass
-                && (type.IsClass || (!type.IsData && !type.HasPrimaryConstructor)))
-            {
-                continue;
-            }
-
-            // Issue #1953 follow-up: pair each primary-ctor parameter name
-            // with its backing field's metadata token (0 when no backing
-            // field is found, e.g. a property-backed parameter), so the
-            // importer (ImportedTypeSymbol.BuildPrimaryConstructorParameters)
-            // can recover the parameter's type via the exact field even when
-            // a future lowering/mangling pass makes the parameter name differ
-            // from the field name — falling back to name matching only when
-            // no token was recorded.
-            var fieldsByName = type.Fields.ToDictionary(f => f.Name, StringComparer.Ordinal);
-            var parameterEntries = type.PrimaryConstructorParameters.Select(p =>
-            {
-                var token = 0;
-                if (fieldsByName.TryGetValue(p.Name, out var backingField)
-                    && this.cache.StructFieldDefs.TryGetValue(backingField, out var fieldHandle))
-                {
-                    token = MetadataTokens.GetToken(fieldHandle);
-                }
-
-                return $"{p.Name}:{token.ToString(CultureInfo.InvariantCulture)}";
-            });
-
-            var payload = string.Join(
-                "|",
-                MetadataTokens.GetToken(handle).ToString(CultureInfo.InvariantCulture),
-                type.IsClass ? "class" : "struct",
-                type.IsData ? "1" : "0",
-                string.Join(",", parameterEntries));
-            this.customAttrEncoder.EmitStringPairAttribute(
-                assemblyHandle,
-                "System.Reflection.AssemblyMetadataAttribute",
-                typeof(System.Reflection.AssemblyMetadataAttribute),
-                ImportedAssemblySemantics.TypeSemanticsMetadataKey,
-                payload);
-        }
-    }
-
-    /// <summary>
-    /// Emits <c>System.Diagnostics.DebuggableAttribute(true, true)</c> when
-    /// debug information is present so managed debuggers treat the assembly as
-    /// JIT-tracked and non-optimized.
-    /// </summary>
-    private void EmitDebuggableAttribute(AssemblyDefinitionHandle assemblyHandle)
-    {
-        var attrType = this.emitCtx.References.TryResolveType("System.Diagnostics.DebuggableAttribute", requireExternalVisibility: false, out var resolved)
-            ? resolved
-            : typeof(System.Diagnostics.DebuggableAttribute);
-        var attrTypeRef = this.GetTypeReference(attrType);
-
-        var ctorSig = new BlobBuilder();
-        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
-            .Parameters(2, r => r.Void(), p =>
-            {
-                p.AddParameter().Type().Boolean();
-                p.AddParameter().Type().Boolean();
-            });
-
-        var ctorRef = this.emitCtx.Metadata.AddMemberReference(
-            attrTypeRef,
-            this.emitCtx.Metadata.GetOrAddString(".ctor"),
-            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
-
-        var valueBlob = new BlobBuilder();
-        valueBlob.WriteUInt16(0x0001); // Prolog
-        valueBlob.WriteBoolean(true);  // isJITTrackingEnabled
-        valueBlob.WriteBoolean(true);  // isJITOptimizerDisabled
-        valueBlob.WriteUInt16(0);      // NumNamed
-
-        this.emitCtx.Metadata.AddCustomAttribute(
-            parent: assemblyHandle,
-            constructor: ctorRef,
-            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
-    }
-
-    /// <summary>
-    /// Emits <c>System.Runtime.CompilerServices.NullableContextAttribute(1)</c>
-    /// on the assembly so C# consumers see GSharp public surface as non-nullable
-    /// (oblivious context = 0, annotated = 1, warnings-only = 2).
-    /// </summary>
-    private void EmitNullableContextAttribute(AssemblyDefinitionHandle assemblyHandle)
-    {
-        // Reuse the cached NullableContextAttribute(byte) ctor MemberRef so the
-        // assembly-, type-, and method-level emitters all share one row (the
-        // P3-11 dedup invariant; see DeterministicEmitTests).
-        var ctorRef = this.wellKnown.GetNullableContextAttributeByteCtorRef();
-        if (ctorRef.IsNil)
-        {
-            // The attribute may not exist in older TFMs — skip silently.
-            return;
-        }
-
-        var valueBlob = new BlobBuilder();
-        valueBlob.WriteUInt16(0x0001); // Prolog
-        valueBlob.WriteByte(1);        // Flag = Annotated (non-null by default)
-        valueBlob.WriteUInt16(0);      // NumNamed
-
-        this.emitCtx.Metadata.AddCustomAttribute(
-            parent: assemblyHandle,
-            constructor: ctorRef,
-            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
     }
 
     /// <summary>
