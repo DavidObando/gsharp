@@ -847,6 +847,36 @@ internal sealed class WellKnownReferences
         return this.getMethodReference(method);
     }
 
+    public MemberReferenceHandle GetMethodFromHandleReference()
+    {
+        // System.Reflection.MethodBase::GetMethodFromHandle(RuntimeMethodHandle)
+        // — issue #2373: reconstructs a runtime MethodInfo for a CLR operator
+        // method (op_Equality, op_Addition, ...) from an `ldtoken` value, used
+        // when the method's declaring type is not a generic-type
+        // instantiation. See GetMethodFromHandleWithDeclaringTypeReference for
+        // the generic-declaring-type overload the CLR requires instead.
+        var method = this.emitCtx.CoreMethodBaseType.GetMethod(
+            "GetMethodFromHandle",
+            new[] { this.emitCtx.CoreRuntimeMethodHandleType })
+            ?? throw new InvalidOperationException("MethodBase.GetMethodFromHandle(RuntimeMethodHandle) is not resolvable from the supplied references.");
+        return this.getMethodReference(method);
+    }
+
+    public MemberReferenceHandle GetMethodFromHandleWithDeclaringTypeReference()
+    {
+        // System.Reflection.MethodBase::GetMethodFromHandle(RuntimeMethodHandle,
+        // RuntimeTypeHandle) — issue #2373: required (instead of the 1-arg
+        // overload) whenever the method's declaring type is itself a generic
+        // instantiation (e.g. a user-defined `operator ==` on `Money<T>`
+        // closed over a concrete `T`); the CLR throws at run time if the
+        // 1-arg overload is used for such a method.
+        var method = this.emitCtx.CoreMethodBaseType.GetMethod(
+            "GetMethodFromHandle",
+            new[] { this.emitCtx.CoreRuntimeMethodHandleType, this.emitCtx.CoreRuntimeTypeHandleType })
+            ?? throw new InvalidOperationException("MethodBase.GetMethodFromHandle(RuntimeMethodHandle, RuntimeTypeHandle) is not resolvable from the supplied references.");
+        return this.getMethodReference(method);
+    }
+
     public MemberReferenceHandle GetArrayCopyReference()
     {
         // System.Array::Copy(Array, Array, Int32) — used to implement append(slice, element).

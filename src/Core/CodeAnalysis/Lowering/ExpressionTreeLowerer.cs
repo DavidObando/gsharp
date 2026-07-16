@@ -191,6 +191,22 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         typeof(string),
         typeof(BindingFlags));
 
+    // Issue #2373: unlike the arithmetic/bitwise/shift/logical factories,
+    // System.Linq.Expressions.Expression's six relational/equality factories
+    // (Equal/NotEqual/LessThan/LessThanOrEqual/GreaterThan/GreaterThanOrEqual)
+    // do NOT expose a 3-arg (Expression, Expression, MethodInfo) overload —
+    // only a 4-arg (Expression, Expression, bool liftToNull, MethodInfo)
+    // overload exists. See BuildClrBinaryOperatorExpression.
+    private static readonly HashSet<string> ComparisonFactoryMethodNames = new(StringComparer.Ordinal)
+    {
+        nameof(System.Linq.Expressions.Expression.Equal),
+        nameof(System.Linq.Expressions.Expression.NotEqual),
+        nameof(System.Linq.Expressions.Expression.LessThan),
+        nameof(System.Linq.Expressions.Expression.LessThanOrEqual),
+        nameof(System.Linq.Expressions.Expression.GreaterThan),
+        nameof(System.Linq.Expressions.Expression.GreaterThanOrEqual),
+    };
+
     private int counter;
 
     public static BoundProgram Lower(BoundProgram program)
@@ -892,6 +908,41 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             _ => throw new NotSupportedException($"Unsupported CLR binary operator token '{expression.OperatorKind}'."),
         };
 
+        var leftExpr = UpcastToExpression(this.TranslateExpression(expression.Left, parameterMap));
+        var rightExpr = UpcastToExpression(this.TranslateExpression(expression.Right, parameterMap));
+        var resultType = TypeSymbol.FromClrType(typeof(System.Linq.Expressions.BinaryExpression));
+
+        // Issue #2373: unlike the arithmetic/bitwise/shift/logical factories,
+        // the six relational/equality factories do NOT expose a 3-arg
+        // (Expression, Expression, MethodInfo) overload — only a 4-arg
+        // (Expression, Expression, bool liftToNull, MethodInfo) overload
+        // exists. Roslyn itself always passes `liftToNull: false` for C#'s
+        // built-in and user-defined `==`/`!=`/`<`/`<=`/`>`/`>=` operators
+        // (confirmed empirically): `IsLifted` becomes true automatically
+        // from nullable operand types, but the *result* of a comparison is
+        // never itself a nullable/lifted bool, so `liftToNull` is always
+        // `false` here, both for nullable and non-nullable operands.
+        if (ComparisonFactoryMethodNames.Contains(methodName))
+        {
+            var comparisonFactory = GetRequiredMethod(
+                typeof(System.Linq.Expressions.Expression),
+                methodName,
+                typeof(System.Linq.Expressions.Expression),
+                typeof(System.Linq.Expressions.Expression),
+                typeof(bool),
+                typeof(MethodInfo));
+
+            return new BoundClrStaticCallExpression(
+                expression.Syntax,
+                comparisonFactory,
+                resultType,
+                ImmutableArray.Create<BoundExpression>(
+                    leftExpr,
+                    rightExpr,
+                    new BoundLiteralExpression(null, false, TypeSymbol.Bool),
+                    BuildMethodInfoConstant(expression.Method)));
+        }
+
         var factory = GetRequiredMethod(
             typeof(System.Linq.Expressions.Expression),
             methodName,
@@ -902,10 +953,10 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return new BoundClrStaticCallExpression(
             expression.Syntax,
             factory,
-            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.BinaryExpression)),
+            resultType,
             ImmutableArray.Create<BoundExpression>(
-                UpcastToExpression(this.TranslateExpression(expression.Left, parameterMap)),
-                UpcastToExpression(this.TranslateExpression(expression.Right, parameterMap)),
+                leftExpr,
+                rightExpr,
                 BuildMethodInfoConstant(expression.Method)));
     }
 
