@@ -801,7 +801,17 @@ internal sealed class MemberDefEmitter
         // trigger the implicit-implementation virtual-slot promotion.
         if (!structSym.ImplementedClrInterfaces.IsDefaultOrEmpty)
         {
-            var propClr = prop.Type?.ClrType;
+            // Issue #2380: use the effective (runtime-shape) CLR type rather
+            // than the raw `ClrType`. `NullableTypeSymbol.ClrType` deliberately
+            // returns the *underlying* (unwrapped) type for a value-typed
+            // `T?` — see `NullableLifting.GetEffectiveClrType`'s remarks — so
+            // comparing the raw `ClrType` against an imported interface's
+            // `Nullable<T>`-typed property (e.g. `DateTime? ReleaseDate`)
+            // never matches, and the property silently stays non-virtual
+            // (ILVerify: "Class implements interface but not method"). The
+            // binder-side `MemberLookup.FindMatchingProperty` already gets
+            // this right; this call brings the emitter in line with it.
+            var propClr = NullableLifting.GetEffectiveClrType(prop.Type);
             foreach (var ifaceSym in structSym.ImplementedClrInterfaces)
             {
                 var clrIface = ifaceSym?.ClrType;
@@ -829,28 +839,56 @@ internal sealed class MemberDefEmitter
     /// </summary>
     private bool EventImplicitlyImplementsInterface(StructSymbol structSym, EventSymbol ev)
     {
-        if (structSym.Interfaces.IsDefaultOrEmpty)
+        if (!structSym.Interfaces.IsDefaultOrEmpty)
         {
-            return false;
+            foreach (var iface in structSym.Interfaces)
+            {
+                // ADR-0149 follow-up (issue #2370): see the matching comment in
+                // PropertyImplicitlyImplementsInterface — Events is likewise
+                // never substituted onto a constructed generic interface
+                // instance, so this must resolve against the open Definition.
+                var defIface = iface.Definition ?? iface;
+                if (defIface.Events.IsDefaultOrEmpty)
+                {
+                    continue;
+                }
+
+                foreach (var ifaceEvent in defIface.Events)
+                {
+                    if (ifaceEvent.Name == ev.Name)
+                    {
+                        return true;
+                    }
+                }
+            }
         }
 
-        foreach (var iface in structSym.Interfaces)
+        // Issue #2380: mirror PropertyImplicitlyImplementsInterface's
+        // ImplementedClrInterfaces (issue #525) branch — this was entirely
+        // missing for events, so a class/struct event implicitly satisfying
+        // an IMPORTED CLR interface's event (of any handler-type shape,
+        // including one that nests a `Nullable<T>` generic argument, e.g.
+        // `EventHandler<Notification<int?>>`) was never promoted to
+        // Virtual|NewSlot and silently produced unverifiable IL, exactly
+        // like the property/method gaps this issue fixes. Uses the same
+        // effective-CLR-type comparison as the property branch.
+        if (!structSym.ImplementedClrInterfaces.IsDefaultOrEmpty)
         {
-            // ADR-0149 follow-up (issue #2370): see the matching comment in
-            // PropertyImplicitlyImplementsInterface — Events is likewise
-            // never substituted onto a constructed generic interface
-            // instance, so this must resolve against the open Definition.
-            var defIface = iface.Definition ?? iface;
-            if (defIface.Events.IsDefaultOrEmpty)
+            var evClr = NullableLifting.GetEffectiveClrType(ev.Type);
+            foreach (var ifaceSym in structSym.ImplementedClrInterfaces)
             {
-                continue;
-            }
-
-            foreach (var ifaceEvent in defIface.Events)
-            {
-                if (ifaceEvent.Name == ev.Name)
+                var clrIface = ifaceSym?.ClrType;
+                if (clrIface == null)
                 {
-                    return true;
+                    continue;
+                }
+
+                foreach (var clrEvent in clrIface.GetEvents(BindingFlags.Public | BindingFlags.Instance))
+                {
+                    if (clrEvent.Name == ev.Name && (evClr == null || ClrTypeUtilities.AreSame(evClr, clrEvent.EventHandlerType)))
+                    {
+                        return true;
+                    }
                 }
             }
         }
