@@ -147,6 +147,98 @@ internal sealed partial class OverloadResolver
         return new BoundCallExpression(null, method, convertedArgs.MoveToImmutable());
     }
 
+    /// <summary>
+    /// Issue #2403: whether <paramref name="syntax"/>'s unqualified callee name
+    /// could resolve to a genuine user-defined callable — a same-compilation
+    /// free/extension <see cref="FunctionSymbol"/> reachable through
+    /// <see cref="Scope"/>, or an implicit-<c>this</c> instance/static sibling
+    /// method (including a private one) on the enclosing struct/class or
+    /// interface body — checked BEFORE the CLR constructor/conversion
+    /// fallbacks a few lines below in <see cref="BindCallExpression"/> run. A
+    /// same-named imported CLR type (e.g. <c>System.Net.Http.HttpClient</c>)
+    /// must not shadow a colliding user method in call position, mirroring how
+    /// a same-named source method always wins over an imported CLR type in
+    /// C#.
+    /// </summary>
+    /// <remarks>
+    /// Only the EXISTENCE of a same-named candidate is checked here — not full
+    /// overload applicability (argument count/types). That is intentional:
+    /// when this returns <see langword="true"/>, <see cref="BindCallExpression"/>
+    /// simply skips the CLR early-return paths and falls through to its
+    /// ordinary implicit-<c>this</c> / symbol-lookup call-binding logic further
+    /// down, which already performs full overload selection via
+    /// <see cref="SelectUnifiedInstanceStaticOverload"/> / <see cref="SelectInstanceOverloadOrReport"/>
+    /// / <see cref="SelectBestUserOverload"/> and reports the correct
+    /// diagnostic (wrong-argument-count, ambiguity, ...) against the genuine
+    /// user candidate — so no overload-resolution logic is duplicated here.
+    /// When no such candidate exists, this returns <see langword="false"/> and
+    /// the CLR paths run exactly as before, so genuine constructor/conversion
+    /// calls (e.g. `StringBuilder(16)`) are unaffected.
+    /// </remarks>
+    private bool HasUserCallableCandidate(CallExpressionSyntax syntax)
+    {
+        var name = syntax.Identifier.Text;
+
+        // A same-compilation free function or extension function (extension
+        // functions are flattened into the global function table — issue
+        // #1103) is directly visible through the scope's symbol table.
+        if (Scope.TryLookupSymbol(name) is FunctionSymbol)
+        {
+            return true;
+        }
+
+        // Issue #1159: the implicit `this` an unqualified instance-member
+        // reference would bind against (mirrors GetEffectiveThisParameter's
+        // callers below).
+        var effThis = GetEffectiveThisParameter();
+        if (effThis?.Type is StructSymbol receiverStruct)
+        {
+            // Issue #1147: an unqualified call inside an instance method
+            // resolves against the COMBINED instance + static (`shared`)
+            // overload set of the enclosing type — mirror that union here.
+            if (!TypeMemberModel.GetMethods(receiverStruct, name, MemberQuery.Instance(MemberKinds.Method)).IsDefaultOrEmpty
+                || !TypeMemberModel.GetMethods(receiverStruct, name, MemberQuery.Static(MemberKinds.Method)).IsDefaultOrEmpty)
+            {
+                return true;
+            }
+        }
+        else if (effThis?.Type is InterfaceSymbol receiverIface)
+        {
+            // ADR-0085 / ADR-0090: implicit `this` inside an interface default
+            // method body also sees the interface's own private helpers.
+            if (!TypeMemberModel.GetMethods(receiverIface, name, MemberQuery.Instance(MemberKinds.Method)).IsDefaultOrEmpty
+                || receiverIface.GetPrivateMethods(name).Length > 0)
+            {
+                return true;
+            }
+        }
+
+        if (getCurrentFunction()?.ThisParameter == null)
+        {
+            // ADR-0089 / ADR-0090: implicit static-self dispatch inside a
+            // static-virtual or private-static interface helper body.
+            if (getCurrentFunction()?.StaticOwnerType is InterfaceSymbol staticIface)
+            {
+                if (!TypeMemberModel.GetMethods(staticIface, name, MemberQuery.Static(MemberKinds.Method)).IsDefaultOrEmpty
+                    || staticIface.GetStaticPrivateMethods(name).Length > 0)
+                {
+                    return true;
+                }
+            }
+            else if (getCurrentFunction()?.StaticOwnerType is StructSymbol staticStruct)
+            {
+                // Issue #1585: implicit static-self dispatch inside a
+                // `shared` method body of a user struct/class.
+                if (!TypeMemberModel.GetMethods(staticStruct, name, MemberQuery.Static(MemberKinds.Method)).IsDefaultOrEmpty)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     public BoundExpression BindCallExpression(CallExpressionSyntax syntax)
     {
         // Issue #2185: an indirect invocation whose callee is an arbitrary
@@ -181,13 +273,24 @@ internal sealed partial class OverloadResolver
             }
         }
 
+        // Issue #2403: a resolvable user-defined callable (same-compilation
+        // free/extension function, or an implicit-`this` instance/static
+        // sibling method) with this name takes precedence over ALL THREE CLR
+        // constructor/conversion fallback paths below, mirroring how a
+        // same-named source method always shadows a colliding imported CLR
+        // type (e.g. `System.Net.Http.HttpClient`) in call position. Computed
+        // once and reused by all three gates; see HasUserCallableCandidate's
+        // remarks for why only existence (not full overload applicability) is
+        // checked here.
+        var hasUserCallable = HasUserCallableCandidate(syntax);
+
         // Phase 4-exit: prefer CLR class instantiation over the single-arg
         // conversion-call hijack below, so that `StringBuilder(16)` resolves
         // to a CLR ctor rather than `conversions.BindConversion(int → StringBuilder)`.
         // Also handles closed-generic imports (`List[int]()`,
         // `Dictionary[string, int]()`). Interpreter-only — resolves a
         // ConstructorInfo and emits BoundClrConstructorCallExpression.
-        if (tryBindClrConstructorCall(syntax, out var clrCtorCall))
+        if (!hasUserCallable && tryBindClrConstructorCall(syntax, out var clrCtorCall))
         {
             return clrCtorCall;
         }
@@ -203,7 +306,7 @@ internal sealed partial class OverloadResolver
             ? syntax.TypeArgumentList.Arguments.Count
             : -1;
 
-        if (syntax.Arguments.Count == 1 && lookupTypeWithArity(syntax.Identifier.Text, ctorPreferredArity) is TypeSymbol type)
+        if (!hasUserCallable && syntax.Arguments.Count == 1 && lookupTypeWithArity(syntax.Identifier.Text, ctorPreferredArity) is TypeSymbol type)
         {
             // Issue #663: when the call carries a `?` token (e.g. `string?(x)`),
             // wrap the resolved type in NullableTypeSymbol so the conversion
@@ -243,7 +346,8 @@ internal sealed partial class OverloadResolver
         // Issue #1069: a value struct (e.g. a `data struct`) declaring a
         // primary constructor is also positionally constructible —
         // `Entry(1, 2)` lowers to a struct literal initializing its fields.
-        if (lookupTypeWithArity(syntax.Identifier.Text, ctorPreferredArity) is StructSymbol classType
+        if (!hasUserCallable
+            && lookupTypeWithArity(syntax.Identifier.Text, ctorPreferredArity) is StructSymbol classType
             && (classType.IsClass || classType.IsInline || classType.HasPrimaryConstructor))
         {
             return BindConstructorCallExpression(syntax, classType);
