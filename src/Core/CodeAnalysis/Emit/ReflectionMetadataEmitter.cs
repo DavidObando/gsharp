@@ -80,6 +80,14 @@ internal sealed class ReflectionMetadataEmitter
     // PR-E-11: widened to internal so the promoted MethodBodyEmitter can read it.
     internal readonly MetadataTokenCache cache;
 
+    // PR-E-16: the generic type-parameter remap mutable state (the
+    // outer-TP → own-slot remaps for reified state-machine / nested / closure
+    // classes and generic-promoted lambdas, plus their push/pop scope
+    // discipline) has moved into GenericRemapState. The root's registration
+    // methods orchestrate over EmitContext/closures and call into this state
+    // to record the remaps; EncodeTypeSymbol reads the active remap through it.
+    internal readonly GenericRemapState remaps;
+
     // PR-E-3: the well-known BCL MemberRef/TypeRef fields
     // (notImplementedExceptionCtorRef, delegateCombineRef/RemoveRef,
     // interlockedCompareExchangeOpenRef, isReadOnly/IsByRefLike/ObsoleteAttribute
@@ -335,153 +343,15 @@ internal sealed class ReflectionMetadataEmitter
     // PR-E-11: widened to internal so the promoted MethodBodyEmitter can read it.
     internal StateMachineEmitter stateMachines;
 
-    // Issue #810: when emitting a member of a generic iterator state-machine
-    // class (the SM's own field-defs, MoveNext body, get_Current signature,
-    // interface impls, etc.), the body and signatures still reference the
-    // OUTER method's `TypeParameterSymbol` instances (which carry
-    // `IsMethodTypeParameter=true`). The state-machine class is itself
-    // generic over class-level type parameters (Var(0..N-1)) that mirror the
-    // outer method's TPs. EncodeTypeSymbol consults this remap to translate
-    // each outer-method TP reference into a `Var(classOrdinal)` slot. The
-    // remap is pushed by StateMachineEmitter around each SM-member emit
-    // boundary (TypeDef, FieldDefs, interface impls, MethodDefs) and popped
-    // afterward, so non-SM code paths see the normal Var/MVar discrimination.
-    internal Dictionary<TypeParameterSymbol, int> activeIteratorStateMachineRemap;
-
-    // Issue #810: per-SM-class remap, populated when SynthesizeIteratorStateMachines
-    // creates each generic state-machine. Used to auto-push the remap inside
-    // GetUserStructFieldRef when the containing type is a generic SM class
-    // (so its field-signature MemberRef matches the FieldDef blob exactly).
-    internal readonly Dictionary<StructSymbol, Dictionary<TypeParameterSymbol, int>> iteratorStateMachineRemapsByClass = new Dictionary<StructSymbol, Dictionary<TypeParameterSymbol, int>>();
-
-    // Issue #1537: for each user-declared type nested inside a generic enclosing
-    // type that the emitter reifies over the flattened enclosing+own parameter
-    // list (RegisterNestedTypeEnclosingGenerics), the number of ENCLOSING
-    // parameters `k` (the low ordinals `0..k-1` of the reified TypeDef, ECMA-335
-    // §II.10.3.1). The nested type's own parameters occupy `k..k+m-1`.
-    // ResolveUserStructTypeSpecArguments consults this to split a use-site's
-    // combined type-argument vector into its enclosing and own halves. Keyed by
-    // the nested type's DEFINITION.
-    private readonly Dictionary<StructSymbol, int> nestedTypeEnclosingArity = new Dictionary<StructSymbol, int>(ReferenceEqualityComparer.Instance);
-
-    /// <summary>
-    /// Issue #810: push the SM remap for <paramref name="smClass"/> so that
-    /// every <see cref="EncodeTypeSymbol"/> call made before the returned
-    /// disposable is disposed translates outer-method type-parameter
-    /// references into the SM class's own type-parameter slots
-    /// (Var(idx) instead of MVar(idx)). Calls are nestable; on dispose the
-    /// previous remap (or <see langword="null"/>) is restored.
-    /// </summary>
-    internal SmRemapScope PushSmRemap(StructSymbol smClass)
-    {
-        if (smClass == null
-            || !this.iteratorStateMachineRemapsByClass.TryGetValue(smClass, out var remap)
-            || remap == null)
-        {
-            return new SmRemapScope(this, null, restore: false);
-        }
-
-        var prev = this.activeIteratorStateMachineRemap;
-        this.activeIteratorStateMachineRemap = remap;
-        return new SmRemapScope(this, prev, restore: true);
-    }
-
-    internal readonly struct SmRemapScope : IDisposable
-    {
-        private readonly ReflectionMetadataEmitter owner;
-        private readonly Dictionary<TypeParameterSymbol, int> previous;
-        private readonly bool restore;
-
-        public SmRemapScope(ReflectionMetadataEmitter owner, Dictionary<TypeParameterSymbol, int> previous, bool restore)
-        {
-            this.owner = owner;
-            this.previous = previous;
-            this.restore = restore;
-        }
-
-        public void Dispose()
-        {
-            if (this.restore)
-            {
-                this.owner.activeIteratorStateMachineRemap = this.previous;
-            }
-        }
-    }
-
-    // Issue #2118: a non-capturing lambda whose signature/body references an
-    // enclosing method/type parameter (e.g. `func Build[T IComparable[T]]() ...
-    // = (x T, y T) -> x.CompareTo(y)`) is hosted as a top-level `<Program>`
-    // static method. To emit verifiable IL that method must be a genuine
-    // GENERIC method declaring its OWN type parameters — cloned from the
-    // referenced enclosing ones (carrying their constraints) — otherwise the
-    // body's `!!0` references a method type parameter the method never declares
-    // (ilverify DelegateCtor at the delegate site + StackUnexpected on any
-    // `constrained.` call inside the body). While emitting such a lambda's
-    // signature and body, this remap translates each referenced ENCLOSING type
-    // parameter into the lambda method's own freshly-cloned method
-    // type-parameter ordinal (MVar(idx)). Pushed around the lambda's
-    // EmitFunction call; null everywhere else.
-    internal Dictionary<TypeParameterSymbol, int> activeLambdaMethodTypeParamRemap;
-
-    // Issue #2118: per-lambda-function original-enclosing-TP -> own-clone-ordinal
-    // remap, produced by ClosureEmitter.PromoteGenericLambda and consulted via
-    // PushLambdaMethodRemap while the lambda's MethodDef signature and body are
-    // emitted.
-    internal readonly Dictionary<FunctionSymbol, Dictionary<TypeParameterSymbol, int>> lambdaMethodTypeParamRemapsByFunction =
-        new Dictionary<FunctionSymbol, Dictionary<TypeParameterSymbol, int>>(ReferenceEqualityComparer.Instance);
-
     // Issue #2118: per-lambda-function ordered ORIGINAL enclosing type
     // parameters used as the MethodSpec type arguments when the lambda is
     // referenced (`ldftn <lambda><...enclosing args...>`) at its delegate
-    // materialization site.
+    // materialization site. The paired enclosing-TP → own-clone-ordinal remap
+    // (which drives EncodeTypeSymbol) lives on GenericRemapState; this ordered
+    // list is a delegate-materialization-token concern, not remap-scope state,
+    // so it stays on the root.
     internal readonly Dictionary<FunctionSymbol, ImmutableArray<TypeParameterSymbol>> lambdaMethodTypeArgsByFunction =
         new Dictionary<FunctionSymbol, ImmutableArray<TypeParameterSymbol>>(ReferenceEqualityComparer.Instance);
-
-    /// <summary>
-    /// Issue #2118: pushes the enclosing-TP -> own-clone-ordinal remap for a
-    /// generic-promoted non-capturing lambda so that every
-    /// <see cref="EncodeTypeSymbol"/> call made while its signature and body are
-    /// emitted translates references to the enclosing type parameters into the
-    /// lambda method's own <c>MVar(idx)</c> slots. Restores the previous remap
-    /// on dispose.
-    /// </summary>
-    /// <param name="function">The lambda function being emitted.</param>
-    /// <returns>A disposable scope that restores the previous remap.</returns>
-    internal LambdaMethodRemapScope PushLambdaMethodRemap(FunctionSymbol function)
-    {
-        if (function == null
-            || !this.lambdaMethodTypeParamRemapsByFunction.TryGetValue(function, out var remap)
-            || remap == null)
-        {
-            return new LambdaMethodRemapScope(this, null, restore: false);
-        }
-
-        var prev = this.activeLambdaMethodTypeParamRemap;
-        this.activeLambdaMethodTypeParamRemap = remap;
-        return new LambdaMethodRemapScope(this, prev, restore: true);
-    }
-
-    internal readonly struct LambdaMethodRemapScope : IDisposable
-    {
-        private readonly ReflectionMetadataEmitter owner;
-        private readonly Dictionary<TypeParameterSymbol, int> previous;
-        private readonly bool restore;
-
-        public LambdaMethodRemapScope(ReflectionMetadataEmitter owner, Dictionary<TypeParameterSymbol, int> previous, bool restore)
-        {
-            this.owner = owner;
-            this.previous = previous;
-            this.restore = restore;
-        }
-
-        public void Dispose()
-        {
-            if (this.restore)
-            {
-                this.owner.activeLambdaMethodTypeParamRemap = this.previous;
-            }
-        }
-    }
 
     /// <summary>
     /// Issue #1465: reifies an async state-machine struct over an
@@ -555,7 +425,7 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         smStruct.SetTypeParameters(smTPs);
-        this.iteratorStateMachineRemapsByClass[smStruct] = remap;
+        this.remaps.RegisterClassRemap(smStruct, remap);
     }
 
     // Issue #1467 / #1537: reifies every user-declared type nested inside a
@@ -616,7 +486,7 @@ internal sealed class ReflectionMetadataEmitter
 
             // Record the enclosing arity so a use site can split its combined
             // type-argument vector into enclosing/own halves.
-            this.nestedTypeEnclosingArity[def] = enclosing.Length;
+            this.remaps.SetNestedTypeEnclosingArity(def, enclosing.Length);
 
             // Build the original-parameter -> reified-slot remap so member
             // signatures/bodies encode the correct VAR(idx). An enclosing
@@ -629,7 +499,7 @@ internal sealed class ReflectionMetadataEmitter
                 remap[combinedList[i]] = i;
             }
 
-            this.iteratorStateMachineRemapsByClass[s] = remap;
+            this.remaps.RegisterClassRemap(s, remap);
         }
     }
 
@@ -694,7 +564,7 @@ internal sealed class ReflectionMetadataEmitter
                 remap[origTPs[i]] = i;
             }
 
-            this.iteratorStateMachineRemapsByClass[s] = remap;
+            this.remaps.RegisterClassRemap(s, remap);
         }
 
         foreach (var s in this.emitCtx.Program.Structs)
@@ -713,7 +583,7 @@ internal sealed class ReflectionMetadataEmitter
     /// <c>GenericParam</c> rows added for a synthesized closure / capture-box /
     /// reified class since <paramref name="gpRowStart"/>, while that class's
     /// enclosing-TP → own-<c>VAR(idx)</c> remap
-    /// (<see cref="activeIteratorStateMachineRemap"/>) is still active.
+    /// (<see cref="GenericRemapState.ActiveIteratorStateMachineRemap"/>) is still active.
     /// </summary>
     /// <remarks>
     /// A class reified generic over its enclosing type parameters
@@ -731,13 +601,13 @@ internal sealed class ReflectionMetadataEmitter
     /// display-class <c>Invoke</c> fails verification
     /// (<c>StackUnexpected</c>). Resolving here, with the remap active, encodes
     /// the class's own <c>Var</c> slot. Mirrors the #2118 non-capturing method
-    /// path (which resolves against <see cref="activeLambdaMethodTypeParamRemap"/>).
+    /// path (which resolves against <see cref="GenericRemapState.ActiveLambdaMethodTypeParamRemap"/>).
     /// No-op when no reified-class remap is active (unregistered class).
     /// </remarks>
     /// <param name="gpRowStart">The <c>PendingGenericParameters</c> count captured before the class's TypeDef was emitted.</param>
     private void PreResolveReifiedGenericConstraints(int gpRowStart)
     {
-        if (this.activeIteratorStateMachineRemap == null)
+        if (this.remaps.ActiveIteratorStateMachineRemap == null)
         {
             return;
         }
@@ -760,6 +630,7 @@ internal sealed class ReflectionMetadataEmitter
     {
         this.emitCtx = new EmitContext(program, references, assemblyName, metadataOnly);
         this.cache = new MetadataTokenCache();
+        this.remaps = new GenericRemapState();
         this.slotPlanner = new SlotPlanner(this.emitCtx, this.cache, this.NeedsRvalueReceiverSpill);
     }
 
@@ -1156,7 +1027,7 @@ internal sealed class ReflectionMetadataEmitter
             var remap = kvp.Value.BuildRemap();
             if (remap != null)
             {
-                this.iteratorStateMachineRemapsByClass[kvp.Key] = remap;
+                this.remaps.RegisterClassRemap(kvp.Key, remap);
             }
         }
 
@@ -1169,7 +1040,7 @@ internal sealed class ReflectionMetadataEmitter
             var remap = kvp.Value.BuildRemap();
             if (remap != null)
             {
-                this.iteratorStateMachineRemapsByClass[kvp.Key] = remap;
+                this.remaps.RegisterClassRemap(kvp.Key, remap);
             }
         }
 
@@ -2301,7 +2172,7 @@ internal sealed class ReflectionMetadataEmitter
             // generic over enclosing type parameters needs its remap active so
             // its capture-field signatures encode the class's own VAR(idx)
             // slots. No-op for every other class (unregistered → restore:false).
-            using (this.PushSmRemap(c))
+            using (this.remaps.PushSmRemap(c))
             {
                 var gpRowStart = this.emitCtx.PendingGenericParameters.Count;
                 this.typeDefEmitter.EmitStructTypeDef(c, structFirstFieldRow[c], classCtorRows[c]);
@@ -2474,7 +2345,7 @@ internal sealed class ReflectionMetadataEmitter
                     // signatures (and the TypeDef's own generic-param
                     // constraints) encode the correct re-ordinalized VAR(idx)
                     // slots. No-op for every other struct.
-                    using (this.PushSmRemap(ns))
+                    using (this.remaps.PushSmRemap(ns))
                     {
                         var gpRowStart = this.emitCtx.PendingGenericParameters.Count;
                         this.typeDefEmitter.EmitStructTypeDef(ns, structFirstFieldRow[ns], nestedMethodListRow[ns]);
@@ -2846,7 +2717,7 @@ internal sealed class ReflectionMetadataEmitter
             // remap so EncodeTypeSymbol translates outer-method TP
             // references to the SM class's own TP slots (Var(idx)) while
             // encoding field signatures and interface implementations.
-            using (this.PushSmRemap(c))
+            using (this.remaps.PushSmRemap(c))
             {
                 this.typeDefEmitter.EmitNestedStructTypeDef(c, structFirstFieldRow[c], classCtorRows[c]);
 
@@ -2871,7 +2742,7 @@ internal sealed class ReflectionMetadataEmitter
             // remap so hoisted-field signatures (e.g. `<>4__this`) translate
             // method-type-parameter references into the SM type's own Var
             // slots. A no-op when the SM is non-generic.
-            using (this.PushSmRemap(s))
+            using (this.remaps.PushSmRemap(s))
             {
                 this.typeDefEmitter.EmitNestedStructTypeDef(s, structFirstFieldRow[s], smMethodListRow);
             }
@@ -3153,7 +3024,7 @@ internal sealed class ReflectionMetadataEmitter
             // remap active while emitting its ctor + Invoke bodies/signatures
             // so enclosing type-parameter references resolve to the class's own
             // VAR(idx) slots. No-op for every other class.
-            using (this.PushSmRemap(c))
+            using (this.remaps.PushSmRemap(c))
             {
                 EmitClassMethodBodies(c);
             }
@@ -3271,7 +3142,7 @@ internal sealed class ReflectionMetadataEmitter
                     // the method's type parameters; push its remap so the Invoke
                     // signature + body translate method-TP references to the
                     // class's own Var slots. No-op for every other nested class.
-                    using (this.PushSmRemap(ns))
+                    using (this.remaps.PushSmRemap(ns))
                     {
                         EmitClassMethodBodies(ns);
                     }
@@ -3283,7 +3154,7 @@ internal sealed class ReflectionMetadataEmitter
                     // the SM TP remap so MoveNext bodies and signatures
                     // translate method-TP references to the SM's own Var
                     // slots. A no-op for non-generic structs.
-                    using (this.PushSmRemap(ns))
+                    using (this.remaps.PushSmRemap(ns))
                     {
                         EmitStructMethodBodies(ns);
                     }
@@ -3314,7 +3185,7 @@ internal sealed class ReflectionMetadataEmitter
                 // Issue #2118: a generic-promoted non-capturing lambda's
                 // signature and body reference the enclosing type parameters;
                 // push the remap so they encode as this method's own MVar slots.
-                using (this.PushLambdaMethodRemap(fn))
+                using (this.remaps.PushLambdaMethodRemap(fn))
                 {
                     this.EmitFunction(fn, body, isEntryPoint: false);
                 }
@@ -3334,7 +3205,7 @@ internal sealed class ReflectionMetadataEmitter
             // that method signatures (return type, parameter types) and
             // bodies emitted for SM members translate outer-method TP
             // references to the SM class's own TP slots (Var(idx)).
-            using (this.PushSmRemap(c))
+            using (this.remaps.PushSmRemap(c))
             {
                 var ctorHandle = this.typeDefEmitter.EmitClassDefaultConstructor(c);
                 this.cache.ClassCtorHandles[c] = ctorHandle;
@@ -3374,7 +3245,7 @@ internal sealed class ReflectionMetadataEmitter
                 // `async func Foo[U](x U) U`) encodes as a dangling method
                 // type-var (`!!0`) instead of the SM's own class type-var
                 // (`!0`) — unverifiable IL / BadImageFormatException at load.
-                using (this.PushSmRemap(s))
+                using (this.remaps.PushSmRemap(s))
                 {
                     this.stateMachines.EmitStateMachineMoveNext(smPlan);
                     this.stateMachines.EmitStateMachineSetStateMachine(smPlan);
@@ -4475,7 +4346,7 @@ internal sealed class ReflectionMetadataEmitter
         // gone — encoding the enclosing Var/MVar slot instead of this method's
         // own MVar. Resolve them now, while the remap is active, so the
         // constraint encodes `!!idx` for both class- and method-parameter roots.
-        if (this.activeLambdaMethodTypeParamRemap != null)
+        if (this.remaps.ActiveLambdaMethodTypeParamRemap != null)
         {
             var pendingRows = this.emitCtx.PendingGenericParameters;
             for (var gi = gpRowStart; gi < pendingRows.Count; gi++)
@@ -5525,16 +5396,16 @@ internal sealed class ReflectionMetadataEmitter
             // generic over enclosing TYPE parameters, so any TP present in the
             // active remap (class or method) maps to the synthesized class's
             // own VAR(idx) slot.
-            if (this.activeLambdaMethodTypeParamRemap != null
-                && this.activeLambdaMethodTypeParamRemap.TryGetValue(tpSym, out var lambdaMethodOrd))
+            if (this.remaps.ActiveLambdaMethodTypeParamRemap != null
+                && this.remaps.ActiveLambdaMethodTypeParamRemap.TryGetValue(tpSym, out var lambdaMethodOrd))
             {
                 // Issue #2118: reference to an enclosing type parameter inside a
                 // generic-promoted non-capturing lambda's signature/body maps to
                 // the lambda method's own MVar(idx) slot.
                 encoder.GenericMethodTypeParameter(lambdaMethodOrd);
             }
-            else if (this.activeIteratorStateMachineRemap != null
-                && this.activeIteratorStateMachineRemap.TryGetValue(tpSym, out var smClassOrd))
+            else if (this.remaps.ActiveIteratorStateMachineRemap != null
+                && this.remaps.ActiveIteratorStateMachineRemap.TryGetValue(tpSym, out var smClassOrd))
             {
                 encoder.GenericTypeParameter(smClassOrd);
             }
@@ -5917,7 +5788,7 @@ internal sealed class ReflectionMetadataEmitter
             remap[origTPs[i]] = i;
         }
 
-        this.lambdaMethodTypeParamRemapsByFunction[fn] = remap;
+        this.remaps.RegisterLambdaMethodRemap(fn, remap);
         this.lambdaMethodTypeArgsByFunction[fn] = origTPs;
     }
 
@@ -6605,7 +6476,7 @@ internal sealed class ReflectionMetadataEmitter
     /// </summary>
     internal EntityHandle GetUserStructTypeSpec(StructSymbol structSym)
     {
-        if (this.userStructTypeSpecCache.TryGetValue((structSym, this.activeIteratorStateMachineRemap), out var cached))
+        if (this.userStructTypeSpecCache.TryGetValue((structSym, this.remaps.ActiveIteratorStateMachineRemap), out var cached))
         {
             return cached;
         }
@@ -6628,7 +6499,7 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         var spec = (EntityHandle)this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        this.userStructTypeSpecCache[(structSym, this.activeIteratorStateMachineRemap)] = spec;
+        this.userStructTypeSpecCache[(structSym, this.remaps.ActiveIteratorStateMachineRemap)] = spec;
         return spec;
     }
 
@@ -6656,7 +6527,7 @@ internal sealed class ReflectionMetadataEmitter
         // (`k..k+m-1`). Each half is concrete when the reference carries it and
         // the open reified parameters (encoded `VAR(idx)`) otherwise, so the
         // vector is context-correct for constructed and open references alike.
-        if (this.nestedTypeEnclosingArity.TryGetValue(def, out var enclosingArity) && enclosingArity > 0)
+        if (this.remaps.TryGetNestedTypeEnclosingArity(def, out var enclosingArity) && enclosingArity > 0)
         {
             var defTps = def.TypeParameters;
             var total = defTps.Length;
@@ -7004,7 +6875,7 @@ internal sealed class ReflectionMetadataEmitter
             defField = fieldOnContaining;
         }
 
-        var key = (containingType, defField, (object)this.activeIteratorStateMachineRemap);
+        var key = (containingType, defField, (object)this.remaps.ActiveIteratorStateMachineRemap);
         if (this.userStructFieldRefCache.TryGetValue(key, out var cached))
         {
             return cached;
@@ -7018,7 +6889,7 @@ internal sealed class ReflectionMetadataEmitter
         // outer-method TPs translated to Var(idx). The MemberRef sig
         // MUST match — push the SM's remap so EncodeTypeSymbol routes
         // the same TPs through the same Var(idx) slots here.
-        using (this.PushSmRemap(containingType.Definition ?? containingType))
+        using (this.remaps.PushSmRemap(containingType.Definition ?? containingType))
         {
             this.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), defField.Type);
         }
@@ -7122,7 +6993,7 @@ internal sealed class ReflectionMetadataEmitter
         string methodName,
         BlobBuilder signature)
     {
-        var key = (containingType, openMethodDef, (object)this.activeIteratorStateMachineRemap);
+        var key = (containingType, openMethodDef, (object)this.remaps.ActiveIteratorStateMachineRemap);
         if (this.userStructMethodRefCache.TryGetValue(key, out var cached))
         {
             return cached;
@@ -7365,7 +7236,7 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         BlobBuilder sig;
-        using (this.PushSmRemap(closureDef))
+        using (this.remaps.PushSmRemap(closureDef))
         {
             sig = this.EncodeOpenMethodSignature(invoke);
         }
@@ -9808,8 +9679,8 @@ internal sealed class ReflectionMetadataEmitter
             // Issue #2118: inside a generic-promoted non-capturing lambda's
             // signature/body, references to the enclosing type parameters map to
             // the lambda method's own MVar(idx) slots.
-            if (this.activeLambdaMethodTypeParamRemap != null
-                && this.activeLambdaMethodTypeParamRemap.TryGetValue(tp, out var lambdaMethodOrd))
+            if (this.remaps.ActiveLambdaMethodTypeParamRemap != null
+                && this.remaps.ActiveLambdaMethodTypeParamRemap.TryGetValue(tp, out var lambdaMethodOrd))
             {
                 encoder.GenericMethodTypeParameter(lambdaMethodOrd);
             }
@@ -9822,9 +9693,9 @@ internal sealed class ReflectionMetadataEmitter
             // `!0` on the SM class. The remap is pushed by
             // EmitIteratorStateMachineMember and is keyed by the
             // method TP's instance identity.
-            else if (this.activeIteratorStateMachineRemap != null
+            else if (this.remaps.ActiveIteratorStateMachineRemap != null
                 && tp.IsMethodTypeParameter
-                && this.activeIteratorStateMachineRemap.TryGetValue(tp, out var classOrdinal))
+                && this.remaps.ActiveIteratorStateMachineRemap.TryGetValue(tp, out var classOrdinal))
             {
                 encoder.GenericTypeParameter(classOrdinal);
             }
@@ -9832,8 +9703,8 @@ internal sealed class ReflectionMetadataEmitter
             // Issue #1477: a synthesized closure / capture-box class is generic
             // over enclosing TYPE parameters too, so any TP in the active remap
             // (class or method) encodes the synthesized class's own Var(idx).
-            else if (this.activeIteratorStateMachineRemap != null
-                && this.activeIteratorStateMachineRemap.TryGetValue(tp, out var classOrdinal2))
+            else if (this.remaps.ActiveIteratorStateMachineRemap != null
+                && this.remaps.ActiveIteratorStateMachineRemap.TryGetValue(tp, out var classOrdinal2))
             {
                 encoder.GenericTypeParameter(classOrdinal2);
             }
