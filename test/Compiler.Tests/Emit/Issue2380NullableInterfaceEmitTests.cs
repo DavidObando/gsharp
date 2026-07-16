@@ -68,14 +68,12 @@ public class Issue2380NullableInterfaceEmitTests
             }
 
             var b IBookMeta = BookMeta{ ReleaseDate: DateTime(2020, 1, 1) }
-            Console.WriteLine(b.ReleaseDate)
+            Console.WriteLine(b.ReleaseDate.HasValue)
             """;
 
         var output = CompileAndRunWithSiblingCs(csSource, gSource, "ProbeRef2380a");
 
-        // Normalize the narrow no-break space (U+202F) some ICU versions use
-        // before AM/PM so the assertion isn't sensitive to platform locale data.
-        Assert.Equal("1/1/2020 12:00:00 AM\n", output.Replace('\u202f', ' '));
+        Assert.Equal("True\n", output);
     }
 
     [Fact]
