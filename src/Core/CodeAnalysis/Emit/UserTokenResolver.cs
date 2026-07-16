@@ -2034,7 +2034,7 @@ internal sealed class UserTokenResolver
     /// method type parameter <c>TSource</c> — is closed over a
     /// same-compilation user element type (<c>List[Check].Single(…)</c> where
     /// <c>Check</c> is a <see cref="StructSymbol"/> struct/class still being
-    /// compiled), <see cref="ReflectionMetadataEmitter.GetMethodEntityHandle(MethodInfo, ImmutableArray{TypeSymbol})"/>
+    /// compiled), <see cref="ImportedMemberRefFactory.GetMethodEntityHandle(MethodInfo, ImmutableArray{TypeSymbol})"/>
     /// encodes a MethodSpec whose type argument is the symbolic <c>Check</c>
     /// (via <see cref="ReflectionMetadataEmitter.ArgIsSymbolicUserDefined"/>). The emitted call therefore
     /// returns the reprojected element type directly on the stack — a raw

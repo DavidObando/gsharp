@@ -36,7 +36,7 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// InterfaceImplEmitter idiom) because the bodies construct the still-private
 /// <see cref="ReflectionMetadataEmitter"/>.<c>MethodBodyEmitSession</c> scaffold
 /// (widened <c>private</c> → <c>internal</c> for this extraction) and resolve
-/// field tokens via <see cref="ReflectionMetadataEmitter.ResolveFieldToken"/>.
+/// field tokens via <see cref="UserTokenResolver.ResolveFieldToken"/>.
 /// Direct fields hold the shared <see cref="EmitContext"/> and
 /// <see cref="MetadataTokenCache"/>; the interface-<c>.cctor</c> MethodDef's
 /// parameter-list anchor comes in through the <c>nextParameterHandle</c>
@@ -303,7 +303,7 @@ internal sealed class ConstructorBodyEmitter
                 throw new InvalidOperationException($"Class '{classSym.Name}' has no field for primary ctor parameter '{param.Name}'.");
             }
 
-            var fieldHandle = this.outer.ResolveFieldToken(classSym, field);
+            var fieldHandle = this.outer.userTokens.ResolveFieldToken(classSym, field);
 
             il.LoadArgument(0);
             il.LoadArgument(i + 1);
@@ -638,7 +638,7 @@ internal sealed class ConstructorBodyEmitter
                 throw new InvalidOperationException($"Class '{classSym.Name}' has no field for primary ctor parameter '{param.Name}'.");
             }
 
-            var fieldHandle = this.outer.ResolveFieldToken(classSym, field);
+            var fieldHandle = this.outer.userTokens.ResolveFieldToken(classSym, field);
 
             il.LoadArgument(0);
             il.LoadArgument(i + 1);

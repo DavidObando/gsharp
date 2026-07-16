@@ -1164,7 +1164,7 @@ internal sealed partial class MethodBodyEmitter
             && (NullableLifting.IsValueTypeNullable(nullable) || NullableLifting.IsUserValueTypeNullable(nullable)))
         {
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.GetElementTypeToken(nullable));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(nullable));
         }
     }
 

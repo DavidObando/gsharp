@@ -939,7 +939,7 @@ internal sealed class MethodBodyPlanner
     /// Issue #810: builds a <c>TypeSpec</c> handle encoding
     /// <paramref name="openDef"/>&lt;<paramref name="elementType"/>&gt;
     /// where the element type is encoded through
-    /// <see cref="ReflectionMetadataEmitter.EncodeTypeSymbol"/> so the
+    /// <see cref="SignatureEncoder.EncodeTypeSymbol"/> so the
     /// active iterator-state-machine remap (outer-method TP →
     /// class-TP Var(idx)) is honoured. Used by
     /// <see cref="AddIteratorInterfaceImplementations"/>.

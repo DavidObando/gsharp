@@ -55,13 +55,13 @@ internal sealed partial class MethodBodyEmitter
             // ctor; emit a newobj against its specific MethodDef (or a
             // MemberRef on the constructed TypeSpec for a generic type).
             ctorHandle = isGeneric
-                ? this.outer.ResolveUserCtorTokenForExplicit(call.StructType, call.SelectedConstructor)
+                ? this.outer.userTokens.ResolveUserCtorTokenForExplicit(call.StructType, call.SelectedConstructor)
                 : this.outer.cache.ExplicitCtorHandles[call.SelectedConstructor];
         }
         else if (this.outer.cache.ClassPrimaryCtorHandles.ContainsKey(call.StructType.Definition ?? call.StructType))
         {
             ctorHandle = isGeneric
-                ? this.outer.ResolveUserCtorTokenForPrimary(call.StructType)
+                ? this.outer.userTokens.ResolveUserCtorTokenForPrimary(call.StructType)
                 : this.outer.cache.ClassPrimaryCtorHandles[call.StructType];
         }
         else if (call.Arguments.IsDefaultOrEmpty
@@ -72,7 +72,7 @@ internal sealed partial class MethodBodyEmitter
             // back to the parameterless default ctor that PHASE B emitted
             // into classCtorHandles.
             ctorHandle = isGeneric
-                ? this.outer.ResolveUserCtorTokenForDefault(call.StructType)
+                ? this.outer.userTokens.ResolveUserCtorTokenForDefault(call.StructType)
                 : this.outer.cache.ClassCtorHandles[call.StructType];
         }
         else
@@ -144,11 +144,11 @@ internal sealed partial class MethodBodyEmitter
                 ? ResolveOpenInterfaceMethod(constraintInterface, call.Method)
                 : call.Method;
             var constrainedMethodToken = constraintInterface != null
-                ? this.outer.ResolveUserInterfaceInstanceMethodToken(constraintInterface, openMethod)
+                ? this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(constraintInterface, openMethod)
                 : this.outer.cache.MethodHandles[call.Method];
 
             this.il.OpCode(ILOpCode.Constrained);
-            this.il.Token(this.outer.GetElementTypeToken(call.ConstrainedReceiverTypeParameter));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(call.ConstrainedReceiverTypeParameter));
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(constrainedMethodToken);
             return;
@@ -192,21 +192,21 @@ internal sealed partial class MethodBodyEmitter
         EntityHandle methodHandle;
         if (isGenericReceiver)
         {
-            methodHandle = this.outer.ResolveUserInstanceMethodToken(receiverType, call.Method);
+            methodHandle = this.outer.userTokens.ResolveUserInstanceMethodToken(receiverType, call.Method);
         }
         else if (inheritedGenericBase != null)
         {
-            methodHandle = this.outer.ResolveUserInstanceMethodToken(inheritedGenericBase, call.Method);
+            methodHandle = this.outer.userTokens.ResolveUserInstanceMethodToken(inheritedGenericBase, call.Method);
         }
         else if (receiverIface != null
             && ReflectionMetadataEmitter.IsUserGenericInterfaceReference(receiverIface))
         {
             var openMethod = ResolveOpenInterfaceMethod(receiverIface, call.Method);
-            methodHandle = this.outer.ResolveUserInterfaceInstanceMethodToken(receiverIface, openMethod);
+            methodHandle = this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(receiverIface, openMethod);
         }
         else if (call.Method.ReceiverType is StructSymbol importedReceiver && importedReceiver.ClrType != null)
         {
-            methodHandle = this.outer.ResolveUserInstanceMethodToken(importedReceiver, call.Method);
+            methodHandle = this.outer.userTokens.ResolveUserInstanceMethodToken(importedReceiver, call.Method);
         }
         else if (this.outer.cache.MethodHandles.TryGetValue(call.Method, out var defHandle))
         {
@@ -223,7 +223,7 @@ internal sealed partial class MethodBodyEmitter
         // substituted type arguments inferred from the call.
         if (call.Method.IsGeneric && !call.Method.TypeParameters.IsDefaultOrEmpty)
         {
-            methodHandle = this.outer.BuildMethodSpecForGenericInstanceCall(methodHandle, call);
+            methodHandle = this.outer.userTokens.BuildMethodSpecForGenericInstanceCall(methodHandle, call);
         }
 
         this.EmitInstanceReceiver(call.Receiver);
@@ -373,7 +373,7 @@ internal sealed partial class MethodBodyEmitter
         // with the symbolic args. Without this the `newobj` would target the
         // type-erased `Open<object,…>::.ctor`, which fails IL verification
         // against the locally-typed `Open<MyGs,…>` slot.
-        var ctorRef = this.outer.GetCtorReference(ctorCall.Constructor, ctorCall.Type);
+        var ctorRef = this.outer.memberRefs.GetCtorReference(ctorCall.Constructor, ctorCall.Type);
         this.il.OpCode(ILOpCode.Newobj);
         this.il.Token(ctorRef);
     }
@@ -393,7 +393,7 @@ internal sealed partial class MethodBodyEmitter
             // Issue #1503: a generic named delegate (constructed or open)
             // dispatches through a MemberRef parented at the delegate TypeSpec;
             // a non-generic delegate uses the bare Invoke MethodDef handle.
-            var namedInvokeHandle = this.outer.ResolveDelegateInvokeToken(namedDelegate);
+            var namedInvokeHandle = this.outer.userTokens.ResolveDelegateInvokeToken(namedDelegate);
 
             this.EmitExpression(call.Target);
             foreach (var arg in call.Arguments)
@@ -422,7 +422,7 @@ internal sealed partial class MethodBodyEmitter
             }
 
             this.il.OpCode(ILOpCode.Callvirt);
-            this.il.Token(this.outer.GetFunctionDelegateInvokeRef(call.FunctionType));
+            this.il.Token(this.outer.memberRefs.GetFunctionDelegateInvokeRef(call.FunctionType));
             return;
         }
 
@@ -432,14 +432,14 @@ internal sealed partial class MethodBodyEmitter
             this.EmitExpression(arg);
         }
 
-        var delegateType = this.outer.ResolveDelegateClrType(call.FunctionType);
+        var delegateType = this.outer.signatures.ResolveDelegateClrType(call.FunctionType);
 
         var invoke = delegateType.GetMethod("Invoke")
             ?? throw new InvalidOperationException(
                 $"Delegate type '{delegateType.FullName}' has no Invoke method.");
 
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(invoke));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(invoke));
     }
 
     // ADR-0087 §3 R6: `EmitOpenDelegateDynamicInvoke` retired. Every
@@ -496,7 +496,7 @@ internal sealed partial class MethodBodyEmitter
                     && m.IsGenericMethodDefinition
                     && m.GetParameters().Length == 0);
             var create = openCreate.MakeGenericMethod(elementClr);
-            this.il.Call(this.outer.GetMethodEntityHandle(create));
+            this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(create));
             return;
         }
 
@@ -504,7 +504,7 @@ internal sealed partial class MethodBodyEmitter
             .GetConstructor(new[] { typeof(int) });
         this.EmitExpression(node.Capacity);
         this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(this.outer.GetCtorReference(optionsCtor));
+        this.il.Token(this.outer.memberRefs.GetCtorReference(optionsCtor));
 
         var openBounded = typeof(System.Threading.Channels.Channel)
             .GetMethods(BindingFlags.Public | BindingFlags.Static)
@@ -513,7 +513,7 @@ internal sealed partial class MethodBodyEmitter
                 && m.GetParameters().Length == 1
                 && m.GetParameters()[0].ParameterType.IsSameAs(typeof(System.Threading.Channels.BoundedChannelOptions)));
         var bounded = openBounded.MakeGenericMethod(elementClr);
-        this.il.Call(this.outer.GetMethodEntityHandle(bounded));
+        this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(bounded));
     }
 
     // Issue #2283: entry point used from expression-position emit
@@ -568,23 +568,23 @@ internal sealed partial class MethodBodyEmitter
 
         this.EmitExpression(node.Channel);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(getReader));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(getReader));
 
         this.EmitCancellationTokenNone();
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(readAsync));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(readAsync));
 
         this.il.StoreLocal(vtSlot);
         this.il.LoadLocalAddress(vtSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.GetMethodReference(asTaskGeneric));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(asTaskGeneric));
 
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(taskGetAwaiter));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(taskGetAwaiter));
         this.il.StoreLocal(taSlot);
         this.il.LoadLocalAddress(taSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.GetMethodReference(taskGetResult));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(taskGetResult));
         this.il.StoreLocal(resultSlot);
         this.il.Branch(ILOpCode.Leave, endLabel);
         this.il.MarkLabel(tryEnd);
@@ -597,7 +597,7 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.MarkLabel(endLabel);
 
-        var catchTypeHandle = (EntityHandle)this.outer.GetTypeReference(ccExceptionClr);
+        var catchTypeHandle = (EntityHandle)this.outer.memberRefs.GetTypeReference(ccExceptionClr);
         this.il.ControlFlowBuilder.AddCatchRegion(tryStart, tryEnd, handlerStart, handlerEnd, catchTypeHandle);
     }
 
@@ -612,10 +612,10 @@ internal sealed partial class MethodBodyEmitter
 
         this.EmitExpression(node.Channel);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(getWriter));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(getWriter));
         this.il.OpCode(ILOpCode.Ldnull);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(complete));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(complete));
     }
 
     private void EmitCancellationTokenNone()
@@ -626,7 +626,7 @@ internal sealed partial class MethodBodyEmitter
         var ctCtor = typeof(System.Threading.CancellationToken).GetConstructor(new[] { typeof(bool) });
         this.il.LoadConstantI4(0);
         this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(this.outer.GetCtorReference(ctCtor));
+        this.il.Token(this.outer.memberRefs.GetCtorReference(ctCtor));
     }
 
     /// <summary>
@@ -651,7 +651,7 @@ internal sealed partial class MethodBodyEmitter
         // naming VAR(n) for type-type parameters, MVAR(n) for
         // method-type parameters). GetElementTypeToken already handles
         // both shapes via TypeParameterSymbol.IsMethodTypeParameter.
-        var typeParamToken = this.outer.GetElementTypeToken(call.TypeParameter);
+        var typeParamToken = this.outer.memberRefs.GetElementTypeToken(call.TypeParameter);
 
         // Resolve the interface static-virtual member handle. The
         // BoundConstrainedStaticCallExpression carries the *interface
@@ -675,7 +675,7 @@ internal sealed partial class MethodBodyEmitter
             && ReflectionMetadataEmitter.IsUserGenericInterfaceReference(constraintIface))
         {
             var openSlot = ResolveOpenInterfaceMethod(constraintIface, call.InterfaceMethod);
-            slotHandle = this.outer.ResolveUserInterfaceInstanceMethodToken(constraintIface, openSlot);
+            slotHandle = this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(constraintIface, openSlot);
         }
         else if (this.outer.cache.MethodHandles.TryGetValue(call.InterfaceMethod, out var slotDef))
         {
@@ -717,7 +717,7 @@ internal sealed partial class MethodBodyEmitter
         // Resolve the right token for the interface's default-body MethodDef.
         // Non-generic interfaces: bare MethodDef. Generic interfaces:
         // MemberRef parented at the constructed TypeSpec.
-        var methodToken = this.outer.ResolveUserInterfaceInstanceMethodToken(call.Interface, call.Method);
+        var methodToken = this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(call.Interface, call.Method);
 
         // ADR-0091: non-virtual `call`, NOT `callvirt`. Using callvirt would
         // re-dispatch through the v-table and re-enter the same override
@@ -767,8 +767,8 @@ internal sealed partial class MethodBodyEmitter
         }
 
         var methodToken = call.Method != null
-            ? this.outer.ResolveUserInstanceMethodToken(baseClass, call.Method)
-            : this.outer.ResolveUserPropertyAccessorToken(baseClass, call.Property, call.IsSetterAccessor);
+            ? this.outer.userTokens.ResolveUserInstanceMethodToken(baseClass, call.Method)
+            : this.outer.userTokens.ResolveUserPropertyAccessorToken(baseClass, call.Property, call.IsSetterAccessor);
 
         // Issue #986: non-virtual `call`, NOT `callvirt`. callvirt would
         // re-dispatch through the v-table and re-enter the derived override.

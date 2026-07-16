@@ -28,8 +28,8 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// <remarks>
 /// Wired with a back-reference to the root emitter (the MethodBodyEmitter
 /// idiom) for the cross-cutting token resolvers
-/// (<see cref="ReflectionMetadataEmitter.GetMethodReference(System.Reflection.MethodInfo)"/>,
-/// <see cref="ReflectionMetadataEmitter.ResolveUserInterfaceInstanceMethodToken"/>,
+/// (<see cref="ImportedMemberRefFactory.GetMethodReference(System.Reflection.MethodInfo)"/>,
+/// <see cref="UserTokenResolver.ResolveUserInterfaceInstanceMethodToken"/>,
 /// <see cref="ReflectionMetadataEmitter.IsUserGenericInterfaceReference"/>),
 /// with direct fields for the shared <see cref="EmitContext"/> and
 /// <see cref="MetadataTokenCache"/>. Method bodies are verbatim moves;
@@ -90,7 +90,7 @@ internal sealed class InterfaceImplEmitter
             var slot = method.ExplicitInterfaceSlot;
             if (slot != null)
             {
-                var slotRef = this.outer.GetMethodReference(slot);
+                var slotRef = this.outer.memberRefs.GetMethodReference(slot);
                 this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implHandle, slotRef);
             }
 
@@ -120,7 +120,7 @@ internal sealed class InterfaceImplEmitter
 
                 var openSlot = ResolveOpenInterfaceInstanceMethod(iface, ifaceMember);
                 slotHandle = ReflectionMetadataEmitter.IsUserGenericInterfaceReference(iface)
-                    ? this.outer.ResolveUserInterfaceInstanceMethodToken(iface, openSlot)
+                    ? this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(iface, openSlot)
                     : this.cache.MethodHandles.TryGetValue(openSlot, out var slotDefHandle)
                         ? slotDefHandle
                         : (EntityHandle?)null;
@@ -195,7 +195,7 @@ internal sealed class InterfaceImplEmitter
                 if (ifaceMember.HasGetter && implAccessors.Getter.HasValue && ifaceMember.GetterSymbol != null)
                 {
                     EntityHandle? getterDecl = isGenericIface
-                        ? this.outer.ResolveUserInterfaceInstanceMethodToken(iface, ifaceMember.GetterSymbol)
+                        ? this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(iface, ifaceMember.GetterSymbol)
                         : this.cache.MethodHandles.TryGetValue(ifaceMember.GetterSymbol, out var getterDefHandle)
                             ? getterDefHandle
                             : (EntityHandle?)null;
@@ -208,7 +208,7 @@ internal sealed class InterfaceImplEmitter
                 if (ifaceMember.HasSetter && implAccessors.Setter.HasValue && ifaceMember.SetterSymbol != null)
                 {
                     EntityHandle? setterDecl = isGenericIface
-                        ? this.outer.ResolveUserInterfaceInstanceMethodToken(iface, ifaceMember.SetterSymbol)
+                        ? this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(iface, ifaceMember.SetterSymbol)
                         : this.cache.MethodHandles.TryGetValue(ifaceMember.SetterSymbol, out var setterDefHandle)
                             ? setterDefHandle
                             : (EntityHandle?)null;
@@ -280,7 +280,7 @@ internal sealed class InterfaceImplEmitter
                 if (ifaceMember.AddMethodSymbol != null)
                 {
                     EntityHandle? addDecl = isGenericIface
-                        ? this.outer.ResolveUserInterfaceInstanceMethodToken(iface, ifaceMember.AddMethodSymbol)
+                        ? this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(iface, ifaceMember.AddMethodSymbol)
                         : this.cache.MethodHandles.TryGetValue(ifaceMember.AddMethodSymbol, out var addDefHandle)
                             ? addDefHandle
                             : (EntityHandle?)null;
@@ -293,7 +293,7 @@ internal sealed class InterfaceImplEmitter
                 if (ifaceMember.RemoveMethodSymbol != null)
                 {
                     EntityHandle? removeDecl = isGenericIface
-                        ? this.outer.ResolveUserInterfaceInstanceMethodToken(iface, ifaceMember.RemoveMethodSymbol)
+                        ? this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(iface, ifaceMember.RemoveMethodSymbol)
                         : this.cache.MethodHandles.TryGetValue(ifaceMember.RemoveMethodSymbol, out var removeDefHandle)
                             ? removeDefHandle
                             : (EntityHandle?)null;
@@ -306,7 +306,7 @@ internal sealed class InterfaceImplEmitter
                 if (ifaceMember.RaiseMethodSymbol != null && implAccessors.Raise.HasValue)
                 {
                     EntityHandle? raiseDecl = isGenericIface
-                        ? this.outer.ResolveUserInterfaceInstanceMethodToken(iface, ifaceMember.RaiseMethodSymbol)
+                        ? this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(iface, ifaceMember.RaiseMethodSymbol)
                         : this.cache.MethodHandles.TryGetValue(ifaceMember.RaiseMethodSymbol, out var raiseDefHandle)
                             ? raiseDefHandle
                             : (EntityHandle?)null;
@@ -365,7 +365,7 @@ internal sealed class InterfaceImplEmitter
                 }
 
                 EntityHandle slotHandle = isGenericIface
-                    ? this.outer.ResolveUserInterfaceInstanceMethodToken(iface, openSlot)
+                    ? this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(iface, openSlot)
                     : slotDefHandle;
 
                 // ADR-0149 follow-up (issue #2370): an explicit-interface-
@@ -588,7 +588,7 @@ internal sealed class InterfaceImplEmitter
                 if (slotProp.HasGetter && slotAccessors.Getter.HasValue && implAccessors.Getter.HasValue)
                 {
                     EntityHandle getterDecl = isGenericIface && slotProp.GetterSymbol != null
-                        ? this.outer.ResolveUserInterfaceInstanceMethodToken(iface, slotProp.GetterSymbol)
+                        ? this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(iface, slotProp.GetterSymbol)
                         : slotAccessors.Getter.Value;
                     this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Getter.Value, getterDecl);
                 }
@@ -596,7 +596,7 @@ internal sealed class InterfaceImplEmitter
                 if (slotProp.HasSetter && slotAccessors.Setter.HasValue && implAccessors.Setter.HasValue)
                 {
                     EntityHandle setterDecl = isGenericIface && slotProp.SetterSymbol != null
-                        ? this.outer.ResolveUserInterfaceInstanceMethodToken(iface, slotProp.SetterSymbol)
+                        ? this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(iface, slotProp.SetterSymbol)
                         : slotAccessors.Setter.Value;
                     this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Setter.Value, setterDecl);
                 }

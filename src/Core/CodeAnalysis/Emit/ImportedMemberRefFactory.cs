@@ -59,9 +59,9 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// <see cref="SignatureEncoder"/> (signature/type encoding), the
 /// <see cref="StateMachineEmitter"/> plans, AND several user-token resolvers
 /// that only move in PR-E-19
-/// (<see cref="ReflectionMetadataEmitter.GetUserStructTypeSpec"/>,
-/// <see cref="ReflectionMetadataEmitter.GetUserInterfaceTypeSpec"/>,
-/// <see cref="ReflectionMetadataEmitter.FunctionTypeNeedsSymbolicDelegate"/>).
+/// (<see cref="UserTokenResolver.GetUserStructTypeSpec"/>,
+/// <see cref="UserTokenResolver.GetUserInterfaceTypeSpec"/>,
+/// <see cref="UserTokenResolver.FunctionTypeNeedsSymbolicDelegate"/>).
 /// Those temporary couplings are reached through <see cref="outer"/> and are
 /// resolved when the user-token-resolution band is extracted (E-19). Direct
 /// convenience fields hold the shared <see cref="EmitContext"/> /

@@ -142,7 +142,7 @@ internal sealed partial class MethodBodyEmitter
                     && ReflectionMetadataEmitter.IsUserGenericInterfaceReference(call.StaticGenericInterfaceOwnerType))
                 {
                     this.il.OpCode(ILOpCode.Call);
-                    this.il.Token(this.outer.ResolveUserInterfaceStaticMethodToken(call.StaticGenericInterfaceOwnerType, call.Function));
+                    this.il.Token(this.outer.userTokens.ResolveUserInterfaceStaticMethodToken(call.StaticGenericInterfaceOwnerType, call.Function));
                     break;
                 }
 
@@ -167,11 +167,11 @@ internal sealed partial class MethodBodyEmitter
                     // be referenced through a MemberRef parented at the
                     // construction's TypeSpec; a bare MethodDef token is invalid
                     // for a method of a generic type.
-                    callTokenToEmit = this.outer.ResolveUserStaticMethodToken(call.StaticGenericOwnerType, call.Function);
+                    callTokenToEmit = this.outer.userTokens.ResolveUserStaticMethodToken(call.StaticGenericOwnerType, call.Function);
                 }
                 else if (call.Function.IsGeneric && !call.Function.TypeParameters.IsDefaultOrEmpty)
                 {
-                    callTokenToEmit = this.outer.BuildMethodSpecForGenericCall(fnHandle, call);
+                    callTokenToEmit = this.outer.userTokens.BuildMethodSpecForGenericCall(fnHandle, call);
                 }
 
                 this.il.OpCode(ILOpCode.Call);
@@ -196,11 +196,11 @@ internal sealed partial class MethodBodyEmitter
                 // instance/extension paths do.
                 if (impCall.StaticContainerType != null)
                 {
-                    this.il.Call(this.outer.GetMethodEntityHandle(impCall.Function.Method, impCall.StaticContainerType));
+                    this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(impCall.Function.Method, impCall.StaticContainerType));
                     break;
                 }
 
-                this.il.Call(this.outer.GetMethodEntityHandle(impCall.Function.Method, impCall.TypeArgumentSymbols));
+                this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(impCall.Function.Method, impCall.TypeArgumentSymbols));
 
                 // Issue #903: when this generic imported (extension) call was
                 // closed over a same-compilation user element type, the emitted
@@ -212,7 +212,7 @@ internal sealed partial class MethodBodyEmitter
                 // struct value (ilverify StackObjRef + runtime crash) or a
                 // redundant `castclass` over a class reference. Skip the
                 // widening, mirroring the symbolic instance-method path below.
-                if (this.outer.TryGetSymbolicSubstitutedImportedCallReturn(impCall.Function.Method, impCall.TypeArgumentSymbols, out _))
+                if (this.outer.userTokens.TryGetSymbolicSubstitutedImportedCallReturn(impCall.Function.Method, impCall.TypeArgumentSymbols, out _))
                 {
                     break;
                 }
@@ -223,7 +223,7 @@ internal sealed partial class MethodBodyEmitter
                 break;
             case BoundClrStaticCallExpression staticCall:
                 this.EmitImportedCallArguments(staticCall.Arguments, staticCall.ArgumentRefKinds);
-                this.il.Call(this.outer.GetMethodEntityHandle(staticCall.Method));
+                this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(staticCall.Method));
                 this.EmitErasedObjectReturnWidening(
                     TypeSymbol.FromClrType(staticCall.Method.ReturnType),
                     staticCall.Type);
@@ -239,13 +239,13 @@ internal sealed partial class MethodBodyEmitter
                         this.EmitConstrainedTypeParameterReceiver(instCall.Receiver);
                         this.EmitImportedCallArguments(instCall.Arguments, instCall.ArgumentRefKinds);
 
-                        var constrainedHandle = this.outer.GetMethodEntityHandle(
+                        var constrainedHandle = this.outer.memberRefs.GetMethodEntityHandle(
                             instCall.Method,
                             instCall.TypeArgumentSymbols,
                             instCall.ConstrainedInterfaceType);
 
                         this.il.OpCode(ILOpCode.Constrained);
-                        this.il.Token(this.outer.GetElementTypeToken(instCall.ConstrainedReceiverTypeParameter));
+                        this.il.Token(this.outer.memberRefs.GetElementTypeToken(instCall.ConstrainedReceiverTypeParameter));
                         this.il.OpCode(ILOpCode.Callvirt);
                         this.il.Token(constrainedHandle);
                         break;
@@ -287,7 +287,7 @@ internal sealed partial class MethodBodyEmitter
                         }
 
                         this.il.OpCode(ILOpCode.Box);
-                        this.il.Token(this.outer.GetElementTypeToken(receiverType));
+                        this.il.Token(this.outer.memberRefs.GetElementTypeToken(receiverType));
                     }
                     else
                     {
@@ -295,7 +295,7 @@ internal sealed partial class MethodBodyEmitter
                     }
 
                     this.EmitImportedCallArguments(instCall.Arguments, instCall.ArgumentRefKinds);
-                    var instCallHandle = this.outer.GetMethodEntityHandle(instCall.Method, instCall.TypeArgumentSymbols, receiverType);
+                    var instCallHandle = this.outer.memberRefs.GetMethodEntityHandle(instCall.Method, instCall.TypeArgumentSymbols, receiverType);
 
                     // Issue #1260: a `base.Member(...)` access into an imported/BCL
                     // base class emits a non-virtual `call` (never `callvirt`),
@@ -316,7 +316,7 @@ internal sealed partial class MethodBodyEmitter
                     // ilverify at the source method but produced a runtime
                     // NullReferenceException once a state-machine rewrite
                     // (e.g. iterator MoveNext) re-inspected the IL.
-                    if (this.outer.TryGetSymbolicSubstitutedInstanceMethodReturn(receiverType, instCall.Method, out _))
+                    if (this.outer.userTokens.TryGetSymbolicSubstitutedInstanceMethodReturn(receiverType, instCall.Method, out _))
                     {
                         break;
                     }
@@ -664,7 +664,7 @@ internal sealed partial class MethodBodyEmitter
     private void EmitMethodInfoLiteral(MethodInfo method)
     {
         this.il.OpCode(ILOpCode.Ldtoken);
-        this.il.Token(this.outer.GetMethodEntityHandle(method));
+        this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(method));
 
         // The CLR requires the 2-arg GetMethodFromHandle(RuntimeMethodHandle,
         // RuntimeTypeHandle) overload whenever the declaring type is a
@@ -676,7 +676,7 @@ internal sealed partial class MethodBodyEmitter
         if (method.DeclaringType is { IsGenericType: true } declaringType)
         {
             this.il.OpCode(ILOpCode.Ldtoken);
-            this.il.Token(this.outer.GetTypeReference(declaringType));
+            this.il.Token(this.outer.memberRefs.GetTypeReference(declaringType));
             this.il.Call(this.outer.wellKnown.GetMethodFromHandleWithDeclaringTypeReference());
         }
         else
@@ -688,7 +688,7 @@ internal sealed partial class MethodBodyEmitter
         // needs the more specific MethodInfo (constructors never reach here —
         // Stream C only resolves public static operator methods).
         this.il.OpCode(ILOpCode.Castclass);
-        this.il.Token(this.outer.GetTypeReference(typeof(MethodInfo)));
+        this.il.Token(this.outer.memberRefs.GetTypeReference(typeof(MethodInfo)));
     }
 
     // ADR-0044 decimal literal lowering. IL has no `ldc.decimal`, so each
@@ -723,7 +723,7 @@ internal sealed partial class MethodBodyEmitter
             this.il.LoadConstantI4(asInt);
             var ctor = typeof(decimal).GetConstructor(new[] { typeof(int) });
             this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(this.outer.GetCtorReference(ctor));
+            this.il.Token(this.outer.memberRefs.GetCtorReference(ctor));
             return;
         }
 
@@ -734,7 +734,7 @@ internal sealed partial class MethodBodyEmitter
             this.il.LoadConstantI8(asLong);
             var ctor = typeof(decimal).GetConstructor(new[] { typeof(long) });
             this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(this.outer.GetCtorReference(ctor));
+            this.il.Token(this.outer.memberRefs.GetCtorReference(ctor));
             return;
         }
 
@@ -758,14 +758,14 @@ internal sealed partial class MethodBodyEmitter
             typeof(int), typeof(int), typeof(int), typeof(bool), typeof(byte),
         });
         this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(this.outer.GetCtorReference(bigCtor));
+        this.il.Token(this.outer.memberRefs.GetCtorReference(bigCtor));
     }
 
     private void EmitDecimalStaticField(string name)
     {
         var field = typeof(decimal).GetField(name);
         this.il.OpCode(ILOpCode.Ldsfld);
-        this.il.Token(this.outer.GetFieldReference(field));
+        this.il.Token(this.outer.memberRefs.GetFieldReference(field));
     }
 
     private void EmitArrayCreation(BoundArrayCreationExpression arr)
@@ -777,13 +777,13 @@ internal sealed partial class MethodBodyEmitter
         {
             this.EmitExpression(arr.LengthExpression);
             this.il.OpCode(ILOpCode.Newarr);
-            this.il.Token(this.outer.GetElementTypeToken(arr.ElementType));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(arr.ElementType));
             return;
         }
 
         this.il.LoadConstantI4(arr.Elements.Length);
         this.il.OpCode(ILOpCode.Newarr);
-        this.il.Token(this.outer.GetElementTypeToken(arr.ElementType));
+        this.il.Token(this.outer.memberRefs.GetElementTypeToken(arr.ElementType));
 
         for (var i = 0; i < arr.Elements.Length; i++)
         {
@@ -852,7 +852,7 @@ internal sealed partial class MethodBodyEmitter
         // bytes = count * sizeof(T); localloc -> void* (native int).
         this.il.LoadLocal(countSlot);
         this.il.OpCode(ILOpCode.Sizeof);
-        this.il.Token(this.outer.GetTypeReference(elementClr));
+        this.il.Token(this.outer.memberRefs.GetTypeReference(elementClr));
         this.il.OpCode(ILOpCode.Mul);
         this.il.OpCode(ILOpCode.Conv_u);
         this.il.OpCode(ILOpCode.Localloc);
@@ -872,7 +872,7 @@ internal sealed partial class MethodBodyEmitter
                     // addr = base + i * sizeof(T).
                     this.il.LoadConstantI4(i);
                     this.il.OpCode(ILOpCode.Sizeof);
-                    this.il.Token(this.outer.GetTypeReference(elementClr));
+                    this.il.Token(this.outer.memberRefs.GetTypeReference(elementClr));
                     this.il.OpCode(ILOpCode.Mul);
                     this.il.OpCode(ILOpCode.Conv_i);
                     this.il.OpCode(ILOpCode.Add);
@@ -896,7 +896,7 @@ internal sealed partial class MethodBodyEmitter
             ?? throw new InvalidOperationException(
                 $"System.Span<{elementClr.Name}> has no (void*, int) constructor.");
         this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(this.outer.GetCtorReference(spanCtor));
+        this.il.Token(this.outer.memberRefs.GetCtorReference(spanCtor));
     }
 
     private void EmitLen(BoundLenExpression len)
@@ -914,7 +914,7 @@ internal sealed partial class MethodBodyEmitter
                 ?? throw new InvalidOperationException(
                     $"Dictionary type '{dictType.FullName}' has no get_Count method.");
             this.il.OpCode(ILOpCode.Callvirt);
-            this.il.Token(this.outer.GetMethodReference(getCount));
+            this.il.Token(this.outer.memberRefs.GetMethodReference(getCount));
         }
         else
         {
@@ -927,7 +927,7 @@ internal sealed partial class MethodBodyEmitter
     {
         // Issue #143: `typeof(T)` -> ldtoken <T> ; call Type::GetTypeFromHandle.
         this.il.OpCode(ILOpCode.Ldtoken);
-        this.il.Token(this.outer.GetTypeOfToken(typeOf.OperandType));
+        this.il.Token(this.outer.memberRefs.GetTypeOfToken(typeOf.OperandType));
         this.il.Call(this.outer.wellKnown.GetTypeFromHandleReference());
     }
 
@@ -938,7 +938,7 @@ internal sealed partial class MethodBodyEmitter
         // scale unmanaged pointer arithmetic by a struct size that is not known
         // at G# compile time.
         this.il.OpCode(ILOpCode.Sizeof);
-        this.il.Token(this.outer.GetElementTypeToken(sizeOf.MeasuredType));
+        this.il.Token(this.outer.memberRefs.GetElementTypeToken(sizeOf.MeasuredType));
     }
 
     private void EmitFunctionPointerFromMethod(BoundFunctionPointerFromMethodExpression node)
@@ -971,7 +971,7 @@ internal sealed partial class MethodBodyEmitter
         }
 
         this.EmitExpression(node.Pointer);
-        var sig = this.outer.GetFunctionPointerCallSiteSignature(node.FunctionPointerType);
+        var sig = this.outer.signatures.GetFunctionPointerCallSiteSignature(node.FunctionPointerType);
         this.il.CallIndirect(sig);
     }
 
@@ -989,7 +989,7 @@ internal sealed partial class MethodBodyEmitter
         }
 
         var element = app.SliceType.ElementType;
-        var elementToken = this.outer.GetElementTypeToken(element);
+        var elementToken = this.outer.memberRefs.GetElementTypeToken(element);
 
         // src = slice
         this.EmitExpression(app.Slice);
@@ -1042,14 +1042,14 @@ internal sealed partial class MethodBodyEmitter
         if (dictType == null)
         {
             this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(this.outer.GetMapCtorReference(literal.MapType));
+            this.il.Token(this.outer.memberRefs.GetMapCtorReference(literal.MapType));
 
             if (literal.Entries.Length == 0)
             {
                 return;
             }
 
-            var symbolicSetItemRef = this.outer.GetMapSetItemReference(literal.MapType);
+            var symbolicSetItemRef = this.outer.memberRefs.GetMapSetItemReference(literal.MapType);
             foreach (var entry in literal.Entries)
             {
                 this.il.OpCode(ILOpCode.Dup);
@@ -1066,7 +1066,7 @@ internal sealed partial class MethodBodyEmitter
             ?? throw new InvalidOperationException(
                 $"Dictionary type '{dictType.FullName}' has no parameterless constructor.");
         this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(this.outer.GetCtorReference(ctor));
+        this.il.Token(this.outer.memberRefs.GetCtorReference(ctor));
 
         if (literal.Entries.Length == 0)
         {
@@ -1076,7 +1076,7 @@ internal sealed partial class MethodBodyEmitter
         var setItem = dictType.GetMethod("set_Item")
             ?? throw new InvalidOperationException(
                 $"Dictionary type '{dictType.FullName}' has no set_Item method.");
-        var setItemRef = this.outer.GetMethodReference(setItem);
+        var setItemRef = this.outer.memberRefs.GetMethodReference(setItem);
 
         foreach (var entry in literal.Entries)
         {
@@ -1101,7 +1101,7 @@ internal sealed partial class MethodBodyEmitter
         this.EmitExpression(del.Map);
         this.EmitExpression(del.Key);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(remove));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(remove));
         this.il.OpCode(ILOpCode.Pop);
     }
 
@@ -1113,7 +1113,7 @@ internal sealed partial class MethodBodyEmitter
         // that R0/R1 erasure required (`box T` before stfld) is dropped:
         // the field's signature is VAR(idx) and resolves to the correct
         // concrete type at the construction site.
-        var typeDef = this.outer.ResolveUserTypeToken(literal.StructType);
+        var typeDef = this.outer.userTokens.ResolveUserTypeToken(literal.StructType);
         bool isGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(literal.StructType);
 
         // Class literal: newobj <ctor>; (dup; <value>; stfld) per init.
@@ -1140,7 +1140,7 @@ internal sealed partial class MethodBodyEmitter
             EntityHandle ctorHandle;
             if (isGeneric)
             {
-                ctorHandle = this.outer.ResolveUserCtorTokenForDefault(literal.StructType);
+                ctorHandle = this.outer.userTokens.ResolveUserCtorTokenForDefault(literal.StructType);
             }
             else if (this.outer.cache.ClassCtorHandles.TryGetValue(literal.StructType, out var ctorDef))
             {
@@ -1156,7 +1156,7 @@ internal sealed partial class MethodBodyEmitter
                 var clrCtor = literal.StructType.ClrType.GetConstructor(Type.EmptyTypes)
                     ?? throw new InvalidOperationException(
                         $"Imported data class '{literal.StructType.Name}' has no parameterless constructor.");
-                ctorHandle = this.outer.GetCtorReference(clrCtor);
+                ctorHandle = this.outer.memberRefs.GetCtorReference(clrCtor);
             }
             else
             {
@@ -1184,7 +1184,7 @@ internal sealed partial class MethodBodyEmitter
                 EntityHandle fieldHandle;
                 if (isGeneric || literal.StructType.ClrType != null)
                 {
-                    fieldHandle = this.outer.ResolveFieldToken(literal.StructType, init.Field);
+                    fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, init.Field);
                 }
                 else if (this.outer.cache.StructFieldDefs.TryGetValue(init.Field, out var defHandle))
                 {
@@ -1237,7 +1237,7 @@ internal sealed partial class MethodBodyEmitter
             EntityHandle fieldHandle;
             if (isGeneric || literal.StructType.ClrType != null)
             {
-                fieldHandle = this.outer.ResolveFieldToken(literal.StructType, init.Field);
+                fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, init.Field);
             }
             else if (this.outer.cache.StructFieldDefs.TryGetValue(init.Field, out var defHandle))
             {
@@ -1304,7 +1304,7 @@ internal sealed partial class MethodBodyEmitter
         }
 
         this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(this.outer.GetCtorReference(primaryCtor));
+        this.il.Token(this.outer.memberRefs.GetCtorReference(primaryCtor));
 
         foreach (var init in literal.Initializers)
         {
@@ -1323,7 +1323,7 @@ internal sealed partial class MethodBodyEmitter
                 continue;
             }
 
-            var fieldHandle = this.outer.ResolveFieldToken(literal.StructType, init.Field);
+            var fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, init.Field);
             this.il.OpCode(ILOpCode.Dup);
             this.EmitExpression(init.Value);
             this.il.OpCode(ILOpCode.Stfld);
@@ -1368,7 +1368,7 @@ internal sealed partial class MethodBodyEmitter
     {
         if (isGeneric)
         {
-            return this.outer.ResolveUserPropertyAccessorToken(structType, property, wantSetter: true);
+            return this.outer.userTokens.ResolveUserPropertyAccessorToken(structType, property, wantSetter: true);
         }
 
         if (this.outer.cache.PropertyAccessorHandles.TryGetValue(property, out var handles) && handles.Setter.HasValue)
@@ -1438,7 +1438,7 @@ internal sealed partial class MethodBodyEmitter
             // value-constrained open type parameter (issue #814).
             if (underlying?.ClrType is not { IsValueType: true })
             {
-                var nullableToken = this.outer.GetElementTypeToken(nullableType);
+                var nullableToken = this.outer.memberRefs.GetElementTypeToken(nullableType);
 
                 // nil branch: ldloca slot; initobj Nullable<UserT>; ldloc slot
                 this.il.LoadLocalAddress(slot);
@@ -1455,8 +1455,8 @@ internal sealed partial class MethodBodyEmitter
                 if (nc.WhenNotNull.Type is not NullableTypeSymbol)
                 {
                     var ctorToken = underlying is Symbols.TypeParameterSymbol
-                        ? this.outer.GetNullableCtorMemberRefForOpenTypeParameter(nullableType)
-                        : this.outer.GetNullableCtorMemberRefForUserValueType(nullableType);
+                        ? this.outer.memberRefs.GetNullableCtorMemberRefForOpenTypeParameter(nullableType)
+                        : this.outer.memberRefs.GetNullableCtorMemberRefForUserValueType(nullableType);
                     this.il.OpCode(ILOpCode.Newobj);
                     this.il.Token(ctorToken);
                 }
@@ -1481,7 +1481,7 @@ internal sealed partial class MethodBodyEmitter
             // nil branch: ldloca slot; initobj Nullable<T>; ldloc slot
             this.il.LoadLocalAddress(slot);
             this.il.OpCode(ILOpCode.Initobj);
-            this.il.Token(this.outer.GetTypeHandleForMember(nullableClr));
+            this.il.Token(this.outer.memberRefs.GetTypeHandleForMember(nullableClr));
             this.il.LoadLocal(slot);
             this.il.Branch(ILOpCode.Br, end);
 
@@ -1495,7 +1495,7 @@ internal sealed partial class MethodBodyEmitter
                     ?? throw new InvalidOperationException(
                         $"Nullable<{nullableInnerArg.FullName}> has no single-arg constructor.");
                 this.il.OpCode(ILOpCode.Newobj);
-                this.il.Token(this.outer.GetCtorReference(ctor));
+                this.il.Token(this.outer.memberRefs.GetCtorReference(ctor));
             }
 
             this.il.MarkLabel(end);
@@ -1544,7 +1544,7 @@ internal sealed partial class MethodBodyEmitter
             this.il.StoreLocal(wrapperSlot);
             this.il.LoadLocal(wrapperSlot);
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.GetElementTypeToken(receiverNullable));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(receiverNullable));
             var nilFallthrough = this.il.DefineLabel();
             this.il.Branch(ILOpCode.Brfalse, nilFallthrough);
 
@@ -1552,7 +1552,7 @@ internal sealed partial class MethodBodyEmitter
             if (NullableLifting.RequiresSymbolicNullableGetValue(receiverNullable))
             {
                 this.il.OpCode(ILOpCode.Call);
-                this.il.Token(this.outer.GetNullableGetValueMemberRefForUserValueType(receiverNullable));
+                this.il.Token(this.outer.memberRefs.GetNullableGetValueMemberRefForUserValueType(receiverNullable));
             }
             else
             {
@@ -1598,7 +1598,7 @@ internal sealed partial class MethodBodyEmitter
             }
 
             this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(this.outer.GetTupleCtorReference(tuple.TupleType));
+            this.il.Token(this.outer.memberRefs.GetTupleCtorReference(tuple.TupleType));
             return;
         }
 
@@ -1621,7 +1621,7 @@ internal sealed partial class MethodBodyEmitter
         // Resolve the ctor from the open generic type definition instead.
         if (clrType.IsConstructedGenericType)
         {
-            this.il.Token(this.outer.GetCtorReferenceOnConstructedGeneric(clrType, tuple.Elements.Length));
+            this.il.Token(this.outer.memberRefs.GetCtorReferenceOnConstructedGeneric(clrType, tuple.Elements.Length));
         }
         else
         {
@@ -1641,7 +1641,7 @@ internal sealed partial class MethodBodyEmitter
                     $"ValueTuple type '{clrType.FullName}' has no constructor of arity {tuple.Elements.Length}.");
             }
 
-            this.il.Token(this.outer.GetCtorReference(ctor));
+            this.il.Token(this.outer.memberRefs.GetCtorReference(ctor));
         }
     }
 
@@ -1663,7 +1663,7 @@ internal sealed partial class MethodBodyEmitter
             // tuple TypeSpec and field MemberRef symbolically.
             this.EmitInstanceReceiver(access.Receiver);
             this.il.OpCode(ILOpCode.Ldfld);
-            this.il.Token(this.outer.GetTupleFieldReference(access.TupleType, fieldName));
+            this.il.Token(this.outer.memberRefs.GetTupleFieldReference(access.TupleType, fieldName));
             return;
         }
 
@@ -1682,14 +1682,14 @@ internal sealed partial class MethodBodyEmitter
         // Resolve the field from the open generic type definition instead.
         if (clrType.IsConstructedGenericType)
         {
-            this.il.Token(this.outer.GetFieldReferenceOnConstructedGeneric(clrType, fieldName));
+            this.il.Token(this.outer.memberRefs.GetFieldReferenceOnConstructedGeneric(clrType, fieldName));
         }
         else
         {
             var field = clrType.GetField(fieldName)
                 ?? throw new InvalidOperationException(
                     $"ValueTuple type '{clrType.FullName}' has no public field '{fieldName}'.");
-            this.il.Token(this.outer.GetFieldReference(field));
+            this.il.Token(this.outer.memberRefs.GetFieldReference(field));
         }
     }
 
@@ -1822,7 +1822,7 @@ internal sealed partial class MethodBodyEmitter
         }
 
         this.il.OpCode(ILOpCode.Castclass);
-        this.il.Token(this.outer.GetElementTypeToken(castTarget));
+        this.il.Token(this.outer.memberRefs.GetElementTypeToken(castTarget));
     }
 
     /// <summary>ADR-0039: Emits a dereference (load indirect) from a managed pointer.</summary>
@@ -1915,13 +1915,13 @@ internal sealed partial class MethodBodyEmitter
         if (declared is TypeParameterSymbol)
         {
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.GetElementTypeToken(declared));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(declared));
         }
         else if (declared is NullableTypeSymbol declaredNullable
             && declaredNullable.UnderlyingType is TypeParameterSymbol underlyingTypeParameter)
         {
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.GetElementTypeToken(underlyingTypeParameter));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(underlyingTypeParameter));
         }
 
         // Issue #2335 (audit follow-up): mirrors the identical generalization
@@ -1944,12 +1944,12 @@ internal sealed partial class MethodBodyEmitter
             || (narrowed.ClrType != null && narrowed.ClrType.IsValueType))
         {
             this.il.OpCode(ILOpCode.Unbox_any);
-            this.il.Token(this.outer.GetElementTypeToken(narrowed));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(narrowed));
             return;
         }
 
         this.il.OpCode(ILOpCode.Castclass);
-        this.il.Token(this.outer.GetElementTypeToken(narrowed));
+        this.il.Token(this.outer.memberRefs.GetElementTypeToken(narrowed));
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -1996,14 +1996,14 @@ internal sealed partial class MethodBodyEmitter
         if (boxNeeded)
         {
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.GetElementTypeToken(boxType));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(boxType));
         }
 
         // Determine the isinst target. For nullable targets, test against the underlying type.
         var isinstTarget = node.TargetType is NullableTypeSymbol nts ? nts.UnderlyingType : node.TargetType;
 
         this.il.OpCode(ILOpCode.Isinst);
-        this.il.Token(this.outer.GetElementTypeToken(isinstTarget));
+        this.il.Token(this.outer.memberRefs.GetElementTypeToken(isinstTarget));
 
         // Convert the object-or-null result to bool.
         this.il.OpCode(ILOpCode.Ldnull);
@@ -2048,7 +2048,7 @@ internal sealed partial class MethodBodyEmitter
         if (boxNeeded)
         {
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.GetElementTypeToken(boxType));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(boxType));
         }
 
         // Determine the isinst target type. For any `as T?` (nullable target),
@@ -2063,13 +2063,13 @@ internal sealed partial class MethodBodyEmitter
             : node.TargetType;
 
         this.il.OpCode(ILOpCode.Isinst);
-        this.il.Token(this.outer.GetElementTypeToken(isinstTarget));
+        this.il.Token(this.outer.memberRefs.GetElementTypeToken(isinstTarget));
 
         if (isNullableValueTarget)
         {
             // Unbox to Nullable<T> — converts the boxed T (or null) to a Nullable<T> value.
             this.il.OpCode(ILOpCode.Unbox_any);
-            this.il.Token(this.outer.GetElementTypeToken(node.TargetType));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(node.TargetType));
         }
         else if (isinstTarget is TypeParameterSymbol)
         {
@@ -2078,7 +2078,7 @@ internal sealed partial class MethodBodyEmitter
             // `unbox.any`, otherwise the stack carries a reference where the
             // type-parameter value slot is expected.
             this.il.OpCode(ILOpCode.Unbox_any);
-            this.il.Token(this.outer.GetElementTypeToken(isinstTarget));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(isinstTarget));
         }
     }
 }

@@ -40,7 +40,7 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// InterfaceImplEmitter idiom) because the band reaches
 /// <see cref="EmitContext"/>, <see cref="MetadataTokenCache"/>,
 /// <see cref="GenericRemapState"/>, AND several user-token resolvers that only
-/// move in later PRs (<see cref="ReflectionMetadataEmitter.GetTypeReference"/>,
+/// move in later PRs (<see cref="ImportedMemberRefFactory.GetTypeReference"/>,
 /// <c>ResolveUserStructTypeSpecArguments</c>, <c>ResolveDelegateTypeArguments</c>,
 /// and the async-state-machine plans on
 /// <see cref="ReflectionMetadataEmitter.stateMachines"/>). Those temporary
@@ -184,7 +184,7 @@ internal sealed class SignatureEncoder
             {
                 var nullableOpen = typeof(System.Nullable<>);
                 var giNullable = encoder.GenericInstantiation(
-                    this.outer.GetTypeReference(nullableOpen),
+                    this.outer.memberRefs.GetTypeReference(nullableOpen),
                     genericArgumentCount: 1,
                     isValueType: true);
                 this.EncodeTypeSymbol(giNullable.AddArgument(), nullableTp);
@@ -208,7 +208,7 @@ internal sealed class SignatureEncoder
 
                 var nullableOpenForStruct = typeof(System.Nullable<>);
                 var giNullableStruct = encoder.GenericInstantiation(
-                    this.outer.GetTypeReference(nullableOpenForStruct),
+                    this.outer.memberRefs.GetTypeReference(nullableOpenForStruct),
                     genericArgumentCount: 1,
                     isValueType: true);
                 this.EncodeTypeSymbol(giNullableStruct.AddArgument(), nestedStruct);
@@ -229,7 +229,7 @@ internal sealed class SignatureEncoder
 
                 var nullableOpenForEnum = typeof(System.Nullable<>);
                 var giNullableEnum = encoder.GenericInstantiation(
-                    this.outer.GetTypeReference(nullableOpenForEnum),
+                    this.outer.memberRefs.GetTypeReference(nullableOpenForEnum),
                     genericArgumentCount: 1,
                     isValueType: true);
                 this.EncodeTypeSymbol(giNullableEnum.AddArgument(), nestedEnum);
@@ -314,7 +314,7 @@ internal sealed class SignatureEncoder
             && symbolicImported.TypeArguments.Any(ReflectionMetadataEmitter.ArgIsSymbolicUserDefined))
         {
             var genericInst = encoder.GenericInstantiation(
-                this.outer.GetTypeReference(symbolicImported.OpenDefinition),
+                this.outer.memberRefs.GetTypeReference(symbolicImported.OpenDefinition),
                 symbolicImported.TypeArguments.Length,
                 isValueType: symbolicImported.OpenDefinition.IsValueType);
             foreach (var arg in symbolicImported.TypeArguments)
@@ -335,7 +335,7 @@ internal sealed class SignatureEncoder
                 ?? throw new InvalidOperationException(
                     $"Imported generic '{erasedGeneric.Name}' has no OpenDefinition for GENERICINST encoding.");
             var giOpen = encoder.GenericInstantiation(
-                this.outer.GetTypeReference(openDef),
+                this.outer.memberRefs.GetTypeReference(openDef),
                 erasedGeneric.TypeArguments.Length,
                 isValueType: openDef.IsValueType);
             foreach (var arg in erasedGeneric.TypeArguments)
@@ -361,7 +361,7 @@ internal sealed class SignatureEncoder
             // with `HasTypeParameterArgument`.
             var enumerableOpen = typeof(System.Collections.Generic.IEnumerable<>);
             var giSeq = encoder.GenericInstantiation(
-                this.outer.GetTypeReference(enumerableOpen),
+                this.outer.memberRefs.GetTypeReference(enumerableOpen),
                 1,
                 isValueType: false);
             this.EncodeTypeSymbol(giSeq.AddArgument(), openSeq.ElementType);
@@ -372,7 +372,7 @@ internal sealed class SignatureEncoder
             // `async sequence[T]` (== IAsyncEnumerable<T>).
             var asyncEnumerableOpen = typeof(System.Collections.Generic.IAsyncEnumerable<>);
             var giAseq = encoder.GenericInstantiation(
-                this.outer.GetTypeReference(asyncEnumerableOpen),
+                this.outer.memberRefs.GetTypeReference(asyncEnumerableOpen),
                 1,
                 isValueType: false);
             this.EncodeTypeSymbol(giAseq.AddArgument(), openAseq.ElementType);
@@ -532,7 +532,7 @@ internal sealed class SignatureEncoder
             };
 
             var genericInst = encoder.GenericInstantiation(
-                this.outer.GetTypeReference(openType),
+                this.outer.memberRefs.GetTypeReference(openType),
                 tupleWithNullClr.Arity,
                 isValueType: true);
             foreach (var elemType in tupleWithNullClr.ElementTypes)
@@ -585,11 +585,11 @@ internal sealed class SignatureEncoder
             // and the iterator's `IEnumerable<…>` / `IEnumerator<…>` rows could
             // not carry the strongly-typed `Dictionary<…, !0>` shape. The
             // matching body construction is reified through
-            // <see cref="ReflectionMetadataEmitter.GetMapCtorReference"/> /
-            // <see cref="ReflectionMetadataEmitter.GetMapSetItemReference"/>.
+            // <see cref="ImportedMemberRefFactory.GetMapCtorReference"/> /
+            // <see cref="ImportedMemberRefFactory.GetMapSetItemReference"/>.
             var dictionaryOpen = typeof(System.Collections.Generic.Dictionary<,>);
             var giMap = encoder.GenericInstantiation(
-                this.outer.GetTypeReference(dictionaryOpen),
+                this.outer.memberRefs.GetTypeReference(dictionaryOpen),
                 genericArgumentCount: 2,
                 isValueType: false);
             this.EncodeTypeSymbol(giMap.AddArgument(), openMap.KeyType);
@@ -786,7 +786,7 @@ internal sealed class SignatureEncoder
                     var openDef = type.GetGenericTypeDefinition();
                     var typeArgs = type.GetGenericArguments();
                     var genericInst = encoder.GenericInstantiation(
-                        this.outer.GetTypeReference(openDef),
+                        this.outer.memberRefs.GetTypeReference(openDef),
                         typeArgs.Length,
                         isValueType: openDef.IsValueType);
                     foreach (var arg in typeArgs)
@@ -806,7 +806,7 @@ internal sealed class SignatureEncoder
                 {
                     var typeParams = type.GetGenericArguments();
                     var genericInst = encoder.GenericInstantiation(
-                        this.outer.GetTypeReference(type),
+                        this.outer.memberRefs.GetTypeReference(type),
                         typeParams.Length,
                         isValueType: type.IsValueType);
                     foreach (var tp in typeParams)
@@ -817,7 +817,7 @@ internal sealed class SignatureEncoder
                     break;
                 }
 
-                encoder.Type(this.outer.GetTypeReference(type), isValueType: type.IsValueType);
+                encoder.Type(this.outer.memberRefs.GetTypeReference(type), isValueType: type.IsValueType);
                 break;
         }
     }
@@ -839,7 +839,7 @@ internal sealed class SignatureEncoder
                 var modifiers = encoder.CustomModifiers();
                 foreach (var modifier in voidRequiredModifiers)
                 {
-                    modifiers.AddModifier(this.outer.GetTypeReference(modifier), isOptional: false);
+                    modifiers.AddModifier(this.outer.memberRefs.GetTypeReference(modifier), isOptional: false);
                 }
             }
 
@@ -860,7 +860,7 @@ internal sealed class SignatureEncoder
                 var modifiers = encoder.CustomModifiers();
                 foreach (var modifier in requiredModifiers)
                 {
-                    modifiers.AddModifier(this.outer.GetTypeReference(modifier), isOptional: false);
+                    modifiers.AddModifier(this.outer.memberRefs.GetTypeReference(modifier), isOptional: false);
                 }
             }
 
@@ -974,7 +974,7 @@ internal sealed class SignatureEncoder
             ? "System.Action`" + arity.ToString(System.Globalization.CultureInfo.InvariantCulture)
             : "System.Func`" + (arity + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
         var openDef = this.emitCtx.References.GetCoreType(typeName);
-        var openHandle = this.outer.GetTypeReference(openDef);
+        var openHandle = this.outer.memberRefs.GetTypeReference(openDef);
         int typeArgCount = arity + (isVoid ? 0 : 1);
         var gi = encoder.GenericInstantiation(openHandle, typeArgCount, isValueType: openDef.IsValueType);
         for (int i = 0; i < arity; i++)

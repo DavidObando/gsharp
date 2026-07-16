@@ -62,7 +62,7 @@ public class Issue2325ArrayPointerByRefRemapEmitTests
         var emitter = CreateEmitter(out var references);
         var hostArray = typeof(int).MakeArrayType();
 
-        var mapped = emitter.MapToReferenceClrType(hostArray);
+        var mapped = emitter.signatures.MapToReferenceClrType(hostArray);
 
         Assert.True(mapped.IsArray);
         Assert.True(mapped.IsSZArray);
@@ -83,7 +83,7 @@ public class Issue2325ArrayPointerByRefRemapEmitTests
         var hostArray = typeof(int).MakeArrayType(1);
         Assert.False(hostArray.IsSZArray);
 
-        var mapped = emitter.MapToReferenceClrType(hostArray);
+        var mapped = emitter.signatures.MapToReferenceClrType(hostArray);
 
         Assert.True(mapped.IsArray);
         Assert.False(mapped.IsSZArray);
@@ -97,7 +97,7 @@ public class Issue2325ArrayPointerByRefRemapEmitTests
         var emitter = CreateEmitter(out var references);
         var hostArray = typeof(int).MakeArrayType(3);
 
-        var mapped = emitter.MapToReferenceClrType(hostArray);
+        var mapped = emitter.signatures.MapToReferenceClrType(hostArray);
 
         Assert.True(mapped.IsArray);
         Assert.Equal(3, mapped.GetArrayRank());
@@ -113,7 +113,7 @@ public class Issue2325ArrayPointerByRefRemapEmitTests
         var emitter = CreateEmitter(out var references);
         var hostArray = typeof(int).MakeArrayType().MakeArrayType();
 
-        var mapped = emitter.MapToReferenceClrType(hostArray);
+        var mapped = emitter.signatures.MapToReferenceClrType(hostArray);
 
         Assert.True(mapped.IsArray);
         Assert.True(mapped.IsSZArray);
@@ -133,7 +133,7 @@ public class Issue2325ArrayPointerByRefRemapEmitTests
         var emitter = CreateEmitter(out var references);
         var hostGeneric = typeof(Action<,>).MakeGenericType(typeof(int[]), typeof(object));
 
-        var mapped = emitter.MapToReferenceClrType(hostGeneric);
+        var mapped = emitter.signatures.MapToReferenceClrType(hostGeneric);
 
         Assert.True(mapped.IsConstructedGenericType);
         Assert.NotEqual(typeof(Action<,>).Assembly.FullName, mapped.GetGenericTypeDefinition().Assembly.FullName);
@@ -153,7 +153,7 @@ public class Issue2325ArrayPointerByRefRemapEmitTests
         var emitter = CreateEmitter(out var references);
         var hostPointer = typeof(int).MakePointerType();
 
-        var mapped = emitter.MapToReferenceClrType(hostPointer);
+        var mapped = emitter.signatures.MapToReferenceClrType(hostPointer);
 
         Assert.True(mapped.IsPointer);
         AssertMappedInt32(references, mapped.GetElementType());
@@ -170,7 +170,7 @@ public class Issue2325ArrayPointerByRefRemapEmitTests
         var emitter = CreateEmitter(out var references);
         var hostByRef = typeof(int).MakeByRefType();
 
-        var mapped = emitter.MapToReferenceClrType(hostByRef);
+        var mapped = emitter.signatures.MapToReferenceClrType(hostByRef);
 
         Assert.True(mapped.IsByRef);
         AssertMappedInt32(references, mapped.GetElementType());
@@ -186,7 +186,7 @@ public class Issue2325ArrayPointerByRefRemapEmitTests
         var emitter = CreateEmitter(out var references);
         var hostPointerToArray = typeof(int).MakeArrayType().MakePointerType();
 
-        var mapped = emitter.MapToReferenceClrType(hostPointerToArray);
+        var mapped = emitter.signatures.MapToReferenceClrType(hostPointerToArray);
 
         Assert.True(mapped.IsPointer);
         var element = mapped.GetElementType();

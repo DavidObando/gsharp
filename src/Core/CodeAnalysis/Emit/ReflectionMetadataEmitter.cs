@@ -689,7 +689,7 @@ internal sealed class ReflectionMetadataEmitter
             {
                 pendingRows[gi] = gpRow with
                 {
-                    PreResolvedConstraintHandle = this.GetElementTypeToken(gpRow.InterfaceConstraintType),
+                    PreResolvedConstraintHandle = this.memberRefs.GetElementTypeToken(gpRow.InterfaceConstraintType),
                 };
             }
         }
@@ -706,47 +706,6 @@ internal sealed class ReflectionMetadataEmitter
         this.functions = new FunctionEmitter(this);
         this.slotPlanner = new SlotPlanner(this.emitCtx, this.cache, this.NeedsRvalueReceiverSpill);
     }
-
-    // PR-E-17: transitional forwarders into the extracted SignatureEncoder.
-    // The signature/type-encoding band moved to SignatureEncoder; these
-    // one-line forwarders keep the ~90 untouched in-RME call sites (and the
-    // external `outer.<Encode…>` call sites in MethodBodyEmitter.*) compiling
-    // without touching them now. The E-21 cleanup repoints those call sites to
-    // `signatures.*` and deletes these forwarders. The collaborator-injection
-    // delegates in EmitCore (EncodeTypeSymbol / EncodeReturnSymbol / EncodeClrType)
-    // are rebound directly to `signatures.*` — they do not use these forwarders.
-    internal void EncodeTypeSymbol(SignatureTypeEncoder encoder, TypeSymbol type)
-        => this.signatures.EncodeTypeSymbol(encoder, type);
-
-    internal void EncodeReturnSymbol(ReturnTypeEncoder encoder, TypeSymbol type, RefKind returnRefKind)
-        => this.signatures.EncodeReturnSymbol(encoder, type, returnRefKind);
-
-    internal void EncodeReturnClr(ReturnTypeEncoder encoder, ParameterInfo returnParameter, Type type)
-        => this.signatures.EncodeReturnClr(encoder, returnParameter, type);
-
-    internal void EncodeClrType(SignatureTypeEncoder encoder, Type type)
-        => this.signatures.EncodeClrType(encoder, type);
-
-    internal void EncodeLocalVariableType(LocalVariableTypeEncoder enc, TypeSymbol t)
-        => this.signatures.EncodeLocalVariableType(enc, t);
-
-    internal void EncodeFunctionTypeSymbol(SignatureTypeEncoder encoder, FunctionTypeSymbol fnType)
-        => this.signatures.EncodeFunctionTypeSymbol(encoder, fnType);
-
-    internal StandaloneSignatureHandle GetFunctionPointerCallSiteSignature(FunctionPointerTypeSymbol fnPtr)
-        => this.signatures.GetFunctionPointerCallSiteSignature(fnPtr);
-
-    internal Type ResolveTargetDelegateClrType(Type hostDelegate)
-        => this.signatures.ResolveTargetDelegateClrType(hostDelegate);
-
-    internal Type ResolveDelegateClrType(FunctionTypeSymbol fnType)
-        => this.signatures.ResolveDelegateClrType(fnType);
-
-    internal Type ResolveAsyncDelegateClrType(FunctionTypeSymbol fnType, FunctionSymbol function)
-        => this.signatures.ResolveAsyncDelegateClrType(fnType, function);
-
-    internal Type MapToReferenceClrType(Type hostType)
-        => this.signatures.MapToReferenceClrType(hostType);
 
     /// <summary>
     /// Emits <paramref name="program"/> to <paramref name="peStream"/> as a
@@ -906,7 +865,7 @@ internal sealed class ReflectionMetadataEmitter
         // refs the rest of EmitCore needs immediately (Object/ValueType
         // TypeRefs, Object..ctor MemberRef); every other well-known ref is
         // lazily materialised on first access via its paired Get* method.
-        this.wellKnown = new WellKnownReferences(this.emitCtx, this.GetTypeReference, this.GetMethodReference);
+        this.wellKnown = new WellKnownReferences(this.emitCtx, this.memberRefs.GetTypeReference, this.memberRefs.GetMethodReference);
 
         // PR-E-12: CustomAttributeEncoder depends on GetTypeReference (the
         // dedup-cached root resolver) and wellKnown's GetIsReadOnlyAttributeCtorRef.
@@ -915,10 +874,10 @@ internal sealed class ReflectionMetadataEmitter
         this.customAttrEncoder = new CustomAttributeEncoder(
             this.emitCtx,
             this.wellKnown,
-            this.GetTypeReference,
-            this.ResolveUserCtorTokenForPrimary,
-            this.ResolveUserCtorTokenForDefault,
-            this.ResolveUserCtorTokenForExplicit);
+            this.memberRefs.GetTypeReference,
+            this.userTokens.ResolveUserCtorTokenForPrimary,
+            this.userTokens.ResolveUserCtorTokenForDefault,
+            this.userTokens.ResolveUserCtorTokenForExplicit);
 
         // PR-E-13: AssemblyAttributeEmitter owns the assembly-level attribute
         // orchestrators and ParseAssemblyVersion. It wires up after
@@ -931,7 +890,7 @@ internal sealed class ReflectionMetadataEmitter
             this.cache,
             this.wellKnown,
             this.customAttrEncoder,
-            this.GetTypeReference);
+            this.memberRefs.GetTypeReference);
 
         // PR-E-14: InterfaceImplEmitter owns the explicit-interface and
         // static-virtual MethodImpl-row emitters. Back-bound to this root
@@ -962,15 +921,15 @@ internal sealed class ReflectionMetadataEmitter
             this.cache,
             this.slotPlanner,
             this.lambdaBodies,
-            this.GetTypeReference,
-            this.GetTypeHandleForMember,
+            this.memberRefs.GetTypeReference,
+            this.memberRefs.GetTypeHandleForMember,
             this.signatures.EncodeTypeSymbol);
 
         // PR-E-5: now that wellKnown is materialised, wire ConversionEmitter.
         // GetElementTypeToken is passed as a delegate (same pattern as
         // SlotPlanner's needsRvalueReceiverSpill) so the new component does
         // not need a hard back-reference to this emitter.
-        this.conversionEmitter = new ConversionEmitter(this.emitCtx, this.cache, this.wellKnown, this.GetElementTypeToken);
+        this.conversionEmitter = new ConversionEmitter(this.emitCtx, this.cache, this.wellKnown, this.memberRefs.GetElementTypeToken);
 
         // PR-E-6: DataStructSynthesizer wires up after ConversionEmitter
         // because it needs `conversionEmitter.EmitBoxIfNeeded` for every
@@ -983,12 +942,12 @@ internal sealed class ReflectionMetadataEmitter
             this.wellKnown,
             this.conversionEmitter,
             this.signatures.EncodeTypeSymbol,
-            this.GetElementTypeToken,
-            this.GetTypeReference,
+            this.memberRefs.GetElementTypeToken,
+            this.memberRefs.GetTypeReference,
             this.customAttrEncoder.NextParameterHandle,
-            this.ResolveUserTypeToken,
-            this.ResolveFieldToken,
-            this.GetUserStructMethodRef);
+            this.userTokens.ResolveUserTypeToken,
+            this.userTokens.ResolveFieldToken,
+            this.userTokens.GetUserStructMethodRef);
 
         // PR-E-7: MemberDefEmitter wires up after DataStructSynthesizer.
         // It depends on the same EmitContext/MetadataTokenCache/WellKnownReferences
@@ -1001,12 +960,12 @@ internal sealed class ReflectionMetadataEmitter
             this.emitCtx,
             this.cache,
             this.wellKnown,
-            this.EmitFunction,
+            this.functions.EmitFunction,
             this.signatures.EncodeTypeSymbol,
             this.customAttrEncoder.NextParameterHandle,
-            this.GetTypeReference,
-            this.GetTypeHandleForMember,
-            this.ResolveFieldToken,
+            this.memberRefs.GetTypeReference,
+            this.memberRefs.GetTypeHandleForMember,
+            this.userTokens.ResolveFieldToken,
             this.customAttrEncoder.EmitNullableAttributeOnProperty,
             this.customAttrEncoder.EmitUserAttributes);
 
@@ -1025,17 +984,17 @@ internal sealed class ReflectionMetadataEmitter
             this.wellKnown,
             this.signatures.EncodeTypeSymbol,
             this.signatures.EncodeReturnSymbol,
-            this.GetTypeReference,
-            this.GetUserStructTypeSpec,
-            this.ResolveConstructedBaseParameterlessCtorToken,
-            this.ResolveConstructedBaseExplicitCtorToken,
+            this.memberRefs.GetTypeReference,
+            this.userTokens.GetUserStructTypeSpec,
+            this.userTokens.ResolveConstructedBaseParameterlessCtorToken,
+            this.userTokens.ResolveConstructedBaseExplicitCtorToken,
             this.customAttrEncoder.NextParameterHandle,
             this.customAttrEncoder.EmitUserAttributes,
             handle => this.customAttrEncoder.EmitNullableContextAttributeOnType(handle, NullableFlagsBuilder.NotAnnotated),
             this.customAttrEncoder.EmitNullableAttributeOnField,
             this.customAttrEncoder.EmitIsReadOnlyAttributeOnParameter,
             this.customAttrEncoder.EmitParamArrayAttributeOnParameter,
-            this.GetCtorReference,
+            this.memberRefs.GetCtorReference,
             this.ctorBodies.EmitStaticConstructorBodyBytes,
             this.ctorBodies.EmitClassDefaultConstructorBodyBytes,
             this.ctorBodies.EmitClassPrimaryConstructorBodyBytes,
@@ -1073,17 +1032,17 @@ internal sealed class ReflectionMetadataEmitter
             this.wellKnown,
             this.closures,
             this.lambdaBodies,
-            this.GetTypeReference,
-            this.GetTypeHandleForMember,
-            this.GetMethodEntityHandle,
-            this.GetMethodEntityHandle,
-            this.GetMethodReference,
+            this.memberRefs.GetTypeReference,
+            this.memberRefs.GetTypeHandleForMember,
+            this.memberRefs.GetMethodEntityHandle,
+            this.memberRefs.GetMethodEntityHandle,
+            this.memberRefs.GetMethodReference,
             this.customAttrEncoder.NextParameterHandle,
             this.signatures.EncodeTypeSymbol,
             this.signatures.EncodeClrType,
-            this.GetStructTypeToken,
-            this.ResolveFieldToken,
-            this.BuildMoveNextBodyBytes);
+            this.userTokens.GetStructTypeToken,
+            this.userTokens.ResolveFieldToken,
+            this.functions.BuildMoveNextBodyBytes);
 
         if (asyncRewriteResult != null)
         {
@@ -2124,7 +2083,7 @@ internal sealed class ReflectionMetadataEmitter
                     {
                         this.emitCtx.Metadata.AddInterfaceImplementation(
                             ifaceTypeDef,
-                            this.GetUserInterfaceTypeSpec(baseIface));
+                            this.userTokens.GetUserInterfaceTypeSpec(baseIface));
                     }
                     else if (this.cache.InterfaceTypeDefs.TryGetValue(baseIface, out var baseHandle))
                     {
@@ -2141,7 +2100,7 @@ internal sealed class ReflectionMetadataEmitter
                     {
                         this.emitCtx.Metadata.AddInterfaceImplementation(
                             ifaceTypeDef,
-                            this.GetTypeHandleForMember(clrType));
+                            this.memberRefs.GetTypeHandleForMember(clrType));
                     }
                 }
             }
@@ -2315,7 +2274,7 @@ internal sealed class ReflectionMetadataEmitter
                     {
                         this.emitCtx.Metadata.AddInterfaceImplementation(
                             this.cache.StructTypeDefs[c],
-                            this.GetUserInterfaceTypeSpec(iface));
+                            this.userTokens.GetUserInterfaceTypeSpec(iface));
                     }
                     else if (this.cache.InterfaceTypeDefs.TryGetValue(iface, out var ifaceHandle))
                     {
@@ -2342,7 +2301,7 @@ internal sealed class ReflectionMetadataEmitter
                     {
                         this.emitCtx.Metadata.AddInterfaceImplementation(
                             this.cache.StructTypeDefs[c],
-                            this.GetElementTypeToken(ifaceSym));
+                            this.memberRefs.GetElementTypeToken(ifaceSym));
                         continue;
                     }
 
@@ -2350,7 +2309,7 @@ internal sealed class ReflectionMetadataEmitter
                     {
                         this.emitCtx.Metadata.AddInterfaceImplementation(
                             this.cache.StructTypeDefs[c],
-                            this.GetTypeHandleForMember(clrIface));
+                            this.memberRefs.GetTypeHandleForMember(clrIface));
                     }
                 }
             }
@@ -2378,7 +2337,7 @@ internal sealed class ReflectionMetadataEmitter
                     {
                         this.emitCtx.Metadata.AddInterfaceImplementation(
                             this.cache.StructTypeDefs[c],
-                            this.GetTypeHandleForMember(declaringIface));
+                            this.memberRefs.GetTypeHandleForMember(declaringIface));
                     }
                 }
             }
@@ -2614,7 +2573,7 @@ internal sealed class ReflectionMetadataEmitter
                 // type parameter the method never declares, producing
                 // unverifiable IL (DelegateCtor at the delegate site and
                 // StackUnexpected on any `constrained.` call in the body).
-                this.TryPromoteNonCapturingGenericLambda(literal, loweredLambdaBody);
+                this.userTokens.TryPromoteNonCapturingGenericLambda(literal, loweredLambdaBody);
 
                 hostBucket.Add(literal.Function);
             }
@@ -2750,7 +2709,7 @@ internal sealed class ReflectionMetadataEmitter
             // RegisterConstructedTypeAliases again later (line 798) to pick
             // up ctor handles populated during the rest of Phase A.
             this.methodBodyPlanner.RegisterConstructedTypeAliases();
-            this.EmitGlobalFieldDefs(globals);
+            this.functions.EmitGlobalFieldDefs(globals);
 
             var programHandle = this.emitCtx.Metadata.AddTypeDefinition(
                 attributes: TypeAttributes.Class | TypeAttributes.Public | TypeAttributes.AutoLayout
@@ -2862,7 +2821,7 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             var iAsyncSmType = typeof(System.Runtime.CompilerServices.IAsyncStateMachine);
-            var iAsyncSmRef = this.GetTypeReference(iAsyncSmType);
+            var iAsyncSmRef = this.memberRefs.GetTypeReference(iAsyncSmType);
             this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[s], iAsyncSmRef);
         }
 
@@ -2883,7 +2842,7 @@ internal sealed class ReflectionMetadataEmitter
                 if (InterfaceSymbol.HasDefaultBody(m)
                     && this.emitCtx.Program.Functions.TryGetValue(m, out var dimBody))
                 {
-                    var emittedHandle = this.EmitFunction(m, dimBody, isEntryPoint: false);
+                    var emittedHandle = this.functions.EmitFunction(m, dimBody, isEntryPoint: false);
                     this.cache.MethodHandles[m] = emittedHandle;
                 }
                 else
@@ -2902,7 +2861,7 @@ internal sealed class ReflectionMetadataEmitter
                 if (InterfaceSymbol.HasDefaultBody(sm)
                     && this.emitCtx.Program.Functions.TryGetValue(sm, out var defBody))
                 {
-                    var emittedHandle = this.EmitFunction(sm, defBody, isEntryPoint: false);
+                    var emittedHandle = this.functions.EmitFunction(sm, defBody, isEntryPoint: false);
                     this.cache.MethodHandles[sm] = emittedHandle;
                 }
                 else
@@ -2920,7 +2879,7 @@ internal sealed class ReflectionMetadataEmitter
                 {
                     if (this.emitCtx.Program.Functions.TryGetValue(pm, out var pBody))
                     {
-                        var emittedHandle = this.EmitFunction(pm, pBody, isEntryPoint: false);
+                        var emittedHandle = this.functions.EmitFunction(pm, pBody, isEntryPoint: false);
                         this.cache.MethodHandles[pm] = emittedHandle;
                     }
                 }
@@ -2932,7 +2891,7 @@ internal sealed class ReflectionMetadataEmitter
                 {
                     if (this.emitCtx.Program.Functions.TryGetValue(spm, out var sBody))
                     {
-                        var emittedHandle = this.EmitFunction(spm, sBody, isEntryPoint: false);
+                        var emittedHandle = this.functions.EmitFunction(spm, sBody, isEntryPoint: false);
                         this.cache.MethodHandles[spm] = emittedHandle;
                     }
                 }
@@ -3059,7 +3018,7 @@ internal sealed class ReflectionMetadataEmitter
                         body = this.lambdaBodies[m];
                     }
 
-                    var emittedHandle = this.EmitFunction(m, body, isEntryPoint: false);
+                    var emittedHandle = this.functions.EmitFunction(m, body, isEntryPoint: false);
                     this.cache.MethodHandles[m] = emittedHandle;
                 }
             }
@@ -3093,7 +3052,7 @@ internal sealed class ReflectionMetadataEmitter
                         // isEntryPoint through so EmitFunction applies the same
                         // async-Main sync-wrapper lowering (GetAwaiter().GetResult())
                         // used for package-scope entry points.
-                        var emittedHandle = this.EmitFunction(m, staticBody, isEntryPoint: m == this.emitCtx.Program.EntryPoint);
+                        var emittedHandle = this.functions.EmitFunction(m, staticBody, isEntryPoint: m == this.emitCtx.Program.EntryPoint);
                         this.cache.MethodHandles[m] = emittedHandle;
                     }
                 }
@@ -3171,7 +3130,7 @@ internal sealed class ReflectionMetadataEmitter
                     body = this.lambdaBodies[m];
                 }
 
-                var emittedHandle = this.EmitFunction(m, body, isEntryPoint: false);
+                var emittedHandle = this.functions.EmitFunction(m, body, isEntryPoint: false);
                 this.cache.MethodHandles[m] = emittedHandle;
             }
 
@@ -3189,7 +3148,7 @@ internal sealed class ReflectionMetadataEmitter
                 {
                     if (this.emitCtx.Program.Functions.TryGetValue(m, out var staticBody))
                     {
-                        var emittedHandle = this.EmitFunction(m, staticBody, isEntryPoint: false);
+                        var emittedHandle = this.functions.EmitFunction(m, staticBody, isEntryPoint: false);
                         this.cache.MethodHandles[m] = emittedHandle;
                     }
                 }
@@ -3301,14 +3260,14 @@ internal sealed class ReflectionMetadataEmitter
                 // push the remap so they encode as this method's own MVar slots.
                 using (this.remaps.PushLambdaMethodRemap(fn))
                 {
-                    this.EmitFunction(fn, body, isEntryPoint: false);
+                    this.functions.EmitFunction(fn, body, isEntryPoint: false);
                 }
             }
 
             if (this.emitCtx.Program.EntryPoint is not null && pkg == entryPointPackage && !entryPointIsClassOwned)
             {
                 var entryBody = this.emitCtx.Program.Functions[this.emitCtx.Program.EntryPoint];
-                this.EmitFunction(this.emitCtx.Program.EntryPoint, entryBody, isEntryPoint: true);
+                this.functions.EmitFunction(this.emitCtx.Program.EntryPoint, entryBody, isEntryPoint: true);
             }
         }
 
@@ -3339,7 +3298,7 @@ internal sealed class ReflectionMetadataEmitter
                             body = this.lambdaBodies[m];
                         }
 
-                        var emittedHandle = this.EmitFunction(m, body, isEntryPoint: false);
+                        var emittedHandle = this.functions.EmitFunction(m, body, isEntryPoint: false);
                         this.cache.MethodHandles[m] = emittedHandle;
                     }
                 }
@@ -3571,7 +3530,7 @@ internal sealed class ReflectionMetadataEmitter
         // MethodDefs are emitted in interleaved visit orders, the rows
         // were buffered into emitCtx.PendingGenericParameters and are
         // flushed in sorted order here, just before PE serialisation.
-        TypeDefEmitter.FlushPendingGenericParameters(this.emitCtx, this.GetElementTypeToken, this.BuildUnmanagedConstraintTypeSpec);
+        TypeDefEmitter.FlushPendingGenericParameters(this.emitCtx, this.memberRefs.GetElementTypeToken, this.BuildUnmanagedConstraintTypeSpec);
         var peHeaderBuilder = new PEHeaderBuilder(
             imageCharacteristics: entryHandle.IsNil
                 ? Characteristics.Dll | Characteristics.ExecutableImage
@@ -3753,7 +3712,7 @@ internal sealed class ReflectionMetadataEmitter
             var encoder = new BlobEncoder(localsSigBlob).LocalVariableSignature(this.localTypes.Count);
             foreach (var t in this.localTypes)
             {
-                this.outer.EncodeLocalVariableType(encoder.AddVariable(), t);
+                this.outer.signatures.EncodeLocalVariableType(encoder.AddVariable(), t);
             }
 
             return this.outer.emitCtx.Metadata.AddStandaloneSignature(
@@ -3831,13 +3790,13 @@ internal sealed class ReflectionMetadataEmitter
         {
             if (TryCreateSymbolicAsyncTaskType(plan.StateMachine, out var symbolicTaskType))
             {
-                this.EncodeTypeSymbol(encoder.Type(), symbolicTaskType);
+                this.signatures.EncodeTypeSymbol(encoder.Type(), symbolicTaskType);
             }
             else
             {
                 // The Task property's return type IS the kickoff return type.
                 var taskClrType = builderInfo.TaskProperty.PropertyType;
-                this.EncodeClrType(encoder.Type(), taskClrType);
+                this.signatures.EncodeClrType(encoder.Type(), taskClrType);
             }
         }
         else
@@ -3996,10 +3955,6 @@ internal sealed class ReflectionMetadataEmitter
         return false;
     }
 
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal EntityHandle GetElementTypeToken(TypeSymbol element)
-        => this.memberRefs.GetElementTypeToken(element);
-
     private Type ResolveCoreType(string fullName, Type fallback)
     {
         if (this.emitCtx.References.TryResolveType(fullName, requireExternalVisibility: false, out var t))
@@ -4027,9 +3982,9 @@ internal sealed class ReflectionMetadataEmitter
             return this.unmanagedConstraintTypeSpec;
         }
 
-        var unmanagedTypeRef = this.GetTypeReference(
+        var unmanagedTypeRef = this.memberRefs.GetTypeReference(
             this.ResolveCoreType("System.Runtime.InteropServices.UnmanagedType", typeof(System.Runtime.InteropServices.UnmanagedType)));
-        var valueTypeRef = this.GetTypeReference(this.emitCtx.CoreValueType);
+        var valueTypeRef = this.memberRefs.GetTypeReference(this.emitCtx.CoreValueType);
 
         var blob = new BlobBuilder();
         blob.WriteByte((byte)SignatureTypeCode.RequiredModifier);
@@ -4047,18 +4002,6 @@ internal sealed class ReflectionMetadataEmitter
         return this.unmanagedConstraintTypeSpec;
     }
 
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal EntityHandle GetTypeOfToken(TypeSymbol type)
-        => this.memberRefs.GetTypeOfToken(type);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal TypeReferenceHandle GetTypeReference(Type type)
-        => this.memberRefs.GetTypeReference(type);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal EntityHandle GetTypeHandleForMember(Type type)
-        => this.memberRefs.GetTypeHandleForMember(type);
-
     // -----------------------------------------------------------------
     // ADR-0087 §3 R3: user-defined generic-type TypeSpec / MemberRef
     // plumbing. After R1 a user-declared generic TypeDef carries
@@ -4073,155 +4016,6 @@ internal sealed class ReflectionMetadataEmitter
     // bodies, the constructed instantiation `Box`1<int32>` for
     // external uses). The helpers below provide that routing.
     // -----------------------------------------------------------------
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    private void TryPromoteNonCapturingGenericLambda(BoundFunctionLiteralExpression literal, BoundBlockStatement loweredBody)
-        => this.userTokens.TryPromoteNonCapturingGenericLambda(literal, loweredBody);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle ResolveLambdaFunctionFtnToken(FunctionSymbol fn)
-        => this.userTokens.ResolveLambdaFunctionFtnToken(fn);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle BuildMethodSpecForGenericCall(EntityHandle openMethod, BoundCallExpression call)
-        => this.userTokens.BuildMethodSpecForGenericCall(openMethod, call);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle BuildMethodSpecForGenericInstanceCall(EntityHandle openMethod, BoundUserInstanceCallExpression call)
-        => this.userTokens.BuildMethodSpecForGenericInstanceCall(openMethod, call);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle GetUserStructTypeSpec(StructSymbol structSym)
-        => this.userTokens.GetUserStructTypeSpec(structSym);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle ResolveDelegateCtorToken(DelegateTypeSymbol delegateSym)
-        => this.userTokens.ResolveDelegateCtorToken(delegateSym);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle ResolveDelegateInvokeToken(DelegateTypeSymbol delegateSym)
-        => this.userTokens.ResolveDelegateInvokeToken(delegateSym);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle GetStructTypeToken(StructSymbol structSym)
-        => this.userTokens.GetStructTypeToken(structSym);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal void EncodeTypeSymbolIntoSignature(SignatureTypeEncoder encoder, TypeSymbol type)
-        => this.userTokens.EncodeTypeSymbolIntoSignature(encoder, type);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle GetUserStructFieldRef(StructSymbol containingType, FieldSymbol fieldOnContaining)
-        => this.userTokens.GetUserStructFieldRef(containingType, fieldOnContaining);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle ResolveFieldToken(StructSymbol containingType, FieldSymbol field)
-        => this.userTokens.ResolveFieldToken(containingType, field);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle ResolveInterfaceFieldToken(InterfaceSymbol containingInterface, FieldSymbol field)
-        => this.userTokens.ResolveInterfaceFieldToken(containingInterface, field);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle GetUserStructMethodRef(
-        StructSymbol containingType,
-        EntityHandle openMethodDef,
-        string methodName,
-        BlobBuilder signature)
-        => this.userTokens.GetUserStructMethodRef(containingType, openMethodDef, methodName, signature);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle ResolveUserInstanceMethodToken(StructSymbol containingType, FunctionSymbol method)
-        => this.userTokens.ResolveUserInstanceMethodToken(containingType, method);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle ResolveClosureInvokeFtnToken(StructSymbol constructedClosure, StructSymbol closureDef, FunctionSymbol invoke)
-        => this.userTokens.ResolveClosureInvokeFtnToken(constructedClosure, closureDef, invoke);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle ResolveUserStaticMethodToken(StructSymbol containingType, FunctionSymbol method)
-        => this.userTokens.ResolveUserStaticMethodToken(containingType, method);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle ResolveUserInterfaceStaticMethodToken(InterfaceSymbol containingInterface, FunctionSymbol method)
-        => this.userTokens.ResolveUserInterfaceStaticMethodToken(containingInterface, method);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle ResolveUserPropertyAccessorToken(StructSymbol containingType, PropertySymbol property, bool wantSetter)
-        => this.userTokens.ResolveUserPropertyAccessorToken(containingType, property, wantSetter);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle GetUserInterfaceTypeSpec(InterfaceSymbol ifaceSym)
-        => this.userTokens.GetUserInterfaceTypeSpec(ifaceSym);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle ResolveUserInterfaceInstanceMethodToken(InterfaceSymbol containingInterface, FunctionSymbol openMethod)
-        => this.userTokens.ResolveUserInterfaceInstanceMethodToken(containingInterface, openMethod);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle ResolveUserCtorTokenForPrimary(StructSymbol structType)
-        => this.userTokens.ResolveUserCtorTokenForPrimary(structType);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle ResolveConstructedBaseExplicitCtorToken(StructSymbol constructedBase, ConstructorSymbol ctor)
-        => this.userTokens.ResolveConstructedBaseExplicitCtorToken(constructedBase, ctor);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle ResolveConstructedBaseParameterlessCtorToken(StructSymbol constructedBase)
-        => this.userTokens.ResolveConstructedBaseParameterlessCtorToken(constructedBase);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle ResolveUserCtorTokenForDefault(StructSymbol structType)
-        => this.userTokens.ResolveUserCtorTokenForDefault(structType);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle ResolveUserCtorTokenForExplicit(StructSymbol structType, ConstructorSymbol ctor)
-        => this.userTokens.ResolveUserCtorTokenForExplicit(structType, ctor);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal EntityHandle ResolveUserTypeToken(StructSymbol structType)
-        => this.userTokens.ResolveUserTypeToken(structType);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal bool TryGetSymbolicSubstitutedPropertyReturn(
-        TypeSymbol receiverType,
-        PropertyInfo property,
-        out TypeSymbol substitutedReturn)
-        => this.userTokens.TryGetSymbolicSubstitutedPropertyReturn(receiverType, property, out substitutedReturn);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal bool TryGetSymbolicSubstitutedInstanceMethodReturn(
-        TypeSymbol receiverType,
-        MethodInfo method,
-        out TypeSymbol substitutedReturn)
-        => this.userTokens.TryGetSymbolicSubstitutedInstanceMethodReturn(receiverType, method, out substitutedReturn);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal bool TryGetSymbolicSubstitutedImportedCallReturn(
-        MethodInfo method,
-        ImmutableArray<TypeSymbol> typeArgSymbols,
-        out TypeSymbol substitutedReturn)
-        => this.userTokens.TryGetSymbolicSubstitutedImportedCallReturn(method, typeArgSymbols, out substitutedReturn);
-
-    // PR-E-19: transitional forwarder into the extracted UserTokenResolver.
-    internal bool FunctionTypeNeedsSymbolicDelegate(FunctionTypeSymbol fnType)
-        => this.userTokens.FunctionTypeNeedsSymbolicDelegate(fnType);
-
-    // PR-E-20: transitional forwarders into the extracted FunctionEmitter. The
-    // function-emission band moved to FunctionEmitter; these one-line forwarders
-    // keep the untouched in-RME call sites compiling — EmitCore's function loop
-    // calls EmitFunction (also passed as a method-group to ClosureEmitter),
-    // EmitGlobalFieldDefs is called once from EmitCore, and BuildMoveNextBodyBytes
-    // is bound as a Func callback into StateMachineEmitter. The E-21 cleanup
-    // repoints those call sites / bindings to `functions.*` and deletes these.
-    internal MethodDefinitionHandle EmitFunction(FunctionSymbol function, BoundBlockStatement body, bool isEntryPoint)
-        => this.functions.EmitFunction(function, body, isEntryPoint);
-
-    internal void EmitGlobalFieldDefs(ImmutableArray<GlobalVariableSymbol> globals)
-        => this.functions.EmitGlobalFieldDefs(globals);
-
-    internal StateMachineEmitter.MoveNextBodyResult BuildMoveNextBodyBytes(AsyncStateMachinePlan plan)
-        => this.functions.BuildMoveNextBodyBytes(plan);
 
     /// <summary>
     /// Rubber-duck follow-up to issue #2224: resolves the field a primary
@@ -4508,90 +4302,6 @@ internal sealed class ReflectionMetadataEmitter
         return null;
     }
 
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal static MethodInfo GetTypeBuilderSafePropertyAccessor(PropertyInfo property, bool wantSetter, bool nonPublic = false)
-        => ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(property, wantSetter, nonPublic);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal MemberReferenceHandle GetMethodReference(MethodInfo method)
-        => this.memberRefs.GetMethodReference(method);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal EntityHandle GetMethodEntityHandle(MethodInfo method)
-        => this.memberRefs.GetMethodEntityHandle(method);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal EntityHandle GetMethodEntityHandle(MethodInfo method, TypeSymbol containingTypeSymbol)
-        => this.memberRefs.GetMethodEntityHandle(method, containingTypeSymbol);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal EntityHandle GetMethodEntityHandle(MethodInfo method, ImmutableArray<TypeSymbol> typeArgSymbols)
-        => this.memberRefs.GetMethodEntityHandle(method, typeArgSymbols);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal EntityHandle GetMethodEntityHandle(MethodInfo method, ImmutableArray<TypeSymbol> typeArgSymbols, TypeSymbol containingTypeSymbol)
-        => this.memberRefs.GetMethodEntityHandle(method, typeArgSymbols, containingTypeSymbol);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal MemberReferenceHandle GetCtorReference(ConstructorInfo ctor)
-        => this.memberRefs.GetCtorReference(ctor);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal MemberReferenceHandle GetCtorReference(ConstructorInfo ctor, TypeSymbol containingTypeSymbol)
-        => this.memberRefs.GetCtorReference(ctor, containingTypeSymbol);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal MemberReferenceHandle GetNullableCtorMemberRefForOpenTypeParameter(NullableTypeSymbol nullableOfTp)
-        => this.memberRefs.GetNullableCtorMemberRefForOpenTypeParameter(nullableOfTp);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal MemberReferenceHandle GetNullableCtorMemberRefForUserEnum(NullableTypeSymbol nullableOfEnum)
-        => this.memberRefs.GetNullableCtorMemberRefForUserEnum(nullableOfEnum);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal MemberReferenceHandle GetNullableCtorMemberRefForUserValueType(NullableTypeSymbol nullableOfUserVt)
-        => this.memberRefs.GetNullableCtorMemberRefForUserValueType(nullableOfUserVt);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal MemberReferenceHandle GetNullableGetValueMemberRefForUserValueType(NullableTypeSymbol nullableOfUserVt)
-        => this.memberRefs.GetNullableGetValueMemberRefForUserValueType(nullableOfUserVt);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal MemberReferenceHandle GetNullableGetHasValueMemberRefForUserValueType(NullableTypeSymbol nullableOfUserVt)
-        => this.memberRefs.GetNullableGetHasValueMemberRefForUserValueType(nullableOfUserVt);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal MemberReferenceHandle GetFieldReference(FieldInfo field)
-        => this.memberRefs.GetFieldReference(field);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal MemberReferenceHandle GetFieldReferenceOnConstructedGeneric(Type closedGenericType, string fieldName)
-        => this.memberRefs.GetFieldReferenceOnConstructedGeneric(closedGenericType, fieldName);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal MemberReferenceHandle GetCtorReferenceOnConstructedGeneric(Type closedGenericType, int paramCount)
-        => this.memberRefs.GetCtorReferenceOnConstructedGeneric(closedGenericType, paramCount);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal MemberReferenceHandle GetDelegateCtorReference(Type delegateType)
-        => this.memberRefs.GetDelegateCtorReference(delegateType);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal MemberReferenceHandle GetTupleFieldReference(TupleTypeSymbol tupleType, string fieldName)
-        => this.memberRefs.GetTupleFieldReference(tupleType, fieldName);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal MemberReferenceHandle GetTupleCtorReference(TupleTypeSymbol tupleType)
-        => this.memberRefs.GetTupleCtorReference(tupleType);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal MemberReferenceHandle GetMapCtorReference(MapTypeSymbol mapType)
-        => this.memberRefs.GetMapCtorReference(mapType);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal MemberReferenceHandle GetMapSetItemReference(MapTypeSymbol mapType)
-        => this.memberRefs.GetMapSetItemReference(mapType);
-
     // Issue #1785: `async func f(...) T?` for a same-compilation user value
     // type (struct/enum) has a ResultTypeSymbol that is a NullableTypeSymbol
     // wrapping the struct/enum, not the bare struct/enum symbol itself.
@@ -4816,26 +4526,6 @@ internal sealed class ReflectionMetadataEmitter
     // functionDelegateInvokeRefCache) moved with the delegate MemberRef
     // producers to ImportedMemberRefFactory as its private fields, since they
     // were RME privates consumed solely by that band.
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal EntityHandle GetFunctionDelegateTypeSpec(FunctionTypeSymbol fnType)
-        => this.memberRefs.GetFunctionDelegateTypeSpec(fnType);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal EntityHandle GetConstructedDelegateCtorRef(ImportedTypeSymbol symbolicDelegate)
-        => this.memberRefs.GetConstructedDelegateCtorRef(symbolicDelegate);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal EntityHandle GetFunctionDelegateCtorRef(FunctionTypeSymbol fnType)
-        => this.memberRefs.GetFunctionDelegateCtorRef(fnType);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal EntityHandle GetFunctionDelegateInvokeRef(FunctionTypeSymbol fnType)
-        => this.memberRefs.GetFunctionDelegateInvokeRef(fnType);
-
-    // PR-E-18: transitional forwarder into the extracted ImportedMemberRefFactory.
-    internal EntityHandle? TryGetSymbolicAsyncDelegateCtorRef(FunctionTypeSymbol fnType, FunctionSymbol function)
-        => this.memberRefs.TryGetSymbolicAsyncDelegateCtorRef(fnType, function);
 
     /// <summary>
     /// Issue #456: deterministic ordering for FunctionSymbols emitted into

@@ -137,7 +137,7 @@ internal sealed class GenericRemapState
 
     /// <summary>
     /// Issue #810: push the SM remap for <paramref name="smClass"/> so that
-    /// every <see cref="ReflectionMetadataEmitter.EncodeTypeSymbol"/> call made
+    /// every <see cref="SignatureEncoder.EncodeTypeSymbol"/> call made
     /// before the returned disposable is disposed translates outer-method
     /// type-parameter references into the SM class's own type-parameter slots
     /// (Var(idx) instead of MVar(idx)). Calls are nestable; on dispose the
@@ -162,7 +162,7 @@ internal sealed class GenericRemapState
     /// <summary>
     /// Issue #2118: pushes the enclosing-TP -> own-clone-ordinal remap for a
     /// generic-promoted non-capturing lambda so that every
-    /// <see cref="ReflectionMetadataEmitter.EncodeTypeSymbol"/> call made while
+    /// <see cref="SignatureEncoder.EncodeTypeSymbol"/> call made while
     /// its signature and body are emitted translates references to the
     /// enclosing type parameters into the lambda method's own <c>MVar(idx)</c>
     /// slots. Restores the previous remap on dispose.

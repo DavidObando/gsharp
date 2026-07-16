@@ -60,7 +60,7 @@ internal sealed partial class MethodBodyEmitter
         // EmitFunctionLiteral / EmitMethodGroup select GetFunctionDelegateCtorRef)
         // so the on-stack delegate value and the newobj ctor parent are the
         // reified `Func<UserType>` / `Action<UserType>` matching the target.
-        bool sourceNeedsSymbolic = this.outer.FunctionTypeNeedsSymbolicDelegate(sourceFn);
+        bool sourceNeedsSymbolic = this.outer.userTokens.FunctionTypeNeedsSymbolicDelegate(sourceFn);
 
         // Issue #323: when the target is the abstract System.Delegate /
         // System.MulticastDelegate base type, there is no concrete delegate
@@ -68,8 +68,8 @@ internal sealed partial class MethodBodyEmitter
         // delegate type (Func/Action) instead; the resulting reference is
         // already a System.Delegate, so the widening is a no-op upcast.
         var targetDelegateType = IsSystemDelegateHostType(targetDelegateHostType)
-            ? this.outer.ResolveDelegateClrType(sourceFn)
-            : this.outer.ResolveTargetDelegateClrType(targetDelegateHostType);
+            ? this.outer.signatures.ResolveDelegateClrType(sourceFn)
+            : this.outer.signatures.ResolveTargetDelegateClrType(targetDelegateHostType);
 
         if (source is BoundFunctionLiteralExpression literal)
         {
@@ -85,7 +85,7 @@ internal sealed partial class MethodBodyEmitter
                 }
 
                 var asyncSymbolicCtor = planKey.StateMachineType != null
-                    ? this.outer.TryGetSymbolicAsyncDelegateCtorRef(literal.FunctionType, planKey)
+                    ? this.outer.memberRefs.TryGetSymbolicAsyncDelegateCtorRef(literal.FunctionType, planKey)
                     : null;
                 if (asyncSymbolicCtor.HasValue)
                 {
@@ -119,20 +119,20 @@ internal sealed partial class MethodBodyEmitter
         EntityHandle invokeRef;
         if (sourceNeedsSymbolic)
         {
-            invokeRef = this.outer.GetFunctionDelegateInvokeRef(sourceFn);
+            invokeRef = this.outer.memberRefs.GetFunctionDelegateInvokeRef(sourceFn);
         }
         else
         {
-            var sourceDelegateType = this.outer.ResolveDelegateClrType(sourceFn);
+            var sourceDelegateType = this.outer.signatures.ResolveDelegateClrType(sourceFn);
             var sourceInvoke = sourceDelegateType.GetMethod("Invoke")
                 ?? throw new InvalidOperationException(
                     $"Delegate type '{sourceDelegateType.FullName}' has no Invoke method.");
-            invokeRef = this.outer.GetMethodReference(sourceInvoke);
+            invokeRef = this.outer.memberRefs.GetMethodReference(sourceInvoke);
         }
 
         var ctorRef = sourceNeedsSymbolic
-            ? this.outer.GetFunctionDelegateCtorRef(sourceFn)
-            : (EntityHandle)this.outer.GetDelegateCtorReference(targetDelegateType);
+            ? this.outer.memberRefs.GetFunctionDelegateCtorRef(sourceFn)
+            : (EntityHandle)this.outer.memberRefs.GetDelegateCtorReference(targetDelegateType);
 
         this.EmitNullGuardedDelegateToDelegateAdaptation(source, invokeRef, ctorRef);
     }
@@ -252,7 +252,7 @@ internal sealed partial class MethodBodyEmitter
         // Issue #1503: a generic named delegate (constructed or open) resolves
         // its `.ctor` through a MemberRef parented at the delegate TypeSpec; a
         // non-generic delegate uses the bare `.ctor` MethodDef handle.
-        var ctorHandle = this.outer.ResolveDelegateCtorToken(targetDelegate);
+        var ctorHandle = this.outer.userTokens.ResolveDelegateCtorToken(targetDelegate);
 
         if (source is BoundFunctionLiteralExpression literal)
         {
@@ -273,12 +273,12 @@ internal sealed partial class MethodBodyEmitter
         // unsubscribed (null) source flows through as null.
         if (sourceFn?.ClrType != null && ClrTypeUtilities.IsDelegateType(sourceFn.ClrType))
         {
-            var sourceDelegateType = this.outer.ResolveDelegateClrType(sourceFn);
+            var sourceDelegateType = this.outer.signatures.ResolveDelegateClrType(sourceFn);
             var sourceInvoke = sourceDelegateType.GetMethod("Invoke")
                 ?? throw new InvalidOperationException(
                     $"Delegate type '{sourceDelegateType.FullName}' has no Invoke method.");
 
-            this.EmitNullGuardedDelegateToDelegateAdaptation(source, this.outer.GetMethodReference(sourceInvoke), ctorHandle);
+            this.EmitNullGuardedDelegateToDelegateAdaptation(source, this.outer.memberRefs.GetMethodReference(sourceInvoke), ctorHandle);
             return;
         }
 
@@ -327,7 +327,7 @@ internal sealed partial class MethodBodyEmitter
 
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(closureIsGeneric
-                ? this.outer.ResolveUserCtorTokenForDefault(constructedClosure)
+                ? this.outer.userTokens.ResolveUserCtorTokenForDefault(constructedClosure)
                 : closureCtor);
 
             foreach (var captured in literal.CapturedVariables)
@@ -341,7 +341,7 @@ internal sealed partial class MethodBodyEmitter
                 EntityHandle fieldToken;
                 if (closureIsGeneric)
                 {
-                    fieldToken = this.outer.ResolveFieldToken(constructedClosure, field);
+                    fieldToken = this.outer.userTokens.ResolveFieldToken(constructedClosure, field);
                 }
                 else if (this.outer.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle))
                 {
@@ -361,7 +361,7 @@ internal sealed partial class MethodBodyEmitter
 
             this.il.OpCode(ILOpCode.Ldftn);
             this.il.Token(closureIsGeneric
-                ? this.outer.ResolveClosureInvokeFtnToken(constructedClosure, closure.ClassSym, closure.InvokeMethod)
+                ? this.outer.userTokens.ResolveClosureInvokeFtnToken(constructedClosure, closure.ClassSym, closure.InvokeMethod)
                 : closureInvoke);
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(delegateCtorHandle);
@@ -382,7 +382,7 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.OpCode(ILOpCode.Ldnull);
         this.il.OpCode(ILOpCode.Ldftn);
-        this.il.Token(this.outer.ResolveLambdaFunctionFtnToken(literal.Function));
+        this.il.Token(this.outer.userTokens.ResolveLambdaFunctionFtnToken(literal.Function));
         this.il.OpCode(ILOpCode.Newobj);
         this.il.Token(delegateCtorHandle);
     }
@@ -436,7 +436,7 @@ internal sealed partial class MethodBodyEmitter
             && ReflectionMetadataEmitter.IsUserGenericTypeReference(receiverStruct)
             && this.outer.cache.MethodHandles.ContainsKey(methodGroup.Function))
         {
-            ftnToken = this.outer.ResolveUserInstanceMethodToken(receiverStruct, methodGroup.Function);
+            ftnToken = this.outer.userTokens.ResolveUserInstanceMethodToken(receiverStruct, methodGroup.Function);
         }
 
         if (methodGroup.Receiver == null)
@@ -454,7 +454,7 @@ internal sealed partial class MethodBodyEmitter
             if (ReflectionMetadataEmitter.IsValueTypeSymbol(methodGroup.Receiver.Type))
             {
                 this.il.OpCode(ILOpCode.Box);
-                this.il.Token(this.outer.GetElementTypeToken(methodGroup.Receiver.Type));
+                this.il.Token(this.outer.memberRefs.GetElementTypeToken(methodGroup.Receiver.Type));
             }
 
             // For an `open` (virtual) / `override` instance method — and,
@@ -494,7 +494,7 @@ internal sealed partial class MethodBodyEmitter
         if (subscription.Handler is BoundFunctionLiteralExpression literalHandler
             && subscription.Event.EventHandlerType != null)
         {
-            var mappedDelegateType = this.outer.MapToReferenceClrType(subscription.Event.EventHandlerType);
+            var mappedDelegateType = this.outer.signatures.MapToReferenceClrType(subscription.Event.EventHandlerType);
             this.EmitFunctionLiteral(literalHandler, mappedDelegateType);
         }
         else
@@ -512,7 +512,7 @@ internal sealed partial class MethodBodyEmitter
         }
 
         this.il.OpCode(isStatic || receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
-        this.il.Token(this.outer.GetMethodReference(accessor));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(accessor));
     }
 
     private void EmitUserEventSubscription(BoundEventSubscriptionExpression node)
@@ -536,7 +536,7 @@ internal sealed partial class MethodBodyEmitter
         if (node.Handler is BoundFunctionLiteralExpression literalHandler
             && node.Event.Type?.ClrType != null)
         {
-            var mappedDelegateType = this.outer.MapToReferenceClrType(node.Event.Type.ClrType);
+            var mappedDelegateType = this.outer.signatures.MapToReferenceClrType(node.Event.Type.ClrType);
             this.EmitFunctionLiteral(literalHandler, mappedDelegateType);
         }
         else
@@ -558,7 +558,7 @@ internal sealed partial class MethodBodyEmitter
                 && ReflectionMetadataEmitter.IsUserGenericInterfaceReference(ifaceOwner)
                 && accessorMethodSymbol != null)
             {
-                var accessorToken = this.outer.ResolveUserInterfaceInstanceMethodToken(ifaceOwner, accessorMethodSymbol);
+                var accessorToken = this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(ifaceOwner, accessorMethodSymbol);
                 this.il.OpCode(ILOpCode.Callvirt);
                 this.il.Token(accessorToken);
                 return;
@@ -604,14 +604,14 @@ internal sealed partial class MethodBodyEmitter
                 // source-defined user type or a type-parameter result/parameter
                 // (`Func<...,Task<TOutput>>`), route through the symbolic
                 // TypeSpec ctor ref instead of the type-erased reflection type.
-                var asyncSymbolicCtor = this.outer.TryGetSymbolicAsyncDelegateCtorRef(literal.FunctionType, planKey);
+                var asyncSymbolicCtor = this.outer.memberRefs.TryGetSymbolicAsyncDelegateCtorRef(literal.FunctionType, planKey);
                 if (asyncSymbolicCtor.HasValue)
                 {
                     this.EmitFunctionLiteral(literal, overrideDelegateType: null, symbolicDelegateCtorRef: asyncSymbolicCtor.Value);
                     return;
                 }
 
-                asyncDelegateOverride = this.outer.ResolveAsyncDelegateClrType(literal.FunctionType, planKey);
+                asyncDelegateOverride = this.outer.signatures.ResolveAsyncDelegateClrType(literal.FunctionType, planKey);
             }
         }
 
@@ -663,7 +663,7 @@ internal sealed partial class MethodBodyEmitter
 
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(closureIsGeneric
-                ? this.outer.ResolveUserCtorTokenForDefault(constructedClosure)
+                ? this.outer.userTokens.ResolveUserCtorTokenForDefault(constructedClosure)
                 : ctorHandle);
 
             foreach (var captured in literal.CapturedVariables)
@@ -677,7 +677,7 @@ internal sealed partial class MethodBodyEmitter
                 EntityHandle fieldToken;
                 if (closureIsGeneric)
                 {
-                    fieldToken = this.outer.ResolveFieldToken(constructedClosure, field);
+                    fieldToken = this.outer.userTokens.ResolveFieldToken(constructedClosure, field);
                 }
                 else if (this.outer.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle))
                 {
@@ -697,7 +697,7 @@ internal sealed partial class MethodBodyEmitter
 
             this.il.OpCode(ILOpCode.Ldftn);
             this.il.Token(closureIsGeneric
-                ? this.outer.ResolveClosureInvokeFtnToken(constructedClosure, closure.ClassSym, closure.InvokeMethod)
+                ? this.outer.userTokens.ResolveClosureInvokeFtnToken(constructedClosure, closure.ClassSym, closure.InvokeMethod)
                 : invokeHandle);
             this.il.OpCode(ILOpCode.Newobj);
 
@@ -711,14 +711,14 @@ internal sealed partial class MethodBodyEmitter
             {
                 this.il.Token(symbolicDelegateCtorRef.Value);
             }
-            else if (overrideDelegateType == null && (literal.FunctionType.ClrType == null || this.outer.FunctionTypeNeedsSymbolicDelegate(literal.FunctionType)))
+            else if (overrideDelegateType == null && (literal.FunctionType.ClrType == null || this.outer.userTokens.FunctionTypeNeedsSymbolicDelegate(literal.FunctionType)))
             {
-                this.il.Token(this.outer.GetFunctionDelegateCtorRef(literal.FunctionType));
+                this.il.Token(this.outer.memberRefs.GetFunctionDelegateCtorRef(literal.FunctionType));
             }
             else
             {
-                var delegateTypeC = overrideDelegateType ?? this.outer.ResolveDelegateClrType(literal.FunctionType);
-                this.il.Token(this.outer.GetDelegateCtorReference(delegateTypeC));
+                var delegateTypeC = overrideDelegateType ?? this.outer.signatures.ResolveDelegateClrType(literal.FunctionType);
+                this.il.Token(this.outer.memberRefs.GetDelegateCtorReference(delegateTypeC));
             }
 
             return;
@@ -738,7 +738,7 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.OpCode(ILOpCode.Ldnull);
         this.il.OpCode(ILOpCode.Ldftn);
-        this.il.Token(this.outer.ResolveLambdaFunctionFtnToken(literal.Function));
+        this.il.Token(this.outer.userTokens.ResolveLambdaFunctionFtnToken(literal.Function));
         this.il.OpCode(ILOpCode.Newobj);
 
         // ADR-0087 §3 R6: see capture-bearing branch above — reified
@@ -747,14 +747,14 @@ internal sealed partial class MethodBodyEmitter
         {
             this.il.Token(symbolicDelegateCtorRef.Value);
         }
-        else if (overrideDelegateType == null && (literal.FunctionType.ClrType == null || this.outer.FunctionTypeNeedsSymbolicDelegate(literal.FunctionType)))
+        else if (overrideDelegateType == null && (literal.FunctionType.ClrType == null || this.outer.userTokens.FunctionTypeNeedsSymbolicDelegate(literal.FunctionType)))
         {
-            this.il.Token(this.outer.GetFunctionDelegateCtorRef(literal.FunctionType));
+            this.il.Token(this.outer.memberRefs.GetFunctionDelegateCtorRef(literal.FunctionType));
         }
         else
         {
-            var delegateType = overrideDelegateType ?? this.outer.ResolveDelegateClrType(literal.FunctionType);
-            this.il.Token(this.outer.GetDelegateCtorReference(delegateType));
+            var delegateType = overrideDelegateType ?? this.outer.signatures.ResolveDelegateClrType(literal.FunctionType);
+            this.il.Token(this.outer.memberRefs.GetDelegateCtorReference(delegateType));
         }
     }
 
@@ -776,9 +776,9 @@ internal sealed partial class MethodBodyEmitter
         Type delegateType = null;
         if (overrideDelegateType != null
             || (methodGroup.FunctionType.ClrType != null
-                && !this.outer.FunctionTypeNeedsSymbolicDelegate(methodGroup.FunctionType)))
+                && !this.outer.userTokens.FunctionTypeNeedsSymbolicDelegate(methodGroup.FunctionType)))
         {
-            delegateType = overrideDelegateType ?? this.outer.ResolveDelegateClrType(methodGroup.FunctionType);
+            delegateType = overrideDelegateType ?? this.outer.signatures.ResolveDelegateClrType(methodGroup.FunctionType);
         }
 
         // Shared prologue: resolves the (interface/generic-aware) function
@@ -791,11 +791,11 @@ internal sealed partial class MethodBodyEmitter
         // delegate shape carries type-parameter slots.
         if (delegateType == null)
         {
-            this.il.Token(this.outer.GetFunctionDelegateCtorRef(methodGroup.FunctionType));
+            this.il.Token(this.outer.memberRefs.GetFunctionDelegateCtorRef(methodGroup.FunctionType));
         }
         else
         {
-            this.il.Token(this.outer.GetDelegateCtorReference(delegateType));
+            this.il.Token(this.outer.memberRefs.GetDelegateCtorReference(delegateType));
         }
     }
 
@@ -816,8 +816,8 @@ internal sealed partial class MethodBodyEmitter
             ?? throw new InvalidOperationException(
                 $"CLR method group '{methodGroup.MethodName}' has no resolved target delegate type.");
 
-        var delegateType = this.outer.ResolveTargetDelegateClrType(hostDelegate);
-        var methodRef = this.outer.GetMethodReference(method);
+        var delegateType = this.outer.signatures.ResolveTargetDelegateClrType(hostDelegate);
+        var methodRef = this.outer.memberRefs.GetMethodReference(method);
 
         if (method.IsStatic)
         {
@@ -841,7 +841,7 @@ internal sealed partial class MethodBodyEmitter
             if (ReflectionMetadataEmitter.IsValueTypeSymbol(methodGroup.Receiver.Type))
             {
                 this.il.OpCode(ILOpCode.Box);
-                this.il.Token(this.outer.GetElementTypeToken(methodGroup.Receiver.Type));
+                this.il.Token(this.outer.memberRefs.GetElementTypeToken(methodGroup.Receiver.Type));
             }
 
             if (method.IsVirtual && !method.IsFinal)
@@ -858,7 +858,7 @@ internal sealed partial class MethodBodyEmitter
         }
 
         this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(this.outer.GetDelegateCtorReference(delegateType));
+        this.il.Token(this.outer.memberRefs.GetDelegateCtorReference(delegateType));
     }
 
     // Phase 4 emit parity: load a captured variable. In a MoveNext body,
