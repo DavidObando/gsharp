@@ -1234,6 +1234,26 @@ internal static class OverloadResolution
                     return false;
                 }
 
+                // Issue #2375: mirror UnifyForInference's #2142 unwrap — a
+                // deferred lambda slot whose delegate parameter is
+                // `Expression<TDelegate>` (e.g. `HasOne<TRelated>(Expression<Func<TEntity, TRelated>>)`)
+                // has no `Invoke` method of its own; unwrap to `TDelegate`
+                // first so this closes the lambda's parameter types instead
+                // of unconditionally bailing out for every expression-tree
+                // deferred lambda parameter.
+                if (delegateType.IsGenericType
+                    && !delegateType.IsGenericTypeDefinition
+                    && string.Equals(delegateType.GetGenericTypeDefinition().FullName, "System.Linq.Expressions.Expression`1", StringComparison.Ordinal))
+                {
+                    var expressionArgs = delegateType.GetGenericArguments();
+                    if (expressionArgs.Length != 1)
+                    {
+                        return false;
+                    }
+
+                    delegateType = expressionArgs[0];
+                }
+
                 invoke = delegateType.GetMethodSafe("Invoke");
                 if (invoke is null)
                 {
