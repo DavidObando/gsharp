@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Lowering.Async;
@@ -115,8 +116,17 @@ public static class AsyncStateMachineTypeBuilder
         sm.StateField = stateField;
 
         var builderFieldType = TypeSymbol.FromClrType(builderInfo.BuilderType);
-        if ((kickoff.Type is StructSymbol or InterfaceSymbol or EnumSymbol or TypeParameterSymbol
-                || (kickoff.Type is NullableTypeSymbol nullableUserVt3 && nullableUserVt3.UnderlyingType is StructSymbol or InterfaceSymbol or EnumSymbol or TypeParameterSymbol))
+
+        // Issue #2381: widened from a bare struct/interface/enum/type-
+        // parameter kickoff-type check to `ArgIsSymbolicUserDefined` (shared
+        // with the emitter's call-site/return-type symbolic-encoding gate)
+        // so an imported generic closed over a same-compilation argument
+        // (`List[DiagnosticCheck]`, `Dictionary[string, DiagnosticCheck]`,
+        // nested/array/nullable shapes, …) ALSO gets its builder field type
+        // rebuilt as a symbolic constructed generic instead of the
+        // reflection-resolved (and, for such an argument, object-erased)
+        // `builderInfo.BuilderType`.
+        if (ReflectionMetadataEmitter.ArgIsSymbolicUserDefined(kickoff.Type)
             && builderInfo.BuilderType is { IsConstructedGenericType: true } builderClrType)
         {
             builderFieldType = ImportedTypeSymbol.GetConstructed(
@@ -234,7 +244,18 @@ public static class AsyncStateMachineTypeBuilder
         }
         else
         {
-            inner = kickoff.Type?.ClrType;
+            // Issue #2381: an imported generic type closed over a
+            // same-compilation TypeBuilder-backed argument (e.g.
+            // `List[DiagnosticCheck]`, `Dictionary[string, DiagnosticCheck]`,
+            // `List[List[DiagnosticCheck]]`) caches an object-erased
+            // `ClrType` (`List<object>`) from binding time, before the
+            // argument's own CLR type existed. Reconstruct the true closed
+            // shape from the CURRENT state of the type arguments so the
+            // async builder / kickoff signature carry the real generic
+            // instantiation instead of the erased approximation.
+            inner = kickoff.Type is ImportedTypeSymbol importedKickoffType
+                ? importedKickoffType.ReifyClosedClrType()
+                : kickoff.Type?.ClrType;
             if (inner == null)
             {
                 // Issue #1785: a nullable same-compilation user value type
@@ -255,8 +276,17 @@ public static class AsyncStateMachineTypeBuilder
                 // open type parameter afterward (see the `builderFieldType`
                 // override in `Build` and `ResultTypeSymbol`), so the emitted
                 // IL still carries `!!0`/`!0`, not `object`.
-                if (kickoff.Type is StructSymbol or InterfaceSymbol or EnumSymbol or TypeParameterSymbol
-                    || (kickoff.Type is NullableTypeSymbol nullableUserVt2 && nullableUserVt2.UnderlyingType is StructSymbol or InterfaceSymbol or EnumSymbol or TypeParameterSymbol))
+                // open type parameter afterward (see the `builderFieldType`
+                // override in `Build` and `ResultTypeSymbol`), so the emitted
+                // IL still carries `!!0`/`!0`, not `object`.
+                //
+                // Issue #2381: widened to the shared `ArgIsSymbolicUserDefined`
+                // predicate so an array/slice of a same-compilation user type
+                // (`[N]DiagnosticCheck` / `[]DiagnosticCheck` — whose eagerly-
+                // cached `ClrType` is null when the element had no CLR type
+                // yet) reaches the same erase-then-re-widen treatment instead
+                // of aborting async state-machine synthesis outright.
+                if (ReflectionMetadataEmitter.ArgIsSymbolicUserDefined(kickoff.Type))
                 {
                     inner = references.MapClrTypeToReferences(typeof(object));
                 }
