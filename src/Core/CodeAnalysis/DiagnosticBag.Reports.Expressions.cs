@@ -21,10 +21,7 @@ public sealed partial class DiagnosticBag
     /// <param name="memberName">The unknown member name.</param>
     /// <param name="enumName">The enum name.</param>
     public void ReportUndefinedEnumMember(TextLocation location, string memberName, string enumName)
-    {
-        var message = $"Enum '{enumName}' does not define a member named '{memberName}'.";
-        Report(location, "GS0112", message);
-    }
+    => Report(location, DiagnosticDescriptors.UndefinedEnumMember, enumName, memberName);
 
     /// <summary>
     /// Reports that a type doesn't exist.
@@ -32,10 +29,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="name">The type name.</param>
     public void ReportUndefinedType(TextLocation location, string name)
-    {
-        var message = $"Type '{name}' doesn't exist.";
-        Report(location, "GS0113", message);
-    }
+    => Report(location, DiagnosticDescriptors.UndefinedType, name);
 
     /// <summary>
     /// Issue #526: reports that the outer type exists but does not contain a nested
@@ -45,10 +39,7 @@ public sealed partial class DiagnosticBag
     /// <param name="outerTypeName">The outer (containing) type's source-visible name.</param>
     /// <param name="nestedName">The nested-type segment that could not be resolved.</param>
     public void ReportUndefinedNestedType(TextLocation location, string outerTypeName, string nestedName)
-    {
-        var message = $"Type '{outerTypeName}' does not contain a nested type named '{nestedName}'.";
-        Report(location, "GS0268", message);
-    }
+    => Report(location, DiagnosticDescriptors.UndefinedNestedType, outerTypeName, nestedName);
 
     /// <summary>
     /// Reports that the array length is not a valid non-negative integer literal.
@@ -56,10 +47,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location.</param>
     /// <param name="text">The length token text.</param>
     public void ReportInvalidArrayLength(TextLocation location, string text)
-    {
-        var message = $"Array length '{text}' must be a non-negative integer literal.";
-        Report(location, "GS0114", message);
-    }
+    => Report(location, DiagnosticDescriptors.InvalidArrayLength, text);
 
     /// <summary>
     /// Reports that the number of array initialisers does not match the declared length.
@@ -68,10 +56,7 @@ public sealed partial class DiagnosticBag
     /// <param name="expected">The declared length.</param>
     /// <param name="actual">The provided initialiser count.</param>
     public void ReportArrayLiteralLengthMismatch(TextLocation location, int expected, int actual)
-    {
-        var message = $"Array literal expects {expected} initialisers but got {actual}.";
-        Report(location, "GS0115", message);
-    }
+    => Report(location, DiagnosticDescriptors.ArrayLiteralLengthMismatch, expected, actual);
 
     /// <summary>
     /// Reports that indexing was attempted on a non-array expression.
@@ -79,10 +64,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location.</param>
     /// <param name="type">The actual type.</param>
     public void ReportTypeNotIndexable(TextLocation location, TypeSymbol type)
-    {
-        var message = $"Type '{type.Name}' is not indexable.";
-        Report(location, "GS0116", message);
-    }
+    => Report(location, DiagnosticDescriptors.TypeNotIndexable, type.Name);
 
     /// <summary>
     /// Reports that a built-in intrinsic was applied to an unsupported argument type.
@@ -91,20 +73,14 @@ public sealed partial class DiagnosticBag
     /// <param name="name">The intrinsic name.</param>
     /// <param name="type">The actual argument type.</param>
     public void ReportIntrinsicArgumentType(TextLocation location, string name, TypeSymbol type)
-    {
-        var message = $"Built-in '{name}' cannot be applied to a value of type '{type.Name}'.";
-        Report(location, "GS0117", message);
-    }
+    => Report(location, DiagnosticDescriptors.IntrinsicArgumentType, name, type.Name);
 
     /// <summary>
     /// Reports that an expression must have a value.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>
     public void ReportExpressionMustHaveValue(TextLocation location)
-    {
-        var message = "Expression must have a value.";
-        Report(location, "GS0124", message);
-    }
+    => Report(location, DiagnosticDescriptors.ExpressionMustHaveValue);
 
     /// <summary>
     /// Reports that a variable doesn't exist.
@@ -125,8 +101,7 @@ public sealed partial class DiagnosticBag
             return;
         }
 
-        var message = $"Variable '{name}' doesn't exist.";
-        Report(location, "GS0125", message);
+        Report(location, DiagnosticDescriptors.UndefinedVariable, name);
     }
 
     /// <summary>
@@ -135,10 +110,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="name">The name of the variable.</param>
     public void ReportNotAVariable(TextLocation location, string name)
-    {
-        var message = $"'{name}' is not a variable.";
-        Report(location, "GS0126", message);
-    }
+    => Report(location, DiagnosticDescriptors.NotAVariable, name);
 
     /// <summary>
     /// Reports that the specified unary operator is not defined for the specified type.
@@ -147,10 +119,7 @@ public sealed partial class DiagnosticBag
     /// <param name="operatorText">The operator text.</param>
     /// <param name="operandType">The operand type.</param>
     public void ReportUndefinedUnaryOperator(TextLocation location, string operatorText, TypeSymbol operandType)
-    {
-        var message = $"Unary operator '{operatorText}' is not defined for type '{operandType}'.";
-        Report(location, "GS0128", message);
-    }
+    => Report(location, DiagnosticDescriptors.UndefinedUnaryOperator, operatorText, operandType);
 
     /// <summary>
     /// Reports that the specified unary operator is not defined for the specified types.
@@ -160,10 +129,7 @@ public sealed partial class DiagnosticBag
     /// <param name="leftType">The left operand type.</param>
     /// <param name="rightType">The right operand type.</param>
     public void ReportUndefinedBinaryOperator(TextLocation location, string operatorText, TypeSymbol leftType, TypeSymbol rightType)
-    {
-        var message = $"Binary operator '{operatorText}' is not defined for types '{leftType}' and '{rightType}'.";
-        Report(location, "GS0129", message);
-    }
+    => Report(location, DiagnosticDescriptors.UndefinedBinaryOperator, operatorText, leftType, rightType);
 
     /// <summary>
     /// Reports that the function doesn't exist.
@@ -171,10 +137,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="name">The function name.</param>
     public void ReportUndefinedFunction(TextLocation location, string name)
-    {
-        var message = $"Function '{name}' doesn't exist.";
-        Report(location, "GS0130", message);
-    }
+    => Report(location, DiagnosticDescriptors.UndefinedFunction, name);
 
     /// <summary>
     /// Reports that the name doesn't belong to a function.
@@ -182,10 +145,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="name">The function name.</param>
     public void ReportNotAFunction(TextLocation location, string name)
-    {
-        var message = $"'{name}' is not a function.";
-        Report(location, "GS0131", message);
-    }
+    => Report(location, DiagnosticDescriptors.NotAFunction, name);
 
     /// <summary>
     /// Reports that the operand of an <c>await</c> expression is not a Task (Phase 5.1 / ADR-0023).
@@ -193,10 +153,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the operand.</param>
     /// <param name="actualType">The actual type of the operand.</param>
     public void ReportTypeIsNotAwaitable(TextLocation location, TypeSymbol actualType)
-    {
-        var message = $"Expression of type '{actualType}' cannot be awaited; expected a 'Task' or 'Task[T]'.";
-        Report(location, "GS0133", message);
-    }
+    => Report(location, DiagnosticDescriptors.TypeIsNotAwaitable, actualType);
 
     /// <summary>
     /// Reports that the function requires a different amount of arguments.
@@ -206,10 +163,7 @@ public sealed partial class DiagnosticBag
     /// <param name="expectedCount">The expected argument count.</param>
     /// <param name="actualCount">The actual argument count.</param>
     public void ReportWrongArgumentCount(TextLocation location, string name, int expectedCount, int actualCount)
-    {
-        var message = $"Function '{name}' requires {expectedCount} arguments but was given {actualCount}.";
-        Report(location, "GS0144", message);
-    }
+    => Report(location, DiagnosticDescriptors.WrongArgumentCount, name, expectedCount, actualCount);
 
     /// <summary>Reports a call to a variadic function with too few fixed arguments (Phase 4.8).</summary>
     /// <param name="location">The text location of the call.</param>
@@ -217,10 +171,7 @@ public sealed partial class DiagnosticBag
     /// <param name="minimumCount">The minimum required argument count (fixed parameters).</param>
     /// <param name="actualCount">The actual argument count provided.</param>
     public void ReportTooFewArgumentsForVariadic(TextLocation location, string name, int minimumCount, int actualCount)
-    {
-        var message = $"Function '{name}' requires at least {minimumCount} arguments but was given {actualCount}.";
-        Report(location, "GS0147", message);
-    }
+    => Report(location, DiagnosticDescriptors.TooFewArgumentsForVariadic, name, minimumCount, actualCount);
 
     /// <summary>Reports a generic call whose explicit type-argument list has the wrong arity (Phase 4.1 / ADR-0020).</summary>
     /// <param name="location">The text location of the type-argument list.</param>
@@ -228,26 +179,20 @@ public sealed partial class DiagnosticBag
     /// <param name="expectedCount">The expected number of type arguments.</param>
     /// <param name="actualCount">The actual number of type arguments.</param>
     public void ReportWrongTypeArgumentCount(TextLocation location, string name, int expectedCount, int actualCount)
-    {
-        Report(location, "GS0148", $"Generic function '{name}' requires {expectedCount} type arguments but was given {actualCount}.");
-    }
+    => Report(location, DiagnosticDescriptors.WrongTypeArgumentCount, name, expectedCount, actualCount);
 
     /// <summary>Reports a type-clause type-argument list applied to a non-generic type (Phase 4.3c / ADR-0020).</summary>
     /// <param name="location">The text location of the offending identifier.</param>
     /// <param name="name">The type name.</param>
     public void ReportTypeNotGeneric(TextLocation location, string name)
-    {
-        Report(location, "GS0149", $"Type '{name}' is not generic.");
-    }
+    => Report(location, DiagnosticDescriptors.TypeNotGeneric, name);
 
     /// <summary>Reports a generic call whose type arguments could not be inferred from the value arguments (Phase 4.1 / ADR-0020).</summary>
     /// <param name="location">The text location of the call.</param>
     /// <param name="name">The callee name.</param>
     /// <param name="typeParameterName">The unresolved type-parameter name.</param>
     public void ReportTypeArgumentInferenceFailed(TextLocation location, string name, string typeParameterName)
-    {
-        Report(location, "GS0151", $"Cannot infer type argument '{typeParameterName}' for generic function '{name}'; supply it explicitly via '[{typeParameterName}]'.");
-    }
+    => Report(location, DiagnosticDescriptors.TypeArgumentInferenceFailed, typeParameterName, name, typeParameterName);
 
     /// <summary>Reports a generic call whose type argument does not satisfy the declared constraint (Phase 4.2 / ADR-0020).</summary>
     /// <param name="location">The text location of the offending type argument or call.</param>
@@ -255,9 +200,7 @@ public sealed partial class DiagnosticBag
     /// <param name="typeArgument">The supplied type argument.</param>
     /// <param name="constraintDescription">A human-readable description of the constraint (e.g. <c>comparable</c>).</param>
     public void ReportTypeArgumentDoesNotSatisfyConstraint(TextLocation location, string typeParameterName, TypeSymbol typeArgument, string constraintDescription)
-    {
-        Report(location, "GS0152", $"Type argument '{typeArgument}' for type parameter '{typeParameterName}' does not satisfy the '{constraintDescription}' constraint.");
-    }
+    => Report(location, DiagnosticDescriptors.TypeArgumentDoesNotSatisfyConstraint, typeArgument, typeParameterName, constraintDescription);
 
     /// <summary>
     /// Reports that the parameter requires a value of a different type.
@@ -267,10 +210,7 @@ public sealed partial class DiagnosticBag
     /// <param name="expectedType">The expected type.</param>
     /// <param name="actualType">The actual type.</param>
     public void ReportWrongArgumentType(TextLocation location, string name, TypeSymbol expectedType, TypeSymbol actualType)
-    {
-        var message = $"Parameter '{name}' requires a value of type '{expectedType}' but was given a value of type '{actualType}'.";
-        Report(location, "GS0154", message);
-    }
+    => Report(location, DiagnosticDescriptors.WrongArgumentType, name, expectedType, actualType);
 
     /// <summary>
     /// Rerpots that there's no conversion from one type to the other.
@@ -279,10 +219,7 @@ public sealed partial class DiagnosticBag
     /// <param name="fromType">From type.</param>
     /// <param name="toType">To type.</param>
     public void ReportCannotConvert(TextLocation location, TypeSymbol fromType, TypeSymbol toType)
-    {
-        var message = $"Cannot convert type '{fromType}' to '{toType}'.";
-        Report(location, "GS0155", message);
-    }
+    => Report(location, DiagnosticDescriptors.CannotConvert, fromType, toType);
 
     /// <summary>Reports why a requested structural projection is unsafe or incomplete.</summary>
     /// <param name="location">The projection source location.</param>
@@ -294,10 +231,7 @@ public sealed partial class DiagnosticBag
         TypeSymbol fromType,
         TypeSymbol toType,
         string reason)
-    {
-        var message = $"Cannot project type '{fromType}' to '{toType}': {reason}";
-        Report(location, "GS0490", message);
-    }
+    => Report(location, DiagnosticDescriptors.StructuralProjectionFailure, fromType, toType, reason);
 
     /// <summary>
     /// Reports that there's no implicit conversion from one type to the other.
@@ -306,10 +240,7 @@ public sealed partial class DiagnosticBag
     /// <param name="fromType">From type.</param>
     /// <param name="toType">To type.</param>
     public void ReportCannotConvertImplicitly(TextLocation location, TypeSymbol fromType, TypeSymbol toType)
-    {
-        var message = $"Cannot convert type '{fromType}' to '{toType}'. An explicit conversion exists (are you missing a cast?)";
-        Report(location, "GS0156", message);
-    }
+    => Report(location, DiagnosticDescriptors.CannotConvertImplicitly, fromType, toType);
 
     /// <summary>
     /// Issue #337: reports that a CLR member method group cannot be converted to
@@ -320,10 +251,7 @@ public sealed partial class DiagnosticBag
     /// <param name="methodName">The method-group name.</param>
     /// <param name="toType">The expected target type.</param>
     public void ReportCannotConvertMethodGroup(TextLocation location, string methodName, TypeSymbol toType)
-    {
-        var message = $"Cannot convert method group '{methodName}' to '{toType}'. No overload matches the target delegate signature.";
-        Report(location, "GS0218", message);
-    }
+    => Report(location, DiagnosticDescriptors.CannotConvertMethodGroup, methodName, toType);
 
     /// <summary>
     /// Issue #367: reports that a by-ref-like (<c>ref struct</c>) value is used in
@@ -338,9 +266,7 @@ public sealed partial class DiagnosticBag
     /// <param name="type">The by-ref-like type.</param>
     /// <param name="reason">A description of why the value would escape.</param>
     public void ReportByRefLikeEscape(TextLocation location, TypeSymbol type, string reason)
-    {
-        Report(location, "GS0219", $"By-ref-like type '{type}' is a `ref struct` and cannot {reason}.");
-    }
+    => Report(location, DiagnosticDescriptors.ByRefLikeEscape, type, reason);
 
     /// <summary>
     /// Reports that we couldn't find the specified type.
@@ -348,10 +274,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="text">The text associated to the type.</param>
     public void ReportUnableToFindType(TextLocation location, string text)
-    {
-        var message = $"Cannot find type {text}. Are you missing an import?";
-        Report(location, "GS0157", message);
-    }
+    => Report(location, DiagnosticDescriptors.UnableToFindType, text);
 
     /// <summary>
     /// Reports that we couldn't find the specified member.
@@ -359,10 +282,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="text">The text associated to the member.</param>
     public void ReportUnableToFindMember(TextLocation location, string text)
-    {
-        var message = $"Cannot find member {text}.";
-        Report(location, "GS0158", message);
-    }
+    => Report(location, DiagnosticDescriptors.UnableToFindMember, text);
 
     /// <summary>
     /// Reports that we couldn't find the specified function.
@@ -370,10 +290,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="text">The text associated to the function.</param>
     public void ReportUnableToFindFunction(TextLocation location, string text)
-    {
-        var message = $"Cannot find function {text}.";
-        Report(location, "GS0159", message);
-    }
+    => Report(location, DiagnosticDescriptors.UnableToFindFunction, text);
 
     /// <summary>
     /// Reports that an overloaded call (constructor, static method, or
@@ -392,48 +309,27 @@ public sealed partial class DiagnosticBag
     /// </param>
     public void ReportAmbiguousOverload(TextLocation location, string name, int candidateCount, IEnumerable<string> candidateSignatures = null)
     {
-        var message = $"Call to '{name}' is ambiguous between {candidateCount} applicable overloads.";
-        if (candidateSignatures != null)
-        {
-            var lines = candidateSignatures.Where(s => !string.IsNullOrEmpty(s)).ToArray();
-            if (lines.Length > 0)
-            {
-                var builder = new System.Text.StringBuilder(message);
-                builder.Append(" Candidates: ");
-                for (var i = 0; i < lines.Length; i++)
-                {
-                    if (i > 0)
-                    {
-                        builder.Append("; ");
-                    }
-
-                    builder.Append(lines[i]);
-                }
-
-                builder.Append('.');
-                message = builder.ToString();
-            }
-        }
-
-        Report(location, "GS0160", message);
+        var candidates = candidateSignatures?
+            .Where(s => !string.IsNullOrEmpty(s))
+            .ToArray();
+        var candidateList = candidates is { Length: > 0 }
+            ? string.Format(
+                DiagnosticDescriptors.AmbiguousOverloadCandidatesMessageFormat,
+                string.Join("; ", candidates))
+            : string.Empty;
+        Report(location, DiagnosticDescriptors.AmbiguousOverload, name, candidateCount, candidateList);
     }
 
     /// <summary>Reports that copy/with syntax was applied to a non-data-struct value.</summary>
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="type">The actual receiver type.</param>
     public void ReportCopyOrWithNotDataStruct(TextLocation location, TypeSymbol type)
-    {
-        var message = $"copy/with requires a data class or data struct receiver, but got '{type}'.";
-        Report(location, "GS0161", message);
-    }
+    => Report(location, DiagnosticDescriptors.CopyOrWithNotDataStruct, type);
 
     /// <summary>Reports that named arguments were used outside the scoped data-struct copy syntax.</summary>
     /// <param name="location">The text location where the error was found.</param>
     public void ReportNamedArgumentOnlyValidForCopy(TextLocation location)
-    {
-        var message = "Named arguments are only supported for data-struct .copy(...).";
-        Report(location, "GS0162", message);
-    }
+    => Report(location, DiagnosticDescriptors.NamedArgumentOnlyValidForCopy);
 
     /// <summary>
     /// Issue #950: GS0379 — a <c>protected</c> member of <paramref name="declaringTypeName"/>
@@ -445,12 +341,7 @@ public sealed partial class DiagnosticBag
     /// <param name="memberName">The protected member's name.</param>
     /// <param name="declaringTypeName">The declaring type's name.</param>
     public void ReportProtectedMemberInaccessible(TextLocation location, string memberName, string declaringTypeName)
-    {
-        Report(
-            location,
-            "GS0379",
-            $"'{declaringTypeName}.{memberName}' is inaccessible due to its protection level: a 'protected' member is only accessible within '{declaringTypeName}' and types derived from it.");
-    }
+    => Report(location, DiagnosticDescriptors.ProtectedMemberInaccessible, declaringTypeName, memberName, declaringTypeName);
 
     /// <summary>
     /// Issue #2044: GS0472 — a <c>private</c> member of
@@ -463,12 +354,7 @@ public sealed partial class DiagnosticBag
     /// <param name="memberName">The private member's name.</param>
     /// <param name="declaringTypeName">The declaring type's name.</param>
     public void ReportPrivateMemberInaccessible(TextLocation location, string memberName, string declaringTypeName)
-    {
-        Report(
-            location,
-            "GS0472",
-            $"'{declaringTypeName}.{memberName}' is inaccessible due to its protection level: a 'private' member is only accessible within '{declaringTypeName}'.");
-    }
+    => Report(location, DiagnosticDescriptors.PrivateMemberInaccessible, declaringTypeName, memberName, declaringTypeName);
 
     /// <summary>
     /// Issue #2044: reports the inaccessible-member diagnostic matching
@@ -504,26 +390,20 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the range expression.</param>
     /// <param name="type">The non-sliceable target type.</param>
     public void ReportTypeNotSliceable(TextLocation location, TypeSymbol type)
-    {
-        Report(location, "GS0392", $"Type '{type.Name}' cannot be sliced with a range ('..') expression.");
-    }
+    => Report(location, DiagnosticDescriptors.TypeNotSliceable, type.Name);
 
     /// <summary>GS9002: Argument must be passed by reference.</summary>
     /// <param name="location">The text location of the argument.</param>
     /// <param name="argumentIndex">The 1-based argument position.</param>
     /// <param name="methodName">The target method name.</param>
     public void ReportArgumentMustBePassedByRef(TextLocation location, int argumentIndex, string methodName)
-    {
-        Report(location, "GS9002", $"Argument {argumentIndex} to '{methodName}' must be passed by reference (`&`).");
-    }
+    => Report(location, DiagnosticDescriptors.ArgumentMustBePassedByRef, argumentIndex, methodName);
 
     /// <summary>GS9004: By-ref value cannot escape its declaring scope.</summary>
     /// <param name="location">The text location of the escape attempt.</param>
     /// <param name="reason">Description of the escape (capture in lambda, return, store in field).</param>
     public void ReportByRefCannotEscape(TextLocation location, string reason)
-    {
-        Report(location, "GS9004", $"By-ref value cannot escape: {reason}.");
-    }
+    => Report(location, DiagnosticDescriptors.ByRefCannotEscape, reason);
 
     /// <summary>
     /// GS0410: a from-end index marker <c>^</c> appeared where it is not
@@ -536,9 +416,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The text location of the <c>^</c> marker.</param>
     public void ReportFromEndMarkerNotAllowedInStandaloneRange(TextLocation location)
-    {
-        Report(location, "GS0410", "A from-end index marker '^' is only valid inside index brackets (e.g. 'arr[^1]' or 'arr[a..^b]') or after '..' in a standalone range upper bound ('a..^b'); a standalone range cannot start with '^'. Use an indexer, or parenthesise a one's-complement bound ('(^a)..b') (issue #1038).");
-    }
+    => Report(location, DiagnosticDescriptors.FromEndMarkerNotAllowedInStandaloneRange);
 
     /// <summary>
     /// Reports that a <c>nameof(...)</c> argument is not a valid name
@@ -546,9 +424,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The text location of the argument.</param>
     public void ReportNameOfRequiresNameReference(TextLocation location)
-    {
-        Report(location, "GS0420", "The argument to 'nameof' must be a name reference: an identifier, member access, or type.");
-    }
+    => Report(location, DiagnosticDescriptors.NameOfRequiresNameReference);
 
     /// <summary>
     /// ADR-0060: reports that an argument's ref-kind modifier (or its absence) does not match
@@ -561,9 +437,7 @@ public sealed partial class DiagnosticBag
     /// <param name="expected">The expected ref-kind ("none", "ref", "out", "in").</param>
     /// <param name="observed">The observed ref-kind ("none", "ref", "out", "in").</param>
     public void ReportRefKindMismatch(TextLocation location, int argumentIndex, string parameterName, string expected, string observed)
-    {
-        Report(location, "GS0235", $"Argument {argumentIndex} (parameter '{parameterName}') passes with ref-kind '{observed}' but the parameter is declared '{expected}'.");
-    }
+    => Report(location, DiagnosticDescriptors.RefKindMismatch, argumentIndex, parameterName, observed, expected);
 
     /// <summary>
     /// ADR-0060: reports that an inline-declaration / discard form (<c>out var</c>, <c>out let</c>,
@@ -572,9 +446,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The location of the offending construct.</param>
     public void ReportOutDeclarationOutsideOutArgument(TextLocation location)
-    {
-        Report(location, "GS0236", "An inline 'out var', 'out let', or 'out _' declaration is only allowed as an argument at an 'out' parameter position.");
-    }
+    => Report(location, DiagnosticDescriptors.OutDeclarationOutsideOutArgument);
 
     /// <summary>
     /// ADR-0060 §8: warns that a call passes a value at an <c>in</c> parameter position
@@ -585,9 +457,7 @@ public sealed partial class DiagnosticBag
     /// <param name="argumentIndex">The 1-based argument index.</param>
     /// <param name="parameterName">The parameter name on the callee.</param>
     public void ReportInArgumentMissingInModifier(TextLocation location, int argumentIndex, string parameterName)
-    {
-        Report(location, "GS0242", $"Argument {argumentIndex} (parameter '{parameterName}') is an 'in' parameter but the call does not use the 'in' modifier; pass 'in <lvalue>' or change the parameter to by-value.", DiagnosticSeverity.Warning);
-    }
+    => Report(location, DiagnosticDescriptors.InArgumentMissingInModifier, argumentIndex, parameterName);
 
     /// <summary>
     /// Issue #343: reports a positional call argument written after a named call
@@ -597,9 +467,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The location of the offending positional argument.</param>
     public void ReportPositionalArgumentAfterNamedArgument(TextLocation location)
-    {
-        Report(location, "GS0244", "Positional argument cannot follow a named argument.");
-    }
+    => Report(location, DiagnosticDescriptors.PositionalArgumentAfterNamedArgument);
 
     /// <summary>
     /// Issue #343: reports a duplicate named argument at a call site (e.g.
@@ -608,9 +476,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The location of the duplicate named argument.</param>
     /// <param name="name">The duplicated parameter name.</param>
     public void ReportDuplicateNamedArgument(TextLocation location, string name)
-    {
-        Report(location, "GS0245", $"Named argument '{name}' specified more than once.");
-    }
+    => Report(location, DiagnosticDescriptors.DuplicateNamedArgument, name);
 
     /// <summary>
     /// Issue #343: reports a named call argument whose name does not match any
@@ -620,9 +486,7 @@ public sealed partial class DiagnosticBag
     /// <param name="callee">The callee name (for diagnostic context).</param>
     /// <param name="name">The argument name that did not match any parameter.</param>
     public void ReportNamedArgumentParameterNotFound(TextLocation location, string callee, string name)
-    {
-        Report(location, "GS0246", $"Named argument '{name}' does not match any parameter of '{callee}'.");
-    }
+    => Report(location, DiagnosticDescriptors.NamedArgumentParameterNotFound, name, callee);
 
     /// <summary>
     /// Issue #343: reports a named call argument whose target parameter is
@@ -631,9 +495,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The location of the offending named argument.</param>
     /// <param name="name">The parameter name that was double-bound.</param>
     public void ReportNamedArgumentAlsoSpecifiedPositionally(TextLocation location, string name)
-    {
-        Report(location, "GS0247", $"Named argument '{name}' specifies a value for parameter '{name}' which was already given a positional value.");
-    }
+    => Report(location, DiagnosticDescriptors.NamedArgumentAlsoSpecifiedPositionally, name, name);
 
     /// <summary>
     /// ADR-0061: reports a conditional ref-argument expression that surfaces outside of
@@ -641,9 +503,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The text location of the conditional expression.</param>
     public void ReportConditionalRefArgumentOutsideRefContext(TextLocation location)
-    {
-        Report(location, "GS0259", "Conditional lvalue expression (`cond ? a : b`) is only legal as the payload of a 'ref'/'out'/'in' argument modifier or as the operand of '&'.");
-    }
+    => Report(location, DiagnosticDescriptors.ConditionalRefArgumentOutsideRefContext);
 
     /// <summary>
     /// ADR-0061: reports that the two branches of a conditional ref-argument produce
@@ -653,9 +513,7 @@ public sealed partial class DiagnosticBag
     /// <param name="trueType">The type of the true-branch lvalue.</param>
     /// <param name="falseType">The type of the false-branch lvalue.</param>
     public void ReportConditionalRefArgumentBranchTypeMismatch(TextLocation location, string trueType, string falseType)
-    {
-        Report(location, "GS0260", $"Both branches of a conditional ref-argument must produce lvalues of the same type, but the true branch is '{trueType}' and the false branch is '{falseType}'.");
-    }
+    => Report(location, DiagnosticDescriptors.ConditionalRefArgumentBranchTypeMismatch, trueType, falseType);
 
     /// <summary>
     /// ADR-0061: reports an inline-declaration (<c>out var</c>/<c>out let</c>/<c>out _</c>)
@@ -664,9 +522,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The text location of the offending inline declaration.</param>
     public void ReportInlineDeclarationInConditionalRefBranch(TextLocation location)
-    {
-        Report(location, "GS0261", "An 'out var'/'out let'/'out _' inline declaration cannot appear inside a branch of a conditional ref-argument (the new local would only conditionally exist). Declare the local before the call instead.");
-    }
+    => Report(location, DiagnosticDescriptors.InlineDeclarationInConditionalRefBranch);
 
     /// <summary>
     /// ADR-0061: reports an inner ref-kind modifier on a conditional ref-argument branch
@@ -676,9 +532,7 @@ public sealed partial class DiagnosticBag
     /// <param name="outerModifier">The outer modifier text (<c>ref</c>/<c>out</c>/<c>in</c>).</param>
     /// <param name="innerModifier">The inner modifier text observed.</param>
     public void ReportConditionalRefArgumentInnerModifierMismatch(TextLocation location, string outerModifier, string innerModifier)
-    {
-        Report(location, "GS0262", $"Inner ref-kind modifier '{innerModifier}' on a conditional ref-argument branch must match the outer modifier '{outerModifier}'.");
-    }
+    => Report(location, DiagnosticDescriptors.ConditionalRefArgumentInnerModifierMismatch, innerModifier, outerModifier);
 
     /// <summary>
     /// ADR-0062: reports a general two-arm conditional whose branch types have no
@@ -688,9 +542,7 @@ public sealed partial class DiagnosticBag
     /// <param name="trueType">The type of the true-branch expression.</param>
     /// <param name="falseType">The type of the false-branch expression.</param>
     public void ReportConditionalNoCommonResultType(TextLocation location, string trueType, string falseType)
-    {
-        Report(location, "GS0263", $"Conditional expression branches have no common result type — the true branch is '{trueType}' and the false branch is '{falseType}'. Add an explicit conversion to align the two arms.");
-    }
+    => Report(location, DiagnosticDescriptors.ConditionalNoCommonResultType, trueType, falseType);
 
     /// <summary>
     /// ADR-0063 §6: reports a call whose argument list matches more than one applicable
@@ -700,9 +552,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The call-site location.</param>
     /// <param name="name">The callable name.</param>
     public void ReportAmbiguousOverloadResolution(TextLocation location, string name)
-    {
-        Report(location, "GS0266", $"Call to '{name}' is ambiguous between multiple overloads. Disambiguate with explicit types or named arguments.");
-    }
+    => Report(location, DiagnosticDescriptors.AmbiguousOverloadResolution, name);
 
     /// <summary>
     /// ADR-0063 §6: reports a call to a name that resolves to an overload set, but
@@ -712,9 +562,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The call-site location.</param>
     /// <param name="name">The callable name.</param>
     public void ReportNoApplicableOverload(TextLocation location, string name)
-    {
-        Report(location, "GS0267", $"No overload of '{name}' is applicable to the given argument list.");
-    }
+    => Report(location, DiagnosticDescriptors.NoApplicableOverload, name);
 
     /// <summary>
     /// Issue #575: the <c>as</c> operator requires the target type to be either a
@@ -724,9 +572,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The expression location.</param>
     /// <param name="typeName">The non-nullable value type name.</param>
     public void ReportAsRequiresReferenceOrNullableType(TextLocation location, string typeName)
-    {
-        Report(location, "GS0270", $"The 'as' operator requires the target type to be a reference type or a nullable value type, but '{typeName}' is a non-nullable value type. Use 'as {typeName}?' instead.");
-    }
+    => Report(location, DiagnosticDescriptors.AsRequiresReferenceOrNullableType, typeName, typeName);
 
     /// <summary>
     /// Reports that <c>nil</c> was supplied as an attribute argument for a
@@ -738,9 +584,7 @@ public sealed partial class DiagnosticBag
     /// <param name="parameterName">The name of the target method parameter.</param>
     /// <param name="typeName">The non-nullable type name.</param>
     public void ReportNilNotAssignableToNonNullableParameter(TextLocation location, string parameterName, string typeName)
-    {
-        Report(location, "GS0274", $"'nil' cannot be assigned to parameter '{parameterName}' of non-nullable type '{typeName}'; consider changing the parameter type to '{typeName}?'.");
-    }
+    => Report(location, DiagnosticDescriptors.NilNotAssignableToNonNullableParameter, parameterName, typeName, typeName);
 
     /// <summary>
     /// GS0275: Calling <c>.GetAwaiter().GetResult()</c> directly on a <c>ValueTask</c>/<c>ValueTask&lt;T&gt;</c>
@@ -748,13 +592,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The source location of the <c>.GetResult()</c> call.</param>
     public void ReportValueTaskDirectGetResult(TextLocation location)
-    {
-        Report(
-            location,
-            "GS0275",
-            "Calling '.GetAwaiter().GetResult()' directly on a ValueTask/ValueTask<T> is unsafe due to its single-await semantics. Convert to Task first via '.AsTask()' (e.g. 'v.AsTask().GetAwaiter().GetResult()').",
-            DiagnosticSeverity.Warning);
-    }
+    => Report(location, DiagnosticDescriptors.ValueTaskDirectGetResult);
 
     /// <summary>
     /// GS0276: An if-expression used in value position has no <c>else</c> branch.
@@ -762,9 +600,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The source location of the <c>if</c> keyword.</param>
     public void ReportIfExpressionMissingElse(TextLocation location)
-    {
-        Report(location, "GS0276", "An if-expression in value position must have an 'else' branch so that all code paths produce a value.");
-    }
+    => Report(location, DiagnosticDescriptors.IfExpressionMissingElse);
 
     /// <summary>
     /// GS0277: A block in an if-expression value position has no trailing
@@ -772,9 +608,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The source location of the block's closing brace.</param>
     public void ReportBlockExpressionMissingTrailingExpression(TextLocation location)
-    {
-        Report(location, "GS0277", "A block in an if-expression value position must end with a value-producing expression.");
-    }
+    => Report(location, DiagnosticDescriptors.BlockExpressionMissingTrailingExpression);
 
     /// <summary>
     /// ADR-0072 / issue #709: GS0298 — the left-hand side of a
@@ -786,9 +620,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the offending operator.</param>
     /// <param name="actualType">The actual (non-nullable) left-hand-side type.</param>
     public void ReportNullCoalescingAssignmentTargetNotNullable(TextLocation location, TypeSymbol actualType)
-    {
-        Report(location, "GS0298", $"The left-hand side of '??=' must be of nullable type, but its type is '{actualType}'. Either declare the target as '{actualType}?' or use a plain assignment.");
-    }
+    => Report(location, DiagnosticDescriptors.NullCoalescingAssignmentTargetNotNullable, actualType, actualType);
 
     /// <summary>
     /// ADR-0072 / issue #709: GS0299 — the left-hand side of a
@@ -799,9 +631,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The source location of the offending operator.</param>
     public void ReportNullCoalescingAssignmentInvalidTarget(TextLocation location)
-    {
-        Report(location, "GS0299", "The left-hand side of '??=' must be assignable: a variable, parameter, field, property, or indexer.");
-    }
+    => Report(location, DiagnosticDescriptors.NullCoalescingAssignmentInvalidTarget);
 
     /// <summary>
     /// ADR-0073 / issue #710: GS0300 (warning) — the receiver of a
@@ -812,9 +642,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the offending operator.</param>
     /// <param name="actualType">The actual (non-nullable) receiver type.</param>
     public void ReportNullConditionalIndexReceiverNotNullable(TextLocation location, TypeSymbol actualType)
-    {
-        Report(location, "GS0300", $"The receiver of '?[...]' is of non-nullable type '{actualType}'. Use '[...]' instead.", DiagnosticSeverity.Warning);
-    }
+    => Report(location, DiagnosticDescriptors.NullConditionalIndexReceiverNotNullable, actualType);
 
     /// <summary>
     /// ADR-0073 / issue #710: GS0301 — the null-conditional index access
@@ -825,9 +653,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The source location of the offending operator.</param>
     public void ReportNullConditionalIndexAssignmentTarget(TextLocation location)
-    {
-        Report(location, "GS0301", "The null-conditional index access '?[...]' cannot appear on the left-hand side of an assignment. Guard the receiver explicitly (e.g. 'if a != nil { a[i] = v }') or use '[...]' when the receiver is known to be non-nil.");
-    }
+    => Report(location, DiagnosticDescriptors.NullConditionalIndexAssignmentTarget);
 
     /// <summary>
     /// ADR-0076 / issue #716: GS0304 — an arrow-lambda binding cannot resolve
@@ -841,9 +667,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the untyped parameter.</param>
     /// <param name="parameterName">The name of the untyped lambda parameter.</param>
     public void ReportLambdaBindingTypeCannotBeInferred(TextLocation location, string parameterName)
-    {
-        Report(location, "GS0304", $"Cannot infer the type of lambda parameter '{parameterName}'. The parameter has no explicit type and no target type is available; either add a type (e.g. '({parameterName} int32) -> ...') or declare the binding with an explicit function type (e.g. 'let f (int32) -> R = ...').", DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.LambdaBindingTypeCannotBeInferred, parameterName, parameterName);
 
     /// <summary>
     /// Reports GS0362 — ADR-0100 / issue #795: a bare <c>default</c>
@@ -858,13 +682,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The offending bare-<c>default</c> location.</param>
     public void ReportBareDefaultNoTargetType(TextLocation location)
-    {
-        Report(
-            location,
-            "GS0362",
-            "Bare 'default' has no target type in this context. Write 'default(T)' with an explicit type clause, or use the bare form in a target-typed position (let/var initializer with explicit type, 'return' when the return type is known, an argument to a typed parameter, or a branch of '?:' typed by the sibling branch).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.BareDefaultNoTargetType);
 
     /// <summary>
     /// Reports GS0333 — ADR-0089 / issue #755: the dispatch expression
@@ -879,13 +697,7 @@ public sealed partial class DiagnosticBag
         TextLocation location,
         string typeParameterName,
         string memberName)
-    {
-        Report(
-            location,
-            "GS0333",
-            $"Type parameter '{typeParameterName}' has no constraint that declares a static-virtual member '{memberName}' (ADR-0089).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.StaticVirtualMemberNotFoundOnTypeParameter, typeParameterName, memberName);
 
     /// <summary>
     /// ADR-0090 / issue #756: GS0334 — external code attempted to call a
@@ -900,13 +712,7 @@ public sealed partial class DiagnosticBag
         TextLocation location,
         string interfaceName,
         string methodName)
-    {
-        Report(
-            location,
-            "GS0334",
-            $"Cannot access private interface member '{interfaceName}.{methodName}' from outside the interface declaration (ADR-0090).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.PrivateInterfaceMemberNotAccessible, interfaceName, methodName);
 
     /// <summary>
     /// ADR-0091 / issue #757: GS0338 — a <c>base[IFoo].M(...)</c> call
@@ -921,13 +727,7 @@ public sealed partial class DiagnosticBag
         TextLocation location,
         string enclosingTypeName,
         string interfaceName)
-    {
-        Report(
-            location,
-            "GS0338",
-            $"'base[{interfaceName}]' is not valid here: enclosing type '{enclosingTypeName}' does not implement interface '{interfaceName}' (ADR-0091). Use 'base[IFoo]' only inside an instance member of a type that lists 'IFoo' in its base-type list.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.BaseInterfaceCallTypeDoesNotImplementInterface, interfaceName, enclosingTypeName, interfaceName);
 
     /// <summary>
     /// ADR-0091 / issue #757: GS0339 — a <c>base[IFoo].M(...)</c> call
@@ -941,13 +741,7 @@ public sealed partial class DiagnosticBag
         TextLocation location,
         string interfaceName,
         string methodName)
-    {
-        Report(
-            location,
-            "GS0339",
-            $"Interface '{interfaceName}' does not declare a member named '{methodName}' (ADR-0091).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.BaseInterfaceCallMemberNotFound, interfaceName, methodName);
 
     /// <summary>
     /// ADR-0091 / issue #757: GS0340 — a <c>base[IFoo].M(...)</c> call
@@ -962,13 +756,7 @@ public sealed partial class DiagnosticBag
         TextLocation location,
         string interfaceName,
         string methodName)
-    {
-        Report(
-            location,
-            "GS0340",
-            $"Interface member '{interfaceName}.{methodName}' is abstract and has no default body to delegate to via 'base[{interfaceName}]' (ADR-0091). Implement the method directly or delegate to a different interface that supplies a default.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.BaseInterfaceCallMemberIsAbstract, interfaceName, methodName, interfaceName);
 
     /// <summary>
     /// ADR-0091 / issue #757: GS0341 — a <c>base[IFoo].M(...)</c> call
@@ -984,13 +772,7 @@ public sealed partial class DiagnosticBag
         TextLocation location,
         string interfaceName,
         string methodName)
-    {
-        Report(
-            location,
-            "GS0341",
-            $"'base[{interfaceName}].{methodName}' cannot target the private interface helper '{interfaceName}.{methodName}'; private helpers are invisible to implementers (ADR-0090 / ADR-0091).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.BaseInterfaceCallTargetsPrivateHelper, interfaceName, methodName, interfaceName, methodName);
 
     /// <summary>
     /// Issue #986: GS0383 — a <c>base.M(...)</c> (or
@@ -1007,13 +789,7 @@ public sealed partial class DiagnosticBag
     public void ReportBaseClassCallHasNoBaseClass(
         TextLocation location,
         string enclosingTypeName)
-    {
-        Report(
-            location,
-            "GS0383",
-            $"'base' is not valid here: '{enclosingTypeName}' must be an instance member of a class that has a base class to use 'base.Member(...)' (issue #986).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.BaseClassCallHasNoBaseClass, enclosingTypeName);
 
     /// <summary>
     /// Issue #986: GS0384 — a <c>base.M(...)</c> (or
@@ -1027,13 +803,7 @@ public sealed partial class DiagnosticBag
         TextLocation location,
         string baseTypeName,
         string methodName)
-    {
-        Report(
-            location,
-            "GS0384",
-            $"Base class '{baseTypeName}' does not declare an accessible method named '{methodName}' to call via 'base' (issue #986).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.BaseClassCallMemberNotFound, baseTypeName, methodName);
 
     /// <summary>
     /// Issue #986: GS0385 — a <c>base[Type].M(...)</c> call names a
@@ -1047,13 +817,7 @@ public sealed partial class DiagnosticBag
         TextLocation location,
         string enclosingTypeName,
         string selectorTypeName)
-    {
-        Report(
-            location,
-            "GS0385",
-            $"'base[{selectorTypeName}]' is not valid: '{selectorTypeName}' is not a base class of '{enclosingTypeName}'. Use the immediate base class name, or the plain 'base.Member(...)' form (issue #986).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.BaseClassCallSelectorNotBaseClass, selectorTypeName, selectorTypeName, enclosingTypeName);
 
     /// <summary>
     /// Issue #1260: GS0413 — a <c>base.M(...)</c> (or <c>base.Prop</c>) access
@@ -1069,13 +833,7 @@ public sealed partial class DiagnosticBag
         TextLocation location,
         string baseTypeName,
         string memberName)
-    {
-        Report(
-            location,
-            "GS0413",
-            $"Cannot call the abstract base member '{baseTypeName}.{memberName}' via 'base'; it has no base implementation to delegate to (issue #1260).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.BaseClassCallAbstractMember, baseTypeName, memberName);
 
     /// <summary>
     /// Issue #1201: GS0414 — an unqualified reference to a <c>shared</c>
@@ -1089,13 +847,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the ambiguous member identifier.</param>
     /// <param name="name">The ambiguous member name.</param>
     public void ReportAmbiguousImportedStaticMember(TextLocation location, string name)
-    {
-        Report(
-            location,
-            "GS0414",
-            $"Reference to '{name}' is ambiguous between members of two or more imported types; qualify it with the owning type name (issue #1201).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.AmbiguousImportedStaticMember, name);
 
     /// <summary>
     /// Issue #2012 (N3): an explicit-arity open-generic <c>typeof(Name[_,
@@ -1112,13 +864,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the ambiguous type reference.</param>
     /// <param name="name">The ambiguous arity-suffixed type name (e.g. <c>Func`1</c>).</param>
     public void ReportAmbiguousImportedType(TextLocation location, string name)
-    {
-        Report(
-            location,
-            "GS0471",
-            $"Type '{name}' is ambiguous between two or more imported namespaces; qualify the reference to disambiguate (issue #2012).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.AmbiguousImportedType, name);
 
     /// <summary>
     /// ADR-0146 / issue #2243: GS0485 — an anonymous-object literal
@@ -1129,13 +875,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the offending <c>init</c>/<c>deinit</c> keyword.</param>
     /// <param name="memberKeyword">The rejected member keyword spelling (<c>init</c> or <c>deinit</c>).</param>
     public void ReportInitDeinitNotAllowedInAnonymousObject(TextLocation location, string memberKeyword)
-    {
-        Report(
-            location,
-            "GS0485",
-            $"'{memberKeyword}' is not allowed in an anonymous object; anonymous objects support fields, methods, and events only.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.InitDeinitNotAllowedInAnonymousObject, memberKeyword);
 
     /// <summary>
     /// ADR-0146 / issue #2243: GS0486 — a field member of a "rich"
@@ -1148,13 +888,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the offending field name.</param>
     /// <param name="fieldName">The field member's name.</param>
     public void ReportInferredFieldTypeNotAllowedInRichAnonymousObject(TextLocation location, string fieldName)
-    {
-        Report(
-            location,
-            "GS0486",
-            $"field '{fieldName}' needs an explicit type here; type inference is only available in an anonymous object without a base type, method, or event.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.InferredFieldTypeNotAllowedInRichAnonymousObject, fieldName);
 
     /// <summary>
     /// Issue #987: GS0386 — an attempt to construct (instantiate) an abstract
@@ -1166,13 +900,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the construction expression.</param>
     /// <param name="typeName">The display name of the abstract type.</param>
     public void ReportCannotInstantiateAbstractType(TextLocation location, string typeName)
-    {
-        Report(
-            location,
-            "GS0386",
-            $"Cannot create an instance of the abstract type '{typeName}' (issue #987).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.CannotInstantiateAbstractType, typeName);
 
     /// <summary>
     /// Reports GS0369 — issue #479 / ADR-0117: a collection initializer
@@ -1186,13 +914,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the initializer.</param>
     /// <param name="type">The non-collection target type.</param>
     public void ReportTypeNotCollectionInitializable(TextLocation location, TypeSymbol type)
-    {
-        Report(
-            location,
-            "GS0369",
-            $"Type '{type}' cannot be initialized with a collection initializer because it has no accessible 'Add' method or settable indexer (issue #479).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.TypeNotCollectionInitializable, type);
 
     /// <summary>
     /// Issue #988: GS0389 — a type parameter is constructed (<c>T()</c>) but it
@@ -1207,11 +929,5 @@ public sealed partial class DiagnosticBag
     public void ReportConstructedTypeParameterRequiresNewConstraint(
         TextLocation location,
         string typeParameterName)
-    {
-        Report(
-            location,
-            "GS0389",
-            $"Cannot construct '{typeParameterName}()' because type parameter '{typeParameterName}' has no 'init()' constraint; add an 'init()' constraint (e.g. '[{typeParameterName} init()]') to allow construction (issue #988).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.ConstructedTypeParameterRequiresNewConstraint, typeParameterName, typeParameterName, typeParameterName);
 }

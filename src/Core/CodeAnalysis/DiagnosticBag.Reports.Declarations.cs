@@ -20,10 +20,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="parameterName">The name of the parameter.</param>
     public void ReportParameterAlreadyDeclared(TextLocation location, string parameterName)
-    {
-        var message = $"A parameter with the name '{parameterName}' already exists.";
-        Report(location, "GS0101", message);
-    }
+    => Report(location, DiagnosticDescriptors.ParameterAlreadyDeclared, parameterName);
 
     /// <summary>
     /// Reports that a symbol is already declared.
@@ -31,10 +28,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="name">The name of the symbol.</param>
     public void ReportSymbolAlreadyDeclared(TextLocation location, string name)
-    {
-        var message = $"'{name}' is already declared.";
-        Report(location, "GS0102", message);
-    }
+    => Report(location, DiagnosticDescriptors.SymbolAlreadyDeclared, name);
 
     /// <summary>
     /// Reports that a same-package receiver declaration targets a non-aggregate type.
@@ -42,10 +36,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location where the receiver type was found.</param>
     /// <param name="receiverTypeName">The receiver type name.</param>
     public void ReportMethodReceiverMustBeStructOrClass(TextLocation location, string receiverTypeName)
-    {
-        var message = $"Method receiver type '{receiverTypeName}' must be a struct or class declared in the same package.";
-        Report(location, "GS0103", message);
-    }
+    => Report(location, DiagnosticDescriptors.MethodReceiverMustBeStructOrClass, receiverTypeName);
 
     /// <summary>
     /// Reports that a <c>data class</c>/<c>data struct</c> was declared with
@@ -61,8 +52,7 @@ public sealed partial class DiagnosticBag
     public void ReportEmptyDataStruct(TextLocation location, string name, bool isClass)
     {
         var kind = isClass ? "class" : "struct";
-        var message = $"'data {kind} {name}' requires at least one field; use '{kind}' instead.";
-        Report(location, "GS0104", message);
+        Report(location, DiagnosticDescriptors.EmptyDataStruct, kind, name, kind);
     }
 
     /// <summary>Reports that an inline struct does not declare exactly one field.</summary>
@@ -70,20 +60,14 @@ public sealed partial class DiagnosticBag
     /// <param name="name">The struct name.</param>
     /// <param name="actualCount">The actual field count.</param>
     public void ReportInlineStructRequiresExactlyOneField(TextLocation location, string name, int actualCount)
-    {
-        var message = $"'inline struct {name}' requires exactly one field, but has {actualCount}.";
-        Report(location, "GS0105", message);
-    }
+    => Report(location, DiagnosticDescriptors.InlineStructRequiresExactlyOneField, name, actualCount);
 
     /// <summary>Reports that a synthesized inline-struct member was hand-written.</summary>
     /// <param name="location">The text location of the member name.</param>
     /// <param name="typeName">The inline struct type name.</param>
     /// <param name="memberName">The synthesized member name.</param>
     public void ReportInlineStructSynthesizedMemberConflict(TextLocation location, string typeName, string memberName)
-    {
-        var message = $"Inline struct '{typeName}' synthesizes member '{memberName}'; it cannot be declared explicitly.";
-        Report(location, "GS0108", message);
-    }
+    => Report(location, DiagnosticDescriptors.InlineStructSynthesizedMemberConflict, typeName, memberName);
 
     /// <summary>
     /// Reports that an enum declaration contains no members.
@@ -91,10 +75,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the enum identifier.</param>
     /// <param name="enumName">The enum name.</param>
     public void ReportEmptyEnumDeclaration(TextLocation location, string enumName)
-    {
-        var message = $"Enum '{enumName}' must declare at least one member.";
-        Report(location, "GS0110", message);
-    }
+    => Report(location, DiagnosticDescriptors.EmptyEnumDeclaration, enumName);
 
     /// <summary>
     /// Reports that an enum declares the same member more than once.
@@ -103,10 +84,7 @@ public sealed partial class DiagnosticBag
     /// <param name="memberName">The duplicate member name.</param>
     /// <param name="enumName">The enum name.</param>
     public void ReportDuplicateEnumMember(TextLocation location, string memberName, string enumName)
-    {
-        var message = $"Enum '{enumName}' already declares a member named '{memberName}'.";
-        Report(location, "GS0111", message);
-    }
+    => Report(location, DiagnosticDescriptors.DuplicateEnumMember, enumName, memberName);
 
     /// <summary>
     /// Reports that an enum member's explicit value (issue #1912) isn't a
@@ -116,10 +94,7 @@ public sealed partial class DiagnosticBag
     /// <param name="memberName">The enum member name.</param>
     /// <param name="enumName">The enum name.</param>
     public void ReportEnumMemberValueNotConstant(TextLocation location, string memberName, string enumName)
-    {
-        var message = $"Enum member '{enumName}.{memberName}' explicit value must be a constant int32 expression (literals, +, -, |, &, ^, <<, >>, unary +/-/~, or a reference to an already-declared sibling member).";
-        Report(location, "GS0467", message);
-    }
+    => Report(location, DiagnosticDescriptors.EnumMemberValueNotConstant, enumName, memberName);
 
     /// <summary>
     /// Issue #946: reports that a property declared both a <c>set</c> and an
@@ -128,10 +103,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="name">The name of the property.</param>
     public void ReportPropertyHasBothSetAndInit(TextLocation location, string name)
-    {
-        var message = $"Property '{name}' cannot declare both a 'set' and an 'init' accessor.";
-        Report(location, "GS0373", message);
-    }
+    => Report(location, DiagnosticDescriptors.PropertyHasBothSetAndInit, name);
 
     /// <summary>
     /// Issue #946: reports that an <c>init</c>-only accessor was declared on a
@@ -140,28 +112,19 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="name">The name of the property.</param>
     public void ReportInitAccessorOnStaticProperty(TextLocation location, string name)
-    {
-        var message = $"Static property '{name}' cannot declare an 'init' accessor; 'init' is only valid on instance properties.";
-        Report(location, "GS0374", message);
-    }
+    => Report(location, DiagnosticDescriptors.InitAccessorOnStaticProperty, name);
 
     /// <summary>Reports a variadic parameter (<c>...T</c>) that is not the last parameter (Phase 4.8).</summary>
     /// <param name="location">The text location of the offending parameter.</param>
     /// <param name="name">The parameter name.</param>
     public void ReportVariadicParameterMustBeLast(TextLocation location, string name)
-    {
-        var message = $"Variadic parameter '{name}' must be the last parameter.";
-        Report(location, "GS0145", message);
-    }
+    => Report(location, DiagnosticDescriptors.VariadicParameterMustBeLast, name);
 
     /// <summary>Reports a variadic parameter used in a context that does not yet support it (Phase 4.8 — MVP: top-level functions only).</summary>
     /// <param name="location">The text location of the offending parameter.</param>
     /// <param name="name">The parameter name.</param>
     public void ReportVariadicParameterNotSupportedHere(TextLocation location, string name)
-    {
-        var message = $"Variadic parameter '{name}' is only supported on top-level function declarations.";
-        Report(location, "GS0146", message);
-    }
+    => Report(location, DiagnosticDescriptors.VariadicParameterNotSupportedHere, name);
 
     /// <summary>Reports an interface type-parameter used in a position incompatible with its declared variance (Phase 4.3c / ADR-0021).</summary>
     /// <param name="location">The text location of the offending use.</param>
@@ -169,17 +132,13 @@ public sealed partial class DiagnosticBag
     /// <param name="declaredVariance">The declared variance (in/out).</param>
     /// <param name="usedPosition">The position the type-parameter was used in (input/output).</param>
     public void ReportTypeParameterVariancePositionViolation(TextLocation location, string typeParameterName, string declaredVariance, string usedPosition)
-    {
-        Report(location, "GS0150", $"Type parameter '{typeParameterName}' declared '{declaredVariance}' cannot appear in {usedPosition} position.");
-    }
+    => Report(location, DiagnosticDescriptors.TypeParameterVariancePositionViolation, typeParameterName, declaredVariance, usedPosition);
 
     /// <summary>Reports a type used as a type-parameter constraint that is neither an interface nor a class (issue #1052 generalised the former sealed-interface restriction; issue #1056 additionally permits base-class constraints, so this now fires only for value types such as a struct or enum).</summary>
     /// <param name="location">The text location of the constraint reference.</param>
     /// <param name="typeName">The offending type name.</param>
     public void ReportConstraintNotInterface(TextLocation location, string typeName)
-    {
-        Report(location, "GS0153", $"Type '{typeName}' cannot be used as a type-parameter constraint because it is neither an interface nor a class.");
-    }
+    => Report(location, DiagnosticDescriptors.ConstraintNotInterface, typeName);
 
     /// <summary>
     /// Issue #948: a <c>const</c> field must be given an initializer (a
@@ -189,9 +148,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The location of the const field identifier.</param>
     /// <param name="name">The const field name.</param>
     public void ReportConstFieldRequiresInitializer(TextLocation location, string name)
-    {
-        Report(location, "GS0375", $"Const field '{name}' must have a compile-time constant initializer (e.g. 'const {name} T = value').");
-    }
+    => Report(location, DiagnosticDescriptors.ConstFieldRequiresInitializer, name, name);
 
     /// <summary>
     /// Issue #948: a <c>const</c> field initializer must be a compile-time
@@ -201,9 +158,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The location of the offending initializer.</param>
     /// <param name="name">The const field name.</param>
     public void ReportConstFieldInitializerNotConstant(TextLocation location, string name)
-    {
-        Report(location, "GS0376", $"The initializer for const field '{name}' must be a compile-time constant expression.");
-    }
+    => Report(location, DiagnosticDescriptors.ConstFieldInitializerNotConstant, name);
 
     /// <summary>
     /// Issue #948: an instance field initializer (the <c>= expr</c> on a
@@ -214,9 +169,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The location of the offending reference.</param>
     /// <param name="memberName">The referenced instance member / parameter name.</param>
     public void ReportFieldInitializerCannotReferenceInstanceMember(TextLocation location, string memberName)
-    {
-        Report(location, "GS0377", $"A field initializer cannot reference the instance member or constructor parameter '{memberName}' (field initializers run before the constructor body, so 'this' is not available). Assign it in an 'init(...)' constructor instead.");
-    }
+    => Report(location, DiagnosticDescriptors.FieldInitializerCannotReferenceInstanceMember, memberName);
 
     /// <summary>
     /// ADR-0068 / issue #698: reports a <c>deinit</c> destructor declaration
@@ -231,8 +184,7 @@ public sealed partial class DiagnosticBag
     {
         var kindText = enclosingKind == SyntaxKind.StructKeyword ? "struct" : enclosingKind.ToString();
         var typeText = string.IsNullOrEmpty(typeName) ? "this type" : "'" + typeName + "'";
-        var message = $"'deinit' is only valid on a class type — {typeText} is a {kindText}.";
-        Report(location, "GS0289", message);
+        Report(location, DiagnosticDescriptors.DeinitOnNonClass, typeText, kindText);
     }
 
     /// <summary>
@@ -246,8 +198,7 @@ public sealed partial class DiagnosticBag
     public void ReportDuplicateDeinit(TextLocation location, string className)
     {
         var classText = string.IsNullOrEmpty(className) ? "this class" : "Class '" + className + "'";
-        var message = $"{classText} declares more than one 'deinit'; only the first declaration emits a finalizer.";
-        Report(location, "GS0290", message);
+        Report(location, DiagnosticDescriptors.DuplicateDeinit, classText);
     }
 
     /// <summary>
@@ -257,10 +208,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The location of the offending open paren.</param>
     public void ReportDeinitMayNotDeclareParameters(TextLocation location)
-    {
-        var message = "'deinit' may not declare parameters — the CLR invokes the destructor with no arguments.";
-        Report(location, "GS0291", message);
-    }
+    => Report(location, DiagnosticDescriptors.DeinitMayNotDeclareParameters);
 
     /// <summary>
     /// ADR-0068 / issue #698: reports a <c>deinit</c> declaration that
@@ -269,10 +217,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The location of the offending return type token.</param>
     public void ReportDeinitMayNotDeclareReturnType(TextLocation location)
-    {
-        var message = "'deinit' may not declare a return type — the CLR finalizer always returns void.";
-        Report(location, "GS0292", message);
-    }
+    => Report(location, DiagnosticDescriptors.DeinitMayNotDeclareReturnType);
 
     /// <summary>
     /// Issue #950: GS0380 — the <c>protected</c> modifier appears on a member
@@ -283,20 +228,13 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The text location of the <c>protected</c> modifier.</param>
     public void ReportProtectedRequiresOpenType(TextLocation location)
-    {
-        Report(
-            location,
-            "GS0380",
-            "'protected' is only allowed on members of an 'open class' (a type that can be inherited). Mark the enclosing class 'open', or use a different accessibility.");
-    }
+    => Report(location, DiagnosticDescriptors.ProtectedRequiresOpenType);
 
     /// <summary>Reports an attempt to subclass a sealed (non-<c>open</c>) class. Phase 3.B.3 sub-step 3 / ADR-0017.</summary>
     /// <param name="location">The text location of the base-type identifier.</param>
     /// <param name="baseTypeName">The base type name.</param>
     public void ReportBaseClassNotOpen(TextLocation location, string baseTypeName)
-    {
-        Report(location, "GS0181", $"Class '{baseTypeName}' is not open; declare 'open class {baseTypeName}' to allow subclassing.");
-    }
+    => Report(location, DiagnosticDescriptors.BaseClassNotOpen, baseTypeName, baseTypeName);
 
     /// <summary>
     /// Issue #949: reports a class that directly names itself as its own base
@@ -309,9 +247,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the base-type identifier.</param>
     /// <param name="typeName">The declaring type name.</param>
     public void ReportClassInheritsFromItself(TextLocation location, string typeName)
-    {
-        Report(location, "GS0378", $"Class '{typeName}' cannot inherit from itself.");
-    }
+    => Report(location, DiagnosticDescriptors.ClassInheritsFromItself, typeName);
 
     /// <summary>
     /// Issue #973: reports a class that participates in a transitive base-class
@@ -326,9 +262,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the base-type clause.</param>
     /// <param name="typeName">The declaring type name.</param>
     public void ReportClassInheritanceCycle(TextLocation location, string typeName)
-    {
-        Report(location, "GS0381", $"Class '{typeName}' is part of an inheritance cycle.");
-    }
+    => Report(location, DiagnosticDescriptors.ClassInheritanceCycle, typeName);
 
     /// <summary>
     /// Issue #976: GS0382 — a <c>struct</c> (value type) named a class or
@@ -340,9 +274,7 @@ public sealed partial class DiagnosticBag
     /// <param name="structName">The declaring struct's name.</param>
     /// <param name="baseTypeName">The illegal base type's name.</param>
     public void ReportStructCannotHaveBaseClass(TextLocation location, string structName, string baseTypeName)
-    {
-        Report(location, "GS0382", $"Struct '{structName}' cannot declare base type '{baseTypeName}'; a struct may only implement interfaces.");
-    }
+    => Report(location, DiagnosticDescriptors.StructCannotHaveBaseClass, structName, baseTypeName);
 
     /// <summary>
     /// Issue #1006: GS0391 — an <c>interface</c> named a class or struct in its
@@ -353,74 +285,56 @@ public sealed partial class DiagnosticBag
     /// <param name="interfaceName">The declaring interface's name.</param>
     /// <param name="baseTypeName">The illegal base type's name.</param>
     public void ReportInterfaceCannotHaveClassBase(TextLocation location, string interfaceName, string baseTypeName)
-    {
-        Report(location, "GS0391", $"Interface '{interfaceName}' cannot declare base type '{baseTypeName}'; an interface may only extend other interfaces.");
-    }
+    => Report(location, DiagnosticDescriptors.InterfaceCannotHaveClassBase, interfaceName, baseTypeName);
 
     /// <summary>Reports base-constructor arguments (<c>: Base(args)</c>) on a class that declares no base class (issue #306).</summary>
     /// <param name="location">The text location of the base-constructor argument list.</param>
     public void ReportBaseConstructorArgumentsWithoutBase(TextLocation location)
-    {
-        Report(location, "GS0213", "A base-constructor argument list requires an explicit base class.");
-    }
+    => Report(location, DiagnosticDescriptors.BaseConstructorArgumentsWithoutBase);
 
     /// <summary>Reports that no accessible base constructor matches the supplied base-constructor arguments (issue #306).</summary>
     /// <param name="location">The text location of the base-constructor argument list.</param>
     /// <param name="baseTypeName">The base type name.</param>
     /// <param name="argumentCount">The number of supplied arguments.</param>
     public void ReportNoMatchingBaseConstructor(TextLocation location, string baseTypeName, int argumentCount)
-    {
-        Report(location, "GS0214", $"Class '{baseTypeName}' has no accessible constructor that takes {argumentCount} argument(s).");
-    }
+    => Report(location, DiagnosticDescriptors.NoMatchingBaseConstructor, baseTypeName, argumentCount);
 
     /// <summary>Reports a class that declares both a Kotlin-style primary constructor and an explicit <c>init(...)</c> constructor (issue #306).</summary>
     /// <param name="location">The text location of the offending <c>init</c> declaration.</param>
     /// <param name="className">The class name.</param>
     public void ReportPrimaryAndExplicitConstructors(TextLocation location, string className)
-    {
-        Report(location, "GS0215", $"Class '{className}' cannot declare both a primary constructor and an explicit 'init' constructor.");
-    }
+    => Report(location, DiagnosticDescriptors.PrimaryAndExplicitConstructors, className);
 
     /// <summary>Reports a class that declares more than one explicit <c>init(...)</c> constructor, which is not yet supported (issue #306).</summary>
     /// <param name="location">The text location of the offending <c>init</c> declaration.</param>
     /// <param name="className">The class name.</param>
     public void ReportMultipleConstructorsUnsupported(TextLocation location, string className)
-    {
-        Report(location, "GS0216", $"Class '{className}' declares multiple 'init' constructors; only a single explicit constructor is supported.");
-    }
+    => Report(location, DiagnosticDescriptors.MultipleConstructorsUnsupported, className);
 
     /// <summary>Reports a method that overrides a base method without using <c>override</c>. ADR-0017.</summary>
     /// <param name="location">The text location of the offending declaration.</param>
     /// <param name="baseTypeName">The base type name.</param>
     /// <param name="methodName">The method name.</param>
     public void ReportMissingOverride(TextLocation location, string baseTypeName, string methodName)
-    {
-        Report(location, "GS0182", $"Method '{baseTypeName}.{methodName}' is overridable; add 'override' to redefine it.");
-    }
+    => Report(location, DiagnosticDescriptors.MissingOverride, baseTypeName, methodName);
 
     /// <summary>Reports an <c>override</c> method that does not match any open base method. ADR-0017.</summary>
     /// <param name="location">The text location of the offending declaration.</param>
     /// <param name="methodName">The method name.</param>
     public void ReportNoBaseMethodToOverride(TextLocation location, string methodName)
-    {
-        Report(location, "GS0183", $"Method '{methodName}' is marked 'override' but no matching open base method was found.");
-    }
+    => Report(location, DiagnosticDescriptors.NoBaseMethodToOverride, methodName);
 
     /// <summary>Reports an <c>override</c> targeting a method that is not <c>open</c> (sealed override). ADR-0017.</summary>
     /// <param name="location">The text location of the offending declaration.</param>
     /// <param name="methodName">The method name.</param>
     public void ReportOverrideOfSealedMethod(TextLocation location, string methodName)
-    {
-        Report(location, "GS0184", $"Method '{methodName}' cannot override the base method because the base method is not open.");
-    }
+    => Report(location, DiagnosticDescriptors.OverrideOfSealedMethod, methodName);
 
     /// <summary>Reports a signature mismatch between an <c>override</c> method and its base method.</summary>
     /// <param name="location">The text location of the offending declaration.</param>
     /// <param name="methodName">The method name.</param>
     public void ReportOverrideSignatureMismatch(TextLocation location, string methodName)
-    {
-        Report(location, "GS0185", $"Override of method '{methodName}' must match the base method's parameter types and return type.");
-    }
+    => Report(location, DiagnosticDescriptors.OverrideSignatureMismatch, methodName);
 
     /// <summary>
     /// ADR-0085 (issue #726): GS0186 — previously reported when an interface
@@ -433,9 +347,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the offending method identifier.</param>
     /// <param name="methodName">The method name.</param>
     public void ReportInterfaceMethodHasBody(TextLocation location, string methodName)
-    {
-        Report(location, "GS0186", $"Interface method '{methodName}' may not have a body in this version of GSharp; see ADR-0018.");
-    }
+    => Report(location, DiagnosticDescriptors.InterfaceMethodHasBody, methodName);
 
     /// <summary>Reports a class that fails to implement an interface method.</summary>
     /// <param name="location">The text location of the class identifier.</param>
@@ -443,9 +355,7 @@ public sealed partial class DiagnosticBag
     /// <param name="interfaceName">The interface name.</param>
     /// <param name="methodName">The missing method.</param>
     public void ReportInterfaceMethodNotImplemented(TextLocation location, string className, string interfaceName, string methodName)
-    {
-        Report(location, "GS0187", $"Class '{className}' does not implement interface method '{interfaceName}.{methodName}'.");
-    }
+    => Report(location, DiagnosticDescriptors.InterfaceMethodNotImplemented, className, interfaceName, methodName);
 
     /// <summary>Phase 3.B.5: reports a class that implements a sealed interface declared in a different package.</summary>
     /// <param name="location">The text location of the implementing class identifier.</param>
@@ -453,25 +363,19 @@ public sealed partial class DiagnosticBag
     /// <param name="interfaceName">The sealed interface name.</param>
     /// <param name="interfacePackage">The package owning the sealed interface.</param>
     public void ReportSealedInterfaceImplementorOutsidePackage(TextLocation location, string className, string interfaceName, string interfacePackage)
-    {
-        Report(location, "GS0188", $"Class '{className}' cannot implement sealed interface '{interfaceName}' from a different package ('{interfacePackage}').");
-    }
+    => Report(location, DiagnosticDescriptors.SealedInterfaceImplementorOutsidePackage, className, interfaceName, interfacePackage);
 
     /// <summary>ADR-0051: reports an auto-property declared inside a <c>data struct</c>, which is not allowed.</summary>
     /// <param name="location">The text location of the property identifier.</param>
     /// <param name="propertyName">The property name.</param>
     public void ReportAutoPropertyInDataStruct(TextLocation location, string propertyName)
-    {
-        Report(location, "GS0419", $"Property '{propertyName}' cannot be an auto-property in a data struct; use a computed property with an explicit body instead.");
-    }
+    => Report(location, DiagnosticDescriptors.AutoPropertyInDataStruct, propertyName);
 
     /// <summary>ADR-0051: reports an <c>open</c> member declared on a class that is not itself <c>open</c>.</summary>
     /// <param name="location">The text location of the <c>open</c> modifier.</param>
     /// <param name="memberName">The member name.</param>
     public void ReportOpenMemberInNonOpenClass(TextLocation location, string memberName)
-    {
-        Report(location, "GS0421", $"Member '{memberName}' is marked 'open' but the enclosing class is not open.");
-    }
+    => Report(location, DiagnosticDescriptors.OpenMemberInNonOpenClass, memberName);
 
     /// <summary>
     /// Reports that an <c>async func(...)</c> type clause has an explicit
@@ -482,17 +386,12 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the offending return-type clause.</param>
     /// <param name="returnTypeName">The name of the explicit return type.</param>
     public void ReportAsyncFunctionTypeClauseHasExplicitTaskReturn(TextLocation location, string returnTypeName)
-    {
-        var message = $"The return type of an 'async func(...)' type clause is implicitly wrapped in 'Task'; do not write '{returnTypeName}' explicitly.";
-        Report(location, "GS0189", message);
-    }
+    => Report(location, DiagnosticDescriptors.AsyncFunctionTypeClauseHasExplicitTaskReturn, returnTypeName);
 
     /// <summary>GS9007: A type may contain at most one 'shared' block.</summary>
     /// <param name="location">The text location of the duplicate shared keyword.</param>
     public void ReportDuplicateSharedBlock(TextLocation location)
-    {
-        Report(location, "GS9007", "A type may contain at most one 'shared' block.");
-    }
+    => Report(location, DiagnosticDescriptors.DuplicateSharedBlock);
 
     /// <summary>
     /// Issue #410 / ADR-0029: reports that a synthesized data-struct member
@@ -508,8 +407,7 @@ public sealed partial class DiagnosticBag
     public void ReportDataStructSynthesizedMemberConflict(TextLocation location, string typeName, bool isClass, string memberName)
     {
         var kind = isClass ? "class" : "struct";
-        var message = $"Data {kind} '{typeName}' synthesizes member '{memberName}'; it cannot be declared explicitly.";
-        Report(location, "GS0232", message);
+        Report(location, DiagnosticDescriptors.DataStructSynthesizedMemberConflict, kind, typeName, memberName);
     }
 
     /// <summary>
@@ -528,8 +426,7 @@ public sealed partial class DiagnosticBag
     public void ReportIncompatibleDataToStringOverride(TextLocation location, string typeName, bool isClass)
     {
         var kind = isClass ? "class" : "struct";
-        var message = $"Data {kind} '{typeName}' declares 'ToString' with an incompatible shape; a data {kind} may only override ToString as 'public ToString() string' (no parameters, not static, not generic, not async, returning 'string').";
-        Report(location, "GS0487", message);
+        Report(location, DiagnosticDescriptors.IncompatibleDataToStringOverride, kind, typeName, kind);
     }
 
     /// <summary>
@@ -542,9 +439,7 @@ public sealed partial class DiagnosticBag
     /// <param name="expected">The expected ref-kind ("none", "ref", "out", "in").</param>
     /// <param name="actual">The actual ref-kind ("none", "ref", "out", "in").</param>
     public void ReportOverrideRefKindMismatch(TextLocation location, string memberName, string parameterName, string expected, string actual)
-    {
-        Report(location, "GS0240", $"Override of '{memberName}' must match the base parameter ref-kind on '{parameterName}': base is '{expected}', this declaration is '{actual}'.");
-    }
+    => Report(location, DiagnosticDescriptors.OverrideRefKindMismatch, memberName, parameterName, expected, actual);
 
     /// <summary>
     /// ADR-0060 §8: reports a variadic parameter (`...T`) declared with a ref-kind modifier.
@@ -553,9 +448,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The parameter location.</param>
     /// <param name="parameterName">The parameter name.</param>
     public void ReportRefKindOnVariadicParameter(TextLocation location, string parameterName)
-    {
-        Report(location, "GS0241", $"'ref'/'out'/'in' is not a legal modifier on a variadic parameter '{parameterName}'.");
-    }
+    => Report(location, DiagnosticDescriptors.RefKindOnVariadicParameter, parameterName);
 
     /// <summary>
     /// ADR-0060 + ADR-0029: rejects a ref-kind modifier on a primary-constructor parameter.
@@ -567,9 +460,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The ref-kind modifier location.</param>
     /// <param name="parameterName">The parameter name.</param>
     public void ReportRefKindOnPrimaryCtorParameter(TextLocation location, string parameterName)
-    {
-        Report(location, "GS0424", $"'ref'/'out'/'in' is not a legal modifier on the primary-constructor parameter '{parameterName}'; primary-ctor parameters materialize fields, and the CLR cannot store a managed pointer in a field. Move the constructor to an 'init(...)' body if a by-reference parameter is required.");
-    }
+    => Report(location, DiagnosticDescriptors.RefKindOnPrimaryCtorParameter, parameterName);
 
     /// <summary>
     /// ADR-0060 §10: reports a ref-kind parameter on an <c>async</c>, <c>sequence</c>, or
@@ -580,9 +471,7 @@ public sealed partial class DiagnosticBag
     /// <param name="parameterName">The parameter name.</param>
     /// <param name="functionKind">"async", "sequence", or "async sequence".</param>
     public void ReportRefKindOnAsyncOrIterator(TextLocation location, string parameterName, string functionKind)
-    {
-        Report(location, "GS0422", $"Ref-kind parameter '{parameterName}' cannot appear on a {functionKind} function.");
-    }
+    => Report(location, DiagnosticDescriptors.RefKindOnAsyncOrIterator, parameterName, functionKind);
 
     /// <summary>
     /// Issue #490 (ADR-0060 §9 extension): the overriding / interface-implementing method
@@ -593,9 +482,7 @@ public sealed partial class DiagnosticBag
     /// <param name="expected">The expected return ref-kind text (e.g. "ref" or "by value").</param>
     /// <param name="actual">The actual return ref-kind text on the derived/implementing declaration.</param>
     public void ReportOverrideReturnRefKindMismatch(TextLocation location, string memberName, string expected, string actual)
-    {
-        Report(location, "GS0255", $"Override of '{memberName}' must match the base return ref-kind: base returns {expected}, this declaration returns {actual}.");
-    }
+    => Report(location, DiagnosticDescriptors.OverrideReturnRefKindMismatch, memberName, expected, actual);
 
     /// <summary>
     /// ADR-0063: reports a second user-defined callable declaration whose signature
@@ -606,9 +493,7 @@ public sealed partial class DiagnosticBag
     /// <param name="name">The callable name.</param>
     /// <param name="signature">A short rendering of the duplicated signature.</param>
     public void ReportDuplicateOverloadSignature(TextLocation location, string name, string signature)
-    {
-        Report(location, "GS0264", $"An overload of '{name}' with signature '{signature}' is already declared. Two overloads must differ by parameter types or ref-kinds.");
-    }
+    => Report(location, DiagnosticDescriptors.DuplicateOverloadSignature, name, signature);
 
     /// <summary>
     /// ADR-0063 §3: reports an optional-parameter declaration that violates a v1
@@ -620,9 +505,7 @@ public sealed partial class DiagnosticBag
     /// <param name="parameterName">The parameter's source name.</param>
     /// <param name="reason">A short, user-visible reason for the rejection.</param>
     public void ReportInvalidOptionalParameter(TextLocation location, string parameterName, string reason)
-    {
-        Report(location, "GS0265", $"Optional parameter '{parameterName}' is invalid: {reason}");
-    }
+    => Report(location, DiagnosticDescriptors.InvalidOptionalParameter, parameterName, reason);
 
     /// <summary>
     /// ADR-0065 §2: GS0278 — a <c>convenience init</c> body must begin with a
@@ -631,9 +514,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the convenience init declaration.</param>
     /// <param name="className">The owning class.</param>
     public void ReportConvenienceInitMustDelegate(TextLocation location, string className)
-    {
-        Report(location, "GS0278", $"Convenience initializer on class '{className}' must delegate to another initializer via 'init(args)' before any other statement.");
-    }
+    => Report(location, DiagnosticDescriptors.ConvenienceInitMustDelegate, className);
 
     /// <summary>
     /// ADR-0065 §2: GS0279 — a <c>convenience init</c> may not declare an
@@ -644,9 +525,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the <c>: base</c> clause.</param>
     /// <param name="className">The owning class.</param>
     public void ReportConvenienceInitMayNotCallBase(TextLocation location, string className)
-    {
-        Report(location, "GS0279", $"Convenience initializer on class '{className}' may not declare ': base(args)'; chain to another initializer with 'init(args)' instead.");
-    }
+    => Report(location, DiagnosticDescriptors.ConvenienceInitMayNotCallBase, className);
 
     /// <summary>
     /// ADR-0065 §2: GS0280 — <c>init(args)</c> self-delegation only appears
@@ -654,9 +533,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The source location of the self-delegation call.</param>
     public void ReportInitDelegationOutsideCtor(TextLocation location)
-    {
-        Report(location, "GS0280", "'init(args)' constructor self-delegation is only valid inside a class constructor body.");
-    }
+    => Report(location, DiagnosticDescriptors.InitDelegationOutsideCtor);
 
     /// <summary>
     /// ADR-0065 §2: GS0281 — <c>init(args)</c> self-delegation is only legal
@@ -666,9 +543,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the self-delegation call.</param>
     /// <param name="className">The owning class.</param>
     public void ReportInitDelegationFromDesignated(TextLocation location, string className)
-    {
-        Report(location, "GS0281", $"Designated initializer on class '{className}' may not delegate to a sibling 'init(args)' overload; use ': base(args)' (or omit it) to chain to the base class.");
-    }
+    => Report(location, DiagnosticDescriptors.InitDelegationFromDesignated, className);
 
     /// <summary>
     /// ADR-0065 §2: GS0282 — <c>init(args)</c> self-delegation must target a
@@ -678,9 +553,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the self-delegation call.</param>
     /// <param name="className">The owning class.</param>
     public void ReportInitDelegationRecursive(TextLocation location, string className)
-    {
-        Report(location, "GS0282", $"Convenience initializer on class '{className}' may not delegate to itself; choose a different 'init(args)' overload.");
-    }
+    => Report(location, DiagnosticDescriptors.InitDelegationRecursive, className);
 
     /// <summary>
     /// ADR-0065 §2: GS0283 — overload resolution found no matching sibling
@@ -689,9 +562,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the self-delegation call.</param>
     /// <param name="className">The owning class.</param>
     public void ReportInitDelegationNoMatch(TextLocation location, string className)
-    {
-        Report(location, "GS0283", $"No applicable 'init(...)' overload on class '{className}' matches the arguments of this 'init(args)' self-delegation.");
-    }
+    => Report(location, DiagnosticDescriptors.InitDelegationNoMatch, className);
 
     /// <summary>
     /// ADR-0065 §5: GS0284 — a user-declared <c>init(...)</c> overload has the
@@ -702,9 +573,7 @@ public sealed partial class DiagnosticBag
     /// <param name="className">The owning class.</param>
     /// <param name="signature">The signature description.</param>
     public void ReportInitDuplicatesPrimaryCtor(TextLocation location, string className, string signature)
-    {
-        Report(location, "GS0284", $"'init({signature})' on class '{className}' duplicates the synthesized primary-constructor overload; remove either the primary-constructor parameter list or this 'init' declaration.");
-    }
+    => Report(location, DiagnosticDescriptors.InitDuplicatesPrimaryCtor, signature, className);
 
     /// <summary>
     /// ADR-0079 / issue #719: GS0314 — a receiver-clause method targets a
@@ -719,13 +588,7 @@ public sealed partial class DiagnosticBag
     /// <param name="receiverTypeName">The owned receiver type name.</param>
     /// <param name="methodName">The receiver method's name.</param>
     public void ReportReceiverClauseOnOwnedType(TextLocation location, string receiverTypeName, string methodName)
-    {
-        Report(
-            location,
-            "GS0314",
-            $"Receiver-clause methods are reserved for types this package does not own; declare '{methodName}' as a member of '{receiverTypeName}' instead (ADR-0079).",
-            DiagnosticSeverity.Warning);
-    }
+    => Report(location, DiagnosticDescriptors.ReceiverClauseOnOwnedType, methodName, receiverTypeName);
 
     /// <summary>
     /// ADR-0085 / issue #726: GS0318 — a class implements two unrelated
@@ -747,13 +610,7 @@ public sealed partial class DiagnosticBag
         string methodName,
         string firstInterfaceName,
         string secondInterfaceName)
-    {
-        Report(
-            location,
-            "GS0318",
-            $"Class '{className}' inherits conflicting default implementations of method '{methodName}' from interfaces '{firstInterfaceName}' and '{secondInterfaceName}'; declare an override on '{className}' to disambiguate (ADR-0085).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.ConflictingInterfaceDefaults, className, methodName, firstInterfaceName, secondInterfaceName, className);
 
     /// <summary>
     /// ADR-0085 / issue #726: GS0319 — a call site (or override) references
@@ -773,13 +630,7 @@ public sealed partial class DiagnosticBag
         string className,
         string interfaceName,
         string methodName)
-    {
-        Report(
-            location,
-            "GS0319",
-            $"Class '{className}' relied on a default implementation of '{interfaceName}.{methodName}' that has been removed; declare an explicit override on '{className}' (ADR-0085).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.InterfaceDefaultRemoved, className, interfaceName, methodName, className);
 
     /// <summary>
     /// ADR-0085 / issue #726: GS0320 — a class declares <c>: I</c> but
@@ -800,13 +651,7 @@ public sealed partial class DiagnosticBag
         string className,
         string interfaceName,
         string methodName)
-    {
-        Report(
-            location,
-            "GS0320",
-            $"Class '{className}' does not implement abstract interface method '{interfaceName}.{methodName}', and the interface provides no default body (ADR-0085).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.InterfaceAbstractMethodHasNoDefault, className, interfaceName, methodName);
 
     /// <summary>
     /// ADR-0085 / issue #726: GS0321 — a deferred modifier (currently
@@ -822,13 +667,7 @@ public sealed partial class DiagnosticBag
         TextLocation location,
         string modifier,
         string methodName)
-    {
-        Report(
-            location,
-            "GS0321",
-            $"Modifier '{modifier}' on interface method '{methodName}' is not supported in this version of GSharp; see ADR-0085 for the deferred-features list.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.InterfaceMethodModifierDeferred, modifier, methodName);
 
     /// <summary>
     /// Reports GS0361 — ADR-0097 / issue #775: a type-parameter constraint
@@ -845,13 +684,7 @@ public sealed partial class DiagnosticBag
     /// <param name="first">The first constraint keyword (e.g. <c>class</c>).</param>
     /// <param name="second">The second constraint keyword (e.g. <c>struct</c>).</param>
     public void ReportTypeParameterConstraintConflict(TextLocation location, string typeParameterName, string first, string second)
-    {
-        Report(
-            location,
-            "GS0361",
-            $"Type parameter '{typeParameterName}' carries the mutually exclusive constraints '{first}' and '{second}' (ADR-0097).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.TypeParameterConstraintConflict, typeParameterName, first, second);
 
     /// <summary>
     /// Reports GS0364 — ADR-0101 / issue #799: more than one variadic
@@ -862,13 +695,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The location of the second (or later) variadic parameter.</param>
     /// <param name="name">The offending parameter name.</param>
     public void ReportMultipleVariadicParameters(TextLocation location, string name)
-    {
-        Report(
-            location,
-            "GS0364",
-            $"At most one variadic parameter is allowed in a signature; '{name}' is the second.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.MultipleVariadicParameters, name);
 
     /// <summary>
     /// Reports GS0365 — ADR-0102 follow-up / issue #818: a variadic
@@ -881,13 +708,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The location of the offending parameter type clause.</param>
     /// <param name="typeName">The non-slice type name that was supplied.</param>
     public void ReportVariadicParameterMustBeSlice(TextLocation location, string typeName)
-    {
-        Report(
-            location,
-            "GS0365",
-            $"A variadic parameter slot in an anonymous function-type clause must use the slice form '[]T'; got '{typeName}'.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.VariadicParameterMustBeSlice, typeName);
 
     /// <summary>
     /// Reports GS0330 — ADR-0089 / issue #755 (issue #865 revision): a
@@ -899,13 +720,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the offending declaration.</param>
     /// <param name="interfaceName">The owning interface name.</param>
     public void ReportInterfaceSharedMemberMustBeFunc(TextLocation location, string interfaceName)
-    {
-        Report(
-            location,
-            "GS0330",
-            $"Only 'func' members are allowed inside the 'shared' block of interface '{interfaceName}'; interface static state is not supported in this release (ADR-0089).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.InterfaceSharedMemberMustBeFunc, interfaceName);
 
     /// <summary>
     /// Reports GS0396 — ADR-0089 / issue #1019: a static-virtual interface
@@ -923,13 +738,7 @@ public sealed partial class DiagnosticBag
         TextLocation location,
         string interfaceName,
         string propertyName)
-    {
-        Report(
-            location,
-            "GS0396",
-            $"Static interface property '{interfaceName}.{propertyName}' may not have an accessor body; default-bodied static interface properties are not supported in this release — declare an abstract slot ('prop {propertyName} T;' or '{{ get; }}') instead (ADR-0089).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.DefaultStaticInterfacePropertyNotSupported, interfaceName, propertyName, propertyName);
 
     /// <summary>
     /// Reports GS0397 — ADR-0089 / issue #1019: a struct/class that declares it
@@ -948,13 +757,7 @@ public sealed partial class DiagnosticBag
         string interfaceName,
         string propertyName,
         string detail)
-    {
-        Report(
-            location,
-            "GS0397",
-            $"Type '{structName}' does not implement static-virtual interface property '{interfaceName}.{propertyName}' ({detail}) (ADR-0089).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.StaticVirtualInterfacePropertyNotImplemented, structName, interfaceName, propertyName, detail);
 
     /// <summary>
     /// Reports GS0331 — ADR-0089 / issue #755: a struct that declares it
@@ -971,13 +774,7 @@ public sealed partial class DiagnosticBag
         string structName,
         string interfaceName,
         string methodName)
-    {
-        Report(
-            location,
-            "GS0331",
-            $"Struct '{structName}' does not implement static-virtual interface method '{interfaceName}.{methodName}', and the interface provides no default body (ADR-0089).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.StaticVirtualInterfaceMethodNotImplemented, structName, interfaceName, methodName);
 
     /// <summary>
     /// Reports GS0332 — ADR-0089 / issue #755: a struct declares a
@@ -996,13 +793,7 @@ public sealed partial class DiagnosticBag
         string structName,
         string interfaceName,
         string methodName)
-    {
-        Report(
-            location,
-            "GS0332",
-            $"Struct '{structName}' declares instance method '{methodName}' but interface '{interfaceName}.{methodName}' is static-virtual; declare it inside a 'shared {{ ... }}' block (ADR-0089).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.NonStaticMemberForStaticVirtualSlot, structName, methodName, interfaceName, methodName);
 
     /// <summary>
     /// ADR-0090 / issue #756: GS0335 — a <c>private</c> interface method was
@@ -1016,13 +807,7 @@ public sealed partial class DiagnosticBag
     public void ReportPrivateInterfaceMemberRequiresBody(
         TextLocation location,
         string methodName)
-    {
-        Report(
-            location,
-            "GS0335",
-            $"Private interface method '{methodName}' must have a body (ADR-0090).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.PrivateInterfaceMemberRequiresBody, methodName);
 
     /// <summary>
     /// ADR-0090 / issue #756: GS0336 — an implementing class or struct
@@ -1040,13 +825,7 @@ public sealed partial class DiagnosticBag
         string implementerName,
         string interfaceName,
         string methodName)
-    {
-        Report(
-            location,
-            "GS0336",
-            $"'{implementerName}.{methodName}' clashes with private interface helper '{interfaceName}.{methodName}'; private interface helpers are invisible to implementers and cannot be overridden or satisfied (ADR-0090). Rename '{methodName}' on '{implementerName}'.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.ImplementerOverridesPrivateInterfaceMember, implementerName, methodName, interfaceName, methodName, methodName, implementerName);
 
     /// <summary>
     /// ADR-0090 / issue #756: GS0337 — a <c>private</c> modifier appears on
@@ -1061,13 +840,7 @@ public sealed partial class DiagnosticBag
         TextLocation location,
         string memberKind,
         string memberName)
-    {
-        Report(
-            location,
-            "GS0337",
-            $"'private' is not supported on interface {memberKind} '{memberName}'; ADR-0090 only allows 'private' on interface methods.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.PrivateInterfaceMemberKindNotSupported, memberKind, memberName);
 
     /// <summary>
     /// ADR-0144 / issue #2201: GS0484 — the <c>partial</c> contextual modifier
@@ -1078,13 +851,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the offending <c>partial</c> modifier.</param>
     /// <param name="kind">The rejected aggregate kind spelling (e.g. <c>enum</c>).</param>
     public void ReportPartialNotValidOnKind(TextLocation location, string kind)
-    {
-        Report(
-            location,
-            "GS0484",
-            $"'partial' is not valid on '{kind}'; only 'class', 'struct', and 'interface' declarations can be partial.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.PartialNotValidOnKind, kind);
 
     /// <summary>
     /// ADR-0144 / issue #2201: GS0475 — a declaration in a partial-type group
@@ -1094,13 +861,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the non-partial declaration's identifier.</param>
     /// <param name="name">The type name.</param>
     public void ReportPartialModifierMissing(TextLocation location, string name)
-    {
-        Report(
-            location,
-            "GS0475",
-            $"Missing 'partial' modifier on declaration of type '{name}'; another partial declaration of this type exists.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.PartialModifierMissing, name);
 
     /// <summary>
     /// ADR-0144 / issue #2201: GS0476 — the parts of a partial type disagree on
@@ -1109,13 +870,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the mismatched declaration's identifier.</param>
     /// <param name="name">The type name.</param>
     public void ReportPartialKindMismatch(TextLocation location, string name)
-    {
-        Report(
-            location,
-            "GS0476",
-            $"Partial declarations of '{name}' must all be the same aggregate kind ('class', 'struct', or 'interface').",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.PartialKindMismatch, name);
 
     /// <summary>
     /// ADR-0144 / issue #2201: GS0477 — two parts of a partial type state
@@ -1124,13 +879,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the conflicting accessibility modifier.</param>
     /// <param name="name">The type name.</param>
     public void ReportPartialAccessibilityConflict(TextLocation location, string name)
-    {
-        Report(
-            location,
-            "GS0477",
-            $"Partial declarations of '{name}' have conflicting accessibility modifiers.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.PartialAccessibilityConflict, name);
 
     /// <summary>
     /// ADR-0144 / issue #2201: GS0478 — one part of a partial type is <c>open</c>
@@ -1139,13 +888,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the conflicting declaration's identifier.</param>
     /// <param name="name">The type name.</param>
     public void ReportPartialOpenSealedConflict(TextLocation location, string name)
-    {
-        Report(
-            location,
-            "GS0478",
-            $"Partial declarations of '{name}' have conflicting 'open'/'sealed' modifiers.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.PartialOpenSealedConflict, name);
 
     /// <summary>
     /// ADR-0144 / issue #2201: GS0479 — a <c>data</c>/<c>inline</c>/<c>ref</c>
@@ -1156,13 +899,7 @@ public sealed partial class DiagnosticBag
     /// <param name="modifier">The modifier spelling (<c>data</c>, <c>inline</c>, or <c>ref</c>).</param>
     /// <param name="name">The type name.</param>
     public void ReportPartialModifierMustMatchAllParts(TextLocation location, string modifier, string name)
-    {
-        Report(
-            location,
-            "GS0479",
-            $"The '{modifier}' modifier must appear on every partial declaration of '{name}'.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.PartialModifierMustMatchAllParts, modifier, name);
 
     /// <summary>
     /// ADR-0144 / issue #2201: GS0480 — the parts of a partial type declare
@@ -1171,13 +908,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the mismatched declaration's identifier.</param>
     /// <param name="name">The type name.</param>
     public void ReportPartialTypeParameterMismatch(TextLocation location, string name)
-    {
-        Report(
-            location,
-            "GS0480",
-            $"Partial declarations of '{name}' must have identical type parameter lists (including names and constraints).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.PartialTypeParameterMismatch, name);
 
     /// <summary>
     /// ADR-0144 / issue #2201: GS0481 — the parts of a partial type have
@@ -1187,13 +918,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the conflicting declaration's identifier.</param>
     /// <param name="name">The type name.</param>
     public void ReportPartialBaseClauseConflict(TextLocation location, string name)
-    {
-        Report(
-            location,
-            "GS0481",
-            $"Partial declarations of '{name}' have conflicting base clauses; only one part may supply base-constructor arguments and any repeated base class must match.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.PartialBaseClauseConflict, name);
 
     /// <summary>
     /// ADR-0144 / issue #2201: GS0482 — more than one part of a partial type
@@ -1202,13 +927,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the offending declaration's identifier.</param>
     /// <param name="name">The type name.</param>
     public void ReportPartialMultiplePrimaryConstructors(TextLocation location, string name)
-    {
-        Report(
-            location,
-            "GS0482",
-            $"Only one partial declaration of '{name}' may declare a primary constructor.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.PartialMultiplePrimaryConstructors, name);
 
     /// <summary>
     /// ADR-0144 / issue #2201: GS0483 — more than one part of a partial type
@@ -1217,13 +936,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the offending <c>deinit</c>.</param>
     /// <param name="name">The type name.</param>
     public void ReportPartialMultipleDeinit(TextLocation location, string name)
-    {
-        Report(
-            location,
-            "GS0483",
-            $"Partial declarations of '{name}' declare more than one 'deinit'.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.PartialMultipleDeinit, name);
 
     /// <summary>
     /// Issue #987: GS0387 — a concrete (non-<c>open</c>) class derives from an
@@ -1240,13 +953,7 @@ public sealed partial class DiagnosticBag
         string className,
         string declaringTypeName,
         string memberName)
-    {
-        Report(
-            location,
-            "GS0387",
-            $"'{className}' does not implement inherited abstract member '{declaringTypeName}.{memberName}' (issue #987).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.AbstractMemberNotImplemented, className, declaringTypeName, memberName);
 
     /// <summary>
     /// Issue #987: GS0388 — a no-body method (an abstract member) appears where
@@ -1260,13 +967,7 @@ public sealed partial class DiagnosticBag
         TextLocation location,
         string methodName,
         string className)
-    {
-        Report(
-            location,
-            "GS0388",
-            $"Abstract method '{methodName}' must be declared 'open' inside an 'open class'; '{className}' is not open or the method omits 'open' (issue #987).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.AbstractMethodRequiresOpenClass, methodName, className);
 
     /// <summary>
     /// Reports GS0370 — ADR-0118 / issue #944: an indexer member
@@ -1275,13 +976,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The source location of the indexer declaration.</param>
     public void ReportIndexerRequiresParameter(TextLocation location)
-    {
-        Report(
-            location,
-            "GS0370",
-            "An indexer member must declare at least one parameter, e.g. 'prop this[i int32] T { … }' (issue #944).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.IndexerRequiresParameter);
 
     /// <summary>
     /// Reports GS0371 — ADR-0118 / issue #944: an indexer member
@@ -1291,13 +986,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The source location of the indexer declaration.</param>
     public void ReportIndexerRequiresAccessorBody(TextLocation location)
-    {
-        Report(
-            location,
-            "GS0371",
-            "An indexer member must declare a 'get' and/or 'set' accessor with a body; there is no auto-indexer form (issue #944).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.IndexerRequiresAccessorBody);
 
     /// <summary>
     /// Issue #1017: GS0393 — a user-defined conversion operator
@@ -1309,11 +998,7 @@ public sealed partial class DiagnosticBag
     public void ReportConversionOperatorRequiresSingleParameter(TextLocation location, bool isExplicit)
     {
         var kind = isExplicit ? "explicit" : "implicit";
-        Report(
-            location,
-            "GS0393",
-            $"A user-defined '{kind}' conversion operator must take exactly one by-value parameter (the source operand).",
-            DiagnosticSeverity.Error);
+        Report(location, DiagnosticDescriptors.ConversionOperatorRequiresSingleParameter, kind);
     }
 
     /// <summary>
@@ -1323,13 +1008,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The source location of the operator name.</param>
     public void ReportConversionOperatorMustInvolveEnclosingType(TextLocation location)
-    {
-        Report(
-            location,
-            "GS0394",
-            "A user-defined conversion operator must convert to or from a user type declared in the same package, and its source and target types must differ.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.ConversionOperatorMustInvolveEnclosingType);
 
     /// <summary>
     /// Issue #1017: GS0395 — two user-defined conversion operators on the same
@@ -1339,13 +1018,7 @@ public sealed partial class DiagnosticBag
     /// <param name="sourceType">The conversion source type.</param>
     /// <param name="targetType">The conversion target type.</param>
     public void ReportDuplicateConversionOperator(TextLocation location, TypeSymbol sourceType, TypeSymbol targetType)
-    {
-        Report(
-            location,
-            "GS0395",
-            $"Duplicate user-defined conversion operator: a conversion from '{sourceType?.Name}' to '{targetType?.Name}' is already declared on this type.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.DuplicateConversionOperator, sourceType?.Name, targetType?.Name);
 
     /// <summary>
     /// ADR-0149: GS0492 — an explicit-interface qualifier clause
@@ -1356,13 +1029,7 @@ public sealed partial class DiagnosticBag
     /// <param name="typeName">The display name of the non-interface type.</param>
     /// <param name="memberName">The declared member name.</param>
     public void ReportExplicitInterfaceClauseTypeNotInterface(TextLocation location, string typeName, string memberName)
-    {
-        Report(
-            location,
-            "GS0492",
-            $"'{typeName}' is not an interface; the explicit-interface qualifier clause on '{memberName}' must reference an interface type.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.ExplicitInterfaceClauseTypeNotInterface, typeName, memberName);
 
     /// <summary>
     /// ADR-0149: GS0493 — an explicit-interface qualifier clause referenced an
@@ -1373,13 +1040,7 @@ public sealed partial class DiagnosticBag
     /// <param name="interfaceName">The referenced interface's name.</param>
     /// <param name="memberName">The declared member name.</param>
     public void ReportExplicitInterfaceClauseNotImplemented(TextLocation location, string containingTypeName, string interfaceName, string memberName)
-    {
-        Report(
-            location,
-            "GS0493",
-            $"'{containingTypeName}' does not implement interface '{interfaceName}'; the explicit-interface qualifier clause on '{memberName}' requires an implemented interface.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.ExplicitInterfaceClauseNotImplemented, containingTypeName, interfaceName, memberName);
 
     /// <summary>
     /// ADR-0149: GS0494 — an explicit-interface qualifier clause's interface
@@ -1390,13 +1051,7 @@ public sealed partial class DiagnosticBag
     /// <param name="interfaceName">The referenced interface's name.</param>
     /// <param name="memberName">The declared member name.</param>
     public void ReportExplicitInterfaceClauseMemberNotFound(TextLocation location, string interfaceName, string memberName)
-    {
-        Report(
-            location,
-            "GS0494",
-            $"'{interfaceName}' has no member '{memberName}' matching this declaration's signature/accessor shape.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.ExplicitInterfaceClauseMemberNotFound, interfaceName, memberName);
 
     /// <summary>
     /// ADR-0149: GS0495 — two members of the same containing type both carry
@@ -1407,11 +1062,5 @@ public sealed partial class DiagnosticBag
     /// <param name="interfaceName">The shared target interface's name.</param>
     /// <param name="memberName">The shared target member name.</param>
     public void ReportDuplicateExplicitInterfaceImplementation(TextLocation location, string interfaceName, string memberName)
-    {
-        Report(
-            location,
-            "GS0495",
-            $"'{interfaceName}.{memberName}' is already explicitly implemented elsewhere in this type.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.DuplicateExplicitInterfaceImplementation, interfaceName, memberName);
 }

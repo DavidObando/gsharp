@@ -6,27 +6,20 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Text.RegularExpressions;
+using GSharp.Core.CodeAnalysis;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Xunit;
+using CoreDiagnosticDescriptor = GSharp.Core.CodeAnalysis.DiagnosticDescriptor;
 
 namespace GSharp.Core.Tests.CodeAnalysis;
 
 /// <summary>
-/// Issue #1655: a <c>GS####</c> diagnostic ID is a stable public contract —
-/// it appears in <c>/nowarn</c> and <c>/warnaserror</c> flags, IDE quick-info,
-/// and documentation. Two unrelated diagnostics sharing one ID silently break
-/// that contract (suppressing one silently suppresses the other). This test
-/// parses every file under <c>src/</c> with Roslyn and finds every
-/// <c>Report(..., "GS####", ...)</c> / <c>new Diagnostic(..., "GS####", ...)</c>
-/// call site, regardless of whether the message argument is a string literal,
-/// an interpolated string, or a local variable/expression. The "shape" for a
-/// given ID is the name of its enclosing method — this repo's convention is
-/// one <c>ReportXxx</c> wrapper method per diagnostic ID — so an ID used from
-/// two distinct methods (a real collision) is caught even when the message
-/// argument text itself gives no clue (the variable-message form regex alone
-/// would miss).
+/// Guards the stable public contract formed by diagnostic IDs, descriptors,
+/// report methods, and the diagnostic reference documentation.
 /// </summary>
 public class DiagnosticIdUniquenessTests
 {
@@ -34,45 +27,45 @@ public class DiagnosticIdUniquenessTests
     public void Every_DiagnosticId_Maps_To_Exactly_One_Message_Shape()
     {
         var repoRoot = FindRepoRoot();
-        var srcRoot = Path.Combine(repoRoot, "src");
-        Assert.True(Directory.Exists(srcRoot), $"src directory not found: {srcRoot}");
-
-        // id -> set of (enclosing-method shape -> example "file:line" site)
         var idToShapes = new Dictionary<string, Dictionary<string, string>>();
 
-        foreach (var file in Directory.EnumerateFiles(srcRoot, "*.cs", SearchOption.AllDirectories))
+        foreach (var field in GetDescriptorFields())
+        {
+            var descriptor = (CoreDiagnosticDescriptor)field.GetValue(null);
+            RecordShape(
+                descriptor.Id,
+                $"DiagnosticDescriptors.{field.Name}",
+                Path.Combine("src", "Core", "CodeAnalysis", "DiagnosticDescriptors.cs"),
+                idToShapes);
+        }
+
+        foreach (var file in Directory.EnumerateFiles(
+                     Path.Combine(repoRoot, "src"),
+                     "*.cs",
+                     SearchOption.AllDirectories))
         {
             var text = File.ReadAllText(file);
-            var tree = CSharpSyntaxTree.ParseText(text, path: file);
-            var root = tree.GetCompilationUnitRoot();
-
-            foreach (var invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
-            {
-                if (GetSimpleName(invocation.Expression) != "Report")
-                {
-                    continue;
-                }
-
-                RecordCallSite(invocation.ArgumentList, invocation, file, repoRoot, text, idToShapes);
-            }
-
+            var root = CSharpSyntaxTree.ParseText(text, path: file).GetCompilationUnitRoot();
             foreach (var creation in root.DescendantNodes().OfType<ObjectCreationExpressionSyntax>())
             {
-                if (GetSimpleName(creation.Type) != "Diagnostic" || creation.ArgumentList == null)
+                if (GetSimpleName(creation.Type) == "Diagnostic" && creation.ArgumentList != null)
                 {
-                    continue;
+                    RecordLiteralCallSite(
+                        creation.ArgumentList,
+                        creation,
+                        file,
+                        repoRoot,
+                        text,
+                        idToShapes);
                 }
-
-                RecordCallSite(creation.ArgumentList, creation, file, repoRoot, text, idToShapes);
             }
         }
 
         Assert.NotEmpty(idToShapes);
-
         var collisions = idToShapes
             .Where(kv => kv.Value.Count > 1)
             .OrderBy(kv => kv.Key, StringComparer.Ordinal)
-            .Select(kv => $"{kv.Key} is used from {kv.Value.Count} distinct enclosing methods:\n" +
+            .Select(kv => $"{kv.Key} is used from {kv.Value.Count} distinct shapes:\n" +
                           string.Join("\n", kv.Value.Select(t => $"    {t.Value}: {t.Key}")))
             .ToArray();
 
@@ -82,7 +75,108 @@ public class DiagnosticIdUniquenessTests
             string.Join("\n\n", collisions));
     }
 
-    private static void RecordCallSite(
+    [Fact]
+    public void Every_Report_Uses_A_Descriptor_And_Every_Descriptor_Is_Used()
+    {
+        var reportDirectory = Path.Combine(FindRepoRoot(), "src", "Core", "CodeAnalysis");
+        var descriptorNames = GetDescriptorFields()
+            .Select(field => field.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var referencedDescriptors = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var file in Directory.EnumerateFiles(
+                     reportDirectory,
+                     "DiagnosticBag.Reports.*.cs",
+                     SearchOption.TopDirectoryOnly))
+        {
+            var root = CSharpSyntaxTree.ParseText(File.ReadAllText(file), path: file)
+                .GetCompilationUnitRoot();
+
+            foreach (var invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                var name = GetSimpleName(invocation.Expression);
+                if (name is not ("Report" or "ReportWithErrorPromotion"))
+                {
+                    continue;
+                }
+
+                var arguments = invocation.ArgumentList.Arguments;
+                Assert.True(arguments.Count >= 2, $"{file}: malformed {name} invocation");
+                var descriptorAccess = Assert.IsType<MemberAccessExpressionSyntax>(arguments[1].Expression);
+                Assert.Equal("DiagnosticDescriptors", descriptorAccess.Expression.ToString());
+                var descriptorName = descriptorAccess.Name.Identifier.ValueText;
+                var reportMethod = invocation.Ancestors().OfType<MethodDeclarationSyntax>().First();
+                Assert.Equal(reportMethod.Identifier.ValueText["Report".Length..], descriptorName);
+                referencedDescriptors.Add(descriptorName);
+            }
+
+            foreach (var method in root.DescendantNodes().OfType<MethodDeclarationSyntax>()
+                         .Where(method => method.Identifier.ValueText.StartsWith("Report", StringComparison.Ordinal)))
+            {
+                var routesToDiagnostic = method.DescendantNodes()
+                    .OfType<InvocationExpressionSyntax>()
+                    .Any(invocation => GetSimpleName(invocation.Expression)
+                        .StartsWith("Report", StringComparison.Ordinal));
+                Assert.True(routesToDiagnostic, $"{method.Identifier.ValueText} does not route to a diagnostic descriptor.");
+            }
+        }
+
+        Assert.Equal(
+            descriptorNames.OrderBy(name => name, StringComparer.Ordinal),
+            referencedDescriptors.OrderBy(name => name, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void Every_Descriptor_MessageFormat_Is_Valid()
+    {
+        var arguments = Enumerable.Repeat<object>("value", 32).ToArray();
+        foreach (var field in GetDescriptorFields())
+        {
+            var descriptor = (CoreDiagnosticDescriptor)field.GetValue(null);
+            var exception = Record.Exception(() =>
+            {
+                _ = string.Format(descriptor.MessageFormat, arguments);
+            });
+            Assert.True(exception == null, $"{field.Name} has an invalid message format: {exception}");
+        }
+    }
+
+    [Fact]
+    public void Every_Documented_DiagnosticBag_Severity_Matches_Its_Descriptor()
+    {
+        var documentation = File.ReadAllText(Path.Combine(FindRepoRoot(), "docs", "diagnostics.md"));
+        var documentedSeverities = Regex.Matches(
+                documentation,
+                @"^\|\s*(GS\d{4})\s*\|\s*(?:\*\*)?(Error|Warning|Info)",
+                RegexOptions.Multiline)
+            .Cast<Match>()
+            .GroupBy(match => match.Groups[1].Value, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(match => match.Groups[2].Value).Distinct().Single(),
+                StringComparer.Ordinal);
+
+        var validatedCount = 0;
+        foreach (var field in GetDescriptorFields())
+        {
+            var descriptor = (CoreDiagnosticDescriptor)field.GetValue(null);
+            if (documentedSeverities.TryGetValue(descriptor.Id, out var documentedSeverity))
+            {
+                Assert.Equal(descriptor.Severity.ToString(), documentedSeverity);
+                validatedCount++;
+            }
+        }
+
+        Assert.True(validatedCount > 0, "No documented descriptor severities were validated.");
+    }
+
+    private static FieldInfo[] GetDescriptorFields() =>
+        typeof(DiagnosticDescriptors)
+            .GetFields(BindingFlags.Static | BindingFlags.NonPublic)
+            .Where(field => field.FieldType == typeof(CoreDiagnosticDescriptor))
+            .ToArray();
+
+    private static void RecordLiteralCallSite(
         ArgumentListSyntax argumentList,
         SyntaxNode callNode,
         string file,
@@ -90,32 +184,37 @@ public class DiagnosticIdUniquenessTests
         string text,
         Dictionary<string, Dictionary<string, string>> idToShapes)
     {
-        // Find the "GSxxxx" string literal argument, wherever it falls in the
-        // argument list (Report and Diagnostic's ctor put it in different
-        // positions).
         var idLiteral = argumentList.Arguments
-            .Select(a => a.Expression)
+            .Select(argument => argument.Expression)
             .OfType<LiteralExpressionSyntax>()
-            .FirstOrDefault(l => l.IsKind(SyntaxKind.StringLiteralExpression) && IsGsId(l.Token.ValueText));
-
+            .FirstOrDefault(literal =>
+                literal.IsKind(SyntaxKind.StringLiteralExpression) &&
+                IsGsId(literal.Token.ValueText));
         if (idLiteral == null)
         {
             return;
         }
 
-        var id = idLiteral.Token.ValueText;
-        var shape = GetEnclosingMemberName(callNode);
-        var line = text[..callNode.SpanStart].Count(c => c == '\n') + 1;
-        var site = $"{Path.GetRelativePath(repoRoot, file)}:{line}";
+        var line = text[..callNode.SpanStart].Count(character => character == '\n') + 1;
+        RecordShape(
+            idLiteral.Token.ValueText,
+            GetEnclosingMemberName(callNode),
+            $"{Path.GetRelativePath(repoRoot, file)}:{line}",
+            idToShapes);
+    }
 
+    private static void RecordShape(
+        string id,
+        string shape,
+        string site,
+        Dictionary<string, Dictionary<string, string>> idToShapes)
+    {
         if (!idToShapes.TryGetValue(id, out var shapes))
         {
             shapes = new Dictionary<string, string>();
             idToShapes[id] = shapes;
         }
 
-        // Keep the first site seen for each distinct shape so the failure
-        // message can point at both call sites of a collision.
         if (!shapes.ContainsKey(shape))
         {
             shapes[shape] = site;
@@ -123,10 +222,10 @@ public class DiagnosticIdUniquenessTests
     }
 
     private static bool IsGsId(string value) =>
-        value.Length == 6 && value.StartsWith("GS", StringComparison.Ordinal) && value[2..].All(char.IsDigit);
+        value.Length == 6 &&
+        value.StartsWith("GS", StringComparison.Ordinal) &&
+        value[2..].All(char.IsDigit);
 
-    // Resolves the simple name of a possibly-qualified expression
-    // (e.g. `this.Report`, `Diagnostics.Report` -> "Report").
     private static string GetSimpleName(SyntaxNode expression) => expression switch
     {
         MemberAccessExpressionSyntax member => member.Name.Identifier.ValueText,
@@ -135,12 +234,6 @@ public class DiagnosticIdUniquenessTests
         _ => string.Empty,
     };
 
-    // The "shape" for a diagnostic ID: the name of its nearest enclosing
-    // method/local-function/constructor/property accessor. This is what
-    // actually distinguishes two unrelated diagnostics sharing an ID, since
-    // this repo's convention is one ReportXxx wrapper method per ID -
-    // regardless of whether the message is a literal, interpolated string,
-    // or a local variable.
     private static string GetEnclosingMemberName(SyntaxNode node)
     {
         for (var current = node.Parent; current != null; current = current.Parent)
@@ -151,8 +244,8 @@ public class DiagnosticIdUniquenessTests
                     return method.Identifier.ValueText;
                 case LocalFunctionStatementSyntax localFunction:
                     return localFunction.Identifier.ValueText;
-                case ConstructorDeclarationSyntax ctor:
-                    return ctor.Identifier.ValueText;
+                case ConstructorDeclarationSyntax constructor:
+                    return constructor.Identifier.ValueText;
                 case AccessorDeclarationSyntax accessor:
                     return $"{(accessor.Parent?.Parent as PropertyDeclarationSyntax)?.Identifier.ValueText}.{accessor.Keyword.ValueText}";
             }
@@ -163,15 +256,15 @@ public class DiagnosticIdUniquenessTests
 
     private static string FindRepoRoot()
     {
-        var dir = Path.GetDirectoryName(typeof(DiagnosticIdUniquenessTests).Assembly.Location);
-        while (!string.IsNullOrEmpty(dir))
+        var directory = Path.GetDirectoryName(typeof(DiagnosticIdUniquenessTests).Assembly.Location);
+        while (!string.IsNullOrEmpty(directory))
         {
-            if (File.Exists(Path.Combine(dir, ".config", "dotnet-tools.json")))
+            if (File.Exists(Path.Combine(directory, ".config", "dotnet-tools.json")))
             {
-                return dir;
+                return directory;
             }
 
-            dir = Path.GetDirectoryName(dir);
+            directory = Path.GetDirectoryName(directory);
         }
 
         return Environment.CurrentDirectory;
