@@ -58,6 +58,10 @@ jobs:
         run: dotnet build GSharp.sln --configuration Release --no-restore -graph
 
       - name: Test
+        env:
+          # Cs2Gs.Tests launches many nested SDK builds; reusable MSBuild
+          # workers eventually exhaust the test host's resources (#2407).
+          MSBUILDDISABLENODEREUSE: 1
         run: dotnet test GSharp.sln --configuration Release --no-build --logger "trx" --results-directory TestResults
 
       - name: Upload test results
