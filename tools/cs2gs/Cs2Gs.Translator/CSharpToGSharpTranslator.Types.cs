@@ -186,9 +186,18 @@ public sealed partial class CSharpToGSharpTranslator
                 returnType is INamedTypeSymbol { Name: "Task" } task &&
                 task.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks")
             {
-                return task.IsGenericType
-                    ? this.typeMapper.Map(task.TypeArguments[0], this.context, location)
-                    : null;
+                if (!task.IsGenericType)
+                {
+                    return null;
+                }
+
+                // Issue #2421: same declaration-sink promotion the sync path
+                // below applies, keyed off the AWAITED type (see
+                // CSharpToGSharpTranslator.MapReturnType /
+                // PromoteAwaitedReturnIfTainted for the full rationale).
+                ITypeSymbol awaitedType = task.TypeArguments[0];
+                GTypeReference awaitedMapped = this.typeMapper.Map(awaitedType, this.context, location);
+                return this.PromoteAwaitedReturnIfTainted(awaitedMapped, awaitedType, symbol);
             }
 
             // Issue #914 (oblivious sink): local-function/lambda return

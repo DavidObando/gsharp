@@ -887,9 +887,21 @@ public sealed partial class CSharpToGSharpTranslator
                     returnType is INamedTypeSymbol { Name: "Task" } task &&
                     task.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks")
                 {
-                    return task.IsGenericType
-                        ? this.typeMapper.Map(task.TypeArguments[0], this.context, node.ReturnType.GetLocation())
-                        : null;
+                    if (!task.IsGenericType)
+                    {
+                        return null;
+                    }
+
+                    // Issue #2421: an `async Task<T>` return is still a
+                    // declaration sink for T like any other method return —
+                    // the unwrap above must not skip the SAME tuple/scalar
+                    // promotion the synchronous path below applies, keyed off
+                    // the AWAITED type T (see PromoteAwaitedReturnIfTainted).
+                    ITypeSymbol awaitedType = task.TypeArguments[0];
+                    GTypeReference awaitedMapped = this.typeMapper.Map(
+                        awaitedType, this.context, node.ReturnType.GetLocation());
+                    awaitedMapped = this.PromoteTupleReturnIfTainted(awaitedMapped, awaitedType, node);
+                    return this.PromoteAwaitedReturnIfTainted(awaitedMapped, awaitedType, symbol);
                 }
 
                 // Issue #1900: `symbol.ReturnType` is already the pointee type T

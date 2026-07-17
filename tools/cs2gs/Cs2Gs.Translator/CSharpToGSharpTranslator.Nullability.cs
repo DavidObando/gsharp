@@ -144,6 +144,45 @@ public sealed partial class CSharpToGSharpTranslator
                 : type;
         }
 
+        // Issue #2421: mirrors PromoteReturnIfTainted's decision for an `async
+        // Task<T>` method/lambda/local function, keyed off the UNWRAPPED
+        // awaited type T rather than `symbol.ReturnType` (which for such a
+        // member is the `Task<T>` ENVELOPE — always a reference type regardless
+        // of whether T is a value or reference type). Calling
+        // ShouldPromoteToNullableReference directly would use that envelope for
+        // its `declared.IsReferenceType` guard, incorrectly bypassing the
+        // guard's protection for a value-typed T (e.g. `Task<int>`, whose
+        // awaited result must never become `int?`/`Nullable<int>` through this
+        // reference-only promotion). The taint MEMBERSHIP check itself is
+        // unchanged: it is the same whole-program symbol-keyed decision
+        // (`ObliviousNullabilityAnalyzer.IsTainted`) the synchronous path
+        // reaches via ShouldPromoteToNullableReference, since
+        // SeedMethodLikeReturnTaint already seeds/propagates taint on the
+        // method symbol uniformly regardless of its `Task<T>` envelope — only
+        // the CONSUMPTION side (this declaration's own rendered return type)
+        // was previously never asked the question at all for an async member.
+        private GTypeReference PromoteAwaitedReturnIfTainted(
+            GTypeReference type,
+            ITypeSymbol awaitedType,
+            IMethodSymbol symbol)
+        {
+            if (type == null || type.IsNullable || symbol == null)
+            {
+                return type;
+            }
+
+            if (awaitedType is not { IsReferenceType: true }
+                || awaitedType.NullableAnnotation == NullableAnnotation.Annotated)
+            {
+                return type;
+            }
+
+            return ObliviousNullabilityAnalyzer.IsTainted(
+                this.context.Compilation, symbol, this.context.SiblingCompilations)
+                ? MakeNullable(type)
+                : type;
+        }
+
         // Issue #914 (oblivious sink): promote the ELEMENT types of a tuple return
         // to `T?` for every position whose returned tuple-expression element is a
         // promoted-nullable value. A method returning `(string Dir, string Path)`
