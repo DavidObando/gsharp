@@ -204,6 +204,31 @@ internal sealed class FunctionEmitter
             return this.EmitPInvokeFunction(function);
         }
 
+        var bodySelection = this.SelectFunctionBody(function, body);
+        var bodyEmission = this.EmitFunctionBody(function, bodySelection.Body, bodySelection.AsyncPlan, isEntryPoint);
+        var signature = this.EncodeFunctionSignature(function, bodySelection.AsyncPlan, isEntryPoint);
+        var methodName = GetMethodMetadataName(function, isEntryPoint);
+        var methodAttributes = GetMethodAttributes(function, isEntryPoint);
+        var parameterMetadata = this.EmitParameterMetadata(function, bodySelection.AsyncPlan);
+        var handle = this.EmitMethodDefinition(
+            function,
+            methodAttributes,
+            methodName,
+            signature,
+            bodyEmission.BodyOffset,
+            parameterMetadata.FirstParameterHandle);
+
+        this.EmitGenericParametersAndConstraints(function, handle);
+        this.RecordMethodDebugInfo(function, handle, bodyEmission);
+        this.EmitFunctionAttributes(function, handle, parameterMetadata);
+
+        return handle;
+    }
+
+    private (BoundBlockStatement Body, AsyncStateMachinePlan AsyncPlan) SelectFunctionBody(
+        FunctionSymbol function,
+        BoundBlockStatement body)
+    {
         if (this.outer.stateMachines.IteratorKickoffBodies.TryGetValue(function, out var iteratorKickoffBody))
         {
             body = iteratorKickoffBody;
@@ -224,6 +249,15 @@ internal sealed class FunctionEmitter
             }
         }
 
+        return (body, asyncPlan);
+    }
+
+    private FunctionBodyEmissionResult EmitFunctionBody(
+        FunctionSymbol function,
+        BoundBlockStatement body,
+        AsyncStateMachinePlan asyncPlan,
+        bool isEntryPoint)
+    {
         // Phase 4 emit parity (F1): generic functions are emitted with a
         // type-erased signature — each open type parameter is encoded as
         // System.Object via EncodeTypeSymbol. Call sites insert the box /
@@ -343,6 +377,20 @@ internal sealed class FunctionEmitter
             } // end else (non-async path)
         }
 
+        return new FunctionBodyEmissionResult(
+            bodyOffset,
+            capturedSequencePoints,
+            capturedLocals,
+            capturedConstants,
+            capturedCodeSize,
+            capturedLocalsSignature);
+    }
+
+    private BlobBuilder EncodeFunctionSignature(
+        FunctionSymbol function,
+        AsyncStateMachinePlan asyncPlan,
+        bool isEntryPoint)
+    {
         var sigBlob = new BlobBuilder();
         var signatureParameterCount = function.Parameters.Length - (function.ExplicitReceiverParameter == null ? 0 : 1);
         new BlobEncoder(sigBlob).MethodSignature(
@@ -386,6 +434,11 @@ internal sealed class FunctionEmitter
                     }
                 });
 
+        return sigBlob;
+    }
+
+    private static string GetMethodMetadataName(FunctionSymbol function, bool isEntryPoint)
+    {
         // Synthesized entry point uses the C#-style mangled name; explicit Main / user funcs keep their source name.
         // ADR-0149: a method declared with an explicit-interface qualifier
         // clause keeps its plain source name on the FunctionSymbol (for
@@ -405,6 +458,11 @@ internal sealed class FunctionEmitter
                 ? ExplicitInterfaceMetadataNaming.GetMetadataName(function.Name, function.ExplicitInterfaceClauseTarget)
                 : function.Name;
 
+        return methodName;
+    }
+
+    private static MethodAttributes GetMethodAttributes(FunctionSymbol function, bool isEntryPoint)
+    {
         // The synthesized entry point must remain Public so the runtime can find it.
         // ADR-0149: an explicit-interface qualifier clause member is ALWAYS
         // private in CLR metadata, exactly like C#'s explicit interface
@@ -534,6 +592,13 @@ internal sealed class FunctionEmitter
             }
         }
 
+        return methodAttrs;
+    }
+
+    private FunctionParameterMetadata EmitParameterMetadata(
+        FunctionSymbol function,
+        AsyncStateMachinePlan asyncPlan)
+    {
         // Issue #170 / ADR-0047 §3: emit a Parameter row per source parameter
         // so we can attach a CustomAttribute to each one. The first emitted
         // ParameterHandle becomes the MethodDef.parameterList anchor; if the
@@ -657,6 +722,24 @@ internal sealed class FunctionEmitter
             paramHandles.Add((p, paramHandle, paramFlagsList[flagsIndex++]));
         }
 
+        return new FunctionParameterMetadata(
+            firstParamHandle,
+            returnParamHandle,
+            paramHandles,
+            returnFlags,
+            effectiveDefault,
+            contextByteToEmit,
+            returnNeedsNullableAttribute);
+    }
+
+    private MethodDefinitionHandle EmitMethodDefinition(
+        FunctionSymbol function,
+        MethodAttributes methodAttributes,
+        string methodName,
+        BlobBuilder signature,
+        int bodyOffset,
+        ParameterHandle firstParameterHandle)
+    {
         // ADR-0084 §L5 / issue #806: honour `@MethodImpl(MethodImplOptions.…)`
         // as a pseudo-custom attribute. The recognised
         // MethodImplOptions bits OR into the MethodImpl field of the
@@ -676,13 +759,20 @@ internal sealed class FunctionEmitter
         }
 
         var handle = this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: methodAttrs,
+            attributes: methodAttributes,
             implAttributes: implAttributes,
             name: this.emitCtx.Metadata.GetOrAddString(methodName),
-            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(signature),
             bodyOffset: bodyOffset,
-            parameterList: firstParamHandle);
+            parameterList: firstParameterHandle);
 
+        return handle;
+    }
+
+    private void EmitGenericParametersAndConstraints(
+        FunctionSymbol function,
+        MethodDefinitionHandle handle)
+    {
         // ADR-0087 §3 R1: emit GenericParam rows for a user-declared generic
         // method immediately after AddMethodDefinition. The signature's
         // genericParameterCount above and these rows together make the method
@@ -713,26 +803,38 @@ internal sealed class FunctionEmitter
                 }
             }
         }
+    }
 
+    private void RecordMethodDebugInfo(
+        FunctionSymbol function,
+        MethodDefinitionHandle handle,
+        FunctionBodyEmissionResult bodyEmission)
+    {
         // Phase 4/5 (ADR-0027 §7.7a): hand the body's sequence points and
         // locals to the PDB emitter, keyed by the freshly minted MethodDef row
         // number. Skipped when PDB emit is off (pdb == null) or for the
         // async-kickoff path (the kickoff stub is fully synthesised — visible
         // PDB rows for the user's async body land via EmitStateMachineMoveNext
         // below).
-        this.emitCtx.Pdb?.RecordMethod(handle, capturedSequencePoints, capturedLocals, capturedConstants, capturedCodeSize, capturedLocalsSignature, function.Declaration?.SyntaxTree);
+        this.emitCtx.Pdb?.RecordMethod(handle, bodyEmission.SequencePoints, bodyEmission.Locals, bodyEmission.Constants, bodyEmission.CodeSize, bodyEmission.LocalsSignature, function.Declaration?.SyntaxTree);
+    }
 
+    private void EmitFunctionAttributes(
+        FunctionSymbol function,
+        MethodDefinitionHandle handle,
+        FunctionParameterMetadata parameterMetadata)
+    {
         // Phase 3 of #141: attach user annotations (method target) to the
         // MethodDef. Issue #170: per-parameter annotations attach to each
         // emitted Parameter row. Issue #172: return-target annotations attach
         // to the synthesised sequence-0 Parameter row.
         this.outer.customAttrEncoder.EmitUserAttributes(handle, function, AttributeTargetKind.Method);
-        if (returnParamHandle is { } retHandle)
+        if (parameterMetadata.ReturnParameterHandle is { } retHandle)
         {
             this.outer.customAttrEncoder.EmitUserAttributes(retHandle, function, AttributeTargetKind.Return);
         }
 
-        foreach (var (paramSym, paramHandle, _) in paramHandles)
+        foreach (var (paramSym, paramHandle, _) in parameterMetadata.ParameterHandles)
         {
             this.outer.customAttrEncoder.EmitUserAttributes(paramHandle, paramSym, AttributeTargetKind.Param);
         }
@@ -745,24 +847,24 @@ internal sealed class FunctionEmitter
         // annotated (CS8602 silenced) and non-nullable positions stay
         // implicit. The byte-array form is used only for nested generic
         // inner-position bytes (e.g. `IEnumerable<string?>?`).
-        if (contextByteToEmit is byte ctxByte)
+        if (parameterMetadata.NullableContextByteToEmit is byte ctxByte)
         {
             this.outer.customAttrEncoder.EmitNullableContextAttributeOnMethod(handle, ctxByte);
         }
 
-        if (returnParamHandle is { } returnHandleForNullable && returnNeedsNullableAttribute)
+        if (parameterMetadata.ReturnParameterHandle is { } returnHandleForNullable && parameterMetadata.ReturnNeedsNullableAttribute)
         {
-            this.outer.customAttrEncoder.EmitNullableAttributeOnParameter(returnHandleForNullable, returnFlags);
+            this.outer.customAttrEncoder.EmitNullableAttributeOnParameter(returnHandleForNullable, parameterMetadata.ReturnFlags);
         }
 
-        foreach (var (_, paramHandle, paramFlags) in paramHandles)
+        foreach (var (_, paramHandle, paramFlags) in parameterMetadata.ParameterHandles)
         {
             if (paramFlags.IsDefaultOrEmpty)
             {
                 continue;
             }
 
-            if (paramFlags.Length == 1 && paramFlags[0] == effectiveDefault)
+            if (paramFlags.Length == 1 && paramFlags[0] == parameterMetadata.EffectiveNullableDefault)
             {
                 continue;
             }
@@ -779,8 +881,6 @@ internal sealed class FunctionEmitter
         {
             this.outer.EmitExtensionAttribute(handle);
         }
-
-        return handle;
     }
 
     /// <summary>
@@ -1420,4 +1520,21 @@ internal sealed class FunctionEmitter
         var offset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSig);
         return (offset, localsSig);
     }
+
+    private readonly record struct FunctionBodyEmissionResult(
+        int BodyOffset,
+        IReadOnlyList<SequencePoint> SequencePoints,
+        IReadOnlyList<LocalInfo> Locals,
+        IReadOnlyList<LocalConstantInfo> Constants,
+        int CodeSize,
+        StandaloneSignatureHandle LocalsSignature);
+
+    private readonly record struct FunctionParameterMetadata(
+        ParameterHandle FirstParameterHandle,
+        ParameterHandle? ReturnParameterHandle,
+        List<(ParameterSymbol Symbol, ParameterHandle Handle, ImmutableArray<byte> NullableFlags)> ParameterHandles,
+        ImmutableArray<byte> ReturnFlags,
+        byte EffectiveNullableDefault,
+        byte? NullableContextByteToEmit,
+        bool ReturnNeedsNullableAttribute);
 }
