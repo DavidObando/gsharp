@@ -19,19 +19,14 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>
     public void ReportAllPathsMustReturn(TextLocation location)
-    {
-        var message = "Not all code paths return a value.";
-        Report(location, "GS0100", message);
-    }
+    => Report(location, DiagnosticDescriptors.AllPathsMustReturn);
 
     /// <summary>
     /// Reports that a 'try' statement has neither catch nor finally clauses.
     /// </summary>
     /// <param name="location">The text location of the 'try' keyword.</param>
     public void ReportTryWithoutCatchOrFinally(TextLocation location)
-    {
-        Report(location, "GS0118", "A 'try' statement requires at least one catch or finally clause.");
-    }
+    => Report(location, DiagnosticDescriptors.TryWithoutCatchOrFinally);
 
     /// <summary>
     /// Reports that a type used in a 'using' declaration does not implement IDisposable.
@@ -39,9 +34,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the using keyword.</param>
     /// <param name="type">The non-disposable type.</param>
     public void ReportTypeNotDisposable(TextLocation location, TypeSymbol type)
-    {
-        Report(location, "GS0119", $"Type '{type.Name}' cannot be used in a 'using' statement because it does not provide a public Dispose() method.");
-    }
+    => Report(location, DiagnosticDescriptors.TypeNotDisposable, type.Name);
 
     /// <summary>
     /// Reports that the keyworkd can only be used inside of loops.
@@ -49,20 +42,14 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="text">The keyword.</param>
     public void ReportInvalidBreakOrContinue(TextLocation location, string text)
-    {
-        var message = $"The keyword '{text}' can only be used inside of loops.";
-        Report(location, "GS0120", message);
-    }
+    => Report(location, DiagnosticDescriptors.InvalidBreakOrContinue, text);
 
     /// <summary>
     /// Reports that the return keyword can only be used inside of functions.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>
     public void ReportInvalidReturn(TextLocation location)
-    {
-        var message = "The 'return' keyword can only be used inside of functions.";
-        Report(location, "GS0121", message);
-    }
+    => Report(location, DiagnosticDescriptors.InvalidReturn);
 
     /// <summary>
     /// Reports that the return value cannot be followed for an expression in functions without a return type.
@@ -70,10 +57,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="functionName">The name of the function.</param>
     public void ReportInvalidReturnExpression(TextLocation location, string functionName)
-    {
-        var message = $"Since the function '{functionName}' does not return a value the 'return' keyword cannot be followed by an expression.";
-        Report(location, "GS0122", message);
-    }
+    => Report(location, DiagnosticDescriptors.InvalidReturnExpression, functionName);
 
     /// <summary>
     /// Reports that an expression of a given type was expected.
@@ -81,10 +65,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="returnType">The expected type.</param>
     public void ReportMissingReturnExpression(TextLocation location, TypeSymbol returnType)
-    {
-        var message = $"An expression of type '{returnType}' is expected.";
-        Report(location, "GS0123", message);
-    }
+    => Report(location, DiagnosticDescriptors.MissingReturnExpression, returnType);
 
     /// <summary>
     /// Reports that the specified variable is read-only and cannot be assigned.
@@ -92,10 +73,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="name">The name of the variable.</param>
     public void ReportCannotAssign(TextLocation location, string name)
-    {
-        var message = $"Variable '{name}' is read-only and cannot be assigned to.";
-        Report(location, "GS0127", message);
-    }
+    => Report(location, DiagnosticDescriptors.CannotAssign, name);
 
     /// <summary>
     /// Issue #946: reports that an <c>init</c>-only property was assigned
@@ -107,20 +85,14 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="name">The name of the property.</param>
     public void ReportInitOnlyPropertyAssignment(TextLocation location, string name)
-    {
-        var message = $"Init-only property '{name}' can only be assigned during object initialization (in a constructor, an object initializer, or an 'init' accessor).";
-        Report(location, "GS0372", message);
-    }
+    => Report(location, DiagnosticDescriptors.InitOnlyPropertyAssignment, name);
 
     /// <summary>
     /// Reports that <c>await</c> appears outside an <c>async</c> function (Phase 5.1 / ADR-0023).
     /// </summary>
     /// <param name="location">The text location where the <c>await</c> keyword appears.</param>
     public void ReportAwaitOutsideAsyncFunction(TextLocation location)
-    {
-        var message = "'await' can only be used inside an 'async func'.";
-        Report(location, "GS0132", message);
-    }
+    => Report(location, DiagnosticDescriptors.AwaitOutsideAsyncFunction);
 
     /// <summary>
     /// Reports that the operand of an <c>await for v := range stream</c> statement is not an <c>IAsyncEnumerable[T]</c> (Phase 5.8 / ADR-0023).
@@ -128,40 +100,28 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the operand.</param>
     /// <param name="actualType">The actual type of the operand.</param>
     public void ReportTypeIsNotAsyncEnumerable(TextLocation location, TypeSymbol actualType)
-    {
-        var message = $"Expression of type '{actualType}' cannot be iterated with 'await for'; expected an 'IAsyncEnumerable[T]'.";
-        Report(location, "GS0134", message);
-    }
+    => Report(location, DiagnosticDescriptors.TypeIsNotAsyncEnumerable, actualType);
 
     /// <summary>
     /// Reports that a <c>yield</c> statement was used outside an iterator function (ADR-0040).
     /// </summary>
     /// <param name="location">The text location of the yield keyword.</param>
     public void ReportYieldOutsideIteratorFunction(TextLocation location)
-    {
-        var message = "'yield' statement is not allowed outside an iterator function (a function returning IEnumerable[T] or sequence[T]).";
-        Report(location, "GS0136", message);
-    }
+    => Report(location, DiagnosticDescriptors.YieldOutsideIteratorFunction);
 
     /// <summary>
     /// Reports that the operand of a <c>go</c> statement is not a call expression (Phase 5.3 / ADR-0022).
     /// </summary>
     /// <param name="location">The text location of the operand.</param>
     public void ReportGoOperandIsNotACall(TextLocation location)
-    {
-        var message = "'go' must be followed by a function or method call.";
-        Report(location, "GS0137", message);
-    }
+    => Report(location, DiagnosticDescriptors.GoOperandIsNotACall);
 
     /// <summary>
     /// Reports that the operand of a <c>defer</c> statement is not a call expression (Phase 7.1 / ADR-0030).
     /// </summary>
     /// <param name="location">The text location of the operand.</param>
     public void ReportDeferOperandIsNotACall(TextLocation location)
-    {
-        var message = "'defer' must be followed by a function or method call.";
-        Report(location, "GS0138", message);
-    }
+    => Report(location, DiagnosticDescriptors.DeferOperandIsNotACall);
 
     /// <summary>
     /// Reports that the operand of a <c>defer</c> statement is a call with
@@ -177,10 +137,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The text location of the operand.</param>
     public void ReportDeferOperandHasByRefArgument(TextLocation location)
-    {
-        var message = "'defer' cannot capture a call with 'ref', 'out', or 'in' arguments.";
-        Report(location, "GS0460", message);
-    }
+    => Report(location, DiagnosticDescriptors.DeferOperandHasByRefArgument);
 
     /// <summary>
     /// Reports that the operand of a <c>lock</c> statement is not a
@@ -192,10 +149,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the operand.</param>
     /// <param name="type">The offending operand type.</param>
     public void ReportLockTargetMustBeReferenceType(TextLocation location, TypeSymbol type)
-    {
-        var message = $"'{type.Name}' is not a reference type as required by the 'lock' statement.";
-        Report(location, "GS0461", message);
-    }
+    => Report(location, DiagnosticDescriptors.LockTargetMustBeReferenceType, type.Name);
 
     /// <summary>
     /// Reports that a generic local-function declaration (<c>let Name[T, ...] = func (...) ... { ... }</c>,
@@ -206,10 +160,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the declaration's identifier.</param>
     /// <param name="name">The name of the declared local function.</param>
     public void ReportGenericLocalFunctionMustBeLetBoundLiteral(TextLocation location, string name)
-    {
-        var message = $"Generic local function '{name}' must be declared with 'let {name}[...] = func (...) ... {{ ... }}'.";
-        Report(location, "GS0462", message);
-    }
+    => Report(location, DiagnosticDescriptors.GenericLocalFunctionMustBeLetBoundLiteral, name, name);
 
     /// <summary>
     /// Reports that a generic local function (issue #1886) captures one or more outer variables. Generic
@@ -220,10 +171,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the declaration's identifier.</param>
     /// <param name="name">The name of the declared local function.</param>
     public void ReportGenericLocalFunctionCannotCapture(TextLocation location, string name)
-    {
-        var message = $"Generic local function '{name}' cannot capture variables from the enclosing scope.";
-        Report(location, "GS0463", message);
-    }
+    => Report(location, DiagnosticDescriptors.GenericLocalFunctionCannotCapture, name);
 
     /// <summary>
     /// Reports that a local function references a type parameter owned by an enclosing generic
@@ -244,12 +192,7 @@ public sealed partial class DiagnosticBag
     /// <param name="name">The name of the declared local function.</param>
     /// <param name="enclosingTypeParameterName">The name of the referenced enclosing type parameter.</param>
     public void ReportLocalFunctionCannotReferenceEnclosingTypeParameter(TextLocation location, string name, string enclosingTypeParameterName)
-    {
-        var message = $"Local function '{name}' cannot reference '{enclosingTypeParameterName}', a type parameter of an enclosing method or class. " +
-            "A generic local function is emitted as its own generic method, and a local function that captures no outer variables is emitted as a " +
-            "top-level method; neither can close over an enclosing type parameter.";
-        Report(location, "GS0468", message);
-    }
+    => Report(location, DiagnosticDescriptors.LocalFunctionCannotReferenceEnclosingTypeParameter, name, enclosingTypeParameterName);
 
     /// <summary>
     /// Reports that the operand of a channel-receive expression (<c>&lt;-ch</c>) is not a channel (Phase 5.5 / ADR-0022).
@@ -257,10 +200,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the operand.</param>
     /// <param name="actualType">The actual type of the operand.</param>
     public void ReportReceiveOperandIsNotChannel(TextLocation location, TypeSymbol actualType)
-    {
-        var message = $"The receive operator '<-' requires a channel operand; got '{actualType}'.";
-        Report(location, "GS0139", message);
-    }
+    => Report(location, DiagnosticDescriptors.ReceiveOperandIsNotChannel, actualType);
 
     /// <summary>
     /// Reports that the left-hand side of a channel-send statement is not a channel (Phase 5.5 / ADR-0022).
@@ -268,10 +208,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the left-hand side.</param>
     /// <param name="actualType">The actual type of the left-hand side.</param>
     public void ReportSendTargetIsNotChannel(TextLocation location, TypeSymbol actualType)
-    {
-        var message = $"The send operator '<-' requires a channel on the left; got '{actualType}'.";
-        Report(location, "GS0140", message);
-    }
+    => Report(location, DiagnosticDescriptors.SendTargetIsNotChannel, actualType);
 
     /// <summary>
     /// Reports that the operand of <c>close(ch)</c> is not a channel (Phase 5.4 / ADR-0022).
@@ -279,49 +216,34 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the operand.</param>
     /// <param name="actualType">The actual type of the operand.</param>
     public void ReportCloseOperandIsNotChannel(TextLocation location, TypeSymbol actualType)
-    {
-        var message = $"'close' requires a channel operand; got '{actualType}'.";
-        Report(location, "GS0141", message);
-    }
+    => Report(location, DiagnosticDescriptors.CloseOperandIsNotChannel, actualType);
 
     /// <summary>
     /// Reports a <c>select</c> with no arms (Phase 5.6 / ADR-0022).
     /// </summary>
     /// <param name="location">The text location of the <c>select</c> keyword.</param>
     public void ReportSelectWithNoCases(TextLocation location)
-    {
-        var message = "'select' with no cases is unreachable.";
-        Report(location, "GS0142", message);
-    }
+    => Report(location, DiagnosticDescriptors.SelectWithNoCases);
 
     /// <summary>
     /// Reports a <c>select</c> with more than one <c>default</c> arm (Phase 5.6 / ADR-0022).
     /// </summary>
     /// <param name="location">The text location of the duplicate <c>default</c> keyword.</param>
     public void ReportSelectDuplicateDefault(TextLocation location)
-    {
-        var message = "'select' may have at most one 'default' arm.";
-        Report(location, "GS0143", message);
-    }
+    => Report(location, DiagnosticDescriptors.SelectDuplicateDefault);
 
     /// <summary>Reports that a deconstruction target has the wrong number of elements.</summary>
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="expected">The expected number of elements.</param>
     /// <param name="actual">The actual number of elements.</param>
     public void ReportDeconstructionFieldCountMismatch(TextLocation location, int expected, int actual)
-    {
-        var message = $"Deconstruction requires {expected} fields but was given {actual}.";
-        Report(location, "GS0163", message);
-    }
+    => Report(location, DiagnosticDescriptors.DeconstructionFieldCountMismatch, expected, actual);
 
     /// <summary>Reports that positional deconstruction needs a tuple or data struct.</summary>
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="type">The actual initializer type.</param>
     public void ReportDeconstructionRequiresTupleOrDataStruct(TextLocation location, TypeSymbol type)
-    {
-        var message = $"Deconstruction requires a tuple or data struct initializer, but got '{type}'.";
-        Report(location, "GS0164", message);
-    }
+    => Report(location, DiagnosticDescriptors.DeconstructionRequiresTupleOrDataStruct, type);
 
     /// <summary>
     /// Reports that a multi-target assignment or short variable declaration has
@@ -331,10 +253,7 @@ public sealed partial class DiagnosticBag
     /// <param name="targetCount">The number of left-hand targets.</param>
     /// <param name="valueCount">The number of right-hand values.</param>
     public void ReportMultiAssignmentMismatch(TextLocation location, int targetCount, int valueCount)
-    {
-        var message = $"Multi-assignment has {targetCount} target(s) but {valueCount} value(s).";
-        Report(location, "GS0167", message);
-    }
+    => Report(location, DiagnosticDescriptors.MultiAssignmentMismatch, targetCount, valueCount);
 
     /// <summary>
     /// Reports a use of the reserved <c>fallthrough</c> keyword (ADR-0013: GSharp
@@ -342,30 +261,21 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The text location where <c>fallthrough</c> was found.</param>
     public void ReportFallthroughNotSupported(TextLocation location)
-    {
-        var message = "'fallthrough' is not supported (ADR-0013). GSharp 'switch' cases do not fall through.";
-        Report(location, "GS0168", message);
-    }
+    => Report(location, DiagnosticDescriptors.FallthroughNotSupported);
 
     /// <summary>
     /// Reports a duplicate <c>default</c> arm in a switch statement.
     /// </summary>
     /// <param name="location">The text location of the offending default arm.</param>
     public void ReportDuplicateSwitchDefault(TextLocation location)
-    {
-        var message = "A 'switch' statement can only have one 'default' arm.";
-        Report(location, "GS0169", message);
-    }
+    => Report(location, DiagnosticDescriptors.DuplicateSwitchDefault);
 
     /// <summary>
     /// Reports a non-constant value used in a switch case.
     /// </summary>
     /// <param name="location">The text location of the offending case value.</param>
     public void ReportSwitchCaseValueNotConstant(TextLocation location)
-    {
-        var message = "Switch case value must be a constant expression.";
-        Report(location, "GS0170", message);
-    }
+    => Report(location, DiagnosticDescriptors.SwitchCaseValueNotConstant);
 
     /// <summary>
     /// Reports a switch case value whose type doesn't match the discriminant.
@@ -374,54 +284,40 @@ public sealed partial class DiagnosticBag
     /// <param name="caseType">The case value type.</param>
     /// <param name="switchType">The switched-on discriminant type.</param>
     public void ReportSwitchCaseTypeMismatch(TextLocation location, TypeSymbol caseType, TypeSymbol switchType)
-    {
-        var message = $"Switch case value of type '{caseType}' is incompatible with switch expression of type '{switchType}'.";
-        Report(location, "GS0171", message);
-    }
+    => Report(location, DiagnosticDescriptors.SwitchCaseTypeMismatch, caseType, switchType);
 
     /// <summary>Reports that a property pattern was used on a non-aggregate type.</summary>
     /// <param name="location">The text location.</param>
     /// <param name="type">The discriminant type.</param>
     public void ReportPropertyPatternRequiresStructOrClass(TextLocation location, TypeSymbol type)
-    {
-        Report(location, "GS0172", $"Property pattern requires a struct or class value, not '{type}'.");
-    }
+    => Report(location, DiagnosticDescriptors.PropertyPatternRequiresStructOrClass, type);
 
     /// <summary>Reports that a property pattern references an unknown field.</summary>
     /// <param name="location">The text location.</param>
     /// <param name="fieldName">The field name.</param>
     /// <param name="type">The containing type.</param>
     public void ReportUndefinedFieldOnType(TextLocation location, string fieldName, TypeSymbol type)
-    {
-        Report(location, "GS0173", $"Type '{type}' does not define a field named '{fieldName}'.");
-    }
+    => Report(location, DiagnosticDescriptors.UndefinedFieldOnType, type, fieldName);
 
     /// <summary>Reports that a relational pattern operator is not defined for a type.</summary>
     /// <param name="location">The text location.</param>
     /// <param name="op">The operator kind.</param>
     /// <param name="type">The operand type.</param>
     public void ReportRelationalPatternOperatorUndefined(TextLocation location, SyntaxKind op, TypeSymbol type)
-    {
-        Report(location, "GS0174", $"Relational pattern operator '{SyntaxFacts.GetText(op)}' is not defined for type '{type}'.");
-    }
+    => Report(location, DiagnosticDescriptors.RelationalPatternOperatorUndefined, SyntaxFacts.GetText(op), type);
 
     /// <summary>Reports that a list pattern was used on a non-array/slice type.</summary>
     /// <param name="location">The text location.</param>
     /// <param name="type">The discriminant type.</param>
     public void ReportListPatternRequiresArrayOrSlice(TextLocation location, TypeSymbol type)
-    {
-        Report(location, "GS0175", $"List pattern requires an array or slice value, not '{type}'.");
-    }
+    => Report(location, DiagnosticDescriptors.ListPatternRequiresArrayOrSlice, type);
 
     /// <summary>
     /// Reports a switch expression without a default arm.
     /// </summary>
     /// <param name="location">The text location of the switch expression.</param>
     public void ReportSwitchExpressionMissingDefault(TextLocation location)
-    {
-        var message = "Switch expression must have a 'default' arm.";
-        Report(location, "GS0176", message);
-    }
+    => Report(location, DiagnosticDescriptors.SwitchExpressionMissingDefault);
 
     /// <summary>
     /// Reports a non-exhaustive switch expression over a closed discriminant.
@@ -430,10 +326,7 @@ public sealed partial class DiagnosticBag
     /// <param name="discriminantTypeName">The discriminant type description.</param>
     /// <param name="missingNames">The missing variant names.</param>
     public void ReportSwitchExpressionNotExhaustive(TextLocation location, string discriminantTypeName, IEnumerable<string> missingNames)
-    {
-        var message = $"Switch expression on {discriminantTypeName} is not exhaustive: missing {FormatMissingNames(missingNames)}.";
-        Report(location, "GS0177", message);
-    }
+    => Report(location, DiagnosticDescriptors.SwitchExpressionNotExhaustive, discriminantTypeName, FormatMissingNames(missingNames));
 
     /// <summary>
     /// Reports a non-exhaustive switch statement over a closed discriminant.
@@ -442,10 +335,7 @@ public sealed partial class DiagnosticBag
     /// <param name="discriminantTypeName">The discriminant type description.</param>
     /// <param name="missingNames">The missing variant names.</param>
     public void ReportSwitchStatementNotExhaustive(TextLocation location, string discriminantTypeName, IEnumerable<string> missingNames)
-    {
-        var message = $"Switch statement on {discriminantTypeName} is not exhaustive: missing {FormatMissingNames(missingNames)}.";
-        Report(location, "GS0178", message);
-    }
+    => Report(location, DiagnosticDescriptors.SwitchStatementNotExhaustive, discriminantTypeName, FormatMissingNames(missingNames));
 
     /// <summary>
     /// Reports a switch-expression arm whose result type does not match the unified result type.
@@ -454,18 +344,13 @@ public sealed partial class DiagnosticBag
     /// <param name="armType">The arm result type.</param>
     /// <param name="expectedType">The expected result type.</param>
     public void ReportSwitchExpressionArmTypeMismatch(TextLocation location, TypeSymbol armType, TypeSymbol expectedType)
-    {
-        var message = $"All switch-expression arms must produce the same type; expected '{expectedType}' but arm produces '{armType}'.";
-        Report(location, "GS0179", message);
-    }
+    => Report(location, DiagnosticDescriptors.SwitchExpressionArmTypeMismatch, expectedType, armType);
 
     /// <summary>GS9003: Variable must be definitely assigned before being passed by ref.</summary>
     /// <param name="location">The text location of the argument.</param>
     /// <param name="variableName">The variable name.</param>
     public void ReportVariableNotDefinitelyAssignedForRef(TextLocation location, string variableName)
-    {
-        Report(location, "GS9003", $"Variable '{variableName}' must be definitely assigned before being passed by `ref`.");
-    }
+    => Report(location, DiagnosticDescriptors.VariableNotDefinitelyAssignedForRef, variableName);
 
     /// <summary>
     /// GS0402: the operand of a prefix/postfix increment (<c>++</c>) or
@@ -476,9 +361,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the offending operand.</param>
     /// <param name="operatorText">The increment/decrement operator text (<c>++</c> or <c>--</c>).</param>
     public void ReportInvalidIncrementDecrementTarget(TextLocation location, string operatorText)
-    {
-        Report(location, "GS0402", $"The operand of '{operatorText}' must be a writable variable, field, array element, or indexer (ADR-0126).");
-    }
+    => Report(location, DiagnosticDescriptors.InvalidIncrementDecrementTarget, operatorText);
 
     /// <summary>
     /// ADR-0056 §2: reports an attempt to assign through a read-only span
@@ -488,10 +371,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the offending assignment.</param>
     /// <param name="type">The read-only span type being written through.</param>
     public void ReportCannotAssignReadOnlySpanElement(TextLocation location, TypeSymbol type)
-    {
-        var message = $"Cannot assign through a read-only span element ('{type.Name}' is read-only).";
-        Report(location, "GS0226", message);
-    }
+    => Report(location, DiagnosticDescriptors.CannotAssignReadOnlySpanElement, type.Name);
 
     /// <summary>
     /// ADR-0060 §5: reports an assignment to an <c>in</c> parameter inside the function body.
@@ -499,9 +379,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The assignment location.</param>
     /// <param name="parameterName">The parameter name.</param>
     public void ReportCannotAssignToInParameter(TextLocation location, string parameterName)
-    {
-        Report(location, "GS0237", $"'in' parameter '{parameterName}' is read-only; remove the 'in' modifier on the declaration if mutation is intended.");
-    }
+    => Report(location, DiagnosticDescriptors.CannotAssignToInParameter, parameterName);
 
     /// <summary>
     /// ADR-0060 §5: reports a return-path on which an <c>out</c> parameter has not been
@@ -510,9 +388,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The location of the return statement (or the end-of-body for fall-through).</param>
     /// <param name="parameterName">The out parameter name.</param>
     public void ReportOutParameterNotAssigned(TextLocation location, string parameterName)
-    {
-        Report(location, "GS0238", $"Out parameter '{parameterName}' must be definitely assigned on every path before the function returns.");
-    }
+    => Report(location, DiagnosticDescriptors.OutParameterNotAssigned, parameterName);
 
     /// <summary>
     /// ADR-0060 §8: user-facing twin of GS9003. Reports that a variable was passed by <c>ref</c>
@@ -521,9 +397,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The argument location.</param>
     /// <param name="variableName">The variable name.</param>
     public void ReportVariableNotAssignedBeforeRef(TextLocation location, string variableName)
-    {
-        Report(location, "GS0239", $"Variable '{variableName}' is not definitely assigned before being passed by 'ref'.");
-    }
+    => Report(location, DiagnosticDescriptors.VariableNotAssignedBeforeRef, variableName);
 
     /// <summary>
     /// Issue #490 (ADR-0060 follow-up): a function declaration carries a <c>ref</c> return modifier
@@ -531,9 +405,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The location of the <c>ref</c> modifier.</param>
     public void ReportRefReturnRequiresReturnType(TextLocation location)
-    {
-        Report(location, "GS0248", "A 'ref' return modifier requires an explicit return type clause (e.g. 'ref int32').");
-    }
+    => Report(location, DiagnosticDescriptors.RefReturnRequiresReturnType);
 
     /// <summary>
     /// Issue #490 (ADR-0060 follow-up): a <c>ref</c> return modifier was placed on an
@@ -544,9 +416,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The location of the <c>ref</c> modifier.</param>
     /// <param name="kind">"async", "sequence", or "async sequence".</param>
     public void ReportRefReturnOnAsyncOrIterator(TextLocation location, string kind)
-    {
-        Report(location, "GS0249", $"'ref' return is not legal on an {kind} function; the state-machine rewriter cannot hoist a managed pointer.");
-    }
+    => Report(location, DiagnosticDescriptors.RefReturnOnAsyncOrIterator, kind);
 
     /// <summary>
     /// Issue #490: a <c>ref</c>-returning function declares its return type as <c>*T</c>
@@ -554,9 +424,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The location of the <c>ref</c> modifier.</param>
     public void ReportRefReturnOfByRefType(TextLocation location)
-    {
-        Report(location, "GS0250", "'ref' return modifier is redundant when the declared return type is already a managed pointer ('*T'); write 'ref T' instead.");
-    }
+    => Report(location, DiagnosticDescriptors.RefReturnOfByRefType);
 
     /// <summary>
     /// Issue #490: a <c>return ref expr</c> statement appears inside a function whose
@@ -565,9 +433,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The location of the <c>ref</c> keyword on the return statement.</param>
     /// <param name="functionName">The enclosing function name.</param>
     public void ReportRefReturnInNonRefReturningFunction(TextLocation location, string functionName)
-    {
-        Report(location, "GS0251", $"'return ref' is not allowed in '{functionName}' because its declaration does not specify a 'ref' return type.");
-    }
+    => Report(location, DiagnosticDescriptors.RefReturnInNonRefReturningFunction, functionName);
 
     /// <summary>
     /// Issue #490: a plain <c>return expr</c> statement appears inside a <c>ref</c>-returning function.
@@ -576,9 +442,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The location of the <c>return</c> keyword.</param>
     /// <param name="functionName">The enclosing function name.</param>
     public void ReportRefReturnRequiredOnRefReturningFunction(TextLocation location, string functionName)
-    {
-        Report(location, "GS0252", $"Function '{functionName}' returns by reference; use 'return ref <lvalue>' instead of a plain 'return'.");
-    }
+    => Report(location, DiagnosticDescriptors.RefReturnRequiredOnRefReturningFunction, functionName);
 
     /// <summary>
     /// Issue #490: the operand of <c>return ref</c> is not an lvalue (literal, arithmetic
@@ -587,9 +451,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The location of the offending expression.</param>
     public void ReportRefReturnRequiresLvalue(TextLocation location)
-    {
-        Report(location, "GS0253", "The operand of 'return ref' must be an lvalue (variable, field, array element, or '*p').");
-    }
+    => Report(location, DiagnosticDescriptors.RefReturnRequiresLvalue);
 
     /// <summary>
     /// Issue #490 (ADR-0058 ref-safe-to-escape): the operand of <c>return ref</c> refers to
@@ -599,9 +461,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The location of the offending expression.</param>
     public void ReportRefReturnEscapesLocalScope(TextLocation location)
-    {
-        Report(location, "GS0254", "Cannot return a managed pointer to function-local storage; the reference would dangle once the function returns.");
-    }
+    => Report(location, DiagnosticDescriptors.RefReturnEscapesLocalScope);
 
     /// <summary>
     /// Issue #491 (ADR-0060 follow-up): reports a ref-aliasing local declaration whose
@@ -612,9 +472,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The <c>ref</c> modifier location.</param>
     /// <param name="exprText">The source text of the offending RHS expression.</param>
     public void ReportRefLocalRhsMustBeLvalue(TextLocation location, string exprText)
-    {
-        Report(location, "GS0256", $"The right-hand side of a ref-aliasing local must be an lvalue (a variable, field/property, indexer access, or '*p' dereference); '{exprText}' is not assignable.");
-    }
+    => Report(location, DiagnosticDescriptors.RefLocalRhsMustBeLvalue, exprText);
 
     /// <summary>
     /// Issue #491 (ADR-0060 follow-up): reports a ref-aliasing local whose initializer's
@@ -626,9 +484,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The <c>ref</c> modifier location.</param>
     /// <param name="variableName">The local name.</param>
     public void ReportRefLocalRhsHasNarrowerEscapeScope(TextLocation location, string variableName)
-    {
-        Report(location, "GS0257", $"Cannot bind ref-aliasing local '{variableName}' to a value whose ref-safe-to-escape scope is narrower than the local's scope; the alias would outlive its referent.");
-    }
+    => Report(location, DiagnosticDescriptors.RefLocalRhsHasNarrowerEscapeScope, variableName);
 
     /// <summary>
     /// Issue #491 (ADR-0060 follow-up): reports the <c>ref</c> aliasing modifier on a
@@ -640,9 +496,7 @@ public sealed partial class DiagnosticBag
     /// <param name="variableName">The local name.</param>
     /// <param name="context">Description of the disallowed context (e.g. "a top-level variable").</param>
     public void ReportRefLocalCannotBeDeclaredHere(TextLocation location, string variableName, string context)
-    {
-        Report(location, "GS0258", $"Ref-aliasing local '{variableName}' cannot be declared as {context}; managed pointers cannot be stored across this boundary.");
-    }
+    => Report(location, DiagnosticDescriptors.RefLocalCannotBeDeclaredHere, variableName, context);
 
     /// <summary>
     /// Reports that a <c>for x in expr</c> loop cannot be lowered because the
@@ -651,19 +505,14 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The collection expression location.</param>
     /// <param name="type">The collection type.</param>
     public void ReportTypeNotIterable(TextLocation location, TypeSymbol type)
-    {
-        var message = $"Type '{type.Name}' does not implement a usable 'GetEnumerator()' method and cannot be iterated with 'for ... in'.";
-        Report(location, "GS0423", message);
-    }
+    => Report(location, DiagnosticDescriptors.TypeNotIterable, type.Name);
 
     /// <summary>
     /// Reports that <c>await using let</c> appears outside an <c>async</c> function.
     /// </summary>
     /// <param name="location">The text location of the <c>await</c> keyword.</param>
     public void ReportAwaitUsingOutsideAsyncFunction(TextLocation location)
-    {
-        Report(location, "GS0271", "'await using let' can only be used inside an 'async func'.");
-    }
+    => Report(location, DiagnosticDescriptors.AwaitUsingOutsideAsyncFunction);
 
     /// <summary>
     /// Reports that a type used in an <c>await using</c> declaration does not implement IAsyncDisposable.
@@ -671,9 +520,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the await using keyword.</param>
     /// <param name="type">The non-async-disposable type.</param>
     public void ReportTypeNotAsyncDisposable(TextLocation location, TypeSymbol type)
-    {
-        Report(location, "GS0272", $"Type '{type.Name}' cannot be used in an 'await using' statement because it does not provide a public DisposeAsync() method returning ValueTask.");
-    }
+    => Report(location, DiagnosticDescriptors.TypeNotAsyncDisposable, type.Name);
 
     /// <summary>
     /// ADR-0070 / issue #707: GS0293 — a labeled <c>break</c> or <c>continue</c>
@@ -683,9 +530,7 @@ public sealed partial class DiagnosticBag
     /// <param name="keyword">The originating keyword (<c>break</c> or <c>continue</c>).</param>
     /// <param name="labelName">The unresolved label name.</param>
     public void ReportUnknownLoopLabel(TextLocation location, string keyword, string labelName)
-    {
-        Report(location, "GS0293", $"No enclosing loop is labeled '{labelName}' (in '{keyword} {labelName}').");
-    }
+    => Report(location, DiagnosticDescriptors.UnknownLoopLabel, labelName, keyword, labelName);
 
     /// <summary>
     /// ADR-0070 / issue #1884: GS0469 — a <c>goto</c> targets a label name
@@ -694,9 +539,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the offending label identifier.</param>
     /// <param name="labelName">The unresolved label name.</param>
     public void ReportUndefinedGotoLabel(TextLocation location, string labelName)
-    {
-        Report(location, "GS0469", $"The label '{labelName}' does not exist in the current context.");
-    }
+    => Report(location, DiagnosticDescriptors.UndefinedGotoLabel, labelName);
 
     /// <summary>
     /// ADR-0070 / issue #1884: GS0470 — two <c>goto</c> labels with the same
@@ -707,9 +550,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the second (duplicate) label declaration.</param>
     /// <param name="labelName">The duplicated label name.</param>
     public void ReportDuplicateGotoLabel(TextLocation location, string labelName)
-    {
-        Report(location, "GS0470", $"The label '{labelName}' is already defined in this function.");
-    }
+    => Report(location, DiagnosticDescriptors.DuplicateGotoLabel, labelName);
 
     /// <summary>
     /// ADR-0070 / issue #707: GS0295 (warning) — a loop label shadows an
@@ -719,9 +560,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the offending label identifier.</param>
     /// <param name="labelName">The shadowed label name.</param>
     public void ReportLabelShadowsEnclosingLoop(TextLocation location, string labelName)
-    {
-        Report(location, "GS0295", $"Label '{labelName}' shadows an enclosing loop label of the same name; the inner label wins for nested 'break'/'continue'.", DiagnosticSeverity.Warning);
-    }
+    => Report(location, DiagnosticDescriptors.LabelShadowsEnclosingLoop, labelName);
 
     /// <summary>
     /// ADR-0071 / issue #708: GS0296 — the right-hand side of an
@@ -734,9 +573,7 @@ public sealed partial class DiagnosticBag
     /// <param name="bindingName">The name introduced by the binding.</param>
     /// <param name="actualType">The actual (non-nullable) initializer type.</param>
     public void ReportIfLetInitializerMustBeNullable(TextLocation location, string bindingName, TypeSymbol actualType)
-    {
-        Report(location, "GS0296", $"The right-hand side of 'if let'/'guard let' binding '{bindingName}' must be of nullable type, but its type is '{actualType}'. Use a plain 'let {bindingName} = …' if no nullability strip is needed.");
-    }
+    => Report(location, DiagnosticDescriptors.IfLetInitializerMustBeNullable, bindingName, actualType, bindingName);
 
     /// <summary>
     /// ADR-0071 / issue #708: GS0297 — the else block of a <c>guard let</c>
@@ -747,9 +584,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The source location of the offending else clause.</param>
     public void ReportGuardLetElseMustExit(TextLocation location)
-    {
-        Report(location, "GS0297", "The else block of 'guard let' must unconditionally exit the enclosing scope (return, throw, break, or continue).");
-    }
+    => Report(location, DiagnosticDescriptors.GuardLetElseMustExit);
 
     /// <summary>
     /// ADR-0078 / issue #718: GS0313 — a switch over a sealed-class hierarchy
@@ -759,9 +594,7 @@ public sealed partial class DiagnosticBag
     /// <param name="missingCaseName">The name of the missing case / subtype.</param>
     /// <param name="baseTypeName">The sealed-base type name.</param>
     public void ReportSealedHierarchyMissingCase(TextLocation location, string missingCaseName, string baseTypeName)
-    {
-        Report(location, "GS0313", $"Switch over sealed hierarchy '{baseTypeName}' is missing a case for '{missingCaseName}' (ADR-0078).", DiagnosticSeverity.Warning);
-    }
+    => Report(location, DiagnosticDescriptors.SealedHierarchyMissingCase, baseTypeName, missingCaseName);
 
     /// <summary>
     /// Issue #1505: GS0416 — a list pattern contains more than one slice
@@ -771,13 +604,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The source location of the offending <c>..</c> token.</param>
     public void ReportMultipleSlicePatternsInListPattern(TextLocation location)
-    {
-        Report(
-            location,
-            "GS0416",
-            "A list pattern may contain at most one slice subpattern ('..') (issue #1505).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.MultipleSlicePatternsInListPattern);
 
     /// <summary>
     /// Issue #1603: GS0418 — a <c>using</c> or <c>await using</c> statement's
@@ -788,13 +615,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The text location of the offending declaration.</param>
     public void ReportUsingRequiresSingleVariableDeclaration(TextLocation location)
-    {
-        Report(
-            location,
-            "GS0418",
-            "A 'using' statement requires a single variable declaration ('let'/'var'/'const name = …'); tuple or named deconstruction is not supported here (issue #1603).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.UsingRequiresSingleVariableDeclaration);
 
     /// <summary>
     /// Reports GS0367 — issue #836: a <c>yield</c> statement appears
@@ -809,13 +630,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the offending
     /// <c>yield</c> keyword.</param>
     public void ReportYieldInsideTryWithCatch(TextLocation location)
-    {
-        Report(
-            location,
-            "GS0367",
-            "'yield' cannot appear inside a 'try' block that has a 'catch' clause; only 'try'/'finally' is supported around 'yield' (issue #836).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.YieldInsideTryWithCatch);
 
     /// <summary>
     /// Issue #992: GS0390 — a type pattern that introduces a binding variable
@@ -829,13 +644,7 @@ public sealed partial class DiagnosticBag
     public void ReportPatternVariableNotAllowedUnderOrNot(
         TextLocation location,
         string variableName)
-    {
-        Report(
-            location,
-            "GS0390",
-            $"A pattern variable ('{variableName}') may not be declared under an 'or' or 'not' pattern; it would not be definitely assigned. Use '_' instead (issue #992).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.PatternVariableNotAllowedUnderOrNot, variableName);
 
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {

@@ -20,30 +20,21 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="character">The unexpected bad character.</param>
     public void ReportBadCharacter(TextLocation location, char character)
-    {
-        var message = $"Bad character input: '{character}'.";
-        Report(location, "GS0001", message);
-    }
+    => Report(location, DiagnosticDescriptors.BadCharacter, character);
 
     /// <summary>
     /// Reports an unterminated comment.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>
     public void ReportUnterminatedComment(TextLocation location)
-    {
-        var message = "Unterminated comment.";
-        Report(location, "GS0002", message);
-    }
+    => Report(location, DiagnosticDescriptors.UnterminatedComment);
 
     /// <summary>
     /// Reports an unterminated string literal.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>
     public void ReportUnterminatedString(TextLocation location)
-    {
-        var message = "Unterminated string literal.";
-        Report(location, "GS0003", message);
-    }
+    => Report(location, DiagnosticDescriptors.UnterminatedString);
 
     /// <summary>
     /// Reports a number literal as invalid.
@@ -52,10 +43,7 @@ public sealed partial class DiagnosticBag
     /// <param name="text">Text found in the source document.</param>
     /// <param name="type">Expected type.</param>
     public void ReportInvalidNumber(TextLocation location, string text, TypeSymbol type)
-    {
-        var message = $"The number {text} isn't valid {type}.";
-        Report(location, "GS0004", message);
-    }
+    => Report(location, DiagnosticDescriptors.InvalidNumber, text, type);
 
     /// <summary>
     /// Reports an unexpected token while parsing.
@@ -64,33 +52,24 @@ public sealed partial class DiagnosticBag
     /// <param name="actualKind">The kind of syntax encountered.</param>
     /// <param name="expectedKind">The kind of syntax expected.</param>
     public void ReportUnexpectedToken(TextLocation location, SyntaxKind actualKind, SyntaxKind expectedKind)
-    {
-        var message = $"Unexpected token <{actualKind}>, expected <{expectedKind}>.";
-        Report(location, "GS0005", message);
-    }
+    => Report(location, DiagnosticDescriptors.UnexpectedToken, actualKind, expectedKind);
 
     /// <summary>Reports that the <c>inline</c> modifier was combined with <c>data</c> or <c>record</c>.</summary>
     /// <param name="location">The text location of the conflicting modifier.</param>
     public void ReportInlineCannotBeCombinedWithData(TextLocation location)
-    {
-        Report(location, "GS0106", "'inline' cannot be combined with 'data' or 'record'.");
-    }
+    => Report(location, DiagnosticDescriptors.InlineCannotBeCombinedWithData);
 
     /// <summary>Reports that inline and open modifiers were combined.</summary>
     /// <param name="location">The text location of the conflicting modifier.</param>
     public void ReportInlineCannotBeCombinedWithOpen(TextLocation location)
-    {
-        Report(location, "GS0107", "'inline struct' cannot be combined with 'open'.");
-    }
+    => Report(location, DiagnosticDescriptors.InlineCannotBeCombinedWithOpen);
 
     /// <summary>
     /// Reports that the <c>record</c> alias cannot be combined with the <c>data</c> contextual keyword.
     /// </summary>
     /// <param name="location">The text location of the <c>data</c> keyword.</param>
     public void ReportRecordCannotBeCombinedWithDataKeyword(TextLocation location)
-    {
-        Report(location, "GS0109", "'record' is an alias for 'data struct' and cannot be combined with 'data'.");
-    }
+    => Report(location, DiagnosticDescriptors.RecordCannotBeCombinedWithDataKeyword);
 
     /// <summary>
     /// Reports that the <c>async</c> modifier was used in a type-clause position
@@ -99,10 +78,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the <c>async</c> modifier.</param>
     /// <param name="actualKind">The kind of the token actually following <c>async</c>.</param>
     public void ReportAsyncModifierInTypeClauseRequiresSequenceOrFunc(TextLocation location, SyntaxKind actualKind)
-    {
-        var message = $"The 'async' modifier in a type clause is only valid before 'sequence[T]', '(T) -> R', or 'func(...)'; found '<{actualKind}>'.";
-        Report(location, "GS0135", message);
-    }
+    => Report(location, DiagnosticDescriptors.AsyncModifierInTypeClauseRequiresSequenceOrFunc, actualKind);
 
     /// <summary>
     /// Reports that top-level statements appear in more than one *package* in
@@ -113,10 +89,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">A location in one of the offending files.</param>
     public void ReportMultipleTopLevelFiles(TextLocation location)
-    {
-        var message = "Top-level statements may appear in at most one package per compilation.";
-        Report(location, "GS0165", message);
-    }
+    => Report(location, DiagnosticDescriptors.MultipleTopLevelFiles);
 
     /// <summary>
     /// Reports that the compilation contains both top-level statements and an
@@ -127,10 +100,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The location of the explicit Main function declaration.</param>
     public void ReportTopLevelStatementsConflictWithMain(TextLocation location)
-    {
-        var message = "The entry point of the program is global statements; ignoring the explicit Main function entry point.";
-        Report(location, "GS0166", message, DiagnosticSeverity.Warning);
-    }
+    => Report(location, DiagnosticDescriptors.TopLevelStatementsConflictWithMain);
 
     /// <summary>
     /// ADR-0066 D2: reports that top-level statements mix bare <c>return;</c> and
@@ -140,10 +110,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The location of the first offending return statement.</param>
     public void ReportTopLevelReturnShapeMismatch(TextLocation location)
-    {
-        var message = "Top-level statements mix bare `return;` and `return <expr>;`. Choose one return shape so the synthesized entry point has a single return type.";
-        Report(location, "GS0287", message);
-    }
+    => Report(location, DiagnosticDescriptors.TopLevelReturnShapeMismatch);
 
     /// <summary>
     /// ADR-0067: reports that a field declaration inside a <c>struct</c>,
@@ -155,10 +122,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The location of the offending token.</param>
     public void ReportFieldDeclarationRequiresVarOrLet(TextLocation location)
-    {
-        var message = "Field declarations require a 'var' (mutable), 'let' (read-only), or 'const' (compile-time constant) keyword.";
-        Report(location, "GS0288", message);
-    }
+    => Report(location, DiagnosticDescriptors.FieldDeclarationRequiresVarOrLet);
 
     /// <summary>
     /// Reports that top-level statements within a single source file are not
@@ -170,10 +134,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The location of the misplaced top-level statement.</param>
     public void ReportTopLevelStatementsMustBeContiguous(TextLocation location)
-    {
-        var message = "Top-level statements should form a single contiguous block within a file — interleaving them with type or function declarations is hard to read.";
-        Report(location, "GS0286", message, DiagnosticSeverity.Warning);
-    }
+    => Report(location, DiagnosticDescriptors.TopLevelStatementsMustBeContiguous);
 
     /// <summary>
     /// ADR-0066 deferred decision D4: reports that top-level statements appear
@@ -184,10 +145,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The location of the first offending top-level statement.</param>
     public void ReportTopLevelStatementsInLibrary(TextLocation location)
-    {
-        var message = "Top-level statements are not allowed in a library project. Set <OutputType>Exe</OutputType> on the project, or move the statements into an explicit `func Main()`.";
-        Report(location, "GS0285", message);
-    }
+    => Report(location, DiagnosticDescriptors.TopLevelStatementsInLibrary);
 
     /// <summary>
     /// Reports an accessibility modifier (<c>public</c>/<c>internal</c>/<c>private</c>) appearing on a construct that does not accept one.
@@ -195,10 +153,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the modifier token.</param>
     /// <param name="modifier">The modifier text.</param>
     public void ReportAccessibilityModifierNotAllowedHere(TextLocation location, string modifier)
-    {
-        var message = $"Accessibility modifier '{modifier}' is not allowed here. It is only valid on top-level 'func', 'type', 'var', 'let' and 'const' declarations.";
-        Report(location, "GS0180", message);
-    }
+    => Report(location, DiagnosticDescriptors.AccessibilityModifierNotAllowedHere, modifier);
 
     /// <summary>
     /// Reports a character literal that is missing a closing quote or
@@ -206,18 +161,14 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The literal's location.</param>
     public void ReportUnterminatedCharLiteral(TextLocation location)
-    {
-        Report(location, "GS0191", "Unterminated character literal.");
-    }
+    => Report(location, DiagnosticDescriptors.UnterminatedCharLiteral);
 
     /// <summary>
     /// Reports an empty character literal <c>''</c> (ADR-0046).
     /// </summary>
     /// <param name="location">The literal's location.</param>
     public void ReportEmptyCharLiteral(TextLocation location)
-    {
-        Report(location, "GS0192", "Empty character literal; a character literal must contain exactly one code unit or escape.");
-    }
+    => Report(location, DiagnosticDescriptors.EmptyCharLiteral);
 
     /// <summary>
     /// Reports a character literal containing more than one code unit
@@ -225,9 +176,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The literal's location.</param>
     public void ReportMultiCharCharLiteral(TextLocation location)
-    {
-        Report(location, "GS0193", "Character literal contains more than one code unit; use a string literal instead.");
-    }
+    => Report(location, DiagnosticDescriptors.MultiCharCharLiteral);
 
     /// <summary>
     /// Reports an unknown escape sequence inside a character literal
@@ -236,9 +185,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The literal's location.</param>
     /// <param name="escapeChar">The unrecognised escape character.</param>
     public void ReportInvalidCharEscape(TextLocation location, char escapeChar)
-    {
-        Report(location, "GS0194", $"Unrecognised escape sequence '\\{escapeChar}' in character literal.");
-    }
+    => Report(location, DiagnosticDescriptors.InvalidCharEscape, escapeChar);
 
     /// <summary>
     /// Reports a malformed Unicode escape (<c>\\u</c>, <c>\\U</c>, or
@@ -248,9 +195,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The literal's location.</param>
     public void ReportInvalidUnicodeEscape(TextLocation location)
-    {
-        Report(location, "GS0195", "Malformed Unicode escape in character literal.");
-    }
+    => Report(location, DiagnosticDescriptors.InvalidUnicodeEscape);
 
     /// <summary>
     /// Reports an unrecognized backslash escape sequence inside a double-quoted
@@ -261,9 +206,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the escape sequence.</param>
     /// <param name="escapeChar">The character following the backslash.</param>
     public void ReportInvalidStringEscape(TextLocation location, char escapeChar)
-    {
-        Report(location, "GS0269", $"Unrecognised escape sequence '\\{escapeChar}' in string literal.");
-    }
+    => Report(location, DiagnosticDescriptors.InvalidStringEscape, escapeChar);
 
     /// <summary>
     /// Reports an annotation lead-in (<c>@</c>) that is not followed by an
@@ -271,9 +214,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The source location of the offending token.</param>
     public void ReportAnnotationExpected(TextLocation location)
-    {
-        Report(location, "GS0196", "Annotation name expected after '@'.");
-    }
+    => Report(location, DiagnosticDescriptors.AnnotationExpected);
 
     /// <summary>
     /// Reports an annotation use-site target qualifier whose kind is not one
@@ -285,9 +226,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the offending kind identifier.</param>
     /// <param name="kind">The unrecognized kind text.</param>
     public void ReportAnnotationTargetInvalid(TextLocation location, string kind)
-    {
-        Report(location, "GS0197", $"Annotation target '{kind}' is not a recognized use-site kind. Expected one of: field, param, return, type, method, property, event, module, assembly, genericparam.");
-    }
+    => Report(location, DiagnosticDescriptors.AnnotationTargetInvalid, kind);
 
     /// <summary>
     /// Reports GS0206 when an annotation lead-in (<c>@Name</c>) precedes a
@@ -297,9 +236,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The source location of the leading <c>@</c>.</param>
     public void ReportAnnotationsNotAllowedOnStatement(TextLocation location)
-    {
-        Report(location, "GS0206", "Annotations are only allowed on variable declarations (var/let/const), not on this statement.");
-    }
+    => Report(location, DiagnosticDescriptors.AnnotationsNotAllowedOnStatement);
 
     /// <summary>
     /// ADR-0055: reports an interpolation hole whose alignment clause
@@ -308,9 +245,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the offending hole.</param>
     /// <param name="text">The offending alignment text.</param>
     public void ReportInvalidInterpolationAlignment(TextLocation location, string text)
-    {
-        Report(location, "GS0220", $"Invalid interpolation alignment '{text}' (must be a constant integer).");
-    }
+    => Report(location, DiagnosticDescriptors.InvalidInterpolationAlignment, text);
 
     /// <summary>
     /// Issue #368: reports an interpolated string passed to an
@@ -322,9 +257,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the interpolated argument.</param>
     /// <param name="reason">A human-readable description of the failure.</param>
     public void ReportInterpolatedStringHandlerArgument(TextLocation location, string reason)
-    {
-        Report(location, "GS0221", $"Cannot use the interpolated-string-handler argument: {reason}.");
-    }
+    => Report(location, DiagnosticDescriptors.InterpolatedStringHandlerArgument, reason);
 
     /// <summary>
     /// ADR-0055: reports an interpolation hole (<c>${ … }</c>) that is never
@@ -332,9 +265,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The text location of the unterminated hole.</param>
     public void ReportUnterminatedInterpolationHole(TextLocation location)
-    {
-        Report(location, "GS0222", "Unterminated interpolation hole; expected a closing '}'.");
-    }
+    => Report(location, DiagnosticDescriptors.UnterminatedInterpolationHole);
 
     /// <summary>
     /// ADR-0055: reports an empty interpolation hole (<c>${}</c>), which has no
@@ -342,9 +273,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The text location of the empty hole.</param>
     public void ReportEmptyInterpolationHole(TextLocation location)
-    {
-        Report(location, "GS0223", "Empty interpolation hole; expected an expression between '${' and '}'.");
-    }
+    => Report(location, DiagnosticDescriptors.EmptyInterpolationHole);
 
     /// <summary>
     /// ADR-0055: reports an interpolation hole whose format clause is present
@@ -352,9 +281,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The text location of the offending hole.</param>
     public void ReportEmptyInterpolationFormat(TextLocation location)
-    {
-        Report(location, "GS0224", "Empty format specifier; expected a format string after ':'.");
-    }
+    => Report(location, DiagnosticDescriptors.EmptyInterpolationFormat);
 
     /// <summary>
     /// ADR-0055: reports a raw newline in the literal portion of an
@@ -363,9 +290,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The text location of the newline.</param>
     public void ReportNewlineInInterpolatedStringLiteral(TextLocation location)
-    {
-        Report(location, "GS0225", "Newline in the literal portion of an interpolated string; only '${ … }' holes may span lines.");
-    }
+    => Report(location, DiagnosticDescriptors.NewlineInInterpolatedStringLiteral);
 
     /// <summary>
     /// ADR-0057 §P4: reports a documentation comment block that does not precede
@@ -373,9 +298,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The text location of the floating documentation comment.</param>
     public void ReportFloatingDocumentationComment(TextLocation location)
-    {
-        Report(location, "GS0227", "Documentation comment is not attached to a declaration.", DiagnosticSeverity.Warning);
-    }
+    => Report(location, DiagnosticDescriptors.FloatingDocumentationComment);
 
     /// <summary>
     /// ADR-0057 §P4: reports a public API member that lacks documentation (opt-in via /warnondoc or similar mechanism).
@@ -383,9 +306,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the undocumented declaration.</param>
     /// <param name="symbolName">The undocumented public symbol name.</param>
     public void ReportMissingDocumentation(TextLocation location, string symbolName)
-    {
-        Report(location, "GS0228", $"Missing documentation comment on public member '{symbolName}'.", DiagnosticSeverity.Warning);
-    }
+    => Report(location, DiagnosticDescriptors.MissingDocumentation, symbolName);
 
     /// <summary>
     /// ADR-0057 §P4: reports a @param or @typeparam tag whose name does not match
@@ -395,9 +316,7 @@ public sealed partial class DiagnosticBag
     /// <param name="paramName">The unmatched parameter or type-parameter name.</param>
     /// <param name="symbolName">The documented symbol name.</param>
     public void ReportDocParamMismatch(TextLocation location, string paramName, string symbolName)
-    {
-        Report(location, "GS0229", $"Documentation @param '{paramName}' does not match any parameter of '{symbolName}'.", DiagnosticSeverity.Warning);
-    }
+    => Report(location, DiagnosticDescriptors.DocParamMismatch, paramName, symbolName);
 
     /// <summary>
     /// ADR-0057 §P4: reserved for unsupported Markdown constructs that cannot be
@@ -406,9 +325,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the unsupported Markdown construct.</param>
     /// <param name="detail">Details about the unsupported Markdown construct.</param>
     public void ReportUnsupportedDocumentationMarkdown(TextLocation location, string detail)
-    {
-        Report(location, "GS0230", $"Unsupported documentation Markdown: {detail}. Use ```xmldoc for complex XML-doc constructs.", DiagnosticSeverity.Warning);
-    }
+    => Report(location, DiagnosticDescriptors.UnsupportedDocumentationMarkdown, detail);
 
     /// <summary>
     /// Reports GS0231 when a documentation comment contains an unknown block tag
@@ -417,9 +334,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The location of the documentation comment.</param>
     /// <param name="tagName">The unrecognised tag text.</param>
     public void ReportUnknownDocumentationTag(TextLocation location, string tagName)
-    {
-        Report(location, "GS0231", $"Unknown documentation tag '{tagName}'. Valid tags are: @param, @typeparam, @returns, @remarks, @value, @exception, @seealso.", DiagnosticSeverity.Warning);
-    }
+    => Report(location, DiagnosticDescriptors.UnknownDocumentationTag, tagName);
 
     /// <summary>
     /// ADR-0059 / issue #255: reports that a delegate declaration
@@ -429,9 +344,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The text location of the offending token.</param>
     public void ReportDelegateDeclarationRequiresFunc(TextLocation location)
-    {
-        Report(location, "GS0233", "Named delegate declaration requires 'func(...)' after 'delegate' (e.g. 'type Name = delegate func(sender Object, e EventArgs)').");
-    }
+    => Report(location, DiagnosticDescriptors.DelegateDeclarationRequiresFunc);
 
     /// <summary>
     /// Reports that the identifier <c>null</c> was used where the G# null
@@ -440,9 +353,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The source location of the <c>null</c> identifier.</param>
     public void ReportUseNilInsteadOfNull(TextLocation location)
-    {
-        Report(location, "GS0273", "'null' is not a literal in G#. Did you mean 'nil'?");
-    }
+    => Report(location, DiagnosticDescriptors.UseNilInsteadOfNull);
 
     /// <summary>
     /// ADR-0074 / issue #714: GS0302 (warning) — a switch-expression arm
@@ -453,9 +364,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The source location of the offending <c>-&gt;</c> token.</param>
     public void ReportSwitchExpressionArmArrowDeprecated(TextLocation location)
-    {
-        Report(location, "GS0302", "'->' in a switch-expression arm is deprecated; use ':' instead (ADR-0074).", DiagnosticSeverity.Warning);
-    }
+    => Report(location, DiagnosticDescriptors.SwitchExpressionArmArrowDeprecated);
 
     /// <summary>
     /// ADR-0075 / issue #715: GS0303 (warning) — a type-clause slot used the
@@ -466,9 +375,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The source location of the offending <c>func</c> keyword.</param>
     public void ReportFunctionTypeClauseFuncKeywordDeprecated(TextLocation location)
-    {
-        Report(location, "GS0303", "'func(...)' as a type clause is deprecated; use the arrow form '(...) -> R' instead (ADR-0075).", DiagnosticSeverity.Warning);
-    }
+    => Report(location, DiagnosticDescriptors.FunctionTypeClauseFuncKeywordDeprecated);
 
     /// <summary>
     /// ADR-0077 / issue #717: GS0305 — the legacy short variable-declaration
@@ -482,9 +389,7 @@ public sealed partial class DiagnosticBag
     /// <param name="migration">A context-specific replacement snippet
     /// (e.g. <c>let x = 1</c> or <c>var x = 1</c>) shown in the message.</param>
     public void ReportColonEqualsRemoved(TextLocation location, string migration)
-    {
-        Report(location, "GS0305", $"':=' short variable declaration has been removed; use 'let' (immutable) or 'var' (mutable) instead (e.g. '{migration}') (ADR-0077).", DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.ColonEqualsRemoved, migration);
 
     /// <summary>
     /// ADR-0078 / issue #718: GS0306 — the legacy <c>type Name &lt;agg-kw&gt; ...</c>
@@ -497,9 +402,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the offending <c>type</c> keyword.</param>
     /// <param name="migration">A context-specific replacement snippet (e.g. <c>class Point(x, y int32)</c>).</param>
     public void ReportOldTypeDeclarationFormRemoved(TextLocation location, string migration)
-    {
-        Report(location, "GS0306", $"The 'type Name <kind> ...' declaration head has been removed; use the kind keyword first (e.g. '{migration}') (ADR-0078).", DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.OldTypeDeclarationFormRemoved, migration);
 
     /// <summary>
     /// ADR-0078 / issue #718: GS0307 — the <c>record</c> contextual keyword has
@@ -510,9 +413,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the offending <c>record</c> identifier.</param>
     /// <param name="name">The aggregate name (used to build the migration snippet).</param>
     public void ReportRecordKeywordRemoved(TextLocation location, string name)
-    {
-        Report(location, "GS0307", $"The 'record' keyword has been removed; use 'data class {name}' (reference equality-bearing) or 'data struct {name}' (value equality-bearing) instead (ADR-0078).", DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.RecordKeywordRemoved, name, name);
 
     /// <summary>
     /// ADR-0078 / issue #718: GS0308 — <c>inline</c> is only valid on
@@ -521,9 +422,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The source location of the offending <c>inline</c> modifier.</param>
     public void ReportInlineOnlyValidOnStruct(TextLocation location)
-    {
-        Report(location, "GS0308", "'inline' is only valid on 'struct'; use 'inline struct Name(field T)' for a newtype wrapper (ADR-0078).", DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.InlineOnlyValidOnStruct);
 
     /// <summary>
     /// ADR-0078 / issue #718: GS0309 — <c>open</c> is only valid on
@@ -533,9 +432,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the offending <c>open</c> modifier.</param>
     /// <param name="kindName">The kind keyword that follows (e.g. <c>struct</c>).</param>
     public void ReportOpenOnlyValidOnClass(TextLocation location, string kindName)
-    {
-        Report(location, "GS0309", $"'open' is only valid on 'class'; '{kindName}' cannot be marked 'open' (ADR-0078).", DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.OpenOnlyValidOnClass, kindName);
 
     /// <summary>
     /// ADR-0078 / issue #718: GS0310 — <c>sealed</c> is only valid on
@@ -545,9 +442,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the offending <c>sealed</c> modifier.</param>
     /// <param name="kindName">The kind keyword that follows.</param>
     public void ReportSealedOnlyValidOnClassOrInterface(TextLocation location, string kindName)
-    {
-        Report(location, "GS0310", $"'sealed' is only valid on 'class' or 'interface'; '{kindName}' cannot be marked 'sealed' (ADR-0078).", DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.SealedOnlyValidOnClassOrInterface, kindName);
 
     /// <summary>
     /// ADR-0078 / issue #718: GS0311 — <c>data</c> and <c>inline</c> cannot be
@@ -557,9 +452,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The source location of the offending modifier.</param>
     public void ReportDataAndInlineCannotCombine(TextLocation location)
-    {
-        Report(location, "GS0311", "'data' and 'inline' cannot be combined; choose one (ADR-0078).", DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.DataAndInlineCannotCombine);
 
     /// <summary>
     /// ADR-0078 / issue #718: GS0312 — <c>open</c> and <c>sealed</c> on the
@@ -568,9 +461,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The source location of the second modifier.</param>
     public void ReportOpenAndSealedCannotCombine(TextLocation location)
-    {
-        Report(location, "GS0312", "'open' and 'sealed' cannot be combined on the same declaration (ADR-0078).", DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.OpenAndSealedCannotCombine);
 
     /// <summary>
     /// ADR-0080 / issue #720: GS0315 (warning) — a call-site or attribute named
@@ -582,13 +473,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the offending <c>=</c> token.</param>
     /// <param name="argumentName">The argument name on the left of the separator.</param>
     public void ReportNamedArgumentEqualsSeparatorDeprecated(TextLocation location, string argumentName)
-    {
-        Report(
-            location,
-            "GS0315",
-            $"Named argument '{argumentName}' uses the deprecated '=' separator; use '{argumentName}: value' instead (ADR-0080).",
-            DiagnosticSeverity.Warning);
-    }
+    => Report(location, DiagnosticDescriptors.NamedArgumentEqualsSeparatorDeprecated, argumentName, argumentName);
 
     /// <summary>
     /// ADR-0082 / issue #722: GS0316 — a Go-flavored concurrency syntactic
@@ -602,13 +487,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the offending keyword or operator.</param>
     /// <param name="form">The triggering syntactic form (e.g. <c>go</c>, <c>chan</c>, <c>&lt;-</c>, <c>select</c>, <c>close</c>, <c>make(chan)</c>).</param>
     public void ReportGoExtensionsImportRequired(TextLocation location, string form)
-    {
-        Report(
-            location,
-            "GS0316",
-            $"'{form}' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' or use 'scope' + 'async'/'await' instead (ADR-0082).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.GoExtensionsImportRequired, form);
 
     /// <summary>
     /// ADR-0083 / issue #723: GS0317 — a Go-style built-in function
@@ -629,15 +508,10 @@ public sealed partial class DiagnosticBag
     /// <param name="suggestion">A short alternative form to recommend (e.g. <c>.Length</c>, <c>.Count</c>, <c>.Remove(k)</c>), or <c>null</c> when there is no clean .NET-idiomatic replacement.</param>
     public void ReportGoBuiltinRequiresImport(TextLocation location, string builtin, string suggestion)
     {
-        var message = suggestion is null
-            ? $"'{builtin}' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' (ADR-0083)."
-            : $"'{builtin}' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' or call '{suggestion}' directly (ADR-0083).";
-
-        Report(
-            location,
-            "GS0317",
-            message,
-            DiagnosticSeverity.Error);
+        var suggestionText = suggestion is null
+            ? string.Empty
+            : string.Format(DiagnosticDescriptors.GoBuiltinSuggestionMessageFormat, suggestion);
+        Report(location, DiagnosticDescriptors.GoBuiltinRequiresImport, builtin, suggestionText);
     }
 
     /// <summary>
@@ -648,13 +522,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The location of the rejected <c>params</c> keyword.</param>
     public void ReportParamsKeywordNotSupported(TextLocation location)
-    {
-        Report(
-            location,
-            "GS0363",
-            "The C# 'params' keyword is not supported in G#. Use the canonical variadic spelling 'name ...T' (Go-style); inside the function body the parameter has type '[]T'.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.ParamsKeywordNotSupported);
 
     /// <summary>
     /// Reports GS0366 — ADR-0104 / issue #805: the legacy Go-flavored
@@ -667,13 +535,7 @@ public sealed partial class DiagnosticBag
     /// <param name="keyTypeText">The source text of the key type clause.</param>
     /// <param name="valueTypeText">The source text of the value type clause.</param>
     public void ReportLegacyMapTypeClauseSyntax(TextLocation location, string keyTypeText, string valueTypeText)
-    {
-        Report(
-            location,
-            "GS0366",
-            $"The 'map[K]V' type-clause spelling has been removed; use 'map[{keyTypeText},{valueTypeText}]' instead (ADR-0104).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.LegacyMapTypeClauseSyntax, keyTypeText, valueTypeText);
 
     /// <summary>
     /// Issue #1602: GS0417 — the source nests expressions, types, statements,
@@ -688,13 +550,7 @@ public sealed partial class DiagnosticBag
     /// </summary>
     /// <param name="location">The source location where the nesting limit was exceeded.</param>
     public void ReportNestingTooDeep(TextLocation location)
-    {
-        Report(
-            location,
-            "GS0417",
-            "The code is nested too deeply for the compiler to parse; simplify or flatten the nesting (issue #1602).",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.NestingTooDeep);
 
     /// <summary>
     /// Reports GS0368 — issue #881: an interface <c>func</c> declaration with
@@ -709,11 +565,5 @@ public sealed partial class DiagnosticBag
     /// expected (immediately after the return-type clause).</param>
     /// <param name="methodName">The name of the offending interface method.</param>
     public void ReportInterfaceMethodMissingSemicolon(TextLocation location, string methodName)
-    {
-        Report(
-            location,
-            "GS0368",
-            $"Interface method '{methodName}' has no body and must be terminated with ';' (ADR-0085); a bodyless 'func' uses ';' as its no-body marker, mirroring P/Invoke.",
-            DiagnosticSeverity.Error);
-    }
+    => Report(location, DiagnosticDescriptors.InterfaceMethodMissingSemicolon, methodName);
 }

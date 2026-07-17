@@ -84,9 +84,29 @@ public sealed partial class DiagnosticBag : IEnumerable<Diagnostic>
         this.diagnostics.AddRange(diagnostics);
     }
 
-    private void Report(TextLocation location, string id, string message, DiagnosticSeverity severity = DiagnosticSeverity.Error)
+    private void Report(TextLocation location, DiagnosticDescriptor descriptor, params object[] messageArguments)
     {
-        var diagnostic = new Diagnostic(location, id, severity, message);
+        Report(location, descriptor, descriptor.Severity, messageArguments);
+    }
+
+    private void ReportWithErrorPromotion(
+        TextLocation location,
+        DiagnosticDescriptor descriptor,
+        bool promoteToError,
+        params object[] messageArguments)
+    {
+        var severity = promoteToError ? DiagnosticSeverity.Error : descriptor.Severity;
+        Report(location, descriptor, severity, messageArguments);
+    }
+
+    private void Report(
+        TextLocation location,
+        DiagnosticDescriptor descriptor,
+        DiagnosticSeverity severity,
+        object[] messageArguments)
+    {
+        var message = string.Format(descriptor.MessageFormat, messageArguments);
+        var diagnostic = new Diagnostic(location, descriptor.Id, severity, message);
         diagnostics.Add(diagnostic);
     }
 }

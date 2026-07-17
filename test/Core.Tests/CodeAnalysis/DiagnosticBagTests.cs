@@ -80,6 +80,45 @@ public class DiagnosticBagTests
         Assert.All(diagnostics, d => Assert.Equal(DiagnosticSeverity.Error, d.Severity));
     }
 
+    [Fact]
+    public void DescriptorFormatting_Preserves_MessageVariants_And_DynamicSeverity()
+    {
+        var location = MakeLocation("x");
+        var bag = new DiagnosticBag();
+
+        bag.ReportAmbiguousOverload(
+            location,
+            "F",
+            2,
+            new[] { "F(int32)", string.Empty, "F(string)" });
+        bag.ReportGoBuiltinRequiresImport(location, "len", null);
+        bag.ReportGoBuiltinRequiresImport(location, "len", ".Length");
+        bag.ReportObsoleteUse(location, "Old", null, false);
+        bag.ReportObsoleteUse(location, "Old", "use New", true);
+
+        Assert.Collection(
+            bag,
+            diagnostic => Assert.Equal(
+                "Call to 'F' is ambiguous between 2 applicable overloads. Candidates: F(int32); F(string).",
+                diagnostic.Message),
+            diagnostic => Assert.Equal(
+                "'len' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' (ADR-0083).",
+                diagnostic.Message),
+            diagnostic => Assert.Equal(
+                "'len' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' or call '.Length' directly (ADR-0083).",
+                diagnostic.Message),
+            diagnostic =>
+            {
+                Assert.Equal("'Old' is obsolete.", diagnostic.Message);
+                Assert.Equal(DiagnosticSeverity.Warning, diagnostic.Severity);
+            },
+            diagnostic =>
+            {
+                Assert.Equal("'Old' is obsolete: 'use New'.", diagnostic.Message);
+                Assert.Equal(DiagnosticSeverity.Error, diagnostic.Severity);
+            });
+    }
+
     private static TextLocation MakeLocation(string text)
     {
         var source = SourceText.From(text);
