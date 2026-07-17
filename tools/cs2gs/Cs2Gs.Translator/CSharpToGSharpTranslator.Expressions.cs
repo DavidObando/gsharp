@@ -845,6 +845,20 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            // Issue #2434: the ARGUMENT-position counterpart of the rule just
+            // above — an UNCONDITIONAL (no guard dominating this exact use)
+            // forward of a same-project promoted-nullable value as a call-site
+            // argument whose bound parameter is a genuine non-null reference
+            // type cs2gs will not also promote. Covers ordinary calls, direct
+            // delegate invocations, and conditional delegate invocations alike
+            // (the exact Oahu.Core BookLibrary.gs:490 shape:
+            // `callback?(tmp)` where `tmp` is `Conversion?` and the delegate
+            // parameter is `IConversion`).
+            if (this.IsUnguardedForwardOfTaintedValueAsArgument(recv))
+            {
+                return true;
+            }
+
             // Issue #2202: a call (or property/field read) whose result comes from
             // an EXTERNAL (metadata) member compiled without a nullable context is
             // oblivious — Roslyn reports its reference-type return/type as
@@ -1128,6 +1142,25 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            return this.IsDominatedByNullCheckGuard(use, symbol);
+        }
+
+        // Issue #2202 / #2434: true when a null-check guard for <paramref
+        // name="symbol"/> dominates <paramref name="use"/> — walking outward
+        // from the use to find an enclosing `if (F == null) {…} else { …F… }` /
+        // `if (F != null) { …F… }` statement, or `F == null ? … : …F…` /
+        // `F != null ? …F… : …` conditional expression, whose condition
+        // directly null-checks that same symbol. Originally scoped to the
+        // field/property caller (<see cref="IsNullGuardNarrowedFieldUse"/>),
+        // this walk is symbol-kind-agnostic and is reused as-is by the
+        // argument-forwarding rule (#2434,
+        // <see cref="IsUnguardedForwardOfTaintedValueAsArgument"/>), which
+        // needs the identical textual-guard detection for a LOCAL/PARAMETER —
+        // a guarded local is narrowed by gsc's own Kotlin-style smart-cast
+        // exactly as a guarded field is narrowed here, syntactically, so a
+        // single shared walk serves both callers.
+        private bool IsDominatedByNullCheckGuard(ExpressionSyntax use, ISymbol symbol)
+        {
             for (SyntaxNode node = use; node != null; node = node.Parent)
             {
                 switch (node.Parent)
@@ -1291,6 +1324,131 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return this.IsBodyOfReturnPreservingMember(use);
+        }
+
+        // Issue #2434: true when <paramref name="use"/> is a same-project
+        // field/property/local/parameter/method read that is ALREADY emitted
+        // `T?` (declared nullable, or promoted by the whole-program oblivious
+        // taint fixpoint — the same <see cref="IsNullablePromotedValue"/> test
+        // as the #2432 return-forwarding rule) AND is passed, UNGUARDED (no
+        // dominating null-check guard for the same symbol —
+        // <see cref="IsDominatedByNullCheckGuard"/>), as the (possibly
+        // parenthesized) ENTIRE expression of a call-site argument whose bound
+        // parameter is a genuine non-null reference type that cs2gs itself will
+        // NOT also promote to nullable (<see cref="ShouldPromoteToNullableReference"/>).
+        //
+        // The canonical shape is the Oahu.Core BookLibrary case: a same-project
+        // concrete `Conversion` local promoted to `Conversion?` by unrelated
+        // constructor-parameter taint, forwarded as the sole argument of a
+        // CONDITIONAL delegate invocation (`callback?(tmp)`) whose delegate
+        // parameter type is the concrete class's own interface `IConversion` —
+        // a fixed, external (`System.Action<T>`-shaped) function-type
+        // parameter that can NEVER itself be promoted to nullable the way an
+        // ordinary same-project method parameter can (contrast a plain
+        // `Run(IConversion c)` call, whose OWN parameter the taint fixpoint
+        // promotes to `IConversion?` in lockstep with the argument,
+        // sidestepping the gap entirely). The same gap reaches a DIRECT
+        // (non-conditional) delegate invocation, a lambda-typed local, and any
+        // ordinary same-project call whose parameter the fixpoint happens not
+        // to promote — this rule is scoped to the ARGUMENT SHAPE, not to
+        // delegates specifically, so a single rule (reusing gsc's existing
+        // explicit-nullable-unwrap-then-implicit-reference-widen composition
+        // in `Conversion.Classify`, which already accepts `tmp!!` here) covers
+        // every call form uniformly, matching #2432's "search existing
+        // conversion helpers, don't special-case" guidance. Unlike
+        // <see cref="IsUnguardedForwardOfTaintedValueInReturnPreservingBody"/>,
+        // a GUARDED local at this same call site needs no help at all: gsc's
+        // own Kotlin-style smart-cast already narrows a syntactically-guarded
+        // local read, so <see cref="IsDominatedByNullCheckGuard"/> must find NO
+        // guard for this rule to apply, keeping the forgiveness reserved for
+        // the truly unconditional forward the original (oblivious) C# accepted
+        // implicitly.
+        private bool IsUnguardedForwardOfTaintedValueAsArgument(ExpressionSyntax use)
+        {
+            if (!this.IsObliviousCompilation())
+            {
+                return false;
+            }
+
+            ISymbol symbol = this.context.GetSymbolInfo(use).Symbol;
+            if (symbol is not (IFieldSymbol or IPropertySymbol or ILocalSymbol or IParameterSymbol or IMethodSymbol))
+            {
+                return false;
+            }
+
+            if (!this.IsNullablePromotedValue(use))
+            {
+                return false;
+            }
+
+            // Walk up through parentheses to the immediate syntactic parent:
+            // this rule covers only a DIRECT (unwrapped) forward — a
+            // ternary/switch arm or any other composed expression never
+            // resolves to an ArgumentSyntax parent here and is intentionally
+            // left to the return-preserving-body rule (or unhandled) instead.
+            SyntaxNode node = use;
+            while (node.Parent is ParenthesizedExpressionSyntax)
+            {
+                node = node.Parent;
+            }
+
+            if (node.Parent is not ArgumentSyntax argumentSyntax)
+            {
+                return false;
+            }
+
+            // A dominating guard means gsc's own smart-cast (locals) or the
+            // sibling field/property rule (already checked earlier in
+            // ReceiverNeedsNullForgiveness) already makes this use safe
+            // without any help from this rule.
+            if (this.IsDominatedByNullCheckGuard(use, symbol))
+            {
+                return false;
+            }
+
+            if (this.context.SemanticModel.GetOperation(argumentSyntax) is not IArgumentOperation argumentOperation
+                || argumentOperation.Parameter is not { } parameter)
+            {
+                return false;
+            }
+
+            ITypeSymbol parameterType = parameter.Type;
+            if (parameterType is not { IsReferenceType: true }
+                || parameterType.NullableAnnotation == NullableAnnotation.Annotated)
+            {
+                return false;
+            }
+
+            // If cs2gs will ALSO promote the bound parameter to nullable (the
+            // ordinary same-project method case above), the argument already
+            // widens `T? -> T?` with no `!!` required — forcing one here would
+            // be superfluous, not incorrect. This ONLY applies when the
+            // parameter is itself declared by SOURCE inside THIS compilation:
+            // cs2gs can only ever change the rendered signature of a symbol it
+            // is translating from source — an EXTERNAL/BCL parameter (e.g. the
+            // synthesized `Invoke` of `System.Action<T>`/`System.Func<T,...>`)
+            // is never re-emitted, so its declared type can never actually be
+            // promoted, no matter what `ShouldPromoteToNullableReference`
+            // reports for it. That check alone is NOT a reliable signal here:
+            // `Canonical()` maps a CONSTRUCTED generic Invoke parameter (e.g.
+            // `Action<IConversion>.Invoke(IConversion)`) back to the single
+            // SHARED unbound-generic definition `Action<T>.Invoke(T)` — the
+            // very same canonical key the whole-program fixpoint uses to
+            // record evidence for the delegate-parameter-promotion feature
+            // (`PromoteDelegateParameterInvokedWithNull`) — so the CURRENT
+            // invocation being translated (a tainted argument passed to THIS
+            // delegate call) is itself sufficient evidence to mark that
+            // canonical key tainted, self-referentially, for EVERY `Action<T>`/
+            // `Func<T,...>` call site in the whole compilation. Requiring
+            // source-declared-in-this-compilation excludes that external
+            // symbol category entirely and leaves the same-project method
+            // case (whose parameter genuinely has a declaring syntax node
+            // here) unaffected.
+            bool parameterDeclaredInThisCompilation = parameter.DeclaringSyntaxReferences
+                .Any(reference => this.context.Compilation.ContainsSyntaxTree(reference.SyntaxTree));
+
+            return !(parameterDeclaredInThisCompilation
+                && this.ShouldPromoteToNullableReference(parameter));
         }
 
         // Walks outward from <paramref name="use"/> through parentheses to find
