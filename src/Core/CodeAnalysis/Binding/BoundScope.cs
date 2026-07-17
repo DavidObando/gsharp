@@ -456,6 +456,27 @@ public sealed class BoundScope
             return true;
         }
 
+        // Issue #2414: neither the caller's own package-qualified bucket nor
+        // the plain (first-come) bucket matched. When a name collision
+        // occurred (see TryDeclareExtensionFunction), every OTHER colliding
+        // package's overloads live in THEIR OWN package-qualified buckets,
+        // which the two checks above never probe unless the caller happens
+        // to belong to that exact package. Extensions are broadly visible by
+        // design — packages are not import boundaries — so a third package
+        // (neither the plain bucket's first-come owner nor `currentPackage`)
+        // must still be able to resolve every other package's same-name
+        // extension. Scan every remaining qualified bucket for `name` before
+        // giving up in this scope.
+        var otherMatches = CollectExtensionFunctionMatchesFromOtherPackages(
+            name,
+            currentPackage != null ? PackageQualifiedName(currentPackage, name) : null,
+            receiverType);
+        if (!otherMatches.IsDefaultOrEmpty)
+        {
+            function = otherMatches[0];
+            return true;
+        }
+
         return Parent?.TryLookupExtensionFunction(receiverType, name, out function) ?? false;
     }
 
@@ -490,16 +511,33 @@ public sealed class BoundScope
         // colliding extension under this name still sees every OTHER
         // extension by simple name via the plain-key fallback below.
         var currentPackage = GetCurrentDeclaringPackage();
+        string ownKey = null;
         if (currentPackage != null)
         {
-            var ownMatches = CollectExtensionFunctionMatches(PackageQualifiedName(currentPackage, name), receiverType);
+            ownKey = PackageQualifiedName(currentPackage, name);
+            var ownMatches = CollectExtensionFunctionMatches(ownKey, receiverType);
             if (!ownMatches.IsDefaultOrEmpty)
             {
                 return ownMatches;
             }
         }
 
-        return CollectExtensionFunctionMatches(name, receiverType);
+        var plainMatches = CollectExtensionFunctionMatches(name, receiverType);
+        if (!plainMatches.IsDefaultOrEmpty)
+        {
+            return plainMatches;
+        }
+
+        // Issue #2414: neither the caller's own package-qualified bucket nor
+        // the plain (first-come) bucket produced a match. When a name
+        // collision occurred (see TryDeclareExtensionFunction), every OTHER
+        // colliding package's overloads live in THEIR OWN package-qualified
+        // buckets, which are otherwise invisible to any package that isn't
+        // either the plain bucket's first-come owner or `currentPackage`
+        // itself. Extensions are broadly visible by design — packages are
+        // not import boundaries — so gather every remaining qualified
+        // bucket's applicable overloads for `name` before giving up.
+        return CollectExtensionFunctionMatchesFromOtherPackages(name, ownKey, receiverType);
     }
 
     /// <summary>Gets the extension functions declared in this scope (Phase 3.B.6).</summary>
@@ -1522,6 +1560,72 @@ public sealed class BoundScope
         }
 
         return builder == null ? ImmutableArray<FunctionSymbol>.Empty : builder.ToImmutable();
+    }
+
+    /// <summary>
+    /// Issue #2414: collects every extension-function overload visible from
+    /// this scope's Parent chain that is stored under a package-qualified key
+    /// for <paramref name="name"/> OTHER than <paramref name="excludeKey"/> (the
+    /// caller's own package-qualified key, already tried) and matches
+    /// <paramref name="receiverType"/>. A package-qualified bucket (storage
+    /// key <c>"{package}#{name}"</c> — see <see cref="PackageQualifiedName"/>)
+    /// is created only when two or more packages declare a same-simple-name
+    /// extension (see <see cref="TryDeclareExtensionFunction"/>); before this
+    /// fallback existed, a package that neither owned the plain bucket nor
+    /// had its own qualified bucket for that name could never see any other
+    /// package's colliding overloads, silently breaking the documented
+    /// "extensions are broadly visible; packages are not import boundaries"
+    /// contract (e.g. a same-named extension declared by a consuming
+    /// project's own package shadowed every sibling package's extension of
+    /// the same name for every OTHER caller).
+    /// </summary>
+    /// <param name="name">The method name at the call site.</param>
+    /// <param name="excludeKey">The caller's own package-qualified key, already probed by the caller; skipped here.</param>
+    /// <param name="receiverType">The static type of the call receiver.</param>
+    /// <returns>The matching extension overloads from other packages' qualified buckets, or an empty array when none match.</returns>
+    private ImmutableArray<FunctionSymbol> CollectExtensionFunctionMatchesFromOtherPackages(string name, string excludeKey, TypeSymbol receiverType)
+    {
+        var suffix = "#" + name;
+        HashSet<string> otherKeys = null;
+        for (var s = this; s != null; s = s.Parent)
+        {
+            if (s.extensionFunctionsByName == null)
+            {
+                continue;
+            }
+
+            foreach (var key in s.extensionFunctionsByName.Keys)
+            {
+                if (string.Equals(key, excludeKey, StringComparison.Ordinal)
+                    || !key.EndsWith(suffix, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                otherKeys ??= new HashSet<string>(StringComparer.Ordinal);
+                otherKeys.Add(key);
+            }
+        }
+
+        if (otherKeys == null)
+        {
+            return ImmutableArray<FunctionSymbol>.Empty;
+        }
+
+        ImmutableArray<FunctionSymbol>.Builder combined = null;
+        foreach (var key in otherKeys)
+        {
+            var matches = CollectExtensionFunctionMatches(key, receiverType);
+            if (matches.IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            combined ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
+            combined.AddRange(matches);
+        }
+
+        return combined?.ToImmutable() ?? ImmutableArray<FunctionSymbol>.Empty;
     }
 
     /// <summary>
