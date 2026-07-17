@@ -983,6 +983,20 @@ internal static class ObliviousNullabilityAnalyzer
 
                 break;
 
+            // `await expr`: issue #2421 — a `return await TaintedAsyncCall()`
+            // must forward the SAME transitive edge a synchronous `return
+            // TaintedCall()` already gets, or the enclosing async method never
+            // converges to tainted despite forwarding a provably-nullable
+            // awaited result (mirrors the identical unwrap in
+            // IsDirectlyNullable above).
+            case AwaitExpressionSyntax awaitExpression:
+                foreach (ISymbol source in ResolveSources(awaitExpression.Expression, model, scope))
+                {
+                    yield return source;
+                }
+
+                break;
+
             case PostfixUnaryExpressionSyntax suppress
                 when suppress.IsKind(SyntaxKind.SuppressNullableWarningExpression):
                 yield break;
@@ -1111,6 +1125,17 @@ internal static class ObliviousNullabilityAnalyzer
 
             case ParenthesizedExpressionSyntax paren:
                 return IsDirectlyNullable(paren.Expression, model);
+
+            // `await expr`: an awaited `Task<T>`'s own nullability is that of
+            // T, which is exactly what the UNWRAPPED awaited expression's own
+            // syntactic shape already answers here (mirrors ResolveSources'
+            // identical unwrap immediately below, and the translator's
+            // symmetric async-return unwrap in
+            // CSharpToGSharpTranslator.PromoteAwaitedReturnIfTainted, issue
+            // #2421). Without this, `return await x?.M();` inside an async
+            // method would be treated as NOT directly nullable at all.
+            case AwaitExpressionSyntax awaitExpression:
+                return IsDirectlyNullable(awaitExpression.Expression, model);
 
             case PostfixUnaryExpressionSyntax suppress
                 when suppress.IsKind(SyntaxKind.SuppressNullableWarningExpression):
