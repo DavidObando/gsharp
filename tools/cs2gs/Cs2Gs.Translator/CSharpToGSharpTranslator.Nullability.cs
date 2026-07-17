@@ -183,6 +183,35 @@ public sealed partial class CSharpToGSharpTranslator
                 : type;
         }
 
+        // Issue #2423: mirrors PromoteAwaitedReturnIfTainted's decision for a
+        // NON-async `Task<T>`/`ValueTask<T>`-returning declaration (a C#
+        // interface member — interfaces cannot declare `async` members — or a
+        // synchronous method that literally returns the envelope). Unlike the
+        // async path, there is no `async` keyword here to imply the envelope,
+        // so the literal `Task[T]`/`ValueTask[T]` reference from `envelope`
+        // must be PRESERVED and only its type ARGUMENT promoted — otherwise an
+        // interface declaration and its `async` implementation, once synced by
+        // CollectInterfaceMethodEdges, would promote to two structurally
+        // different shapes (`Task[T]?` outer-nullable vs `Task[T?]`
+        // inner-nullable) that still fail interface-conformance (GS0187).
+        private GTypeReference PromoteTaskEnvelopeReturnIfTainted(
+            GTypeReference envelope,
+            ITypeSymbol awaitedType,
+            IMethodSymbol symbol)
+        {
+            if (envelope is not NamedTypeReference { TypeArguments.Count: 1 } named || named.IsNullable)
+            {
+                return envelope;
+            }
+
+            GTypeReference promotedInner = this.PromoteAwaitedReturnIfTainted(
+                named.TypeArguments[0], awaitedType, symbol);
+
+            return ReferenceEquals(promotedInner, named.TypeArguments[0])
+                ? envelope
+                : new NamedTypeReference(named.Name, new[] { promotedInner });
+        }
+
         // Issue #914 (oblivious sink): promote the ELEMENT types of a tuple return
         // to `T?` for every position whose returned tuple-expression element is a
         // promoted-nullable value. A method returning `(string Dir, string Path)`

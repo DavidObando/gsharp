@@ -920,6 +920,27 @@ public sealed partial class CSharpToGSharpTranslator
                 // no-op for a tuple value type).
                 mapped = this.PromoteTupleReturnIfTainted(mapped, returnType, node);
 
+                // Issue #2423: a NON-async declaration (a C# interface member —
+                // interfaces cannot declare `async` members — or a synchronous
+                // method that literally returns a `Task<T>`/`ValueTask<T>`
+                // envelope) is still a taint-consumption sink for the AWAITED
+                // type T, not for the envelope itself: the Task instance is not
+                // a nullability-bearing artifact of the source, only the
+                // logical awaited result is. Whole-envelope promotion here
+                // (`Task[T]?`) would render a structurally different shape
+                // from an `async` implementation's sugar, which instead
+                // nullifies the awaited result (`Task[T?]`,
+                // PromoteAwaitedReturnIfTainted) — defeating interface/impl
+                // conformance once CollectInterfaceMethodEdges syncs both
+                // sides' taint (GS0187).
+                if (returnType is INamedTypeSymbol { IsGenericType: true } taskLikeSync &&
+                    taskLikeSync.TypeArguments.Length == 1 &&
+                    taskLikeSync.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks" &&
+                    taskLikeSync.Name is "Task" or "ValueTask")
+                {
+                    return this.PromoteTaskEnvelopeReturnIfTainted(mapped, taskLikeSync.TypeArguments[0], symbol);
+                }
+
                 // Issue #2113: promote the return type to `T?` through the same
                 // shared symbol-position decision used by every declaration sink.
                 return this.PromoteReturnIfTainted(mapped, symbol);
