@@ -315,13 +315,19 @@ internal sealed partial class ExpressionBinder
         // that does NOT resolve to a value, a type, an import alias, or an
         // imported class — i.e. a pure namespace/package component. Stop at the
         // first segment that is anything else (a generic-name type reference, a
-        // type name, or the terminal construction).
+        // type name, or the terminal construction). Only the FIRST segment is
+        // required to fail the in-scope-value check: once a segment has been
+        // accepted as a namespace-prefix component, the chain can no longer be a
+        // value-access chain (there is no value at its head to access `.member`
+        // on), so a later segment coincidentally sharing a name with an unrelated
+        // in-scope value (e.g. a field on the enclosing type) is not a genuine
+        // alternate interpretation and must not stop peeling (issue #2419).
         ExpressionSyntax current = syntax;
         var peeledAny = false;
         while (current is AccessorExpressionSyntax accessor
                && !accessor.IsNullConditional
                && accessor.LeftPart is NameExpressionSyntax leftName
-               && IsNamespacePrefixSegment(leftName.IdentifierToken.Text))
+               && IsNamespacePrefixSegment(leftName.IdentifierToken.Text, isLeadingSegment: !peeledAny))
         {
             current = accessor.RightPart;
             peeledAny = true;
