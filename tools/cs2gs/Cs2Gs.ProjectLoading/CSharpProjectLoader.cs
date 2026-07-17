@@ -191,8 +191,16 @@ public static class CSharpProjectLoader
 
         var workspaceFailures = new List<Diagnostic>();
         using var workspace = MSBuildWorkspace.Create();
-        workspace.LoadMetadataForReferencedProjects = true;
 
+        // Issue #2412: unlike LoadProjectAsync, this loader's entire purpose is
+        // to load referenced projects as their own bound source Projects so their
+        // syntax is available to callers (e.g. cross-project oblivious-nullability
+        // taint analysis, Refs #914). Setting LoadMetadataForReferencedProjects
+        // makes MSBuildWorkspace collapse same-solution ProjectReferences into
+        // pure metadata references instead of Solution.Projects entries, which
+        // silently empties root.ProjectReferences/TransitiveCSharpProjectReferences
+        // below and degrades this call to loading only the primary project — do
+        // not set it here.
         Project project = await workspace.OpenProjectAsync(fullPath, cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 

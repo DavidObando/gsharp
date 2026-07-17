@@ -14,6 +14,7 @@ using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 
 namespace Cs2Gs.Pipeline;
 
@@ -84,6 +85,18 @@ public sealed class TranslateStage : IMigrationStage
                 DeclaredProjectItems.Read(context.App.ProjectPath, "PackageReference")));
         context.ProjectReferences.AddRange(
             DeclaredProjectItems.Read(context.App.ProjectPath, "ProjectReference"));
+
+        // Issue #2412: every project's own `Compilation` in this run (app +
+        // every transitively-referenced sibling), so `TranslationContext.
+        // ResolveDeclaringCompilation` can redirect a whole-program fact query
+        // (e.g. `ObliviousNullabilityAnalyzer`'s oblivious-taint fixpoint) for a
+        // symbol declared in a REFERENCED sibling project back to that
+        // sibling's OWN compilation — the one whose syntax trees actually
+        // contain the tainting evidence — instead of always the current
+        // document's own project compilation, which never sees it.
+        IReadOnlyList<CSharpCompilation> siblingCompilations = projects
+            .Select(p => p.Compilation)
+            .ToList();
 
         // Translate the app itself (index 0) plus its transitively referenced
         // sibling projects (Refs #914). Sibling G# is emitted so the app's uses
@@ -185,7 +198,8 @@ public sealed class TranslateStage : IMigrationStage
                 var translationContext = new TranslationContext(
                     currentProject.Compilation,
                     document.SemanticModel,
-                    document.FilePath);
+                    document.FilePath,
+                    siblingCompilations);
 
                 CompilationUnit unit = translator.TranslateDocument(document, translationContext);
                 string printed = GSharpPrinter.Print(unit);

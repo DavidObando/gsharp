@@ -105,6 +105,196 @@ internal static class ObliviousNullabilityAnalyzer
         return Cache.GetValue(compilation, Compute).Tainted.Contains(Canonical(symbol));
     }
 
+    /// <summary>
+    /// Issue #2412: cross-project overload of <see cref="IsTainted(CSharpCompilation, ISymbol)"/>.
+    /// <paramref name="compilation"/>'s own whole-program taint fixpoint only
+    /// walks ITS OWN syntax trees, so it never sees a referenced sibling
+    /// project's tainting evidence — even for a symbol DECLARED in
+    /// <paramref name="compilation"/> itself, when that evidence is an
+    /// interface-implementation edge (issue #2285) recorded only inside a
+    /// sibling project's own fixpoint (the sibling's own source types are the
+    /// ones implementing the interface). This tries <paramref name="compilation"/>
+    /// first (byte-identical to the two-argument overload for every existing,
+    /// single-compilation caller — an empty or <see langword="null"/>
+    /// <paramref name="siblingCompilations"/> reduces to exactly that), then
+    /// each of <paramref name="siblingCompilations"/> in the supplied
+    /// (deterministic) order, returning <see langword="true"/> on the first
+    /// compilation whose OWN cached <see cref="Compute"/> result proves the
+    /// symbol tainted. A symbol declared in — or seeded/propagated from — ANY
+    /// ONE known project's own source is a single global fact once true, so
+    /// this is a plain existential OR: each candidate's result is computed
+    /// (and cached, same <see cref="Cache"/>) independently and exactly once
+    /// regardless of how many times this overload is called, keeping repeated
+    /// per-document queries within one run, and across a project translated
+    /// both standalone and as a sibling, consistent and cheap.
+    /// <para>
+    /// Deliberately scoped to <paramref name="symbol"/> ITSELF (plus its
+    /// remapped counterpart in each sibling) — never a same-compilation
+    /// backward walk through <paramref name="compilation"/>'s own assignment
+    /// edges to some OTHER, indirectly-connected declaration. Issue #2412's
+    /// own worked example is explicit that the fix must insert `!!`
+    /// forgiveness AT THE CONSUMPTION SITE while leaving the consuming
+    /// project's OWN declarations (e.g. an object-initializer target
+    /// property) untouched — confirmed empirically: even a fully MERGED
+    /// single-compilation version of the exact LibA/LibB repro promotes the
+    /// object-initializer TARGET property's own declared type too (the
+    /// existing, pre-#2412 edge-based fixpoint already treats "declaration
+    /// type is the join of every direct assignment" uniformly for locals,
+    /// fields, AND properties alike) — a broader, transitively-propagating
+    /// design here would branch further from that minimal, explicitly-scoped
+    /// request than necessary, and would let ONE cross-project call site's
+    /// taint silently repaint an unrelated declaration's own type everywhere
+    /// else it is used in the consuming project.
+    /// </para>
+    /// </summary>
+    /// <param name="compilation">The compilation of the translation unit asking about <paramref name="symbol"/>.</param>
+    /// <param name="symbol">The declaration symbol to test.</param>
+    /// <param name="siblingCompilations">
+    /// Every other project's own compilation loaded in the same migration run
+    /// (<see cref="TranslationContext.SiblingCompilations"/>), or
+    /// <see langword="null"/> when none is known.
+    /// </param>
+    /// <returns><see langword="true"/> when any known compilation's own analysis proves the symbol null-tainted.</returns>
+    public static bool IsTainted(
+        CSharpCompilation compilation,
+        ISymbol symbol,
+        IReadOnlyList<CSharpCompilation> siblingCompilations)
+    {
+        if (IsTainted(compilation, symbol))
+        {
+            return true;
+        }
+
+        if (symbol == null || siblingCompilations == null)
+        {
+            return false;
+        }
+
+        foreach (CSharpCompilation sibling in siblingCompilations)
+        {
+            if (sibling == null || ReferenceEquals(sibling, compilation))
+            {
+                continue;
+            }
+
+            // A symbol resolved through one compilation's semantic model and
+            // the "same" declaration resolved directly in the compilation that
+            // actually owns it are NOT `SymbolEqualityComparer.Default`-equal
+            // across two independently-bound `CSharpCompilation`s linked only
+            // by a `CompilationReference` (confirmed empirically: two separate
+            // `CSharpCompilation.Create` calls each mint their own distinct
+            // `IAssemblySymbol` wrapper for the "same" referenced assembly, so
+            // even `ContainingAssembly` differs) — this is true of the exact
+            // `LoadProjectWithReferencesAsync` shape too (a separate
+            // `BuildLoadedProjectAsync`/`GetCompilationAsync` call per project).
+            // So `IsTainted(sibling, symbol)` alone would only ever match a
+            // symbol whose OWN declaring compilation happens to be `sibling`
+            // itself — remap `symbol` to ITS OWN symbol in `sibling`'s symbol
+            // table (by stable metadata identity: containing type's fully
+            // qualified metadata name + member name/arity, not object/CLR
+            // symbol identity) and test that remapped symbol against
+            // `sibling`'s own cached result instead.
+            ISymbol remapped = RemapToCompilation(sibling, symbol);
+            if (remapped != null && IsTainted(sibling, remapped))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Finds the symbol in <paramref name="targetCompilation"/>'s own symbol
+    /// table that is the "same" declaration as <paramref name="symbol"/>,
+    /// which may have been resolved through an entirely different
+    /// <see cref="CSharpCompilation"/>. Matching is by stable metadata
+    /// identity (containing type's fully qualified metadata name plus member
+    /// name/kind/arity), never by <see cref="SymbolEqualityComparer"/> or CLR
+    /// object identity, since those do not hold across independently bound
+    /// compilations (see the long comment on the calling overload). Returns
+    /// <see langword="null"/> when no matching declaration exists in
+    /// <paramref name="targetCompilation"/> (e.g. `symbol` is unrelated to it).
+    /// </summary>
+    private static ISymbol RemapToCompilation(Compilation targetCompilation, ISymbol symbol)
+    {
+        if (symbol is IParameterSymbol parameter)
+        {
+            ISymbol remappedOwner = RemapMemberOwner(targetCompilation, parameter.ContainingSymbol);
+            return remappedOwner switch
+            {
+                IMethodSymbol method when parameter.Ordinal < method.Parameters.Length =>
+                    method.Parameters[parameter.Ordinal],
+                IPropertySymbol indexer when parameter.Ordinal < indexer.Parameters.Length =>
+                    indexer.Parameters[parameter.Ordinal],
+                _ => null,
+            };
+        }
+
+        return RemapMemberOwner(targetCompilation, symbol);
+    }
+
+    /// <summary>
+    /// Remaps a field/property/method/local-owning member symbol (everything
+    /// <see cref="RemapToCompilation"/> handles other than parameters
+    /// themselves) into <paramref name="targetCompilation"/>'s own symbol
+    /// table by metadata name. Locals have no stable cross-compilation
+    /// identity (they only ever make sense within the one method body/one
+    /// compilation that declares them), so they intentionally fall through to
+    /// <see langword="null"/> here.
+    /// </summary>
+    private static ISymbol RemapMemberOwner(Compilation targetCompilation, ISymbol symbol)
+    {
+        if (symbol == null)
+        {
+            return null;
+        }
+
+        INamedTypeSymbol containingType = symbol.ContainingType;
+        if (containingType == null)
+        {
+            return null;
+        }
+
+        INamedTypeSymbol remappedType = targetCompilation.GetTypeByMetadataName(MetadataTypeName(containingType));
+        if (remappedType == null)
+        {
+            return null;
+        }
+
+        if (symbol is IMethodSymbol method)
+        {
+            return remappedType.GetMembers(method.Name)
+                .OfType<IMethodSymbol>()
+                .FirstOrDefault(candidate =>
+                    candidate.IsStatic == method.IsStatic &&
+                    candidate.Parameters.Length == method.Parameters.Length &&
+                    candidate.TypeParameters.Length == method.TypeParameters.Length);
+        }
+
+        return remappedType.GetMembers(symbol.Name).FirstOrDefault(candidate => candidate.Kind == symbol.Kind);
+    }
+
+    /// <summary>
+    /// Builds the CLR metadata name (e.g. <c>Outer+Inner`1</c> within its
+    /// namespace) that <see cref="Compilation.GetTypeByMetadataName"/> expects,
+    /// walking outward through nested-type containment so nested types (which
+    /// <c>MetadataName</c> alone does not capture) are found too.
+    /// </summary>
+    private static string MetadataTypeName(INamedTypeSymbol type)
+    {
+        var parts = new List<string>();
+        for (INamedTypeSymbol current = type; current != null; current = current.ContainingType)
+        {
+            parts.Insert(0, current.MetadataName);
+        }
+
+        string nested = string.Join("+", parts);
+        return type.ContainingNamespace is { IsGlobalNamespace: false } ns
+            ? ns.ToDisplayString() + "." + nested
+            : nested;
+    }
+
     private static TaintResult Compute(Compilation compilation)
     {
         var tainted = new HashSet<ISymbol>(SymbolEqualityComparer.Default);

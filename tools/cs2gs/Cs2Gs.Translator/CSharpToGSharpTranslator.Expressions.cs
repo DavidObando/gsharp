@@ -833,6 +833,31 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            // Issue #2412: a VALUE-position read (`return foo.Name;`,
+            // `sink.Accept(foo.Name)`) of a field/property/parameter/local/method
+            // declared in a REFERENCED SIBLING project (a separate
+            // `CSharpCompilation`, loaded by `CSharpProjectLoader.
+            // LoadProjectWithReferencesAsync`) that the sibling's OWN whole-
+            // program taint fixpoint proved null-tainted. Unlike a same-project
+            // tainted value — whose consuming property/method/local is itself
+            // promoted to `T?` by THIS compilation's own `Compute()` edge walk
+            // (issue #2167), so the value flows `T? -> T?` and needs no `!!` —
+            // a foreign symbol can never seed an edge in this compilation's own
+            // fixpoint (the tainting evidence lives only in the sibling's
+            // syntax), so the consuming declaration's OWN type is never promoted
+            // and the mismatch must be bridged here, at the read, instead. Gated
+            // to a symbol whose `ContainingAssembly` differs from this
+            // compilation's own assembly so every intra-project case (handled by
+            // the existing promotion path above) is completely untouched.
+            ISymbol foreignCandidate = this.context.GetSymbolInfo(recv).Symbol;
+            if (this.IsObliviousCompilation()
+                && foreignCandidate is IFieldSymbol or IPropertySymbol or IParameterSymbol or ILocalSymbol or IMethodSymbol
+                && !SymbolEqualityComparer.Default.Equals(foreignCandidate.ContainingAssembly, this.context.Compilation.Assembly)
+                && this.ShouldPromoteToNullableReference(foreignCandidate))
+            {
+                return true;
+            }
+
             // Flow analysis must have proven the receiver non-null at this site.
             if (this.context.GetTypeInfo(recv).Nullability.FlowState != NullableFlowState.NotNull)
             {

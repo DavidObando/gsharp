@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 using Cs2Gs.Translator.Coverage;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -32,21 +33,60 @@ public sealed class TranslationContext
     // avoids re-creating a `SemanticModel` per member for the same tree.
     private readonly Dictionary<SyntaxTree, SemanticModel> modelsByTree = new Dictionary<SyntaxTree, SemanticModel>();
 
+    // Issue #2412: every project's own `Compilation` loaded alongside this one
+    // in the same migration run (the app plus every transitively-referenced
+    // sibling project — see `TranslateStage`), consulted by
+    // `ObliviousNullabilityAnalyzer.IsTainted`'s multi-compilation overload
+    // when a symbol's own compilation (`Compilation`) reports it untainted.
+    // Null (default, and every existing single-compilation caller) means "no
+    // sibling set is known", so only `Compilation` is ever consulted — the
+    // exact prior behavior.
+    private readonly IReadOnlyList<CSharpCompilation> siblingCompilations;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="TranslationContext"/> class.
     /// </summary>
     /// <param name="compilation">The owning C# compilation.</param>
     /// <param name="semanticModel">The active semantic model for the file being translated.</param>
     /// <param name="filePath">The originating file path, used to tag diagnostics.</param>
-    public TranslationContext(CSharpCompilation compilation, SemanticModel semanticModel, string filePath)
+    /// <param name="siblingCompilations">
+    /// Issue #2412: every project's own <see cref="CSharpCompilation"/> loaded
+    /// alongside <paramref name="compilation"/> in the same migration run (the
+    /// app plus its transitively-referenced sibling projects). A whole-program
+    /// fact computed only from one compilation's own syntax trees (e.g.
+    /// <see cref="Translator.ObliviousNullabilityAnalyzer"/>'s taint fixpoint)
+    /// can be TRUE in a sibling project's own result for a symbol this
+    /// compilation cannot prove tainted on its own — not only because the
+    /// symbol is declared there, but also because that sibling's own
+    /// interface-implementation edges (issue #2285) can record taint for a
+    /// symbol declared in a THIRD project (an interface member implemented by
+    /// one of the sibling's own types). Pass <see langword="null"/> (default)
+    /// for a single-compilation translation (in-memory tests, <c>CompileViaSdk</c>,
+    /// a project with no references) — only <paramref name="compilation"/> is
+    /// then ever consulted, the exact prior behavior.
+    /// </param>
+    public TranslationContext(
+        CSharpCompilation compilation,
+        SemanticModel semanticModel,
+        string filePath,
+        IReadOnlyList<CSharpCompilation> siblingCompilations = null)
     {
         this.Compilation = compilation ?? throw new ArgumentNullException(nameof(compilation));
         this.SemanticModel = semanticModel ?? throw new ArgumentNullException(nameof(semanticModel));
         this.FilePath = filePath;
+        this.siblingCompilations = siblingCompilations;
     }
 
     /// <summary>Gets the owning C# compilation.</summary>
     public CSharpCompilation Compilation { get; }
+
+    /// <summary>
+    /// Gets every project's own <see cref="CSharpCompilation"/> loaded
+    /// alongside <see cref="Compilation"/> in the same migration run (issue
+    /// #2412), or <see langword="null"/> when no sibling set is known (a
+    /// single-compilation translation).
+    /// </summary>
+    public IReadOnlyList<CSharpCompilation> SiblingCompilations => this.siblingCompilations;
 
     /// <summary>Gets the active semantic model for the file being translated.</summary>
     public SemanticModel SemanticModel { get; private set; }

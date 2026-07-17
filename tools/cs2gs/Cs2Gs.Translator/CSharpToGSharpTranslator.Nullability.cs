@@ -525,7 +525,22 @@ public sealed partial class CSharpToGSharpTranslator
             // generated `var settings T? = …` locals already rely on it — and
             // `Cast[T]`/`typeof(T)`/`T()` NAME positions are unaffected because
             // they reference `T`, not the promoted symbol.
-            if (ObliviousNullabilityAnalyzer.IsTainted(this.context.Compilation, symbol))
+            //
+            // Issue #2412: the taint fixpoint only walks ONE compilation's own
+            // syntax trees, so a symbol whose ONLY tainting evidence lives in a
+            // REFERENCED sibling project (loaded as its own separate
+            // `CSharpCompilation` by `CSharpProjectLoader.
+            // LoadProjectWithReferencesAsync`) — whether the symbol is declared
+            // there directly, or is declared here/in a third project but only
+            // gets wired into taint via a sibling's own interface-implementation
+            // edges (issue #2285) — must also be checked against every sibling's
+            // OWN cached result, not just `this.context.Compilation`'s (the
+            // downstream consumer's translation unit, whose syntax never
+            // contains that evidence). `this.context.SiblingCompilations` is
+            // `null` for every existing single-compilation caller, so this
+            // overload reduces to the exact prior single-compilation check —
+            // a pure additive fix for the cross-project case.
+            if (ObliviousNullabilityAnalyzer.IsTainted(this.context.Compilation, symbol, this.context.SiblingCompilations))
             {
                 return true;
             }
