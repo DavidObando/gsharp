@@ -4412,20 +4412,46 @@ public sealed class Binder
                 // the array's interface set to find a match for the
                 // parameter's open definition and extract its arguments.
                 var argClr = argumentType?.ClrType;
-                if (argClr != null && argClr.IsArray && pit.OpenDefinition != null)
+                var matched = argClr != null && argClr.IsArray && pit.OpenDefinition != null
+                    ? FindMatchingInterface(argClr, pit.OpenDefinition)
+                    : null;
+                if (matched != null)
                 {
-                    var matched = FindMatchingInterface(argClr, pit.OpenDefinition);
-                    if (matched != null)
+                    var matchedArgs = matched.GetGenericArguments();
+                    if (matchedArgs.Length == pit.TypeArguments.Length)
                     {
-                        var matchedArgs = matched.GetGenericArguments();
-                        if (matchedArgs.Length == pit.TypeArguments.Length)
+                        for (var i = 0; i < pit.TypeArguments.Length; i++)
                         {
-                            for (var i = 0; i < pit.TypeArguments.Length; i++)
-                            {
-                                InferTypeArguments(pit.TypeArguments[i], TypeSymbol.FromClrType(matchedArgs[i]), substitution);
-                            }
+                            InferTypeArguments(pit.TypeArguments[i], TypeSymbol.FromClrType(matchedArgs[i]), substitution);
                         }
                     }
+                }
+                else if ((argumentType is SliceTypeSymbol || argumentType is ArrayTypeSymbol)
+                    && pit.TypeArguments.Length == 1
+                    && IsArrayCompatibleOpenInterface(pit.OpenDefinition))
+                {
+                    // Issue #2416: the reflection-based lookup above requires a
+                    // real CLR `Type` for the slice/array (`argumentType.ClrType`),
+                    // which is null for a same-compilation SOURCE element type
+                    // that has not been emitted yet (e.g. a source `struct`/
+                    // `class` used as `[]Chapter`). A CLR single-dimensional
+                    // array unconditionally implements `IEnumerable<T>`,
+                    // `ICollection<T>`, `IList<T>`, `IReadOnlyCollection<T>`,
+                    // and `IReadOnlyList<T>` with `T` equal to its own element
+                    // type — a guarantee of the CLR array contract, not
+                    // something that needs reflection to confirm. Unify
+                    // symbolically against the slice/array's own
+                    // <see cref="SliceTypeSymbol.ElementType"/> /
+                    // <see cref="ArrayTypeSymbol.ElementType"/> so this generic
+                    // extension/method inference doesn't depend on whether the
+                    // element type has a `ClrType` yet. This keeps working the
+                    // same way regardless of whether the array receiver came
+                    // from a bare member access, a null-asserted chain
+                    // (`x!!.Member`), a nested chain, or a for-loop element.
+                    var elementType = argumentType is SliceTypeSymbol slice
+                        ? slice.ElementType
+                        : ((ArrayTypeSymbol)argumentType).ElementType;
+                    InferTypeArguments(pit.TypeArguments[0], elementType, substitution);
                 }
             }
         }
@@ -4537,6 +4563,28 @@ public sealed class Binder
         }
 
         return null;
+    }
+
+    // Issue #2416: the fixed, closed set of single-type-parameter generic
+    // interfaces that the CLR guarantees every single-dimensional array
+    // (`T[]`) implements, regardless of whether `T` has been emitted yet.
+    // Used to symbolically unify a slice/array argument against an
+    // `IEnumerable[T]`-shaped (or equivalent) generic parameter when the
+    // array's element type has no `ClrType` (still source-only), so
+    // reflection-based interface lookup (<see cref="FindMatchingInterface"/>)
+    // isn't available.
+    private static bool IsArrayCompatibleOpenInterface(Type openDefinition)
+    {
+        if (openDefinition == null || !openDefinition.IsGenericTypeDefinition)
+        {
+            return false;
+        }
+
+        return openDefinition.IsSameAs(typeof(System.Collections.Generic.IEnumerable<>))
+            || openDefinition.IsSameAs(typeof(System.Collections.Generic.ICollection<>))
+            || openDefinition.IsSameAs(typeof(System.Collections.Generic.IList<>))
+            || openDefinition.IsSameAs(typeof(System.Collections.Generic.IReadOnlyCollection<>))
+            || openDefinition.IsSameAs(typeof(System.Collections.Generic.IReadOnlyList<>));
     }
 
     /// <summary>
