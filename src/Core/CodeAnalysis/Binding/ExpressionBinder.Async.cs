@@ -347,7 +347,31 @@ internal sealed partial class ExpressionBinder
             return BindEventSubscriptionHandlerFromBoundAccessor(memberAccess, boundReceiver, targetDelegateType);
         }
 
-        var bound = BindExpression(handlerSyntax);
+        // Issue #2389: an untyped arrow lambda handler (`Ticked += (count) ->
+        // ...`) omits its parameter type clauses and relies entirely on a
+        // target function type to infer them (ADR-0076 / issue #716). The
+        // plain `BindExpression(handlerSyntax)` fallback below binds with NO
+        // target type at all, so inference fails with GS0304 even though the
+        // event's declared delegate type (`targetDelegateType`) fully
+        // determines the expected parameter/return shape — the same target
+        // shape already threaded into target-typed local declarations
+        // (StatementBinder.Narrowing.cs) and call-argument inference
+        // (OverloadResolver.*). Reuse that established
+        // `TryGetLambdaTargetFunctionTypeFromSymbol` conversion here so the
+        // event's delegate type (whether a user `delegate` alias or a
+        // genuinely imported CLR delegate) fills in the omitted parameter
+        // types before falling through to the same method-group / conversion
+        // handling below that already covers typed lambdas.
+        BoundExpression bound;
+        if (handlerSyntax is LambdaExpressionSyntax lambdaHandler
+            && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(targetDelegateType, out var handlerTargetFnType))
+        {
+            bound = lambdas.BindLambdaExpression(lambdaHandler, handlerTargetFnType);
+        }
+        else
+        {
+            bound = BindExpression(handlerSyntax);
+        }
 
         if (bound is BoundClrMethodGroupExpression clrGroup && clrGroup.ResolvedMethod == null)
         {
