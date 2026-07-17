@@ -212,6 +212,32 @@ public sealed partial class CSharpToGSharpTranslator
                             // natural type) promote identically.
                             emitType = true;
                         }
+                        else if (this.IsObliviousCompilation()
+                            && IsObliviousExternalNullableMember(
+                                this.context.GetSymbolInfo(declarator.Initializer.Value).Symbol))
+                        {
+                            // Issue #2425: the explicit-type-equals-initializer-type
+                            // shape above elides the type clause and relies on
+                            // inference (issue #1737 above doesn't fire — the
+                            // whole-program taint fixpoint only tracks
+                            // same/sibling-SOURCE symbols, and an EXTERNAL member
+                            // never seeds one of its edges). But the initializer
+                            // itself is a value-position read of an oblivious
+                            // (metadata, no nullable context) external member —
+                            // exactly the shape #2202's TranslateValueWithNullForgiveness
+                            // already forgives for a `return ext.Combine(...)` direct
+                            // return. gsc maps that read to `T?`, so with no type
+                            // clause emitted here gsc would infer the LOCAL itself as
+                            // `T?` (e.g. `let codeVerifier = tokenBytes.ToUrlBase64String()`
+                            // → `codeVerifier : string?`), and a later `return
+                            // codeVerifier;` has no external symbol left at the read
+                            // site to trigger forgiveness (GS0156). Assert `!!` at the
+                            // INITIALIZER instead — mirroring the direct-return fix —
+                            // so the local infers the declared non-null type from the
+                            // start and every later use (return/argument/assignment)
+                            // needs no further special-casing.
+                            initializer = new NonNullAssertionExpression(initializer);
+                        }
                     }
 
                     if (emitType)
