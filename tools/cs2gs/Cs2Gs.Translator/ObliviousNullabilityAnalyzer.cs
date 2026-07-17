@@ -807,33 +807,125 @@ internal static class ObliviousNullabilityAnalyzer
             {
                 foreach (ISymbol member in iface.GetMembers())
                 {
-                    if (member is not IPropertySymbol interfaceProperty
-                        || interfaceProperty.Type is not { IsReferenceType: true }
-                        || interfaceProperty.Type.NullableAnnotation == NullableAnnotation.Annotated)
+                    switch (member)
                     {
-                        continue;
-                    }
+                        case IPropertySymbol interfaceProperty:
+                            CollectInterfacePropertyEdges(compilation, type, interfaceProperty, edges);
+                            break;
 
-                    if (type.FindImplementationForInterfaceMember(interfaceProperty) is not IPropertySymbol implementingProperty)
-                    {
-                        continue;
-                    }
-
-                    ISymbol interfaceCanonical = Canonical(interfaceProperty);
-                    ISymbol implCanonical = Canonical(implementingProperty);
-                    edges.Add((interfaceCanonical, implCanonical));
-                    edges.Add((implCanonical, interfaceCanonical));
-
-                    IParameterSymbol positionalParameter = FindPositionalRecordParameter(compilation, implementingProperty);
-                    if (positionalParameter != null)
-                    {
-                        ISymbol paramCanonical = Canonical(positionalParameter);
-                        edges.Add((interfaceCanonical, paramCanonical));
-                        edges.Add((paramCanonical, interfaceCanonical));
+                        case IMethodSymbol interfaceMethod:
+                            CollectInterfaceMethodEdges(type, interfaceMethod, edges);
+                            break;
                     }
                 }
             }
         }
+    }
+
+    private static void CollectInterfacePropertyEdges(
+        Compilation compilation,
+        INamedTypeSymbol type,
+        IPropertySymbol interfaceProperty,
+        List<(ISymbol Target, ISymbol Source)> edges)
+    {
+        if (interfaceProperty.Type is not { IsReferenceType: true }
+            || interfaceProperty.Type.NullableAnnotation == NullableAnnotation.Annotated)
+        {
+            return;
+        }
+
+        if (type.FindImplementationForInterfaceMember(interfaceProperty) is not IPropertySymbol implementingProperty)
+        {
+            return;
+        }
+
+        ISymbol interfaceCanonical = Canonical(interfaceProperty);
+        ISymbol implCanonical = Canonical(implementingProperty);
+        edges.Add((interfaceCanonical, implCanonical));
+        edges.Add((implCanonical, interfaceCanonical));
+
+        IParameterSymbol positionalParameter = FindPositionalRecordParameter(compilation, implementingProperty);
+        if (positionalParameter != null)
+        {
+            ISymbol paramCanonical = Canonical(positionalParameter);
+            edges.Add((interfaceCanonical, paramCanonical));
+            edges.Add((paramCanonical, interfaceCanonical));
+        }
+    }
+
+    // Issue #2423: the method-return analog of
+    // <see cref="CollectInterfacePropertyEdges"/>. `CollectInterfaceImplementationEdges`
+    // previously handled ONLY properties, so a method that implements an
+    // interface member had no synchronization at all: `SeedMethodLikeReturnTaint`
+    // (unlike its property counterpart) applies UNCONDITIONAL transitive
+    // return-taint promotion to every method, including one that implements an
+    // interface — so an implementation whose body forwards a tainted call (e.g.
+    // an `async Task&lt;T&gt;` method delegating to a sibling overload that can
+    // return null) is correctly promoted to `T?`, but the interface declaration
+    // it implements — which has no body of its own to seed taint from — never
+    // is, producing an internally-inconsistent translation gsc's Kotlin-style
+    // interface-conformance check rejects (GS0187: "does not implement interface
+    // method"). Only an ORDINARY method member is considered (interface property
+    // accessors surface as <see cref="IMethodSymbol"/> too via
+    // <see cref="ITypeSymbol.GetMembers()"/> and are already handled by the
+    // property edge above). The eligibility check is keyed off the UNWRAPPED
+    // `async Task&lt;T&gt;`/`ValueTask&lt;T&gt;` result type (mirroring
+    // <c>CSharpToGSharpTranslator.PromoteAwaitedReturnIfTainted</c>'s own
+    // unwrap), since the interface method symbol's own <c>ReturnType</c> is the
+    // `Task&lt;T&gt;` envelope regardless of the implementing method's `async`
+    // modifier (a signature-level fact, not an implementation detail) — so a
+    // value-typed `Task&lt;int&gt;` is correctly left untouched, exactly like the
+    // synchronous case. Both directions are recorded (mirroring the property
+    // fix) so the two endpoints always converge to the same tainted-ness
+    // regardless of which side (interface or implementation) the taint was
+    // originally seeded on.
+    private static void CollectInterfaceMethodEdges(
+        INamedTypeSymbol type,
+        IMethodSymbol interfaceMethod,
+        List<(ISymbol Target, ISymbol Source)> edges)
+    {
+        if (interfaceMethod.MethodKind != MethodKind.Ordinary || interfaceMethod.ReturnsVoid)
+        {
+            return;
+        }
+
+        ITypeSymbol effectiveReturnType = UnwrapAwaitedType(interfaceMethod.ReturnType);
+        if (effectiveReturnType is not { IsReferenceType: true }
+            || effectiveReturnType.NullableAnnotation == NullableAnnotation.Annotated)
+        {
+            return;
+        }
+
+        if (type.FindImplementationForInterfaceMember(interfaceMethod) is not IMethodSymbol implementingMethod)
+        {
+            return;
+        }
+
+        ISymbol interfaceCanonical = Canonical(interfaceMethod);
+        ISymbol implCanonical = Canonical(implementingMethod);
+        edges.Add((interfaceCanonical, implCanonical));
+        edges.Add((implCanonical, interfaceCanonical));
+    }
+
+    // Unwraps a (non-generic-parameter) `System.Threading.Tasks.Task<T>` or
+    // `System.Threading.Tasks.ValueTask<T>` return type to its awaited result
+    // `T`, mirroring `CSharpToGSharpTranslator.PromoteAwaitedReturnIfTainted`'s
+    // own unwrap so an interface method's `Task<T>`-declared signature is judged
+    // on the SAME effective type an `async` implementation's return is. Any
+    // other type (including the non-generic `Task`/`ValueTask`, and a
+    // value-typed `Task<int>`, whose `T` is filtered out by the reference-type
+    // eligibility check at the call site) is returned unchanged.
+    private static ITypeSymbol UnwrapAwaitedType(ITypeSymbol returnType)
+    {
+        if (returnType is INamedTypeSymbol { IsGenericType: true, TypeArguments.Length: 1 } named
+            && named.OriginalDefinition.SpecialType != SpecialType.System_Nullable_T
+            && (named.Name == "Task" || named.Name == "ValueTask")
+            && named.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks")
+        {
+            return named.TypeArguments[0];
+        }
+
+        return returnType;
     }
 
     // A record's positional-parameter property has a declaring syntax
