@@ -129,467 +129,470 @@ internal sealed partial class DeclarationBinder
     {
         foreach (var (syntax, structSymbol) in pendingInterfaceImplementationChecks)
         {
-            // ADR-0085 / issue #726: collect every interface default-method
-            // the implementer would inherit if it does not provide its own
-            // method, keyed by signature (name + parameter shape). When two
-            // unrelated interfaces both provide a default for the same
-            // signature and the class does not declare an override, GS0318
-            // fires. The mapping is "first-seen wins" for the diagnostic
-            // message; conflicts are reported once per signature.
             var inheritedDefaultsBySignature = new Dictionary<string, (FunctionSymbol Method, InterfaceSymbol Iface)>(System.StringComparer.Ordinal);
             var conflictsReported = new HashSet<string>(System.StringComparer.Ordinal);
-
-            // Issue #2150: data-class positional parameters that satisfy an
-            // interface property are materialized only as public fields, so the
-            // CLR interface slot (get_/set_ accessor) would be missing and the
-            // emitted type would fail to load. Collect the parameters that
-            // satisfy an interface property here, then synthesize backing
-            // auto-property accessor members below so the interface contract is
-            // fulfilled at the IL level. Keyed by parameter name; the flag
-            // tracks whether any satisfied interface property also requires a
-            // setter.
             var positionalInterfaceProps = new Dictionary<string, (ParameterSymbol Param, bool NeedsSetter)>(System.StringComparer.Ordinal);
 
             foreach (var iface in structSymbol.Interfaces)
             {
-                foreach (var imethod in iface.Methods)
+                VerifyInterfaceMethodImplementationsAndDefaultConflicts(
+                    syntax,
+                    structSymbol,
+                    iface,
+                    inheritedDefaultsBySignature,
+                    conflictsReported);
+                VerifyInterfacePropertyImplementationsAndCollectPositionalCandidates(
+                    syntax,
+                    structSymbol,
+                    iface,
+                    positionalInterfaceProps);
+                ResolveExplicitInterfaceEventImplementations(structSymbol, iface);
+            }
+
+            SynthesizePositionalInterfaceProperties(structSymbol, positionalInterfaceProps);
+            VerifyClrInterfaceImplementations(syntax, structSymbol);
+            VerifyInheritedClrInterfaceSlots(syntax, structSymbol);
+            VerifyStaticVirtualInterfaceImplementations(syntax, structSymbol);
+            VerifyStaticVirtualInterfacePropertyImplementations(syntax, structSymbol);
+            VerifyPrivateInterfaceHelpersNotOverridden(syntax, structSymbol);
+            VerifyExplicitInterfaceClauseResolution(syntax, structSymbol);
+        }
+    }
+
+    private void VerifyInterfaceMethodImplementationsAndDefaultConflicts(
+        StructDeclarationSyntax syntax,
+        StructSymbol structSymbol,
+        InterfaceSymbol iface,
+        Dictionary<string, (FunctionSymbol Method, InterfaceSymbol Iface)> inheritedDefaultsBySignature,
+        HashSet<string> conflictsReported)
+    {
+        // ADR-0085 / issue #726: collect every interface default-method
+        // the implementer would inherit if it does not provide its own
+        // method, keyed by signature (name + parameter shape). When two
+        // unrelated interfaces both provide a default for the same
+        // signature and the class does not declare an override, GS0318
+        // fires. The mapping is "first-seen wins" for the diagnostic
+        // message; conflicts are reported once per signature.
+        foreach (var imethod in iface.Methods)
+        {
+            // ADR-0149 (was issue #2010's mangled-name convention): an
+            // explicit-interface-clause implementation
+            // (`func (IFoo) M(...)`) satisfies this slot even though
+            // its own declared name never needs to match `imethod`
+            // via any string convention — it was already resolved and
+            // linked to `imethod` by `ResolveExplicitInterfaceClauses`.
+            // Skip the name-based lookup entirely once found; no
+            // diagnostic, and the emitter binds the slot via
+            // `FunctionSymbol.ExplicitInterfaceMember`.
+            if (TryResolveExplicitInterfaceImplementation(structSymbol, iface, imethod) != null)
+            {
+                continue;
+            }
+
+            // ADR-0063 §8: implementing class may have multiple methods
+            // with the same name; pick the one whose signature matches
+            // this specific interface overload exactly.
+            var implCandidates = structSymbol.GetMethodsIncludingInherited(imethod.Name);
+            FunctionSymbol impl = null;
+            FunctionSymbol signatureMatch = null;
+            foreach (var candidate in implCandidates)
+            {
+                impl ??= candidate;
+                var methodTypeParamMap = TryBuildMethodTypeParameterMap(imethod, candidate);
+                if (methodTypeParamMap == null)
                 {
-                    // ADR-0149 (was issue #2010's mangled-name convention): an
-                    // explicit-interface-clause implementation
-                    // (`func (IFoo) M(...)`) satisfies this slot even though
-                    // its own declared name never needs to match `imethod`
-                    // via any string convention — it was already resolved and
-                    // linked to `imethod` by `ResolveExplicitInterfaceClauses`.
-                    // Skip the name-based lookup entirely once found; no
-                    // diagnostic, and the emitter binds the slot via
-                    // `FunctionSymbol.ExplicitInterfaceMember`.
-                    if (TryResolveExplicitInterfaceImplementation(structSymbol, iface, imethod) != null)
+                    // Generic-arity mismatch: not a viable implementor
+                    // of this interface method overload (issue #1007).
+                    continue;
+                }
+
+                if (SignaturesMatch(imethod, GetCallableParameters(candidate), candidate.Type, candidate.ReturnRefKind, methodTypeParamMap, candidate.IsAsync))
+                {
+                    signatureMatch = candidate;
+                    break;
+                }
+            }
+
+            if (signatureMatch != null)
+            {
+                // The class itself provides an implementation that exactly
+                // matches the interface signature — no default needed and
+                // any earlier-seen conflicting default is preempted.
+                var sigKey = BuildInterfaceMethodSignatureKey(imethod);
+                inheritedDefaultsBySignature.Remove(sigKey);
+                conflictsReported.Add(sigKey);
+                continue;
+            }
+
+            if (impl == null)
+            {
+                // ADR-0085: when the interface itself provides a default,
+                // the implementer does not need to declare the method.
+                // Track which default would be inherited so we can
+                // diagnose diamond conflicts across multiple interfaces.
+                if (InterfaceSymbol.HasDefaultBody(imethod))
+                {
+                    var sigKey = BuildInterfaceMethodSignatureKey(imethod);
+                    if (inheritedDefaultsBySignature.TryGetValue(sigKey, out var prior))
                     {
-                        continue;
-                    }
-
-                    // ADR-0063 §8: implementing class may have multiple methods
-                    // with the same name; pick the one whose signature matches
-                    // this specific interface overload exactly.
-                    var implCandidates = structSymbol.GetMethodsIncludingInherited(imethod.Name);
-                    FunctionSymbol impl = null;
-                    FunctionSymbol signatureMatch = null;
-                    foreach (var candidate in implCandidates)
-                    {
-                        impl ??= candidate;
-                        var methodTypeParamMap = TryBuildMethodTypeParameterMap(imethod, candidate);
-                        if (methodTypeParamMap == null)
+                        if (!ReferenceEquals(prior.Method, imethod) && conflictsReported.Add(sigKey))
                         {
-                            // Generic-arity mismatch: not a viable implementor
-                            // of this interface method overload (issue #1007).
-                            continue;
-                        }
-
-                        if (SignaturesMatch(imethod, GetCallableParameters(candidate), candidate.Type, candidate.ReturnRefKind, methodTypeParamMap, candidate.IsAsync))
-                        {
-                            signatureMatch = candidate;
-                            break;
-                        }
-                    }
-
-                    if (signatureMatch != null)
-                    {
-                        // The class itself provides an implementation that exactly
-                        // matches the interface signature — no default needed and
-                        // any earlier-seen conflicting default is preempted.
-                        var sigKey = BuildInterfaceMethodSignatureKey(imethod);
-                        inheritedDefaultsBySignature.Remove(sigKey);
-                        conflictsReported.Add(sigKey);
-                        continue;
-                    }
-
-                    if (impl == null)
-                    {
-                        // ADR-0085: when the interface itself provides a default,
-                        // the implementer does not need to declare the method.
-                        // Track which default would be inherited so we can
-                        // diagnose diamond conflicts across multiple interfaces.
-                        if (InterfaceSymbol.HasDefaultBody(imethod))
-                        {
-                            var sigKey = BuildInterfaceMethodSignatureKey(imethod);
-                            if (inheritedDefaultsBySignature.TryGetValue(sigKey, out var prior))
-                            {
-                                if (!ReferenceEquals(prior.Method, imethod) && conflictsReported.Add(sigKey))
-                                {
-                                    Diagnostics.ReportConflictingInterfaceDefaults(
-                                        syntax.Identifier.Location,
-                                        structSymbol.Name,
-                                        imethod.Name,
-                                        prior.Iface.Name,
-                                        iface.Name);
-                                }
-                            }
-                            else
-                            {
-                                inheritedDefaultsBySignature[sigKey] = (imethod, iface);
-                            }
-
-                            continue;
-                        }
-
-                        // No impl, no default → original GS0187 channel for
-                        // missing implementations. GS0320 narrows it to "the
-                        // interface deliberately requires this method".
-                        if (InterfaceHasAnyDefaultsExcept(iface, imethod))
-                        {
-                            Diagnostics.ReportInterfaceAbstractMethodHasNoDefault(
+                            Diagnostics.ReportConflictingInterfaceDefaults(
                                 syntax.Identifier.Location,
                                 structSymbol.Name,
-                                iface.Name,
-                                imethod.Name);
-                        }
-                        else
-                        {
-                            Diagnostics.ReportInterfaceMethodNotImplemented(
-                                syntax.Identifier.Location,
-                                structSymbol.Name,
-                                iface.Name,
-                                imethod.Name);
-                        }
-                    }
-                    else if (signatureMatch == null)
-                    {
-                        // ADR-0060 §9: distinguish a pure ref-kind mismatch (GS0240) from
-                        // an unrelated signature mismatch (the existing diagnostic).
-                        // Issue #490: also surface a dedicated diagnostic when only the
-                        // *return* ref-kind disagrees.
-                        if (imethod.Type == impl.Type && imethod.ReturnRefKind != impl.ReturnRefKind)
-                        {
-                            Diagnostics.ReportOverrideReturnRefKindMismatch(
-                                syntax.Identifier.Location,
                                 imethod.Name,
-                                imethod.ReturnRefKind == RefKind.Ref ? "by ref" : "by value",
-                                impl.ReturnRefKind == RefKind.Ref ? "by ref" : "by value");
-                        }
-                        else
-                        {
-                            var refMismatchIdx = FindRefKindMismatchIndex(imethod, GetCallableParameters(impl), impl.Type);
-                            if (refMismatchIdx >= 0)
-                            {
-                                var implCallable = GetCallableParameters(impl);
-                                var ifaceCallable = GetCallableParameters(imethod);
-                                Diagnostics.ReportOverrideRefKindMismatch(
-                                    syntax.Identifier.Location,
-                                    imethod.Name,
-                                    ifaceCallable[refMismatchIdx].Name,
-                                    refKindToString(ifaceCallable[refMismatchIdx].RefKind),
-                                    refKindToString(implCallable[refMismatchIdx].RefKind));
-                            }
-                            else
-                            {
-                                Diagnostics.ReportInterfaceMethodNotImplemented(
-                                    syntax.Identifier.Location,
-                                    structSymbol.Name,
-                                    iface.Name,
-                                    imethod.Name);
-                            }
+                                prior.Iface.Name,
+                                iface.Name);
                         }
                     }
+                    else
+                    {
+                        inheritedDefaultsBySignature[sigKey] = (imethod, iface);
+                    }
+
+                    continue;
                 }
 
-                // Issue #2362: a mangled-name explicit PROPERTY implementation
-                // (`__explicit_<Interface>__<Member>`) is resolved against the
-                // interface's OPEN DEFINITION property table, not the
-                // (possibly constructed-generic) `iface.Properties` iterated
-                // below. Unlike Methods, InterfaceSymbol.Construct does not
-                // substitute Properties onto a constructed instance (see
-                // InterfaceSymbol.TryResolveMembers) — `iface.Properties` is
-                // empty for a constructed generic interface, so the main loop
-                // below never even runs for one. Resolving against
-                // `iface.Definition ?? iface` here (a no-op for a non-generic
-                // interface, where Definition is the interface itself) lets a
-                // generic interface's explicit property implementation still
-                // get linked, mirroring the #2181 fix for methods and
-                // `EmitStaticVirtualPropertyMethodImpls`, which reads
-                // `defIface.Properties` for the identical reason.
-                var explicitPropDefIface = iface.Definition ?? iface;
-                if (!explicitPropDefIface.Properties.IsDefaultOrEmpty)
+                // No impl, no default → original GS0187 channel for
+                // missing implementations. GS0320 narrows it to "the
+                // interface deliberately requires this method".
+                if (InterfaceHasAnyDefaultsExcept(iface, imethod))
                 {
-                    foreach (var openIprop in explicitPropDefIface.Properties)
-                    {
-                        if (!openIprop.IsStatic)
-                        {
-                            TryResolveExplicitInterfacePropertyImplementation(structSymbol, iface, openIprop);
-                        }
-                    }
+                    Diagnostics.ReportInterfaceAbstractMethodHasNoDefault(
+                        syntax.Identifier.Location,
+                        structSymbol.Name,
+                        iface.Name,
+                        imethod.Name);
                 }
-
-                // ADR-0051: verify property requirements.
-                foreach (var iprop in iface.Properties)
+                else
                 {
-                    // ADR-0089 / issue #1019: static-virtual interface
-                    // properties are verified separately (against the
-                    // implementer's static properties); skip them here so the
-                    // instance-property contract check doesn't misfire.
-                    if (iprop.IsStatic)
+                    Diagnostics.ReportInterfaceMethodNotImplemented(
+                        syntax.Identifier.Location,
+                        structSymbol.Name,
+                        iface.Name,
+                        imethod.Name);
+                }
+            }
+            else if (signatureMatch == null)
+            {
+                // ADR-0060 §9: distinguish a pure ref-kind mismatch (GS0240) from
+                // an unrelated signature mismatch (the existing diagnostic).
+                // Issue #490: also surface a dedicated diagnostic when only the
+                // *return* ref-kind disagrees.
+                if (imethod.Type == impl.Type && imethod.ReturnRefKind != impl.ReturnRefKind)
+                {
+                    Diagnostics.ReportOverrideReturnRefKindMismatch(
+                        syntax.Identifier.Location,
+                        imethod.Name,
+                        imethod.ReturnRefKind == RefKind.Ref ? "by ref" : "by value",
+                        impl.ReturnRefKind == RefKind.Ref ? "by ref" : "by value");
+                }
+                else
+                {
+                    var refMismatchIdx = FindRefKindMismatchIndex(imethod, GetCallableParameters(impl), impl.Type);
+                    if (refMismatchIdx >= 0)
                     {
-                        continue;
+                        var implCallable = GetCallableParameters(impl);
+                        var ifaceCallable = GetCallableParameters(imethod);
+                        Diagnostics.ReportOverrideRefKindMismatch(
+                            syntax.Identifier.Location,
+                            imethod.Name,
+                            ifaceCallable[refMismatchIdx].Name,
+                            refKindToString(ifaceCallable[refMismatchIdx].RefKind),
+                            refKindToString(implCallable[refMismatchIdx].RefKind));
                     }
-
-                    // Issue #2362: a mangled-name explicit implementation
-                    // (`__explicit_<Interface>__<Member>`) satisfies this slot
-                    // even though its own name never matches `iprop.Name` —
-                    // already resolved and linked by the pre-pass above. Skip
-                    // entirely; no diagnostic, and the emitter binds the
-                    // accessor MethodImpl rows via
-                    // `PropertySymbol.ExplicitInterfaceMember`.
-                    if (TryResolveExplicitInterfacePropertyImplementation(structSymbol, iface, iprop) != null)
+                    else
                     {
-                        continue;
-                    }
-
-                    // Issue #1066: an interface property may be satisfied by a
-                    // property implemented (or inherited) ANYWHERE in the base
-                    // chain, not only one declared directly on this class.
-                    // TypeMemberModel.TryGetProperty walks BaseClass this-first,
-                    // mirroring C# semantics where a base class's accessible
-                    // instance member satisfies an interface listed on a
-                    // derived class.
-                    var found = TypeMemberModel.TryGetProperty(structSymbol, iprop.Name, out var implProp);
-                    if (found)
-                    {
-                        if (iprop.HasGetter && !implProp.HasGetter)
-                        {
-                            Diagnostics.ReportInterfaceMethodNotImplemented(
-                                syntax.Identifier.Location,
-                                structSymbol.Name,
-                                iface.Name,
-                                iprop.Name + " (getter)");
-                        }
-
-                        if (iprop.HasSetter && !implProp.HasSetter)
-                        {
-                            Diagnostics.ReportInterfaceMethodNotImplemented(
-                                syntax.Identifier.Location,
-                                structSymbol.Name,
-                                iface.Name,
-                                iprop.Name + " (setter)");
-                        }
-                    }
-
-                    // Issue #2150: a data-class positional (primary-constructor)
-                    // parameter is materialized as a public instance field and,
-                    // like a C# record's positional property, may satisfy a
-                    // matching get/set interface property. It never appears in
-                    // `.Properties`, so `TryGetProperty` misses it. Walk the
-                    // this-first BaseClass chain (mirroring `TryGetProperty` and
-                    // issue #1066) and treat a same-name, type-compatible
-                    // positional parameter as satisfying the property contract.
-                    if (!found && TypeMemberModel.TryGetPrimaryConstructorParameter(structSymbol, iprop.Name, out var positionalParam))
-                    {
-                        found = true;
-
-                        // Issue #2150 follow-up (Oahu migration): compare the
-                        // underlying (nullability-erased) types, then apply
-                        // Kotlin-style SOUND nullability variance on top —
-                        // G# targets Kotlin-faithful null safety (smart-casts,
-                        // `if let`/`guard let`), which enforces nullability via
-                        // subtyping: `T <: T?`, never the reverse. A get-only
-                        // interface property is a covariant (return) position,
-                        // so the implementing member's type merely needs to be
-                        // a SUBTYPE of the interface property's type — `T` or
-                        // `T?` both satisfy `T?`, but only `T` satisfies `T`
-                        // (accepting `T?` there would let a consumer of the
-                        // non-null contract observe `null` and NPE, which is
-                        // exactly the unsoundness this tightens). A property
-                        // that ALSO declares a setter is an invariant
-                        // (read/write) position — like a C# `in`/`out`
-                        // parameter mismatch, both directions must hold, so the
-                        // nullability must match EXACTLY.
-                        var positionalUnderlyingType = positionalParam.Type is NullableTypeSymbol positionalNullable
-                            ? positionalNullable.UnderlyingType
-                            : positionalParam.Type;
-                        var ifaceUnderlyingType = iprop.Type is NullableTypeSymbol ifaceNullable
-                            ? ifaceNullable.UnderlyingType
-                            : iprop.Type;
-
-                        var underlyingTypesMatch = System.Collections.Generic.EqualityComparer<TypeSymbol>.Default.Equals(positionalUnderlyingType, ifaceUnderlyingType);
-                        var ifaceIsNullable = iprop.Type is NullableTypeSymbol;
-                        var implIsNullable = positionalParam.Type is NullableTypeSymbol;
-
-                        var nullabilityCompatible = iprop.HasSetter
-                            ? ifaceIsNullable == implIsNullable
-                            : !(!ifaceIsNullable && implIsNullable);
-
-                        if (!underlyingTypesMatch || !nullabilityCompatible)
-                        {
-                            // Name matches but the type is incompatible: the
-                            // positional parameter does not satisfy the contract.
-                            // Fall through to the single GS0187 report below.
-                            found = false;
-                        }
-                        else
-                        {
-                            // Record the positional parameter so a backing
-                            // auto-property is synthesized below, filling the
-                            // interface's get_/set_ accessor slots. A data-class
-                            // positional parameter is a mutable public field, so
-                            // it can satisfy a setter requirement too.
-                            var needsSetter = iprop.HasSetter;
-                            if (positionalInterfaceProps.TryGetValue(iprop.Name, out var existing))
-                            {
-                                positionalInterfaceProps[iprop.Name] = (existing.Param, existing.NeedsSetter || needsSetter);
-                            }
-                            else
-                            {
-                                positionalInterfaceProps[iprop.Name] = (positionalParam, needsSetter);
-                            }
-                        }
-                    }
-
-                    if (!found)
-                    {
-                        // Issue #2293: an interface property whose required
-                        // accessors all carry a default (arrow/block) body is
-                        // satisfied by inheritance, exactly like a
-                        // default-interface method — no GS0187 needed.
-                        if (PropertyHasDefaultBody(iprop))
-                        {
-                            continue;
-                        }
-
                         Diagnostics.ReportInterfaceMethodNotImplemented(
                             syntax.Identifier.Location,
                             structSymbol.Name,
                             iface.Name,
-                            iprop.Name);
-                    }
-                }
-
-                // ADR-0149: resolve explicit-interface EVENT implementations
-                // (`event (IFoo) Changed T`) — generalizes the #2362 property
-                // pre-pass immediately above to events for the first time.
-                // Mirrors the property pre-pass exactly: resolved against the
-                // interface's OPEN DEFINITION event table (constructed
-                // generic interfaces do not substitute Events either — see
-                // InterfaceSymbol.TryResolveMembers), and is a pure resolve
-                // pass with no ordinary implicit-event-contract diagnostic
-                // (there is currently no implicit interface-event contract
-                // check in this binder at all — adding one is out of scope
-                // for this explicit-implementation feature and would risk an
-                // unrelated regression across every existing interface-event
-                // declaration in the test suite).
-                var explicitEventDefIface = iface.Definition ?? iface;
-                if (!explicitEventDefIface.Events.IsDefaultOrEmpty)
-                {
-                    foreach (var openIevent in explicitEventDefIface.Events)
-                    {
-                        TryResolveExplicitInterfaceEventImplementation(structSymbol, iface, openIevent);
+                            imethod.Name);
                     }
                 }
             }
-
-            // Issue #2150: materialize synthesized backing auto-properties for
-            // every data-class positional parameter that satisfied an interface
-            // property above. Member access still resolves to the underlying
-            // field (fields are probed before properties), so this only adds the
-            // get_/set_ accessor methods the CLR interface slot requires. The
-            // existing property-emission path (planning, accessor IL, PropertyDef
-            // rows, and Virtual|NewSlot promotion for interface implementation)
-            // consumes these uniformly.
-            //
-            // The synthesized property is attached to the class that actually
-            // declares the backing field (this class or a base). Emitting it on
-            // the declaring type keeps it a same-type auto-property — the field
-            // planner only reserves a backing-field row when the auto-property's
-            // backing field is NOT one of the type's own fields, so a
-            // cross-type backing reference would corrupt the FieldDef range.
-            // The accessor is virtual (NewSlot), so a derived class that lists
-            // the interface satisfies the slot through inheritance.
-            if (positionalInterfaceProps.Count > 0)
-            {
-                foreach (var entry in positionalInterfaceProps.Values)
-                {
-                    var param = entry.Param;
-                    if (!structSymbol.TryGetFieldIncludingInherited(param.Name, out var backingField, out var declaringType))
-                    {
-                        continue;
-                    }
-
-                    // Skip if the declaring type already exposes a property of
-                    // this name (a real one that already satisfies the slot, or
-                    // one synthesized by an earlier derived-class check).
-                    if (TypeMemberModel.TryGetProperty(declaringType, param.Name, out _))
-                    {
-                        continue;
-                    }
-
-                    var synthProp = new PropertySymbol(
-                        name: param.Name,
-                        type: param.Type,
-                        accessibility: Accessibility.Public,
-                        hasGetter: true,
-                        hasSetter: entry.NeedsSetter,
-                        isAutoProperty: true,
-                        isVirtual: true,
-                        isOverride: false)
-                    {
-                        BackingField = backingField,
-                    };
-
-                    declaringType.SetProperties(declaringType.Properties.Add(synthProp));
-                }
-            }
-
-            // Issue #525: verify CLR interfaces declared in the base-type clause.
-            // Walks each public abstract member on the imported interface and
-            // confirms the G# class provides a same-name, same-CLR-signature
-            // method or property. Diagnostic uses the same GS0187 channel.
-            VerifyClrInterfaceImplementations(syntax, structSymbol);
-
-            // Issue #985: a CLR interface in the base clause may inherit other
-            // interfaces whose abstract members are NOT enumerated by the
-            // direct-interface walk above (e.g. `IEnumerable[T]` inherits the
-            // non-generic `IEnumerable.GetEnumerator()`). The resulting type
-            // must satisfy those inherited slots too — otherwise the runtime
-            // rejects it with a TypeLoadException. Verify them here so a missing
-            // bridge (the canonical "only the generic GetEnumerator present"
-            // case) surfaces as GS0187 instead of emitting an unloadable type.
-            VerifyInheritedClrInterfaceSlots(syntax, structSymbol);
-
-            // ADR-0089 / issue #755: verify static-virtual interface members.
-            // For each declared interface, walk its StaticMethods. The
-            // implementer must either (a) declare a matching static method
-            // inside its `shared { ... }` block (ADR-0053) — recorded on
-            // StructSymbol.StaticMethods — or (b) inherit a default body
-            // from the interface itself (the interface method declaration
-            // carries a body). If a same-named *instance* method exists but
-            // no matching static method, GS0332 surfaces; otherwise GS0331.
-            VerifyStaticVirtualInterfaceImplementations(syntax, structSymbol);
-
-            // ADR-0089 / issue #1019: verify static-virtual interface
-            // *properties*. The implementer must declare a matching static
-            // property (same name and type, with at least the required
-            // accessors) inside its `shared { ... }` block; otherwise GS0397.
-            VerifyStaticVirtualInterfacePropertyImplementations(syntax, structSymbol);
-
-            // ADR-0090 / issue #756: verify that the implementer does not
-            // attempt to override a `private` interface helper. Private
-            // helpers are part of the interface's own implementation and
-            // are not part of the public contract; an implementer that
-            // happens to declare a same-signature method clashes with the
-            // helper at the implementation level.
-            VerifyPrivateInterfaceHelpersNotOverridden(syntax, structSymbol);
-
-            // ADR-0149: sweep every explicit-interface qualifier clause that
-            // successfully bound a target interface (via
-            // ResolveExplicitInterfaceClauses) for two outstanding problems
-            // the per-interface-member loops above cannot detect on their
-            // own: (a) two members on the same type both explicitly claim
-            // the same (interface, name) slot (GS0495), and (b) a clause
-            // whose target interface has no member matching this
-            // declaration's name/signature/accessor-shape at all (GS0494) —
-            // the loops above only ever *consume* a clause-bearing candidate
-            // when it matches; one that never matches anything is otherwise
-            // silently accepted as an ordinary (non-conforming) member.
-            VerifyExplicitInterfaceClauseResolution(syntax, structSymbol);
         }
     }
+
+    private void VerifyInterfacePropertyImplementationsAndCollectPositionalCandidates(
+        StructDeclarationSyntax syntax,
+        StructSymbol structSymbol,
+        InterfaceSymbol iface,
+        Dictionary<string, (ParameterSymbol Param, bool NeedsSetter)> positionalInterfaceProps)
+    {
+        // Issue #2150: data-class positional parameters that satisfy an
+        // interface property are materialized only as public fields, so the
+        // CLR interface slot (get_/set_ accessor) would be missing and the
+        // emitted type would fail to load. Collect the parameters that
+        // satisfy an interface property here, then synthesize backing
+        // auto-property accessor members below so the interface contract is
+        // fulfilled at the IL level. Keyed by parameter name; the flag
+        // tracks whether any satisfied interface property also requires a
+        // setter.
+
+        // Issue #2362: a mangled-name explicit PROPERTY implementation
+        // (`__explicit_<Interface>__<Member>`) is resolved against the
+        // interface's OPEN DEFINITION property table, not the
+        // (possibly constructed-generic) `iface.Properties` iterated
+        // below. Unlike Methods, InterfaceSymbol.Construct does not
+        // substitute Properties onto a constructed instance (see
+        // InterfaceSymbol.TryResolveMembers) — `iface.Properties` is
+        // empty for a constructed generic interface, so the main loop
+        // below never even runs for one. Resolving against
+        // `iface.Definition ?? iface` here (a no-op for a non-generic
+        // interface, where Definition is the interface itself) lets a
+        // generic interface's explicit property implementation still
+        // get linked, mirroring the #2181 fix for methods and
+        // `EmitStaticVirtualPropertyMethodImpls`, which reads
+        // `defIface.Properties` for the identical reason.
+        var explicitPropDefIface = iface.Definition ?? iface;
+        if (!explicitPropDefIface.Properties.IsDefaultOrEmpty)
+        {
+            foreach (var openIprop in explicitPropDefIface.Properties)
+            {
+                if (!openIprop.IsStatic)
+                {
+                    TryResolveExplicitInterfacePropertyImplementation(structSymbol, iface, openIprop);
+                }
+            }
+        }
+
+        // ADR-0051: verify property requirements.
+        foreach (var iprop in iface.Properties)
+        {
+            // ADR-0089 / issue #1019: static-virtual interface
+            // properties are verified separately (against the
+            // implementer's static properties); skip them here so the
+            // instance-property contract check doesn't misfire.
+            if (iprop.IsStatic)
+            {
+                continue;
+            }
+
+            // Issue #2362: a mangled-name explicit implementation
+            // (`__explicit_<Interface>__<Member>`) satisfies this slot
+            // even though its own name never matches `iprop.Name` —
+            // already resolved and linked by the pre-pass above. Skip
+            // entirely; no diagnostic, and the emitter binds the
+            // accessor MethodImpl rows via
+            // `PropertySymbol.ExplicitInterfaceMember`.
+            if (TryResolveExplicitInterfacePropertyImplementation(structSymbol, iface, iprop) != null)
+            {
+                continue;
+            }
+
+            // Issue #1066: an interface property may be satisfied by a
+            // property implemented (or inherited) ANYWHERE in the base
+            // chain, not only one declared directly on this class.
+            // TypeMemberModel.TryGetProperty walks BaseClass this-first,
+            // mirroring C# semantics where a base class's accessible
+            // instance member satisfies an interface listed on a
+            // derived class.
+            var found = TypeMemberModel.TryGetProperty(structSymbol, iprop.Name, out var implProp);
+            if (found)
+            {
+                if (iprop.HasGetter && !implProp.HasGetter)
+                {
+                    Diagnostics.ReportInterfaceMethodNotImplemented(
+                        syntax.Identifier.Location,
+                        structSymbol.Name,
+                        iface.Name,
+                        iprop.Name + " (getter)");
+                }
+
+                if (iprop.HasSetter && !implProp.HasSetter)
+                {
+                    Diagnostics.ReportInterfaceMethodNotImplemented(
+                        syntax.Identifier.Location,
+                        structSymbol.Name,
+                        iface.Name,
+                        iprop.Name + " (setter)");
+                }
+            }
+
+            // Issue #2150: a data-class positional (primary-constructor)
+            // parameter is materialized as a public instance field and,
+            // like a C# record's positional property, may satisfy a
+            // matching get/set interface property. It never appears in
+            // `.Properties`, so `TryGetProperty` misses it. Walk the
+            // this-first BaseClass chain (mirroring `TryGetProperty` and
+            // issue #1066) and treat a same-name, type-compatible
+            // positional parameter as satisfying the property contract.
+            if (!found && TypeMemberModel.TryGetPrimaryConstructorParameter(structSymbol, iprop.Name, out var positionalParam))
+            {
+                found = true;
+
+                // Issue #2150 follow-up (Oahu migration): compare the
+                // underlying (nullability-erased) types, then apply
+                // Kotlin-style SOUND nullability variance on top —
+                // G# targets Kotlin-faithful null safety (smart-casts,
+                // `if let`/`guard let`), which enforces nullability via
+                // subtyping: `T <: T?`, never the reverse. A get-only
+                // interface property is a covariant (return) position,
+                // so the implementing member's type merely needs to be
+                // a SUBTYPE of the interface property's type — `T` or
+                // `T?` both satisfy `T?`, but only `T` satisfies `T`
+                // (accepting `T?` there would let a consumer of the
+                // non-null contract observe `null` and NPE, which is
+                // exactly the unsoundness this tightens). A property
+                // that ALSO declares a setter is an invariant
+                // (read/write) position — like a C# `in`/`out`
+                // parameter mismatch, both directions must hold, so the
+                // nullability must match EXACTLY.
+                var positionalUnderlyingType = positionalParam.Type is NullableTypeSymbol positionalNullable
+                    ? positionalNullable.UnderlyingType
+                    : positionalParam.Type;
+                var ifaceUnderlyingType = iprop.Type is NullableTypeSymbol ifaceNullable
+                    ? ifaceNullable.UnderlyingType
+                    : iprop.Type;
+
+                var underlyingTypesMatch = System.Collections.Generic.EqualityComparer<TypeSymbol>.Default.Equals(positionalUnderlyingType, ifaceUnderlyingType);
+                var ifaceIsNullable = iprop.Type is NullableTypeSymbol;
+                var implIsNullable = positionalParam.Type is NullableTypeSymbol;
+
+                var nullabilityCompatible = iprop.HasSetter
+                    ? ifaceIsNullable == implIsNullable
+                    : !(!ifaceIsNullable && implIsNullable);
+
+                if (!underlyingTypesMatch || !nullabilityCompatible)
+                {
+                    // Name matches but the type is incompatible: the
+                    // positional parameter does not satisfy the contract.
+                    // Fall through to the single GS0187 report below.
+                    found = false;
+                }
+                else
+                {
+                    // Record the positional parameter so a backing
+                    // auto-property is synthesized below, filling the
+                    // interface's get_/set_ accessor slots. A data-class
+                    // positional parameter is a mutable public field, so
+                    // it can satisfy a setter requirement too.
+                    var needsSetter = iprop.HasSetter;
+                    if (positionalInterfaceProps.TryGetValue(iprop.Name, out var existing))
+                    {
+                        positionalInterfaceProps[iprop.Name] = (existing.Param, existing.NeedsSetter || needsSetter);
+                    }
+                    else
+                    {
+                        positionalInterfaceProps[iprop.Name] = (positionalParam, needsSetter);
+                    }
+                }
+            }
+
+            if (!found)
+            {
+                // Issue #2293: an interface property whose required
+                // accessors all carry a default (arrow/block) body is
+                // satisfied by inheritance, exactly like a
+                // default-interface method — no GS0187 needed.
+                if (PropertyHasDefaultBody(iprop))
+                {
+                    continue;
+                }
+
+                Diagnostics.ReportInterfaceMethodNotImplemented(
+                    syntax.Identifier.Location,
+                    structSymbol.Name,
+                    iface.Name,
+                    iprop.Name);
+            }
+        }
+    }
+
+    private void ResolveExplicitInterfaceEventImplementations(StructSymbol structSymbol, InterfaceSymbol iface)
+    {
+        // ADR-0149: resolve explicit-interface EVENT implementations
+        // (`event (IFoo) Changed T`) — generalizes the #2362 property
+        // pre-pass immediately above to events for the first time.
+        // Mirrors the property pre-pass exactly: resolved against the
+        // interface's OPEN DEFINITION event table (constructed
+        // generic interfaces do not substitute Events either — see
+        // InterfaceSymbol.TryResolveMembers), and is a pure resolve
+        // pass with no ordinary implicit-event-contract diagnostic
+        // (there is currently no implicit interface-event contract
+        // check in this binder at all — adding one is out of scope
+        // for this explicit-implementation feature and would risk an
+        // unrelated regression across every existing interface-event
+        // declaration in the test suite).
+        var explicitEventDefIface = iface.Definition ?? iface;
+        if (!explicitEventDefIface.Events.IsDefaultOrEmpty)
+        {
+            foreach (var openIevent in explicitEventDefIface.Events)
+            {
+                TryResolveExplicitInterfaceEventImplementation(structSymbol, iface, openIevent);
+            }
+        }
+    }
+
+    private static void SynthesizePositionalInterfaceProperties(
+        StructSymbol structSymbol,
+        Dictionary<string, (ParameterSymbol Param, bool NeedsSetter)> positionalInterfaceProps)
+    {
+        // Issue #2150: materialize synthesized backing auto-properties for
+        // every data-class positional parameter that satisfied an interface
+        // property above. Member access still resolves to the underlying
+        // field (fields are probed before properties), so this only adds the
+        // get_/set_ accessor methods the CLR interface slot requires. The
+        // existing property-emission path (planning, accessor IL, PropertyDef
+        // rows, and Virtual|NewSlot promotion for interface implementation)
+        // consumes these uniformly.
+        //
+        // The synthesized property is attached to the class that actually
+        // declares the backing field (this class or a base). Emitting it on
+        // the declaring type keeps it a same-type auto-property — the field
+        // planner only reserves a backing-field row when the auto-property's
+        // backing field is NOT one of the type's own fields, so a
+        // cross-type backing reference would corrupt the FieldDef range.
+        // The accessor is virtual (NewSlot), so a derived class that lists
+        // the interface satisfies the slot through inheritance.
+        if (positionalInterfaceProps.Count > 0)
+        {
+            foreach (var entry in positionalInterfaceProps.Values)
+            {
+                var param = entry.Param;
+                if (!structSymbol.TryGetFieldIncludingInherited(param.Name, out var backingField, out var declaringType))
+                {
+                    continue;
+                }
+
+                // Skip if the declaring type already exposes a property of
+                // this name (a real one that already satisfies the slot, or
+                // one synthesized by an earlier derived-class check).
+                if (TypeMemberModel.TryGetProperty(declaringType, param.Name, out _))
+                {
+                    continue;
+                }
+
+                var synthProp = new PropertySymbol(
+                    name: param.Name,
+                    type: param.Type,
+                    accessibility: Accessibility.Public,
+                    hasGetter: true,
+                    hasSetter: entry.NeedsSetter,
+                    isAutoProperty: true,
+                    isVirtual: true,
+                    isOverride: false)
+                {
+                    BackingField = backingField,
+                };
+
+                declaringType.SetProperties(declaringType.Properties.Add(synthProp));
+            }
+        }
+    }
+
+    // ADR-0149: sweep every explicit-interface qualifier clause that
+    // successfully bound a target interface (via
+    // ResolveExplicitInterfaceClauses) for two outstanding problems
+    // the per-interface-member loops above cannot detect on their
+    // own: (a) two members on the same type both explicitly claim
+    // the same (interface, name) slot (GS0495), and (b) a clause
+    // whose target interface has no member matching this
+    // declaration's name/signature/accessor-shape at all (GS0494) —
+    // the loops above only ever *consume* a clause-bearing candidate
+    // when it matches; one that never matches anything is otherwise
+    // silently accepted as an ordinary (non-conforming) member.
 
     /// <summary>
     /// ADR-0149: reports GS0495 for two explicit-interface-clause members on
@@ -774,6 +777,13 @@ internal sealed partial class DeclarationBinder
         }
     }
 
+    // ADR-0090 / issue #756: verify that the implementer does not
+    // attempt to override a `private` interface helper. Private
+    // helpers are part of the interface's own implementation and
+    // are not part of the public contract; an implementer that
+    // happens to declare a same-signature method clashes with the
+    // helper at the implementation level.
+
     /// <summary>
     /// ADR-0090 / issue #756: rejects implementers that attempt to declare a
     /// method whose signature matches one of the private helpers on an
@@ -827,6 +837,15 @@ internal sealed partial class DeclarationBinder
             }
         }
     }
+
+    // ADR-0089 / issue #755: verify static-virtual interface members.
+    // For each declared interface, walk its StaticMethods. The
+    // implementer must either (a) declare a matching static method
+    // inside its `shared { ... }` block (ADR-0053) — recorded on
+    // StructSymbol.StaticMethods — or (b) inherit a default body
+    // from the interface itself (the interface method declaration
+    // carries a body). If a same-named *instance* method exists but
+    // no matching static method, GS0332 surfaces; otherwise GS0331.
 
     /// <summary>
     /// ADR-0089 / issue #755: enforces that every static-virtual interface
@@ -915,6 +934,11 @@ internal sealed partial class DeclarationBinder
             }
         }
     }
+
+    // ADR-0089 / issue #1019: verify static-virtual interface
+    // *properties*. The implementer must declare a matching static
+    // property (same name and type, with at least the required
+    // accessors) inside its `shared { ... }` block; otherwise GS0397.
 
     /// <summary>
     /// ADR-0089 / issue #1019: enforces that every static-virtual interface
@@ -1141,6 +1165,10 @@ internal sealed partial class DeclarationBinder
         return true;
     }
 
+    // Issue #525: verify CLR interfaces declared in the base-type clause.
+    // Walks each public abstract member on the imported interface and
+    // confirms the G# class provides a same-name, same-CLR-signature
+    // method or property. Diagnostic uses the same GS0187 channel.
     private void VerifyClrInterfaceImplementations(StructDeclarationSyntax syntax, StructSymbol structSymbol)
     {
         if (structSymbol.ImplementedClrInterfaces.IsDefaultOrEmpty)
@@ -1253,6 +1281,15 @@ internal sealed partial class DeclarationBinder
             }
         }
     }
+
+    // Issue #985: a CLR interface in the base clause may inherit other
+    // interfaces whose abstract members are NOT enumerated by the
+    // direct-interface walk above (e.g. `IEnumerable[T]` inherits the
+    // non-generic `IEnumerable.GetEnumerator()`). The resulting type
+    // must satisfy those inherited slots too — otherwise the runtime
+    // rejects it with a TypeLoadException. Verify them here so a missing
+    // bridge (the canonical "only the generic GetEnumerator present"
+    // case) surfaces as GS0187 instead of emitting an unloadable type.
 
     /// <summary>
     /// Issue #985: verifies that the type satisfies every abstract method slot
