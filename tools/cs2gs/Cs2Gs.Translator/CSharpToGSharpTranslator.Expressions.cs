@@ -815,6 +815,36 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            // Issue #2432: an UNCONDITIONAL (no ternary/switch, no null-check
+            // guard) forward of a same-project promoted-nullable field / property
+            // / local / parameter / method as the ENTIRE (possibly parenthesized)
+            // body of a property/method whose own return type was deliberately
+            // kept non-null by the very same property-contract / forwarding-
+            // exclusion guardrail (#1354 / #2167) that left the forwarded value
+            // tainted in the first place. The canonical shape is an EXPLICIT
+            // interface property implementation that forwards to a same-project
+            // concrete property promoted through unrelated flow (the exact
+            // Oahu.Core shape: `Authorization` is promoted to `Authorization?`
+            // because its constructor can receive a null from
+            // `Authorization.Create`, but the explicit `IAuthorization
+            // IProfile.Authorization => Authorization;` forwarder's own type stays
+            // the non-null interface contract `IAuthorization`, since
+            // `CollectInterfacePropertyEdges` never taints an explicit-impl
+            // forwarder from the property it merely reads, and
+            // `SeedPropertyLikeReturnTaint` excludes property-forwarding from
+            // transitivity for exactly this reason). Unlike
+            // <see cref="IsUnguardedSiblingOfNullGuardedArmInReturnPreservingBody"/>,
+            // no sibling ternary arm exists to require — the guardrail
+            // relationship alone (this value being the WHOLE return-preserving
+            // body) is sufficient evidence gsc will reject the bare `T? -> T`
+            // conversion (GS0155): the original C# accepted the same forward
+            // implicitly (oblivious, unchecked), so asserting `!!` here is the
+            // minimal bridge, not a widening of the interface contract.
+            if (this.IsUnguardedForwardOfTaintedValueInReturnPreservingBody(recv))
+            {
+                return true;
+            }
+
             // Issue #2202: a call (or property/field read) whose result comes from
             // an EXTERNAL (metadata) member compiled without a nullable context is
             // oblivious — Roslyn reports its reference-type return/type as
@@ -1216,6 +1246,51 @@ public sealed partial class CSharpToGSharpTranslator
             // return type must NOT be promoted to nullable by the oblivious
             // analyzer (i.e., it was deliberately kept non-null).
             return this.IsBodyOfReturnPreservingMember(conditional);
+        }
+
+        // Issue #2432: true when <paramref name="use"/> is a same-project
+        // field/property/local/parameter/method read that is ALREADY emitted
+        // `T?` (declared nullable, or promoted by the whole-program oblivious
+        // taint fixpoint — the same symbol-kind set `IsNullablePromotedValue`
+        // inspects) AND is, itself, the ENTIRE (possibly parenthesized) body of
+        // a property/method whose own declared type the analyzer deliberately
+        // left non-null (<see cref="IsBodyOfReturnPreservingMember"/>, shared
+        // unchanged with <see cref="IsUnguardedSiblingOfNullGuardedArmInReturnPreservingBody"/>).
+        // This is the UNCONDITIONAL counterpart of that sibling rule: there is
+        // no ternary/switch here at all, so no sibling arm can already be
+        // guard-proven safe — the sole evidence is the guardrail relationship
+        // itself (a promoted-nullable value flowing, unconditionally, into a
+        // declaration the SAME analyzer refused to widen). That refusal is
+        // deliberate for a contract member (explicit/implicit interface
+        // implementation or override, which must keep the interface/base's own
+        // declared nullability) and for an ordinary property that merely
+        // forwards ANOTHER property (excluded from `SourceScope` transitivity to
+        // preserve the #1354 golden forwarding behavior) — both leave the
+        // bridging `!!` to this pass, exactly as their design comments call for.
+        private bool IsUnguardedForwardOfTaintedValueInReturnPreservingBody(ExpressionSyntax use)
+        {
+            if (!this.IsObliviousCompilation())
+            {
+                return false;
+            }
+
+            ISymbol symbol = this.context.GetSymbolInfo(use).Symbol;
+            if (symbol is not (IFieldSymbol or IPropertySymbol or ILocalSymbol or IParameterSymbol or IMethodSymbol))
+            {
+                return false;
+            }
+
+            // Reuses the exact same "is this emitted `T?`" test the rest of the
+            // translator relies on (declared-annotated OR taint-promoted), so a
+            // symbol whose nullability this pass would forgive here is always
+            // consistent with what every other promotion/forgiveness call site
+            // already treats as nullable.
+            if (!this.IsNullablePromotedValue(use))
+            {
+                return false;
+            }
+
+            return this.IsBodyOfReturnPreservingMember(use);
         }
 
         // Walks outward from <paramref name="use"/> through parentheses to find
