@@ -137,7 +137,7 @@ internal sealed class ConsoleInputReader : IInputReader, IDisposable
 
             var mode = this.originalMode;
             mode |= NativeMethods.ENABLE_EXTENDED_FLAGS;
-            mode &= ~NativeMethods.ENABLE_QUICK_EDIT_MODE;
+            mode |= NativeMethods.ENABLE_QUICK_EDIT_MODE;
             mode &= ~NativeMethods.ENABLE_VIRTUAL_TERMINAL_INPUT;
             if (!NativeMethods.SetConsoleMode(this.stdInHandle, mode))
             {

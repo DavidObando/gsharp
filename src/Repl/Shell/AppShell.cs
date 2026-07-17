@@ -14,13 +14,12 @@ namespace GSharp.Repl.Shell;
 
 /// <summary>
 /// Top-level TUI controller: header + tab strip + body + pinned hint bar, a modal
-/// overlay, progressive Ctrl+C, and a flicker-free synchronized render loop.
+/// overlay, and a flicker-free synchronized render loop.
 /// </summary>
 public sealed class AppShell : IAppShellNavigator
 {
     private readonly IAnsiConsole console;
     private readonly IReadOnlyList<ITabScreen> tabs;
-    private readonly CtrlCState ctrlC = new();
 
     // Captured once, up front: a cell evaluation can run on a background thread while the
     // busy spinner keeps this render loop going on the main thread, and SessionEngine
@@ -148,28 +147,7 @@ public sealed class AppShell : IAppShellNavigator
 
     public ShellAction Dispatch(ConsoleKeyInfo key)
     {
-        if (!ctrlC.ToastActive)
-        {
-            toast = null;
-        }
-
-        if (key.Key == ConsoleKey.C && (key.Modifiers & ConsoleModifiers.Control) != 0)
-        {
-            if (activeModal is not null)
-            {
-                DismissModal();
-                ctrlC.Reset();
-                return ShellAction.Continue;
-            }
-
-            if (ctrlC.OnPress() == CtrlCAction.Exit)
-            {
-                return ShellAction.Exit;
-            }
-
-            toast = "Press Ctrl+C again to quit · Esc to stay";
-            return ShellAction.Continue;
-        }
+        toast = null;
 
         if (activeModal is not null)
         {
@@ -179,13 +157,6 @@ public sealed class AppShell : IAppShellNavigator
                 DismissModal();
             }
 
-            return ShellAction.Continue;
-        }
-
-        if (key.Key == ConsoleKey.Escape && toast is not null)
-        {
-            toast = null;
-            ctrlC.Reset();
             return ShellAction.Continue;
         }
 
@@ -327,7 +298,7 @@ public sealed class AppShell : IAppShellNavigator
             .Add("/", "commands")
             .Add("Ctrl+Space", "complete")
             .Add("Ctrl+K", "hover")
-            .Add("Ctrl+C", "quit");
+            .Add("/exit", "quit");
     }
 }
 

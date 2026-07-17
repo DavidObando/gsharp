@@ -278,6 +278,16 @@ public class ReplLayoutTests
         Assert.Equal(2, tab.Scrolls.Count);
     }
 
+    [Fact]
+    public void AppShell_CtrlC_DoesNotExit()
+    {
+        var shell = new AppShell(NullConsole(), new[] { (ITabScreen)new RecordingTab() });
+        var ctrlC = new ConsoleKeyInfo('\x03', ConsoleKey.C, false, false, true);
+
+        Assert.Equal(ShellAction.Continue, shell.Dispatch(ctrlC));
+        Assert.Equal(ShellAction.Continue, shell.Dispatch(ctrlC));
+    }
+
     private static IAnsiConsole NullConsole()
     {
         var console = AnsiConsole.Create(new AnsiConsoleSettings
