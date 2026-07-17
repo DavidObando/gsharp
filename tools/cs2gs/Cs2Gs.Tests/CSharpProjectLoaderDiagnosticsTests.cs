@@ -306,6 +306,100 @@ namespace Sample
             d => d.FilePath.Replace('\\', '/').EndsWith("Lib/IWidget.cs", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// Issue #2412 regression guard: on a fresh, never-restored/never-built
+    /// sibling project (the shape <see cref="LoadProjectWithReferencesAsync_IncludesReferencedSiblingProject"/>
+    /// exercises), MSBuildWorkspace cannot resolve a prebuilt output assembly
+    /// for the <c>ProjectReference</c>, so it always keeps the sibling as a
+    /// source <see cref="Project"/> in the solution regardless of the
+    /// <c>LoadMetadataForReferencedProjects</c> setting — that test alone would
+    /// NOT have caught this bug. Once the sibling has actually been restored
+    /// and built (its real-world state — e.g. any already-built solution like
+    /// Oahu.Core referencing Oahu.Data/Oahu.Foundation/Oahu.Decrypt), a
+    /// prebuilt <c>bin/</c> output exists for MSBuildWorkspace to substitute,
+    /// and setting <c>LoadMetadataForReferencedProjects = true</c> makes it
+    /// collapse the sibling <c>ProjectReference</c> into a pure metadata
+    /// reference — dropping it from <c>Solution.Projects</c> entirely and
+    /// silently degrading <see cref="CSharpProjectLoader.LoadProjectWithReferencesAsync"/>
+    /// to returning only the primary project. This regressed cross-project
+    /// oblivious-nullability taint analysis (Refs #914's sibling-source
+    /// requirement) because the sibling's source was never available to
+    /// analyze. <see cref="CSharpProjectLoader.LoadProjectWithReferencesAsync"/>
+    /// must not set that flag.
+    /// </summary>
+    [Fact]
+    public async Task LoadProjectWithReferencesAsync_IncludesReferencedSiblingProject_WhenSiblingIsPrebuilt()
+    {
+        string root = NewScratchDir("with-prebuilt-reference");
+        File.WriteAllText(Path.Combine(root, "Directory.Build.props"), "<Project></Project>");
+
+        string libDir = Path.Combine(root, "Lib");
+        Directory.CreateDirectory(libDir);
+        string libProjectPath = Path.Combine(libDir, "Lib.csproj");
+        File.WriteAllText(libProjectPath, @"<Project Sdk=""Microsoft.NET.Sdk"">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+</Project>
+");
+        File.WriteAllText(
+            Path.Combine(libDir, "IWidget.cs"),
+            "namespace Lib { public interface IWidget { int Value { get; } } }");
+
+        string appDir = Path.Combine(root, "App");
+        Directory.CreateDirectory(appDir);
+        File.WriteAllText(Path.Combine(appDir, "App.csproj"), @"<Project Sdk=""Microsoft.NET.Sdk"">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include=""..\Lib\Lib.csproj"" />
+  </ItemGroup>
+</Project>
+");
+        File.WriteAllText(
+            Path.Combine(appDir, "Widget.cs"),
+            "namespace App { public class Widget : Lib.IWidget { public int Value => 42; } }");
+
+        // Reproduce the real-world precondition (Refs #2412): the sibling has
+        // already been restored and built, so a prebuilt output assembly
+        // exists on disk for MSBuildWorkspace to (incorrectly, if the buggy
+        // flag were set) substitute in place of the source Project.
+        RunDotnetBuild(libProjectPath);
+
+        System.Collections.Generic.IReadOnlyList<LoadedCSharpProject> projects =
+            await CSharpProjectLoader.LoadProjectWithReferencesAsync(Path.Combine(appDir, "App.csproj"));
+
+        Assert.True(
+            projects.Count >= 2,
+            "Expected the app project plus its prebuilt referenced sibling as a source project.");
+        Assert.Contains(
+            projects[0].Documents,
+            d => d.FilePath.Replace('\\', '/').EndsWith("App/Widget.cs", StringComparison.Ordinal));
+        Assert.Contains(
+            projects.Skip(1).SelectMany(p => p.Documents),
+            d => d.FilePath.Replace('\\', '/').EndsWith("Lib/IWidget.cs", StringComparison.Ordinal));
+    }
+
+    private static void RunDotnetBuild(string projectPath)
+    {
+        var startInfo = new ProcessStartInfo("dotnet", $"build \"{projectPath}\"")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+
+        using Process process = Process.Start(startInfo);
+        string stdout = process.StandardOutput.ReadToEnd();
+        string stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        Assert.True(
+            process.ExitCode == 0,
+            $"Prerequisite `dotnet build` failed (exit {process.ExitCode}); cannot exercise the prebuilt-sibling path.\nstdout:\n{stdout}\nstderr:\n{stderr}");
+    }
+
     private static string NewScratchDir(string label)
     {
         string root = Path.Combine(AppContext.BaseDirectory, "loader-tests", label, Guid.NewGuid().ToString("N"));
