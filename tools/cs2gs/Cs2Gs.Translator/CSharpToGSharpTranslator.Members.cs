@@ -1009,6 +1009,25 @@ public sealed partial class CSharpToGSharpTranslator
                 });
             }
 
+            // Issue #2438: a genuine C# `async void` method (an event handler
+            // — the only C# shape with no awaitable result at all) has no G#
+            // "async void" counterpart: every G# `async func` is
+            // Task-observable at its call site, so translating it as an
+            // ordinary async G# method would leave its method-group value
+            // typed `(args) -> Task`, unable to convert to the `(args) ->
+            // void` event-delegate shape it originally subscribed with
+            // (GS0155). Rewrite it into a non-async, void-returning wrapper
+            // with the SAME name (so `+=`/`-=` subscription/unsubscription
+            // keep referring to the same symbol) that fires the untouched
+            // original body off as a nested async literal and surfaces any
+            // unobserved fault instead of silently discarding it — see
+            // BuildAsyncVoidHandlerWrapperBody for the exact shape/rationale.
+            bool isAsyncVoidHandler = body != null && IsCSharpAsyncVoidHandler(symbol);
+            if (isAsyncVoidHandler)
+            {
+                body = this.BuildAsyncVoidHandlerWrapperBody(parameters, body, node.GetLocation());
+            }
+
             bool isOverride = symbol != null && symbol.IsOverride && !OverridesExternalBaseMethod(symbol);
 
             // Interface members are implicitly abstract in C#; in canonical G# the
@@ -1035,7 +1054,11 @@ public sealed partial class CSharpToGSharpTranslator
             // Issue #1278 / ADR-0131: a C# expression-bodied method (`=> expr`)
             // renders as the idiomatic G# arrow form `func F(...) T -> expr`
             // when the translated body folds to a single inline statement.
-            GStatement arrowBody = node.ExpressionBody != null ? TryFoldArrowBody(body) : null;
+            // Issue #2438: an async-void handler's wrapper body is never a
+            // single foldable statement (it always needs the nested
+            // async-literal binding plus the `ContinueWith` call), so it
+            // never takes the arrow form.
+            GStatement arrowBody = !isAsyncVoidHandler && node.ExpressionBody != null ? TryFoldArrowBody(body) : null;
             if (arrowBody != null)
             {
                 body = null;
@@ -1071,7 +1094,7 @@ public sealed partial class CSharpToGSharpTranslator
                 visibility: explicitInterfaceVisibility,
                 isOpen: isOpen,
                 isOverride: isOverride,
-                isAsync: symbol != null && symbol.IsAsync,
+                isAsync: !isAsyncVoidHandler && symbol != null && symbol.IsAsync,
                 attributes: this.MapAttributes(node.AttributeLists),
                 expressionBody: arrowBody,
                 explicitInterfaceType: explicitInterfaceType,
