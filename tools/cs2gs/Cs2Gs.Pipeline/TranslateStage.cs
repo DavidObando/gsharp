@@ -40,6 +40,29 @@ public sealed class TranslateStage : IMigrationStage
             throw new ArgumentNullException(nameof(context));
         }
 
+        // Issue #2412 (reopened): this must stay the ORIGINAL CompileViaSdk-gated
+        // loader choice for `projects`/`project` — the values every other part of
+        // this method (PE reference capture, document translation, the generated
+        // `.gsproj`'s <Reference>/<ProjectReference> sets) depends on. `LoadProjectAsync`
+        // sets `LoadMetadataForReferencedProjects = true`, which is why a sibling
+        // ProjectReference shows up in `project.Compilation.References` as a
+        // `PortableExecutableReference` pointing at the sibling's own prebuilt ref
+        // assembly (e.g. `obj/Debug/net10.0/ref/Sibling.dll`) — exactly what the SDK-
+        // backed compile stage needs to resolve sibling types via CLR reference
+        // assemblies (Refs #914) without re-emitting the sibling's own G#.
+        // `LoadProjectWithReferencesAsync` deliberately does NOT set that flag (a
+        // sibling ProjectReference instead becomes a same-workspace `CompilationReference`
+        // to a separately loaded source `Project`), so swapping it in here — as a
+        // prior version of this fix did — silently emptied `project.Compilation`'s
+        // own `PortableExecutableReference` set for every sibling, breaking every
+        // downstream reference/type resolution the app's OWN generated `.gsproj` and
+        // gsc compile depend on (a regression caught by re-running the real Oahu
+        // corpus, not by any in-memory test). Cross-project taint analysis needs only
+        // read-only sibling `CSharpCompilation`s matched by metadata identity (see
+        // `ObliviousNullabilityAnalyzer.RemapToCompilation`), never object/reference
+        // identity with `project.Compilation` — so it is loaded independently below,
+        // via its own isolated `LoadProjectWithReferencesAsync` call/workspace, and
+        // never touches `projects`/`project` or anything derived from them.
         IReadOnlyList<LoadedCSharpProject> projects = context.Options.CompileViaSdk
             ? new[]
             {
@@ -94,12 +117,41 @@ public sealed class TranslateStage : IMigrationStage
         // sibling's OWN compilation — the one whose syntax trees actually
         // contain the tainting evidence — instead of always the current
         // document's own project compilation, which never sees it.
-        IReadOnlyList<CSharpCompilation> siblingCompilations = projects
-            .Select(p => p.Compilation)
-            .ToList();
+        //
+        // Issue #2412 (reopened): under the default SDK-backed path `projects`
+        // above is deliberately kept to the app's own project only (see the
+        // loader comment), so it can no longer double as the sibling list here.
+        // Load the transitive sibling projects a SECOND time, independently,
+        // purely to bind their own compilations for this taint lookup — this
+        // extra MSBuild workspace load only ever feeds `IsTainted`'s read-only,
+        // metadata-identity-based cross-compilation symbol remap (see
+        // `ObliviousNullabilityAnalyzer.RemapToCompilation`), so it is safe for
+        // it to be a wholly separate `Compilation` graph than `project`'s own —
+        // and it never touches `projects`/`project`, PE reference capture, or
+        // anything the generated `.gsproj` depends on.
+        IReadOnlyList<CSharpCompilation> siblingCompilations;
+        if (context.Options.CompileViaSdk)
+        {
+            IReadOnlyList<LoadedCSharpProject> taintOnlyProjects = await CSharpProjectLoader
+                .LoadProjectWithReferencesAsync(context.App.ProjectPath, cancellationToken)
+                .ConfigureAwait(false);
+            siblingCompilations = taintOnlyProjects.Select(p => p.Compilation).ToList();
+        }
+        else
+        {
+            siblingCompilations = projects.Select(p => p.Compilation).ToList();
+        }
 
-        // Translate the app itself (index 0) plus its transitively referenced
-        // sibling projects (Refs #914). Sibling G# is emitted so the app's uses
+        // Translate the app itself (index 0) plus, in the no-via-sdk path,
+        // its transitively referenced sibling projects (Refs #914); under the
+        // default SDK-backed path `projects` above contains only the app
+        // itself, so this loop's `projectIndex > 0` branch never runs there —
+        // a referenced sibling is migrated and compiled as its own,
+        // independent app, linked back in by the Compile stage's rewritten
+        // ProjectReference/prebuilt CLR reference assembly (Refs #914), and
+        // its `Compilation` is already available above via
+        // `siblingCompilations` for cross-project taint resolution. Sibling
+        // G# is emitted here only in the no-via-sdk path, so the app's uses
         // of sibling types resolve at the gsc compile stage; those files are
         // flagged IsFromReferencedProject so the Compile stage attributes errors
         // only to the app's own files (a sibling's own gaps are measured in its
