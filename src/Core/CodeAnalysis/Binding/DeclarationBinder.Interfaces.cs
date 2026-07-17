@@ -206,11 +206,24 @@ internal sealed partial class DeclarationBinder
     {
         BindInterfaceBaseInterfaces(syntax, interfaceSymbol);
 
+        var seenNames = new HashSet<string>();
+        BindInterfaceMethods(syntax, interfaceSymbol, package, seenNames);
+        BindInterfaceProperties(syntax, interfaceSymbol, package, seenNames);
+        BindInterfaceEvents(syntax, interfaceSymbol, package, seenNames);
+        BindInterfaceStaticFields(syntax, interfaceSymbol, seenNames);
+        VerifyInterfaceMemberVariance(syntax, interfaceSymbol);
+    }
+
+    private void BindInterfaceMethods(
+        InterfaceDeclarationSyntax syntax,
+        InterfaceSymbol interfaceSymbol,
+        PackageSymbol package,
+        HashSet<string> seenNames)
+    {
         var methodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
         var staticMethodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
         var privateMethodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
         var staticPrivateMethodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
-        var seenNames = new HashSet<string>();
         foreach (var methodSyntax in syntax.Methods)
         {
             var methodName = methodSyntax.Identifier.Text;
@@ -443,7 +456,14 @@ internal sealed partial class DeclarationBinder
         interfaceSymbol.SetStaticMethods(staticMethodsBuilder.ToImmutable());
         interfaceSymbol.SetPrivateMethods(privateMethodsBuilder.ToImmutable());
         interfaceSymbol.SetStaticPrivateMethods(staticPrivateMethodsBuilder.ToImmutable());
+    }
 
+    private void BindInterfaceProperties(
+        InterfaceDeclarationSyntax syntax,
+        InterfaceSymbol interfaceSymbol,
+        PackageSymbol package,
+        HashSet<string> seenNames)
+    {
         // ADR-0051: bind interface property declarations.
         if (!syntax.Properties.IsDefaultOrEmpty)
         {
@@ -673,7 +693,14 @@ internal sealed partial class DeclarationBinder
 
             interfaceSymbol.SetProperties(propertiesBuilder.ToImmutable());
         }
+    }
 
+    private void BindInterfaceEvents(
+        InterfaceDeclarationSyntax syntax,
+        InterfaceSymbol interfaceSymbol,
+        PackageSymbol package,
+        HashSet<string> seenNames)
+    {
         // ADR-0052: bind interface event declarations.
         if (!syntax.Events.IsDefaultOrEmpty)
         {
@@ -748,7 +775,13 @@ internal sealed partial class DeclarationBinder
 
             interfaceSymbol.SetEvents(eventsBuilder.ToImmutable());
         }
+    }
 
+    private void BindInterfaceStaticFields(
+        InterfaceDeclarationSyntax syntax,
+        InterfaceSymbol interfaceSymbol,
+        HashSet<string> seenNames)
+    {
         // ADR-0089 / issue #1030: bind interface static *state* — `var` / `let`
         // / `const` fields declared inside the interface `shared { … }` block.
         // CLR interfaces may own static fields; these become `Static` FieldDef
@@ -847,7 +880,10 @@ internal sealed partial class DeclarationBinder
                 }
             }
         }
+    }
 
+    private void VerifyInterfaceMemberVariance(InterfaceDeclarationSyntax syntax, InterfaceSymbol interfaceSymbol)
+    {
         // Phase 4.3c / ADR-0021: variance position checking. Walk each method's
         // parameter types (contravariant position) and return type (covariant
         // position). An `out T` may only appear in covariant position; an
