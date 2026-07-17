@@ -197,6 +197,27 @@ internal sealed partial class DeclarationBinder
         _ => null,
     };
 
+    private readonly record struct StructFieldBindingResult(
+        ImmutableArray<FieldSymbol>.Builder Fields,
+        ImmutableArray<ParameterSymbol> PrimaryConstructorParameters,
+        ImmutableArray<FieldSymbol>.Builder ConstFields,
+        List<(FieldSymbol Field, ExpressionSyntax InitSyntax, TypeSymbol FieldType)> PendingInstanceInitializers,
+        List<(FieldSymbol Field, FieldDeclarationSyntax Syntax, TypeSymbol FieldType)> PendingConstInitializers,
+        List<(FieldSymbol Field, ExpressionSyntax InitSyntax, TypeSymbol FieldType)> PendingStaticFieldInitializers,
+        List<(FieldSymbol Field, FieldDeclarationSyntax Syntax, TypeSymbol FieldType)> PendingSharedConstInitializers);
+
+    private readonly record struct StructBaseBindingResult(
+        StructSymbol BaseClass,
+        TypeSymbol ImportedBaseType,
+        ImmutableArray<InterfaceSymbol>.Builder ImplementedInterfaces,
+        ImmutableArray<TypeSymbol>.Builder ImplementedClrInterfaces);
+
+    private readonly record struct StructMemberBindingContext(
+        HashSet<string> ExistingNames,
+        HashSet<string> MethodNames,
+        HashSet<string> ExplicitInterfaceClauseNames,
+        List<(FunctionDeclarationSyntax Syntax, ImmutableArray<ParameterSymbol> Parameters, TypeSymbol ReturnType, Accessibility Accessibility, ImmutableArray<BoundAttribute> Attributes)> PendingConversionOperators);
+
     private void BindStructDeclarationBodyCore(
         StructDeclarationSyntax syntax,
         PackageSymbol package,
@@ -207,16 +228,34 @@ internal sealed partial class DeclarationBinder
         // context, so they may use unmanaged raw pointers (`*T`).
         using var unsafeContext = binderCtx.PushUnsafeContext(syntax.IsUnsafe);
 
-        var name = structSymbol.Name;
-        var accessibility = structSymbol.Accessibility;
-        var seenFieldNames = new HashSet<string>();
-        var fields = ImmutableArray.CreateBuilder<FieldSymbol>();
-
         // Issue #950: `protected` is only meaningful on members of an
         // inheritable `open class`. Reject it on members of a non-open class,
         // a struct (value types are not inheritable), or a sealed type before
         // binding the members so the user sees one clean GS0380 diagnostic.
         ValidateProtectedMemberPlacement(syntax);
+
+        var fieldBinding = BindStructFieldsAndPrimaryConstructor(syntax, package, structSymbol);
+        var baseBinding = BindStructBaseAndInterfaces(syntax, structSymbol, fieldBinding);
+        var memberBinding = CreateStructMemberBindingContext(structSymbol);
+
+        BindStructInstanceMethods(syntax, package, structSymbol, baseBinding, memberBinding);
+        BindStructProperties(syntax, package, structSymbol, memberBinding);
+        BindStructEvents(syntax, package, structSymbol, memberBinding);
+        BindStructSharedBlock(syntax, package, structSymbol, fieldBinding, memberBinding);
+        RegisterStructConversionOperators(package, memberBinding.PendingConversionOperators);
+        RegisterStructDeferredInitializers(package, structSymbol, fieldBinding);
+        RegisterStructInterfaceChecks(syntax, structSymbol, baseBinding);
+        BindStructFinalMembers(syntax, package, structSymbol, baseBinding);
+    }
+
+    private StructFieldBindingResult BindStructFieldsAndPrimaryConstructor(
+        StructDeclarationSyntax syntax,
+        PackageSymbol package,
+        StructSymbol structSymbol)
+    {
+        var name = structSymbol.Name;
+        var seenFieldNames = new HashSet<string>();
+        var fields = ImmutableArray.CreateBuilder<FieldSymbol>();
 
         // Phase 3.B.3 sub-step 2: Kotlin-style primary constructor parameters
         // declare fields of the same name + type, in source order, in addition
@@ -486,6 +525,26 @@ internal sealed partial class DeclarationBinder
             }
         }
 
+        return new StructFieldBindingResult(
+            fields,
+            primaryCtorParameters,
+            constFieldsBuilder,
+            pendingInstanceInitializers,
+            pendingConstInitializers,
+            pendingStaticFieldInitializers,
+            pendingSharedConstInitializers);
+    }
+
+    private StructBaseBindingResult BindStructBaseAndInterfaces(
+        StructDeclarationSyntax syntax,
+        StructSymbol structSymbol,
+        StructFieldBindingResult fieldBinding)
+    {
+        var name = structSymbol.Name;
+        var fields = fieldBinding.Fields;
+        var primaryCtorParameters = fieldBinding.PrimaryConstructorParameters;
+        var constFieldsBuilder = fieldBinding.ConstFields;
+
         // Phase 4 of #141 / ADR-0047 §5: detect the `@Attribute` declaration
         // sugar marker before resolving the base clause so we can tolerate
         // an explicit `: System.Attribute` (redundant restatement) and reject
@@ -737,6 +796,15 @@ internal sealed partial class DeclarationBinder
             structSymbol.SetConstFields(constFieldsBuilder.ToImmutable());
         }
 
+        return new StructBaseBindingResult(
+            baseClassSymbol,
+            importedBaseType,
+            implementedInterfaces,
+            implementedClrInterfaces);
+    }
+
+    private StructMemberBindingContext CreateStructMemberBindingContext(StructSymbol structSymbol)
+    {
         // Collect existing member names for duplicate detection across fields,
         // methods, and properties.
         var existingNames = new HashSet<string>();
@@ -780,6 +848,24 @@ internal sealed partial class DeclarationBinder
         // shared-block static methods are installed (which replaces the static
         // method table), so an in-body operator coexists with a `shared` block.
         var pendingConversionOperators = new List<(FunctionDeclarationSyntax Syntax, ImmutableArray<ParameterSymbol> Parameters, TypeSymbol ReturnType, Accessibility Accessibility, ImmutableArray<BoundAttribute> Attributes)>();
+
+        return new StructMemberBindingContext(
+            existingNames,
+            methodNames,
+            explicitInterfaceClauseNames,
+            pendingConversionOperators);
+    }
+
+    private void BindStructInstanceMethods(
+        StructDeclarationSyntax syntax,
+        PackageSymbol package,
+        StructSymbol structSymbol,
+        StructBaseBindingResult baseBinding,
+        StructMemberBindingContext memberBinding)
+    {
+        var implementedClrInterfaces = baseBinding.ImplementedClrInterfaces;
+        var methodNames = memberBinding.MethodNames;
+        var pendingConversionOperators = memberBinding.PendingConversionOperators;
 
         if (!syntax.Methods.IsDefaultOrEmpty)
         {
@@ -1183,6 +1269,17 @@ internal sealed partial class DeclarationBinder
                 methodNames.Add(m.Name);
             }
         }
+    }
+
+    private void BindStructProperties(
+        StructDeclarationSyntax syntax,
+        PackageSymbol package,
+        StructSymbol structSymbol,
+        StructMemberBindingContext memberBinding)
+    {
+        var existingNames = memberBinding.ExistingNames;
+        var methodNames = memberBinding.MethodNames;
+        var explicitInterfaceClauseNames = memberBinding.ExplicitInterfaceClauseNames;
 
         // ADR-0051: bind property declarations.
         if (!syntax.Properties.IsDefaultOrEmpty)
@@ -1445,6 +1542,17 @@ internal sealed partial class DeclarationBinder
 
             structSymbol.SetProperties(propertiesBuilder.ToImmutable());
         }
+    }
+
+    private void BindStructEvents(
+        StructDeclarationSyntax syntax,
+        PackageSymbol package,
+        StructSymbol structSymbol,
+        StructMemberBindingContext memberBinding)
+    {
+        var existingNames = memberBinding.ExistingNames;
+        var methodNames = memberBinding.MethodNames;
+        var explicitInterfaceClauseNames = memberBinding.ExplicitInterfaceClauseNames;
 
         // ADR-0052: bind event declarations.
         if (!syntax.Events.IsDefaultOrEmpty)
@@ -1605,6 +1713,31 @@ internal sealed partial class DeclarationBinder
 
             structSymbol.SetEvents(eventsBuilder.ToImmutable());
         }
+    }
+
+    private void BindStructSharedBlock(
+        StructDeclarationSyntax syntax,
+        PackageSymbol package,
+        StructSymbol structSymbol,
+        StructFieldBindingResult fieldBinding,
+        StructMemberBindingContext memberBinding)
+    {
+        BindStructSharedFields(syntax, structSymbol, fieldBinding, memberBinding);
+        BindStructSharedMethods(syntax, package, structSymbol, memberBinding);
+        BindStructSharedProperties(syntax, package, structSymbol, memberBinding);
+        BindStructSharedEvents(syntax, package, structSymbol, memberBinding);
+    }
+
+    private void BindStructSharedFields(
+        StructDeclarationSyntax syntax,
+        StructSymbol structSymbol,
+        StructFieldBindingResult fieldBinding,
+        StructMemberBindingContext memberBinding)
+    {
+        var existingNames = memberBinding.ExistingNames;
+        var methodNames = memberBinding.MethodNames;
+        var pendingStaticFieldInitializers = fieldBinding.PendingStaticFieldInitializers;
+        var pendingSharedConstInitializers = fieldBinding.PendingSharedConstInitializers;
 
         // ADR-0053: bind members declared inside the optional `shared { … }` block
         // as static members on the struct/class symbol.
@@ -1711,7 +1844,20 @@ internal sealed partial class DeclarationBinder
             {
                 structSymbol.SetConstFields(structSymbol.ConstFields.AddRange(sharedConstFieldsBuilder.ToImmutable()));
             }
+        }
+    }
 
+    private void BindStructSharedMethods(
+        StructDeclarationSyntax syntax,
+        PackageSymbol package,
+        StructSymbol structSymbol,
+        StructMemberBindingContext memberBinding)
+    {
+        var existingNames = memberBinding.ExistingNames;
+        var methodNames = memberBinding.MethodNames;
+
+        if (syntax.SharedBlock != null)
+        {
             // Static methods
             var staticMethodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
             foreach (var methodSyntax in syntax.SharedBlock.Methods)
@@ -1915,7 +2061,21 @@ internal sealed partial class DeclarationBinder
             {
                 methodNames.Add(m.Name);
             }
+        }
+    }
 
+    private void BindStructSharedProperties(
+        StructDeclarationSyntax syntax,
+        PackageSymbol package,
+        StructSymbol structSymbol,
+        StructMemberBindingContext memberBinding)
+    {
+        var existingNames = memberBinding.ExistingNames;
+        var methodNames = memberBinding.MethodNames;
+        var explicitInterfaceClauseNames = memberBinding.ExplicitInterfaceClauseNames;
+
+        if (syntax.SharedBlock != null)
+        {
             // Static properties
             var staticPropertiesBuilder = ImmutableArray.CreateBuilder<PropertySymbol>();
             foreach (var propSyntax in syntax.SharedBlock.Properties)
@@ -2078,7 +2238,20 @@ internal sealed partial class DeclarationBinder
             }
 
             structSymbol.SetStaticProperties(staticPropertiesBuilder.ToImmutable());
+        }
+    }
 
+    private void BindStructSharedEvents(
+        StructDeclarationSyntax syntax,
+        PackageSymbol package,
+        StructSymbol structSymbol,
+        StructMemberBindingContext memberBinding)
+    {
+        var existingNames = memberBinding.ExistingNames;
+        var methodNames = memberBinding.MethodNames;
+
+        if (syntax.SharedBlock != null)
+        {
             // Static events
             var staticEventsBuilder = ImmutableArray.CreateBuilder<EventSymbol>();
             foreach (var eventSyntax in syntax.SharedBlock.Events)
@@ -2209,7 +2382,12 @@ internal sealed partial class DeclarationBinder
 
             structSymbol.SetStaticEvents(staticEventsBuilder.ToImmutable());
         }
+    }
 
+    private void RegisterStructConversionOperators(
+        PackageSymbol package,
+        List<(FunctionDeclarationSyntax Syntax, ImmutableArray<ParameterSymbol> Parameters, TypeSymbol ReturnType, Accessibility Accessibility, ImmutableArray<BoundAttribute> Attributes)> pendingConversionOperators)
+    {
         // Issue #1283: register in-body conversion operators as static
         // `op_Implicit` / `op_Explicit` methods now that the static-method table
         // (which a `shared` block REPLACES via SetStaticMethods above) is final.
@@ -2225,6 +2403,19 @@ internal sealed partial class DeclarationBinder
                 package,
                 conversionOperator.Attributes);
         }
+    }
+
+    private void RegisterStructDeferredInitializers(
+        PackageSymbol package,
+        StructSymbol structSymbol,
+        StructFieldBindingResult fieldBinding)
+    {
+        var pendingConstInitializers = fieldBinding.PendingConstInitializers;
+        var pendingSharedConstInitializers = fieldBinding.PendingSharedConstInitializers;
+        var pendingStaticFieldInitializers = fieldBinding.PendingStaticFieldInitializers;
+        var pendingInstanceInitializers = fieldBinding.PendingInstanceInitializers;
+        var fields = fieldBinding.Fields;
+        var primaryCtorParameters = fieldBinding.PrimaryConstructorParameters;
 
         // Issue #1070: consolidated field-initializer binding. Every static member
         // symbol of the enclosing type (class const fields, `shared` static fields,
@@ -2316,6 +2507,15 @@ internal sealed partial class DeclarationBinder
                 setCurrentFunction(savedFieldInitFunction);
             }
         });
+    }
+
+    private void RegisterStructInterfaceChecks(
+        StructDeclarationSyntax syntax,
+        StructSymbol structSymbol,
+        StructBaseBindingResult baseBinding)
+    {
+        var implementedInterfaces = baseBinding.ImplementedInterfaces;
+        var implementedClrInterfaces = baseBinding.ImplementedClrInterfaces;
 
         // Phase 3.B.4: validate interface implementation. Walks each
         // implemented interface and confirms the class (including inherited
@@ -2383,6 +2583,16 @@ internal sealed partial class DeclarationBinder
         {
             pendingInterfaceImplementationChecks.Add((syntax, structSymbol));
         }
+    }
+
+    private void BindStructFinalMembers(
+        StructDeclarationSyntax syntax,
+        PackageSymbol package,
+        StructSymbol structSymbol,
+        StructBaseBindingResult baseBinding)
+    {
+        var baseClassSymbol = baseBinding.BaseClass;
+        var importedBaseType = baseBinding.ImportedBaseType;
 
         // Issue #306: bind standalone user-defined constructors (`init(...)`).
         BindConstructorDeclarations(syntax, structSymbol, package, baseClassSymbol, importedBaseType);
