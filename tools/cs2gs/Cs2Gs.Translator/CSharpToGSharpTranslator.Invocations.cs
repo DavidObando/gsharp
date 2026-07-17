@@ -1349,18 +1349,90 @@ public sealed partial class CSharpToGSharpTranslator
             return new InvocationExpression(new IdentifierExpression(type.ToString()), arguments);
         }
 
-        // Object-initializer member assignment is a sink just like an argument,
-        // return, or element write: if the source expression was promoted to `T?`
-        // but the target member still emits as non-null `T`, assert the source.
+        // Issue #2429 (oblivious sink, shared bridge): an object/struct-literal
+        // member value, a collection-initializer element/Add-argument, or an
+        // indexer-initializer value is a sink just like an argument, return, or
+        // plain-assignment RHS (issues #2202/#2425/#2427). Two DISTINCT shapes
+        // trip the same `T? -> T` GS0156 once gsc's strict nullability sees the
+        // value's true `T?` type:
+        //  - a same/sibling-SOURCE symbol the whole-program taint fixpoint proved
+        //    nullable (`IsNullablePromotedValue`, issue #1072/#2259's shape,
+        //    e.g. `Alias = account.Alias` where `Account.Alias` was tainted
+        //    elsewhere), and
+        //  - a value READ from a GENUINELY EXTERNAL oblivious (metadata, no
+        //    nullable context, no source ANYWHERE we can analyze) member the
+        //    fixpoint can't see at all (`IsObliviousExternalNullableMember`,
+        //    issue #2113 follow-up, e.g. `Asin: author.Asin` where `author` is
+        //    an external oblivious type).
+        // Both are forgiven identically here: the TARGET position (member/
+        // Add-parameter/indexer-value) is what decides whether forgiveness is
+        // needed — gated to a target whose OWN type is a non-annotated,
+        // non-promoted reference type (i.e. one that genuinely expects
+        // non-null), so an ALREADY-nullable/promoted target (which accepts a
+        // `T?` value unchanged) and a nullable-enabled compilation (real
+        // annotations) are both left byte-identical. This is deliberately blind
+        // to whether the TARGET is an imported/metadata type or a source type —
+        // only the target's resolved type/promotion state matters, exactly like
+        // every other forgiveness sink in this file.
+        //
+        // Deliberately NOT narrowed to exclude PREBUILT SIBLING projects (an
+        // earlier version of this bridge tried exactly that, gating
+        // `IsObliviousExternalNullableMember` on the value symbol's assembly
+        // not matching one of `this.context.SiblingCompilations`): empirically,
+        // against the real Oahu.Core corpus, that guard silently un-fixed the
+        // exact two diagnostics this issue targets
+        // (`BookLibrary.AccountAliasContext.Alias = account.Alias`,
+        // `Series.Asin`) because `Account.Alias`/`Series.Asin` are plain
+        // auto-properties in a sibling project (`Oahu.Data`) with NO taint
+        // evidence anywhere (`IsNullablePromotedValue` is `false`) — their
+        // ONLY nullability signal is the same blind
+        // "oblivious external reference-returning member is `T?`" rule. This
+        // mirrors the identical, already-documented precedent on the
+        // RECEIVER-position rule (`ReceiverNeedsNullForgiveness`'s own
+        // `IsObliviousExternalNullableMember` check): a prior attempt to
+        // exclude sibling-project members from THAT blind rule was proven,
+        // against the same real corpus, to regress 47 -> 90 compile errors.
+        // Accepting the same harmless over-forgiveness here (a sibling member
+        // provably non-null by construction, e.g. an expression-bodied
+        // property returning a literal, gets a superfluous but
+        // still-compiling `!!`) is consistent with that established,
+        // corpus-validated policy.
+        private GExpression ForgiveInitializerElementValue(
+            ExpressionSyntax valueExpression,
+            GExpression translatedValue,
+            ITypeSymbol targetType,
+            ISymbol targetSymbolForPromotionCheck)
+        {
+            if (!this.IsObliviousCompilation()
+                || translatedValue is NonNullAssertionExpression
+                || targetType is not { IsReferenceType: true }
+                || targetType.NullableAnnotation == NullableAnnotation.Annotated)
+            {
+                return translatedValue;
+            }
+
+            if (targetSymbolForPromotionCheck != null
+                && this.ShouldPromoteToNullableReference(targetSymbolForPromotionCheck))
+            {
+                return translatedValue;
+            }
+
+            bool needsForgiveness = this.IsNullablePromotedValue(valueExpression)
+                || IsObliviousExternalNullableMember(this.context.GetSymbolInfo(valueExpression).Symbol);
+
+            return needsForgiveness ? new NonNullAssertionExpression(translatedValue) : translatedValue;
+        }
+
+        // Object-initializer member assignment (`Field = value` inside `T{ ... }`
+        // / `T(args){ ... }`): routes the field/property target's type/promotion
+        // state and the assignment's RHS value expression through the shared
+        // <see cref="ForgiveInitializerElementValue"/> bridge above.
         private GExpression ForgiveObjectInitializerValue(
             AssignmentExpressionSyntax assignment,
             GExpression translatedValue)
         {
             ISymbol target = this.context.GetSymbolInfo(assignment.Left).Symbol;
-            if (!this.IsObliviousCompilation()
-                || translatedValue is NonNullAssertionExpression
-                || !this.IsNullablePromotedValue(assignment.Right)
-                || target is not (IFieldSymbol or IPropertySymbol))
+            if (target is not (IFieldSymbol or IPropertySymbol))
             {
                 return translatedValue;
             }
@@ -1372,14 +1444,7 @@ public sealed partial class CSharpToGSharpTranslator
                 _ => null,
             };
 
-            if (targetType is not { IsReferenceType: true }
-                || targetType.NullableAnnotation == NullableAnnotation.Annotated
-                || this.ShouldPromoteToNullableReference(target))
-            {
-                return translatedValue;
-            }
-
-            return new NonNullAssertionExpression(translatedValue);
+            return this.ForgiveInitializerElementValue(assignment.Right, translatedValue, targetType, target);
         }
 
         /// <summary>
@@ -1593,9 +1658,24 @@ public sealed partial class CSharpToGSharpTranslator
                         return null;
                     }
 
+                    // Issue #2429: the indexer's VALUE type/promotion state is
+                    // resolved exactly like a plain `arr[i] = value` element-access
+                    // assignment (`ForgiveElementAccessAssignmentRhs`, issue
+                    // #2259) — `GetTypeInfo` on the (implicit) indexer access
+                    // itself gives the indexer's converted value type, and the
+                    // indexer PROPERTY symbol (not the value) is what the taint
+                    // fixpoint may have promoted.
+                    ITypeSymbol indexerValueType = this.context.GetTypeInfo(indexAccess).Type;
+                    ISymbol indexerSymbol = this.context.GetSymbolInfo(indexAccess).Symbol;
+                    GExpression indexedValue = this.ForgiveInitializerElementValue(
+                        indexedAssignment.Right,
+                        this.TranslateExpression(indexedAssignment.Right),
+                        indexerValueType,
+                        indexerSymbol);
+
                     elements.Add(new CollectionInitializerElement(
                         this.TranslateExpression(indexAccess.ArgumentList.Arguments[0].Expression),
-                        this.TranslateExpression(indexedAssignment.Right),
+                        indexedValue,
                         indexed: true));
                 }
                 else if (element is InitializerExpressionSyntax { } complex &&
@@ -1610,15 +1690,44 @@ public sealed partial class CSharpToGSharpTranslator
                         return null;
                     }
 
-                    elements.Add(new CollectionInitializerElement(
-                        this.TranslateExpression(complex.Expressions[0]),
-                        this.TranslateExpression(complex.Expressions[1]),
-                        indexed: false));
+                    // Issue #2429: resolve the actual `Add(key, value)` overload
+                    // gsc bound for this element (Roslyn's dedicated collection-
+                    // initializer symbol API — a plain `GetSymbolInfo` on the
+                    // element has nothing to bind to, it is not itself a call
+                    // syntax) so each argument's target parameter type decides
+                    // whether that argument needs forgiveness. `Add` parameters
+                    // are never tracked by the taint fixpoint (they're not a
+                    // symbol with its own declaration to promote), so no
+                    // promotion-check symbol is passed.
+                    IMethodSymbol addMethod =
+                        this.context.SemanticModel.GetCollectionInitializerSymbolInfo(complex).Symbol as IMethodSymbol;
+                    GExpression keyValue = this.TranslateExpression(complex.Expressions[0]);
+                    GExpression pairValue = this.TranslateExpression(complex.Expressions[1]);
+                    if (addMethod is { Parameters.Length: 2 })
+                    {
+                        keyValue = this.ForgiveInitializerElementValue(
+                            complex.Expressions[0], keyValue, addMethod.Parameters[0].Type, targetSymbolForPromotionCheck: null);
+                        pairValue = this.ForgiveInitializerElementValue(
+                            complex.Expressions[1], pairValue, addMethod.Parameters[1].Type, targetSymbolForPromotionCheck: null);
+                    }
+
+                    elements.Add(new CollectionInitializerElement(keyValue, pairValue, indexed: false));
                 }
                 else
                 {
-                    // Bare element `e` → `Add(e)`.
-                    elements.Add(new CollectionInitializerElement(this.TranslateExpression(element)));
+                    // Bare element `e` → `Add(e)`. Same `Add`-overload resolution
+                    // as the keyed shape above, keyed to the single value
+                    // parameter.
+                    IMethodSymbol addMethod =
+                        this.context.SemanticModel.GetCollectionInitializerSymbolInfo(element).Symbol as IMethodSymbol;
+                    GExpression bareValue = this.TranslateExpression(element);
+                    if (addMethod is { Parameters.Length: 1 })
+                    {
+                        bareValue = this.ForgiveInitializerElementValue(
+                            element, bareValue, addMethod.Parameters[0].Type, targetSymbolForPromotionCheck: null);
+                    }
+
+                    elements.Add(new CollectionInitializerElement(bareValue));
                 }
             }
 
