@@ -591,6 +591,56 @@ public sealed partial class CSharpToGSharpTranslator
             return new NonNullAssertionExpression(translatedRhs);
         }
 
+        // Issue #2427 (oblivious sink): a plain REASSIGNMENT (`path = (pathStub +
+        // ext).AsUncIfLong();`, the exact Oahu.Core BookLibrary.gs:469 shape) to an
+        // already-declared non-null local/parameter/field/property/indexer whose
+        // RHS reads an oblivious EXTERNAL (metadata, no nullable context) member
+        // trips the same `T? -> T` GS0156 that issue #2202's direct-return
+        // forgiveness (`ReceiverNeedsNullForgiveness`) and issue #2425's
+        // explicit-local-initializer forgiveness (`TranslateLocalDeclaration`)
+        // already apply for THEIR OWN value-read shapes (`return
+        // ext.Combine(...)`; `T x = ext.Combine(...);`) — gsc maps every such
+        // oblivious external reference read to `T?` regardless of where the value
+        // is consumed. Neither of those fixes reaches a subsequent bare assignment
+        // STATEMENT: `TranslateExpressionStatement`'s assignment case translates
+        // the RHS via plain `TranslateExpression` with no external-oblivious
+        // forgiveness of its own. This reuses the SAME `IsObliviousExternalNullableMember`
+        // detection those two fixes already use, applied at the assignment RHS use
+        // site instead. Gated to a target whose OWN type is a non-annotated,
+        // non-promoted reference type — i.e., one that genuinely expects
+        // non-null — so a target that is itself declared/promoted nullable (which
+        // already accepts a `T?` RHS unchanged) and a nullable-enabled compilation
+        // (whose external annotations are real) are both left byte-identical.
+        // Scoped to SIMPLE assignment: a compound assignment (`path +=
+        // ext.Combine(...)`) is a distinct shape (its RHS also flows through
+        // numeric-coercion logic) and is deliberately left untouched here.
+        private GExpression ForgiveObliviousExternalAssignmentRhs(
+            AssignmentExpressionSyntax assignment, GExpression translatedRhs)
+        {
+            if (!this.IsObliviousCompilation()
+                || !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                || translatedRhs is NonNullAssertionExpression
+                || !IsObliviousExternalNullableMember(this.context.GetSymbolInfo(assignment.Right).Symbol))
+            {
+                return translatedRhs;
+            }
+
+            ITypeSymbol leftType = this.context.GetTypeInfo(assignment.Left).Type;
+            if (leftType is not { IsReferenceType: true }
+                || leftType.NullableAnnotation == NullableAnnotation.Annotated)
+            {
+                return translatedRhs;
+            }
+
+            if (this.context.GetSymbolInfo(assignment.Left).Symbol is { } leftSymbol
+                && this.ShouldPromoteToNullableReference(leftSymbol))
+            {
+                return translatedRhs;
+            }
+
+            return new NonNullAssertionExpression(translatedRhs);
+        }
+
         // For a compound numeric assignment `x OP= y` (`+= -= *= /= %= &= |= ^=`),
         // G# requires the RHS to share the LHS's numeric type; a mismatched RHS is
         // coerced to the LHS type via the conversion-call form (e.g. `x += int64(y)`).
@@ -1734,6 +1784,7 @@ public sealed partial class CSharpToGSharpTranslator
                     assignRhs = this.CoercePointerConversion(assignment.Right, assignRhs);
                     assignRhs = this.ForgiveEventSubscriptionRhs(assignment, assignRhs);
                     assignRhs = this.ForgiveElementAccessAssignmentRhs(assignment, assignRhs);
+                    assignRhs = this.ForgiveObliviousExternalAssignmentRhs(assignment, assignRhs);
                     return new AssignmentStatement(
                         this.TranslateAssignmentTarget(assignment.Left),
                         assignRhs,
