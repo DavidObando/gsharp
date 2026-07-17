@@ -77,6 +77,20 @@ public sealed partial class CSharpToGSharpTranslator
 
             bool isAsync = lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword);
 
+            // Issue #2438: an async lambda directly targeting a VOID delegate
+            // (`EventHandler h = async (s, e) => await Foo();`,
+            // `button.Click += async (s, e) => { ... };`) is Roslyn's async-void
+            // shape for a lambda — its inferred `IMethodSymbol.ReturnsVoid` is
+            // `true` because it takes its signature from the CONVERTED target
+            // delegate's `Invoke` method, not from a `Task` value of its own. It
+            // needs the exact same fire-and-forget rewrite as an `async void`
+            // method/local function — an ordinary `async` lambda targeting
+            // `Func<Task>`/`Func<T, Task>` etc. has `ReturnsVoid == false` and is
+            // untouched. See BuildAsyncVoidHandlerWrapperBody.
+            bool isAsyncVoidTarget = isAsync &&
+                this.context.GetSymbolInfo(lambda).Symbol is IMethodSymbol lambdaSymbol &&
+                IsCSharpAsyncVoidHandler(lambdaSymbol);
+
             // A block-bodied lambda's body is its own evaluation scope: a spill
             // hoisted while translating it (issue #1731) must never leak into the
             // ENCLOSING statement's prologue (that would evaluate the operand
@@ -111,6 +125,25 @@ public sealed partial class CSharpToGSharpTranslator
             this.state.CurrentBodyScope = lambda;
             try
             {
+                if (isAsyncVoidTarget)
+                {
+                    // Every C# lambda body shape reduces to a plain STATEMENT
+                    // sequence here — never a `return`-wrapped value, even for
+                    // the generic expression-bodied shape below, since a
+                    // void-delegate target has no result to return (and the
+                    // expression itself, e.g. a bare `await voidTask`, has no
+                    // value to produce anyway).
+                    BlockStatement innerBody = lambda.Body is BlockSyntax asyncVoidBlock
+                        ? this.TranslateBlock(asyncVoidBlock)
+                        : new BlockStatement(this.WithSpillSeam(
+                            () => this.TranslateExpressionStatements((ExpressionSyntax)lambda.Body).ToList()).ToList());
+
+                    return new LambdaExpression(
+                        parameters,
+                        blockBody: this.BuildAsyncVoidHandlerWrapperBody(parameters, innerBody, lambda.GetLocation()),
+                        isAsync: false);
+                }
+
                 if (lambda.Body is BlockSyntax block)
                 {
                     // ADR-0128 / issue #1172: a block-bodied C# lambda renders as the
