@@ -52,7 +52,12 @@ public sealed class TranslationContext
     /// <param name="siblingCompilations">
     /// Issue #2412: every project's own <see cref="CSharpCompilation"/> loaded
     /// alongside <paramref name="compilation"/> in the same migration run (the
-    /// app plus its transitively-referenced sibling projects). A whole-program
+    /// app plus its transitively-referenced sibling projects — under the
+    /// default SDK-backed (<c>CompileViaSdk</c>) path, loaded independently
+    /// purely for this taint lookup by <c>TranslateStage</c>, since
+    /// <paramref name="compilation"/> itself resolves siblings as
+    /// <see cref="PortableExecutableReference"/> metadata there instead of
+    /// same-workspace source compilations). A whole-program
     /// fact computed only from one compilation's own syntax trees (e.g.
     /// <see cref="Translator.ObliviousNullabilityAnalyzer"/>'s taint fixpoint)
     /// can be TRUE in a sibling project's own result for a symbol this
@@ -61,8 +66,8 @@ public sealed class TranslationContext
     /// interface-implementation edges (issue #2285) can record taint for a
     /// symbol declared in a THIRD project (an interface member implemented by
     /// one of the sibling's own types). Pass <see langword="null"/> (default)
-    /// for a single-compilation translation (in-memory tests, <c>CompileViaSdk</c>,
-    /// a project with no references) — only <paramref name="compilation"/> is
+    /// for a single-compilation translation (in-memory tests, a standalone
+    /// project with no references) — only <paramref name="compilation"/> is
     /// then ever consulted, the exact prior behavior.
     /// </param>
     public TranslationContext(
