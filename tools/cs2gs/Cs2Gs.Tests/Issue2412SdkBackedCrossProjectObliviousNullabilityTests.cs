@@ -167,11 +167,28 @@ public class Issue2412SdkBackedCrossProjectObliviousNullabilityTests
         // resolves the reopened issue with zero new errors.)
         Assert.Contains("Target{First: widget.Wrapped!!.Value.Name!!}", compact);
 
-        // Negative control: a sibling member with NO taint evidence anywhere
-        // must stay a bare, non-forgiven read — the fix must not over-promote
-        // every cross-project symbol wholesale.
-        Assert.Contains("Target{Untainted: widget.FixedLabel}", compact);
-        Assert.DoesNotContain("widget.FixedLabel!!", compact);
+        // Issue #2429: an object-initializer member value read from an
+        // oblivious sibling member with NO taint evidence anywhere
+        // (`FixedLabel` is a plain expression-bodied property returning a
+        // literal, so `IsNullablePromotedValue` is `false`) now ALSO gets `!!`
+        // — the initializer bridge's blanket "oblivious external
+        // reference-returning member is `T?`" fallback (issue #2113/#2202's
+        // rule, extended to initializer sinks by #2429) applies here exactly
+        // like it already does for the RECEIVER-position `Wrapped` case
+        // above. This was previously a bare, non-forgiven read (the
+        // pre-#2429 initializer bridge only ever consulted
+        // `IsNullablePromotedValue`, never the oblivious-external rule at
+        // all); an earlier #2429 iteration tried to exclude sibling-project
+        // members from that fallback specifically to keep this read bare,
+        // but that was empirically PROVEN, against the real Oahu.Core
+        // corpus, to silently un-fix the exact diagnostics #2429 targets
+        // (`BookLibrary.AccountAliasContext.Alias = account.Alias`,
+        // `Series.Asin` — both plain auto-properties in a sibling project
+        // with identically zero taint evidence). Accepting the same
+        // harmless over-forgiveness here that the receiver rule already
+        // accepts for `Wrapped` is consistent with that corpus-validated
+        // policy.
+        Assert.Contains("Target{Untainted: widget.FixedLabel!!}", compact);
 
         // Genuinely-nullable negative: a DIFFERENT sibling project that is
         // nullable-ENABLED (a real `string?` annotation, not oblivious taint)
