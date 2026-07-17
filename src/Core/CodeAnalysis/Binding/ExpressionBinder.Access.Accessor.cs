@@ -2253,15 +2253,34 @@ internal sealed partial class ExpressionBinder
 
     /// <summary>
     /// Whether <paramref name="segment"/> is a pure namespace/package prefix
-    /// component — it does not name an in-scope value, a known type/alias, an
-    /// import alias, or an imported class. cs2gs fully-qualifies type references,
-    /// so a leading run of such segments in front of a same-compilation source
-    /// type is redundant and must be peeled before binding by simple name.
+    /// component — it does not name a known type/alias, an import alias, or an
+    /// imported class, and (only for the leading segment of a chain, per
+    /// <paramref name="isLeadingSegment"/>) does not name an in-scope value.
+    /// cs2gs fully-qualifies type references, so a leading run of such segments
+    /// in front of a same-compilation source type is redundant and must be
+    /// peeled before binding by simple name.
+    /// <para>
+    /// The in-scope-value check is restricted to the leading segment because it
+    /// is what distinguishes a genuine value-access chain (e.g.
+    /// <c>myOahu.Foo.Ctor()</c>, where <c>myOahu</c> really is a value) from a
+    /// namespace-qualified construction. Once a segment has already been
+    /// accepted as a namespace-prefix component (i.e. peeling is past the first
+    /// segment), the chain can no longer be reinterpreted as a value-access
+    /// chain — there is no value at its head to access <c>.member</c> on — so a
+    /// later segment coincidentally sharing a name with an unrelated in-scope
+    /// value (e.g. a field or const declared on the enclosing type, see issue
+    /// #2419) is not a genuine alternate interpretation and must not stop
+    /// peeling.
+    /// </para>
     /// </summary>
     /// <param name="segment">The dotted-name segment to classify.</param>
+    /// <param name="isLeadingSegment">
+    /// Whether <paramref name="segment"/> is the first segment being peeled from
+    /// the chain (as opposed to a later, already-committed continuation).
+    /// </param>
     /// <returns>Whether the segment is a pure namespace/package prefix.</returns>
-    private bool IsNamespacePrefixSegment(string segment) =>
-        scope.TryLookupSymbol(segment) is not VariableSymbol
+    private bool IsNamespacePrefixSegment(string segment, bool isLeadingSegment = true) =>
+        (!isLeadingSegment || scope.TryLookupSymbol(segment) is not VariableSymbol)
         && !scope.TryLookupTypeAlias(segment, out _)
         && !scope.TryLookupImport(segment, out _)
         && !scope.TryLookupImportedClass(segment, declaration: null, out _);
@@ -2277,12 +2296,14 @@ internal sealed partial class ExpressionBinder
     private ExpressionSyntax PeelNamespacePrefix(ExpressionSyntax expr)
     {
         var current = expr;
+        var peeledAny = false;
         while (current is AccessorExpressionSyntax accessor
                && !accessor.IsNullConditional
                && accessor.LeftPart is NameExpressionSyntax leftName
-               && IsNamespacePrefixSegment(leftName.IdentifierToken.Text))
+               && IsNamespacePrefixSegment(leftName.IdentifierToken.Text, isLeadingSegment: !peeledAny))
         {
             current = accessor.RightPart;
+            peeledAny = true;
         }
 
         return current;
