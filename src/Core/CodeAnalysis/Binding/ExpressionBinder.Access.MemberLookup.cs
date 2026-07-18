@@ -141,8 +141,7 @@ internal sealed partial class ExpressionBinder
                             return staticGroup;
                         }
 
-                        Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
-                        return new BoundErrorExpression(null);
+                        return BindExtensionMethodGroupOrError(receiver, ne);
                     }
 
                     // Stream B: static field/property read on imported type.
@@ -307,7 +306,7 @@ internal sealed partial class ExpressionBinder
                         return inheritedClrGroup;
                     }
 
-                    Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
+                    return BindExtensionMethodGroupOrError(receiver, ne);
                 }
                 else if (receiver != null && receiver.Type is EnumSymbol)
                 {
@@ -322,7 +321,7 @@ internal sealed partial class ExpressionBinder
                         return enumClrGroup;
                     }
 
-                    Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
+                    return BindExtensionMethodGroupOrError(receiver, ne);
                 }
                 else if (receiver != null && receiver.Type is InterfaceSymbol ifaceSym)
                 {
@@ -396,7 +395,7 @@ internal sealed partial class ExpressionBinder
                         }
                     }
 
-                    Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
+                    return BindExtensionMethodGroupOrError(receiver, ne);
                 }
                 else if (receiver != null && receiver.Type is TupleTypeSymbol tupleSym)
                 {
@@ -409,8 +408,7 @@ internal sealed partial class ExpressionBinder
                         return new BoundTupleElementAccessExpression(null, receiver, tupleSym, oneBased - 1);
                     }
 
-                    Diagnostics.ReportUnableToFindMember(ne.Location, memberName);
-                    return new BoundErrorExpression(null);
+                    return BindExtensionMethodGroupOrError(receiver, ne);
                 }
                 else if (receiver != null && receiver.Type is NullableTypeSymbol nullableSym
                     && nullableSym.UnderlyingType?.ClrType is { IsValueType: true } nullableInnerClr
@@ -436,8 +434,7 @@ internal sealed partial class ExpressionBinder
                         return nullableGroup;
                     }
 
-                    Diagnostics.ReportUnableToFindMember(ne.Location, nullableMemberName);
-                    return new BoundErrorExpression(null);
+                    return BindExtensionMethodGroupOrError(receiver, ne);
                 }
                 else if (receiver != null && receiver.Type is NullableTypeSymbol openNullableSym
                     && openNullableSym.UnderlyingType is TypeParameterSymbol openTp
@@ -479,8 +476,7 @@ internal sealed partial class ExpressionBinder
                         return openNullableGroup;
                     }
 
-                    Diagnostics.ReportUnableToFindMember(ne.Location, openNullableMemberName);
-                    return new BoundErrorExpression(null);
+                    return BindExtensionMethodGroupOrError(receiver, ne);
                 }
                 else if (receiver != null && receiver.Type != null && receiver.Type is not NullableTypeSymbol && receiver.Type.ClrType != null)
                 {
@@ -536,8 +532,7 @@ internal sealed partial class ExpressionBinder
                         return instanceGroup;
                     }
 
-                    Diagnostics.ReportUnableToFindMember(ne.Location, memberName);
-                    return new BoundErrorExpression(null);
+                    return BindExtensionMethodGroupOrError(receiver, ne);
                 }
                 else if (receiver != null
                     && receiver.Type is SliceTypeSymbol or ArrayTypeSymbol
@@ -561,8 +556,7 @@ internal sealed partial class ExpressionBinder
                         return new BoundClrPropertyAccessExpression(null, receiver, arrayProp, ClrNullability.GetPropertyTypeSymbol(arrayProp));
                     }
 
-                    Diagnostics.ReportUnableToFindMember(ne.Location, arrayMemberName);
-                    return new BoundErrorExpression(null);
+                    return BindExtensionMethodGroupOrError(receiver, ne);
                 }
                 else if (receiver != null && receiver.Type is TypeParameterSymbol tpRecv)
                 {
@@ -580,18 +574,65 @@ internal sealed partial class ExpressionBinder
                         return tpMember;
                     }
 
-                    Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
+                    return BindExtensionMethodGroupOrError(receiver, ne);
                 }
                 else
                 {
-                    Diagnostics.ReportUnableToFindMember(ne.Location, ne.IdentifierToken.Text);
+                    return BindExtensionMethodGroupOrError(receiver, ne);
                 }
-
-                return new BoundErrorExpression(null);
 
             default:
                 return new BoundErrorExpression(null);
         }
+    }
+
+    /// <summary>
+    /// Issue #2452: binds a receiver-style extension method reference used as a
+    /// value (<c>receiver.Extension</c>) after ordinary fields, properties, and
+    /// instance methods have all failed lookup. Calls already resolve extensions
+    /// through the overload resolver; method-group lookup must use the same
+    /// symbol tables instead of treating the name as a missing property.
+    /// </summary>
+    private BoundExpression BindExtensionMethodGroupOrError(BoundExpression receiver, NameExpressionSyntax name)
+    {
+        if (receiver != null)
+        {
+            var userCandidates = scope.TryLookupExtensionFunctions(receiver.Type, name.IdentifierToken.Text);
+            if (!userCandidates.IsDefaultOrEmpty)
+            {
+                if (userCandidates.Length == 1
+                    && userCandidates[0] is { IsExtension: true, TypeParameters.IsDefaultOrEmpty: true } single
+                    && single.Parameters.Length > 0)
+                {
+                    var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(single.Parameters.Length - 1);
+                    for (var i = 1; i < single.Parameters.Length; i++)
+                    {
+                        parameterTypes.Add(single.Parameters[i].Type);
+                    }
+
+                    var functionType = FunctionTypeSymbol.Get(
+                        parameterTypes.MoveToImmutable(),
+                        single.Type ?? TypeSymbol.Void);
+                    return new BoundMethodGroupExpression(name, receiver, single, functionType);
+                }
+
+                return new BoundMethodGroupExpression(name, receiver, userCandidates);
+            }
+
+            var importedCandidates = this.memberLookup.CollectImportedExtensionMethods(name.IdentifierToken.Text);
+            if (importedCandidates.Count > 0)
+            {
+                return new BoundClrMethodGroupExpression(
+                    name,
+                    receiver,
+                    declaringType: null,
+                    name.IdentifierToken.Text,
+                    importedCandidates.ToImmutableArray());
+            }
+        }
+
+        Diagnostics.ReportUnableToFindMember(name.Location, name.IdentifierToken.Text);
+        return new BoundErrorExpression(null);
     }
 
     /// <summary>

@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -1347,16 +1348,31 @@ internal sealed class ConversionClassifier
         }
 
         var invokeParams = invoke.GetParameters();
-        var argTypes = new Type[invokeParams.Length];
+        var closesExtensionReceiver = group.Receiver != null
+            && group.Candidates.All(candidate => candidate.IsStatic);
+        var argTypes = new Type[invokeParams.Length + (closesExtensionReceiver ? 1 : 0)];
+        if (closesExtensionReceiver)
+        {
+            var receiverClr = group.Receiver.Type?.ClrType;
+            if (receiverClr == null
+                && !MemberLookup.TryProjectErasedClrType(group.Receiver.Type, out receiverClr))
+            {
+                Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, group.MethodName, targetType);
+                return new BoundErrorExpression(null);
+            }
+
+            argTypes[0] = receiverClr;
+        }
+
         for (var i = 0; i < invokeParams.Length; i++)
         {
-            argTypes[i] = invokeParams[i].ParameterType;
+            argTypes[i + (closesExtensionReceiver ? 1 : 0)] = invokeParams[i].ParameterType;
         }
 
         var applicable = new List<MethodInfo>();
         foreach (var candidate in group.Candidates)
         {
-            if (candidate.GetParameters().Length != invokeParams.Length)
+            if (candidate.GetParameters().Length != argTypes.Length)
             {
                 continue;
             }
@@ -1438,15 +1454,16 @@ internal sealed class ConversionClassifier
         FunctionSymbol pick = null;
         foreach (var candidate in group.Candidates)
         {
-            if (candidate.Parameters.Length != targetParameterTypes.Length)
+            var parameterOffset = candidate.IsExtension && group.Receiver != null ? 1 : 0;
+            if (candidate.Parameters.Length - parameterOffset != targetParameterTypes.Length)
             {
                 continue;
             }
 
             var paramsMatch = true;
-            for (var i = 0; i < candidate.Parameters.Length; i++)
+            for (var i = 0; i < targetParameterTypes.Length; i++)
             {
-                if (!ReferenceEquals(candidate.Parameters[i].Type, targetParameterTypes[i]))
+                if (!ReferenceEquals(candidate.Parameters[i + parameterOffset].Type, targetParameterTypes[i]))
                 {
                     paramsMatch = false;
                     break;
@@ -1479,10 +1496,11 @@ internal sealed class ConversionClassifier
             return new BoundErrorExpression(null);
         }
 
-        var pickParams = ImmutableArray.CreateBuilder<TypeSymbol>(pick.Parameters.Length);
-        foreach (var p in pick.Parameters)
+        var pickParameterOffset = pick.IsExtension && group.Receiver != null ? 1 : 0;
+        var pickParams = ImmutableArray.CreateBuilder<TypeSymbol>(pick.Parameters.Length - pickParameterOffset);
+        for (var i = pickParameterOffset; i < pick.Parameters.Length; i++)
         {
-            pickParams.Add(p.Type);
+            pickParams.Add(pick.Parameters[i].Type);
         }
 
         var pickFnType = FunctionTypeSymbol.Get(pickParams.MoveToImmutable(), pick.Type ?? TypeSymbol.Void);

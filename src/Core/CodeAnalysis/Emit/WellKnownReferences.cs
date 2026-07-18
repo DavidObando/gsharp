@@ -877,6 +877,22 @@ internal sealed class WellKnownReferences
         return this.getMethodReference(method);
     }
 
+    public MemberReferenceHandle GetClosedStaticDelegateCreateReference()
+    {
+        // System.Delegate::CreateDelegate(Type, object, MethodInfo) creates a
+        // verifiable closed-static delegate whose target supplies the method's
+        // first parameter (issue #2452 extension method groups).
+        var delegateType = this.emitCtx.CoreObjectType.Assembly.GetType("System.Delegate")
+            ?? throw new InvalidOperationException("System.Delegate is not resolvable from the supplied references.");
+        var methodInfoType = this.emitCtx.CoreMethodBaseType.Assembly.GetType("System.Reflection.MethodInfo")
+            ?? throw new InvalidOperationException("System.Reflection.MethodInfo is not resolvable from the supplied references.");
+        var method = delegateType.GetMethod(
+            "CreateDelegate",
+            new[] { this.emitCtx.CoreSystemType, this.emitCtx.CoreObjectType, methodInfoType })
+            ?? throw new InvalidOperationException("Delegate.CreateDelegate(Type, object, MethodInfo) is not resolvable from the supplied references.");
+        return this.getMethodReference(method);
+    }
+
     public MemberReferenceHandle GetArrayCopyReference()
     {
         // System.Array::Copy(Array, Array, Int32) — used to implement append(slice, element).
