@@ -47,315 +47,122 @@ internal sealed partial class DeclarationBinder
 
         try
         {
-            // Phase 3.B.6 / ADR-0019 and Phase 6.4 / ADR-0024: receiver
-            // clauses become parameters[0]. Same-package struct/class receivers
-            // are methods; all other valid receivers remain extension functions.
-            TypeSymbol receiverType = null;
-            ParameterSymbol explicitReceiverParameter = null;
-            StructSymbol methodReceiverStruct = null;
-            if (syntax.IsExtension)
+            BindFunctionDeclarationCore(syntax, package, typeParameters, parameters, seenParameterNames);
+        }
+        finally
+        {
+            binderCtx.CurrentTypeParameters = previousTypeParameters;
+        }
+    }
+
+    private void BindFunctionDeclarationCore(
+        FunctionDeclarationSyntax syntax,
+        PackageSymbol package,
+        ImmutableArray<TypeParameterSymbol> typeParameters,
+        ImmutableArray<ParameterSymbol>.Builder parameters,
+        HashSet<string> seenParameterNames)
+    {
+        var receiverBinding = BindFunctionReceiver(syntax, package, parameters, seenParameterNames);
+        if (!receiverBinding.Succeeded)
+        {
+            return;
+        }
+
+        var receiverType = receiverBinding.ReceiverType;
+        var explicitReceiverParameter = receiverBinding.ExplicitReceiverParameter;
+        var methodReceiverStruct = receiverBinding.MethodReceiverStruct;
+        var parameterSymbolBySyntax = BindFunctionParameters(syntax, parameters, seenParameterNames);
+        var returnBinding = BindFunctionReturn(syntax, parameterSymbolBySyntax);
+        var type = returnBinding.ReturnType;
+        var typeIsValueTask = returnBinding.TypeIsValueTask;
+        var returnRefKind = returnBinding.ReturnRefKind;
+        var accessibility = resolveAccessibility(syntax.AccessibilityModifier);
+        var functionAttributes = BindFunctionAttributes(syntax, type);
+        BindFunctionParameterAttributes(syntax, parameterSymbolBySyntax, type);
+
+        FunctionSymbol function;
+
+        // Issue #1017: a user-defined conversion operator
+        // `func operator implicit (x T) U { … }` (or `explicit`) is modelled
+        // as a static `op_Implicit` / `op_Explicit` special-name method on
+        // the owning user type. It takes exactly one parameter (the source
+        // operand) and its return type is the conversion target; at least
+        // one of source/target must be a same-package user type.
+        if (syntax.IsConversionOperator)
+        {
+            BindConversionOperatorDeclaration(syntax, parameters.ToImmutable(), type, accessibility, package, functionAttributes);
+            return;
+        }
+
+        if (methodReceiverStruct != null)
+        {
+            var methodName = syntax.Identifier.Text;
+
+            // ADR-0079 / issue #719: warn when a receiver-clause method
+            // targets a same-package ("owned") struct or class. The
+            // canonical form for owned-type instance methods is the
+            // in-body declaration; the receiver-clause form is reserved
+            // for non-owned types (imported CLR or referenced-package
+            // types). Operators are exempt because they have no in-body
+            // counterpart — the parser synthesises an `op_*`-prefixed
+            // identifier for `func (a T) operator …`.
+            if (!methodName.StartsWith("op_", StringComparison.Ordinal))
             {
-                var recvName = syntax.Receiver.Identifier.Text;
-                receiverType = bindTypeClause(syntax.Receiver.Type);
-                if (receiverType == null)
-                {
-                    receiverType = TypeSymbol.Error;
-                }
-
-                explicitReceiverParameter = new ParameterSymbol(recvName, receiverType, declaringSyntax: syntax.Receiver);
-                seenParameterNames.Add(recvName);
-                parameters.Add(explicitReceiverParameter);
-
-                if (receiverType is StructSymbol receiverStruct && string.Equals(receiverStruct.PackageName, package.Name, StringComparison.Ordinal))
-                {
-                    methodReceiverStruct = receiverStruct.Definition ?? receiverStruct;
-                }
-                else if (IsSamePackageNonAggregateReceiver(syntax.Receiver.Type, receiverType, package))
-                {
-                    Diagnostics.ReportMethodReceiverMustBeStructOrClass(syntax.Receiver.Type.Location, receiverType.Name);
-                    return;
-                }
+                Diagnostics.ReportReceiverClauseOnOwnedType(
+                    syntax.Receiver.Type.Location,
+                    methodReceiverStruct.Name,
+                    methodName);
             }
 
-            // Tracks the bound ParameterSymbol corresponding to each parameter
-            // syntax position (null for duplicates) so per-parameter annotations
-            // can be attached to the right symbol below.
-            var parameterSymbolBySyntax = new ParameterSymbol[syntax.Parameters.Count];
-            for (var pIndex = 0; pIndex < syntax.Parameters.Count; pIndex++)
+            if (methodReceiverStruct.IsInline && IsInlineSynthesizedMemberName(methodName))
             {
-                var parameterSyntax = syntax.Parameters[pIndex];
-                var parameterName = parameterSyntax.Identifier.Text;
-                var parameterType = bindTypeClause(parameterSyntax.Type) ?? TypeSymbol.Error;
-
-                // Issue #1262: `_` is the discard identifier — repeated `_` parameters are
-                // permitted on named functions/methods. Each `_` occupies a positional slot
-                // but is not added to the body scope, so non-`_` duplicates still error.
-                if (parameterName != "_" && !seenParameterNames.Add(parameterName))
-                {
-                    Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
-                }
-                else
-                {
-                    // Phase 4.8: a `...T` parameter has type `[]T` for the body
-                    // and must be the last parameter. Auto-packing of trailing
-                    // arguments happens at the call site.
-                    var isVariadic = parameterSyntax.IsVariadic;
-                    if (isVariadic && parameterType != TypeSymbol.Error)
-                    {
-                        parameterType = SliceTypeSymbol.Get(parameterType);
-                    }
-
-                    var parameterRefKind = conversions.BindAndValidateParameterRefKind(
-                        parameterSyntax,
-                        parameterName,
-                        parameterType,
-                        isVariadic,
-                        syntax.IsAsync ? "async" : null);
-
-                    var parameter = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
-                    conversions.BindAndAttachParameterDefaultValue(parameterSyntax, parameter);
-                    parameters.Add(parameter);
-                    parameterSymbolBySyntax[pIndex] = parameter;
-                }
-            }
-
-            // Phase 4.8: validate `...T` appears only on the last syntactic parameter.
-            // ADR-0101 / issue #799: also flag the (rare) case where more than one
-            // parameter is variadic — the second and later occurrences get GS0364
-            // in addition to the "must-be-last" diagnostic on the earlier one(s).
-            ValidateVariadicParameterShape(syntax.Parameters);
-
-            // ADR-0041: bind the return type with async-aware alias resolution.
-            var type = bindReturnTypeClause(syntax.Type, syntax.IsAsync) ?? TypeSymbol.Void;
-
-            // ADR-0146 (Kotlin visibility narrowing follow-up): infer/narrow the
-            // return type when the (omitted-type) body is `-> object { ... }`.
-            type = InferAnonymousClassLiteralReturnType(syntax, type, resolveAccessibility(syntax.AccessibilityModifier));
-
-            // Issue #1918: unwrap an explicit `Task[T]` / `ValueTask[T]` async
-            // return-type annotation to its awaited result, remembering which
-            // wrapper was requested.
-            type = NormalizeAsyncDeclaredReturnType(type, syntax.IsAsync, out var typeIsValueTask);
-
-            // Issue #490 (ADR-0060 follow-up): a `ref` return modifier on the declaration
-            // is only valid when an explicit return-type clause is present, the function is
-            // not async, and the return is not a sequence/async-sequence (the state-machine
-            // rewriter cannot hoist a managed pointer into a field — same constraint as
-            // ref-kind parameters per ADR-0058 §4).
-            var returnRefKind = ValidateReturnRefKind(syntax, type);
-
-            // ADR-0060 §10: post-bind check — if this is a sequence/async-sequence
-            // function, ref-kind parameters are forbidden. (The async-only check
-            // is handled earlier in the parameter loop.)
-            var isSequenceReturn = type is SequenceTypeSymbol || type is AsyncSequenceTypeSymbol;
-            if (isSequenceReturn)
-            {
-                for (var pIndex = 0; pIndex < syntax.Parameters.Count; pIndex++)
-                {
-                    var pSym = parameterSymbolBySyntax[pIndex];
-                    if (pSym != null && pSym.RefKind != RefKind.None)
-                    {
-                        var label = syntax.IsAsync ? "async sequence" : "sequence";
-                        Diagnostics.ReportRefKindOnAsyncOrIterator(syntax.Parameters[pIndex].Location, pSym.Name, label);
-                    }
-                }
-            }
-
-            var accessibility = resolveAccessibility(syntax.AccessibilityModifier);
-
-            // Issue #141 / ADR-0047: resolve annotation lead-ins for this
-            // declaration. We do this once per function regardless of whether
-            // it is an extension, a method, or a free function — diagnostics
-            // and the resulting bound-attribute list are identical.
-            var functionAttributes = BindAttributes(
-                syntax.Annotations,
-                AttributeTargetKind.Method,
-                Binder.FunctionDeclarationAllowedTargets,
-                "a function declaration",
-                System.AttributeTargets.Method);
-
-            // Issue #176 / ADR-0047 §6: a function marked `@Conditional`
-            // must return void. The CLR rule (matching C# CS0578) is that
-            // conditional-method calls may be elided at the call site, which
-            // is incompatible with a non-void result feeding the surrounding
-            // expression. The attribute is still attached to the function
-            // symbol so downstream tools see the user's intent and so the
-            // call site still elides; the diagnostic is per-declaration.
-            if (KnownAttributes.HasConditional(functionAttributes) && type != TypeSymbol.Void)
-            {
-                Diagnostics.ReportConditionalMethodMustReturnVoid(syntax.Identifier.Location, syntax.Identifier.Text);
-            }
-
-            // Per-parameter annotations: each ParameterSyntax owns its own
-            // annotation list; the default target is `param`. Issue #170 /
-            // ADR-0047 §3: the bound list is stored on the ParameterSymbol so
-            // the emitter can emit a `CustomAttribute` row keyed to the
-            // corresponding `Parameter` metadata handle.
-            for (var pIndex = 0; pIndex < syntax.Parameters.Count; pIndex++)
-            {
-                var parameterSyntax = syntax.Parameters[pIndex];
-                var paramAttrs = BindAttributes(
-                    parameterSyntax.Annotations,
-                    AttributeTargetKind.Param,
-                    Binder.ParameterAllowedTargets,
-                    "a parameter declaration",
-                    System.AttributeTargets.Parameter);
-
-                var parameterSymbol = parameterSymbolBySyntax[pIndex];
-                if (parameterSymbol != null && !paramAttrs.IsDefaultOrEmpty)
-                {
-                    parameterSymbol.SetAttributes(paramAttrs);
-
-                    // Issue #180 / ADR-0040: validate @EnumeratorCancellation.
-                    // The attribute marks the cancellation-token parameter that
-                    // the async-sequence rewriter threads through, so it is
-                    // only meaningful when (a) the parameter's type is
-                    // System.Threading.CancellationToken and (b) the enclosing
-                    // function returns IAsyncEnumerable[T] (an `async sequence`).
-                    // Diagnostics are reported per offending attribute; the
-                    // attribute is still attached so downstream tooling can
-                    // observe the user's intent.
-                    var ecAttr = KnownAttributes.FindEnumeratorCancellation(paramAttrs);
-                    if (ecAttr != null)
-                    {
-                        if (parameterSymbol.Type?.ClrType.IsSameAs(typeof(System.Threading.CancellationToken)) != true)
-                        {
-                            Diagnostics.ReportEnumeratorCancellationWrongType(
-                                parameterSyntax.Location,
-                                parameterSymbol.Name,
-                                parameterSymbol.Type?.Name ?? "?");
-                        }
-                        else if (!isAsyncSequenceReturnType(type))
-                        {
-                            Diagnostics.ReportEnumeratorCancellationNotAsyncSequence(
-                                parameterSyntax.Location,
-                                parameterSymbol.Name);
-                        }
-                    }
-                }
-            }
-
-            FunctionSymbol function;
-
-            // Issue #1017: a user-defined conversion operator
-            // `func operator implicit (x T) U { … }` (or `explicit`) is modelled
-            // as a static `op_Implicit` / `op_Explicit` special-name method on
-            // the owning user type. It takes exactly one parameter (the source
-            // operand) and its return type is the conversion target; at least
-            // one of source/target must be a same-package user type.
-            if (syntax.IsConversionOperator)
-            {
-                BindConversionOperatorDeclaration(syntax, parameters.ToImmutable(), type, accessibility, package, functionAttributes);
+                Diagnostics.ReportInlineStructSynthesizedMemberConflict(syntax.Identifier.Location, methodReceiverStruct.Name, methodName);
                 return;
             }
 
-            if (methodReceiverStruct != null)
+            // Issue #2361: same ToString exception as the in-body form
+            // above — a compatible shape falls through as an ordinary
+            // receiver-clause method (suppressing the synthesized
+            // ToString); an incompatible one gets the more specific
+            // GS0487 instead of the blanket GS0232.
+            if (methodReceiverStruct.IsData && IsDataStructSynthesizedMemberName(methodName) && !IsUserOverridableDataMemberName(methodName))
             {
-                var methodName = syntax.Identifier.Text;
+                Diagnostics.ReportDataStructSynthesizedMemberConflict(syntax.Identifier.Location, methodReceiverStruct.Name, methodReceiverStruct.IsClass, methodName);
+                return;
+            }
 
-                // ADR-0079 / issue #719: warn when a receiver-clause method
-                // targets a same-package ("owned") struct or class. The
-                // canonical form for owned-type instance methods is the
-                // in-body declaration; the receiver-clause form is reserved
-                // for non-owned types (imported CLR or referenced-package
-                // types). Operators are exempt because they have no in-body
-                // counterpart — the parser synthesises an `op_*`-prefixed
-                // identifier for `func (a T) operator …`.
-                if (!methodName.StartsWith("op_", StringComparison.Ordinal))
-                {
-                    Diagnostics.ReportReceiverClauseOnOwnedType(
-                        syntax.Receiver.Type.Location,
-                        methodReceiverStruct.Name,
-                        methodName);
-                }
+            if (methodReceiverStruct.IsData && methodName == "ToString"
+                && !IsCompatibleDataToStringOverride(syntax.Parameters.Count, type, returnRefKind, syntax.IsAsync, syntax.IsUnsafe, typeParameters, accessibility))
+            {
+                Diagnostics.ReportIncompatibleDataToStringOverride(syntax.Identifier.Location, methodReceiverStruct.Name, methodReceiverStruct.IsClass);
+                return;
+            }
 
-                if (methodReceiverStruct.IsInline && IsInlineSynthesizedMemberName(methodName))
-                {
-                    Diagnostics.ReportInlineStructSynthesizedMemberConflict(syntax.Identifier.Location, methodReceiverStruct.Name, methodName);
-                    return;
-                }
+            if (methodReceiverStruct.TryGetField(methodName, out _))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, methodName);
+                return;
+            }
 
-                // Issue #2361: same ToString exception as the in-body form
-                // above — a compatible shape falls through as an ordinary
-                // receiver-clause method (suppressing the synthesized
-                // ToString); an incompatible one gets the more specific
-                // GS0487 instead of the blanket GS0232.
-                if (methodReceiverStruct.IsData && IsDataStructSynthesizedMemberName(methodName) && !IsUserOverridableDataMemberName(methodName))
-                {
-                    Diagnostics.ReportDataStructSynthesizedMemberConflict(syntax.Identifier.Location, methodReceiverStruct.Name, methodReceiverStruct.IsClass, methodName);
-                    return;
-                }
-
-                if (methodReceiverStruct.IsData && methodName == "ToString"
-                    && !IsCompatibleDataToStringOverride(syntax.Parameters.Count, type, returnRefKind, syntax.IsAsync, syntax.IsUnsafe, typeParameters, accessibility))
-                {
-                    Diagnostics.ReportIncompatibleDataToStringOverride(syntax.Identifier.Location, methodReceiverStruct.Name, methodReceiverStruct.IsClass);
-                    return;
-                }
-
-                if (methodReceiverStruct.TryGetField(methodName, out _))
-                {
-                    Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, methodName);
-                    return;
-                }
-
-                // Issue #2377: a receiver-clause binary/unary operator
-                // (`func (a T) operator +(b T) T { … }`) is syntax sugar over
-                // a CLR operator — it must be emitted as the canonical static,
-                // public, SpecialName `op_*` method with NO hidden instance
-                // receiver, exactly like a hand-authored C# `public static T
-                // operator +(T a, T b)`. The receiver clause is preserved as
-                // syntax only: `a` still binds as an ordinary named parameter
-                // (Parameters[0], already added above), so the body sees the
-                // same identifiers as before, but the symbol itself is static
-                // — reusing the exact shape `BindConversionOperatorDeclaration`
-                // already uses for `op_Implicit`/`op_Explicit` above, and the
-                // shape non-owned-receiver ("extension") operators already got
-                // via `FunctionSymbol.IsExtension` — so it round-trips through
-                // the SAME generic static-method emission path (no operator-
-                // specific emitter logic needed) and is discoverable by CLR
-                // consumers and by gsc's own ClrOperatorResolution (Stream C)
-                // reflection fallback after import.
-                if (methodName.StartsWith("op_", StringComparison.Ordinal))
-                {
-                    function = new FunctionSymbol(
-                        methodName,
-                        parameters.ToImmutable(),
-                        type,
-                        syntax,
-                        package,
-                        accessibility,
-                        receiverType: (TypeSymbol)null);
-                    function.TypeParameters = typeParameters;
-                    function.IsUnsafe = syntax.IsUnsafe;
-                    function.ReturnRefKind = returnRefKind;
-                    function.IsStatic = true;
-                    function.StaticOwnerType = methodReceiverStruct;
-                    function.IsSpecialName = true;
-                    Binder.AttachDocumentation(function, syntax);
-                    function.SetAttributes(functionAttributes);
-                    ValidateInlineDataNilArguments(functionAttributes, function.Parameters);
-
-                    // Duplicate-signature detection against existing static
-                    // methods on the receiver (operators live in the static
-                    // method bucket, not the instance one).
-                    foreach (var existingStatic in methodReceiverStruct.StaticMethods)
-                    {
-                        if (BoundScope.FunctionSignaturesEqual(existingStatic, function))
-                        {
-                            Diagnostics.ReportDuplicateOverloadSignature(
-                                syntax.Identifier.Location,
-                                methodName,
-                                Binder.FormatOverloadSignature(function));
-                            return;
-                        }
-                    }
-
-                    methodReceiverStruct.AddStaticMethods(ImmutableArray.Create(function));
-                    PInvokeBinder.ReportMarshalAsOnNonPInvokeFunction(syntax, Diagnostics);
-                    return;
-                }
-
+            // Issue #2377: a receiver-clause binary/unary operator
+            // (`func (a T) operator +(b T) T { … }`) is syntax sugar over
+            // a CLR operator — it must be emitted as the canonical static,
+            // public, SpecialName `op_*` method with NO hidden instance
+            // receiver, exactly like a hand-authored C# `public static T
+            // operator +(T a, T b)`. The receiver clause is preserved as
+            // syntax only: `a` still binds as an ordinary named parameter
+            // (Parameters[0], already added above), so the body sees the
+            // same identifiers as before, but the symbol itself is static
+            // — reusing the exact shape `BindConversionOperatorDeclaration`
+            // already uses for `op_Implicit`/`op_Explicit` above, and the
+            // shape non-owned-receiver ("extension") operators already got
+            // via `FunctionSymbol.IsExtension` — so it round-trips through
+            // the SAME generic static-method emission path (no operator-
+            // specific emitter logic needed) and is discoverable by CLR
+            // consumers and by gsc's own ClrOperatorResolution (Stream C)
+            // reflection fallback after import.
+            if (methodName.StartsWith("op_", StringComparison.Ordinal))
+            {
                 function = new FunctionSymbol(
                     methodName,
                     parameters.ToImmutable(),
@@ -363,21 +170,23 @@ internal sealed partial class DeclarationBinder
                     syntax,
                     package,
                     accessibility,
-                    methodReceiverStruct,
-                    explicitReceiverParameter);
+                    receiverType: (TypeSymbol)null);
                 function.TypeParameters = typeParameters;
-                function.IsAsync = syntax.IsAsync || isAsyncIteratorReturnType(type);
-                function.AsyncReturnsValueTask = typeIsValueTask;
                 function.IsUnsafe = syntax.IsUnsafe;
                 function.ReturnRefKind = returnRefKind;
+                function.IsStatic = true;
+                function.StaticOwnerType = methodReceiverStruct;
+                function.IsSpecialName = true;
                 Binder.AttachDocumentation(function, syntax);
                 function.SetAttributes(functionAttributes);
                 ValidateInlineDataNilArguments(functionAttributes, function.Parameters);
 
-                // ADR-0063 §11: detect duplicate-signature against existing methods on the receiver.
-                foreach (var existingMethod in methodReceiverStruct.Methods)
+                // Duplicate-signature detection against existing static
+                // methods on the receiver (operators live in the static
+                // method bucket, not the instance one).
+                foreach (var existingStatic in methodReceiverStruct.StaticMethods)
                 {
-                    if (BoundScope.FunctionSignaturesEqual(existingMethod, function))
+                    if (BoundScope.FunctionSignaturesEqual(existingStatic, function))
                     {
                         Diagnostics.ReportDuplicateOverloadSignature(
                             syntax.Identifier.Location,
@@ -387,17 +196,20 @@ internal sealed partial class DeclarationBinder
                     }
                 }
 
-                methodReceiverStruct.AddMethods(ImmutableArray.Create(function));
-
-                // ADR-0096 / issue #762: a receiver-clause method is
-                // never a P/Invoke (GS0326 would also fire for the
-                // shape), so any `@MarshalAs` on a parameter is rejected
-                // with GS0360 to make the misuse explicit.
+                methodReceiverStruct.AddStaticMethods(ImmutableArray.Create(function));
                 PInvokeBinder.ReportMarshalAsOnNonPInvokeFunction(syntax, Diagnostics);
                 return;
             }
 
-            function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package, accessibility);
+            function = new FunctionSymbol(
+                methodName,
+                parameters.ToImmutable(),
+                type,
+                syntax,
+                package,
+                accessibility,
+                methodReceiverStruct,
+                explicitReceiverParameter);
             function.TypeParameters = typeParameters;
             function.IsAsync = syntax.IsAsync || isAsyncIteratorReturnType(type);
             function.AsyncReturnsValueTask = typeIsValueTask;
@@ -407,74 +219,335 @@ internal sealed partial class DeclarationBinder
             function.SetAttributes(functionAttributes);
             ValidateInlineDataNilArguments(functionAttributes, function.Parameters);
 
-            // ADR-0086 / issue #727: when @DllImport is present and well-formed,
-            // attach the resolved PInvokeMetadata so the emitter wires the
-            // ImplMap row and the body-binder skips body binding. If the user
-            // wrote `;` but no @DllImport, surface GS0325.
-            var isPInvoke = PInvokeBinder.TryAttachPInvokeMetadata(function, syntax, Diagnostics);
-            if (!isPInvoke && syntax.HasSemicolonBody)
+            // ADR-0063 §11: detect duplicate-signature against existing methods on the receiver.
+            foreach (var existingMethod in methodReceiverStruct.Methods)
             {
-                Diagnostics.ReportSemicolonBodyRequiresDllImport(syntax.Identifier.Location, function.Name);
+                if (BoundScope.FunctionSignaturesEqual(existingMethod, function))
+                {
+                    Diagnostics.ReportDuplicateOverloadSignature(
+                        syntax.Identifier.Location,
+                        methodName,
+                        Binder.FormatOverloadSignature(function));
+                    return;
+                }
             }
 
-            // ADR-0096 / issue #762: `@MarshalAs` on a non-P/Invoke
-            // parameter has no CLR-defined meaning (it is a pseudo-custom
-            // attribute encoded into a FieldMarshal table row, but the
-            // managed-call ABI does not consult that row). Report GS0360
-            // so the misuse is not silently elided.
-            if (!isPInvoke)
+            methodReceiverStruct.AddMethods(ImmutableArray.Create(function));
+
+            // ADR-0096 / issue #762: a receiver-clause method is
+            // never a P/Invoke (GS0326 would also fire for the
+            // shape), so any `@MarshalAs` on a parameter is rejected
+            // with GS0360 to make the misuse explicit.
+            PInvokeBinder.ReportMarshalAsOnNonPInvokeFunction(syntax, Diagnostics);
+            return;
+        }
+
+        function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package, accessibility);
+        function.TypeParameters = typeParameters;
+        function.IsAsync = syntax.IsAsync || isAsyncIteratorReturnType(type);
+        function.AsyncReturnsValueTask = typeIsValueTask;
+        function.IsUnsafe = syntax.IsUnsafe;
+        function.ReturnRefKind = returnRefKind;
+        Binder.AttachDocumentation(function, syntax);
+        function.SetAttributes(functionAttributes);
+        ValidateInlineDataNilArguments(functionAttributes, function.Parameters);
+
+        // ADR-0086 / issue #727: when @DllImport is present and well-formed,
+        // attach the resolved PInvokeMetadata so the emitter wires the
+        // ImplMap row and the body-binder skips body binding. If the user
+        // wrote `;` but no @DllImport, surface GS0325.
+        var isPInvoke = PInvokeBinder.TryAttachPInvokeMetadata(function, syntax, Diagnostics);
+        if (!isPInvoke && syntax.HasSemicolonBody)
+        {
+            Diagnostics.ReportSemicolonBodyRequiresDllImport(syntax.Identifier.Location, function.Name);
+        }
+
+        // ADR-0096 / issue #762: `@MarshalAs` on a non-P/Invoke
+        // parameter has no CLR-defined meaning (it is a pseudo-custom
+        // attribute encoded into a FieldMarshal table row, but the
+        // managed-call ABI does not consult that row). Report GS0360
+        // so the misuse is not silently elided.
+        if (!isPInvoke)
+        {
+            PInvokeBinder.ReportMarshalAsOnNonPInvokeFunction(syntax, Diagnostics);
+        }
+
+        if (syntax.IsExtension)
+        {
+            function.IsExtension = true;
+            function.ExtensionReceiverType = receiverType;
+
+            // Issue #1188: extension functions overload like ordinary
+            // methods and free functions. A collision now means a genuine
+            // duplicate signature (same receiver type, name, and callable
+            // parameters) — report it as a duplicate-overload-signature
+            // error to match the method/free-function path rather than a
+            // generic redeclaration.
+            if (function.Declaration.Identifier.Text != null && !scope.TryDeclareExtensionFunction(function))
             {
-                PInvokeBinder.ReportMarshalAsOnNonPInvokeFunction(syntax, Diagnostics);
+                Diagnostics.ReportDuplicateOverloadSignature(syntax.Identifier.Location, function.Name, Binder.FormatOverloadSignature(function));
             }
 
-            if (syntax.IsExtension)
+            return;
+        }
+
+        if (function.Declaration.Identifier.Text != null && !scope.TryDeclareFunction(function))
+        {
+            // ADR-0063 §11: if the collision is with another callable of
+            // the same name, it is a duplicate-signature error rather
+            // than a generic redeclaration.
+            var existingOverloads = scope.TryLookupFunctions(function.Name);
+            var duplicateSig = false;
+            foreach (var existing in existingOverloads)
             {
-                function.IsExtension = true;
-                function.ExtensionReceiverType = receiverType;
-
-                // Issue #1188: extension functions overload like ordinary
-                // methods and free functions. A collision now means a genuine
-                // duplicate signature (same receiver type, name, and callable
-                // parameters) — report it as a duplicate-overload-signature
-                // error to match the method/free-function path rather than a
-                // generic redeclaration.
-                if (function.Declaration.Identifier.Text != null && !scope.TryDeclareExtensionFunction(function))
+                if (BoundScope.FunctionSignaturesEqual(existing, function))
                 {
-                    Diagnostics.ReportDuplicateOverloadSignature(syntax.Identifier.Location, function.Name, Binder.FormatOverloadSignature(function));
+                    duplicateSig = true;
+                    break;
                 }
-
-                return;
             }
 
-            if (function.Declaration.Identifier.Text != null && !scope.TryDeclareFunction(function))
+            if (duplicateSig)
             {
-                // ADR-0063 §11: if the collision is with another callable of
-                // the same name, it is a duplicate-signature error rather
-                // than a generic redeclaration.
-                var existingOverloads = scope.TryLookupFunctions(function.Name);
-                var duplicateSig = false;
-                foreach (var existing in existingOverloads)
+                Diagnostics.ReportDuplicateOverloadSignature(syntax.Identifier.Location, function.Name, Binder.FormatOverloadSignature(function));
+            }
+            else
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, function.Name);
+            }
+        }
+    }
+
+    private readonly record struct FunctionReceiverBindingResult(
+        TypeSymbol ReceiverType,
+        ParameterSymbol ExplicitReceiverParameter,
+        StructSymbol MethodReceiverStruct,
+        bool Succeeded);
+
+    private readonly record struct FunctionReturnBindingResult(
+        TypeSymbol ReturnType,
+        bool TypeIsValueTask,
+        RefKind ReturnRefKind);
+
+    private FunctionReceiverBindingResult BindFunctionReceiver(
+        FunctionDeclarationSyntax syntax,
+        PackageSymbol package,
+        ImmutableArray<ParameterSymbol>.Builder parameters,
+        HashSet<string> seenParameterNames)
+    {
+        // Phase 3.B.6 / ADR-0019 and Phase 6.4 / ADR-0024: receiver
+        // clauses become parameters[0]. Same-package struct/class receivers
+        // are methods; all other valid receivers remain extension functions.
+        TypeSymbol receiverType = null;
+        ParameterSymbol explicitReceiverParameter = null;
+        StructSymbol methodReceiverStruct = null;
+        if (syntax.IsExtension)
+        {
+            var recvName = syntax.Receiver.Identifier.Text;
+            receiverType = bindTypeClause(syntax.Receiver.Type);
+            if (receiverType == null)
+            {
+                receiverType = TypeSymbol.Error;
+            }
+
+            explicitReceiverParameter = new ParameterSymbol(recvName, receiverType, declaringSyntax: syntax.Receiver);
+            seenParameterNames.Add(recvName);
+            parameters.Add(explicitReceiverParameter);
+
+            if (receiverType is StructSymbol receiverStruct && string.Equals(receiverStruct.PackageName, package.Name, StringComparison.Ordinal))
+            {
+                methodReceiverStruct = receiverStruct.Definition ?? receiverStruct;
+            }
+            else if (IsSamePackageNonAggregateReceiver(syntax.Receiver.Type, receiverType, package))
+            {
+                Diagnostics.ReportMethodReceiverMustBeStructOrClass(syntax.Receiver.Type.Location, receiverType.Name);
+                return new FunctionReceiverBindingResult(receiverType, explicitReceiverParameter, methodReceiverStruct, false);
+            }
+        }
+
+        return new FunctionReceiverBindingResult(receiverType, explicitReceiverParameter, methodReceiverStruct, true);
+    }
+
+    private ParameterSymbol[] BindFunctionParameters(
+        FunctionDeclarationSyntax syntax,
+        ImmutableArray<ParameterSymbol>.Builder parameters,
+        HashSet<string> seenParameterNames)
+    {
+        // Tracks the bound ParameterSymbol corresponding to each parameter
+        // syntax position (null for duplicates) so per-parameter annotations
+        // can be attached to the right symbol below.
+        var parameterSymbolBySyntax = new ParameterSymbol[syntax.Parameters.Count];
+        for (var pIndex = 0; pIndex < syntax.Parameters.Count; pIndex++)
+        {
+            var parameterSyntax = syntax.Parameters[pIndex];
+            var parameterName = parameterSyntax.Identifier.Text;
+            var parameterType = bindTypeClause(parameterSyntax.Type) ?? TypeSymbol.Error;
+
+            // Issue #1262: `_` is the discard identifier — repeated `_` parameters are
+            // permitted on named functions/methods. Each `_` occupies a positional slot
+            // but is not added to the body scope, so non-`_` duplicates still error.
+            if (parameterName != "_" && !seenParameterNames.Add(parameterName))
+            {
+                Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
+            }
+            else
+            {
+                // Phase 4.8: a `...T` parameter has type `[]T` for the body
+                // and must be the last parameter. Auto-packing of trailing
+                // arguments happens at the call site.
+                var isVariadic = parameterSyntax.IsVariadic;
+                if (isVariadic && parameterType != TypeSymbol.Error)
                 {
-                    if (BoundScope.FunctionSignaturesEqual(existing, function))
-                    {
-                        duplicateSig = true;
-                        break;
-                    }
+                    parameterType = SliceTypeSymbol.Get(parameterType);
                 }
 
-                if (duplicateSig)
+                var parameterRefKind = conversions.BindAndValidateParameterRefKind(
+                    parameterSyntax,
+                    parameterName,
+                    parameterType,
+                    isVariadic,
+                    syntax.IsAsync ? "async" : null);
+
+                var parameter = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
+                conversions.BindAndAttachParameterDefaultValue(parameterSyntax, parameter);
+                parameters.Add(parameter);
+                parameterSymbolBySyntax[pIndex] = parameter;
+            }
+        }
+
+        // Phase 4.8: validate `...T` appears only on the last syntactic parameter.
+        // ADR-0101 / issue #799: also flag the (rare) case where more than one
+        // parameter is variadic — the second and later occurrences get GS0364
+        // in addition to the "must-be-last" diagnostic on the earlier one(s).
+        ValidateVariadicParameterShape(syntax.Parameters);
+        return parameterSymbolBySyntax;
+    }
+
+    private FunctionReturnBindingResult BindFunctionReturn(
+        FunctionDeclarationSyntax syntax,
+        ParameterSymbol[] parameterSymbolBySyntax)
+    {
+        // ADR-0041: bind the return type with async-aware alias resolution.
+        var type = bindReturnTypeClause(syntax.Type, syntax.IsAsync) ?? TypeSymbol.Void;
+
+        // ADR-0146 (Kotlin visibility narrowing follow-up): infer/narrow the
+        // return type when the (omitted-type) body is `-> object { ... }`.
+        type = InferAnonymousClassLiteralReturnType(syntax, type, resolveAccessibility(syntax.AccessibilityModifier));
+
+        // Issue #1918: unwrap an explicit `Task[T]` / `ValueTask[T]` async
+        // return-type annotation to its awaited result, remembering which
+        // wrapper was requested.
+        type = NormalizeAsyncDeclaredReturnType(type, syntax.IsAsync, out var typeIsValueTask);
+
+        // Issue #490 (ADR-0060 follow-up): a `ref` return modifier on the declaration
+        // is only valid when an explicit return-type clause is present, the function is
+        // not async, and the return is not a sequence/async-sequence (the state-machine
+        // rewriter cannot hoist a managed pointer into a field — same constraint as
+        // ref-kind parameters per ADR-0058 §4).
+        var returnRefKind = ValidateReturnRefKind(syntax, type);
+
+        // ADR-0060 §10: post-bind check — if this is a sequence/async-sequence
+        // function, ref-kind parameters are forbidden. (The async-only check
+        // is handled earlier in the parameter loop.)
+        var isSequenceReturn = type is SequenceTypeSymbol || type is AsyncSequenceTypeSymbol;
+        if (isSequenceReturn)
+        {
+            for (var pIndex = 0; pIndex < syntax.Parameters.Count; pIndex++)
+            {
+                var pSym = parameterSymbolBySyntax[pIndex];
+                if (pSym != null && pSym.RefKind != RefKind.None)
                 {
-                    Diagnostics.ReportDuplicateOverloadSignature(syntax.Identifier.Location, function.Name, Binder.FormatOverloadSignature(function));
-                }
-                else
-                {
-                    Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, function.Name);
+                    var label = syntax.IsAsync ? "async sequence" : "sequence";
+                    Diagnostics.ReportRefKindOnAsyncOrIterator(syntax.Parameters[pIndex].Location, pSym.Name, label);
                 }
             }
         }
-        finally
+
+        return new FunctionReturnBindingResult(type, typeIsValueTask, returnRefKind);
+    }
+
+    private ImmutableArray<BoundAttribute> BindFunctionAttributes(
+        FunctionDeclarationSyntax syntax,
+        TypeSymbol type)
+    {
+        // Issue #141 / ADR-0047: resolve annotation lead-ins for this
+        // declaration. We do this once per function regardless of whether
+        // it is an extension, a method, or a free function — diagnostics
+        // and the resulting bound-attribute list are identical.
+        var functionAttributes = BindAttributes(
+            syntax.Annotations,
+            AttributeTargetKind.Method,
+            Binder.FunctionDeclarationAllowedTargets,
+            "a function declaration",
+            System.AttributeTargets.Method);
+
+        // Issue #176 / ADR-0047 §6: a function marked `@Conditional`
+        // must return void. The CLR rule (matching C# CS0578) is that
+        // conditional-method calls may be elided at the call site, which
+        // is incompatible with a non-void result feeding the surrounding
+        // expression. The attribute is still attached to the function
+        // symbol so downstream tools see the user's intent and so the
+        // call site still elides; the diagnostic is per-declaration.
+        if (KnownAttributes.HasConditional(functionAttributes) && type != TypeSymbol.Void)
         {
-            binderCtx.CurrentTypeParameters = previousTypeParameters;
+            Diagnostics.ReportConditionalMethodMustReturnVoid(syntax.Identifier.Location, syntax.Identifier.Text);
+        }
+
+        return functionAttributes;
+    }
+
+    private void BindFunctionParameterAttributes(
+        FunctionDeclarationSyntax syntax,
+        ParameterSymbol[] parameterSymbolBySyntax,
+        TypeSymbol type)
+    {
+        // Per-parameter annotations: each ParameterSyntax owns its own
+        // annotation list; the default target is `param`. Issue #170 /
+        // ADR-0047 §3: the bound list is stored on the ParameterSymbol so
+        // the emitter can emit a `CustomAttribute` row keyed to the
+        // corresponding `Parameter` metadata handle.
+        for (var pIndex = 0; pIndex < syntax.Parameters.Count; pIndex++)
+        {
+            var parameterSyntax = syntax.Parameters[pIndex];
+            var paramAttrs = BindAttributes(
+                parameterSyntax.Annotations,
+                AttributeTargetKind.Param,
+                Binder.ParameterAllowedTargets,
+                "a parameter declaration",
+                System.AttributeTargets.Parameter);
+
+            var parameterSymbol = parameterSymbolBySyntax[pIndex];
+            if (parameterSymbol != null && !paramAttrs.IsDefaultOrEmpty)
+            {
+                parameterSymbol.SetAttributes(paramAttrs);
+
+                // Issue #180 / ADR-0040: validate @EnumeratorCancellation.
+                // The attribute marks the cancellation-token parameter that
+                // the async-sequence rewriter threads through, so it is
+                // only meaningful when (a) the parameter's type is
+                // System.Threading.CancellationToken and (b) the enclosing
+                // function returns IAsyncEnumerable[T] (an `async sequence`).
+                // Diagnostics are reported per offending attribute; the
+                // attribute is still attached so downstream tooling can
+                // observe the user's intent.
+                var ecAttr = KnownAttributes.FindEnumeratorCancellation(paramAttrs);
+                if (ecAttr != null)
+                {
+                    if (parameterSymbol.Type?.ClrType.IsSameAs(typeof(System.Threading.CancellationToken)) != true)
+                    {
+                        Diagnostics.ReportEnumeratorCancellationWrongType(
+                            parameterSyntax.Location,
+                            parameterSymbol.Name,
+                            parameterSymbol.Type?.Name ?? "?");
+                    }
+                    else if (!isAsyncSequenceReturnType(type))
+                    {
+                        Diagnostics.ReportEnumeratorCancellationNotAsyncSequence(
+                            parameterSyntax.Location,
+                            parameterSymbol.Name);
+                    }
+                }
+            }
         }
     }
 
