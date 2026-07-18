@@ -66,10 +66,10 @@ public sealed class DelegateTypeSymbol : TypeSymbol
     public Accessibility Accessibility { get; }
 
     /// <summary>Gets the delegate's named parameters in declaration order.</summary>
-    public ImmutableArray<ParameterSymbol> Parameters { get; }
+    public ImmutableArray<ParameterSymbol> Parameters { get; private set; }
 
     /// <summary>Gets the delegate's return type (<see cref="TypeSymbol.Void"/> for a void delegate).</summary>
-    public TypeSymbol ReturnType { get; }
+    public TypeSymbol ReturnType { get; private set; }
 
     /// <summary>Gets the declaring syntax node.</summary>
     public DelegateDeclarationSyntax Declaration { get; }
@@ -143,13 +143,26 @@ public sealed class DelegateTypeSymbol : TypeSymbol
 
     /// <summary>
     /// Attaches the delegate's generic type parameters (issue #1503). Called
-    /// once by the binder during <see cref="Binding.DeclarationBinder.BindDelegateDeclaration"/>
+    /// once by the binder during delegate declaration binding
     /// before any constructed instance is materialized.
     /// </summary>
     /// <param name="typeParameters">The bound type parameters in declaration order.</param>
     public void SetTypeParameters(ImmutableArray<TypeParameterSymbol> typeParameters)
     {
         TypeParameters = typeParameters.IsDefault ? ImmutableArray<TypeParameterSymbol>.Empty : typeParameters;
+    }
+
+    /// <summary>
+    /// Installs the signature on a declaration shell after all compilation
+    /// type names have been registered.
+    /// </summary>
+    /// <param name="parameters">The delegate parameters.</param>
+    /// <param name="returnType">The delegate return type.</param>
+    public void SetSignature(ImmutableArray<ParameterSymbol> parameters, TypeSymbol returnType)
+    {
+        Parameters = parameters.IsDefault ? ImmutableArray<ParameterSymbol>.Empty : parameters;
+        ReturnType = returnType ?? Void;
+        equivalentFunctionType = null;
     }
 
     /// <summary>

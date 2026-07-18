@@ -233,7 +233,7 @@ internal sealed partial class DeclarationBinder
     /// current scope. Unlike a plain type alias, a named delegate produces a
     /// real CLR TypeDef at emit time.
     /// </summary>
-    internal void BindDelegateDeclaration(DelegateDeclarationSyntax syntax, PackageSymbol package)
+    internal DelegateTypeSymbol DeclareDelegateSymbol(DelegateDeclarationSyntax syntax, PackageSymbol package)
     {
         var name = syntax.Identifier.Text;
 
@@ -241,43 +241,53 @@ internal sealed partial class DeclarationBinder
         if (isPrimitiveTypeName(name))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
-            return;
+            return null;
         }
 
-        // Issue #1503 / ADR-0059 follow-up: a generic named delegate
-        // declaration (`type Predicate[T any] = delegate func(value T) bool`)
-        // binds its type-parameter list FIRST so the delegate's parameter and
-        // return type clauses can reference T, U, … — mirroring how generic
-        // struct/class/interface declarations bind their TypeParameterList. The
-        // emitter threads one GenericParam row per slot through the delegate
-        // TypeDef and references the type parameters (VAR(idx)) in the
-        // Invoke/ctor signatures.
+        var delegateSymbol = new DelegateTypeSymbol(
+            name,
+            package.Name,
+            resolveAccessibility(syntax.AccessibilityModifier),
+            ImmutableArray<ParameterSymbol>.Empty,
+            TypeSymbol.Void,
+            syntax);
+        var typeParameters = CreateTypeParameterSymbols(syntax.TypeParameterList);
+        if (!typeParameters.IsDefaultOrEmpty)
+        {
+            delegateSymbol.SetTypeParameters(typeParameters);
+        }
+
+        Binder.AttachDocumentation(delegateSymbol, syntax);
+        if (!scope.TryDeclareTypeAlias(name, delegateSymbol))
+        {
+            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
+            return null;
+        }
+
+        return delegateSymbol;
+    }
+
+    internal void BindDelegateDeclarationBody(
+        DelegateDeclarationSyntax syntax,
+        DelegateTypeSymbol delegateSymbol)
+    {
         var previousTypeParameters = binderCtx.CurrentTypeParameters;
-        ImmutableArray<TypeParameterSymbol> typeParameters = ImmutableArray<TypeParameterSymbol>.Empty;
+        var typeParameters = delegateSymbol.TypeParameters;
+        if (!typeParameters.IsDefaultOrEmpty)
+        {
+            binderCtx.CurrentTypeParameters = previousTypeParameters == null
+                ? new Dictionary<string, TypeParameterSymbol>()
+                : new Dictionary<string, TypeParameterSymbol>(previousTypeParameters);
+            foreach (var tp in typeParameters)
+            {
+                binderCtx.CurrentTypeParameters[tp.Name] = tp;
+            }
+        }
+
         try
         {
-            if (syntax.TypeParameterList != null)
-            {
-                binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
-                typeParameters = BindTypeParameterList(syntax.TypeParameterList);
-            }
-
-            // Re-establish the type-parameter scope captured above so the
-            // delegate's parameter and return type clauses resolve T, U, ….
-            // (BindTypeParameterList restores CurrentTypeParameters to its prior
-            // value when it returns, so the scope must be rebuilt here.)
-            if (!typeParameters.IsDefaultOrEmpty)
-            {
-                binderCtx.CurrentTypeParameters = previousTypeParameters == null
-                    ? new Dictionary<string, TypeParameterSymbol>()
-                    : new Dictionary<string, TypeParameterSymbol>(previousTypeParameters);
-                foreach (var tp in typeParameters)
-                {
-                    binderCtx.CurrentTypeParameters[tp.Name] = tp;
-                }
-            }
-
-            BindDelegateDeclarationCore(syntax, package, typeParameters);
+            ResolveTypeParameterConstraints(syntax.TypeParameterList, typeParameters);
+            BindDelegateDeclarationBodyCore(syntax, delegateSymbol);
         }
         finally
         {
@@ -285,14 +295,10 @@ internal sealed partial class DeclarationBinder
         }
     }
 
-    private void BindDelegateDeclarationCore(
+    private void BindDelegateDeclarationBodyCore(
         DelegateDeclarationSyntax syntax,
-        PackageSymbol package,
-        ImmutableArray<TypeParameterSymbol> typeParameters)
+        DelegateTypeSymbol delegateSymbol)
     {
-        var name = syntax.Identifier.Text;
-        var accessibility = resolveAccessibility(syntax.AccessibilityModifier);
-
         var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
         var seenParameterNames = new HashSet<string>();
         for (var pIndex = 0; pIndex < syntax.Parameters.Count; pIndex++)
@@ -357,25 +363,8 @@ internal sealed partial class DeclarationBinder
             "a delegate declaration",
             System.AttributeTargets.Delegate);
 
-        var delegateSymbol = new DelegateTypeSymbol(
-            name,
-            package.Name,
-            accessibility,
-            parameters.ToImmutable(),
-            returnType,
-            syntax);
-        if (!typeParameters.IsDefaultOrEmpty)
-        {
-            delegateSymbol.SetTypeParameters(typeParameters);
-        }
-
+        delegateSymbol.SetSignature(parameters.ToImmutable(), returnType);
         delegateSymbol.SetAttributes(delegateAttributes);
-        Binder.AttachDocumentation(delegateSymbol, syntax);
-
-        if (!scope.TryDeclareTypeAlias(name, delegateSymbol))
-        {
-            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
-        }
     }
 
     internal EnumSymbol BindEnumDeclaration(EnumDeclarationSyntax syntax, PackageSymbol package, TypeSymbol containingType = null)
