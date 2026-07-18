@@ -317,13 +317,20 @@ internal sealed class LambdaBinder
             Scope.TryDeclareVariable(ps);
         }
 
-        // ADR-0069 / issue #700: smart-cast narrowings do not survive into a
-        // closure body — the narrowed variable could be reassigned by the
-        // enclosing scope between when the closure is created and when it
-        // runs. Save and restore the outer narrowing-frame stack so the
-        // lambda body binds at the captured variables' declared types.
+        // ADR-0069 / issue #700, amended by issue #2442: a smart-cast
+        // narrowing on a MUTABLE binding does not survive into a closure
+        // body — the narrowed variable could be reassigned by the enclosing
+        // scope between when the closure is created and when it runs. A
+        // narrowing on a read-only plain-variable binding (`let`, or a
+        // by-value/`in` parameter) is different: it can never be reassigned
+        // anywhere, so it survives unconditionally — see
+        // FilterNarrowingsSurvivingClosureCapture. Save the full outer
+        // frame stack so it can be restored verbatim once binding leaves the
+        // closure; only the filtered copy is visible while the body binds.
         var savedNarrowed = binderCtx.NarrowedVariables.ToList();
+        var survivingNarrowed = FilterNarrowingsSurvivingClosureCapture(savedNarrowed);
         binderCtx.NarrowedVariables.Clear();
+        binderCtx.NarrowedVariables.AddRange(survivingNarrowed);
 
         // Issue #2027: a function literal (lambda OR local function — this
         // method binds both) is its own goto/label frame; isolate it from
@@ -686,8 +693,16 @@ internal sealed class LambdaBinder
             Scope.TryDeclareVariable(ps);
         }
 
+        // ADR-0069 / issue #700, amended by issue #2442: see the matching
+        // comment in BindFunctionLiteralExpression — a read-only
+        // plain-variable narrowing survives into the arrow-lambda body
+        // unconditionally; every other narrowing (mutable `var` locals,
+        // ref/out parameters, member-access paths) is dropped exactly as
+        // before.
         var savedNarrowed = binderCtx.NarrowedVariables.ToList();
+        var survivingNarrowed = FilterNarrowingsSurvivingClosureCapture(savedNarrowed);
         binderCtx.NarrowedVariables.Clear();
+        binderCtx.NarrowedVariables.AddRange(survivingNarrowed);
 
         // Issue #2027: an arrow lambda is its own goto/label frame — a
         // block-bodied arrow lambda (`x => { ...; goto foo; foo: ...; }`)
@@ -1027,6 +1042,80 @@ internal sealed class LambdaBinder
         }
 
         return element;
+    }
+
+    /// <summary>
+    /// ADR-0069 amendment / issue #2442: computes the subset of the enclosing
+    /// scope's active narrowing frames that may legally survive into a
+    /// captured closure body (a lambda or local function literal).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A narrowing entry keyed on <see cref="AccessPath"/> <c>p</c> survives
+    /// into the closure only when <c>p.Root.IsReadOnly</c> is
+    /// <see langword="true"/> AND <c>p</c> is a plain variable path
+    /// (<c>!p.HasMembers</c>). <see cref="VariableSymbol.IsReadOnly"/> is the
+    /// binder's own "can never be reassigned" fact — it is exactly the
+    /// signal <see cref="ExpressionBinder"/> already consults to reject
+    /// <em>any</em> assignment to the variable (a <c>let</c> local, or a
+    /// by-value / <c>in</c> function parameter), and it is deliberately
+    /// <see langword="false"/> for <c>var</c> locals, <c>ref</c>/<c>out</c>
+    /// parameters, and <c>let ref</c>/<c>var ref</c> aliasing locals (which
+    /// bind a managed pointer to possibly-external storage — see
+    /// <c>StatementBinder.Narrowing.cs</c>'s ref-local declaration path,
+    /// which passes <c>isReadOnly: false</c> unconditionally). Because a
+    /// read-only binding can never be written again anywhere in its scope,
+    /// the value a nil-guard or <c>is</c>-test proved at the guard site can
+    /// never change later — no matter when the closure that captured it
+    /// eventually runs: immediately and synchronously (<c>Task.Run(() =>
+    /// …)</c>), after the enclosing function returns (an escaping/stored
+    /// delegate), repeatedly (invoked from inside a loop), concurrently on
+    /// another thread, or after an <c>await</c> suspension point. This is a
+    /// strictly stronger guarantee than "not reassigned along this
+    /// particular flow path": it holds for every path, so no additional
+    /// temporal/flow proof is required.
+    /// </para>
+    /// <para>
+    /// Member-access paths (<c>x.member</c>) are always dropped even when
+    /// the root is read-only: the ADR-0069 addendum (issue #1180) already
+    /// treats member reads as fragile because another call or another
+    /// receiver's assignment could mutate the member through an alias the
+    /// closure's own narrowing analysis never observes — the same reasoning
+    /// <see cref="StatementBinder.InvalidateNarrowingsForAssignedVariables(SyntaxNode)"/>
+    /// applies at ordinary statement boundaries. Widening that guarantee to
+    /// "safe forever, even across a closure capture" would be unsound, so
+    /// this method conservatively keeps the pre-existing behaviour (drop) for
+    /// every member-bearing key.
+    /// </para>
+    /// </remarks>
+    /// <param name="outerFrames">
+    /// The enclosing scope's narrowing-frame stack at the point the closure
+    /// literal is entered (a snapshot copy — not mutated by this method).
+    /// </param>
+    /// <returns>
+    /// A new frame stack, parallel in shape to <paramref name="outerFrames"/>,
+    /// containing only the entries that are sound to keep visible while
+    /// binding the closure body.
+    /// </returns>
+    private static List<Dictionary<AccessPath, TypeSymbol>> FilterNarrowingsSurvivingClosureCapture(
+        List<Dictionary<AccessPath, TypeSymbol>> outerFrames)
+    {
+        var result = new List<Dictionary<AccessPath, TypeSymbol>>(outerFrames.Count);
+        foreach (var frame in outerFrames)
+        {
+            var survivors = new Dictionary<AccessPath, TypeSymbol>();
+            foreach (var entry in frame)
+            {
+                if (!entry.Key.HasMembers && entry.Key.Root.IsReadOnly)
+                {
+                    survivors[entry.Key] = entry.Value;
+                }
+            }
+
+            result.Add(survivors);
+        }
+
+        return result;
     }
 
     /// <summary>
