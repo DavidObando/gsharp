@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -117,6 +118,7 @@ internal sealed class BinderContext
     private int cachedStaticImportImportCount = -1;
 
     private int cachedStaticImportStructCount = -1;
+    private SyntaxTree cachedStaticImportSyntaxTree;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BinderContext"/> class.
@@ -264,6 +266,8 @@ internal sealed class BinderContext
     /// </summary>
     public int CachedImportedExtensionImportCount { get; set; } = -1;
 
+    public SyntaxTree CachedImportedExtensionSyntaxTree { get; set; }
+
     /// <summary>
     /// Issue #1201: resolves the compilation's non-alias type imports
     /// (<c>import Ns.Type</c>) to the user-defined <see cref="StructSymbol"/>s
@@ -282,7 +286,8 @@ internal sealed class BinderContext
         var structs = RootScope.GetDeclaredStructs();
         if (cachedStaticImportTypes is { } cached
             && cachedStaticImportImportCount == imports.Length
-            && cachedStaticImportStructCount == structs.Length)
+            && cachedStaticImportStructCount == structs.Length
+            && ReferenceEquals(cachedStaticImportSyntaxTree, RootScope.GetCurrentReferencingSyntaxTreeForCache()))
         {
             return cached;
         }
@@ -320,6 +325,7 @@ internal sealed class BinderContext
         cachedStaticImportTypes = result;
         cachedStaticImportImportCount = imports.Length;
         cachedStaticImportStructCount = structs.Length;
+        cachedStaticImportSyntaxTree = RootScope.GetCurrentReferencingSyntaxTreeForCache();
         return result;
 
         // Issue #1201: whether the fully-qualified import `target` names the user

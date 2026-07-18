@@ -1827,6 +1827,8 @@ internal sealed partial class DeclarationBinder
             }
 
             var savedTypeParameters = binderCtx.CurrentTypeParameters;
+            var savedPackage = scope.SetCurrentDeclaringPackage(structSymbol.PackageName);
+            var savedTree = scope.SetCurrentReferencingSyntaxTree(syntax.SyntaxTree);
             if (!structSymbol.TypeParameters.IsDefaultOrEmpty)
             {
                 binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
@@ -1995,6 +1997,8 @@ internal sealed partial class DeclarationBinder
             finally
             {
                 binderCtx.CurrentTypeParameters = savedTypeParameters;
+                scope.SetCurrentDeclaringPackage(savedPackage);
+                scope.SetCurrentReferencingSyntaxTree(savedTree);
             }
         }
     }
