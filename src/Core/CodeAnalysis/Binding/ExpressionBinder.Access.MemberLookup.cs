@@ -872,19 +872,21 @@ internal sealed partial class ExpressionBinder
         if (target.Type is NullabilityAnnotatedTypeSymbol annotIdx && annotIdx.ClrType is System.Type clrAnnotIdx)
         {
             var idxArgsAnnot = ImmutableArray.Create(BoundIndexArg());
-            if (this.memberLookup.TryResolveClrIndexer(clrAnnotIdx, idxArgsAnnot, out var idxPropAnnot))
+            if (this.memberLookup.TryResolveClrIndexer(clrAnnotIdx, idxArgsAnnot, out var idxPropAnnot, out var resolvedIdxArgsAnnot))
             {
                 var elemTypeAnnot = annotIdx.GetTypeArgumentSymbolForClrType(idxPropAnnot.PropertyType);
-                return ConversionClassifier.AutoDereferenceRefReturn(new BoundClrIndexExpression(null, target, idxPropAnnot, idxArgsAnnot, elemTypeAnnot));
+                return ConversionClassifier.AutoDereferenceRefReturn(new BoundClrIndexExpression(null, target, idxPropAnnot, resolvedIdxArgsAnnot, elemTypeAnnot));
             }
         }
-        else if (target.Type is ImportedTypeSymbol && target.Type.ClrType is System.Type clrTarget)
+        else if ((target.Type is ImportedTypeSymbol || target.Type is StructSymbol) && target.Type.ClrType is System.Type clrTarget)
         {
             var idxArgs = ImmutableArray.Create(BoundIndexArg());
-            if (this.memberLookup.TryResolveClrIndexer(clrTarget, idxArgs, out var idxProp))
+            if (this.memberLookup.TryResolveClrIndexer(clrTarget, idxArgs, out var idxProp, out var resolvedIdxArgs))
             {
-                var elementType = MapErasedIndexerElementType((ImportedTypeSymbol)target.Type, idxProp);
-                return ConversionClassifier.AutoDereferenceRefReturn(new BoundClrIndexExpression(null, target, idxProp, idxArgs, elementType));
+                var elementType = target.Type is ImportedTypeSymbol imported
+                    ? MapErasedIndexerElementType(imported, idxProp)
+                    : ClrNullability.GetPropertyTypeSymbol(idxProp);
+                return ConversionClassifier.AutoDereferenceRefReturn(new BoundClrIndexExpression(null, target, idxProp, resolvedIdxArgs, elementType));
             }
         }
 
@@ -1304,7 +1306,7 @@ internal sealed partial class ExpressionBinder
         if (variable.Type is NullabilityAnnotatedTypeSymbol annotWr && variable.Type.ClrType is System.Type clrAnnotWr)
         {
             var idxArgsAnnotWr = ImmutableArray.Create(BindExpression(indexSyntax));
-            if (this.memberLookup.TryResolveClrIndexer(clrAnnotWr, idxArgsAnnotWr, out var idxPropAnnotWr))
+            if (this.memberLookup.TryResolveClrIndexer(clrAnnotWr, idxArgsAnnotWr, out var idxPropAnnotWr, out var resolvedIdxArgsAnnotWr))
             {
                 if (!idxPropAnnotWr.CanWrite)
                 {
@@ -1314,13 +1316,13 @@ internal sealed partial class ExpressionBinder
 
                 var valueTypeAnnotWr = annotWr.GetTypeArgumentSymbolForClrType(idxPropAnnotWr.PropertyType);
                 var boundValueAnnotWr = BindValue(valueTypeAnnotWr);
-                return new BoundClrIndexAssignmentExpression(null, variable, idxPropAnnotWr, idxArgsAnnotWr, boundValueAnnotWr, valueTypeAnnotWr);
+                return new BoundClrIndexAssignmentExpression(null, variable, idxPropAnnotWr, resolvedIdxArgsAnnotWr, boundValueAnnotWr, valueTypeAnnotWr);
             }
         }
-        else if (variable.Type is ImportedTypeSymbol && variable.Type.ClrType is System.Type clrTarget)
+        else if ((variable.Type is ImportedTypeSymbol || variable.Type is StructSymbol) && variable.Type.ClrType is System.Type clrTarget)
         {
             var idxArgs = ImmutableArray.Create(BindExpression(indexSyntax));
-            if (this.memberLookup.TryResolveClrIndexer(clrTarget, idxArgs, out var idxProp))
+            if (this.memberLookup.TryResolveClrIndexer(clrTarget, idxArgs, out var idxProp, out var resolvedIdxArgs))
             {
                 // ADR-0056 §2: span element write. `Span[T]` has no `set_Item`; its
                 // indexer is a `ref T`-returning getter and writes go through that
@@ -1340,7 +1342,7 @@ internal sealed partial class ExpressionBinder
 
                         var pointeeType = TypeSymbol.FromClrType(refGetter.ReturnType.GetElementType()!);
                         var refValue = BindValue(pointeeType);
-                        return new BoundClrIndexAssignmentExpression(null, variable, idxProp, idxArgs, refValue, pointeeType);
+                        return new BoundClrIndexAssignmentExpression(null, variable, idxProp, resolvedIdxArgs, refValue, pointeeType);
                     }
 
                     Diagnostics.ReportTypeNotIndexable(diagnosticLocation, variable.Type);
@@ -1359,9 +1361,11 @@ internal sealed partial class ExpressionBinder
                 // real element type (`T`), so the `T` value binds without a
                 // spurious boxing conversion — the WRITE-path counterpart to the
                 // READ-path element-type recovery (issues #313 / #671 / #957).
-                var valueType = MapErasedIndexerElementType((ImportedTypeSymbol)variable.Type, idxProp);
+                var valueType = variable.Type is ImportedTypeSymbol imported
+                    ? MapErasedIndexerElementType(imported, idxProp)
+                    : ClrNullability.GetPropertyTypeSymbol(idxProp);
                 var boundValue = BindValue(valueType);
-                return new BoundClrIndexAssignmentExpression(null, variable, idxProp, idxArgs, boundValue, valueType);
+                return new BoundClrIndexAssignmentExpression(null, variable, idxProp, resolvedIdxArgs, boundValue, valueType);
             }
         }
 

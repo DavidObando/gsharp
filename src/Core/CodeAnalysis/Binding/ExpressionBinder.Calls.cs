@@ -755,8 +755,11 @@ internal sealed partial class ExpressionBinder
             && dataClassAggregate.IsData
             && dataClassAggregate.HasPrimaryConstructor)
         {
-            result = overloads.BindConstructorCallExpression(syntax, dataClassAggregate);
-            return true;
+            return TryBindClrConstructorFromType(
+                clrType,
+                syntax,
+                out result,
+                resultTypeOverride: dataClassAggregate);
         }
 
         if (TryBindClrConstructorFromType(clrType, syntax, out result, openGenericDefinition, symbolicTypeArgs))
@@ -881,13 +884,20 @@ internal sealed partial class ExpressionBinder
     /// alongside <paramref name="openGenericDefinition"/>. Default when no
     /// symbolic substitution is in effect.
     /// </param>
+    /// <param name="resultTypeOverride">
+    /// Semantic result type to expose instead of a plain imported CLR type.
+    /// Used for imported data aggregates so constructor binding still flows
+    /// through shared CLR overload resolution without reintroducing dual type
+    /// identity.
+    /// </param>
     /// <returns>Whether a constructor was resolved and bound.</returns>
     private bool TryBindClrConstructorFromType(
         System.Type clrType,
         CallExpressionSyntax syntax,
         out BoundExpression result,
         System.Type openGenericDefinition = null,
-        ImmutableArray<TypeSymbol> symbolicTypeArgs = default)
+        ImmutableArray<TypeSymbol> symbolicTypeArgs = default,
+        TypeSymbol resultTypeOverride = null)
     {
         result = null;
 
@@ -1119,7 +1129,11 @@ internal sealed partial class ExpressionBinder
         // the user-defined TypeDef tokens (so the NEWOBJ targets, e.g.,
         // `List<MyGs>` rather than the erased `List<object>`).
         TypeSymbol resultType;
-        if (openGenericDefinition != null && !symbolicTypeArgs.IsDefaultOrEmpty)
+        if (resultTypeOverride != null)
+        {
+            resultType = resultTypeOverride;
+        }
+        else if (openGenericDefinition != null && !symbolicTypeArgs.IsDefaultOrEmpty)
         {
             resultType = ImportedTypeSymbol.GetConstructed(clrType, openGenericDefinition, symbolicTypeArgs);
         }

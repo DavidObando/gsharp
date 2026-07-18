@@ -617,6 +617,10 @@ public sealed partial class Evaluator
                 ? CheckedNumericConvert(value, node.Type.ClrType)
                 : UncheckedNumericConvert(value, node.Type.ClrType);
         }
+        else if (node.Type?.ClrType?.IsEnum == true)
+        {
+            return Enum.ToObject(node.Type.ClrType, value);
+        }
         else
         {
             throw new EvaluatorException($"Unexpected type {node.Type}", node);

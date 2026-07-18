@@ -180,9 +180,38 @@ internal sealed class ConversionClassifier
     {
         var typeSymbol = TypeSymbol.FromClrType(parameter.ParameterType);
 
+        if (TryGetDateTimeParameterDefault(parameter, out var dateTime))
+        {
+            var constructor = parameter.ParameterType.GetConstructors()
+                .FirstOrDefault(static candidate =>
+                    candidate.GetParameters() is [{ ParameterType.FullName: "System.Int64" }]);
+            if (constructor != null)
+            {
+                return new BoundClrConstructorCallExpression(
+                    null,
+                    parameter.ParameterType,
+                    constructor,
+                    ImmutableArray.Create<BoundExpression>(new BoundLiteralExpression(null, dateTime.Ticks)),
+                    typeSymbol);
+            }
+        }
+
+        if (IsMissingParameterDefault(parameter))
+        {
+            var missingType = parameter.ParameterType.Assembly.GetType("System.Reflection.Missing");
+            var valueField = missingType?.GetField("Value", BindingFlags.Public | BindingFlags.Static);
+            if (valueField != null)
+            {
+                return new BoundClrPropertyAccessExpression(null, null, valueField, typeSymbol);
+            }
+        }
+
         if (TryGetConstantParameterDefault(parameter, out var constant))
         {
-            return new BoundLiteralExpression(null, constant);
+            var literal = new BoundLiteralExpression(null, constant);
+            return parameter.ParameterType.IsEnum
+                ? new BoundConversionExpression(null, typeSymbol, literal)
+                : literal;
         }
 
         return new BoundDefaultExpression(null, typeSymbol);
@@ -2101,10 +2130,8 @@ internal sealed class ConversionClassifier
         return false;
     }
 
-    // Issue #327/#321: extracts the CLR `RawDefaultValue` for an optional
-    // parameter when it is one of the primitive/string constant kinds that
-    // BoundLiteralExpression carries directly; returns false for `[Optional]`
-    // without a constant and any non-primitive type.
+    // Issue #327/#321/#2451: extracts the CLR `RawDefaultValue` for an optional
+    // parameter when it is a literal kind that BoundLiteralExpression carries.
     private static bool TryGetConstantParameterDefault(ParameterInfo parameter, out object value)
     {
         value = null;
@@ -2139,12 +2166,63 @@ internal sealed class ConversionClassifier
             case ulong:
             case float:
             case double:
+            case decimal:
             case char:
             case string:
                 value = raw;
                 return true;
             default:
                 return false;
+        }
+    }
+
+    private static bool TryGetDateTimeParameterDefault(ParameterInfo parameter, out DateTime value)
+    {
+        try
+        {
+            if (parameter.ParameterType.FullName == "System.DateTime")
+            {
+                if (parameter.RawDefaultValue is long ticks)
+                {
+                    value = new DateTime(ticks);
+                    return true;
+                }
+            }
+
+            var attribute = parameter.GetCustomAttributesData().FirstOrDefault(static candidate =>
+                candidate.AttributeType.FullName == "System.Runtime.CompilerServices.DateTimeConstantAttribute");
+            if (attribute != null
+                && attribute.ConstructorArguments.Count == 1)
+            {
+                var attributeTicks = Convert.ToInt64(
+                    attribute.ConstructorArguments[0].Value,
+                    System.Globalization.CultureInfo.InvariantCulture);
+                value = new DateTime(attributeTicks);
+                return true;
+            }
+        }
+        catch
+        {
+        }
+
+        value = default;
+        return false;
+    }
+
+    private static bool IsMissingParameterDefault(ParameterInfo parameter)
+    {
+        try
+        {
+            var raw = parameter.RawDefaultValue;
+            return raw is Missing
+                || raw?.GetType().FullName == "System.Reflection.Missing"
+                || (parameter.ParameterType.FullName == "System.Object"
+                    && parameter.IsOptional
+                    && (raw is DBNull || !parameter.HasDefaultValue));
+        }
+        catch
+        {
+            return false;
         }
     }
 

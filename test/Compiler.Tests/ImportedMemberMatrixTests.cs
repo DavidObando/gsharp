@@ -190,6 +190,146 @@ public class ImportedMemberMatrixTests
         Assert.Contains(diagnostics, d => d.Contains("data class or data struct", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void ImportedMemberMatrix_OptionalDefaults_AreResolvedAndEmittedAcrossCallableKinds()
+    {
+        const string csSource = """
+            using System;
+            using System.Reflection;
+            using System.Runtime.CompilerServices;
+            using System.Runtime.InteropServices;
+            using System.Threading;
+
+            namespace ImportedOptional.CSharp
+            {
+                public enum Tone { First = 1, Second = 2 }
+
+                public record ProgressMessage(int Count, string Text = "ready");
+
+                public delegate string OptionalDelegate(bool enabled = true);
+
+                public sealed class OptionalApi
+                {
+                    private readonly int seed;
+                    private string? indexed;
+
+                    public OptionalApi(int seed, int add = 5) => this.seed = seed + add;
+
+                    public int Instance(int value = 7) => seed + value;
+
+                    public static string Constants(
+                        string text = "ok",
+                        Tone tone = Tone.Second,
+                        decimal amount = 12.5m,
+                        CancellationToken token = default) =>
+                        $"{text}:{(int)tone}:{amount}:{token.CanBeCanceled}";
+
+                    public static long Date([Optional, DateTimeConstant(123)] DateTime value) => value.Ticks;
+
+                    public static bool MissingValue([Optional] object value) =>
+                        ReferenceEquals(value, Missing.Value);
+
+                    public static int Params(int prefix = 2, params int[] values) =>
+                        prefix + values.Length;
+
+                    public string this[int x, int y = 4]
+                    {
+                        get => indexed ?? $"{x}:{y}";
+                        set => indexed = $"{x}:{y}:{value}";
+                    }
+                }
+            }
+            """;
+
+        const string gsSource = """
+            package ImportedOptional.Probe
+            import ImportedOptional.CSharp
+            import System
+
+            var message = ProgressMessage(3)
+            var api = OptionalApi(10)
+            var callback OptionalDelegate = func(enabled bool) string {
+                return enabled ? "yes" : "no"
+            }
+
+            Console.WriteLine(message.Text)
+            Console.WriteLine(api.Instance())
+            Console.WriteLine(OptionalApi.Constants())
+            Console.WriteLine(OptionalApi.Date())
+            Console.WriteLine(OptionalApi.MissingValue())
+            Console.WriteLine(OptionalApi.Params())
+            Console.WriteLine(callback())
+            Console.WriteLine(api[3])
+            api[3] = "set"
+            Console.WriteLine(api[3])
+            """;
+
+        Assert.Equal(
+            "ready\n22\nok:2:12.5:False\n123\nTrue\n2\nyes\n3:4\n3:4:set\n",
+            CompileAndRunWithSiblingCs(csSource, gsSource, "ImportedOptional.CSharp"));
+    }
+
+    [Fact]
+    public void ImportedMemberMatrix_OptionalOverloads_PreserveAmbiguityAndRequiredDiagnostics()
+    {
+        const string csSource = """
+            namespace ImportedOptionalDiagnostics.CSharp
+            {
+                public static class Calls
+                {
+                    public static int Ambiguous(string? value = null) => 1;
+                    public static long Ambiguous(System.Uri? value = null) => 2;
+                    public static int Required(int value, int extra = 2) => value + extra;
+                }
+            }
+            """;
+
+        const string ambiguousSource = """
+            package ImportedOptionalDiagnostics.Probe
+            import ImportedOptionalDiagnostics.CSharp
+
+            var a = Calls.Ambiguous()
+            """;
+
+        var ambiguityDiagnostics = CompileExpectingErrorsWithSiblingCs(
+            csSource,
+            ambiguousSource,
+            "ImportedOptionalDiagnostics.CSharp");
+        Assert.Contains(ambiguityDiagnostics, d => d.Contains("ambiguous", StringComparison.OrdinalIgnoreCase));
+
+        const string requiredSource = """
+            package ImportedOptionalDiagnostics.Probe
+            import ImportedOptionalDiagnostics.CSharp
+
+            var b = Calls.Required()
+            """;
+
+        var requiredDiagnostics = CompileExpectingErrorsWithSiblingCs(
+            csSource,
+            requiredSource,
+            "ImportedOptionalDiagnostics.CSharp");
+        Assert.Contains(requiredDiagnostics, d => d.Contains("Required", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void NamedDelegate_OmittedOptionalArgument_UsesDeclaredDefault()
+    {
+        const string source = """
+            package OptionalDelegate.Probe
+            import System
+
+            type Toggle = delegate func(enabled bool = true) string
+
+            var callback Toggle = func(enabled bool) string {
+                return enabled ? "yes" : "no"
+            }
+
+            Console.WriteLine(callback())
+            """;
+
+        Assert.Equal("yes\n", CompileAndRun(source));
+    }
+
     private static string CompileAndRunWithSiblingCs(string csSource, string gSource, string siblingName)
     {
         var workDir = CreateWorkDir("imported_member_matrix_");

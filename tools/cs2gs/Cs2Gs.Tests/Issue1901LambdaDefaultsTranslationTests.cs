@@ -97,6 +97,29 @@ namespace Corpus.Issue1901
     }
 
     [Fact]
+    public void NullableNamedDelegate_DefaultParameter_IsMaterializedAtConditionalCall()
+    {
+        string rendered = Render(@"
+#nullable enable
+namespace Corpus.Issue2451
+{
+    public delegate string TokenProvider(bool enforce = false);
+
+    public class Holder
+    {
+        public static string? Read(TokenProvider? provider)
+        {
+            return provider?.Invoke();
+        }
+    }
+}
+");
+
+        Assert.True(rendered.Contains("return provider?(false)", StringComparison.Ordinal), rendered);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
     public void LambdaDefaultParameter_EnumAndNullConstants_MaterializedAtOmittedCallSite()
     {
         string rendered = Render(@"

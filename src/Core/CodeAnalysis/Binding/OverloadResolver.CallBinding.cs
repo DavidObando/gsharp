@@ -891,8 +891,17 @@ internal sealed partial class OverloadResolver
             }
             else if (syntax.Arguments.Count != namedDelegateSym.Parameters.Length)
             {
-                Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, namedDelegateVar.Name, namedDelegateSym.Parameters.Length, syntax.Arguments.Count);
-                return new BoundErrorExpression(null);
+                var requiredCount = namedDelegateSym.Parameters.Length;
+                while (requiredCount > 0 && namedDelegateSym.Parameters[requiredCount - 1].HasExplicitDefaultValue)
+                {
+                    requiredCount--;
+                }
+
+                if (syntax.Arguments.Count < requiredCount || syntax.Arguments.Count > namedDelegateSym.Parameters.Length)
+                {
+                    Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, namedDelegateVar.Name, namedDelegateSym.Parameters.Length, syntax.Arguments.Count);
+                    return new BoundErrorExpression(null);
+                }
             }
 
             ImmutableArray<BoundExpression> ndPermutedArgs = boundArguments.ToImmutable();
@@ -919,6 +928,17 @@ internal sealed partial class OverloadResolver
                 {
                     return new BoundErrorExpression(null);
                 }
+            }
+            else if (ndPermutedArgs.Length < namedDelegateSym.Parameters.Length)
+            {
+                var padded = ImmutableArray.CreateBuilder<BoundExpression>(namedDelegateSym.Parameters.Length);
+                padded.AddRange(ndPermutedArgs);
+                for (var i = ndPermutedArgs.Length; i < namedDelegateSym.Parameters.Length; i++)
+                {
+                    padded.Add(CreateOptionalUserDefaultArgument(namedDelegateSym.Parameters[i]));
+                }
+
+                ndPermutedArgs = padded.MoveToImmutable();
             }
 
             var convertedNamedArgs = ImmutableArray.CreateBuilder<BoundExpression>(ndPermutedArgs.Length);

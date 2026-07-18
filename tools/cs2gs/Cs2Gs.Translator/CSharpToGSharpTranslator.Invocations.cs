@@ -80,7 +80,7 @@ public sealed partial class CSharpToGSharpTranslator
                     { MethodKind: MethodKind.DelegateInvoke }
                 && TryGetDelegateInvokeReceiver(invocation.Expression, out GExpression invokeTarget))
             {
-                var invokeArguments = this.TranslateArguments(invocation.ArgumentList.Arguments);
+                var invokeArguments = this.TranslateCallArguments(invocation, invocation.ArgumentList.Arguments);
                 return new InvocationExpression(invokeTarget, invokeArguments, null);
             }
 
@@ -416,7 +416,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             GExpression receiver = this.SpillOperand(
                 this.TranslateExpression(conditionalAccess.Expression));
-            var invokeArguments = this.TranslateArguments(invocation.ArgumentList.Arguments);
+            var invokeArguments = this.TranslateCallArguments(invocation, invocation.ArgumentList.Arguments);
             result = new ConditionalAccessExpression(
                 receiver,
                 new InvocationExpression(new ConditionalReceiverExpression(), invokeArguments, null));
