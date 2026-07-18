@@ -50,6 +50,30 @@ public sealed class BoundScope
     // of the chain, exactly like anonymousTypeCache above.
     private string currentDeclaringPackageName;
 
+    // Issue #2456 (per-file import scoping / #2395 follow-up): the ambient
+    // "current referencing syntax tree" (see SetCurrentReferencingSyntaxTree),
+    // set for the duration of binding a single declaration's type clauses or a
+    // single member body, mirroring currentDeclaringPackageName exactly.
+    // TryResolveCollidingTypeAliasByImport consults this to restrict its
+    // import-based disambiguation to imports declared in the SAME file as the
+    // reference being resolved — never an unrelated file's import — so this
+    // fix does not entrench issue #2395's compilation-wide import leakage
+    // into type-identity resolution.
+    private GSharp.Core.CodeAnalysis.Syntax.SyntaxTree currentReferencingSyntaxTree;
+
+    // Issue #2455: the ambient "qualified construction package hint" (see
+    // SetQualifiedConstructionPackageHint), set only while re-binding the
+    // stripped remainder of a package-qualified source-type construction
+    // (e.g. `Oahu.Audible.Json.Author{...}` peeled down to bare `Author{...}`
+    // by TryBindQualifiedSourceTypeConstruction). Bare re-binding loses the
+    // peeled qualification entirely, so without this hint a same-simple-name
+    // collision across packages (both imported) would either misresolve to
+    // the wrong package (pre-#2455) or be reported as ambiguous (post-#2455)
+    // even though the qualification already disambiguates it. Lazily set/
+    // cleared only on the root scope of the chain, exactly like
+    // currentDeclaringPackageName above.
+    private string qualifiedConstructionPackageHint;
+
     private Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol> richAnonymousClassMap;
 
     // Issue #1680: name-keyed index over extensionFunctions. Extension lookup is a
@@ -939,11 +963,59 @@ public sealed class BoundScope
     /// <param name="type">The aliased type, when found.</param>
     /// <returns>Whether an alias exists.</returns>
     public bool TryLookupTypeAlias(string name, int preferredArity, out TypeSymbol type)
+        => TryLookupTypeAlias(name, preferredArity, out type, out _);
+
+    /// <summary>
+    /// Issue #2455: same as <see cref="TryLookupTypeAlias(string, int, out TypeSymbol)"/>,
+    /// but also reports (via <paramref name="ambiguousAcrossImportedPackages"/>)
+    /// when the simple name genuinely cannot be determined because two or more
+    /// DIFFERENT packages that both declare a same-named top-level type are
+    /// EACH visible via an explicit <c>import</c> somewhere in the compilation
+    /// (imports are bound compilation-wide — see the Issue #2394 binder
+    /// remarks). Callers that can surface a location-bearing diagnostic (e.g.
+    /// <see cref="Binder.BindNonNullableTypeClause"/>'s bare-name branch) should
+    /// use this overload and report a dedicated ambiguity diagnostic instead of
+    /// the generic "cannot find type"; every other caller keeps using the
+    /// 3-argument overload, for which an ambiguous result is simply treated as
+    /// "not found" (never silently resolved to the wrong package's type).
+    /// </summary>
+    /// <param name="name">The alias name.</param>
+    /// <param name="preferredArity">The preferred generic arity, or -1 for none.</param>
+    /// <param name="type">The aliased type, when found.</param>
+    /// <param name="ambiguousAcrossImportedPackages">
+    /// Whether resolution failed specifically because two or more colliding
+    /// packages are both imported (as opposed to no match at all).
+    /// </param>
+    /// <returns>Whether an alias exists.</returns>
+    public bool TryLookupTypeAlias(string name, int preferredArity, out TypeSymbol type, out bool ambiguousAcrossImportedPackages)
     {
         type = null;
+        ambiguousAcrossImportedPackages = false;
         if (name == null)
         {
             return false;
+        }
+
+        // Issue #2455: an explicit qualified-construction package hint (see
+        // SetQualifiedConstructionPackageHint) always wins outright — an
+        // explicit package qualification (e.g. `Oahu.Audible.Json.Author{...}`)
+        // already disambiguates the reference, so it must never be second-
+        // guessed by the general import-based ambiguity check below, even when
+        // the terminal simple name collides across two or more independently-
+        // imported packages.
+        var qualifiedConstructionHint = GetQualifiedConstructionPackageHint();
+        if (qualifiedConstructionHint != null)
+        {
+            if (preferredArity > 0
+                && TryResolveTypeAliasByExplicitPackageHint(name, preferredArity, qualifiedConstructionHint, out type))
+            {
+                return true;
+            }
+
+            if (TryResolveTypeAliasByExplicitPackageHint(name, arity: 0, qualifiedConstructionHint, out type))
+            {
+                return true;
+            }
         }
 
         // Issue #2342: when a "current declaring package" is set (the body of a
@@ -975,13 +1047,45 @@ public sealed class BoundScope
             }
         }
 
+        // Issue #2455: a bare simple name that collides across two or more
+        // DIFFERENT top-level packages is stored under one arbitrary "first
+        // declared wins" plain key (see TryDeclareTypeAlias) plus one or more
+        // package-qualified fallback keys for the losing packages — an
+        // ordering/tree-order-dependent choice that does not reflect what the
+        // referencing code actually means. When the referencing scope isn't
+        // either colliding package itself (the check above), consult the
+        // compilation-wide `import` set: if EXACTLY ONE colliding package is
+        // imported anywhere in the compilation, its type is the only one the
+        // reference could plausibly mean, so prefer it deterministically over
+        // the order-dependent plain-key winner. If two or more colliding
+        // packages are each imported, the reference is genuinely ambiguous.
         if (preferredArity > 0)
         {
+            if (TryResolveCollidingTypeAliasByImport(name, preferredArity, out type, out ambiguousAcrossImportedPackages))
+            {
+                return true;
+            }
+
+            if (ambiguousAcrossImportedPackages)
+            {
+                return false;
+            }
+
             var key = MangleArity(name, preferredArity);
             if (TryGetTypeAliasInChain(key, out type))
             {
                 return true;
             }
+        }
+
+        if (TryResolveCollidingTypeAliasByImport(name, arity: 0, out type, out ambiguousAcrossImportedPackages))
+        {
+            return true;
+        }
+
+        if (ambiguousAcrossImportedPackages)
+        {
+            return false;
         }
 
         // Fall back to the arity-0 type (whose key is the plain simple name).
@@ -1203,6 +1307,42 @@ public sealed class BoundScope
     }
 
     /// <summary>
+    /// Issue #2456 (per-file import scoping / #2395 follow-up): sets the
+    /// syntax tree (file) of the declaration whose type clauses, or member
+    /// whose body, is CURRENTLY being bound, so
+    /// <see cref="TryResolveCollidingTypeAliasByImport(string, int, out TypeSymbol, out bool)"/>
+    /// can restrict its import-based disambiguation to imports declared in
+    /// THIS file only — never a sibling file's import, which issue #2395
+    /// documents as leaking compilation-wide through <see cref="EnumerateImports"/>
+    /// for OTHER purposes (CLR-imported-class/static-member lookup). Without
+    /// this restriction, a same-simple-name collision fix built directly on
+    /// top of that same leaky, compilation-wide import enumeration would
+    /// silently let an import in one file disambiguate — correctly or
+    /// incorrectly — a reference in a completely unrelated file, entrenching
+    /// #2395's cross-file order-dependence into type identity resolution
+    /// rather than fixing it. Stored at the root of this scope's chain,
+    /// exactly like <see cref="currentDeclaringPackageName"/>. Pass
+    /// <see langword="null"/> to clear (falls back to the legacy
+    /// order-dependent "first declared wins" behavior for that lookup,
+    /// exactly as if this fix did not exist — never to the leaky
+    /// compilation-wide set). Returns the PREVIOUS value so the caller can
+    /// restore it once binding finishes.
+    /// </summary>
+    /// <param name="tree">The syntax tree to make ambient for lookup, or <see langword="null"/> to clear it.</param>
+    /// <returns>The previous ambient referencing syntax tree.</returns>
+    internal GSharp.Core.CodeAnalysis.Syntax.SyntaxTree SetCurrentReferencingSyntaxTree(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree tree)
+    {
+        if (Parent != null)
+        {
+            return Parent.SetCurrentReferencingSyntaxTree(tree);
+        }
+
+        var previous = currentReferencingSyntaxTree;
+        currentReferencingSyntaxTree = tree;
+        return previous;
+    }
+
+    /// <summary>
     /// Gets the per-compile-pass map from a "rich" anonymous-object literal
     /// (one carrying a base/interface clause, methods, or events — ADR-0146 /
     /// issue #2243) to its desugared, compiler-synthesized backing
@@ -1215,12 +1355,106 @@ public sealed class BoundScope
         => Parent != null ? Parent.GetRichAnonymousClassMap() : richAnonymousClassMap ??= new Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol>();
 
     /// <summary>
+    /// Issue #2455: sets the package name explicitly PEELED off a
+    /// package-qualified source-type construction (e.g.
+    /// <c>Oahu.Audible.Json.Author{...}</c>) while its stripped, bare-simple-
+    /// name remainder (<c>Author{...}</c>) is re-bound by
+    /// <see cref="ExpressionBinder.TryBindQualifiedSourceTypeConstruction"/>.
+    /// <see cref="TryLookupTypeAlias(string, int, out TypeSymbol, out bool)"/>
+    /// consults this FIRST, ahead of both the #2342 own-package preference and
+    /// the general import-based ambiguity resolution, so an explicit
+    /// qualification always wins deterministically — the whole point of
+    /// writing it out — even when the terminal simple name collides across
+    /// two or more packages that are each independently imported (which would
+    /// otherwise report a spurious GS0496 ambiguity despite the reference
+    /// being fully disambiguated by its own qualification). Pass
+    /// <see langword="null"/> to clear. Returns the PREVIOUS value so the
+    /// caller can restore it once the remainder finishes binding. Stored at
+    /// the root of this scope's chain, exactly like
+    /// <see cref="currentDeclaringPackageName"/>.
+    /// </summary>
+    /// <param name="packageName">The explicitly-qualified package name to make ambient for lookup, or <see langword="null"/> to clear it.</param>
+    /// <returns>The previous ambient qualified-construction package hint.</returns>
+    internal string SetQualifiedConstructionPackageHint(string packageName)
+    {
+        if (Parent != null)
+        {
+            return Parent.SetQualifiedConstructionPackageHint(packageName);
+        }
+
+        var previous = qualifiedConstructionPackageHint;
+        qualifiedConstructionPackageHint = packageName;
+        return previous;
+    }
+
+    /// <summary>
     /// Issue #2342: gets the ambient "current declaring package" set by
     /// <see cref="SetCurrentDeclaringPackage"/>, or <see langword="null"/> when
     /// none is set.
     /// </summary>
     private string GetCurrentDeclaringPackage()
         => Parent != null ? Parent.GetCurrentDeclaringPackage() : currentDeclaringPackageName;
+
+    /// <summary>
+    /// Issue #2456: gets the ambient "current referencing syntax tree" set by
+    /// <see cref="SetCurrentReferencingSyntaxTree"/>, or <see langword="null"/>
+    /// when none is set (no per-file import restriction available; the
+    /// import-based disambiguation this fix adds simply does not fire, rather
+    /// than falling back to the leaky compilation-wide import set).
+    /// </summary>
+    private GSharp.Core.CodeAnalysis.Syntax.SyntaxTree GetCurrentReferencingSyntaxTree()
+        => Parent != null ? Parent.GetCurrentReferencingSyntaxTree() : currentReferencingSyntaxTree;
+
+    /// <summary>
+    /// Issue #2455: gets the ambient qualified-construction package hint set
+    /// by <see cref="SetQualifiedConstructionPackageHint"/>, or
+    /// <see langword="null"/> when none is set.
+    /// </summary>
+    private string GetQualifiedConstructionPackageHint()
+        => Parent != null ? Parent.GetQualifiedConstructionPackageHint() : qualifiedConstructionPackageHint;
+
+    /// <summary>
+    /// Issue #2455: tries to resolve (<paramref name="name"/>, <paramref name="arity"/>)
+    /// against the SPECIFIC package named by an explicit qualification hint
+    /// (see <see cref="SetQualifiedConstructionPackageHint"/>) — first via that
+    /// package's dedicated package-qualified fallback key (the "losing"
+    /// declaration of a same-simple-name collision, per
+    /// <see cref="TryDeclareTypeAlias(string, TypeSymbol, string)"/>), then, if
+    /// that misses, by checking whether the CURRENT plain-key "winner" is
+    /// itself declared by the hinted package (a same-simple-name collision's
+    /// winner has no package-qualified key of its own, only the plain one).
+    /// </summary>
+    /// <param name="name">The simple type name.</param>
+    /// <param name="arity">The generic arity (0 for a non-generic lookup).</param>
+    /// <param name="hintPackage">The explicitly-qualified package name.</param>
+    /// <param name="type">The type declared by exactly that package, when found.</param>
+    /// <returns>Whether a type declared by the hinted package was found.</returns>
+    private bool TryResolveTypeAliasByExplicitPackageHint(string name, int arity, string hintPackage, out TypeSymbol type)
+    {
+        type = null;
+
+        var qualifiedKey = MangleArity(PackageQualifiedName(hintPackage, name), arity);
+        if (TryGetTypeAliasInChain(qualifiedKey, out type))
+        {
+            return true;
+        }
+
+        var plainKey = MangleArity(name, arity);
+        if (TryGetTypeAliasInChain(plainKey, out var plainValue))
+        {
+            var plainPackage = TryGetAliasDeclaringPackageInChain(plainKey, out var overridePackage)
+                ? overridePackage
+                : TypePackageName(plainValue);
+            if (plainPackage == hintPackage)
+            {
+                type = plainValue;
+                return true;
+            }
+        }
+
+        type = null;
+        return false;
+    }
 
     /// <summary>
     /// Adds a brand-new type-alias key, not previously visible anywhere in the
@@ -1347,6 +1581,141 @@ public sealed class BoundScope
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Issue #2455 (per-file-scoped since #2456's follow-up hardening):
+    /// implements the same-file-import disambiguation described on
+    /// <see cref="TryLookupTypeAlias(string, int, out TypeSymbol, out bool)"/>.
+    /// Collects every package that stores a top-level type under the
+    /// (<paramref name="name"/>, <paramref name="arity"/>) key — both the
+    /// plain-key "winner" and every package-qualified fallback entry (see
+    /// <see cref="PackageQualifiedName"/>) — then intersects that set against
+    /// every package named by an <c>import</c> declaration that is either
+    /// compiler-synthesized (implicit — visible everywhere) or declared in
+    /// the SAME file as the reference currently being resolved (see
+    /// <see cref="GetCurrentReferencingSyntaxTree"/>). An import declared in
+    /// any OTHER file is never consulted, even though it is technically
+    /// reachable through <see cref="GetDeclaredImports"/>'s compilation-wide
+    /// enumeration (issue #2395) — this method deliberately does not use that
+    /// leaked visibility as a type-identity authority. Returns
+    /// <see langword="false"/> with <paramref name="type"/> null and
+    /// <paramref name="ambiguous"/> false when this name has no genuine
+    /// cross-package collision at all (the ordinary plain-key fallback should
+    /// run unmodified), when it collides but no SAME-FILE import disambiguates
+    /// it, or when no referencing-file context is ambiently available
+    /// (preserves the pre-#2455 "first declared wins" behavior exactly).
+    /// </summary>
+    /// <param name="name">The simple type name.</param>
+    /// <param name="arity">The generic arity (0 for a non-generic lookup).</param>
+    /// <param name="type">The single imported-package-matched type, when unambiguous.</param>
+    /// <param name="ambiguous">Whether two or more colliding packages are each imported.</param>
+    /// <returns>Whether a single import-disambiguated type was found.</returns>
+    private bool TryResolveCollidingTypeAliasByImport(string name, int arity, out TypeSymbol type, out bool ambiguous)
+    {
+        type = null;
+        ambiguous = false;
+
+        var suffix = "#" + MangleArity(name, arity);
+        Dictionary<string, TypeSymbol> byPackage = null;
+        foreach (var pair in EnumerateTypeAliasesInChain())
+        {
+            var key = pair.Key;
+            if (key.Length <= suffix.Length
+                || !key.EndsWith(suffix, System.StringComparison.Ordinal)
+                || key.IndexOf('#') != key.Length - suffix.Length)
+            {
+                continue;
+            }
+
+            var package = key.Substring(0, key.Length - suffix.Length);
+            byPackage ??= new Dictionary<string, TypeSymbol>(System.StringComparer.Ordinal);
+            byPackage[package] = pair.Value;
+        }
+
+        // Fold in the plain-key winner's own package too: it is just as much a
+        // genuine colliding declaration as the package-qualified "losers", and
+        // omitting it would make a plain two-package collision look like it
+        // only ever has one candidate package.
+        var plainKey = MangleArity(name, arity);
+        if (TryGetTypeAliasInChain(plainKey, out var plainValue))
+        {
+            var plainPackage = TryGetAliasDeclaringPackageInChain(plainKey, out var overridePackage)
+                ? overridePackage
+                : TypePackageName(plainValue);
+            if (plainPackage != null)
+            {
+                byPackage ??= new Dictionary<string, TypeSymbol>(System.StringComparer.Ordinal);
+                byPackage[plainPackage] = plainValue;
+            }
+        }
+
+        if (byPackage == null || byPackage.Count < 2)
+        {
+            // No genuine cross-package collision under this (name, arity) at
+            // all — nothing for this helper to do.
+            return false;
+        }
+
+        // Issue #2456 (per-file import scoping / #2395 follow-up): only
+        // imports declared in the SAME file as the reference being resolved
+        // (plus compiler-synthesized implicit imports, which apply
+        // everywhere) may disambiguate it. GetDeclaredImports() itself walks
+        // the whole compilation's flattened import list (issue #2395 — every
+        // file's imports are bound onto one shared scope with no per-file
+        // boundary), so without this filter a completely unrelated file's
+        // import could silently decide this reference's type identity,
+        // entrenching #2395's cross-file leakage into type-identity
+        // resolution instead of fixing the collision deterministically. When
+        // the ambient referencing tree is unset (null — no per-file context
+        // available at this call site), no import can disambiguate here: the
+        // legacy order-dependent plain-key fallback runs unmodified, exactly
+        // as if this fix did not exist, rather than silently falling back to
+        // the leaky compilation-wide set.
+        var referencingTree = GetCurrentReferencingSyntaxTree();
+        if (referencingTree == null)
+        {
+            return false;
+        }
+
+        TypeSymbol matched = null;
+        foreach (var import in GetDeclaredImports())
+        {
+            if (import.Target == null || !byPackage.TryGetValue(import.Target, out var candidate))
+            {
+                continue;
+            }
+
+            if (import.Declaration != null && import.Declaration.SyntaxTree != referencingTree)
+            {
+                // Declared in a different file than the reference — issue
+                // #2395's leakage must not decide this reference's identity.
+                continue;
+            }
+
+            if (matched == null)
+            {
+                matched = candidate;
+            }
+            else if (!ReferenceEquals(matched, candidate))
+            {
+                ambiguous = true;
+            }
+        }
+
+        if (ambiguous)
+        {
+            type = null;
+            return false;
+        }
+
+        if (matched != null)
+        {
+            type = matched;
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>

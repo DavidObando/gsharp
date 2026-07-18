@@ -927,7 +927,8 @@ internal sealed partial class ExpressionBinder
             // non-generic `Foo` and a generic `Foo[T]` can coexist. Without one,
             // prefer the arity-0 type (falling back to a lone generic for inference).
             var preferredArity = syntax.TypeArgumentList != null ? syntax.TypeArgumentList.Arguments.Count : -1;
-            if (!scope.TryLookupTypeAlias(typeName, preferredArity, out var resolvedType) || !(resolvedType is StructSymbol resolvedStruct))
+            var foundAlias = scope.TryLookupTypeAlias(typeName, preferredArity, out var resolvedType, out var typeNameAmbiguous);
+            if (!foundAlias || !(resolvedType is StructSymbol resolvedStruct))
             {
                 // Issue #1199 / #2258: a composite literal `T{Field: value}` also
                 // targets an IMPORTED reference-type class (a BCL class such as
@@ -940,7 +941,15 @@ internal sealed partial class ExpressionBinder
                 // object-initializer (construct via the parameterless
                 // constructor, or the zero value for a value type with none,
                 // then assign each named member).
-                if (syntax.TypeArgumentList == null
+                //
+                // Issue #2455: when `typeNameAmbiguous` is set, two or more
+                // colliding SOURCE packages are each imported and neither of
+                // the fallbacks below (imported CLR class, type parameter) can
+                // possibly be what the literal means — skip straight to
+                // reporting the dedicated ambiguity diagnostic rather than the
+                // generic "cannot find type".
+                if (!typeNameAmbiguous
+                    && syntax.TypeArgumentList == null
                     && scope.TryLookupImportedClass(typeName, declaration: null, out var importedClass)
                     && importedClass.ClassType is { IsGenericTypeDefinition: false })
                 {
@@ -953,7 +962,7 @@ internal sealed partial class ExpressionBinder
                         return BindImportedTypeLiteralExpression(syntax, importedClass.ClassType);
                     }
                 }
-                else if (syntax.TypeArgumentList == null && lookupType(typeName) is TypeParameterSymbol tpLiteral)
+                else if (!typeNameAmbiguous && syntax.TypeArgumentList == null && lookupType(typeName) is TypeParameterSymbol tpLiteral)
                 {
                     // Issue #988 / #1235 (object-initializer follow-up): `T{Field: value,
                     // ...}` constructs the type parameter `T` — mirroring C#'s
@@ -975,6 +984,11 @@ internal sealed partial class ExpressionBinder
                     }
 
                     return BindTypeParameterObjectInitializer(syntax, tpLiteral);
+                }
+                else if (structSymbol == null && typeNameAmbiguous)
+                {
+                    Diagnostics.ReportAmbiguousSourceType(syntax.TypeIdentifier.Location, typeName);
+                    return new BoundErrorExpression(null);
                 }
                 else if (structSymbol == null)
                 {
