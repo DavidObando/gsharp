@@ -284,17 +284,6 @@ internal sealed partial class OverloadResolver
         // checked here.
         var hasUserCallable = HasUserCallableCandidate(syntax);
 
-        // Phase 4-exit: prefer CLR class instantiation over the single-arg
-        // conversion-call hijack below, so that `StringBuilder(16)` resolves
-        // to a CLR ctor rather than `conversions.BindConversion(int → StringBuilder)`.
-        // Also handles closed-generic imports (`List[int]()`,
-        // `Dictionary[string, int]()`). Interpreter-only — resolves a
-        // ConstructorInfo and emits BoundClrConstructorCallExpression.
-        if (!hasUserCallable && tryBindClrConstructorCall(syntax, out var clrCtorCall))
-        {
-            return clrCtorCall;
-        }
-
         // Issue #1263: when the construction carries an explicit type-argument
         // list (`Op[int32](5)`), resolve the constructed type by (name, arity)
         // so a non-generic `Op` and a generic `Op[T]` can coexist. With no type
@@ -305,6 +294,39 @@ internal sealed partial class OverloadResolver
         var ctorPreferredArity = syntax.TypeArgumentList != null
             ? syntax.TypeArgumentList.Arguments.Count
             : -1;
+
+        // Issue #2455: a genuinely resolvable SOURCE type alias (a struct or
+        // class declared in THIS compilation, via BoundScope.TryLookupTypeAlias
+        // — which never sees CLR-imported types) that is itself constructible
+        // takes precedence over CLR-imported-class construction a few lines
+        // below, mirroring (a) how a same-named source function/method already
+        // shadows a colliding imported CLR type in call position
+        // (HasUserCallableCandidate, issue #2403), and (b) how the
+        // struct/class-literal binder (BindStructLiteralExpression) already
+        // checks TryLookupTypeAlias before ever falling back to
+        // TryLookupImportedClass. Without this, `Type(...)` for a same-simple-
+        // name source struct/class colliding with an imported CLR class (e.g.
+        // a package-qualified source construction like
+        // `Oahu.Audible.Json.ChapterInfo()` peeled and rebound by simple name
+        // — see TryBindQualifiedSourceTypeConstruction) always constructed the
+        // CLR type, never the source one, regardless of import order,
+        // qualification, or the qualified-construction package hint — because
+        // tryBindClrConstructorCall/TryLookupImportedClass ran unconditionally
+        // before the source-type-alias checks further down ever got a chance.
+        var hasSourceConstructibleType = Scope.TryLookupTypeAlias(syntax.Identifier.Text, ctorPreferredArity, out var sourceCtorCandidate, out _)
+            && sourceCtorCandidate is StructSymbol sourceCtorStruct
+            && (sourceCtorStruct.IsClass || sourceCtorStruct.IsInline || sourceCtorStruct.HasPrimaryConstructor);
+
+        // Phase 4-exit: prefer CLR class instantiation over the single-arg
+        // conversion-call hijack below, so that `StringBuilder(16)` resolves
+        // to a CLR ctor rather than `conversions.BindConversion(int → StringBuilder)`.
+        // Also handles closed-generic imports (`List[int]()`,
+        // `Dictionary[string, int]()`). Interpreter-only — resolves a
+        // ConstructorInfo and emits BoundClrConstructorCallExpression.
+        if (!hasUserCallable && !hasSourceConstructibleType && tryBindClrConstructorCall(syntax, out var clrCtorCall))
+        {
+            return clrCtorCall;
+        }
 
         if (!hasUserCallable && syntax.Arguments.Count == 1 && lookupTypeWithArity(syntax.Identifier.Text, ctorPreferredArity) is TypeSymbol type)
         {

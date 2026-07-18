@@ -114,6 +114,97 @@ public class Issue2455CompositeTypeCollisionEmitTests
         Assert.Equal("My Audiobook\n1\nPrologue\n", output);
     }
 
+    // Issue #2455 (real-world shape): the actual Oahu AaxExporter.cs does not
+    // use a struct literal for `ci` — it constructs the Audible sibling via a
+    // package-qualified, PARENLESS-ARGS bare CONSTRUCTOR CALL:
+    // `new Oahu.Audible.Json.ChapterInfo()`, translated by cs2gs to
+    // `Oahu.Audible.Json.ChapterInfo()`. This is peeled by
+    // TryBindQualifiedSourceTypeConstruction down to the bare terminal call
+    // `ChapterInfo()`, which is bound by OverloadResolver.CallBinding's
+    // BindCallExpression — a completely different code path from
+    // BindStructLiteralExpression (used by `Type{...}`). Before the fix in
+    // this changeset, BindCallExpression's `tryBindClrConstructorCall`
+    // unconditionally ran BEFORE any source-type-alias check, always
+    // preferring a same-simple-name CLR-IMPORTED class over a colliding
+    // SOURCE type — regardless of package qualification or the
+    // qualified-construction-package-hint (which is only consulted inside
+    // TryLookupTypeAlias, a path this bare-call binder never reached). This
+    // test exercises the bare-call SHAPE with two source packages (the exact
+    // real-world CLR-vs-source collision is additionally covered end-to-end,
+    // using a genuine C#-compiled CLR reference assembly, in
+    // Issue2455QualifiedConstructorCallVsClrImportTests in Core.Tests). This
+    // is the exact syntax shape that Issue2455CompositeTypeCollisionTests's
+    // binder-level tests and the struct-literal-based emit test above did NOT
+    // cover, and that reproduced GS0490 against the live Oahu.Core corpus.
+    private const string AaxExporterBareCallGs = """
+        package Oahu.Core
+        import Oahu.Audible.Json
+        import System
+
+        class AaxExporter {
+            func Export(title string) ContentMetadata {
+                let ci = Oahu.Audible.Json.ChapterInfo()
+                return ContentMetadata{ChapterInfo: ci, Title: title}
+            }
+
+            func Describe(cm ContentMetadata) {
+                Console.WriteLine(cm.Title)
+            }
+        }
+
+        func Main() {
+            var exporter = AaxExporter{}
+            var cm = exporter.Export("My Audiobook")
+            exporter.Describe(cm)
+        }
+        """;
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ExactOahuShape_BareQualifiedConstructorCall_CompilesIlVerifiesAndRuns_OrderIndependent(bool audibleTreeFirst)
+    {
+        var sources = audibleTreeFirst
+            ? new[] { AudibleChapterInfoGs, BooksDatabaseChapterInfoGs, ContentMetadataGs, AaxExporterBareCallGs }
+            : new[] { BooksDatabaseChapterInfoGs, AudibleChapterInfoGs, ContentMetadataGs, AaxExporterBareCallGs };
+
+        var output = CompileAndRun(sources);
+
+        Assert.Equal("My Audiobook\n", output);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ExactOahuShape_BareQualifiedConstructorCall_EmittedContentMetadataChapterInfoProperty_ReflectsAsAudibleType_OrderIndependent(bool audibleTreeFirst)
+    {
+        var sources = audibleTreeFirst
+            ? new[] { AudibleChapterInfoGs, BooksDatabaseChapterInfoGs, ContentMetadataGs, AaxExporterBareCallGs }
+            : new[] { BooksDatabaseChapterInfoGs, AudibleChapterInfoGs, ContentMetadataGs, AaxExporterBareCallGs };
+
+        var dllPath = CompileLibrary(sources, out var tempDir);
+        try
+        {
+            var runtimeDir = Path.GetDirectoryName(typeof(object).Assembly.Location)!;
+            var resolver = new PathAssemblyResolver(
+                Directory.GetFiles(runtimeDir, "*.dll").Concat(new[] { dllPath }));
+            using var mlc = new MetadataLoadContext(resolver, "System.Private.CoreLib");
+            var asm = mlc.LoadFromAssemblyPath(dllPath);
+
+            var contentMetadataType = asm.GetType("Oahu.Core.ContentMetadata")
+                ?? throw new InvalidOperationException("Oahu.Core.ContentMetadata not found in emitted assembly");
+            var chapterInfoProp = contentMetadataType.GetProperty("ChapterInfo")
+                ?? throw new InvalidOperationException("ChapterInfo property not found on ContentMetadata");
+
+            Assert.Equal("Oahu.Audible.Json.ChapterInfo", chapterInfoProp.PropertyType.FullName);
+            Assert.NotEqual("Oahu.BooksDatabase.ChapterInfo", chapterInfoProp.PropertyType.FullName);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
