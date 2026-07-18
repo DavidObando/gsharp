@@ -50,6 +50,17 @@ public sealed class BoundScope
     // of the chain, exactly like anonymousTypeCache above.
     private string currentDeclaringPackageName;
 
+    // Issue #2456 (per-file import scoping / #2395 follow-up): the ambient
+    // "current referencing syntax tree" (see SetCurrentReferencingSyntaxTree),
+    // set for the duration of binding a single declaration's type clauses or a
+    // single member body, mirroring currentDeclaringPackageName exactly.
+    // TryResolveCollidingTypeAliasByImport consults this to restrict its
+    // import-based disambiguation to imports declared in the SAME file as the
+    // reference being resolved — never an unrelated file's import — so this
+    // fix does not entrench issue #2395's compilation-wide import leakage
+    // into type-identity resolution.
+    private GSharp.Core.CodeAnalysis.Syntax.SyntaxTree currentReferencingSyntaxTree;
+
     // Issue #2455: the ambient "qualified construction package hint" (see
     // SetQualifiedConstructionPackageHint), set only while re-binding the
     // stripped remainder of a package-qualified source-type construction
@@ -1296,6 +1307,42 @@ public sealed class BoundScope
     }
 
     /// <summary>
+    /// Issue #2456 (per-file import scoping / #2395 follow-up): sets the
+    /// syntax tree (file) of the declaration whose type clauses, or member
+    /// whose body, is CURRENTLY being bound, so
+    /// <see cref="TryResolveCollidingTypeAliasByImport(string, int, out TypeSymbol, out bool)"/>
+    /// can restrict its import-based disambiguation to imports declared in
+    /// THIS file only — never a sibling file's import, which issue #2395
+    /// documents as leaking compilation-wide through <see cref="EnumerateImports"/>
+    /// for OTHER purposes (CLR-imported-class/static-member lookup). Without
+    /// this restriction, a same-simple-name collision fix built directly on
+    /// top of that same leaky, compilation-wide import enumeration would
+    /// silently let an import in one file disambiguate — correctly or
+    /// incorrectly — a reference in a completely unrelated file, entrenching
+    /// #2395's cross-file order-dependence into type identity resolution
+    /// rather than fixing it. Stored at the root of this scope's chain,
+    /// exactly like <see cref="currentDeclaringPackageName"/>. Pass
+    /// <see langword="null"/> to clear (falls back to the legacy
+    /// order-dependent "first declared wins" behavior for that lookup,
+    /// exactly as if this fix did not exist — never to the leaky
+    /// compilation-wide set). Returns the PREVIOUS value so the caller can
+    /// restore it once binding finishes.
+    /// </summary>
+    /// <param name="tree">The syntax tree to make ambient for lookup, or <see langword="null"/> to clear it.</param>
+    /// <returns>The previous ambient referencing syntax tree.</returns>
+    internal GSharp.Core.CodeAnalysis.Syntax.SyntaxTree SetCurrentReferencingSyntaxTree(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree tree)
+    {
+        if (Parent != null)
+        {
+            return Parent.SetCurrentReferencingSyntaxTree(tree);
+        }
+
+        var previous = currentReferencingSyntaxTree;
+        currentReferencingSyntaxTree = tree;
+        return previous;
+    }
+
+    /// <summary>
     /// Gets the per-compile-pass map from a "rich" anonymous-object literal
     /// (one carrying a base/interface clause, methods, or events — ADR-0146 /
     /// issue #2243) to its desugared, compiler-synthesized backing
@@ -1347,6 +1394,16 @@ public sealed class BoundScope
     /// </summary>
     private string GetCurrentDeclaringPackage()
         => Parent != null ? Parent.GetCurrentDeclaringPackage() : currentDeclaringPackageName;
+
+    /// <summary>
+    /// Issue #2456: gets the ambient "current referencing syntax tree" set by
+    /// <see cref="SetCurrentReferencingSyntaxTree"/>, or <see langword="null"/>
+    /// when none is set (no per-file import restriction available; the
+    /// import-based disambiguation this fix adds simply does not fire, rather
+    /// than falling back to the leaky compilation-wide import set).
+    /// </summary>
+    private GSharp.Core.CodeAnalysis.Syntax.SyntaxTree GetCurrentReferencingSyntaxTree()
+        => Parent != null ? Parent.GetCurrentReferencingSyntaxTree() : currentReferencingSyntaxTree;
 
     /// <summary>
     /// Issue #2455: gets the ambient qualified-construction package hint set
@@ -1527,17 +1584,26 @@ public sealed class BoundScope
     }
 
     /// <summary>
-    /// Issue #2455: implements the compilation-wide-import disambiguation
-    /// described on <see cref="TryLookupTypeAlias(string, int, out TypeSymbol, out bool)"/>.
+    /// Issue #2455 (per-file-scoped since #2456's follow-up hardening):
+    /// implements the same-file-import disambiguation described on
+    /// <see cref="TryLookupTypeAlias(string, int, out TypeSymbol, out bool)"/>.
     /// Collects every package that stores a top-level type under the
     /// (<paramref name="name"/>, <paramref name="arity"/>) key — both the
     /// plain-key "winner" and every package-qualified fallback entry (see
     /// <see cref="PackageQualifiedName"/>) — then intersects that set against
-    /// every package named by a compilation-wide <c>import</c> declaration.
-    /// Returns <see langword="false"/> with <paramref name="type"/> null and
+    /// every package named by an <c>import</c> declaration that is either
+    /// compiler-synthesized (implicit — visible everywhere) or declared in
+    /// the SAME file as the reference currently being resolved (see
+    /// <see cref="GetCurrentReferencingSyntaxTree"/>). An import declared in
+    /// any OTHER file is never consulted, even though it is technically
+    /// reachable through <see cref="GetDeclaredImports"/>'s compilation-wide
+    /// enumeration (issue #2395) — this method deliberately does not use that
+    /// leaked visibility as a type-identity authority. Returns
+    /// <see langword="false"/> with <paramref name="type"/> null and
     /// <paramref name="ambiguous"/> false when this name has no genuine
     /// cross-package collision at all (the ordinary plain-key fallback should
-    /// run unmodified), or when it collides but no import disambiguates it
+    /// run unmodified), when it collides but no SAME-FILE import disambiguates
+    /// it, or when no referencing-file context is ambiently available
     /// (preserves the pre-#2455 "first declared wins" behavior exactly).
     /// </summary>
     /// <param name="name">The simple type name.</param>
@@ -1591,11 +1657,39 @@ public sealed class BoundScope
             return false;
         }
 
+        // Issue #2456 (per-file import scoping / #2395 follow-up): only
+        // imports declared in the SAME file as the reference being resolved
+        // (plus compiler-synthesized implicit imports, which apply
+        // everywhere) may disambiguate it. GetDeclaredImports() itself walks
+        // the whole compilation's flattened import list (issue #2395 — every
+        // file's imports are bound onto one shared scope with no per-file
+        // boundary), so without this filter a completely unrelated file's
+        // import could silently decide this reference's type identity,
+        // entrenching #2395's cross-file leakage into type-identity
+        // resolution instead of fixing the collision deterministically. When
+        // the ambient referencing tree is unset (null — no per-file context
+        // available at this call site), no import can disambiguate here: the
+        // legacy order-dependent plain-key fallback runs unmodified, exactly
+        // as if this fix did not exist, rather than silently falling back to
+        // the leaky compilation-wide set.
+        var referencingTree = GetCurrentReferencingSyntaxTree();
+        if (referencingTree == null)
+        {
+            return false;
+        }
+
         TypeSymbol matched = null;
         foreach (var import in GetDeclaredImports())
         {
             if (import.Target == null || !byPackage.TryGetValue(import.Target, out var candidate))
             {
+                continue;
+            }
+
+            if (import.Declaration != null && import.Declaration.SyntaxTree != referencingTree)
+            {
+                // Declared in a different file than the reference — issue
+                // #2395's leakage must not decide this reference's identity.
                 continue;
             }
 

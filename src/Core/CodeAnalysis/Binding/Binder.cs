@@ -729,9 +729,18 @@ public sealed class Binder
         // package's own same-simple-name type over an unrelated package's
         // homonym, then restores the previous ambient value. Used to wrap
         // every per-declaration shell/body binding call below.
-        void RunWithPackage(PackageSymbol pkg, Action action)
+        //
+        // Issue #2456 (per-file import scoping / #2395 follow-up): ALSO runs
+        // `action` with `tree` set as the ambient "current referencing syntax
+        // tree" (see `BoundScope.SetCurrentReferencingSyntaxTree`), so a
+        // same-simple-name collision encountered while binding `tree`'s own
+        // declaration is only disambiguated by an import declared in `tree`
+        // itself — never a sibling file's import, which issue #2395 already
+        // documents as leaking compilation-wide.
+        void RunWithPackage(PackageSymbol pkg, SyntaxTree tree, Action action)
         {
             var previousPackage = binder.scope.SetCurrentDeclaringPackage(pkg?.Name);
+            var previousTree = binder.scope.SetCurrentReferencingSyntaxTree(tree);
             try
             {
                 action();
@@ -739,6 +748,7 @@ public sealed class Binder
             finally
             {
                 binder.scope.SetCurrentDeclaringPackage(previousPackage);
+                binder.scope.SetCurrentReferencingSyntaxTree(previousTree);
             }
         }
 
@@ -755,7 +765,7 @@ public sealed class Binder
         {
             var owningPackage = packageByTree[typeAlias.SyntaxTree];
             binder.declarations.ValidateTopLevelProtected(typeAlias.AccessibilityModifier);
-            RunWithPackage(owningPackage, () => binder.declarations.BindTypeAliasDeclaration(typeAlias, owningPackage));
+            RunWithPackage(owningPackage, typeAlias.SyntaxTree, () => binder.declarations.BindTypeAliasDeclaration(typeAlias, owningPackage));
         }
 
         // ADR-0059 / issue #255: declare named delegate types BEFORE
@@ -767,7 +777,7 @@ public sealed class Binder
         {
             var owningPackage = packageByTree[delegateSyntax.SyntaxTree];
             binder.declarations.ValidateTopLevelProtected(delegateSyntax.AccessibilityModifier);
-            RunWithPackage(owningPackage, () => binder.declarations.BindDelegateDeclaration(delegateSyntax, owningPackage));
+            RunWithPackage(owningPackage, delegateSyntax.SyntaxTree, () => binder.declarations.BindDelegateDeclaration(delegateSyntax, owningPackage));
         }
 
         var interfaceDeclarations = PartialTypeMerger.MergeInterfaces(
@@ -786,7 +796,7 @@ public sealed class Binder
             var owningPackage = packageByTree[ifaceSyntax.SyntaxTree];
             binder.declarations.ValidateTopLevelProtected(ifaceSyntax.AccessibilityModifier);
             InterfaceSymbol sym = null;
-            RunWithPackage(owningPackage, () => sym = binder.declarations.DeclareInterfaceSymbol(ifaceSyntax, owningPackage));
+            RunWithPackage(owningPackage, ifaceSyntax.SyntaxTree, () => sym = binder.declarations.DeclareInterfaceSymbol(ifaceSyntax, owningPackage));
             if (sym != null)
             {
                 declaredInterfaces.Add((ifaceSyntax, sym));
@@ -799,7 +809,7 @@ public sealed class Binder
         {
             var owningPackage = packageByTree[enumSyntax.SyntaxTree];
             binder.declarations.ValidateTopLevelProtected(enumSyntax.AccessibilityModifier);
-            RunWithPackage(owningPackage, () => binder.declarations.BindEnumDeclaration(enumSyntax, owningPackage));
+            RunWithPackage(owningPackage, enumSyntax.SyntaxTree, () => binder.declarations.BindEnumDeclaration(enumSyntax, owningPackage));
         }
 
         // Issue #973: declare all struct/class type-name shells first (phase 1),
@@ -837,7 +847,7 @@ public sealed class Binder
             var owningPackage = packageByTree[structSyntax.SyntaxTree];
             binder.declarations.ValidateTopLevelProtected(structSyntax.AccessibilityModifier);
             StructSymbol structSymbol = null;
-            RunWithPackage(owningPackage, () =>
+            RunWithPackage(owningPackage, structSyntax.SyntaxTree, () =>
             {
                 structSymbol = binder.declarations.DeclareStructShell(structSyntax, owningPackage);
                 if (structSymbol != null)
@@ -871,7 +881,7 @@ public sealed class Binder
         foreach (var (structSyntax, structSymbol) in declaredStructs)
         {
             var owningPackage = packageByTree[structSyntax.SyntaxTree];
-            RunWithPackage(owningPackage, () => binder.declarations.BindStructDeclarationBody(structSyntax, owningPackage, structSymbol));
+            RunWithPackage(owningPackage, structSyntax.SyntaxTree, () => binder.declarations.BindStructDeclarationBody(structSyntax, owningPackage, structSymbol));
         }
 
         // Issue #1085 / #1194: base-constructor-initializer and field-initializer
@@ -894,7 +904,7 @@ public sealed class Binder
         foreach (var (ifaceSyntax, ifaceSymbol) in declaredInterfaces)
         {
             var owningPackage = packageByTree[ifaceSyntax.SyntaxTree];
-            RunWithPackage(owningPackage, () => binder.declarations.BindInterfaceMembers(ifaceSyntax, ifaceSymbol, owningPackage));
+            RunWithPackage(owningPackage, ifaceSyntax.SyntaxTree, () => binder.declarations.BindInterfaceMembers(ifaceSyntax, ifaceSymbol, owningPackage));
         }
 
         var functionDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
@@ -903,7 +913,7 @@ public sealed class Binder
         {
             var owningPackage = packageByTree[function.SyntaxTree];
             binder.declarations.ValidateTopLevelProtected(function.AccessibilityModifier);
-            RunWithPackage(owningPackage, () => binder.declarations.BindFunctionDeclaration(function, owningPackage));
+            RunWithPackage(owningPackage, function.SyntaxTree, () => binder.declarations.BindFunctionDeclaration(function, owningPackage));
         }
 
         // Issue #1085 / #1194: now that every type body is bound (explicit
@@ -1241,7 +1251,7 @@ public sealed class Binder
                     continue;
                 }
 
-                var loweredBody = BindBodyWithPackage(parentScope, function.Package?.Name, () => BindBodyWithCache(cache, dirtyTrees, function, function.Declaration.Body, diagnostics, () =>
+                var loweredBody = BindBodyWithPackage(parentScope, function.Package?.Name, function.Declaration.Body.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, function, function.Declaration.Body, diagnostics, () =>
                 {
                     var binder = new Binder(parentScope, function);
                     var body = binder.statements.BindStatement(function.Declaration.Body);
@@ -1294,7 +1304,7 @@ public sealed class Binder
                     continue;
                 }
 
-                var loweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, () => BindBodyWithCache(cache, dirtyTrees, method, method.Declaration.Body, diagnostics, () =>
+                var loweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, method.Declaration.Body.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, method, method.Declaration.Body, diagnostics, () =>
                 {
                     var binder = new Binder(parentScope, method);
                     var body = binder.statements.BindStatement(method.Declaration.Body);
@@ -1448,7 +1458,7 @@ public sealed class Binder
                     continue;
                 }
 
-                var ctorLoweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, () => BindBodyWithCache(cache, dirtyTrees, ctor.Function, ctor.Declaration.Body, diagnostics, () =>
+                var ctorLoweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, ctor.Declaration.Body.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, ctor.Function, ctor.Declaration.Body, diagnostics, () =>
                 {
                     var ctorBinder = new Binder(parentScope, ctor.Function);
                     var ctorBody = ctorBinder.statements.BindStatement(ctor.Declaration.Body);
@@ -1743,14 +1753,24 @@ public sealed class Binder
     /// same-simple-name type over an unrelated package's homonym — the
     /// ambiguity that arises when two packages each independently synthesize
     /// a type with the same simple name (the Oahu.Data EF-migration shape).
+    ///
+    /// Issue #2456 (per-file import scoping / #2395 follow-up): ALSO sets
+    /// <paramref name="referencingTree"/> as the ambient "current referencing
+    /// syntax tree" (see <see cref="BoundScope.SetCurrentReferencingSyntaxTree"/>)
+    /// for the same duration, so a same-simple-name collision encountered
+    /// while binding this body (e.g. a struct-literal or bare-constructor-call
+    /// reference — issue #2455) is only disambiguated by an import declared in
+    /// THIS body's own file — never a sibling file's import.
     /// </summary>
     /// <param name="parentScope">The scope whose ambient declaring-package is set for the duration of the call.</param>
     /// <param name="packageName">The declaring package of the member whose body is about to be bound, or <see langword="null"/> when unknown.</param>
+    /// <param name="referencingTree">The syntax tree (file) the member's body belongs to.</param>
     /// <param name="bind">Performs the member-body bind/lower work.</param>
     /// <returns>The lowered body produced by <paramref name="bind"/>.</returns>
-    private static BoundBlockStatement BindBodyWithPackage(BoundScope parentScope, string packageName, Func<BoundBlockStatement> bind)
+    private static BoundBlockStatement BindBodyWithPackage(BoundScope parentScope, string packageName, GSharp.Core.CodeAnalysis.Syntax.SyntaxTree referencingTree, Func<BoundBlockStatement> bind)
     {
         var previousPackage = parentScope.SetCurrentDeclaringPackage(packageName);
+        var previousTree = parentScope.SetCurrentReferencingSyntaxTree(referencingTree);
         try
         {
             return bind();
@@ -1758,6 +1778,7 @@ public sealed class Binder
         finally
         {
             parentScope.SetCurrentDeclaringPackage(previousPackage);
+            parentScope.SetCurrentReferencingSyntaxTree(previousTree);
         }
     }
 
@@ -1782,7 +1803,7 @@ public sealed class Binder
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement>.Builder functionBodies,
         ImmutableArray<Diagnostic>.Builder diagnostics)
     {
-        var loweredBody = BindBodyWithPackage(parentScope, method.Package?.Name, () => BindBodyWithCache(cache, dirtyTrees, method, method.Declaration.Body, diagnostics, () =>
+        var loweredBody = BindBodyWithPackage(parentScope, method.Package?.Name, method.Declaration.Body.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, method, method.Declaration.Body, diagnostics, () =>
         {
             var binder = new Binder(parentScope, method);
             var body = binder.statements.BindStatement(method.Declaration.Body);
@@ -1830,7 +1851,7 @@ public sealed class Binder
         ImmutableArray<Diagnostic>.Builder diagnostics,
         bool requireAllPathsReturn)
     {
-        var loweredBody = BindBodyWithPackage(parentScope, accessor.Package?.Name, () => BindBodyWithCache(cache, dirtyTrees, accessor, bodySyntax, diagnostics, () =>
+        var loweredBody = BindBodyWithPackage(parentScope, accessor.Package?.Name, bodySyntax.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, accessor, bodySyntax, diagnostics, () =>
         {
             var binder = new Binder(parentScope, accessor);
             var body = binder.statements.BindStatement(bodySyntax);
@@ -1879,7 +1900,7 @@ public sealed class Binder
         ImmutableArray<Diagnostic>.Builder diagnostics,
         TextLocation? allPathsReturnLocation = null)
     {
-        var loweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, () => BindBodyWithCache(cache, dirtyTrees, member, bodySyntax, diagnostics, () =>
+        var loweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, bodySyntax.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, member, bodySyntax, diagnostics, () =>
         {
             var binder = new Binder(parentScope, member);
             var body = binder.statements.BindStatement(bodySyntax);
@@ -1924,7 +1945,7 @@ public sealed class Binder
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement>.Builder functionBodies,
         ImmutableArray<Diagnostic>.Builder diagnostics)
     {
-        var loweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, () => BindBodyWithCache(cache, dirtyTrees, method, method.Declaration.Body, diagnostics, () =>
+        var loweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, method.Declaration.Body.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, method, method.Declaration.Body, diagnostics, () =>
         {
             var binder = new Binder(parentScope, method);
             var body = binder.statements.BindStatement(method.Declaration.Body);

@@ -657,6 +657,184 @@ public class Issue2455CompositeTypeCollisionTests
         Assert.Contains(errors, d => d.Id == "GS0496");
     }
 
+    // ---- Per-file import scoping (issue #2395 follow-up hardening) ----
+    //
+    // TryResolveCollidingTypeAliasByImport must NEVER let an import declared
+    // in one file decide type identity for a reference in a DIFFERENT file
+    // that imports neither colliding package itself. Imports are still bound
+    // onto one shared compilation-wide scope (issue #2395's own leak, not
+    // fixed by this change), but the collision-disambiguation logic added for
+    // #2455 must consult only the REFERENCING file's own imports (plus
+    // implicit/compiler-synthesized ones), never a sibling file's.
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void UnrelatedFileImportingOneCollidingPackage_DoesNotLeakIntoResolution_FileWithNoOwnImportKeepsLegacyOrderDependentFallback(bool audibleDeclaredFirst)
+    {
+        // Dedicated local collision shape (distinct from the shared
+        // AudibleChapterInfo/BooksDatabaseChapterInfo constants) with
+        // deliberately ASYMMETRIC member names, so a clean member-access
+        // check unambiguously reveals which package's ChapterInfo won —
+        // `FromAudible` exists ONLY on Oahu.Audible.Json.ChapterInfo.
+        const string audibleShape = """
+            package Oahu.Audible.Json
+
+            class ChapterInfo {
+                prop FromAudible string
+            }
+            """;
+
+        const string booksDbShape = """
+            package Oahu.BooksDatabase
+
+            class ChapterInfo {
+                prop FromBooksDb string
+            }
+            """;
+
+        // `unrelatedImporter` imports ONLY Oahu.BooksDatabase, but never
+        // references ChapterInfo (or anything from `probe`) at all — it is
+        // completely unrelated to `probe`'s own file. `probe` itself imports
+        // NEITHER colliding package.
+        //
+        // Before the per-file scoping fix, TryResolveCollidingTypeAliasByImport
+        // consulted the compilation-wide import set (EnumerateImports() walks
+        // every file's imports with no per-file boundary — issue #2395), so
+        // finding exactly one colliding package (Oahu.BooksDatabase) imported
+        // ANYWHERE would deterministically resolve `probe`'s bare
+        // `ChapterInfo` reference to Oahu.BooksDatabase.ChapterInfo — in
+        // BOTH declaration orders, regardless of `probe` importing nothing.
+        // That is exactly the leak the user identified: an import in one
+        // file silently deciding identity in a wholly unrelated file.
+        //
+        // After the fix, `unrelatedImporter`'s import must never be consulted
+        // for `probe`'s reference (it is declared in a different syntax
+        // tree), so `probe` falls back to the ORIGINAL, pre-#2455
+        // order-dependent "first declared wins" behavior — exactly like
+        // AbsentDisambiguatingImport_PreservesLegacyOrderDependentFallback_DocumentedNotFixed
+        // above, flipping with declaration order rather than being pinned to
+        // Oahu.BooksDatabase regardless of order.
+        const string unrelatedImporter = """
+            package Oahu.Other
+            import Oahu.BooksDatabase
+
+            class Unrelated {
+                func Noop() int {
+                    return 0
+                }
+            }
+            """;
+
+        const string probe = """
+            package Oahu.Core
+
+            class Probe {
+                func Make() string {
+                    var ci = ChapterInfo{}
+                    return ci.FromAudible
+                }
+            }
+            """;
+
+        var sources = audibleDeclaredFirst
+            ? new[] { audibleShape, booksDbShape, unrelatedImporter, probe }
+            : new[] { booksDbShape, audibleShape, unrelatedImporter, probe };
+
+        var compilation = Compile(sources);
+        var errors = AllDiagnostics(compilation).Where(d => d.IsError).ToArray();
+
+        // Never the fix's own ambiguity diagnostic (there is genuinely no
+        // same-file disambiguating import here) — and, critically, whether
+        // `ci.FromAudible` resolves cleanly must track declaration ORDER, not
+        // be pinned to Oahu.BooksDatabase.ChapterInfo (which has no
+        // `FromAudible` member) regardless of order.
+        Assert.DoesNotContain(errors, d => d.Id == "GS0496");
+        if (audibleDeclaredFirst)
+        {
+            // Oahu.Audible.Json.ChapterInfo (which HAS FromAudible) won the
+            // legacy plain-key race — `ci.FromAudible` must resolve cleanly.
+            Assert.Empty(errors);
+        }
+        else
+        {
+            // Oahu.BooksDatabase.ChapterInfo (which has no FromAudible) won
+            // the legacy plain-key race — `ci.FromAudible` must fail to find
+            // a member, proving `unrelatedImporter`'s import of
+            // Oahu.BooksDatabase was NOT consulted (a leaked, compilation-
+            // wide disambiguation would have forced Oahu.BooksDatabase.
+            // ChapterInfo to win in BOTH orders, never reaching this
+            // branch's failure).
+            Assert.Contains(errors, d => d.Id == "GS0158");
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void SameFileImport_DisambiguatesOrderIndependently_EvenWhenAnUnrelatedFileImportsTheOtherCollidingPackage(bool audibleDeclaredFirst)
+    {
+        const string audibleShape = """
+            package Oahu.Audible.Json
+
+            class ChapterInfo {
+                prop FromAudible string
+            }
+            """;
+
+        const string booksDbShape = """
+            package Oahu.BooksDatabase
+
+            class ChapterInfo {
+                prop FromBooksDb string
+            }
+            """;
+
+        // The exact real-world (AaxExporter) shape: `probe`'s OWN file
+        // imports Oahu.Audible.Json, so its bare `ChapterInfo` reference must
+        // always resolve to Oahu.Audible.Json.ChapterInfo, regardless of
+        // declaration order AND regardless of `unrelatedImporter` (a
+        // completely different, unrelated file) importing the OTHER
+        // colliding package (Oahu.BooksDatabase). A same-file import must
+        // always win for that file's own references — a sibling file's
+        // import of the OTHER colliding package must never turn this into a
+        // false GS0496 ambiguity, and must never flip the result toward
+        // Oahu.BooksDatabase.ChapterInfo.
+        const string unrelatedImporter = """
+            package Oahu.Other
+            import Oahu.BooksDatabase
+
+            class Unrelated {
+                func Noop() int {
+                    return 0
+                }
+            }
+            """;
+
+        const string probe = """
+            package Oahu.Core
+            import Oahu.Audible.Json
+
+            class Probe {
+                func Make() string {
+                    var ci = ChapterInfo{}
+                    return ci.FromAudible
+                }
+            }
+            """;
+
+        var sources = audibleDeclaredFirst
+            ? new[] { audibleShape, booksDbShape, unrelatedImporter, probe }
+            : new[] { booksDbShape, audibleShape, unrelatedImporter, probe };
+
+        var compilation = Compile(sources);
+
+        // Always clean: same-file import deterministically wins, in both
+        // declaration orders, unaffected by the unrelated file's opposing
+        // import.
+        Assert.DoesNotContain(AllDiagnostics(compilation), d => d.IsError);
+    }
+
     // ---- Documented residual (not fixed here; reported as next blocker) ----
 
     [Fact]
