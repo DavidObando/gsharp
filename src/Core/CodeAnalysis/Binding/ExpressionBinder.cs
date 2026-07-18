@@ -995,6 +995,11 @@ internal sealed partial class ExpressionBinder
     /// <summary>ADR-0039: Determines whether an expression is an lvalue (can have its address taken).</summary>
     internal static bool IsLvalue(BoundExpression expression)
     {
+        if (expression is BoundBlockExpression block)
+        {
+            return IsLvalue(block.Expression);
+        }
+
         return expression is BoundVariableExpression
             or BoundFieldAccessExpression
             or BoundIndexExpression
