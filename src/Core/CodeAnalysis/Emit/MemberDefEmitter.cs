@@ -33,7 +33,7 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// <item><c>EmitStaticPropertyAccessors</c> / <c>EmitStaticPropertyGetter</c> / <c>EmitStaticPropertySetter</c></item>
 /// <item><c>EmitEventAccessors</c> / <c>EmitEventAddAccessor</c> / <c>EmitEventRemoveAccessor</c> / <c>EmitEventRaiseAccessor</c></item>
 /// <item><c>EmitStaticEventAccessors</c> / <c>EmitStaticEventAddAccessor</c> / <c>EmitStaticEventRemoveAccessor</c></item>
-/// <item><c>EmitInterfacePropertyAccessors</c> / <c>EmitInterfaceEventAccessors</c></item>
+/// <item><c>EmitInterfacePropertyAccessors</c> / <c>EmitInterfacePropertyGetter</c> / <c>EmitInterfacePropertySetter</c> / <c>EmitInterfaceEventAccessors</c></item>
 /// </list>
 /// <para>
 /// Plus four private helpers used exclusively by the methods above:
@@ -1415,111 +1415,14 @@ internal sealed class MemberDefEmitter
             MethodDefinitionHandle? emittedGetter = null;
             if (prop.HasGetter && accessorHandles.Getter.HasValue)
             {
-                // Issue #1030 / #2293: a default-bodied interface property
-                // getter — static-virtual or ordinary instance — is a
-                // non-abstract Virtual slot with a real IL body. Route it
-                // through the regular function-emit pipeline (signature +
-                // body + parameter rows), which stamps
-                // Static|Virtual|NewSlot|SpecialName for a static accessor,
-                // or Virtual|NewSlot|SpecialName (receiver = interface, no
-                // Static) for an instance default accessor — mirroring how
-                // default-interface *methods* are emitted (EmitFunction's
-                // receiver-is-interface branch). The MethodDef row lands in
-                // the planned accessor position because this runs in
-                // accessor order.
-                if (prop.GetterSymbol != null
-                    && !prop.GetterSymbol.IsAbstract
-                    && this.emitCtx.Program.Functions.TryGetValue(prop.GetterSymbol, out var getterBody))
-                {
-                    emittedGetter = this.emitFunction(prop.GetterSymbol, getterBody, false);
-                }
-                else
-                {
-                    var sigBlob = new BlobBuilder();
-                    new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: !prop.IsStatic)
-                        .Parameters(
-                            prop.Parameters.Length,
-                            r => this.encodeTypeSymbol(r.Type(), prop.Type),
-                            ps =>
-                            {
-                                // ADR-0149 (issue #944 follow-up): an abstract
-                                // interface indexer getter carries its index
-                                // parameters ahead of the return type, exactly
-                                // like a struct/class indexer getter.
-                                foreach (var indexParam in prop.Parameters)
-                                {
-                                    this.encodeTypeSymbol(ps.AddParameter().Type(), indexParam.Type);
-                                }
-                            });
-
-                    var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
-                        | MethodAttributes.Virtual | MethodAttributes.Abstract
-                        | MethodAttributes.NewSlot | MethodAttributes.SpecialName;
-                    if (prop.IsStatic)
-                    {
-                        attrs |= MethodAttributes.Static;
-                    }
-
-                    emittedGetter = this.emitCtx.Metadata.AddMethodDefinition(
-                        attributes: attrs,
-                        implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-                        name: this.emitCtx.Metadata.GetOrAddString($"get_{prop.Name}"),
-                        signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
-                        bodyOffset: -1,
-                        parameterList: this.nextParameterHandle());
-                }
+                emittedGetter = this.EmitInterfacePropertyGetter(prop);
             }
 
             // Emit abstract setter MethodDef.
             MethodDefinitionHandle? emittedSetter = null;
             if (prop.HasSetter && accessorHandles.Setter.HasValue)
             {
-                // Issue #1030 / #2293: default-bodied interface setter
-                // (static-virtual or ordinary instance).
-                if (prop.SetterSymbol != null
-                    && !prop.SetterSymbol.IsAbstract
-                    && this.emitCtx.Program.Functions.TryGetValue(prop.SetterSymbol, out var setterBody))
-                {
-                    emittedSetter = this.emitFunction(prop.SetterSymbol, setterBody, false);
-                }
-                else
-                {
-                    var sigBlob = new BlobBuilder();
-                    new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: !prop.IsStatic)
-                        .Parameters(
-                            prop.Parameters.Length + 1,
-                            r => r.Void(),
-                            ps =>
-                            {
-                                // ADR-0149 (issue #944 follow-up): an abstract
-                                // interface indexer setter carries its index
-                                // parameters ahead of the trailing `value`
-                                // parameter, exactly like a struct/class
-                                // indexer setter.
-                                foreach (var indexParam in prop.Parameters)
-                                {
-                                    this.encodeTypeSymbol(ps.AddParameter().Type(), indexParam.Type);
-                                }
-
-                                this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type);
-                            });
-
-                    var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
-                        | MethodAttributes.Virtual | MethodAttributes.Abstract
-                        | MethodAttributes.NewSlot | MethodAttributes.SpecialName;
-                    if (prop.IsStatic)
-                    {
-                        attrs |= MethodAttributes.Static;
-                    }
-
-                    emittedSetter = this.emitCtx.Metadata.AddMethodDefinition(
-                        attributes: attrs,
-                        implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-                        name: this.emitCtx.Metadata.GetOrAddString($"set_{prop.Name}"),
-                        signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
-                        bodyOffset: -1,
-                        parameterList: this.nextParameterHandle());
-                }
+                emittedSetter = this.EmitInterfacePropertySetter(prop);
             }
 
             // Emit PropertyDef row.
@@ -1585,6 +1488,121 @@ internal sealed class MemberDefEmitter
             this.emitCtx.Metadata.AddPropertyMap(typeDefHandle, firstPropDef);
             this.cache.TypesWithPropertyMap.Add(typeDefHandle);
         }
+    }
+
+    private MethodDefinitionHandle EmitInterfacePropertyGetter(PropertySymbol prop)
+    {
+        MethodDefinitionHandle emittedGetter;
+
+        // Issue #1030 / #2293: a default-bodied interface property
+        // getter — static-virtual or ordinary instance — is a
+        // non-abstract Virtual slot with a real IL body. Route it
+        // through the regular function-emit pipeline (signature +
+        // body + parameter rows), which stamps
+        // Static|Virtual|NewSlot|SpecialName for a static accessor,
+        // or Virtual|NewSlot|SpecialName (receiver = interface, no
+        // Static) for an instance default accessor — mirroring how
+        // default-interface *methods* are emitted (EmitFunction's
+        // receiver-is-interface branch). The MethodDef row lands in
+        // the planned accessor position because this runs in
+        // accessor order.
+        if (prop.GetterSymbol != null
+            && !prop.GetterSymbol.IsAbstract
+            && this.emitCtx.Program.Functions.TryGetValue(prop.GetterSymbol, out var getterBody))
+        {
+            emittedGetter = this.emitFunction(prop.GetterSymbol, getterBody, false);
+        }
+        else
+        {
+            var sigBlob = new BlobBuilder();
+            new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: !prop.IsStatic)
+                .Parameters(
+                    prop.Parameters.Length,
+                    r => this.encodeTypeSymbol(r.Type(), prop.Type),
+                    ps =>
+                    {
+                        // ADR-0149 (issue #944 follow-up): an abstract
+                        // interface indexer getter carries its index
+                        // parameters ahead of the return type, exactly
+                        // like a struct/class indexer getter.
+                        foreach (var indexParam in prop.Parameters)
+                        {
+                            this.encodeTypeSymbol(ps.AddParameter().Type(), indexParam.Type);
+                        }
+                    });
+
+            var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
+                | MethodAttributes.Virtual | MethodAttributes.Abstract
+                | MethodAttributes.NewSlot | MethodAttributes.SpecialName;
+            if (prop.IsStatic)
+            {
+                attrs |= MethodAttributes.Static;
+            }
+
+            emittedGetter = this.emitCtx.Metadata.AddMethodDefinition(
+                attributes: attrs,
+                implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+                name: this.emitCtx.Metadata.GetOrAddString($"get_{prop.Name}"),
+                signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
+                bodyOffset: -1,
+                parameterList: this.nextParameterHandle());
+        }
+
+        return emittedGetter;
+    }
+
+    private MethodDefinitionHandle EmitInterfacePropertySetter(PropertySymbol prop)
+    {
+        MethodDefinitionHandle emittedSetter;
+
+        // Issue #1030 / #2293: default-bodied interface setter
+        // (static-virtual or ordinary instance).
+        if (prop.SetterSymbol != null
+            && !prop.SetterSymbol.IsAbstract
+            && this.emitCtx.Program.Functions.TryGetValue(prop.SetterSymbol, out var setterBody))
+        {
+            emittedSetter = this.emitFunction(prop.SetterSymbol, setterBody, false);
+        }
+        else
+        {
+            var sigBlob = new BlobBuilder();
+            new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: !prop.IsStatic)
+                .Parameters(
+                    prop.Parameters.Length + 1,
+                    r => r.Void(),
+                    ps =>
+                    {
+                        // ADR-0149 (issue #944 follow-up): an abstract
+                        // interface indexer setter carries its index
+                        // parameters ahead of the trailing `value`
+                        // parameter, exactly like a struct/class
+                        // indexer setter.
+                        foreach (var indexParam in prop.Parameters)
+                        {
+                            this.encodeTypeSymbol(ps.AddParameter().Type(), indexParam.Type);
+                        }
+
+                        this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type);
+                    });
+
+            var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
+                | MethodAttributes.Virtual | MethodAttributes.Abstract
+                | MethodAttributes.NewSlot | MethodAttributes.SpecialName;
+            if (prop.IsStatic)
+            {
+                attrs |= MethodAttributes.Static;
+            }
+
+            emittedSetter = this.emitCtx.Metadata.AddMethodDefinition(
+                attributes: attrs,
+                implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+                name: this.emitCtx.Metadata.GetOrAddString($"set_{prop.Name}"),
+                signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
+                bodyOffset: -1,
+                parameterList: this.nextParameterHandle());
+        }
+
+        return emittedSetter;
     }
 
     /// <summary>
