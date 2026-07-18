@@ -595,10 +595,17 @@ public sealed partial class CSharpToGSharpTranslator
             return new ExpressionStatement(this.TranslateExpression(expression));
         }
 
-        private GStatement TranslateSwitchStatement(SwitchStatementSyntax node)
+        private IEnumerable<GStatement> TranslateSwitchStatement(SwitchStatementSyntax node)
         {
             GExpression subject = this.TranslateExpression(node.Expression);
             var cases = new List<SwitchStatementCase>();
+
+            // Issue #2462: a non-terminal break still has observable control
+            // flow after C# switch terminators are removed. Lower it to a jump
+            // past the translated switch and emit that target only when needed.
+            bool needsExitLabel = node.DescendantNodes()
+                .OfType<BreakStatementSyntax>()
+                .Any(b => BreakTargetsSwitch(b, node) && !IsRedundantSwitchSectionBreak(b));
 
             // Issue #1884: a `goto case K;` / `goto default;` anywhere in this
             // switch (but not in a nested switch, whose own gotos target its
@@ -697,7 +704,13 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            return new SwitchStatement(subject, cases);
+            yield return new SwitchStatement(subject, cases);
+            if (needsExitLabel)
+            {
+                yield return new LabeledStatement(
+                    SwitchExitLabelName(node),
+                    new BlockStatement(new List<GStatement>()));
+            }
         }
 
         private BlockStatement TranslateSwitchSectionBody(SwitchSectionSyntax section, string injectLabel = null)
@@ -705,13 +718,6 @@ public sealed partial class CSharpToGSharpTranslator
             var statements = new List<GStatement>();
             foreach (StatementSyntax statement in section.Statements)
             {
-                // A trailing `break;` only terminates the C# section; G# arms do not
-                // fall through, so the explicit break carries no meaning and is dropped.
-                if (statement is BreakStatementSyntax)
-                {
-                    continue;
-                }
-
                 statements.AddRange(this.TranslateStatement(statement));
             }
 
@@ -733,6 +739,69 @@ public sealed partial class CSharpToGSharpTranslator
 
             return new BlockStatement(statements);
         }
+
+        private IEnumerable<GStatement> TranslateBreakStatement(BreakStatementSyntax node)
+        {
+            // The nearest breakable ancestor is the semantic target. Blocks,
+            // conditionals, try/using/lock statements, local functions, and
+            // lambdas do not require special cases; nested loops/switches do.
+            SwitchStatementSyntax enclosingSwitch = node.Ancestors()
+                .OfType<SwitchStatementSyntax>()
+                .FirstOrDefault();
+
+            if (enclosingSwitch != null && BreakTargetsSwitch(node, enclosingSwitch))
+            {
+                if (IsRedundantSwitchSectionBreak(node))
+                {
+                    return System.Array.Empty<GStatement>();
+                }
+
+                return new[] { (GStatement)new GotoStatement(SwitchExitLabelName(enclosingSwitch)) };
+            }
+
+            return new[] { (GStatement)new BreakStatement() };
+        }
+
+        private static bool BreakTargetsSwitch(BreakStatementSyntax node, SwitchStatementSyntax target)
+        {
+            SyntaxNode breakTarget = node.Ancestors().FirstOrDefault(IsBreakTarget);
+            return breakTarget == target;
+        }
+
+        private static bool IsBreakTarget(SyntaxNode node)
+            => node is SwitchStatementSyntax
+                or ForStatementSyntax
+                or CommonForEachStatementSyntax
+                or WhileStatementSyntax
+                or DoStatementSyntax;
+
+        private static bool IsRedundantSwitchSectionBreak(BreakStatementSyntax node)
+        {
+            // A break at the end of every containing statement list reaches
+            // exactly the point where a G# arm ends naturally.
+            SyntaxNode child = node;
+            foreach (SyntaxNode ancestor in node.Ancestors())
+            {
+                if (ancestor is SwitchSectionSyntax section)
+                {
+                    return section.Statements.LastOrDefault() == child;
+                }
+
+                if (ancestor is BlockSyntax block &&
+                    child is StatementSyntax statement &&
+                    block.Statements.LastOrDefault() != statement)
+                {
+                    return false;
+                }
+
+                child = ancestor;
+            }
+
+            return false;
+        }
+
+        private static string SwitchExitLabelName(SwitchStatementSyntax node)
+            => $"__switchExit{node.SpanStart}";
 
         private IEnumerable<GStatement> TranslateYieldStatement(YieldStatementSyntax node)
         {
