@@ -30,10 +30,10 @@ namespace Cs2Gs.Tests;
 /// implementation (<c>IAuthorization IProfile.Authorization =&gt;
 /// Authorization;</c>) that forwards a same-project concrete
 /// <c>Authorization</c> property promoted to <c>Authorization?</c> through
-/// unrelated constructor-parameter flow. Unlike the #2202 sibling rule
-/// (<see cref="CSharpToGSharpTranslator.IsUnguardedSiblingOfNullGuardedArmInReturnPreservingBody"/>),
-/// no ternary/sibling guard is required or present — the bare forward itself,
-/// combined with the guardrail relationship, is sufficient evidence.
+/// unrelated constructor-parameter flow. Unlike the #2202 conditional-arm rule
+/// (<see cref="CSharpToGSharpTranslator.IsNullableTaintedArmOfReturnPreservingConditional"/>),
+/// no ternary/switch conditional is required or present — the bare forward
+/// itself, combined with the guardrail relationship, is sufficient evidence.
 /// </summary>
 public class Issue2432UnguardedForwardForgivenessTranslationTests
 {
