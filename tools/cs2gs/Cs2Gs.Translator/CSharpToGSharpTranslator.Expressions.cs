@@ -800,17 +800,28 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
-            // Issue #2202: a nullable-tainted field/property read in an UNGUARDED
-            // arm of a conditional/switch expression, when that conditional is the
-            // (possibly parenthesized) body of a property/method whose return type
-            // was deliberately kept non-null by the oblivious analyzer's
-            // property-contract / forwarding-exclusion guardrail (#1354 / #2167),
-            // AND a sibling arm in the same conditional IS narrowed by a null-check
-            // guard. The original C# accepted this implicitly (oblivious, no
-            // enforcement); cs2gs keeps the declared return non-null and the sibling
-            // is already forgiven, so forgiving this arm too is the minimal
-            // assertion needed to compile the property without regressing safety.
-            if (this.IsUnguardedSiblingOfNullGuardedArmInReturnPreservingBody(recv))
+            // Issue #2202 / #2412 (round 3): a nullable-tainted field/property
+            // read as ANY arm of a conditional/switch expression, when that
+            // conditional is the (possibly parenthesized) body of a property/
+            // method whose return type was deliberately kept non-null by the
+            // oblivious analyzer's property-contract / forwarding-exclusion
+            // guardrail (#1354 / #2167). The original C# accepted this
+            // implicitly (oblivious, no enforcement); cs2gs keeps the declared
+            // return non-null (matching the sibling project's own contract, so
+            // downstream consumers of the property/method are unaffected), so
+            // forgiving each tainted arm is the minimal assertion needed to
+            // compile the member without regressing safety or widening its
+            // contract. This subsumes the original, narrower #2202 shape where
+            // one arm happens to ALSO be null-guard-narrowed by the condition
+            // (e.g. `Book is null ? Component : Book`, the Oahu.Data
+            // `Conversion.BookCommon` shape) — that arm is separately asserted
+            // by <see cref="IsNullGuardNarrowedFieldUse"/>, and this rule
+            // additionally covers the case where NEITHER arm is guarded by the
+            // condition at all (e.g. `Profile.PreAmazon ? HttpClientAudible :
+            // HttpClientAmazon`, the Oahu.Core `AudibleApi.HttpClient` shape,
+            // where the condition is an unrelated flag, not a null-check on
+            // either arm).
+            if (this.IsNullableTaintedArmOfReturnPreservingConditional(recv))
             {
                 return true;
             }
@@ -833,7 +844,7 @@ public sealed partial class CSharpToGSharpTranslator
             // forwarder from the property it merely reads, and
             // `SeedPropertyLikeReturnTaint` excludes property-forwarding from
             // transitivity for exactly this reason). Unlike
-            // <see cref="IsUnguardedSiblingOfNullGuardedArmInReturnPreservingBody"/>,
+            // <see cref="IsNullableTaintedArmOfReturnPreservingConditional"/>,
             // no sibling ternary arm exists to require — the guardrail
             // relationship alone (this value being the WHOLE return-preserving
             // body) is sufficient evidence gsc will reject the bare `T? -> T`
@@ -1207,13 +1218,12 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         /// <summary>
-        /// Issue #2202: true when <paramref name="use"/> reads a nullable-tainted
-        /// field/property as an UNGUARDED arm of a conditional/switch expression
-        /// whose enclosing property/method return type was deliberately preserved
-        /// non-null (the oblivious-analyzer's property-contract / forwarding-
-        /// exclusion guardrail, issues #1354 / #2167), AND at least one sibling arm
-        /// in the same conditional is provably null-guarded (via
-        /// <see cref="IsNullGuardNarrowedFieldUse"/>).
+        /// Issue #2202 / #2412 (round 3): true when <paramref name="use"/> reads
+        /// a nullable-tainted field/property as an arm of a conditional/switch
+        /// expression whose enclosing property/method return type was
+        /// deliberately preserved non-null (the oblivious-analyzer's
+        /// property-contract / forwarding-exclusion guardrail, issues #1354 /
+        /// #2167).
         /// </summary>
         /// <remarks>
         /// Scoping constraints that prevent this from becoming a blanket forgiveness:
@@ -1224,13 +1234,23 @@ public sealed partial class CSharpToGSharpTranslator
         ///     entire body of the enclosing property/method.</item>
         ///   <item>The enclosing property/method's return type must NOT be promoted to
         ///     nullable — only the deliberate "return kept non-null" pattern qualifies.</item>
-        ///   <item>A sibling arm must already be narrowed by a null-check guard — so
-        ///     this rule fires only in the specific forwarding-two-nullable-properties
-        ///     pattern where one is already proven safe and the other is trusted by
-        ///     the original C# (oblivious) code.</item>
         /// </list>
+        /// This deliberately does NOT require a sibling arm to already be
+        /// null-guard-narrowed (the original #2202 scoping): a conditional's
+        /// governing condition need not correlate with either arm's nullness at
+        /// all (e.g. `Profile.PreAmazon ? HttpClientAudible : HttpClientAmazon`
+        /// — a plain flag check, not a null-check on either arm — the real
+        /// Oahu.Core `AudibleApi.HttpClient` shape). Every tainted arm of a
+        /// conditional whose enclosing member's return type the guardrail
+        /// refused to widen needs the same bridging assertion the guardrail's
+        /// own design already anticipates (per <see cref="IsUnguardedForwardOfTaintedValueInReturnPreservingBody"/>'s
+        /// unconditional counterpart) — restricting to only the "one sibling
+        /// already guarded" subset left every OTHER unguarded shape unfixed
+        /// without narrowing the class of members this rule can affect (that
+        /// scope is controlled entirely by <see cref="IsBodyOfReturnPreservingMember"/>
+        /// below, not by sibling-guard status).
         /// </remarks>
-        private bool IsUnguardedSiblingOfNullGuardedArmInReturnPreservingBody(ExpressionSyntax use)
+        private bool IsNullableTaintedArmOfReturnPreservingConditional(ExpressionSyntax use)
         {
             if (!this.IsObliviousCompilation())
             {
@@ -1246,30 +1266,8 @@ public sealed partial class CSharpToGSharpTranslator
             // ConditionalExpressionSyntax or SwitchExpressionSyntax whose arm
             // this use belongs to, and confirm that the use IS an arm (not the
             // condition / governing expression).
-            (ExpressionSyntax conditional, ExpressionSyntax[] siblingArms) =
-                this.FindEnclosingConditionalAndSiblings(use);
+            (ExpressionSyntax conditional, _) = this.FindEnclosingConditionalAndSiblings(use);
             if (conditional == null)
-            {
-                return false;
-            }
-
-            // At least one sibling arm must be narrowed by a null-check guard
-            // (i.e., it would get `!!` from `IsNullGuardNarrowedFieldUse`). This
-            // ensures we only fire for the two-property-forwarding pattern where
-            // one arm is already proven safe — not an arbitrary unguarded value.
-            bool anySiblingGuarded = false;
-            foreach (ExpressionSyntax sibling in siblingArms)
-            {
-                ExpressionSyntax stripped = StripParentheses(sibling);
-                if (this.TryGetEmittedNullableFieldOrProperty(stripped, out ISymbol siblingSymbol)
-                    && this.IsSiblingArmNullGuarded(stripped, siblingSymbol, conditional))
-                {
-                    anySiblingGuarded = true;
-                    break;
-                }
-            }
-
-            if (!anySiblingGuarded)
             {
                 return false;
             }
@@ -1288,10 +1286,10 @@ public sealed partial class CSharpToGSharpTranslator
         // inspects) AND is, itself, the ENTIRE (possibly parenthesized) body of
         // a property/method whose own declared type the analyzer deliberately
         // left non-null (<see cref="IsBodyOfReturnPreservingMember"/>, shared
-        // unchanged with <see cref="IsUnguardedSiblingOfNullGuardedArmInReturnPreservingBody"/>).
-        // This is the UNCONDITIONAL counterpart of that sibling rule: there is
-        // no ternary/switch here at all, so no sibling arm can already be
-        // guard-proven safe — the sole evidence is the guardrail relationship
+        // unchanged with <see cref="IsNullableTaintedArmOfReturnPreservingConditional"/>).
+        // This is the UNCONDITIONAL counterpart of that conditional-arm rule:
+        // there is no ternary/switch here at all, so no arm can be evaluated —
+        // the sole evidence is the guardrail relationship
         // itself (a promoted-nullable value flowing, unconditionally, into a
         // declaration the SAME analyzer refused to widen). That refusal is
         // deliberate for a contract member (explicit/implicit interface
@@ -1526,38 +1524,6 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            return false;
-        }
-
-        // True when <paramref name="armExpr"/> (a field/property read in a sibling
-        // arm) is narrowed by the null-check guard in the enclosing
-        // <paramref name="conditional"/>. Mirrors the specific-case logic of
-        // <see cref="IsNullGuardNarrowedFieldUse"/> but checks against a known
-        // conditional rather than walking upward.
-        private bool IsSiblingArmNullGuarded(
-            ExpressionSyntax armExpr,
-            ISymbol symbol,
-            ExpressionSyntax conditional)
-        {
-            if (conditional is ConditionalExpressionSyntax ternary)
-            {
-                // WhenFalse position guarded by `X == null ? … : X` / `X is null ? … : X`
-                if (armExpr == StripParentheses(ternary.WhenFalse)
-                    && this.IsNullCheckOf(ternary.Condition, symbol))
-                {
-                    return true;
-                }
-
-                // WhenTrue position guarded by `X != null ? X : …` / `X is not null ? X : …`
-                if (armExpr == StripParentheses(ternary.WhenTrue)
-                    && this.IsNonNullCheckOf(ternary.Condition, symbol))
-                {
-                    return true;
-                }
-            }
-
-            // Switch expressions do not have a single condition narrowing a
-            // specific arm in the same way; leave unsupported for now.
             return false;
         }
 

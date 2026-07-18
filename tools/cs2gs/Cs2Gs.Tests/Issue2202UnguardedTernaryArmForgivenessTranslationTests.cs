@@ -17,13 +17,15 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Translator-fidelity tests for issue #2202: an UNGUARDED nullable-tainted
-/// field/property arm in a ternary/switch expression whose enclosing
-/// property/method return type is deliberately kept non-null (the oblivious
-/// analyzer's property-contract / forwarding-exclusion guardrail, issues
-/// #1354 / #2167), when a SIBLING arm is already null-guard-narrowed.
-/// The original C# accepted this implicitly (oblivious), and the sibling arm
-/// is already asserted; forgiving this arm too is the minimal safe assertion.
+/// Translator-fidelity tests for issue #2202 (generalized in #2412 round 3):
+/// a nullable-tainted field/property arm of a ternary/switch expression whose
+/// enclosing property/method return type is deliberately kept non-null (the
+/// oblivious analyzer's property-contract / forwarding-exclusion guardrail,
+/// issues #1354 / #2167). The original C# accepted this implicitly
+/// (oblivious); forgiving every such tainted arm — regardless of whether the
+/// conditional's own condition happens to null-check any arm — is the minimal
+/// assertion needed to compile the member without regressing safety or
+/// widening its declared contract.
 /// </summary>
 public class Issue2202UnguardedTernaryArmForgivenessTranslationTests
 {
@@ -169,12 +171,17 @@ namespace Demo
     }
 
     /// <summary>
-    /// Negative test: two unguarded nullable fields in a ternary arm where
-    /// the condition does NOT null-check either field — no sibling is
-    /// null-guard-narrowed, so neither arm should be blindly forgiven.
+    /// Positive test (round 3 generalization, real Oahu.Core shape): two
+    /// nullable-tainted fields as ternary arms where the CONDITION does NOT
+    /// null-check either arm at all — mirrors the real Oahu.Core
+    /// `AudibleApi.HttpClient =&gt; Profile.PreAmazon ? HttpClientAudible :
+    /// HttpClientAmazon;` shape, where `Profile.PreAmazon` is an unrelated
+    /// flag, not a null-check on either `HttpClientAudible`/`HttpClientAmazon`.
+    /// Both arms must still be forgiven for the property to compile against
+    /// its deliberately-preserved non-null return type.
     /// </summary>
     [Fact]
-    public void NoSiblingGuarded_UnguardedArms_AreNotAsserted()
+    public void NoSiblingGuarded_UnguardedArms_AreBothAsserted()
     {
         string printed = TranslateOblivious(@"
 namespace Demo
@@ -196,7 +203,9 @@ namespace Demo
         public bool HasB => B != null;
 
         // The condition checks `Flag`, NOT a null-check on A or B.
-        // Neither arm is null-guard-narrowed → no forgiveness should fire.
+        // Neither arm is null-guard-narrowed, but both are nullable-tainted,
+        // so both must be forgiven for this non-null-returning property to
+        // compile (mirrors Oahu.Core's AudibleApi.HttpClient).
         public IVal Pick => Flag ? A : B;
     }
 }");
@@ -205,12 +214,54 @@ namespace Demo
         Assert.True(pickIndex >= 0, "Expected to find 'prop Pick' in output:\n" + printed);
         string afterPick = printed.Substring(pickIndex);
 
-        // Look at just the Pick property line(s) — neither A nor B should get !!
-        // because neither is null-guard-narrowed (condition is `Flag`, not a
-        // null-check on A or B).
+        // Look at just the Pick property line(s) — both A and B must get !!
+        // even though neither is null-guard-narrowed by the condition (which
+        // checks an unrelated `Flag`, not either arm's nullness).
         string pickLine = afterPick.Substring(0, afterPick.IndexOf('\n') + 1);
-        Assert.DoesNotContain("A!!", pickLine);
-        Assert.DoesNotContain("B!!", pickLine);
+        Assert.Contains("A!!", pickLine);
+        Assert.Contains("B!!", pickLine);
+    }
+
+    /// <summary>
+    /// Negative control: an arm that is NOT nullable-tainted at all (no
+    /// null-check evidence anywhere for `C`) must never get a spurious `!!`,
+    /// even though it sits in the very same kind of unguarded conditional as
+    /// the positive case above. Only genuinely tainted arms are forgiven.
+    /// </summary>
+    [Fact]
+    public void UntaintedArm_InUnguardedConditional_IsNotAsserted()
+    {
+        string printed = TranslateOblivious(@"
+namespace Demo
+{
+    public interface IVal { }
+    public class Alpha : IVal { }
+    public class Gamma : IVal { }
+
+    public class Mixed
+    {
+        public Alpha A { get; set; }
+        public Gamma C { get; set; }
+        public bool Flag { get; set; }
+
+        // Taint A via null-check elsewhere:
+        public bool HasA => A != null;
+
+        // C has NO null-check evidence anywhere — never tainted.
+        public IVal Pick => Flag ? A : C;
+    }
+}");
+
+        int pickIndex = printed.IndexOf("prop Pick", StringComparison.Ordinal);
+        Assert.True(pickIndex >= 0, "Expected to find 'prop Pick' in output:\n" + printed);
+        string afterPick = printed.Substring(pickIndex);
+        string pickLine = afterPick.Substring(0, afterPick.IndexOf('\n') + 1);
+
+        // A is tainted (via HasA's null-check) and must be forgiven.
+        Assert.Contains("A!!", pickLine);
+
+        // C is never tainted anywhere — must NOT get a spurious !!.
+        Assert.DoesNotContain("C!!", pickLine);
     }
 
     private static string TranslateOblivious(string source)

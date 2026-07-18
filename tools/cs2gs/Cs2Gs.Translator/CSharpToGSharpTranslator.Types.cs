@@ -489,13 +489,26 @@ public sealed partial class CSharpToGSharpTranslator
             return mapped.IsNullable ? mapped : MakeNullable(mapped);
         }
 
+        // Issue #2412 (round 3): mirrors TranslateValueWithNullForgiveness's
+        // ternary-arm handling (Statements.cs, ConditionalExpressionSyntax
+        // WhenTrue/WhenFalse) for a switch-EXPRESSION arm's value. Prior to
+        // this fix, a switch arm's value was translated with a bare
+        // `TranslateExpression` call, so a nullable-tainted arm value never
+        // got the `!!` forgiveness a ternary arm in the exact same
+        // return-preserving-body position already receives — the detection
+        // logic in `FindEnclosingConditionalAndSiblings` already recognized
+        // switch arms, but nothing downstream ever consulted it for this call
+        // site. `TranslateValueWithNullForgiveness` is safe to reuse as-is: it
+        // only adds `!!` when `ReceiverNeedsNullForgiveness` says so (which
+        // already excludes literals, so the `IsNullOrDefaultLiteral` branch
+        // below is untouched either way).
         private GExpression TranslateSwitchArmExpression(
             ExpressionSyntax expression,
             GTypeReference nullableResultType)
         {
             return nullableResultType != null && IsNullOrDefaultLiteral(expression)
                 ? new DefaultValueExpression(nullableResultType)
-                : this.TranslateExpression(expression);
+                : this.TranslateValueWithNullForgiveness(expression);
         }
 
         // Lowers a C# switch EXPRESSION that appears in statement position
