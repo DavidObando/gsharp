@@ -192,6 +192,56 @@ public class Adr0112UserMethodGroupEmitTests
         Assert.Equal("17\n", CompileAndRun(source));
     }
 
+    [Fact]
+    public void ExtensionMethodGroup_ClosesStaticReceiverOnce_AndPreservesMethodIdentity()
+    {
+        var source = """
+            package P
+            import System
+
+            var receiverReads = 0
+
+            func NextText() string {
+                receiverReads++
+                return "abc"
+            }
+
+            func (text string) Checksum32() uint32 -> uint32(text.Length)
+
+            let checksum () -> uint32 = NextText().Checksum32
+            Console.WriteLine(receiverReads)
+            Console.WriteLine(checksum())
+            Console.WriteLine(checksum.Method.Name)
+            Console.WriteLine("group=${NextText().Checksum32}")
+            Console.WriteLine(receiverReads)
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.StartsWith("1\n3\nChecksum32\ngroup=System.Func`1[System.UInt32]\n2\n", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ImportedExtensionMethodGroup_ClosesReceiver_AndRuns()
+    {
+        var source = """
+            package P
+            import System
+            import System.Collections.Generic
+            import System.Linq
+
+            let values = List[int32]()
+            values.Add(1)
+            values.Add(2)
+            let items IEnumerable[int32] = values
+            let count () -> int32 = items.Count
+
+            Console.WriteLine(count())
+            Console.WriteLine(count.Method.Name)
+            """;
+
+        Assert.Equal("2\nCount\n", CompileAndRun(source));
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_adr0112_emit_").FullName;

@@ -781,6 +781,22 @@ internal sealed partial class MethodBodyEmitter
             delegateType = overrideDelegateType ?? this.outer.signatures.ResolveDelegateClrType(methodGroup.FunctionType);
         }
 
+        if (methodGroup.Function.IsExtension && methodGroup.Receiver != null)
+        {
+            if (!this.outer.cache.FunctionHandles.TryGetValue(methodGroup.Function, out var methodHandle)
+                && !this.outer.cache.MethodHandles.TryGetValue(methodGroup.Function, out methodHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Extension method group '{methodGroup.Function.Name}' has no emitted MethodDef.");
+            }
+
+            EntityHandle delegateTypeHandle = delegateType == null
+                ? this.outer.memberRefs.GetFunctionDelegateTypeSpec(methodGroup.FunctionType)
+                : this.outer.memberRefs.GetTypeHandleForMember(delegateType);
+            this.EmitClosedStaticMethodGroup(methodGroup.Receiver, methodHandle, delegateTypeHandle);
+            return;
+        }
+
         // Shared prologue: resolves the (interface/generic-aware) function
         // pointer token and leaves the delegate-ctor operands on the stack.
         this.EmitMethodGroupTarget(methodGroup);
@@ -818,6 +834,16 @@ internal sealed partial class MethodBodyEmitter
 
         var delegateType = this.outer.signatures.ResolveTargetDelegateClrType(hostDelegate);
         var methodRef = this.outer.memberRefs.GetMethodReference(method);
+
+        if (method.IsStatic && methodGroup.Receiver != null)
+        {
+            this.EmitClosedStaticMethodGroup(
+                methodGroup.Receiver,
+                methodRef,
+                this.outer.memberRefs.GetTypeHandleForMember(delegateType),
+                method);
+            return;
+        }
 
         if (method.IsStatic)
         {
@@ -859,6 +885,41 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.OpCode(ILOpCode.Newobj);
         this.il.Token(this.outer.memberRefs.GetDelegateCtorReference(delegateType));
+    }
+
+    private void EmitClosedStaticMethodGroup(
+        BoundExpression receiver,
+        EntityHandle methodHandle,
+        EntityHandle delegateTypeHandle,
+        MethodInfo importedMethod = null)
+    {
+        this.il.OpCode(ILOpCode.Ldtoken);
+        this.il.Token(delegateTypeHandle);
+        this.il.Call(this.outer.wellKnown.GetTypeFromHandleReference());
+
+        this.EmitExpression(receiver);
+        if (ReflectionMetadataEmitter.IsValueTypeSymbol(receiver.Type))
+        {
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(receiver.Type));
+        }
+
+        if (importedMethod != null)
+        {
+            this.EmitMethodInfoLiteral(importedMethod);
+        }
+        else
+        {
+            this.il.OpCode(ILOpCode.Ldtoken);
+            this.il.Token(methodHandle);
+            this.il.Call(this.outer.wellKnown.GetMethodFromHandleReference());
+            this.il.OpCode(ILOpCode.Castclass);
+            this.il.Token(this.outer.memberRefs.GetTypeReference(typeof(MethodInfo)));
+        }
+
+        this.il.Call(this.outer.wellKnown.GetClosedStaticDelegateCreateReference());
+        this.il.OpCode(ILOpCode.Castclass);
+        this.il.Token(delegateTypeHandle);
     }
 
     // Phase 4 emit parity: load a captured variable. In a MoveNext body,
