@@ -170,6 +170,29 @@ internal sealed class TypeDefEmitter
     /// <param name="methodListRow">The pre-reserved first method row used as the TypeDef's <c>methodList</c>.</param>
     public void EmitStructTypeDef(StructSymbol structSym, int firstFieldRow, int methodListRow)
     {
+        ValidateStructTypeDefinition(structSym);
+
+        FieldDefinitionHandle firstField = default;
+        this.EmitStructInstanceFields(structSym, ref firstField);
+        this.EmitStructAutoPropertyBackingFields(structSym, ref firstField);
+        this.EmitStructEventBackingFields(structSym, ref firstField);
+        this.EmitStructStaticFields(structSym, ref firstField);
+        this.EmitStructConstFields(structSym, ref firstField);
+        this.EmitStructStaticPropertyBackingFields(structSym, ref firstField);
+        this.EmitStructStaticEventBackingFields(structSym, ref firstField);
+        EnsureStructFirstField(firstFieldRow, ref firstField);
+
+        var (typeAccessibility, structNamespace) = this.ResolveStructNamespaceAndAccessibility(structSym);
+        var (typeAttrs, baseType) = this.ResolveStructTypeShape(structSym, typeAccessibility);
+        typeAttrs = SuppressBeforeFieldInitForStruct(structSym, typeAttrs);
+        var handle2 = this.EmitStructTypeDefinition(
+            structSym, typeAttrs, structNamespace, baseType, firstField, methodListRow);
+        this.EmitStructClassLayout(handle2, structSym);
+        this.EmitStructTypeAttributes(handle2, structSym);
+    }
+
+    private static void ValidateStructTypeDefinition(StructSymbol structSym)
+    {
         // Phase 4 emit parity (F2, type-erased): generic type definitions
         // are emitted as ordinary non-generic CLR classes/structs. Each
         // T-typed field is encoded as System.Object via EncodeTypeSymbol;
@@ -184,10 +207,12 @@ internal sealed class TypeDefEmitter
             throw new System.NotSupportedException(
                 $"Internal error: a constructed StructSymbol ('{structSym.Name}') reached EmitStructTypeDef. Only definitions should be in program.Structs.");
         }
+    }
 
+    private void EmitStructInstanceFields(StructSymbol structSym, ref FieldDefinitionHandle firstField)
+    {
         // Emit field definitions in source order. Each field's signature is a
         // FieldSig encoding the GSharp type symbol.
-        FieldDefinitionHandle firstField = default;
         foreach (var field in structSym.Fields)
         {
             var sigBlob = new BlobBuilder();
@@ -233,7 +258,10 @@ internal sealed class TypeDefEmitter
                 this.EmitFixedBufferFieldAttribute(handle, field);
             }
         }
+    }
 
+    private void EmitStructAutoPropertyBackingFields(StructSymbol structSym, ref FieldDefinitionHandle firstField)
+    {
         // ADR-0051 Phase 6: emit backing FieldDefs for auto-properties.
         foreach (var prop in structSym.Properties)
         {
@@ -263,7 +291,10 @@ internal sealed class TypeDefEmitter
 
             this.cache.StructFieldDefs[prop.BackingField] = backingHandle;
         }
+    }
 
+    private void EmitStructEventBackingFields(StructSymbol structSym, ref FieldDefinitionHandle firstField)
+    {
         // ADR-0052: emit backing FieldDefs for field-like events.
         foreach (var ev in structSym.Events)
         {
@@ -295,7 +326,10 @@ internal sealed class TypeDefEmitter
 
             this.cache.StructFieldDefs[ev.BackingField] = backingHandle;
         }
+    }
 
+    private void EmitStructStaticFields(StructSymbol structSym, ref FieldDefinitionHandle firstField)
+    {
         // ADR-0053: emit static field definitions from shared block.
         if (!structSym.StaticFields.IsDefaultOrEmpty)
         {
@@ -322,7 +356,10 @@ internal sealed class TypeDefEmitter
                 this.emitNullableAttributeOnField(handle, staticField.Type);
             }
         }
+    }
 
+    private void EmitStructConstFields(StructSymbol structSym, ref FieldDefinitionHandle firstField)
+    {
         // Issue #948: emit const fields as CLR literal fields (Static | Literal
         // | HasDefault) carrying a Constant row. Their reads are inlined by the
         // method-body emitter, so no .cctor assignment is generated.
@@ -350,7 +387,10 @@ internal sealed class TypeDefEmitter
                 this.emitNullableAttributeOnField(handle, constField.Type);
             }
         }
+    }
 
+    private void EmitStructStaticPropertyBackingFields(StructSymbol structSym, ref FieldDefinitionHandle firstField)
+    {
         // Issue #263: emit backing FieldDefs for static auto-properties.
         foreach (var prop in structSym.StaticProperties)
         {
@@ -372,7 +412,10 @@ internal sealed class TypeDefEmitter
 
             this.cache.StructFieldDefs[prop.BackingField] = backingHandle;
         }
+    }
 
+    private void EmitStructStaticEventBackingFields(StructSymbol structSym, ref FieldDefinitionHandle firstField)
+    {
         // Issue #263: emit backing FieldDefs for static field-like events.
         foreach (var ev in structSym.StaticEvents)
         {
@@ -394,14 +437,20 @@ internal sealed class TypeDefEmitter
 
             this.cache.StructFieldDefs[ev.BackingField] = backingHandle;
         }
+    }
 
+    private static void EnsureStructFirstField(int firstFieldRow, ref FieldDefinitionHandle firstField)
+    {
         if (firstField.IsNil)
         {
             // Empty struct: no field rows added; point at next row, which is
             // (firstFieldRow) — same as the next TypeDef's first field row.
             firstField = MetadataTokens.FieldDefinitionHandle(firstFieldRow);
         }
+    }
 
+    private (TypeAttributes Accessibility, StringHandle Namespace) ResolveStructNamespaceAndAccessibility(StructSymbol structSym)
+    {
         // Issue #910: a user type declared inside a class/struct body
         // (structSym.ContainingType != null) is emitted as a CLR nested
         // TypeDef. Nested types carry NestedPublic/NestedAssembly/NestedPrivate
@@ -417,6 +466,11 @@ internal sealed class TypeDefEmitter
             ? default(StringHandle)
             : this.emitCtx.Metadata.GetOrAddString(structSym.PackageName ?? string.Empty);
 
+        return (typeAccessibility, structNamespace);
+    }
+
+    private (TypeAttributes Attributes, EntityHandle BaseType) ResolveStructTypeShape(StructSymbol structSym, TypeAttributes typeAccessibility)
+    {
         TypeAttributes typeAttrs;
         EntityHandle baseType;
         if (structSym.IsClass)
@@ -490,6 +544,11 @@ internal sealed class TypeDefEmitter
             baseType = this.wellKnown.ValueTypeRef;
         }
 
+        return (typeAttrs, baseType);
+    }
+
+    private static TypeAttributes SuppressBeforeFieldInitForStruct(StructSymbol structSym, TypeAttributes typeAttrs)
+    {
         // ADR-0140 / issue #2131: a type with a `shared { init { … } }`
         // static-initializer block has an explicit `.cctor` body, so — like C#
         // when a static constructor is declared — it must NOT be
@@ -500,6 +559,17 @@ internal sealed class TypeDefEmitter
             typeAttrs &= ~TypeAttributes.BeforeFieldInit;
         }
 
+        return typeAttrs;
+    }
+
+    private TypeDefinitionHandle EmitStructTypeDefinition(
+        StructSymbol structSym,
+        TypeAttributes typeAttrs,
+        StringHandle structNamespace,
+        EntityHandle baseType,
+        FieldDefinitionHandle firstField,
+        int methodListRow)
+    {
         // ADR-0087 §3 R1: a generic user type's TypeDef name is mangled with
         // backtick-arity per ECMA-335 II.10.3.1 (`Box` becomes `Box`1`) and one
         // GenericParam row is emitted per type parameter immediately after
@@ -534,11 +604,19 @@ internal sealed class TypeDefEmitter
             this.EmitFixedBufferBackingAttributes(handle2);
         }
 
+        return handle2;
+    }
+
+    private void EmitStructClassLayout(TypeDefinitionHandle handle2, StructSymbol structSym)
+    {
         // ADR-0093 §5: when @StructLayout supplies Pack or Size, write the
         // matching ClassLayout row. A null/0 pack with a 0 size results in
         // no ClassLayout row at all — the runtime defaults apply.
         EmitClassLayout(this.emitCtx, handle2, structSym.LayoutMetadata);
+    }
 
+    private void EmitStructTypeAttributes(TypeDefinitionHandle handle2, StructSymbol structSym)
+    {
         // Phase 3 of #141: user annotations targeting the type land on this TypeDef.
         this.emitUserAttributes(handle2, structSym, AttributeTargetKind.Type);
         this.emitNullableContextOnType(handle2);
