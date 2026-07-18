@@ -91,14 +91,8 @@ internal sealed partial class OverloadResolver
         }
 
         var fixedCount = paramsIndex;
-        var tailCount = arguments.Length - fixedCount;
-        if (tailCount < 0)
-        {
-            // Shouldn't happen: overload resolution rejects expanded-form
-            // candidates whose fixed leading parameters are not all supplied.
-            // Defensive fallback: leave the arguments unchanged.
-            return arguments;
-        }
+        var suppliedFixedCount = Math.Min(arguments.Length, fixedCount);
+        var tailCount = Math.Max(0, arguments.Length - fixedCount);
 
         var packed = ImmutableArray.CreateBuilder<BoundExpression>(tailCount);
         for (var i = 0; i < tailCount; i++)
@@ -110,9 +104,14 @@ internal sealed partial class OverloadResolver
         var arrayExpr = new BoundArrayCreationExpression(callSyntax, sliceType, packed.MoveToImmutable());
 
         var result = ImmutableArray.CreateBuilder<BoundExpression>(parameters.Length);
-        for (var i = 0; i < fixedCount; i++)
+        for (var i = 0; i < suppliedFixedCount; i++)
         {
             result.Add(arguments[i]);
+        }
+
+        for (var i = suppliedFixedCount; i < fixedCount; i++)
+        {
+            result.Add(ConversionClassifier.CreateOptionalDefaultArgument(parameters[i]));
         }
 
         result.Add(arrayExpr);

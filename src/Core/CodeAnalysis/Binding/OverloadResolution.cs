@@ -1089,7 +1089,7 @@ internal static class OverloadResolution
 
         for (var i = argTypes.Count; i < parameters.Length; i++)
         {
-            if (!parameters[i].IsOptional)
+            if (!IsOptionalParameter(parameters[i]))
             {
                 return false;
             }
@@ -2496,7 +2496,7 @@ internal static class OverloadResolution
         // allocates an empty array).
         for (var i = 0; i < paramsIndex; i++)
         {
-            if (!filled[i] && !parameters[i].IsOptional)
+            if (!filled[i] && !IsOptionalParameter(parameters[i]))
             {
                 return;
             }
@@ -2729,7 +2729,7 @@ internal static class OverloadResolution
         // Every unfilled parameter must be optional.
         for (var i = 0; i < parameters.Length; i++)
         {
-            if (!filled[i] && !parameters[i].IsOptional)
+            if (!filled[i] && !IsOptionalParameter(parameters[i]))
             {
                 return false;
             }
@@ -2847,13 +2847,27 @@ internal static class OverloadResolution
     {
         for (var i = suppliedCount; i < parameters.Length; i++)
         {
-            if (!parameters[i].IsOptional)
+            if (!IsOptionalParameter(parameters[i]))
             {
                 return false;
             }
         }
 
         return true;
+    }
+
+    private static bool IsOptionalParameter(ParameterInfo parameter)
+    {
+        if (parameter.IsOptional || parameter.HasDefaultValue)
+        {
+            return true;
+        }
+
+        return parameter.GetCustomAttributesData().Any(static attribute =>
+            attribute.AttributeType.FullName is
+                "System.Runtime.CompilerServices.DecimalConstantAttribute" or
+                "System.Runtime.CompilerServices.DateTimeConstantAttribute" or
+                "System.Runtime.InteropServices.OptionalAttribute");
     }
 
     /// <summary>
@@ -2945,7 +2959,7 @@ internal static class OverloadResolution
         // Phase 2b — prefer the candidate whose parameter types are
         // "more specific" (parameter-by-parameter assignability — a less
         // derived type is implicitly assignable from a more derived one).
-        if (pool.Count > 1)
+        if (pool.Count > 1 && argTypes.Count > 0)
         {
             var mostSpecific = pool
                 .Where(w => pool.All(o => ReferenceEquals(w.Method, o.Method) || IsAtLeastAsSpecific(w.Method, o.Method)))
@@ -3132,14 +3146,16 @@ internal static class OverloadResolution
             return false;
         }
 
-        if (aParamTypes.Length != bParamTypes.Length)
+        var aParameters = a.GetParameters();
+        var bParameters = b.GetParameters();
+        if (aParameters.Length != bParameters.Length)
         {
             return false;
         }
 
-        for (var i = 0; i < aParamTypes.Length; i++)
+        for (var i = 0; i < aParameters.Length; i++)
         {
-            if (!ClrTypeUtilities.AreSame(aParamTypes[i], bParamTypes[i]))
+            if (!ClrTypeUtilities.AreSame(aParameters[i].ParameterType, bParameters[i].ParameterType))
             {
                 return false;
             }

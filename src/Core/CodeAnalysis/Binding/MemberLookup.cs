@@ -2230,38 +2230,42 @@ internal sealed class MemberLookup
     /// <param name="clrTarget">The CLR receiver type whose indexers to probe.</param>
     /// <param name="boundArguments">The pre-bound index argument expressions.</param>
     /// <param name="indexer">The matching <see cref="PropertyInfo"/>, on success.</param>
+    /// <param name="resolvedArguments">The arguments in parameter order, including omitted optional defaults.</param>
     /// <returns><see langword="true"/> when a matching indexer is found.</returns>
-    public bool TryResolveClrIndexer(Type clrTarget, ImmutableArray<BoundExpression> boundArguments, out PropertyInfo indexer)
+    public bool TryResolveClrIndexer(
+        Type clrTarget,
+        ImmutableArray<BoundExpression> boundArguments,
+        out PropertyInfo indexer,
+        out ImmutableArray<BoundExpression> resolvedArguments)
     {
         indexer = null;
+        resolvedArguments = default;
 
-        foreach (var prop in ClrTypeUtilities.SafeGetProperties(clrTarget, BindingFlags.Public | BindingFlags.Instance))
+        var properties = ClrTypeUtilities.SafeGetProperties(clrTarget, BindingFlags.Public | BindingFlags.Instance)
+            .Where(static property => property.GetMethod != null && property.GetIndexParameters().Length > 0)
+            .ToArray();
+        var argTypes = new Type[boundArguments.Length];
+        for (var i = 0; i < boundArguments.Length; i++)
         {
-            var ps = prop.GetIndexParameters();
-            if (ps.Length != boundArguments.Length)
+            argTypes[i] = boundArguments[i].Type?.ClrType;
+            if (argTypes[i] == null)
             {
-                continue;
-            }
-
-            var ok = true;
-            for (var i = 0; i < ps.Length; i++)
-            {
-                var argClr = boundArguments[i].Type?.ClrType;
-                if (argClr == null || !ClrTypeUtilities.IsAssignableByName(ps[i].ParameterType, argClr))
-                {
-                    ok = false;
-                    break;
-                }
-            }
-
-            if (ok)
-            {
-                indexer = prop;
-                return true;
+                return false;
             }
         }
 
-        return false;
+        var resolution = OverloadResolution.Resolve(properties.Select(static property => property.GetMethod).ToArray(), argTypes);
+        if (resolution.Outcome != OverloadResolution.ResolutionOutcome.Resolved)
+        {
+            return false;
+        }
+
+        indexer = properties.First(property => ReferenceEquals(property.GetMethod, resolution.Best));
+        resolvedArguments = OverloadResolver.BuildOrderedCallArguments(
+            boundArguments,
+            resolution.ParameterMapping,
+            resolution.Best.GetParameters());
+        return true;
     }
 
     /// <summary>
