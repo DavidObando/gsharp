@@ -2952,10 +2952,23 @@ public sealed class Binder
             // list, prefer the matching generic definition; without one, prefer
             // the arity-0 type.
             var requestedArity = syntax.HasTypeArguments ? syntax.TypeArguments.Count : 0;
-            element = LookupType(syntax.Identifier.Text, requestedArity);
+            element = LookupType(syntax.Identifier.Text, requestedArity, out var ambiguousAcrossImportedPackages);
             if (element == null)
             {
-                Diagnostics.ReportUndefinedType(syntax.Identifier.Location, syntax.Identifier.Text);
+                // Issue #2455: "ambiguous between imported packages" and "no
+                // match at all" are different failure modes and deserve
+                // different diagnostics — ambiguous means two or more
+                // colliding same-named top-level types are each imported, not
+                // that the type is undefined.
+                if (ambiguousAcrossImportedPackages)
+                {
+                    Diagnostics.ReportAmbiguousSourceType(syntax.Identifier.Location, syntax.Identifier.Text);
+                }
+                else
+                {
+                    Diagnostics.ReportUndefinedType(syntax.Identifier.Location, syntax.Identifier.Text);
+                }
+
                 return null;
             }
 
@@ -5698,7 +5711,27 @@ public sealed class Binder
         => LookupType(name, preferredArity: -1);
 
     private TypeSymbol LookupType(string name, int preferredArity)
+        => LookupType(name, preferredArity, out _);
+
+    /// <summary>
+    /// Issue #2455: same as <see cref="LookupType(string, int)"/>, but also
+    /// reports (via <paramref name="ambiguousAcrossImportedPackages"/>) when
+    /// the bare simple name collides between two or more different top-level
+    /// packages that are EACH visible via a compilation-wide <c>import</c>
+    /// (see <see cref="BoundScope.TryLookupTypeAlias(string, int, out TypeSymbol, out bool)"/>).
+    /// Used by the bare-name branch of <see cref="BindNonNullableTypeClause"/>
+    /// so it can surface a dedicated ambiguity diagnostic (GS0496) instead of
+    /// the generic "cannot find type" (GS0157) that a null result otherwise
+    /// produces.
+    /// </summary>
+    /// <param name="name">The simple type name.</param>
+    /// <param name="preferredArity">The preferred generic arity, or -1 for none.</param>
+    /// <param name="ambiguousAcrossImportedPackages">Whether the miss was specifically a cross-package import ambiguity.</param>
+    /// <returns>The resolved type, or <c>null</c> when unresolved or ambiguous.</returns>
+    private TypeSymbol LookupType(string name, int preferredArity, out bool ambiguousAcrossImportedPackages)
     {
+        ambiguousAcrossImportedPackages = false;
+
         // Issue #944: a parse-recovery artifact (e.g. a malformed type clause
         // with no identifier) can reach here with a null/empty name. Treat it
         // as unresolved and let the caller surface the ordinary GS0113
@@ -5775,9 +5808,19 @@ public sealed class Binder
                 return TypeSymbol.Void;
         }
 
-        if (scope.TryLookupTypeAlias(name, preferredArity, out var aliased))
+        if (scope.TryLookupTypeAlias(name, preferredArity, out var aliased, out ambiguousAcrossImportedPackages))
         {
             return aliased;
+        }
+
+        if (ambiguousAcrossImportedPackages)
+        {
+            // Issue #2455: a genuine cross-package collision where two or more
+            // colliding packages are each imported. Do not fall through to the
+            // CLR-imported-class / alias-import paths below — those cannot
+            // possibly be what a colliding SOURCE type reference means — and
+            // let the caller report the dedicated ambiguity diagnostic.
+            return null;
         }
 
         if (scope.TryLookupImportedClass(name, declaration: null, out var importedClass))

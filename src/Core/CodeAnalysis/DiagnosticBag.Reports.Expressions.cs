@@ -32,6 +32,20 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.UndefinedType, name);
 
     /// <summary>
+    /// Issue #2455: reports that a bare simple type name collides between two
+    /// or more different top-level packages that are EACH visible via an
+    /// explicit <c>import</c> somewhere in the compilation, so its identity
+    /// cannot be determined from the reference alone. Distinct from
+    /// <see cref="ReportUndefinedType"/> (which means no type at all matched)
+    /// the same way <see cref="ReportAmbiguousImportedType"/> is distinct for
+    /// imported CLR types.
+    /// </summary>
+    /// <param name="location">The text location where the error was found.</param>
+    /// <param name="name">The type name.</param>
+    public void ReportAmbiguousSourceType(TextLocation location, string name)
+    => Report(location, DiagnosticDescriptors.AmbiguousSourceType, name);
+
+    /// <summary>
     /// Issue #526: reports that the outer type exists but does not contain a nested
     /// type of the requested name.
     /// </summary>

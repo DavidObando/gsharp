@@ -324,11 +324,13 @@ internal sealed partial class ExpressionBinder
         // alternate interpretation and must not stop peeling (issue #2419).
         ExpressionSyntax current = syntax;
         var peeledAny = false;
+        var peeledSegments = new List<string>();
         while (current is AccessorExpressionSyntax accessor
                && !accessor.IsNullConditional
                && accessor.LeftPart is NameExpressionSyntax leftName
                && IsNamespacePrefixSegment(leftName.IdentifierToken.Text, isLeadingSegment: !peeledAny))
         {
+            peeledSegments.Add(leftName.IdentifierToken.Text);
             current = accessor.RightPart;
             peeledAny = true;
         }
@@ -338,19 +340,40 @@ internal sealed partial class ExpressionBinder
         // the remainder's head names a same-compilation user aggregate source
         // type — a constructor call `Type(...)`, a struct literal `Type{...}`, or
         // a static-member access `Type.Member` / `Type[Args].Member`.
-        if (!peeledAny || !RemainderHeadIsSourceType(current))
+        if (!peeledAny)
         {
             return false;
         }
 
-        // Peel the redundant namespace prefix and bind the remainder by simple
-        // name. Use BindExpressionpublic (not BindExpression) so a void terminal
-        // (a `Ns.Type[Args].VoidMethod(...)` call in an expression-bodied void
-        // member) is not prematurely rejected here — the caller's BindExpression
-        // wrapper applies the correct void-in-value-position check on the
-        // original syntax.
-        result = BindExpressionpublic(current);
-        return true;
+        // Issue #2455: make the exact peeled package name ambient for the
+        // remainder's resolution (both the gate check just below and the
+        // actual bind further down) so a terminal simple name that collides
+        // across two or more independently-imported packages resolves to
+        // THIS specific package's declaration — the qualification's whole
+        // purpose — instead of being second-guessed by the general
+        // import-based ambiguity check.
+        var peeledPackageName = string.Join(".", peeledSegments);
+        var previousHint = scope.SetQualifiedConstructionPackageHint(peeledPackageName);
+        try
+        {
+            if (!RemainderHeadIsSourceType(current))
+            {
+                return false;
+            }
+
+            // Peel the redundant namespace prefix and bind the remainder by simple
+            // name. Use BindExpressionpublic (not BindExpression) so a void
+            // terminal (a `Ns.Type[Args].VoidMethod(...)` call in an
+            // expression-bodied void member) is not prematurely rejected here —
+            // the caller's BindExpression wrapper applies the correct
+            // void-in-value-position check on the original syntax.
+            result = BindExpressionpublic(current);
+            return true;
+        }
+        finally
+        {
+            scope.SetQualifiedConstructionPackageHint(previousHint);
+        }
     }
 
     /// <summary>
