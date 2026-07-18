@@ -34,6 +34,7 @@ public class Issue2459NestedImportedClrMemberTests
             {
                 public int Field = 1;
                 public int Property { get; } = 2;
+                public event System.Action Changed;
                 public int Method() => 3;
             }
             """);
@@ -50,6 +51,7 @@ public class Issue2459NestedImportedClrMemberTests
 
                 func Read() int32 {
                     let a = A()
+                    a.Field.Changed += () -> { }
                     return a.Field.Field + a.Property.Property + a.Field.Method()
                 }
                 """)));
