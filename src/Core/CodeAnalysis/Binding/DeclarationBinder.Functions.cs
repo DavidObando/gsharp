@@ -806,8 +806,26 @@ internal sealed partial class DeclarationBinder
             return ImmutableArray<TypeParameterSymbol>.Empty;
         }
 
+        var symbols = CreateTypeParameterSymbols(syntax);
+
+        // Publish the bare symbols into the binder's type-parameter scope so the
+        // constraint type clauses bound in pass 2 can see them. Enclosing type
+        // parameters (e.g. for a generic method declared inside a generic type)
+        // remain visible because we copy the previous map.
+        onBareSymbolsPublished?.Invoke(symbols);
+        ResolveTypeParameterConstraints(syntax, symbols);
+        return symbols;
+    }
+
+    private ImmutableArray<TypeParameterSymbol> CreateTypeParameterSymbols(TypeParameterListSyntax syntax)
+    {
+        if (syntax == null)
+        {
+            return ImmutableArray<TypeParameterSymbol>.Empty;
+        }
+
         var count = syntax.Parameters.Count;
-        var symbols = new TypeParameterSymbol[count];
+        var symbols = ImmutableArray.CreateBuilder<TypeParameterSymbol>(count);
         var seen = new HashSet<string>();
 
         // Pass 1: create the bare type-parameter symbols (name, ordinal, variance)
@@ -830,8 +848,22 @@ internal sealed partial class DeclarationBinder
                 variance = p.VarianceModifier.Text == "in" ? TypeParameterVariance.In : TypeParameterVariance.Out;
             }
 
-            symbols[i] = new TypeParameterSymbol(name, i, TypeParameterConstraint.Any, variance);
+            symbols.Add(new TypeParameterSymbol(name, i, TypeParameterConstraint.Any, variance));
         }
+
+        return symbols.MoveToImmutable();
+    }
+
+    private void ResolveTypeParameterConstraints(
+        TypeParameterListSyntax syntax,
+        ImmutableArray<TypeParameterSymbol> symbols)
+    {
+        if (syntax == null)
+        {
+            return;
+        }
+
+        var count = syntax.Parameters.Count;
 
         // Publish the bare symbols into the binder's type-parameter scope so the
         // constraint type clauses bound in pass 2 can see them. Enclosing type
@@ -845,12 +877,6 @@ internal sealed partial class DeclarationBinder
         {
             constraintScope[s.Name] = s;
         }
-
-        // Issue #1056: let the caller register the declaring type's name shell
-        // (with these bare type parameters attached) before constraints resolve,
-        // so a self-referential base-class constraint resolves the type's own
-        // name and arity.
-        onBareSymbolsPublished?.Invoke(ImmutableArray.Create(symbols));
 
         binderCtx.CurrentTypeParameters = constraintScope;
         try
@@ -945,8 +971,6 @@ internal sealed partial class DeclarationBinder
         {
             binderCtx.CurrentTypeParameters = previousTypeParameters;
         }
-
-        return ImmutableArray.Create(symbols);
     }
 
     /// <summary>

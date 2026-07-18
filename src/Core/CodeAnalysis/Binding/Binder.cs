@@ -768,16 +768,24 @@ public sealed class Binder
             RunWithPackage(owningPackage, typeAlias.SyntaxTree, () => binder.declarations.BindTypeAliasDeclaration(typeAlias, owningPackage));
         }
 
-        // ADR-0059 / issue #255: declare named delegate types BEFORE
-        // interfaces/structs/enums so that interface methods, struct fields,
-        // event handler types, etc. can reference a named delegate by name.
+        // Declare named delegate type-name shells before other type bodies so
+        // their members can reference delegates. Signatures are bound after all
+        // interface/enum/struct shells exist, making delegate constraints,
+        // parameters, and returns independent of syntax-tree order.
         var delegateDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
-                                              .OfType<DelegateDeclarationSyntax>();
+                                              .OfType<DelegateDeclarationSyntax>()
+                                              .ToList();
+        var declaredDelegates = new List<(DelegateDeclarationSyntax Syntax, DelegateTypeSymbol Symbol)>();
         foreach (var delegateSyntax in delegateDeclarations)
         {
             var owningPackage = packageByTree[delegateSyntax.SyntaxTree];
             binder.declarations.ValidateTopLevelProtected(delegateSyntax.AccessibilityModifier);
-            RunWithPackage(owningPackage, delegateSyntax.SyntaxTree, () => binder.declarations.BindDelegateDeclaration(delegateSyntax, owningPackage));
+            DelegateTypeSymbol sym = null;
+            RunWithPackage(owningPackage, delegateSyntax.SyntaxTree, () => sym = binder.declarations.DeclareDelegateSymbol(delegateSyntax, owningPackage));
+            if (sym != null)
+            {
+                declaredDelegates.Add((delegateSyntax, sym));
+            }
         }
 
         var interfaceDeclarations = PartialTypeMerger.MergeInterfaces(
@@ -864,6 +872,12 @@ public sealed class Binder
                 declaredStructs.Add((structSyntax, structSymbol));
                 syntheticDeclToSymbol[structSyntax] = structSymbol;
             }
+        }
+
+        foreach (var (delegateSyntax, delegateSymbol) in declaredDelegates)
+        {
+            var owningPackage = packageByTree[delegateSyntax.SyntaxTree];
+            RunWithPackage(owningPackage, delegateSyntax.SyntaxTree, () => binder.declarations.BindDelegateDeclarationBody(delegateSyntax, delegateSymbol));
         }
 
         // ADR-0146 / issue #2243: publish the rich anonymous-object literal →
