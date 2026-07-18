@@ -79,7 +79,7 @@ Implicit-field reads (`_name` resolving to `this._name`) are already separately 
 The narrowing is dropped under any of these conditions, all of which already had infrastructure in place for the nullable-narrowing case:
 
 - **Reassignment**: an assignment to the narrowed variable inside the narrowed region drops the narrowing for that variable from every active frame (`InvalidateNarrowingsForAssignedVariables`). The narrowing is *not* restored after the assignment — Kotlin's same rule.
-- **Closure capture**: when the narrowed region contains a lambda or local-function literal that captures the narrowed variable, the narrowing is dropped before binding the lambda body and is restored once binding leaves the lambda. The capturing closure binds the variable at its declared type, so the closure body sees the original type even if the surrounding scope was narrowed.
+- **Closure capture**: when the narrowed region contains a lambda or local-function literal that captures the narrowed variable, the narrowing is dropped before binding the lambda body **unless** the captured binding is a read-only, plain-variable root — see the issue #2442 addendum below, which supersedes the blanket "always dropped" rule stated in the original ADR text.
 - **`var` with a structural risk of mutation**: for an immutable binding (`let` local, primary-ctor parameter passed by value, etc.) the narrowing is unconditional. For a mutable binding (`var` local) the narrowing applies but is dropped the first time the binder sees an assignment to that variable inside the narrowed region. This is the same conservative rule that nullable narrowing already uses.
 
 ### Combination with the existing nullable-narrowing path
@@ -118,7 +118,7 @@ No new diagnostic is introduced. The previously-emitted `GS0159` (member-not-fou
 - **Binder — early-exit narrowing propagation**. `BindBlockStatements` already keeps a `memberNotNullFrame` that survives across the block's statements. After binding each top-level statement, if the statement is a `BoundIfStatement` whose then-branch unconditionally exits the enclosing block (return / throw / unconditional goto, including `break` / `continue` which lower to goto, or a block whose last statement does any of those), the else-frame from the if-condition's classifier is merged into the persistent frame so that subsequent reads in this block see the narrowing. The else-frame is computed once at if-binding time and stored on the resulting `BoundIfStatement` via a per-binder side-table keyed by node identity, so the block-walker does not need to re-classify the condition.
 - **Emit — narrowed variable read**. `MethodBodyEmitter.EmitExpression(BoundVariableExpression)` is extended: after `EmitLoadVariable(v.Variable)`, if `v.NarrowedType` is non-null and the narrowed CLR type differs from the variable's declared CLR type, the emitter inserts a single conversion opcode — `unbox.any T` when the narrowed type is a value type (the boxed reference must be unboxed back to its native value-type representation) and `castclass T` for any reference-type narrowing. The cast is guaranteed safe because the binder placed it inside a region where an `is` test already verified the runtime type. This is the same single instruction the C# compiler emits at the use site for `if (x is Y y) { … }`; the only difference is that G# does not introduce a new local for `y` — the cast happens inline on each read.
 - **Bound tree**. No new bound-node kind is introduced. The narrowing is recorded on the existing `BoundVariableExpression.NarrowedType` slot, which the rewriter (`RewriteVariableExpression`), walker (`VisitVariableExpression`), printer (`WriteVariableExpression`), and spiller (`SpillSequenceSpiller`) already handle. The four bound-node exhaustiveness allowlists therefore require no updates.
-- **Closures / lambdas**. The lambda binder pushes a *new* `NarrowedVariables` frame stack when entering a lambda body. The outer frames are saved and restored around the lambda binding so the lambda body binds the captured variable at its declared type. This matches Kotlin's behaviour: a smart cast does not survive into a closure that captures the narrowed variable.
+- **Closures / lambdas**. The lambda binder pushes a *new* `NarrowedVariables` frame stack when entering a lambda body. The outer frames are saved and, prior to issue #2442, unconditionally cleared for the lambda body and restored once binding leaves the lambda. **Issue #2442 amends this**: see the addendum below — a read-only, plain-variable narrowing frame now survives into the new frame stack instead of being cleared.
 
 ## Examples
 
@@ -357,6 +357,94 @@ func CallInvalidates(b Box) {
     if b.Pet is Dog {
         SomethingElse()
         b.Pet.Bark()        // rejected — call may have mutated reachable state
+    }
+}
+```
+
+## Addendum — issue #2442 (narrowing survives closure capture for read-only bindings)
+
+- **Status**: Accepted (addendum)
+- **Related**: parent issue [#706](https://github.com/DavidObando/gsharp/issues/706), this addendum's issue [#2442](https://github.com/DavidObando/gsharp/issues/2442), the #712 and #1180 addenda above.
+
+The original ADR text and both prior addenda state that closure capture unconditionally drops every narrowing: "the narrowing is dropped before binding the lambda body ... the capturing closure binds the variable at its declared type". This addendum supersedes that blanket rule for one specific, provably-sound case: a nil-guard or type-test narrowing on a **read-only, plain-variable root** (no member access) now survives into a captured lambda, local-function literal, or async lambda body.
+
+### Motivation
+
+`if convertAction != nil { Task.Run(() -> convertAction(data)) }`, where `convertAction` is a nil-guarded `let`/by-value parameter of a nullable delegate/function type, is an extremely common pattern (fire-and-forget work, deferred callbacks, `Task.Run`/`go` bodies). Because a `let` local or by-value parameter can never be reassigned once bound, the guard's non-nil proof is still valid for every read reachable from the closure — there is no execution path between the guard and the closure's eventual invocation (however delayed) on which the binding could change. Unconditionally dropping the narrowing here was unnecessarily conservative and produced a spurious `GS0131`/`GS0159` diagnostic cascade for code that is, in fact, sound. Chasing this down as an Oahu-specific special case was explicitly rejected in favor of a general, symbol-mutability-based rule.
+
+### Rule
+
+When entering a lambda / local-function / async-lambda body, each active narrowing frame entry `variable → narrowedType` is preserved into the new (otherwise-cleared) frame stack **if and only if**:
+
+- The narrowing key has **no member-access path** (`AccessPath.HasMembers == false` — see the #1180 addendum). Member-bearing paths (`b.Pet`, `o.Box.Pet`, `self.field`, etc.) are *never* preserved across closure capture, regardless of the root's mutability — a receiver captured by the closure could still be mutated through an alias, and re-validating a member chain across a capture boundary is out of scope for this addendum.
+- The root variable is `IsReadOnly` (a `let` local, or a by-value/`in` parameter — anything the binder already tracks as never assignable after initialization). `var` locals, `ref`/`out` parameters, and any other mutable root are excluded unconditionally.
+
+This is deliberately **not** keyed on symbol *kind* (e.g. "parameters always narrow") — a mutable `var` parameter alias, if the language ever added one, would still be excluded, because the test is `IsReadOnly`, not `is ParameterSymbol`. It is also deliberately conservative about *when* the check is performed: `IsReadOnly` reflects whether the binder can ever observe an assignment to that variable anywhere in the function, so a `let` local or by-value parameter that is written to nowhere in the enclosing function qualifies, while a `var` local reassigned on a completely different, non-overlapping path still does not, because the binder does not attempt path-sensitive "the write happens after every possible closure invocation" reasoning — it conservatively treats *any* write to the root anywhere as disqualifying.
+
+Concretely, this covers:
+
+- A bare nil-guarded `let`/by-value-parameter binding of any callable type — a native G# function type (`(...) -> T`), a same-compilation named delegate (`type F = delegate func(...) T`), a generic named delegate, or an imported CLR delegate (`Func<...>`/custom `delegate`) — invoked directly or indirectly inside a nested lambda, a local function, an async lambda, an escaping/returned closure, or multiple sibling closures capturing the same binding.
+- Conditional invocation and branch-only narrowing carried into the closure (the guard may be nested inside further `if`/branch structure before the closure is created, as long as no write to the root occurs on the path reaching the closure's declaration).
+
+It explicitly does **not** cover, and these continue to drop narrowing (or were never narrowed) exactly as before:
+
+- `var` locals reassigned before or after closure creation (including across a loop).
+- `ref`/`out` parameters.
+- Any member-access path (`self.field`, `b.Pet`, etc.), even when every link is itself individually stable per the #1180 addendum — the combination of member-path stability *and* closure capture is out of scope for this addendum.
+- Captured aliases introduced by boxing (see *Implementation* below) do not change this: boxing is a storage mechanism for write-visibility across sibling closures, not a relaxation of the mutability test that already ran at bind time.
+
+### Soundness argument
+
+A `let` local or by-value/`in` parameter is, by construction, assigned exactly once (at declaration/parameter-binding) and never reassigned for the remainder of its enclosing function — `VariableSymbol.IsReadOnly` is exactly this invariant, already relied upon elsewhere in the binder (e.g. definite-assignment and capture-boxing skip these variables for by-reference semantics). Because there is no program point between the nil-guard and any later read of the binding (including a read from inside a closure invoked synchronously, asynchronously, or after the declaring function has returned) at which the binding's value could change, the guard's non-nil (or type-test) proof remains valid for every such read. This holds regardless of *when* the closure is actually invoked — the value in the binding's storage cell is fixed for the binding's entire lifetime, so no amount of scheduling delay, thread hand-off, or async suspension can invalidate it. Member-access paths are excluded because the same argument does not hold for them: even a `let`-rooted, all-stable-links member path reads through a receiver the closure also captures, and nothing prevents another alias of that receiver — reachable from a different call site the binder cannot see — from mutating a `var` link further down the chain between the guard and the closure's eventual invocation.
+
+### Implementation
+
+- **Binder** (`LambdaBinder.FilterNarrowingsSurvivingClosureCapture`): both closure-entry sites (the block-bodied function-literal path and the arrow-lambda path) now filter the current `NarrowedVariables` frames through this predicate instead of unconditionally clearing them, and push the filtered result as the new frame for the lambda body (still restoring the outer, unfiltered frames on exit, as before).
+- **Emit — capture boxing** (`CaptureBoxingRewriter.RewriteVariableExpression`): issue #523's capture-boxing pass unconditionally hoists every captured local/parameter (mutable or not) into a shared heap cell so multiple closures observe each other's writes; this pass runs before closure synthesis and previously discarded a captured `BoundVariableExpression`'s `NarrowedType` when rewriting the read into a box-field access. It now forwards `NarrowedType` onto the rewritten `BoundFieldAccessExpression` (which already had a `NarrowedType` slot from issue #208's member-narrowing support), so a narrowing proven sound at bind time is not silently lost by this unrelated storage-mechanism rewrite.
+- **Emit — closure display class** (`ClosureEmitter.CaptureRewriter.RewriteVariableExpression`): the closure-synthesis capture rewrite (which runs after boxing and replaces a captured-variable read with a `this.<field>` access on the synthesized display class) likewise now forwards `NarrowedType`, for the same reason.
+- These two emit-side changes were both necessary and are tightly coupled to this fix: once the binder change makes a narrowed, same-compilation named-delegate call newly reachable from inside a closure body, `EmitIndirectCall`'s existing `call.Target.Type is DelegateTypeSymbol` dispatch (in place since ADR-0059 / issue #255, for the direct, non-closure case) depends on the rewritten capture expression still reporting the narrowed (non-nullable, named-delegate) type; without forwarding `NarrowedType` through both rewrites, the dispatch silently fell back to the type-erased `Func<...>`/`Action<...>` `Invoke` overload and produced IL that failed ILVerify (`StackUnexpected`, wrong `Invoke` signature) — a previously-unreachable code path this fix newly exercises, not a pre-existing unrelated defect.
+
+### Examples (addendum)
+
+```gs
+type ConvertFunc = delegate func(data []uint8) []uint8
+
+class DownloadDecryptJob {
+    var runningTasks List[Task] = List[Task]()
+
+    func Convert(data []uint8, convertAction ConvertFunc?) {
+        if convertAction != nil {
+            // `convertAction` is a by-value parameter (IsReadOnly) with no
+            // member path — the narrowing to `ConvertFunc` now survives into
+            // the closure, so this call binds without GS0131/GS0159.
+            runningTasks.Add(Task.Run(() -> {
+                let result = convertAction(data)
+                Console.WriteLine(result.Length)
+            }))
+        }
+    }
+}
+
+// NOT narrowed — `var` root reassigned in the enclosing function
+// (the write need not be reachable before the closure to disqualify it;
+// IsReadOnly reflects "never reassigned anywhere in this function").
+func Retry(convertAction ConvertFunc?) {
+    if convertAction != nil {
+        var handler = convertAction
+        let f = () -> { handler(nil) }   // rejected — `handler` is `var`.
+        handler = nil
+        f()
+    }
+}
+
+// NOT narrowed — member-access path, even though `self` is stable and the
+// field is read-only; member paths never survive closure capture.
+class Job {
+    let convertAction ConvertFunc?
+    func Run(data []uint8) {
+        if self.convertAction != nil {
+            let f = () -> { self.convertAction(data) }  // rejected — GS0131.
+        }
     }
 }
 ```

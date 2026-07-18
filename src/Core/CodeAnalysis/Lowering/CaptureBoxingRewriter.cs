@@ -566,11 +566,27 @@ internal static class CaptureBoxingRewriter
         {
             if (this.boxInfo.TryGetValue(node.Variable, out var bi))
             {
+                // Issue #2442: forward a bind-time narrowed type (see
+                // LambdaBinder's FilterNarrowingsSurvivingClosureCapture) onto
+                // the rewritten box-field access. Boxing runs before
+                // ClosureEmitter's own capture rewrite and unconditionally
+                // wraps every captured local/parameter — including read-only
+                // bindings the binder has already proven safe to narrow
+                // across closure capture — in a heap cell purely for
+                // write-visibility semantics (see class remarks above); it
+                // does not itself introduce any new mutation. Dropping
+                // NarrowedType here would make EmitIndirectCall's
+                // `call.Target.Type is DelegateTypeSymbol` dispatch see the
+                // box field's declared (possibly nullable) type instead,
+                // selecting the wrong Invoke overload and producing invalid
+                // IL (ILVerify StackUnexpected) for a narrowed named-delegate
+                // call inside a closure.
                 return new BoundFieldAccessExpression(
                     null,
                     new BoundVariableExpression(null, bi.BoxLocal),
                     bi.BoxClass,
-                    bi.BoxField);
+                    bi.BoxField,
+                    node.NarrowedType);
             }
 
             return node;

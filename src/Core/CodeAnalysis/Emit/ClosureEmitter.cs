@@ -537,11 +537,29 @@ internal sealed class ClosureEmitter
         {
             if (this.captureFields.TryGetValue(node.Variable, out var field))
             {
+                // Issue #2442: a read-only narrowed binding (see LambdaBinder's
+                // FilterNarrowingsSurvivingClosureCapture) carries a non-null
+                // NarrowedType on the pre-rewrite BoundVariableExpression — e.g.
+                // a nil-guarded named-delegate parameter narrowed from `T?` to
+                // `T` before the closure captured it. The synthesized capture
+                // field is always declared with the ORIGINAL (possibly
+                // nullable) variable type, so without forwarding NarrowedType
+                // here the rewritten field access reverts to that nullable
+                // view. EmitIndirectCall keys its named-delegate-vs-type-erased
+                // Invoke dispatch on the bound target expression's Type, so
+                // losing the narrowing here — despite it having been proven
+                // sound at bind time — causes the wrong Invoke overload to be
+                // emitted and invalid IL (ILVerify StackUnexpected). Forwarding
+                // the narrowed type mirrors the existing narrowed-field-access
+                // mechanism (issue #208) and keeps the field handle itself
+                // unchanged, so this only affects the static type surfaced to
+                // later phases, not runtime storage.
                 return new BoundFieldAccessExpression(
                     null,
                     new BoundVariableExpression(null, this.thisParam),
                     this.closureClass,
-                    field);
+                    field,
+                    node.NarrowedType);
             }
 
             return node;
