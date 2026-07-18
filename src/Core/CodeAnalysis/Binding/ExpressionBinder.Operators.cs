@@ -236,6 +236,14 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        if (operand is BoundBlockExpression block)
+        {
+            return new BoundBlockExpression(
+                null,
+                block.Statements,
+                new BoundAddressOfExpression(null, block.Expression, unmanaged: binderCtx.InUnsafeContext));
+        }
+
         return new BoundAddressOfExpression(null, operand, unmanaged: binderCtx.InUnsafeContext);
     }
 

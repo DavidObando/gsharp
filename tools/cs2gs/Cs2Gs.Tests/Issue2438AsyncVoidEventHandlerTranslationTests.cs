@@ -439,14 +439,16 @@ namespace Demo
     public sealed class Authorize
     {
         public event EventHandler SettingsChanged;
+        private readonly TaskCompletionSource<bool> completion = new TaskCompletionSource<bool>();
 
         public async Task WriteConfigurationAsync()
         {
-            await Task.Delay(1);
+            await completion.Task;
             Console.WriteLine(""wrote-configuration"");
         }
 
         public void Raise() => SettingsChanged?.Invoke(this, EventArgs.Empty);
+        public void Complete() => completion.SetResult(true);
     }
 
     public sealed class AudibleClient
@@ -464,6 +466,7 @@ namespace Demo
         {
             Authorize.Raise();
             Console.WriteLine(""fire-returned"");
+            Authorize.Complete();
             Thread.Sleep(300);
         }
     }

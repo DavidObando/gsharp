@@ -329,7 +329,12 @@ internal sealed partial class StatementBinder
                 Diagnostics.ReportRefReturnEscapesLocalScope(syntax.Expression.Location);
             }
 
-            expression = new BoundAddressOfExpression(syntax.Expression, expression);
+            expression = expression is BoundBlockExpression block
+                ? new BoundBlockExpression(
+                    syntax.Expression,
+                    block.Statements,
+                    new BoundAddressOfExpression(syntax.Expression, block.Expression))
+                : new BoundAddressOfExpression(syntax.Expression, expression);
         }
 
         return new BoundReturnStatement(syntax, expression, isRefReturn);
@@ -351,6 +356,8 @@ internal sealed partial class StatementBinder
                 return true;
             case BoundDereferenceExpression:
                 return true;
+            case BoundBlockExpression block:
+                return IsLvalueForRefReturn(block.Expression);
             default:
                 return false;
         }
@@ -406,6 +413,8 @@ internal sealed partial class StatementBinder
                 // *p has whatever scope `p` itself yields; conservative — if p is a local
                 // variable of *T, its current value points into the local frame.
                 return HasFunctionLocalRefScope(deref.Operand);
+            case BoundBlockExpression block:
+                return HasFunctionLocalRefScope(block.Expression);
             default:
                 return true;
         }

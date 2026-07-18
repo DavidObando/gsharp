@@ -46,7 +46,11 @@ public partial class Parser
         {
             var identifierToken = NextToken();
             var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
-            var index = ParseExpression();
+
+            // Issue #2465: use the same index-context parser as ordinary and
+            // compound element access so a leading `^` is a from-end marker,
+            // not the one's-complement unary operator.
+            var index = ParseIndexArgument();
             var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
             var equalsToken = MatchToken(SyntaxKind.EqualsToken);
             var value = ParseAssignmentExpression();
