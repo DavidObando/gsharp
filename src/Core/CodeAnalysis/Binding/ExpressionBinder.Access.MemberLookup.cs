@@ -478,13 +478,18 @@ internal sealed partial class ExpressionBinder
 
                     return BindExtensionMethodGroupOrError(receiver, ne);
                 }
-                else if (receiver != null && receiver.Type != null && receiver.Type is not NullableTypeSymbol && receiver.Type.ClrType != null)
+                else if (receiver != null
+                    && receiver.Type?.ClrType != null
+                    && (receiver.Type is not NullableTypeSymbol
+                        || receiver is BoundClrPropertyAccessExpression))
                 {
                     // Phase 4 exit: read a public instance property or field on
                     // a CLR receiver (e.g. `lst.Count`, `sb.Length`,
                     // `kvp.Key`). Static members are reached through
-                    // ImportedClassSymbol; this path covers instances. Nullable
-                    // receivers must be narrowed or use `?.` before this path.
+                    // ImportedClassSymbol; this path covers instances. Permit a
+                    // chained CLR member whose oblivious metadata made its
+                    // result nullable, while explicit nullable variables still
+                    // require narrowing or `?.`.
                     var clrReceiverType = receiver.Type.ClrType;
                     var memberName = ne.IdentifierToken.Text;
 
