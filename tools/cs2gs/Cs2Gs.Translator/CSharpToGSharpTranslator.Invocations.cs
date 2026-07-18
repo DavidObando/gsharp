@@ -120,18 +120,20 @@ public sealed partial class CSharpToGSharpTranslator
             // take the positional path above).
             if (invocation.Expression is MemberAccessExpressionSyntax staticExtMember
                 && staticExtMember.Expression is TypeSyntax or IdentifierNameSyntax or MemberAccessExpressionSyntax
-                && this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol
+                && this.context.SemanticModel.GetOperation(invocation) is IInvocationOperation staticExtOperation
+                && staticExtOperation.TargetMethod is IMethodSymbol
                     { IsExtensionMethod: true, MethodKind: not MethodKind.ReducedExtension } staticExt
                 && staticExt.Parameters.Length >= 1
                 && !(staticExt.ReducedFrom ?? staticExt).DeclaringSyntaxReferences.IsDefaultOrEmpty
                 && (staticExt.Parameters[0].Type?.TypeKind ?? TypeKind.Unknown) != TypeKind.Enum
-                && this.context.SemanticModel.GetSymbolInfo(staticExtMember.Expression).Symbol is not (IParameterSymbol or ILocalSymbol or IFieldSymbol or IPropertySymbol)
-                && invocation.ArgumentList.Arguments.Count >= 1)
+                && this.context.SemanticModel.GetSymbolInfo(staticExtMember.Expression).Symbol is INamedTypeSymbol
+                && TryGetExplicitExtensionReceiverArgument(
+                    staticExtOperation,
+                    staticExt,
+                    out IArgumentOperation staticExtReceiverArgument))
             {
-                GExpression staticExtReceiver =
-                    this.TranslateExpression(invocation.ArgumentList.Arguments[0].Expression);
-                var staticExtRest = this.TranslateArguments(
-                    SyntaxFactory.SeparatedList(invocation.ArgumentList.Arguments.Skip(1)));
+                GExpression staticExtReceiver = this.TranslateStaticExtensionReceiver(staticExtReceiverArgument);
+                var staticExtRest = this.TranslateStaticExtensionTrailingArguments(invocation);
                 IReadOnlyList<GTypeReference> staticExtTypeArgs =
                     staticExtMember.Name is GenericNameSyntax staticExtGeneric
                         ? this.MapTypeArguments(staticExtGeneric)
@@ -159,17 +161,19 @@ public sealed partial class CSharpToGSharpTranslator
             // and enum receivers keep the positional `Owner.M(x)` helper form.
             if (invocation.Expression is SimpleNameSyntax bareExtName
                 && bareExtName is IdentifierNameSyntax or GenericNameSyntax
-                && this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol
+                && this.context.SemanticModel.GetOperation(invocation) is IInvocationOperation bareExtOperation
+                && bareExtOperation.TargetMethod is IMethodSymbol
                     { IsExtensionMethod: true, MethodKind: not MethodKind.ReducedExtension } bareExt
                 && bareExt.Parameters.Length >= 1
                 && !(bareExt.ReducedFrom ?? bareExt).DeclaringSyntaxReferences.IsDefaultOrEmpty
                 && (bareExt.Parameters[0].Type?.TypeKind ?? TypeKind.Unknown) != TypeKind.Enum
-                && invocation.ArgumentList.Arguments.Count >= 1)
+                && TryGetExplicitExtensionReceiverArgument(
+                    bareExtOperation,
+                    bareExt,
+                    out IArgumentOperation bareExtReceiverArgument))
             {
-                GExpression bareExtReceiver =
-                    this.TranslateExpression(invocation.ArgumentList.Arguments[0].Expression);
-                var bareExtRest = this.TranslateArguments(
-                    SyntaxFactory.SeparatedList(invocation.ArgumentList.Arguments.Skip(1)));
+                GExpression bareExtReceiver = this.TranslateStaticExtensionReceiver(bareExtReceiverArgument);
+                var bareExtRest = this.TranslateStaticExtensionTrailingArguments(invocation);
                 IReadOnlyList<GTypeReference> bareExtTypeArgs =
                     bareExtName is GenericNameSyntax bareExtGeneric
                         ? this.MapTypeArguments(bareExtGeneric)
@@ -261,6 +265,59 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return new InvocationExpression(target, arguments, typeArguments);
+        }
+
+        private static bool TryGetExplicitExtensionReceiverArgument(
+            IInvocationOperation invocation,
+            IMethodSymbol method,
+            out IArgumentOperation receiver)
+        {
+            IParameterSymbol receiverParameter = (method.ReducedFrom ?? method).Parameters[0];
+            receiver = invocation.Arguments.FirstOrDefault(argument =>
+                argument.ArgumentKind != ArgumentKind.DefaultValue
+                && argument.Syntax is ArgumentSyntax
+                && SymbolEqualityComparer.Default.Equals(
+                    argument.Parameter?.OriginalDefinition,
+                    receiverParameter.OriginalDefinition));
+            return receiver != null;
+        }
+
+        private GExpression TranslateStaticExtensionReceiver(IArgumentOperation receiverArgument)
+        {
+            var translated = this.TranslateExpression(((ArgumentSyntax)receiverArgument.Syntax).Expression);
+            IOperation value = receiverArgument.Value;
+
+            while (value is IConversionOperation { IsImplicit: true } implicitConversion)
+            {
+                value = implicitConversion.Operand;
+            }
+
+            if (value is IConditionalAccessOperation
+                or ICoalesceOperation
+                or IConditionalOperation
+                or IAwaitOperation
+                or IConversionOperation { IsImplicit: false })
+            {
+                return translated is ParenthesizedExpression
+                    ? translated
+                    : new ParenthesizedExpression(translated);
+            }
+
+            return ParenthesizeIfBareNumericLiteral(translated);
+        }
+
+        private List<GExpression> TranslateStaticExtensionTrailingArguments(
+            InvocationExpressionSyntax invocation)
+        {
+            List<GExpression> translated = this.TranslateCallArguments(
+                invocation,
+                invocation.ArgumentList.Arguments);
+            if (translated.Count != 0)
+            {
+                translated.RemoveAt(0);
+            }
+
+            return translated;
         }
 
         // Resolves the receiver of a delegate/event `.Invoke(...)` call to the value
