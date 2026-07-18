@@ -785,11 +785,106 @@ internal sealed class ReflectionMetadataEmitter
         emitter.EmitCore(peStream, asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult);
     }
 
+    // Phase records retain the original mutable collection instances so row
+    // planning and emission share the same handles, counters, and ordering.
+    private readonly record struct GeneratedTypeSet(
+        List<BoundFunctionLiteralExpression> LambdaLiterals,
+        ImmutableArray<StructSymbol> AllAggregates,
+        List<StructSymbol> AsyncStateMachineStructs,
+        Dictionary<StructSymbol, AsyncStateMachinePlan> AsyncStateMachinePlansByStruct);
+
+    private readonly record struct NestedTypeOrder(
+        List<TypeSymbol> Types,
+        Dictionary<TypeSymbol, int> FirstFieldRows,
+        Dictionary<TypeSymbol, int> FirstMethodRows);
+
+    private readonly record struct AggregatePartitions(
+        List<StructSymbol> NonStateMachineClasses,
+        List<StructSymbol> StateMachineClasses,
+        List<StructSymbol> NonStateMachineStructs,
+        List<StructSymbol> StateMachineStructs);
+
+    private readonly record struct TopLevelTypeOrder(
+        List<InterfaceSymbol> Interfaces,
+        List<StructSymbol> Classes,
+        List<StructSymbol> Structs,
+        List<EnumSymbol> Enums);
+
+    private readonly record struct AggregateTypeLayout(
+        AggregatePartitions Aggregates,
+        TopLevelTypeOrder TopLevel,
+        ImmutableArray<EnumSymbol> AllEnums,
+        NestedTypeOrder NestedTypes);
+
+    private readonly record struct FieldRowPlan(
+        Dictionary<InterfaceSymbol, int> InterfaceFirstRows,
+        Dictionary<StructSymbol, int> AggregateFirstRows,
+        Dictionary<EnumSymbol, int> EnumFirstRows,
+        ImmutableArray<GlobalVariableSymbol> Globals,
+        int ProgramFirstRow,
+        int ModuleFirstRow);
+
+    private readonly record struct TypeMethodRows(
+        Dictionary<InterfaceSymbol, int> InterfaceFirstRows,
+        Dictionary<DelegateTypeSymbol, int> DelegateConstructorRows,
+        Dictionary<StructSymbol, int> ClassConstructorRows,
+        Dictionary<StructSymbol, int> ClassPrimaryConstructorRows,
+        Dictionary<FunctionSymbol, MethodDefinitionHandle> AggregateMethodHandles,
+        Dictionary<StructSymbol, int> StructFirstRows);
+
+    private readonly record struct MethodRowPlan(
+        ImmutableArray<DelegateTypeSymbol> Delegates,
+        TypeMethodRows TypeRows,
+        bool EntryPointIsClassOwned,
+        int FirstNestedRow,
+        int FirstPackageConstructorRow);
+
+    private readonly record struct PackageMethodPlan(
+        ImmutableArray<PackageSymbol> Packages,
+        Dictionary<PackageSymbol, List<FunctionSymbol>> FunctionsByPackage,
+        PackageSymbol EntryPointPackage,
+        Dictionary<PackageSymbol, int> ConstructorRows,
+        MethodDefinitionHandle EntryPointHandle);
+
+    private readonly record struct DebugArtifacts(
+        BlobBuilder PdbBlob,
+        DebugDirectoryBuilder DebugDirectory,
+        bool PdbEnabled,
+        bool IsEmbedded);
+
     private void EmitCore(
         Stream peStream,
         AsyncStateMachineRewriteResult asyncRewriteResult = null,
         IteratorRewriteResult iteratorRewriteResult = null,
         Lowering.Iterators.AsyncIteratorRewriteResult asyncIteratorRewriteResult = null)
+    {
+        this.InitializePortablePdb();
+        this.ResolveCoreTypesAndWireEmitters();
+        this.RegisterRewriteResults(asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult);
+
+        var lambdaLiterals = this.SynthesizeClosuresAndStateMachines();
+        this.RegisterGeneratedGenericRemaps();
+        var generatedTypes = this.MaterializeGeneratedTypes(lambdaLiterals);
+        var aggregateTypes = this.DiscoverAndOrderAggregateTypes(generatedTypes);
+        var fieldRows = this.PlanFieldRows(aggregateTypes);
+        var methodRows = this.PlanMethodRows(aggregateTypes);
+
+        this.EmitUserTypeDefinitionsAndEarlyMethods(aggregateTypes, fieldRows, methodRows);
+        var packageMethods = this.PlanPackageAndStateMachineMethods(generatedTypes, aggregateTypes, methodRows);
+        var programTypeDefinitions = this.EmitProgramAndStateMachineTypeDefinitions(
+            aggregateTypes,
+            fieldRows,
+            methodRows,
+            packageMethods);
+        this.EmitRemainingMethodDefinitions(generatedTypes, aggregateTypes, methodRows, packageMethods);
+        this.EmitNestedTypeRows(aggregateTypes, packageMethods, programTypeDefinitions);
+
+        var mvidFixup = this.EmitModuleAndAssemblyRows();
+        var debugArtifacts = this.BuildPortablePdbAndDebugDirectory(packageMethods.EntryPointHandle);
+        this.SerializePeAndWriteOutputs(peStream, packageMethods.EntryPointHandle, mvidFixup, debugArtifacts);
+    }
+
+    private void InitializePortablePdb()
     {
         // Phase 4 (ADR-0027 §7.7a): instantiate the Portable PDB collaborator
         // before any method body is emitted, but only when the caller asked
@@ -832,7 +927,10 @@ internal sealed class ReflectionMetadataEmitter
             // CompilationMetadataReferences CDI blob (issue #219).
             this.emitCtx.Pdb.SetReferenceInfos(this.emitCtx.References.GetReferenceInfos());
         }
+    }
 
+    private void ResolveCoreTypesAndWireEmitters()
+    {
         // 1. Seed Object reference. Resolve from the supplied references so the type-ref
         //    assembly identity (mscorlib / System.Runtime / netstandard) matches the
         //    target framework rather than the gsc host's System.Private.CoreLib.
@@ -1043,7 +1141,13 @@ internal sealed class ReflectionMetadataEmitter
             this.userTokens.GetStructTypeToken,
             this.userTokens.ResolveFieldToken,
             this.functions.BuildMoveNextBodyBytes);
+    }
 
+    private void RegisterRewriteResults(
+        AsyncStateMachineRewriteResult asyncRewriteResult,
+        IteratorRewriteResult iteratorRewriteResult,
+        Lowering.Iterators.AsyncIteratorRewriteResult asyncIteratorRewriteResult)
+    {
         if (asyncRewriteResult != null)
         {
             this.stateMachines.AsyncStateMachinePlans = asyncRewriteResult.StateMachines;
@@ -1062,7 +1166,10 @@ internal sealed class ReflectionMetadataEmitter
         // PR-E-12: late-bind stateMachines into the body planner so
         // TryGetUserKickoffReceiverHandle can consult AsyncStateMachinePlans.
         this.methodBodyPlanner.SetStateMachines(this.stateMachines);
+    }
 
+    private List<BoundFunctionLiteralExpression> SynthesizeClosuresAndStateMachines()
+    {
         // Pre-assign FieldDefinitionHandles for user struct fields. Struct
         // TypeDefs are emitted between <Module> and the per-package <Program>
         // types so the field/method-row ranges fall out correctly:
@@ -1090,6 +1197,11 @@ internal sealed class ReflectionMetadataEmitter
         this.stateMachines.SynthesizeAsyncIteratorStateMachines(hostPackageGuess);
         this.stateMachines.SynthesizeAsyncLambdaStateMachines(lambdaLiterals, hostPackageGuess);
 
+        return lambdaLiterals;
+    }
+
+    private void RegisterGeneratedGenericRemaps()
+    {
         // Issue #810: register per-SM-class outer-method TP → class-TP-ordinal
         // remaps so that EncodeTypeSymbol can auto-translate outer-method
         // type-parameter references into the SM's own class type-parameter
@@ -1135,7 +1247,10 @@ internal sealed class ReflectionMetadataEmitter
         // channel so EncodeTypeSymbol routes every capture-field / Invoke
         // signature through a valid VAR(idx) slot of the synthesized class.
         this.RegisterSynthesizedClosureReifiedGenerics();
+    }
 
+    private GeneratedTypeSet MaterializeGeneratedTypes(List<BoundFunctionLiteralExpression> lambdaLiterals)
+    {
         // Phase 3.B.4: user-defined interface TypeDefs (planned below).
         // Synthesized closure classes are appended after user aggregates so
         // their TypeDefs come last among the class block; field-row planning
@@ -1174,6 +1289,14 @@ internal sealed class ReflectionMetadataEmitter
         {
             allAggregates = allAggregates.AddRange(asyncSmStructs);
         }
+
+        return new GeneratedTypeSet(lambdaLiterals, allAggregates, asyncSmStructs, asyncSmPlansByStruct);
+    }
+
+    private AggregateTypeLayout DiscoverAndOrderAggregateTypes(GeneratedTypeSet generatedTypes)
+    {
+        var allAggregates = generatedTypes.AllAggregates;
+        var asyncSmStructs = generatedTypes.AsyncStateMachineStructs;
 
         // Separate state-machine types from non-SM types. SM types will be
         // nested inside their declaring type (<Program> or closure class) per
@@ -1333,6 +1456,25 @@ internal sealed class ReflectionMetadataEmitter
         var nestedFieldListRow = new Dictionary<TypeSymbol, int>();
         var nestedMethodListRow = new Dictionary<TypeSymbol, int>();
 
+        return new AggregateTypeLayout(
+            new AggregatePartitions(nonSmClasses, smClasses, nonSmStructs, smStructsOrdered),
+            new TopLevelTypeOrder(topInterfaces, topClasses, topStructs, topEnums),
+            enumsAll,
+            new NestedTypeOrder(nestedOrdered, nestedFieldListRow, nestedMethodListRow));
+    }
+
+    private FieldRowPlan PlanFieldRows(AggregateTypeLayout aggregateTypes)
+    {
+        var smClasses = aggregateTypes.Aggregates.StateMachineClasses;
+        var smStructsOrdered = aggregateTypes.Aggregates.StateMachineStructs;
+        var topInterfaces = aggregateTypes.TopLevel.Interfaces;
+        var topClasses = aggregateTypes.TopLevel.Classes;
+        var topStructs = aggregateTypes.TopLevel.Structs;
+        var topEnums = aggregateTypes.TopLevel.Enums;
+        var enumsAll = aggregateTypes.AllEnums;
+        var nestedOrdered = aggregateTypes.NestedTypes.Types;
+        var nestedFieldListRow = aggregateTypes.NestedTypes.FirstFieldRows;
+
         // Field-row planning: non-SM types first, then SM types. This ensures
         // fieldList pointers are non-decreasing when <Program> (which owns no
         // fields) sits between non-SM and SM TypeDefs.
@@ -1481,8 +1623,8 @@ internal sealed class ReflectionMetadataEmitter
                     nextFieldRow += ni.StaticFields.Length + ni.ConstFields.Length;
                     break;
 
-                // Other nested kinds own no fields; the boundary pointer above
-                // is what their nested TypeDef row will reference.
+                    // Other nested kinds own no fields; the boundary pointer above
+                    // is what their nested TypeDef row will reference.
             }
         }
 
@@ -1515,6 +1657,23 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         var moduleFirstFieldRow = 1;
+
+        return new FieldRowPlan(
+            interfaceFirstFieldRow,
+            structFirstFieldRow,
+            enumFirstFieldRow,
+            globals,
+            programFirstFieldRow,
+            moduleFirstFieldRow);
+    }
+
+    private MethodRowPlan PlanMethodRows(AggregateTypeLayout aggregateTypes)
+    {
+        var topInterfaces = aggregateTypes.TopLevel.Interfaces;
+        var topClasses = aggregateTypes.TopLevel.Classes;
+        var topStructs = aggregateTypes.TopLevel.Structs;
+        var nestedOrdered = aggregateTypes.NestedTypes.Types;
+        var nestedMethodListRow = aggregateTypes.NestedTypes.FirstMethodRows;
 
         int methodRow = 1;
         var interfaceFirstMethodRow = new Dictionary<InterfaceSymbol, int>();
@@ -1969,12 +2128,52 @@ internal sealed class ReflectionMetadataEmitter
                     PlanStructMethods(ns);
                     break;
 
-                // Enums own no methods; the boundary pointer above is the row
-                // their nested TypeDef will reference.
+                    // Enums own no methods; the boundary pointer above is the row
+                    // their nested TypeDef will reference.
             }
         }
 
         int firstPackageCtorRow = methodRow;
+
+        return new MethodRowPlan(
+            delegates,
+            new TypeMethodRows(
+                interfaceFirstMethodRow,
+                delegateCtorRows,
+                classCtorRows,
+                classPrimaryCtorRows,
+                aggregateMethodHandles,
+                structFirstMethodRows),
+            entryPointIsClassOwned,
+            firstNestedMethodRow,
+            firstPackageCtorRow);
+    }
+
+    private void EmitUserTypeDefinitionsAndEarlyMethods(
+        AggregateTypeLayout aggregateTypes,
+        FieldRowPlan fieldRows,
+        MethodRowPlan methodRows)
+    {
+        var nonSmClasses = aggregateTypes.Aggregates.NonStateMachineClasses;
+        var nonSmStructs = aggregateTypes.Aggregates.NonStateMachineStructs;
+        var topInterfaces = aggregateTypes.TopLevel.Interfaces;
+        var topClasses = aggregateTypes.TopLevel.Classes;
+        var topStructs = aggregateTypes.TopLevel.Structs;
+        var topEnums = aggregateTypes.TopLevel.Enums;
+        var nestedOrdered = aggregateTypes.NestedTypes.Types;
+        var nestedFieldListRow = aggregateTypes.NestedTypes.FirstFieldRows;
+        var nestedMethodListRow = aggregateTypes.NestedTypes.FirstMethodRows;
+        var interfaceFirstFieldRow = fieldRows.InterfaceFirstRows;
+        var structFirstFieldRow = fieldRows.AggregateFirstRows;
+        var enumFirstFieldRow = fieldRows.EnumFirstRows;
+        var moduleFirstFieldRow = fieldRows.ModuleFirstRow;
+        var interfaceFirstMethodRow = methodRows.TypeRows.InterfaceFirstRows;
+        var delegates = methodRows.Delegates;
+        var delegateCtorRows = methodRows.TypeRows.DelegateConstructorRows;
+        var classCtorRows = methodRows.TypeRows.ClassConstructorRows;
+        var classPrimaryCtorRows = methodRows.TypeRows.ClassPrimaryConstructorRows;
+        var structFirstMethodRows = methodRows.TypeRows.StructFirstRows;
+        var firstNestedMethodRow = methodRows.FirstNestedRow;
 
         // 2. <Module> type (TypeDef row #1 must always be <Module> per ECMA-335).
         this.emitCtx.Metadata.AddTypeDefinition(
@@ -2432,6 +2631,22 @@ internal sealed class ReflectionMetadataEmitter
                     break;
             }
         }
+    }
+
+    private PackageMethodPlan PlanPackageAndStateMachineMethods(
+        GeneratedTypeSet generatedTypes,
+        AggregateTypeLayout aggregateTypes,
+        MethodRowPlan methodRows)
+    {
+        var lambdaLiterals = generatedTypes.LambdaLiterals;
+        var smClasses = aggregateTypes.Aggregates.StateMachineClasses;
+        var smStructsOrdered = aggregateTypes.Aggregates.StateMachineStructs;
+        var classCtorRows = methodRows.TypeRows.ClassConstructorRows;
+        var classPrimaryCtorRows = methodRows.TypeRows.ClassPrimaryConstructorRows;
+        var aggregateMethodHandles = methodRows.TypeRows.AggregateMethodHandles;
+        var entryPointIsClassOwned = methodRows.EntryPointIsClassOwned;
+        var structFirstMethodRows = methodRows.TypeRows.StructFirstRows;
+        var firstPackageCtorRow = methodRows.FirstPackageConstructorRow;
 
         // 3. Group functions by their declaring package. One <Program> type
         //    is emitted per package, in BoundProgram.Packages declaration
@@ -2690,6 +2905,26 @@ internal sealed class ReflectionMetadataEmitter
         // the loop above, right before interface method bodies are emitted —
         // an interface body may itself `newobj` a class ctor), so no further
         // pre-registration is needed here before class method bodies below.
+        return new PackageMethodPlan(packages, functionsByPackage, entryPointPackage, packageCtorRows, entryHandle);
+    }
+
+    private Dictionary<PackageSymbol, TypeDefinitionHandle> EmitProgramAndStateMachineTypeDefinitions(
+        AggregateTypeLayout aggregateTypes,
+        FieldRowPlan fieldRows,
+        MethodRowPlan methodRows,
+        PackageMethodPlan packageMethods)
+    {
+        var smClasses = aggregateTypes.Aggregates.StateMachineClasses;
+        var smStructsOrdered = aggregateTypes.Aggregates.StateMachineStructs;
+        var structFirstFieldRow = fieldRows.AggregateFirstRows;
+        var globals = fieldRows.Globals;
+        var programFirstFieldRow = fieldRows.ProgramFirstRow;
+        var classCtorRows = methodRows.TypeRows.ClassConstructorRows;
+        var structFirstMethodRows = methodRows.TypeRows.StructFirstRows;
+        var packages = packageMethods.Packages;
+        var functionsByPackage = packageMethods.FunctionsByPackage;
+        var entryPointPackage = packageMethods.EntryPointPackage;
+        var packageCtorRows = packageMethods.ConstructorRows;
 
         // === PHASE A: Emit remaining TypeDefs (Program + SM) ===
         // <Program> TypeDefs BEFORE SM TypeDefs (ECMA-335 §II.22.32: enclosing row < nested row).
@@ -2825,98 +3060,118 @@ internal sealed class ReflectionMetadataEmitter
             this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[s], iAsyncSmRef);
         }
 
-        // === PHASE B: Emit MethodDefs in row order ===
-        // B1. Interface methods (abstract + default-interface methods).
-        void EmitInterfaceMethodBodies(InterfaceSymbol i)
+        return programTypeDefHandles;
+    }
+
+    // B1. Interface methods (abstract + default-interface methods).
+    private void EmitInterfaceMethodBodies(InterfaceSymbol i)
+    {
+        foreach (var m in i.Methods)
         {
-            foreach (var m in i.Methods)
+            // ADR-0085 / issue #726: a default-interface method (the
+            // method's declaring syntax carries a non-null Body) is
+            // emitted as a normal virtual MethodDef with a real body —
+            // the EmitFunction pipeline handles signature, body, and
+            // ParameterRow plumbing, and the receiver-is-interface
+            // branch above stamps it as Public | Virtual | NewSlot
+            // (no Final, no Abstract). Abstract interface methods
+            // (no body) continue to use EmitAbstractMethod.
+            if (InterfaceSymbol.HasDefaultBody(m)
+                && this.emitCtx.Program.Functions.TryGetValue(m, out var dimBody))
             {
-                // ADR-0085 / issue #726: a default-interface method (the
-                // method's declaring syntax carries a non-null Body) is
-                // emitted as a normal virtual MethodDef with a real body —
-                // the EmitFunction pipeline handles signature, body, and
-                // ParameterRow plumbing, and the receiver-is-interface
-                // branch above stamps it as Public | Virtual | NewSlot
-                // (no Final, no Abstract). Abstract interface methods
-                // (no body) continue to use EmitAbstractMethod.
-                if (InterfaceSymbol.HasDefaultBody(m)
-                    && this.emitCtx.Program.Functions.TryGetValue(m, out var dimBody))
-                {
-                    var emittedHandle = this.functions.EmitFunction(m, dimBody, isEntryPoint: false);
-                    this.cache.MethodHandles[m] = emittedHandle;
-                }
-                else
-                {
-                    this.typeDefEmitter.EmitAbstractMethod(m);
-                }
+                var emittedHandle = this.functions.EmitFunction(m, dimBody, isEntryPoint: false);
+                this.cache.MethodHandles[m] = emittedHandle;
             }
-
-            // ADR-0089 / issue #755: emit static-virtual interface members.
-            // When the declaration carries a default body, route through
-            // EmitFunction (which handles signature + IL body + parameter
-            // rows). When there is no body, emit a Static|Virtual|Abstract
-            // MethodDef with no IL.
-            foreach (var sm in i.StaticMethods)
+            else
             {
-                if (InterfaceSymbol.HasDefaultBody(sm)
-                    && this.emitCtx.Program.Functions.TryGetValue(sm, out var defBody))
-                {
-                    var emittedHandle = this.functions.EmitFunction(sm, defBody, isEntryPoint: false);
-                    this.cache.MethodHandles[sm] = emittedHandle;
-                }
-                else
-                {
-                    this.typeDefEmitter.EmitStaticVirtualMethod(sm, hasBody: false, bodyOffset: -1);
-                }
-            }
-
-            // ADR-0090 / issue #756: emit private interface helper methods
-            // (instance and static). These always carry a body (GS0335
-            // enforces this); skip if for some reason the body is missing.
-            if (!i.PrivateMethods.IsDefaultOrEmpty)
-            {
-                foreach (var pm in i.PrivateMethods)
-                {
-                    if (this.emitCtx.Program.Functions.TryGetValue(pm, out var pBody))
-                    {
-                        var emittedHandle = this.functions.EmitFunction(pm, pBody, isEntryPoint: false);
-                        this.cache.MethodHandles[pm] = emittedHandle;
-                    }
-                }
-            }
-
-            if (!i.StaticPrivateMethods.IsDefaultOrEmpty)
-            {
-                foreach (var spm in i.StaticPrivateMethods)
-                {
-                    if (this.emitCtx.Program.Functions.TryGetValue(spm, out var sBody))
-                    {
-                        var emittedHandle = this.functions.EmitFunction(spm, sBody, isEntryPoint: false);
-                        this.cache.MethodHandles[spm] = emittedHandle;
-                    }
-                }
-            }
-
-            // Issue #248: emit abstract accessor MethodDefs + PropertyDef rows for interface properties.
-            this.memberDefEmitter.EmitInterfacePropertyAccessors(i);
-
-            // ADR-0149 (issue #944 follow-up): mirror EmitDefaultMemberAttributeIfIndexer
-            // (struct/class-side) for an interface that declares its own
-            // indexer contract.
-            this.EmitDefaultMemberAttributeIfIndexer(i);
-
-            // ADR-0052: emit abstract accessor MethodDefs + EventDef rows for interface events.
-            this.memberDefEmitter.EmitInterfaceEventAccessors(i);
-
-            // ADR-0089 / issue #1030: emit the interface .cctor running static
-            // field initializers. Emitted LAST (after property/event accessors)
-            // to match the row reserved in PlanInterfaceMethods.
-            if (!i.StaticFieldInitializers.IsEmpty)
-            {
-                this.ctorBodies.EmitInterfaceStaticConstructor(i);
+                this.typeDefEmitter.EmitAbstractMethod(m);
             }
         }
 
+        // ADR-0089 / issue #755: emit static-virtual interface members.
+        // When the declaration carries a default body, route through
+        // EmitFunction (which handles signature + IL body + parameter
+        // rows). When there is no body, emit a Static|Virtual|Abstract
+        // MethodDef with no IL.
+        foreach (var sm in i.StaticMethods)
+        {
+            if (InterfaceSymbol.HasDefaultBody(sm)
+                && this.emitCtx.Program.Functions.TryGetValue(sm, out var defBody))
+            {
+                var emittedHandle = this.functions.EmitFunction(sm, defBody, isEntryPoint: false);
+                this.cache.MethodHandles[sm] = emittedHandle;
+            }
+            else
+            {
+                this.typeDefEmitter.EmitStaticVirtualMethod(sm, hasBody: false, bodyOffset: -1);
+            }
+        }
+
+        // ADR-0090 / issue #756: emit private interface helper methods
+        // (instance and static). These always carry a body (GS0335
+        // enforces this); skip if for some reason the body is missing.
+        if (!i.PrivateMethods.IsDefaultOrEmpty)
+        {
+            foreach (var pm in i.PrivateMethods)
+            {
+                if (this.emitCtx.Program.Functions.TryGetValue(pm, out var pBody))
+                {
+                    var emittedHandle = this.functions.EmitFunction(pm, pBody, isEntryPoint: false);
+                    this.cache.MethodHandles[pm] = emittedHandle;
+                }
+            }
+        }
+
+        if (!i.StaticPrivateMethods.IsDefaultOrEmpty)
+        {
+            foreach (var spm in i.StaticPrivateMethods)
+            {
+                if (this.emitCtx.Program.Functions.TryGetValue(spm, out var sBody))
+                {
+                    var emittedHandle = this.functions.EmitFunction(spm, sBody, isEntryPoint: false);
+                    this.cache.MethodHandles[spm] = emittedHandle;
+                }
+            }
+        }
+
+        // Issue #248: emit abstract accessor MethodDefs + PropertyDef rows for interface properties.
+        this.memberDefEmitter.EmitInterfacePropertyAccessors(i);
+
+        // ADR-0149 (issue #944 follow-up): mirror EmitDefaultMemberAttributeIfIndexer
+        // (struct/class-side) for an interface that declares its own
+        // indexer contract.
+        this.EmitDefaultMemberAttributeIfIndexer(i);
+
+        // ADR-0052: emit abstract accessor MethodDefs + EventDef rows for interface events.
+        this.memberDefEmitter.EmitInterfaceEventAccessors(i);
+
+        // ADR-0089 / issue #1030: emit the interface .cctor running static
+        // field initializers. Emitted LAST (after property/event accessors)
+        // to match the row reserved in PlanInterfaceMethods.
+        if (!i.StaticFieldInitializers.IsEmpty)
+        {
+            this.ctorBodies.EmitInterfaceStaticConstructor(i);
+        }
+    }
+
+    private void EmitRemainingMethodDefinitions(
+        GeneratedTypeSet generatedTypes,
+        AggregateTypeLayout aggregateTypes,
+        MethodRowPlan methodRows,
+        PackageMethodPlan packageMethods)
+    {
+        var asyncSmPlansByStruct = generatedTypes.AsyncStateMachinePlansByStruct;
+        var smClasses = aggregateTypes.Aggregates.StateMachineClasses;
+        var smStructsOrdered = aggregateTypes.Aggregates.StateMachineStructs;
+        var topClasses = aggregateTypes.TopLevel.Classes;
+        var topStructs = aggregateTypes.TopLevel.Structs;
+        var nestedOrdered = aggregateTypes.NestedTypes.Types;
+        var entryPointIsClassOwned = methodRows.EntryPointIsClassOwned;
+        var packages = packageMethods.Packages;
+        var functionsByPackage = packageMethods.FunctionsByPackage;
+        var entryPointPackage = packageMethods.EntryPointPackage;
+
+        // === PHASE B: Emit MethodDefs in row order ===
         // B2. Non-SM class ctors + instance methods.
         void EmitClassMethodBodies(StructSymbol c)
         {
@@ -3234,7 +3489,7 @@ internal sealed class ReflectionMetadataEmitter
 
                     break;
 
-                // Enums own no method bodies.
+                    // Enums own no method bodies.
             }
         }
 
@@ -3325,6 +3580,18 @@ internal sealed class ReflectionMetadataEmitter
                 }
             }
         }
+    }
+
+    private void EmitNestedTypeRows(
+        AggregateTypeLayout aggregateTypes,
+        PackageMethodPlan packageMethods,
+        Dictionary<PackageSymbol, TypeDefinitionHandle> programTypeDefHandles)
+    {
+        var smClasses = aggregateTypes.Aggregates.StateMachineClasses;
+        var smStructsOrdered = aggregateTypes.Aggregates.StateMachineStructs;
+        var nestedOrdered = aggregateTypes.NestedTypes.Types;
+        var packages = packageMethods.Packages;
+        var entryPointPackage = packageMethods.EntryPointPackage;
 
         // Issue #910 / ADR-0110: NestedClass rows for user-declared nested
         // types (class/struct/enum/interface declared inside a class/struct
@@ -3411,7 +3678,10 @@ internal sealed class ReflectionMetadataEmitter
                 this.emitCtx.Metadata.AddNestedType(nestedHandle, enclosingHandle);
             }
         }
+    }
 
+    private ReservedBlob<GuidHandle> EmitModuleAndAssemblyRows()
+    {
         // 6. Module + assembly rows. Reserve the MVID guid heap slot so we can
         // patch it with a content-derived value after PE serialization.
         var assemblyName = this.emitCtx.AssemblyNameOverride ?? this.emitCtx.Program.PackageName ?? "Default";
@@ -3443,6 +3713,11 @@ internal sealed class ReflectionMetadataEmitter
             this.assemblyAttrs.EmitDebuggableAttribute(assemblyHandle);
         }
 
+        return mvidFixup;
+    }
+
+    private DebugArtifacts BuildPortablePdbAndDebugDirectory(MethodDefinitionHandle entryHandle)
+    {
         // 7. Build the Portable PDB blob FIRST so we can wire its content id
         // (CodeView), SHA-256 checksum (PdbChecksum), and — when embedded —
         // the blob itself into the PE's DebugDirectory. PortablePdbEmitter
@@ -3517,6 +3792,20 @@ internal sealed class ReflectionMetadataEmitter
                 debugDirectory.AddEmbeddedPortablePdbEntry(pdbBlob, PortablePdbVersion);
             }
         }
+
+        return new DebugArtifacts(pdbBlob, debugDirectory, pdbEnabled, isEmbedded);
+    }
+
+    private void SerializePeAndWriteOutputs(
+        Stream peStream,
+        MethodDefinitionHandle entryHandle,
+        ReservedBlob<GuidHandle> mvidFixup,
+        DebugArtifacts debugArtifacts)
+    {
+        var pdbBlob = debugArtifacts.PdbBlob;
+        var debugDirectory = debugArtifacts.DebugDirectory;
+        var pdbEnabled = debugArtifacts.PdbEnabled;
+        var isEmbedded = debugArtifacts.IsEmbedded;
 
         // 9. Serialize PE deterministically: a SHA-256 of the serialized PE
         // content produces the BlobContentId, which patches both the PE
