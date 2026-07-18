@@ -54,6 +54,7 @@ internal sealed partial class DeclarationBinder
             // ambient lookup preference (see field-initializer closure above
             // for the full rationale) for the duration of this deferred bind.
             var savedPackage = scope.SetCurrentDeclaringPackage(structSymbol.PackageName);
+            var savedTree = scope.SetCurrentReferencingSyntaxTree(syntax.SyntaxTree);
             try
             {
                 BindBaseConstructorInitializerCore(syntax, structSymbol, baseClassSymbol, importedBaseType, primaryCtorParameters);
@@ -61,6 +62,7 @@ internal sealed partial class DeclarationBinder
             finally
             {
                 scope.SetCurrentDeclaringPackage(savedPackage);
+                scope.SetCurrentReferencingSyntaxTree(savedTree);
                 scope = outerScope;
             }
         });
@@ -830,6 +832,7 @@ internal sealed partial class DeclarationBinder
                 // above for the full rationale) for the duration of this
                 // deferred bind.
                 var savedPackage = scope.SetCurrentDeclaringPackage(structSymbol.PackageName);
+                var savedTree = scope.SetCurrentReferencingSyntaxTree(ctorSyntax.SyntaxTree);
                 try
                 {
                     BindConstructorBaseInitializerCore(ctorSyntax, constructorSymbol, ctorFunction, structSymbol, baseClassSymbol, importedBaseType);
@@ -837,6 +840,7 @@ internal sealed partial class DeclarationBinder
                 finally
                 {
                     scope.SetCurrentDeclaringPackage(savedPackage);
+                    scope.SetCurrentReferencingSyntaxTree(savedTree);
                     scope = outerScope;
                 }
             });

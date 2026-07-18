@@ -686,7 +686,7 @@ public sealed class Binder
     /// <returns>The new chained bound global scope.</returns>
     public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver references, bool implicitSystemImport, ImmutableHashSet<string> preprocessorSymbols, bool isLibrary)
     {
-        var parentScope = CreateParentScope(previous, references, preprocessorSymbols);
+        var parentScope = CreateParentScope(previous, references, preprocessorSymbols, preserveLatestImportSyntaxTrees: false);
         var binder = new Binder(parentScope, function: null);
 
         if (implicitSystemImport && previous == null)
@@ -1038,8 +1038,10 @@ public sealed class Binder
             var tlsBinder = new Binder(binder.scope, synthesizedEntryPoint);
             foreach (var globalStatement in globalStatements)
             {
-                var statement = tlsBinder.statements.BindStatement(globalStatement.Statement);
-                statements.Add(statement);
+                RunWithPackage(
+                    packageByTree[globalStatement.SyntaxTree],
+                    globalStatement.SyntaxTree,
+                    () => statements.Add(tlsBinder.statements.BindStatement(globalStatement.Statement)));
             }
 
             // Issue #1884: all TLS global statements share the synthesized
@@ -1228,7 +1230,7 @@ public sealed class Binder
     /// <returns>A bound program.</returns>
     public static BoundProgram BindProgram(BoundGlobalScope globalScope, ReferenceResolver references, BoundBodyCache cache, ImmutableHashSet<SyntaxTree> dirtyTrees)
     {
-        var parentScope = CreateParentScope(globalScope, references, preprocessorSymbols: globalScope?.PreprocessorSymbols);
+        var parentScope = CreateParentScope(globalScope, references, preprocessorSymbols: globalScope?.PreprocessorSymbols, preserveLatestImportSyntaxTrees: true);
 
         // ADR-0146 / issue #2243: rehydrate the rich anonymous-object literal →
         // synthesized-class map onto this pass's scope chain so a literal
@@ -2015,6 +2017,7 @@ public sealed class Binder
         };
 
         var previousPackage = parentScope.SetCurrentDeclaringPackage(structSym.PackageName);
+        var previousTree = parentScope.SetCurrentReferencingSyntaxTree(structSym.Declaration.SyntaxTree);
         try
         {
             var binder = new Binder(parentScope, context);
@@ -2033,6 +2036,7 @@ public sealed class Binder
         finally
         {
             parentScope.SetCurrentDeclaringPackage(previousPackage);
+            parentScope.SetCurrentReferencingSyntaxTree(previousTree);
         }
     }
 
@@ -2065,30 +2069,35 @@ public sealed class Binder
 
         try
         {
-            var parentScope = CreateParentScope(globalScope, references, globalScope.PreprocessorSymbols);
+            var parentScope = CreateParentScope(globalScope, references, globalScope.PreprocessorSymbols, preserveLatestImportSyntaxTrees: true);
             var binder = new Binder(parentScope, containingFunction);
+            var previousPackage = parentScope.SetCurrentDeclaringPackage(containingFunction?.Package?.Name);
+            var previousTree = parentScope.SetCurrentReferencingSyntaxTree(expression.SyntaxTree);
 
-            if (additionalLocals != null)
+            try
             {
-                foreach (var local in additionalLocals)
+                if (additionalLocals != null)
                 {
-                    if (local != null)
+                    foreach (var local in additionalLocals)
                     {
-                        // Speculative binding: collisions with already-declared
-                        // parameters are expected and harmless (TryDeclareVariable
-                        // simply reports false).
-                        binder.scope.TryDeclareVariable(local);
+                        if (local != null)
+                        {
+                            binder.scope.TryDeclareVariable(local);
+                        }
                     }
                 }
-            }
 
-            // The binder writes any diagnostics into its own throwaway bag, so
-            // speculative binding never leaks errors into the open document.
-            var bound = binder.expressions.BindExpression(expression);
-            var type = bound?.Type;
-            return type == null || ReferenceEquals(type, TypeSymbol.Error) || ReferenceEquals(type, TypeSymbol.Void)
-                ? null
-                : type;
+                var bound = binder.expressions.BindExpression(expression);
+                var type = bound?.Type;
+                return type == null || ReferenceEquals(type, TypeSymbol.Error) || ReferenceEquals(type, TypeSymbol.Void)
+                    ? null
+                    : type;
+            }
+            finally
+            {
+                parentScope.SetCurrentDeclaringPackage(previousPackage);
+                parentScope.SetCurrentReferencingSyntaxTree(previousTree);
+            }
         }
         catch (Exception)
         {
@@ -2393,7 +2402,11 @@ public sealed class Binder
         }
     }
 
-    private static BoundScope CreateParentScope(BoundGlobalScope previous, ReferenceResolver references, ImmutableHashSet<string> preprocessorSymbols)
+    private static BoundScope CreateParentScope(
+        BoundGlobalScope previous,
+        ReferenceResolver references,
+        ImmutableHashSet<string> preprocessorSymbols,
+        bool preserveLatestImportSyntaxTrees)
     {
         var stack = new Stack<BoundGlobalScope>();
         while (previous != null)
@@ -2408,10 +2421,13 @@ public sealed class Binder
         {
             previous = stack.Pop();
             var scope = new BoundScope(parent);
+            var preserveImportSyntaxTrees = preserveLatestImportSyntaxTrees && stack.Count == 0;
 
             foreach (var i in previous.Imports)
             {
-                scope.TryImport(i);
+                scope.TryImport(preserveImportSyntaxTrees
+                    ? i
+                    : new ImportSymbol(i.Name, i.Target, declaration: null));
             }
 
             foreach (var alias in previous.TypeAliases)

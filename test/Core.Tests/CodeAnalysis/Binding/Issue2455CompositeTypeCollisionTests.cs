@@ -523,6 +523,7 @@ public class Issue2455CompositeTypeCollisionTests
         // the projection is checked against.
         const string sourceShape = """
             package Oahu.Audible.Alt
+            import Oahu.Audible.Json
 
             class ChapterInfoLike {
                 prop Chapters []Chapter

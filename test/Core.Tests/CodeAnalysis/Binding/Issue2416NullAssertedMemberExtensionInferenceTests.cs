@@ -65,6 +65,8 @@ public class Issue2416NullAssertedMemberExtensionInferenceTests
 
     private const string ChapterModelSource = """
         package Core
+        import System.Collections.Generic
+
         class Chapter {
             prop Title string
             prop Chapters []Chapter

@@ -2462,6 +2462,7 @@ internal sealed partial class DeclarationBinder
             // reference in the initializer could resolve against an unrelated
             // package's same-simple-name homonym.
             var savedFieldInitPackage = scope.SetCurrentDeclaringPackage(fieldInitPackageName);
+            var savedFieldInitTree = scope.SetCurrentReferencingSyntaxTree(structSymbol.Declaration.SyntaxTree);
 
             // Issue #2111: a static field/property initializer is bound outside
             // any function body, so no "current function" is established. The
@@ -2502,6 +2503,7 @@ internal sealed partial class DeclarationBinder
             finally
             {
                 scope.SetCurrentDeclaringPackage(savedFieldInitPackage);
+                scope.SetCurrentReferencingSyntaxTree(savedFieldInitTree);
                 scope = savedFieldInitScope;
                 binderCtx.CurrentTypeParameters = savedFieldInitTypeParameters;
                 setCurrentFunction(savedFieldInitFunction);

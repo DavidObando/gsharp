@@ -2392,7 +2392,11 @@ internal sealed class MemberLookup
     {
         var imports = this.binderCtx.RootScope.GetDeclaredImports();
         var importCount = imports.IsDefault ? 0 : imports.Length;
-        if (this.binderCtx.CachedImportedExtensionClasses != null && this.binderCtx.CachedImportedExtensionImportCount == importCount)
+        if (this.binderCtx.CachedImportedExtensionClasses != null
+            && this.binderCtx.CachedImportedExtensionImportCount == importCount
+            && ReferenceEquals(
+                this.binderCtx.CachedImportedExtensionSyntaxTree,
+                this.binderCtx.RootScope.GetCurrentReferencingSyntaxTreeForCache()))
         {
             return this.binderCtx.CachedImportedExtensionClasses;
         }
@@ -2447,6 +2451,7 @@ internal sealed class MemberLookup
 
         this.binderCtx.CachedImportedExtensionClasses = classes;
         this.binderCtx.CachedImportedExtensionImportCount = importCount;
+        this.binderCtx.CachedImportedExtensionSyntaxTree = this.binderCtx.RootScope.GetCurrentReferencingSyntaxTreeForCache();
         return classes;
     }
 
