@@ -1626,8 +1626,8 @@ public sealed partial class CSharpToGSharpTranslator
 
                     return this.TranslateExpressionStatements(expressionStatement.Expression);
 
-                case BreakStatementSyntax:
-                    return new[] { (GStatement)new BreakStatement() };
+                case BreakStatementSyntax breakStatement:
+                    return this.TranslateBreakStatement(breakStatement);
 
                 case ContinueStatementSyntax:
                     return new[] { (GStatement)new ContinueStatement() };
@@ -1799,7 +1799,7 @@ public sealed partial class CSharpToGSharpTranslator
                     return new[] { (GStatement)this.TranslateBlock(block) };
 
                 case SwitchStatementSyntax switchStatement:
-                    return new[] { this.TranslateSwitchStatement(switchStatement) };
+                    return this.TranslateSwitchStatement(switchStatement);
 
                 case YieldStatementSyntax yieldStatement:
                     return this.TranslateYieldStatement(yieldStatement);
