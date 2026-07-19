@@ -122,7 +122,7 @@ public sealed partial class CSharpToGSharpTranslator
                 accessors = new List<PropertyAccessor>();
             }
 
-            bool isOverride = symbol != null && symbol.IsOverride && !OverridesExternalBaseProperty(symbol);
+            bool isOverride = symbol != null && symbol.IsOverride;
             bool isOpen = this.IsMemberEmittedOpen(symbol, isOverride);
 
             // ADR-0149: see the matching visibility comment in

@@ -464,6 +464,8 @@ public sealed class EventDeclaration : GMember
     /// field-like), so this is only ever set alongside non-null
     /// <paramref name="addBody"/>/<paramref name="removeBody"/>.
     /// </param>
+    /// <param name="isOpen">Whether the event is <c>open</c> (virtual).</param>
+    /// <param name="isOverride">Whether the event is an <c>override</c>.</param>
     public EventDeclaration(
         string name,
         GTypeReference type,
@@ -471,7 +473,9 @@ public sealed class EventDeclaration : GMember
         IReadOnlyList<AttributeUse> attributes = null,
         BlockStatement addBody = null,
         BlockStatement removeBody = null,
-        GTypeReference explicitInterfaceType = null)
+        GTypeReference explicitInterfaceType = null,
+        bool isOpen = false,
+        bool isOverride = false)
     {
         Name = name;
         Type = type;
@@ -480,6 +484,8 @@ public sealed class EventDeclaration : GMember
         AddBody = addBody;
         RemoveBody = removeBody;
         ExplicitInterfaceType = explicitInterfaceType;
+        IsOpen = isOpen;
+        IsOverride = isOverride;
     }
 
     /// <summary>Gets the event name.</summary>
@@ -493,6 +499,12 @@ public sealed class EventDeclaration : GMember
 
     /// <summary>Gets the event attributes.</summary>
     public IReadOnlyList<AttributeUse> Attributes { get; }
+
+    /// <summary>Gets a value indicating whether the event is <c>open</c>.</summary>
+    public bool IsOpen { get; }
+
+    /// <summary>Gets a value indicating whether the event is an <c>override</c>.</summary>
+    public bool IsOverride { get; }
 
     /// <summary>
     /// Gets the explicit <c>add</c> accessor body, or <see langword="null"/> for a

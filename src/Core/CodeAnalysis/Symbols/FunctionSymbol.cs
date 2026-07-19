@@ -3,6 +3,7 @@
 // </copyright>
 
 using System.Collections.Immutable;
+using System.Reflection;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -206,6 +207,14 @@ public sealed class FunctionSymbol : Symbol
 
     /// <summary>Gets or sets the base method this method overrides. Set by the binder when <see cref="IsOverride"/> is true and a matching open base method is found; <c>null</c> otherwise.</summary>
     public FunctionSymbol OverriddenMethod { get; set; }
+
+    /// <summary>
+    /// Gets or sets the imported CLR virtual method this method overrides.
+    /// The emitter uses this target to write an explicit MethodImpl row, which
+    /// is required for covariant-return overrides and keeps reflection/runtime
+    /// dispatch tied to the external base slot.
+    /// </summary>
+    public MethodInfo ExternalOverriddenMethod { get; set; }
 
     /// <summary>Gets or sets a value indicating whether this function is an extension function (Phase 3.B.6, ADR-0019). When true, the function's first parameter is the receiver and call sites <c>x.Foo(args)</c> bind to <c>Foo(x, args)</c>.</summary>
     public bool IsExtension { get; set; }

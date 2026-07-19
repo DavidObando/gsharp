@@ -1083,6 +1083,7 @@ internal sealed class ReflectionMetadataEmitter
             this.signatures.EncodeTypeSymbol,
             this.signatures.EncodeReturnSymbol,
             this.memberRefs.GetTypeReference,
+            this.memberRefs.GetTypeHandleForMember,
             this.userTokens.GetUserStructTypeSpec,
             this.userTokens.ResolveConstructedBaseParameterlessCtorToken,
             this.userTokens.ResolveConstructedBaseExplicitCtorToken,
@@ -3337,6 +3338,10 @@ internal sealed class ReflectionMetadataEmitter
             // bridges (e.g. the non-generic IEnumerable.GetEnumerator).
             this.interfaceImpls.EmitExplicitInterfaceMethodImpls(c);
 
+            // Issue #2443: bind overrides to virtual members inherited from an
+            // imported CLR base class (including covariant-return slots).
+            this.interfaceImpls.EmitExternalBaseMethodImpls(c);
+
             // Issue #2362: emit MethodImpl rows for mangled-name explicit
             // interface property implementations (accessor methods).
             this.interfaceImpls.EmitExplicitInterfacePropertyMethodImpls(c);
@@ -3438,6 +3443,8 @@ internal sealed class ReflectionMetadataEmitter
             // Issue #985: emit MethodImpl rows for covariant-return interface
             // bridges declared on a struct that implements `IEnumerable[T]` &c.
             this.interfaceImpls.EmitExplicitInterfaceMethodImpls(s);
+
+            this.interfaceImpls.EmitExternalBaseMethodImpls(s);
 
             // Issue #2362: emit MethodImpl rows for mangled-name explicit
             // interface property implementations (accessor methods).

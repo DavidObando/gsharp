@@ -1042,6 +1042,8 @@ internal sealed partial class DeclarationBinder
                     // Phase 3.B.3 sub-step 3: open/override validation against
                     // base class chain per ADR-0017.
                     FunctionSymbol overriddenMethod = null;
+                    MethodInfo externalOverriddenMethod = null;
+                    bool reportedMissingOverride = false;
                     if (methodSyntax.IsOverride)
                     {
                         // ADR-0063 §8: when the base exposes a name-overload set, the
@@ -1065,7 +1067,30 @@ internal sealed partial class DeclarationBinder
 
                         if (baseMethod == null)
                         {
-                            Diagnostics.ReportNoBaseMethodToOverride(methodSyntax.Identifier.Location, methodName);
+                            var externalMatch = ExternalClrOverrideResolver.FindMethod(
+                                structSymbol,
+                                methodName,
+                                methodParameters,
+                                returnType,
+                                methodReturnRefKind,
+                                methodTypeParameters,
+                                methodAccessibility);
+                            if (externalMatch.Member != null)
+                            {
+                                externalOverriddenMethod = externalMatch.Member;
+                            }
+                            else if (externalMatch.IsSealed)
+                            {
+                                Diagnostics.ReportOverrideOfSealedMethod(methodSyntax.Identifier.Location, methodName);
+                            }
+                            else if (externalMatch.SawName)
+                            {
+                                Diagnostics.ReportOverrideSignatureMismatch(methodSyntax.Identifier.Location, methodName);
+                            }
+                            else
+                            {
+                                Diagnostics.ReportNoBaseMethodToOverride(methodSyntax.Identifier.Location, methodName);
+                            }
                         }
                         else if (baseSignatureMatch != null)
                         {
@@ -1134,8 +1159,28 @@ internal sealed partial class DeclarationBinder
                             if (SignaturesMatch(shadowed, methodParameters, returnType, methodReturnRefKind, shadowedTypeArgSubst, methodIsAsync))
                             {
                                 Diagnostics.ReportMissingOverride(methodSyntax.Identifier.Location, shadowed.ReceiverType.Name, methodName);
+                                reportedMissingOverride = true;
                                 break;
                             }
+                        }
+                    }
+
+                    if (!methodSyntax.IsOverride && !reportedMissingOverride)
+                    {
+                        var externalMatch = ExternalClrOverrideResolver.FindMethod(
+                            structSymbol,
+                            methodName,
+                            methodParameters,
+                            returnType,
+                            methodReturnRefKind,
+                            methodTypeParameters,
+                            methodAccessibility);
+                        if (externalMatch.Member != null)
+                        {
+                            Diagnostics.ReportMissingOverride(
+                                methodSyntax.Identifier.Location,
+                                externalMatch.Member.DeclaringType?.Name ?? structSymbol.ImportedBaseType?.Name ?? "?",
+                                methodName);
                         }
                     }
 
@@ -1150,6 +1195,7 @@ internal sealed partial class DeclarationBinder
                         isOpen: methodSyntax.IsOpen,
                         isOverride: methodSyntax.IsOverride);
                     methodSymbol.OverriddenMethod = overriddenMethod;
+                    methodSymbol.ExternalOverriddenMethod = externalOverriddenMethod;
                     methodSymbol.TypeParameters = methodTypeParameters;
                     methodSymbol.ReturnRefKind = methodReturnRefKind;
                     methodSymbol.IsAsync = methodSyntax.IsAsync || isAsyncIteratorReturnType(returnType);
@@ -1429,20 +1475,60 @@ internal sealed partial class DeclarationBinder
                 }
 
                 // Validate: override needs base property
-                PropertySymbol overriddenProperty = null;
+                PropertyInfo externalOverriddenProperty = null;
                 if (isOverride)
                 {
-                    if (structSymbol.BaseClass == null || !TypeMemberModel.TryGetProperty(structSymbol.BaseClass, propName, out var baseProp))
+                    if (structSymbol.BaseClass != null && TypeMemberModel.TryGetProperty(structSymbol.BaseClass, propName, out var baseProp))
                     {
-                        Diagnostics.ReportNoBaseMethodToOverride(propSyntax.Identifier.Location, propName);
-                    }
-                    else if (!baseProp.IsVirtual && !baseProp.IsOverride)
-                    {
-                        Diagnostics.ReportOverrideOfSealedMethod(propSyntax.Identifier.Location, propName);
+                        if (!baseProp.IsVirtual && !baseProp.IsOverride)
+                        {
+                            Diagnostics.ReportOverrideOfSealedMethod(propSyntax.Identifier.Location, propName);
+                        }
                     }
                     else
                     {
-                        overriddenProperty = baseProp;
+                        var externalMatch = ExternalClrOverrideResolver.FindProperty(
+                            structSymbol,
+                            propName,
+                            indexerParameters,
+                            propType,
+                            hasGetter,
+                            hasSetter,
+                            propAccessibility);
+                        if (externalMatch.Member != null)
+                        {
+                            externalOverriddenProperty = externalMatch.Member;
+                        }
+                        else if (externalMatch.IsSealed)
+                        {
+                            Diagnostics.ReportOverrideOfSealedMethod(propSyntax.Identifier.Location, propName);
+                        }
+                        else if (externalMatch.SawName)
+                        {
+                            Diagnostics.ReportOverrideSignatureMismatch(propSyntax.Identifier.Location, propName);
+                        }
+                        else
+                        {
+                            Diagnostics.ReportNoBaseMethodToOverride(propSyntax.Identifier.Location, propName);
+                        }
+                    }
+                }
+                else
+                {
+                    var externalMatch = ExternalClrOverrideResolver.FindProperty(
+                        structSymbol,
+                        propName,
+                        indexerParameters,
+                        propType,
+                        hasGetter,
+                        hasSetter,
+                        propAccessibility);
+                    if (externalMatch.Member != null)
+                    {
+                        Diagnostics.ReportMissingOverride(
+                            propSyntax.Identifier.Location,
+                            externalMatch.Member.DeclaringType?.Name ?? structSymbol.ImportedBaseType?.Name ?? "?",
+                            propName);
                     }
                 }
 
@@ -1463,6 +1549,11 @@ internal sealed partial class DeclarationBinder
                     Parameters = indexerParameters,
                 };
                 Binder.AttachDocumentation(propertySymbol, propSyntax);
+                if (externalOverriddenProperty != null)
+                {
+                    propertySymbol.ExternalOverriddenGetter = externalOverriddenProperty.GetGetMethod(nonPublic: true);
+                    propertySymbol.ExternalOverriddenSetter = externalOverriddenProperty.GetSetMethod(nonPublic: true);
+                }
 
                 // Create backing field for auto-properties
                 if (isAutoProperty && !syntax.IsData)
@@ -1499,6 +1590,7 @@ internal sealed partial class DeclarationBinder
                         // ADR-0118: indexer accessors are emitted as SpecialName
                         // CLR default-member accessors (get_Item).
                         getterSymbol.IsSpecialName = isIndexer;
+                        getterSymbol.ExternalOverriddenMethod = propertySymbol.ExternalOverriddenGetter;
                         propertySymbol.GetterSymbol = getterSymbol;
                         propertySymbol.GetterBodySyntax = getAccessor.Body;
                     }
@@ -1521,6 +1613,7 @@ internal sealed partial class DeclarationBinder
                             isOverride: isOverride);
                         setterSymbol.IsSpecialName = isIndexer;
                         setterSymbol.IsInitOnlySetter = isInitOnly;
+                        setterSymbol.ExternalOverriddenMethod = propertySymbol.ExternalOverriddenSetter;
                         propertySymbol.SetterSymbol = setterSymbol;
                         propertySymbol.SetterBodySyntax = setAccessor.Body;
                     }
@@ -1603,6 +1696,61 @@ internal sealed partial class DeclarationBinder
                     Diagnostics.ReportOpenMemberInNonOpenClass(eventSyntax.OpenModifier.Location, eventName);
                 }
 
+                EventInfo externalOverriddenEvent = null;
+                if (isOverride)
+                {
+                    if (structSymbol.BaseClass != null && TypeMemberModel.TryGetEvent(structSymbol.BaseClass, eventName, out var baseEvent))
+                    {
+                        if (!baseEvent.IsVirtual && !baseEvent.IsOverride)
+                        {
+                            Diagnostics.ReportOverrideOfSealedMethod(eventSyntax.Identifier.Location, eventName);
+                        }
+                        else if (baseEvent.Type != handlerType)
+                        {
+                            Diagnostics.ReportOverrideSignatureMismatch(eventSyntax.Identifier.Location, eventName);
+                        }
+                    }
+                    else
+                    {
+                        var externalMatch = ExternalClrOverrideResolver.FindEvent(
+                            structSymbol,
+                            eventName,
+                            handlerType,
+                            eventAccessibility);
+                        if (externalMatch.Member != null)
+                        {
+                            externalOverriddenEvent = externalMatch.Member;
+                        }
+                        else if (externalMatch.IsSealed)
+                        {
+                            Diagnostics.ReportOverrideOfSealedMethod(eventSyntax.Identifier.Location, eventName);
+                        }
+                        else if (externalMatch.SawName)
+                        {
+                            Diagnostics.ReportOverrideSignatureMismatch(eventSyntax.Identifier.Location, eventName);
+                        }
+                        else
+                        {
+                            Diagnostics.ReportNoBaseMethodToOverride(eventSyntax.Identifier.Location, eventName);
+                        }
+                    }
+                }
+                else
+                {
+                    var externalMatch = ExternalClrOverrideResolver.FindEvent(
+                        structSymbol,
+                        eventName,
+                        handlerType,
+                        eventAccessibility);
+                    if (externalMatch.Member != null)
+                    {
+                        Diagnostics.ReportMissingOverride(
+                            eventSyntax.Identifier.Location,
+                            externalMatch.Member.DeclaringType?.Name ?? structSymbol.ImportedBaseType?.Name ?? "?",
+                            eventName);
+                    }
+                }
+
                 var eventSymbol = new EventSymbol(
                     eventName,
                     handlerType,
@@ -1612,6 +1760,12 @@ internal sealed partial class DeclarationBinder
                     isOverride,
                     declaration: eventSyntax);
                 Binder.AttachDocumentation(eventSymbol, eventSyntax);
+                if (externalOverriddenEvent != null)
+                {
+                    eventSymbol.ExternalOverriddenAddMethod = externalOverriddenEvent.GetAddMethod(nonPublic: true);
+                    eventSymbol.ExternalOverriddenRemoveMethod = externalOverriddenEvent.GetRemoveMethod(nonPublic: true);
+                    eventSymbol.ExternalOverriddenRaiseMethod = externalOverriddenEvent.GetRaiseMethod(nonPublic: true);
+                }
 
                 // Create backing field for field-like events
                 if (isFieldLike)
@@ -1658,7 +1812,11 @@ internal sealed partial class DeclarationBinder
                     eventAccessibility,
                     receiverType: structSymbol,
                     isOpen: isVirtual,
-                    isOverride: isOverride) { IsSpecialName = true };
+                    isOverride: isOverride)
+                {
+                    IsSpecialName = true,
+                    ExternalOverriddenMethod = eventSymbol.ExternalOverriddenAddMethod,
+                };
                 eventSymbol.RemoveMethodSymbol = new FunctionSymbol(
                     $"remove_{eventName}",
                     ImmutableArray.Create(handlerParam),
@@ -1668,7 +1826,11 @@ internal sealed partial class DeclarationBinder
                     eventAccessibility,
                     receiverType: structSymbol,
                     isOpen: isVirtual,
-                    isOverride: isOverride) { IsSpecialName = true };
+                    isOverride: isOverride)
+                {
+                    IsSpecialName = true,
+                    ExternalOverriddenMethod = eventSymbol.ExternalOverriddenRemoveMethod,
+                };
 
                 // Issue #257: create raise method symbol if raise accessor is present.
                 if (eventSyntax.Accessors.Any(a => a.IsRaise))
@@ -1694,7 +1856,11 @@ internal sealed partial class DeclarationBinder
                         eventAccessibility,
                         receiverType: structSymbol,
                         isOpen: isVirtual,
-                        isOverride: isOverride) { IsSpecialName = true };
+                        isOverride: isOverride)
+                    {
+                        IsSpecialName = true,
+                        ExternalOverriddenMethod = eventSymbol.ExternalOverriddenRaiseMethod,
+                    };
                 }
 
                 // Bind annotations

@@ -91,6 +91,7 @@ internal sealed class TypeDefEmitter
     private readonly Action<SignatureTypeEncoder, TypeSymbol> encodeTypeSymbol;
     private readonly Action<ReturnTypeEncoder, TypeSymbol, RefKind> encodeReturnSymbol;
     private readonly Func<Type, TypeReferenceHandle> getTypeReference;
+    private readonly Func<Type, EntityHandle> getImportedTypeHandle;
     private readonly Func<StructSymbol, EntityHandle> getUserStructTypeSpec;
     private readonly Func<StructSymbol, EntityHandle> resolveConstructedBaseCtorToken;
     private readonly Func<StructSymbol, ConstructorSymbol, EntityHandle> resolveConstructedBaseExplicitCtorToken;
@@ -115,6 +116,7 @@ internal sealed class TypeDefEmitter
         Action<SignatureTypeEncoder, TypeSymbol> encodeTypeSymbol,
         Action<ReturnTypeEncoder, TypeSymbol, RefKind> encodeReturnSymbol,
         Func<Type, TypeReferenceHandle> getTypeReference,
+        Func<Type, EntityHandle> getImportedTypeHandle,
         Func<StructSymbol, EntityHandle> getUserStructTypeSpec,
         Func<StructSymbol, EntityHandle> resolveConstructedBaseCtorToken,
         Func<StructSymbol, ConstructorSymbol, EntityHandle> resolveConstructedBaseExplicitCtorToken,
@@ -138,6 +140,7 @@ internal sealed class TypeDefEmitter
         this.encodeTypeSymbol = encodeTypeSymbol ?? throw new ArgumentNullException(nameof(encodeTypeSymbol));
         this.encodeReturnSymbol = encodeReturnSymbol ?? throw new ArgumentNullException(nameof(encodeReturnSymbol));
         this.getTypeReference = getTypeReference ?? throw new ArgumentNullException(nameof(getTypeReference));
+        this.getImportedTypeHandle = getImportedTypeHandle ?? throw new ArgumentNullException(nameof(getImportedTypeHandle));
         this.getUserStructTypeSpec = getUserStructTypeSpec ?? throw new ArgumentNullException(nameof(getUserStructTypeSpec));
         this.resolveConstructedBaseCtorToken = resolveConstructedBaseCtorToken ?? throw new ArgumentNullException(nameof(resolveConstructedBaseCtorToken));
         this.resolveConstructedBaseExplicitCtorToken = resolveConstructedBaseExplicitCtorToken ?? throw new ArgumentNullException(nameof(resolveConstructedBaseExplicitCtorToken));
@@ -529,7 +532,7 @@ internal sealed class TypeDefEmitter
                 // Issue #296: the class inherits from an imported CLR base
                 // class; reference it as the TypeDef's base type so the emitted
                 // metadata extends the imported base.
-                baseType = this.getTypeReference(importedBaseClr);
+                baseType = this.getImportedTypeHandle(importedBaseClr);
             }
             else
             {
@@ -705,7 +708,7 @@ internal sealed class TypeDefEmitter
             else if (structSym.ImportedBaseType?.ClrType is Type importedBaseClr)
             {
                 // Issue #296: nested class inheriting an imported CLR base.
-                baseType = this.getTypeReference(importedBaseClr);
+                baseType = this.getImportedTypeHandle(importedBaseClr);
             }
             else
             {
@@ -1849,7 +1852,7 @@ internal sealed class TypeDefEmitter
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => r.Void(), _ => { });
         return this.emitCtx.Metadata.AddMemberReference(
-            parent: this.getTypeReference(importedBaseClr),
+            parent: this.getImportedTypeHandle(importedBaseClr),
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
     }
