@@ -531,9 +531,8 @@ internal sealed partial class ExpressionBinder
     // struct/enum. Build the symbolic awaiter type (`TaskAwaiter[U]`) so the
     // emitted awaiter pool field and `GetAwaiter()`/`GetResult()` call sites
     // agree on `!!0`/`!0` instead of the erased `object`.
-    private static bool IsAwaiterTypeArgumentCandidate(TypeSymbol a) =>
-        a is StructSymbol or InterfaceSymbol or EnumSymbol or TypeParameterSymbol
-        || (a is NullableTypeSymbol nt && nt.UnderlyingType is StructSymbol or InterfaceSymbol or EnumSymbol or TypeParameterSymbol);
+    private static bool IsAwaiterTypeArgumentCandidate(TypeSymbol a)
+        => TypeSymbol.RequiresSymbolicProjection(a);
 
     private static TypeSymbol TryGetAwaiterTypeSymbol(TypeSymbol awaitableType)
     {
