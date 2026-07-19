@@ -723,49 +723,21 @@ internal sealed partial class DeclarationBinder
 
         var accessibility = resolveAccessibility(syntax.AccessibilityModifier);
 
-        // Phase 4.3 / ADR-0020: bind the optional type-parameter list FIRST so
-        // field/parameter types in the body can reference T, U, etc.
-        // Issue #1056: construct and register the struct/class shell BETWEEN
-        // creating the bare type parameters and resolving their constraints, so a
-        // self-referential base-class constraint (CRTP `class Box[T Box[T]]` /
-        // `class Box[T Box]`) can resolve the type's own name and arity.
-        var previousTypeParameters = binderCtx.CurrentTypeParameters;
-        StructSymbol structSymbol = null;
-        ImmutableArray<TypeParameterSymbol> typeParameters = ImmutableArray<TypeParameterSymbol>.Empty;
-        try
-        {
-            if (syntax.TypeParameterList != null)
-            {
-                binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
-
-                // Issue #1537: a nested generic type's own type-parameter
-                // constraints may reference the enclosing type's parameters
-                // (e.g. `struct Middle[T U]` nested in `Outer[U]`), so seed the
-                // enclosing parameters (outermost-first) before binding the
-                // nested type's list.
-                foreach (var tp in CollectEnclosingTypeParameters(containingType))
-                {
-                    binderCtx.CurrentTypeParameters[tp.Name] = tp;
-                }
-
-                typeParameters = BindTypeParameterList(
-                    syntax.TypeParameterList,
-                    bareSymbols =>
-                    {
-                        structSymbol = CreateAndRegisterStructShell(syntax, package, accessibility, name, bareSymbols, containingType);
-                    });
-            }
-        }
-        finally
-        {
-            binderCtx.CurrentTypeParameters = previousTypeParameters;
-        }
-
-        // Non-generic types (or the defensive fallback when the callback did not
-        // run) construct and register the shell here.
-        structSymbol ??= CreateAndRegisterStructShell(syntax, package, accessibility, name, typeParameters, containingType);
-
-        return structSymbol;
+        // Issue #2519: publish the aggregate shell with bare type parameters,
+        // but defer constraint resolution to BindStructDeclarationBody. The
+        // global declaration pass creates every same-compilation type shell
+        // before any body is bound, so a constraint may name a class declared
+        // in a later file without depending on compile-item order. Resolving in
+        // the body phase still preserves CRTP constraints because this shell is
+        // already registered before its own constraints are resolved.
+        var typeParameters = CreateTypeParameterSymbols(syntax.TypeParameterList);
+        return CreateAndRegisterStructShell(
+            syntax,
+            package,
+            accessibility,
+            name,
+            typeParameters,
+            containingType);
     }
 
     /// <summary>

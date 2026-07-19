@@ -496,6 +496,19 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #2519: box a class-constrained type parameter when widening it
+        // to the constraint, one of its bases, or an implemented interface.
+        // For a reference-type instantiation `box !T` is a runtime no-op, while
+        // giving the verifier the constrained reference shape it requires.
+        if (from is TypeParameterSymbol classConstrainedParameter
+            && classConstrainedParameter.ClassConstraint is TypeSymbol classConstraint
+            && IsReferenceCompatible(classConstraint, to))
+        {
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(classConstrainedParameter));
+            return;
+        }
+
         // Phase D: class → interface upcast is a CLR reference-level
         // no-op. The receiver already implements the interface; loading
         // the reference into an interface-typed slot needs no IL.

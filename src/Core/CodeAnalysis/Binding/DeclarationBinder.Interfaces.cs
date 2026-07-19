@@ -42,52 +42,18 @@ internal sealed partial class DeclarationBinder
             "an interface declaration",
             System.AttributeTargets.Interface));
 
-        // Phase 4.3c / ADR-0020: bind type parameters at declaration time so
-        // method-signature binding (which happens later) can resolve them.
-        //
-        // Issue #1061: register the interface's name shell BETWEEN creating the
-        // bare type parameters and resolving their constraints (mirroring the
-        // class/struct path from #1056). This puts the declaring interface's own
-        // name and arity in scope while its type-parameter constraints are bound,
-        // so a self-referential / CRTP constraint such as
-        // `interface IData[T IData]` or `interface IData[TData IAppleData[TData]]`
-        // resolves the interface being declared instead of failing with GS0113.
-        var registered = false;
-        var registrationFailed = false;
-        var typeParameters = BindTypeParameterList(
-            syntax.TypeParameterList,
-            bareSymbols =>
-            {
-                if (!bareSymbols.IsDefaultOrEmpty)
-                {
-                    interfaceSymbol.SetTypeParameters(bareSymbols);
-                }
-
-                if (!scope.TryDeclareTypeAlias(name, interfaceSymbol))
-                {
-                    Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
-                    registrationFailed = true;
-                    return;
-                }
-
-                registered = true;
-            });
-
-        if (registrationFailed)
-        {
-            return null;
-        }
-
-        // Bind the fully-resolved type parameters (with constraints) onto the
-        // interface symbol; the callback only attached the bare symbols.
+        // Issue #2519: publish bare type parameters with the interface shell
+        // and resolve their constraints only when members are bound, after all
+        // same-compilation aggregate shells exist. This is the interface
+        // counterpart of the aggregate-shell lifecycle and preserves CRTP
+        // because the interface's own shell is visible by then.
+        var typeParameters = CreateTypeParameterSymbols(syntax.TypeParameterList);
         if (!typeParameters.IsDefaultOrEmpty)
         {
             interfaceSymbol.SetTypeParameters(typeParameters);
         }
 
-        // Non-generic interfaces (or the defensive fallback when the callback did
-        // not run) register the name shell here.
-        if (!registered && !scope.TryDeclareTypeAlias(name, interfaceSymbol))
+        if (!scope.TryDeclareTypeAlias(name, interfaceSymbol))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
             return null;
@@ -121,6 +87,7 @@ internal sealed partial class DeclarationBinder
 
         try
         {
+            ResolveTypeParameterConstraints(syntax.TypeParameterList, interfaceSymbol.TypeParameters);
             BindInterfaceMembersCore(syntax, interfaceSymbol, package);
         }
         finally
