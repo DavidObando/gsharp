@@ -2284,16 +2284,44 @@ public sealed partial class CSharpToGSharpTranslator
 
         private IReadOnlyList<GTypeReference> MapTypeArguments(GenericNameSyntax generic)
         {
+            // Issue #2500: an individual NullableTypeSyntax can bind as its
+            // underlying type parameter and lose the explicit annotation.
+            // Prefer the constructed method/type symbol, whose TypeArguments
+            // retain nullability recursively for every semantic type shape.
+            ImmutableArray<ITypeSymbol> boundTypeArguments = this.GetBoundTypeArguments(generic);
             var result = new List<GTypeReference>();
-            foreach (TypeSyntax argument in generic.TypeArgumentList.Arguments)
+            for (int i = 0; i < generic.TypeArgumentList.Arguments.Count; i++)
             {
-                ITypeSymbol symbol = this.context.GetTypeInfo(argument).Type;
+                TypeSyntax argument = generic.TypeArgumentList.Arguments[i];
+                ITypeSymbol symbol = i < boundTypeArguments.Length
+                    ? boundTypeArguments[i]
+                    : this.context.GetTypeInfo(argument).Type;
                 result.Add(symbol != null
                     ? this.typeMapper.Map(symbol, this.context, argument.GetLocation())
                     : new NamedTypeReference(argument.ToString()));
             }
 
             return result;
+        }
+
+        private ImmutableArray<ITypeSymbol> GetBoundTypeArguments(GenericNameSyntax generic)
+        {
+            ISymbol symbol = this.context.GetSymbolInfo(generic).Symbol;
+            if (symbol == null && generic.Parent is InvocationExpressionSyntax invocation)
+            {
+                symbol = this.context.GetSymbolInfo(invocation).Symbol;
+            }
+
+            ImmutableArray<ITypeSymbol> typeArguments = symbol switch
+            {
+                IMethodSymbol method => method.TypeArguments,
+                INamedTypeSymbol type => type.TypeArguments,
+                _ => ImmutableArray<ITypeSymbol>.Empty,
+            };
+
+            return typeArguments.Length == generic.TypeArgumentList.Arguments.Count
+                ? typeArguments
+                : ImmutableArray<ITypeSymbol>.Empty;
         }
 
         private GExpression TranslateInterpolatedString(InterpolatedStringExpressionSyntax interpolated)
