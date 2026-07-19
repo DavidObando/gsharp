@@ -1550,12 +1550,12 @@ internal sealed class LambdaBinder
 
         if (left == TypeSymbol.Null)
         {
-            return right;
+            return right is NullableTypeSymbol ? right : NullableTypeSymbol.Get(right);
         }
 
         if (right == TypeSymbol.Null)
         {
-            return left;
+            return left is NullableTypeSymbol ? left : NullableTypeSymbol.Get(left);
         }
 
         var leftToRight = Conversion.Classify(left, right);
@@ -1573,8 +1573,10 @@ internal sealed class LambdaBinder
 
         if (leftToRight.IsImplicit && rightToLeft.IsImplicit)
         {
-            // Pick the left arm deterministically when both sides convert.
-            return left;
+            // Issue #2498: mutually convertible nullable/non-nullable
+            // references must union their annotations independent of return
+            // statement order.
+            return MemberLookup.MergeInferredTypeArgument(left, right);
         }
 
         return null;

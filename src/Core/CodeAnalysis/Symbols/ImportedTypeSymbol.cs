@@ -86,11 +86,12 @@ public sealed class ImportedTypeSymbol : TypeSymbol
     /// </summary>
     public bool HasSubstitutableTypeArgument =>
         !TypeArguments.IsDefaultOrEmpty
-        && (HasTypeParameterArgument
-            || TypeArguments.Any(static a => a.ClrType == null
-                || (a is ImportedTypeSymbol nested
-                    && nested.OpenDefinition != null
-                    && !nested.TypeArguments.IsDefaultOrEmpty)));
+        && TypeArguments.Any(static a =>
+            a.ClrType == null
+            || TypeSymbol.RequiresSymbolicProjection(a)
+            || (a is ImportedTypeSymbol nested
+                && nested.OpenDefinition != null
+                && !nested.TypeArguments.IsDefaultOrEmpty));
 
     /// <summary>
     /// Gets or creates the imported type symbol for the given CLR type.

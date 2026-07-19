@@ -1681,13 +1681,7 @@ internal sealed partial class ExpressionBinder
         // (e.g. `outer[0]` on `List[List[MyGs]]` -> `List[MyGs]`); without
         // this the element would type-erase to `List<object>` and downstream
         // member access on the result would emit against the wrong parent.
-        var hasSubstitutableArgs = !target.TypeArguments.IsDefaultOrEmpty
-            && (target.HasTypeParameterArgument
-                || target.TypeArguments.Any(static a => a.ClrType == null
-                    || (a is ImportedTypeSymbol nested
-                        && nested.OpenDefinition != null
-                        && !nested.TypeArguments.IsDefaultOrEmpty)));
-        if (hasSubstitutableArgs
+        if (target.HasSubstitutableTypeArgument
             && target.OpenDefinition is System.Type openDefinition)
         {
             try

@@ -653,6 +653,49 @@ public class TypeSymbol : Symbol
     }
 
     /// <summary>
+    /// Issue #2498: returns <c>true</c> when <paramref name="type"/> carries a
+    /// nullable-reference annotation at any structural position. Unlike CLR
+    /// <c>Nullable&lt;T&gt;</c>, reference nullability has no distinct runtime
+    /// <see cref="Type"/> shape, so reflection-only generic substitution cannot
+    /// reproduce it after inference.
+    /// </summary>
+    /// <param name="type">The type to inspect.</param>
+    /// <returns><c>true</c> when a nullable-reference wrapper is present.</returns>
+    public static bool ContainsReferenceNullableAnnotation(TypeSymbol type)
+    {
+        if (type is NullableTypeSymbol nullable)
+        {
+            if (!NullableLifting.IsAnyValueTypeNullable(nullable))
+            {
+                return true;
+            }
+
+            return ContainsReferenceNullableAnnotation(nullable.UnderlyingType);
+        }
+
+        foreach (var inner in GetWrappedTypes(type))
+        {
+            if (ContainsReferenceNullableAnnotation(inner))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when a symbolic type projection contains information
+    /// that its CLR <see cref="Type"/> cannot faithfully represent.
+    /// </summary>
+    /// <param name="type">The type to inspect.</param>
+    /// <returns><c>true</c> when symbolic substitution must be retained.</returns>
+    public static bool RequiresSymbolicProjection(TypeSymbol type)
+        => ContainsTypeParameter(type)
+            || ContainsSameCompilationUserType(type)
+            || ContainsReferenceNullableAnnotation(type);
+
+    /// <summary>
     /// Returns true when <paramref name="type"/> — after unwrapping nullable,
     /// slice and array wrappers — is itself a same-compilation user-defined
     /// type (struct/class/enum/interface/delegate with a null <c>ClrType</c>).

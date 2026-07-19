@@ -150,6 +150,16 @@ internal sealed class ImportedMemberRefFactory
             return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         }
 
+        // Issue #2498: nullable-reference annotations do not change the CLR
+        // element token. Forward same-compilation classes/interfaces/delegates
+        // through their underlying symbol just as imported nullable references
+        // already flow through the shared CLR Type.
+        if (element is NullableTypeSymbol nullableReferenceElement
+            && !NullableLifting.IsAnyValueTypeNullable(nullableReferenceElement))
+        {
+            return this.GetElementTypeToken(nullableReferenceElement.UnderlyingType);
+        }
+
         if (element == TypeSymbol.Int32)
         {
             return this.GetTypeReference(this.emitCtx.CoreInt32Type);
@@ -184,7 +194,7 @@ internal sealed class ImportedMemberRefFactory
         if (element is ImportedTypeSymbol symbolicImported
             && !symbolicImported.TypeArguments.IsDefaultOrEmpty
             && !symbolicImported.HasTypeParameterArgument
-            && symbolicImported.TypeArguments.Any(ReflectionMetadataEmitter.ArgIsSymbolicUserDefined))
+            && symbolicImported.TypeArguments.Any(TypeSymbol.RequiresSymbolicProjection))
         {
             var sigBlob = new BlobBuilder();
             this.signatures.EncodeTypeSymbol(new BlobEncoder(sigBlob).TypeSpecificationSignature(), symbolicImported);
@@ -817,7 +827,7 @@ internal sealed class ImportedMemberRefFactory
             {
                 if (!typeArgSymbols.IsDefaultOrEmpty
                     && i < typeArgSymbols.Length
-                    && ReflectionMetadataEmitter.ArgIsSymbolicUserDefined(typeArgSymbols[i]))
+                    && TypeSymbol.RequiresSymbolicProjection(typeArgSymbols[i]))
                 {
                     this.signatures.EncodeTypeSymbol(symbolicArgsEncoder.AddArgument(), typeArgSymbols[i]);
                 }
@@ -842,7 +852,7 @@ internal sealed class ImportedMemberRefFactory
         // the same generic method was referenced multiple times with the same
         // user-type generic args.
         var hasSymbolArgs = !typeArgSymbols.IsDefaultOrEmpty
-            && typeArgSymbols.Any(ReflectionMetadataEmitter.ArgIsSymbolicUserDefined);
+            && typeArgSymbols.Any(TypeSymbol.RequiresSymbolicProjection);
         if (!hasSymbolArgs)
         {
             if (this.cache.MethodSpecs.TryGetValue(method, out var existing))
@@ -874,7 +884,7 @@ internal sealed class ImportedMemberRefFactory
             // collapsing to System.Object at the placeholder.
             if (!typeArgSymbols.IsDefaultOrEmpty
                 && i < typeArgSymbols.Length
-                && ReflectionMetadataEmitter.ArgIsSymbolicUserDefined(typeArgSymbols[i]))
+                && TypeSymbol.RequiresSymbolicProjection(typeArgSymbols[i]))
             {
                 this.signatures.EncodeTypeSymbol(argsEncoder.AddArgument(), typeArgSymbols[i]);
             }
@@ -906,7 +916,7 @@ internal sealed class ImportedMemberRefFactory
         if (method == null
             || !TryNormalizeToSymbolicContainer(containingTypeSymbol, out var openDefinition, out var typeArguments)
             || typeArguments.IsDefaultOrEmpty
-            || !(typeArguments.Any(TypeSymbol.ContainsTypeParameter) || typeArguments.Any(ReflectionMetadataEmitter.ArgIsSymbolicUserDefined)))
+            || !typeArguments.Any(TypeSymbol.RequiresSymbolicProjection))
         {
             return false;
         }

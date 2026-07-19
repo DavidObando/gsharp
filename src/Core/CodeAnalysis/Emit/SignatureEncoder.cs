@@ -311,7 +311,7 @@ internal sealed class SignatureEncoder
             && !symbolicImported.TypeArguments.IsDefaultOrEmpty
             && !symbolicImported.HasTypeParameterArgument
             && symbolicImported.OpenDefinition != null
-            && symbolicImported.TypeArguments.Any(ReflectionMetadataEmitter.ArgIsSymbolicUserDefined))
+            && symbolicImported.TypeArguments.Any(TypeSymbol.RequiresSymbolicProjection))
         {
             var genericInst = encoder.GenericInstantiation(
                 this.outer.memberRefs.GetTypeReference(symbolicImported.OpenDefinition),

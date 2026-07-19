@@ -862,8 +862,7 @@ internal sealed class MemberLookup
             // symbolic slice here the call's return would collapse to the
             // erased `object[]` and fail to convert to `[]Foo` (GS0155). Mirror
             // the generic-type branch below, which already honours #903.
-            if (TypeSymbol.ContainsTypeParameter(mappedElement)
-                || TypeSymbol.ContainsSameCompilationUserType(mappedElement))
+            if (TypeSymbol.RequiresSymbolicProjection(mappedElement))
             {
                 return SliceTypeSymbol.Get(mappedElement);
             }
@@ -878,8 +877,7 @@ internal sealed class MemberLookup
         {
             var openPointee = openClr.GetElementType();
             var mappedPointee = MapOpenClrTypeToSymbolic(openPointee, openDefinition, typeArguments, openMethodDefinition, methodTypeArguments);
-            if (TypeSymbol.ContainsTypeParameter(mappedPointee)
-                || TypeSymbol.ContainsSameCompilationUserType(mappedPointee))
+            if (TypeSymbol.RequiresSymbolicProjection(mappedPointee))
             {
                 return ByRefTypeSymbol.Get(mappedPointee);
             }
@@ -904,8 +902,7 @@ internal sealed class MemberLookup
                 openMethodDefinition,
                 methodTypeArguments);
 
-            if (TypeSymbol.ContainsTypeParameter(mappedUnderlying)
-                || TypeSymbol.ContainsSameCompilationUserType(mappedUnderlying))
+            if (TypeSymbol.RequiresSymbolicProjection(mappedUnderlying))
             {
                 return NullableTypeSymbol.Get(mappedUnderlying);
             }
@@ -931,8 +928,7 @@ internal sealed class MemberLookup
                 // receiver keep the `Check` element identity instead of
                 // collapsing to the type-erased `IEnumerable<object>` (which
                 // for a value-type element is not even a legal up-cast).
-                if (TypeSymbol.ContainsTypeParameter(mapped)
-                    || TypeSymbol.ContainsSameCompilationUserType(mapped))
+                if (TypeSymbol.RequiresSymbolicProjection(mapped))
                 {
                     anyParam = true;
                 }
@@ -1102,7 +1098,7 @@ internal sealed class MemberLookup
         // erased `TSource` to `object`, so a generic return like `Single() →
         // TSource` would otherwise surface as `object` and lose the `Check`
         // identity (breaking `net.Id`). The symbolic projection recovers it.
-        return TypeSymbol.ContainsTypeParameter(mapped) || TypeSymbol.ContainsSameCompilationUserType(mapped)
+        return TypeSymbol.RequiresSymbolicProjection(mapped)
             ? mapped
             : null;
     }
@@ -1162,8 +1158,7 @@ internal sealed class MemberLookup
             // recovered from a `List[Check]` receiver) does too — the closed
             // CLR method erased it to `object`, so without the symbolic vector
             // the call's return type / lambda parameter type would be `object`.
-            if (inferred[i] != null
-                && (TypeSymbol.ContainsTypeParameter(inferred[i]) || TypeSymbol.ContainsSameCompilationUserType(inferred[i])))
+            if (TypeSymbol.RequiresSymbolicProjection(inferred[i]))
             {
                 anySymbolic = true;
                 break;
@@ -3087,6 +3082,9 @@ internal sealed class MemberLookup
         return TypeSymbol.FromClrType(closedType);
     }
 
+    internal static TypeSymbol MergeInferredTypeArgument(TypeSymbol existing, TypeSymbol incoming)
+        => MergeRecoveredTypeArgument(existing, incoming);
+
     private static bool IsBetterSymbolicIndexerCandidate(
         ImmutableArray<TypeSymbol> candidate,
         ImmutableArray<TypeSymbol> other,
@@ -3853,6 +3851,26 @@ internal sealed class MemberLookup
             return;
         }
 
+        // A direct MVar match must observe the complete symbolic actual before
+        // nullable-reference wrappers are removed for outer structural
+        // matching. Multiple inference sources join compatible nullable
+        // evidence instead of depending on argument order.
+        if (openClr.IsGenericParameter && openClr.DeclaringMethod != null)
+        {
+            if (ReferenceEquals(openClr.DeclaringMethod, openMethod)
+                || openClr.DeclaringMethod.MetadataToken == openMethod.MetadataToken)
+            {
+                var pos = openClr.GenericParameterPosition;
+                if ((uint)pos < (uint)result.Length)
+                {
+                    var recovered = NormalizeRecoveredNullability(actual);
+                    result[pos] = MergeInferredTypeArgument(result[pos], recovered);
+                }
+            }
+
+            return;
+        }
+
         // Reference-type nullability is a source annotation and does not add a
         // CLR wrapper. Unify through it so a nullable reference receiver such as
         // IEnumerable<Choice>? still recovers TSource = Choice. Preserve real
@@ -3861,22 +3879,6 @@ internal sealed class MemberLookup
             && !NullableLifting.IsAnyValueTypeNullable(nullableActual))
         {
             actual = nullableActual.UnderlyingType;
-        }
-
-        // Open MVar(i) → record the actual symbolic shape (first wins).
-        if (openClr.IsGenericParameter && openClr.DeclaringMethod != null)
-        {
-            if (ReferenceEquals(openClr.DeclaringMethod, openMethod)
-                || openClr.DeclaringMethod.MetadataToken == openMethod.MetadataToken)
-            {
-                var pos = openClr.GenericParameterPosition;
-                if ((uint)pos < (uint)result.Length && result[pos] == null)
-                {
-                    result[pos] = NormalizeRecoveredNullability(actual);
-                }
-            }
-
-            return;
         }
 
         // T[] / []T (open array element).
@@ -4045,6 +4047,112 @@ internal sealed class MemberLookup
         }
 
         return t;
+    }
+
+    private static TypeSymbol MergeRecoveredTypeArgument(TypeSymbol existing, TypeSymbol incoming)
+    {
+        if (existing == null)
+        {
+            return incoming;
+        }
+
+        if (incoming == null || ReferenceEquals(existing, incoming))
+        {
+            return existing;
+        }
+
+        var existingNullable = existing is NullableTypeSymbol en
+            && !NullableLifting.IsAnyValueTypeNullable(en);
+        var incomingNullable = incoming is NullableTypeSymbol inn
+            && !NullableLifting.IsAnyValueTypeNullable(inn);
+        if (existingNullable || incomingNullable)
+        {
+            var existingUnderlying = existingNullable ? ((NullableTypeSymbol)existing).UnderlyingType : existing;
+            var incomingUnderlying = incomingNullable ? ((NullableTypeSymbol)incoming).UnderlyingType : incoming;
+            if (DeclarationBinder.TypeSignaturesEquivalent(existingUnderlying, incomingUnderlying))
+            {
+                return NullableTypeSymbol.Get(
+                    MergeRecoveredTypeArgument(existingUnderlying, incomingUnderlying));
+            }
+        }
+
+        if (existing is ImportedTypeSymbol existingImported
+            && incoming is ImportedTypeSymbol incomingImported
+            && existingImported.OpenDefinition != null
+            && incomingImported.OpenDefinition != null
+            && ClrTypeUtilities.AreSame(existingImported.OpenDefinition, incomingImported.OpenDefinition)
+            && existingImported.TypeArguments.Length == incomingImported.TypeArguments.Length)
+        {
+            var merged = ImmutableArray.CreateBuilder<TypeSymbol>(existingImported.TypeArguments.Length);
+            var changed = false;
+            for (var i = 0; i < existingImported.TypeArguments.Length; i++)
+            {
+                var left = existingImported.TypeArguments[i];
+                var right = incomingImported.TypeArguments[i];
+                if (!DeclarationBinder.TypeSignaturesEquivalent(left, right))
+                {
+                    return existing;
+                }
+
+                var item = MergeRecoveredTypeArgument(left, right);
+                changed |= !ReferenceEquals(item, left);
+                merged.Add(item);
+            }
+
+            if (changed)
+            {
+                return ImportedTypeSymbol.GetConstructed(
+                    existingImported.ClrType,
+                    existingImported.OpenDefinition,
+                    merged.MoveToImmutable());
+            }
+        }
+
+        if (existing is SliceTypeSymbol existingSlice
+            && incoming is SliceTypeSymbol incomingSlice
+            && DeclarationBinder.TypeSignaturesEquivalent(existingSlice.ElementType, incomingSlice.ElementType))
+        {
+            return SliceTypeSymbol.Get(
+                MergeRecoveredTypeArgument(existingSlice.ElementType, incomingSlice.ElementType));
+        }
+
+        if (existing is ArrayTypeSymbol existingArray
+            && incoming is ArrayTypeSymbol incomingArray
+            && existingArray.Length == incomingArray.Length
+            && DeclarationBinder.TypeSignaturesEquivalent(existingArray.ElementType, incomingArray.ElementType))
+        {
+            return ArrayTypeSymbol.Get(
+                MergeRecoveredTypeArgument(existingArray.ElementType, incomingArray.ElementType),
+                existingArray.Length);
+        }
+
+        if (existing is TupleTypeSymbol existingTuple
+            && incoming is TupleTypeSymbol incomingTuple
+            && existingTuple.ElementTypes.Length == incomingTuple.ElementTypes.Length)
+        {
+            var merged = ImmutableArray.CreateBuilder<TypeSymbol>(existingTuple.ElementTypes.Length);
+            for (var i = 0; i < existingTuple.ElementTypes.Length; i++)
+            {
+                if (!DeclarationBinder.TypeSignaturesEquivalent(
+                    existingTuple.ElementTypes[i],
+                    incomingTuple.ElementTypes[i]))
+                {
+                    return existing;
+                }
+
+                merged.Add(MergeRecoveredTypeArgument(
+                    existingTuple.ElementTypes[i],
+                    incomingTuple.ElementTypes[i]));
+            }
+
+            return TupleTypeSymbol.Get(merged.MoveToImmutable());
+        }
+
+        return !TypeSymbol.ContainsReferenceNullableAnnotation(existing)
+            && TypeSymbol.ContainsReferenceNullableAnnotation(incoming)
+            && DeclarationBinder.TypeSignaturesEquivalent(existing, incoming)
+                ? incoming
+                : existing;
     }
 
     private static TypeSymbol TryGetElementType(TypeSymbol t)

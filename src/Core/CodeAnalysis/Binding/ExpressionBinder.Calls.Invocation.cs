@@ -369,7 +369,7 @@ internal sealed partial class ExpressionBinder
         // open `T` return to the user `Entry` symbol (whose `ClrType` is null
         // while being emitted). Without this the result type-erases to `object`
         // and an `Entry`-typed target fails to bind (GS0155).
-        return TypeSymbol.ContainsTypeParameter(mapped) || TypeSymbol.ContainsSameCompilationUserType(mapped)
+        return TypeSymbol.RequiresSymbolicProjection(mapped)
             ? mapped
             : null;
     }
@@ -427,7 +427,7 @@ internal sealed partial class ExpressionBinder
         }
 
         var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openPointee, imp.OpenDefinition, imp.TypeArguments);
-        return TypeSymbol.ContainsTypeParameter(mapped) || TypeSymbol.ContainsSameCompilationUserType(mapped)
+        return TypeSymbol.RequiresSymbolicProjection(mapped)
             ? mapped
             : null;
     }
@@ -858,8 +858,7 @@ internal sealed partial class ExpressionBinder
 
         var methodHasSymbolicArgs = closedMethod.IsGenericMethod
             && !symbolicMethodTypeArgs.IsDefaultOrEmpty
-            && symbolicMethodTypeArgs.Any(s => s != null
-                && (TypeSymbol.ContainsTypeParameter(s) || TypeSymbol.ContainsSameCompilationUserType(s)));
+            && symbolicMethodTypeArgs.Any(TypeSymbol.RequiresSymbolicProjection);
 
         Type receiverOpenDef = null;
         ImmutableArray<TypeSymbol> receiverTypeArgs = default;
@@ -870,8 +869,7 @@ internal sealed partial class ExpressionBinder
         }
 
         var receiverHasSymbolicArgs = receiverOpenDef != null
-            && receiverTypeArgs.Any(s => s != null
-                && (TypeSymbol.ContainsTypeParameter(s) || TypeSymbol.ContainsSameCompilationUserType(s)));
+            && receiverTypeArgs.Any(TypeSymbol.RequiresSymbolicProjection);
 
         if (!methodHasSymbolicArgs && !receiverHasSymbolicArgs)
         {
@@ -950,8 +948,8 @@ internal sealed partial class ExpressionBinder
         // Only override the erased target when the recovered shape actually
         // carries a type parameter or same-compilation user type; otherwise the
         // ordinary closed-CLR delegate target is already correct.
-        var carries = (returnType != null && (TypeSymbol.ContainsTypeParameter(returnType) || TypeSymbol.ContainsSameCompilationUserType(returnType)))
-            || parameterTypes.Any(p => p != null && (TypeSymbol.ContainsTypeParameter(p) || TypeSymbol.ContainsSameCompilationUserType(p)));
+        var carries = TypeSymbol.RequiresSymbolicProjection(returnType)
+            || parameterTypes.Any(TypeSymbol.RequiresSymbolicProjection);
         if (!carries)
         {
             return false;

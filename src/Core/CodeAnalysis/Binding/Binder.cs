@@ -2882,7 +2882,7 @@ public sealed class Binder
         {
             var clrArgs = new System.Type[syntax.TypeArguments.Count];
             var symbolicArgs = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.TypeArguments.Count);
-            var hasTypeParameterArg = false;
+            var hasSymbolicArg = false;
             for (var i = 0; i < syntax.TypeArguments.Count; i++)
             {
                 var ta = BindTypeClause(syntax.TypeArguments[i]);
@@ -2911,9 +2911,9 @@ public sealed class Binder
                 // CLR shape so member / index / conversion resolution keeps
                 // working, while the symbolic `[T]` is preserved on the result
                 // for inference, substitution, and erased emit.
-                if (TypeSymbol.ContainsTypeParameter(ta) || TypeSymbol.ContainsSameCompilationUserType(ta))
+                if (TypeSymbol.RequiresSymbolicProjection(ta))
                 {
-                    hasTypeParameterArg = true;
+                    hasSymbolicArg = true;
 
                     // Issue #2391: source enums use Int32 as their established
                     // CLR ride-through. Preserve that surrogate when closing
@@ -2921,8 +2921,17 @@ public sealed class Binder
                     // struct-constrained interface leaves Nullable<T> member
                     // signatures unconstructable and hides parameterized
                     // methods from overload resolution.
-                    var erasedArgument = ta is EnumSymbol ? typeof(int) : typeof(object);
-                    clrArgs[i] = scope.References.MapClrTypeToReferences(erasedArgument);
+                    if (TypeSymbol.ContainsTypeParameter(ta) || TypeSymbol.ContainsSameCompilationUserType(ta))
+                    {
+                        var erasedArgument = ta is EnumSymbol ? typeof(int) : typeof(object);
+                        clrArgs[i] = scope.References.MapClrTypeToReferences(erasedArgument);
+                    }
+                    else
+                    {
+                        clrArgs[i] = ResolveClrTypeForGenericArg(ta)
+                            ?? scope.References.MapClrTypeToReferences(ta.ClrType);
+                    }
+
                     continue;
                 }
 
@@ -2938,7 +2947,7 @@ public sealed class Binder
             try
             {
                 var closed = clrOpenType.MakeGenericType(clrArgs);
-                if (hasTypeParameterArg)
+                if (hasSymbolicArg)
                 {
                     // #313 / #671: keep the symbolic type arguments alongside
                     // the type-erased closed CLR shape so call-site inference,
@@ -3701,7 +3710,7 @@ public sealed class Binder
 
         var clrArgs = new Type[targetArity];
         var symbolicArgs = ImmutableArray.CreateBuilder<TypeSymbol>(targetArity);
-        var hasTypeParameterArg = false;
+        var hasSymbolicArg = false;
         for (var i = 0; i < targetArity; i++)
         {
             var ta = BindTypeClause(syntax.TypeArguments[i]);
@@ -3725,7 +3734,7 @@ public sealed class Binder
             // formed while the symbolic argument is preserved alongside.
             if (TypeSymbol.ContainsTypeParameter(ta))
             {
-                hasTypeParameterArg = true;
+                hasSymbolicArg = true;
                 clrArgs[i] = scope.References.MapClrTypeToReferences(typeof(object));
                 continue;
             }
@@ -3734,7 +3743,7 @@ public sealed class Binder
             // System.Object (same as type parameters above).
             if (ta.ClrType == null)
             {
-                hasTypeParameterArg = true;
+                hasSymbolicArg = true;
                 clrArgs[i] = scope.References.MapClrTypeToReferences(typeof(object));
                 continue;
             }
@@ -3745,7 +3754,7 @@ public sealed class Binder
         try
         {
             var closed = clrType.MakeGenericType(clrArgs);
-            if (hasTypeParameterArg)
+            if (hasSymbolicArg)
             {
                 return ImportedTypeSymbol.GetConstructed(closed, clrType, symbolicArgs.MoveToImmutable());
             }
@@ -3950,7 +3959,7 @@ public sealed class Binder
 
         var clrArgs = new Type[argSyntaxes.Count];
         var symbolicArgs = ImmutableArray.CreateBuilder<TypeSymbol>(argSyntaxes.Count);
-        var hasTypeParameterArg = false;
+        var hasSymbolicArg = false;
         for (var i = 0; i < argSyntaxes.Count; i++)
         {
             var ta = BindTypeClause(argSyntaxes[i]);
@@ -3970,10 +3979,15 @@ public sealed class Binder
 
             // #313 / #671: in-scope type parameters and user types without a
             // ClrType project onto System.Object under the type-erased model.
-            if (TypeSymbol.ContainsTypeParameter(ta) || TypeSymbol.ContainsSameCompilationUserType(ta) || ta.ClrType == null)
+            if (TypeSymbol.RequiresSymbolicProjection(ta) || ta.ClrType == null)
             {
-                hasTypeParameterArg = true;
-                clrArgs[i] = scope.References.MapClrTypeToReferences(typeof(object));
+                hasSymbolicArg = true;
+                clrArgs[i] = TypeSymbol.ContainsTypeParameter(ta)
+                    || TypeSymbol.ContainsSameCompilationUserType(ta)
+                    || ta.ClrType == null
+                        ? scope.References.MapClrTypeToReferences(typeof(object))
+                        : ResolveClrTypeForGenericArg(ta)
+                            ?? scope.References.MapClrTypeToReferences(ta.ClrType);
                 continue;
             }
 
@@ -3983,7 +3997,7 @@ public sealed class Binder
         try
         {
             var closed = nestedDef.MakeGenericType(clrArgs);
-            if (hasTypeParameterArg)
+            if (hasSymbolicArg)
             {
                 return ImportedTypeSymbol.GetConstructed(closed, nestedDef, symbolicArgs.MoveToImmutable());
             }
@@ -4325,9 +4339,14 @@ public sealed class Binder
                 return;
             }
 
-            // First seen value wins. Cross-arg consistency is verified later
-            // by the post-substitution argument-type check.
-            if (!substitution.ContainsKey(tp))
+            // Join compatible nullable-reference evidence across arguments.
+            // The post-substitution applicability check still rejects genuine
+            // type conflicts.
+            if (substitution.TryGetValue(tp, out var existing))
+            {
+                substitution[tp] = MemberLookup.MergeInferredTypeArgument(existing, argumentType);
+            }
+            else
             {
                 substitution[tp] = argumentType;
             }
