@@ -1773,7 +1773,8 @@ public sealed partial class CSharpToGSharpTranslator
                         indexerSymbol);
 
                     elements.Add(new CollectionInitializerElement(
-                        this.TranslateExpression(indexAccess.ArgumentList.Arguments[0].Expression),
+                        this.TranslateIndexArgumentWithNullForgiveness(
+                            indexAccess.ArgumentList.Arguments[0]),
                         indexedValue,
                         indexed: true));
                 }

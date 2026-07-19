@@ -198,7 +198,8 @@ public sealed partial class CSharpToGSharpTranslator
                     GExpression index = elementAccess.ArgumentList.Arguments.Count > 0
                         ? this.CoerceIndexToInt32(
                             elementAccess,
-                            this.TranslateExpression(elementAccess.ArgumentList.Arguments[0].Expression))
+                            this.TranslateIndexArgumentWithNullForgiveness(
+                                elementAccess.ArgumentList.Arguments[0]))
                         : new IdentifierExpression("nil");
                     return new IndexExpression(
                         this.TranslateReceiverWithNullForgiveness(elementAccess.Expression),
@@ -282,7 +283,8 @@ public sealed partial class CSharpToGSharpTranslator
 
                 case ElementBindingExpressionSyntax elementBinding:
                     GExpression bindingIndex = elementBinding.ArgumentList.Arguments.Count > 0
-                        ? this.TranslateExpression(elementBinding.ArgumentList.Arguments[0].Expression)
+                        ? this.TranslateIndexArgumentWithNullForgiveness(
+                            elementBinding.ArgumentList.Arguments[0])
                         : new IdentifierExpression("nil");
                     return new IndexExpression(new ConditionalReceiverExpression(), bindingIndex);
 
