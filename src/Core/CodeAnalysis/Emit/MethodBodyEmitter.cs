@@ -501,6 +501,11 @@ internal sealed partial class MethodBodyEmitter
 
     private static bool IsInterfaceTargetType(TypeSymbol type)
     {
+        if (type is NullableTypeSymbol nullable)
+        {
+            type = nullable.UnderlyingType;
+        }
+
         if (type is InterfaceSymbol)
         {
             return true;
@@ -511,12 +516,30 @@ internal sealed partial class MethodBodyEmitter
 
     private static bool IsInterfaceSourceType(TypeSymbol type)
     {
+        if (type is NullableTypeSymbol nullable)
+        {
+            type = nullable.UnderlyingType;
+        }
+
         if (type is InterfaceSymbol)
         {
             return true;
         }
 
         return type?.ClrType != null && type.ClrType.IsInterface;
+    }
+
+    private static bool IsExplicitUnboxingSourceType(TypeSymbol type)
+    {
+        if (type is NullableTypeSymbol nullable)
+        {
+            type = nullable.UnderlyingType;
+        }
+
+        return type?.ClrType.IsSameAs(typeof(object)) == true
+            || type?.ClrType.IsSameAs(typeof(System.ValueType)) == true
+            || type?.ClrType.IsSameAs(typeof(System.Enum)) == true
+            || IsInterfaceSourceType(type);
     }
 
     private static bool IsUnsignedClrType(Type t)

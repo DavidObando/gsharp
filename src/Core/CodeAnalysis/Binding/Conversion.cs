@@ -480,6 +480,19 @@ public sealed class Conversion
                     }
                 }
 
+                // Issue #2492: nullable annotations on boxed/reference sources
+                // do not remove C#'s explicit unboxing conversion to a nullable
+                // value type. `object?` / `I?` -> `T?` lowers to
+                // `unbox.any Nullable<T>`: null becomes an empty nullable, a
+                // boxed T becomes a present nullable, and a mismatched box
+                // throws InvalidCastException. Keep this explicit-only and
+                // symbol-aware so primitive/imported/user enum or struct
+                // targets and `[T struct] T?` all share the same rule.
+                if (HasExplicitUnboxingConversion(fromNullable.UnderlyingType, toNullable))
+                {
+                    return Conversion.Explicit;
+                }
+
                 return Conversion.None;
             }
 
@@ -777,8 +790,12 @@ public sealed class Conversion
             return Conversion.Implicit;
         }
 
-        // ADR-0045 explicit unbox: `(T)objectValue` for any value-type T.
-        if (from?.ClrType.IsSameAs(typeof(object)) == true && to?.ClrType != null && to.ClrType.IsValueType)
+        // ADR-0045 / issue #421: explicit unboxing from object, ValueType,
+        // Enum, or a compatible interface to a value type. Issue #2492
+        // includes nullable value-type targets whose real CLR storage is
+        // `Nullable<T>` even when T is a same-compilation symbol without a
+        // ClrType yet.
+        if (HasExplicitUnboxingConversion(from, to))
         {
             return Conversion.Explicit;
         }
@@ -796,17 +813,6 @@ public sealed class Conversion
         // a type parameter. `object?` reaches this via its `object` ClrType.
         // The emitter materialises this with `unbox.any T`.
         if (from?.ClrType.IsSameAs(typeof(object)) == true && to is TypeParameterSymbol)
-        {
-            return Conversion.Explicit;
-        }
-
-        // Issue #421 P2-5: an interface-typed reference holding a boxed
-        // value type unboxes back to that value type via an explicit cast
-        // (`MyStruct(iface)`). On the CLR this lowers to `unbox.any`. We
-        // accept either a user-declared interface (InterfaceSymbol, whose
-        // own ClrType is null) or an imported CLR interface (e.g.
-        // System.IComparable). Mirrors C# §10.3.5.
-        if (IsInterfaceLikeType(from) && to?.ClrType != null && to.ClrType.IsValueType)
         {
             return Conversion.Explicit;
         }
@@ -2343,6 +2349,50 @@ public sealed class Conversion
         {
             return false;
         }
+    }
+
+    private static bool HasExplicitUnboxingConversion(TypeSymbol from, TypeSymbol to)
+    {
+        if (from is NullableTypeSymbol nullableFrom)
+        {
+            from = nullableFrom.UnderlyingType;
+        }
+
+        if (to is NullableTypeSymbol nullableTo)
+        {
+            if (!NullableLifting.IsAnyValueTypeNullable(nullableTo))
+            {
+                return false;
+            }
+
+            to = nullableTo.UnderlyingType;
+        }
+        else if (!IsValueTypeLikeFrom(to))
+        {
+            return false;
+        }
+
+        if (from?.ClrType.IsSameAs(typeof(object)) == true)
+        {
+            return true;
+        }
+
+        if (from?.ClrType.IsSameAs(typeof(System.ValueType)) == true)
+        {
+            return true;
+        }
+
+        if (from?.ClrType.IsSameAs(typeof(System.Enum)) == true)
+        {
+            return IsEnumLikeType(to);
+        }
+
+        // C# only permits interface unboxing when the target value type is
+        // known to implement that interface. Keep unrelated interface/value
+        // pairs as genuine no-conversion diagnostics rather than deferring an
+        // impossible cast to runtime.
+        return IsInterfaceLikeType(from)
+            && IsValueTypeAssignableToInterface(to, from);
     }
 
     private static bool IsValueTypeLikeFrom(TypeSymbol type)
