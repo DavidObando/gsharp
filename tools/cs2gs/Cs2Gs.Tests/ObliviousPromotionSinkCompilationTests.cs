@@ -146,6 +146,61 @@ namespace Demo
         Assert.DoesNotContain("string?", printed);
     }
 
+    [Fact]
+    public void TupleElementPromotion_ScalarCallSinksCompileWithGsc()
+    {
+        string printed = TranslateOblivious(@"
+namespace Demo
+{
+    public delegate int Counter(string value);
+
+    public sealed class Box
+    {
+        public Box(string value)
+        {
+        }
+    }
+
+    public sealed class Lookup
+    {
+        public int this[string key] => 1;
+    }
+
+    public static class Repro
+    {
+        public static int Run(bool missing, Counter counter, Lookup lookup)
+        {
+            var result = Gather(missing);
+            var value = result.Payload.Maybe;
+            var box = new Box(result.Payload.Maybe);
+            return Count(value) + counter(result.Payload.Maybe) + lookup[result.Payload.Maybe];
+        }
+
+        private static ((string Keep, string Maybe) Payload, int Count) Gather(bool missing)
+        {
+            if (missing)
+                return ((""keep"", null), 0);
+
+            return ((""keep"", ""value""), 1);
+        }
+
+        private static int Count(string value)
+        {
+            if (value is null)
+                return 0;
+
+            return value.Length;
+        }
+    }
+}");
+
+        Assert.Contains("type Counter = delegate func(value string?) int32", printed);
+        Assert.Contains("init(value string?)", printed);
+        Assert.Contains("prop this[key string?] int32", printed);
+        Assert.Contains("func Count(value string?) int32", printed);
+        CompileWithGsc(printed);
+    }
+
     private static string TranslateOblivious(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
