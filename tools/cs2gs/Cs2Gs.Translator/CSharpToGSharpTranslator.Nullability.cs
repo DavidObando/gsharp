@@ -627,6 +627,26 @@ public sealed partial class CSharpToGSharpTranslator
                 : this.IsUsedAsNullable(symbol, this.GetNullabilityScope(symbol));
         }
 
+        // Issue #2521: sink lowering must use the target contract that G# will
+        // actually bind, not consumer-side taint recorded for an imported
+        // symbol. Only declarations emitted by this compilation can have their
+        // contract widened by this compilation's promotion result. Project
+        // references and CLR metadata retain their already-emitted contract.
+        private bool TargetWillRemainNonNullableReference(ITypeSymbol targetType, ISymbol targetSymbol)
+        {
+            if (targetType is not { IsReferenceType: true }
+                || targetType.NullableAnnotation == NullableAnnotation.Annotated)
+            {
+                return false;
+            }
+
+            bool targetDeclaredInThisCompilation = targetSymbol?.DeclaringSyntaxReferences
+                .Any(reference => this.context.Compilation.ContainsSyntaxTree(reference.SyntaxTree)) == true;
+
+            return !(targetDeclaredInThisCompilation
+                && this.ShouldPromoteToNullableReference(targetSymbol));
+        }
+
         // The syntax region a symbol's null usage is searched in: the whole
         // enclosing method for a parameter, the whole declaring type for a field,
         // and the enclosing method body block for a local.
