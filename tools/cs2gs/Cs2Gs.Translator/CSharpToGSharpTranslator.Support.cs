@@ -77,6 +77,46 @@ public sealed partial class CSharpToGSharpTranslator
                 new List<GStatement>();
         }
 
+        private sealed class StructConstructorPlan
+        {
+            public StructConstructorPlan(
+                IMethodSymbol constructor,
+                IReadOnlyList<StructMemberInitialization> initializations,
+                bool fixedInitializersAreDeclaredOnType)
+            {
+                this.Constructor = constructor;
+                this.Initializations = initializations;
+                this.FixedInitializersAreDeclaredOnType = fixedInitializersAreDeclaredOnType;
+            }
+
+            public IMethodSymbol Constructor { get; }
+
+            public IReadOnlyList<StructMemberInitialization> Initializations { get; }
+
+            public bool FixedInitializersAreDeclaredOnType { get; }
+        }
+
+        private sealed class StructMemberInitialization
+        {
+            public StructMemberInitialization(string memberName, int parameterOrdinal)
+            {
+                this.MemberName = memberName;
+                this.ParameterOrdinal = parameterOrdinal;
+            }
+
+            public StructMemberInitialization(string memberName, ExpressionSyntax fixedExpression)
+            {
+                this.MemberName = memberName;
+                this.FixedExpression = fixedExpression;
+            }
+
+            public string MemberName { get; }
+
+            public int? ParameterOrdinal { get; }
+
+            public ExpressionSyntax FixedExpression { get; }
+        }
+
         // Issue #1971: groups extended property subpatterns (`{ A.B: 0, A.C: 1 }`,
         // parsed as `ExpressionColon`) sharing a leftmost identifier prefix so
         // <see cref="TranslateRecursivePattern"/> can merge them into ONE nested

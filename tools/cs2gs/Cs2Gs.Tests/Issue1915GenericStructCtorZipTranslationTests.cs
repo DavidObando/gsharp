@@ -13,7 +13,7 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Issue #1915 (sub-bug a): <c>TryMapCtorParametersToMembers</c> (issue #1739's
+/// Issue #1915 (sub-bug a): <c>TryAnalyzeStructConstructor</c> (issue #1739's
 /// ctor-to-composite-literal "zip" detection, used to translate a positional
 /// <c>new T(a, b)</c> on a struct that has no callable G# constructor into a G#
 /// composite literal <c>T{a: ..., b: ...}</c>) compared a resolved field/
