@@ -2458,7 +2458,14 @@ internal sealed partial class ExpressionBinder
         // methods declared on a base interface (e.g.
         // IEnumerable<T>.GetEnumerator() surfaced through
         // IReadOnlyList<T>) are found.
-        var candidates = new List<MethodInfo>(MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(clrType, methodName));
+        var instSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(
+            receiverType: null,
+            ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
+        var candidates = MemberLookup.ExcludeErasureOnlyEnumCandidates(
+            MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(clrType, methodName),
+            instSymbolicArgs,
+            argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
+            effectiveReceiverType).ToList();
 
         if (candidates.Count > 0)
         {
@@ -2570,7 +2577,6 @@ internal sealed partial class ExpressionBinder
                         // never unified and the call collapsed to `<object>`. The
                         // receiver still drives return-type Var substitution via
                         // `ResolveCallReturnTypeFromSymbolicTypeArgs` below.
-                        var instSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(null, ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
                         var instSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(resolution.Best, typeArgSymbols, instSymbolicArgs);
                         var instTypeArgSymbolsForCall = !instSymbolicTypeArgs.IsDefault ? instSymbolicTypeArgs : typeArgSymbols;
                         var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols)

@@ -1123,7 +1123,13 @@ internal sealed partial class ExpressionBinder
             extensionArgumentNames = withReceiver;
         }
 
-        var candidates = this.memberLookup.CollectImportedExtensionMethods(methodName);
+        var extensionSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(
+            receiver?.Type,
+            ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
+        var candidates = MemberLookup.ExcludeErasureOnlyEnumCandidates(
+            this.memberLookup.CollectImportedExtensionMethods(methodName),
+            extensionSymbolicArgs,
+            extensionArgumentNames).ToList();
         if (candidates.Count == 0)
         {
             return false;
@@ -1189,7 +1195,6 @@ internal sealed partial class ExpressionBinder
         // method-type-args may then surface a symbolic return like
         // `[]T` from `[]T{}.ToArray()` instead of the erased
         // `object[]`.
-        var extensionSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(receiver?.Type, ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
         var extensionSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(best, typeArgSymbols, extensionSymbolicArgs);
         var extensionTypeArgSymbolsForCall = !extensionSymbolicTypeArgs.IsDefault ? extensionSymbolicTypeArgs : typeArgSymbols;
         var returnOverride = ResolveImportedGenericReturnType(best, typeArgSymbols)

@@ -324,6 +324,11 @@ public sealed class ImportedClassSymbol : Symbol
         var symbolicArgVector = MemberLookup.BuildSymbolicArgTypeVector(
             receiverType: null,
             ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
+        nameMatches = MemberLookup.ExcludeErasureOnlyEnumCandidates(
+            nameMatches,
+            symbolicArgVector,
+            argumentNames,
+            SymbolicReceiver).ToList();
         var result = OverloadResolution.Resolve(
             nameMatches,
             argTypes,
