@@ -928,12 +928,7 @@ internal sealed class MemberLookup
                 // receiver keep the `Check` element identity instead of
                 // collapsing to the type-erased `IEnumerable<object>` (which
                 // for a value-type element is not even a legal up-cast).
-                // A type parameter can substitute to a concrete symbol (for
-                // example Action<T> on IBase<string>). The original open CLR
-                // shape still cannot be used as the projected member type, so
-                // reconstruct it even when the mapped argument itself does
-                // not require symbolic projection.
-                if (TypeSymbol.RequiresSymbolicProjection(mapped) || a.ContainsGenericParameters)
+                if (TypeSymbol.RequiresSymbolicProjection(mapped))
                 {
                     anyParam = true;
                 }
@@ -2610,7 +2605,10 @@ internal sealed class MemberLookup
         indexer = null;
         resolvedArguments = default;
 
-        var properties = EnumerateSelfAndInterfaces(clrTarget)
+        var declaringTypes = clrTarget.IsInterface
+            ? EnumerateSelfAndInterfaces(clrTarget)
+            : new[] { clrTarget };
+        var properties = declaringTypes
             .SelectMany(type => ClrTypeUtilities.SafeGetProperties(
                 type,
                 BindingFlags.Public | BindingFlags.Instance))
@@ -2967,9 +2965,10 @@ internal sealed class MemberLookup
         int parameterIndex)
     {
         var closedParameter = closedIndexer.GetIndexParameters()[parameterIndex];
-        if (GetImportedTypeSymbol(targetType) is ImportedTypeSymbol imported
+        if (GetImportedTypeSymbol(targetType) is ImportedTypeSymbol importedInterface
+            && importedInterface.ClrType?.IsInterface == true
             && TryGetSymbolicDeclaringContext(
-                imported,
+                importedInterface,
                 closedIndexer.DeclaringType,
                 out var openDefinition,
                 out var declaringTypeArguments))
@@ -2982,6 +2981,20 @@ internal sealed class MemberLookup
                     openParameters[parameterIndex].ParameterType,
                     openDefinition,
                     declaringTypeArguments);
+            }
+        }
+        else if (targetType is ImportedTypeSymbol imported
+            && imported.OpenDefinition is Type importedOpenDefinition
+            && !imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            var openIndexer = FindOpenIndexerDefinition(importedOpenDefinition, closedIndexer);
+            var openParameters = openIndexer?.GetIndexParameters();
+            if (openParameters != null && parameterIndex < openParameters.Length)
+            {
+                return SubstituteOpenIndexerType(
+                    imported,
+                    openParameters[parameterIndex].ParameterType,
+                    closedParameter.ParameterType);
             }
         }
 
@@ -3047,10 +3060,14 @@ internal sealed class MemberLookup
                 .FirstOrDefault(candidate => candidate.Name == closedEvent.Name);
             if (openEvent?.EventHandlerType != null)
             {
-                return MapOpenClrTypeToSymbolic(
+                var mapped = MapOpenClrTypeToSymbolic(
                     openEvent.EventHandlerType,
                     openDefinition,
                     declaringTypeArguments);
+                if (mapped.ClrType?.ContainsGenericParameters != true)
+                {
+                    return mapped;
+                }
             }
         }
 

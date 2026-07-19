@@ -1795,12 +1795,6 @@ internal sealed partial class ExpressionBinder
 
     private static TypeSymbol MapErasedIndexerElementType(ImportedTypeSymbol target, PropertyInfo closedIndexer)
     {
-        var symbolicType = MemberLookup.GetClrPropertyTypeSymbol(target, closedIndexer);
-        if (TypeSymbol.RequiresSymbolicProjection(symbolicType))
-        {
-            return symbolicType;
-        }
-
         // Issue #313 (HasTypeParameterArgument): substitute the open indexer's
         // generic-parameter result back through the target's symbolic type
         // arguments so `list[i]` on `List[T]` is typed as `T`.
