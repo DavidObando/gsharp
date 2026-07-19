@@ -116,7 +116,7 @@ public class Issue2467StaticExtensionConditionalReceiverTests
             }
             """);
 
-        Assert.Contains("(box?.Value).Pick[string](\"fallback\")", printed, StringComparison.Ordinal);
+        Assert.Contains("(box?.Value).Pick[string?](\"fallback\")", printed, StringComparison.Ordinal);
         Assert.Contains("(box?.Value).Pick(\"fallback\")", printed, StringComparison.Ordinal);
         Assert.Contains("(box?.Value).Flow(&x, &y, z)", printed, StringComparison.Ordinal);
         Assert.Contains("(box?.Value).Join()", printed, StringComparison.Ordinal);
