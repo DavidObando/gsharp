@@ -527,7 +527,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             GExpression translated = this.TranslateExpression(recv);
 
-            if (this.ReceiverNeedsNullForgiveness(recv)
+            if (this.ReceiverNeedsNullForgiveness(recv, isDereferenceReceiver: true)
                 || this.ReceiverIsNullableReferenceFieldOrProperty(recv))
             {
                 translated = new NonNullAssertionExpression(translated);
@@ -713,9 +713,10 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         // True when <paramref name="member"/> binds to an extension method whose
-        // (reduced) `this` parameter is nullable-annotated (`this T? x`). Such a
-        // method is designed to accept a null receiver, so the translated call must
-        // keep the declared-nullable receiver rather than forgive it to non-null.
+        // (reduced) `this` parameter is nullable-annotated (`this T? x`) or was
+        // promoted nullable by oblivious analysis. Such a method is designed to
+        // accept a null receiver, so the translated call must keep that nullable
+        // receiver rather than forgive it to non-null.
         private bool MemberBindsToNullableThisExtension(MemberAccessExpressionSyntax member)
         {
             if (this.context.GetSymbolInfo(member).Symbol is not IMethodSymbol method)
@@ -732,6 +733,7 @@ public sealed partial class CSharpToGSharpTranslator
             IParameterSymbol thisParameter = unreduced.Parameters[0];
             return thisParameter.Type.IsReferenceType
                 ? thisParameter.NullableAnnotation == NullableAnnotation.Annotated
+                    || this.ShouldPromoteToNullableReference(thisParameter)
                 : thisParameter.Type.OriginalDefinition?.SpecialType == SpecialType.System_Nullable_T;
         }
 
@@ -757,12 +759,15 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         /// <summary>
-        /// Determines whether <paramref name="recv"/> is a declared-nullable
-        /// reference receiver that Roslyn's flow analysis has narrowed to non-null,
-        /// and therefore needs a G# <c>!!</c> assertion (see
+        /// Determines whether <paramref name="recv"/> needs a G# <c>!!</c>
+        /// assertion because it is either a declared-nullable reference narrowed
+        /// non-null by flow or an ordinary dereference receiver whose declaration
+        /// was promoted nullable by oblivious analysis (see
         /// <see cref="TranslateReceiverWithNullForgiveness"/>).
         /// </summary>
-        private bool ReceiverNeedsNullForgiveness(ExpressionSyntax recv)
+        private bool ReceiverNeedsNullForgiveness(
+            ExpressionSyntax recv,
+            bool isDereferenceReceiver = false)
         {
             // `expr!` already lowers to a `NonNullAssertionExpression`; never
             // double-assert. `this`/`base`, a null literal, and a `?.` conditional
@@ -797,6 +802,18 @@ public sealed partial class CSharpToGSharpTranslator
             if (this.IsCallableValueExpression(recv))
             {
                 return false;
+            }
+
+            // Issue #2506: the oblivious analysis promotes a same-project
+            // method/property/indexer declaration when its VALUE can be null.
+            // An ordinary C# dereference of that value still means
+            // throw-on-null, so the corresponding G# receiver needs one `!!`.
+            // Keep this receiver-only: a method group is the callable value
+            // rather than its return, and a promoted call forwarded as a return
+            // or argument must remain `T?` instead of being blanket-forgiven.
+            if (isDereferenceReceiver && this.ReceiverValueIsPromotedNullable(recv))
+            {
+                return true;
             }
 
             // Issue #2164: the classic lazy-singleton pattern initializes a
@@ -988,6 +1005,102 @@ public sealed partial class CSharpToGSharpTranslator
             // too, so its flow-proven uses need the same assertion for consistency.
             return declared.NullableAnnotation == NullableAnnotation.Annotated
                 || this.ShouldPromoteToNullableReference(symbol);
+        }
+
+        private bool ReceiverValueIsPromotedNullable(ExpressionSyntax expression)
+        {
+            if (!this.IsObliviousCompilation())
+            {
+                return false;
+            }
+
+            switch (expression)
+            {
+                case ParenthesizedExpressionSyntax parenthesized:
+                    return this.ReceiverValueIsPromotedNullable(parenthesized.Expression);
+
+                case CastExpressionSyntax cast:
+                    ITypeSymbol castTarget = this.context.GetTypeInfo(cast.Type).Type;
+                    ITypeSymbol castSource = this.context.GetTypeInfo(cast.Expression).Type;
+                    return castTarget != null
+                        && castSource != null
+                        && this.context.Compilation.ClassifyConversion(castSource, castTarget).IsReference
+                        && this.ReceiverValueIsPromotedNullable(cast.Expression);
+
+                case AwaitExpressionSyntax awaited:
+                    return this.AwaitedReceiverValueIsPromotedNullable(awaited.Expression);
+
+                case ConditionalExpressionSyntax conditional:
+                    return this.ReceiverValueIsPromotedNullable(conditional.WhenTrue)
+                        || this.ReceiverValueIsPromotedNullable(conditional.WhenFalse);
+
+                case SwitchExpressionSyntax switchExpression:
+                    return switchExpression.Arms.Any(arm =>
+                        this.ReceiverValueIsPromotedNullable(arm.Expression));
+
+                // `a ?? b` is non-null whenever `b` is non-null; only the
+                // fallback value can make the coalesced receiver nullable.
+                case BinaryExpressionSyntax coalesce
+                    when coalesce.IsKind(SyntaxKind.CoalesceExpression):
+                    return this.ReceiverValueIsPromotedNullable(coalesce.Right);
+
+                case InvocationExpressionSyntax invocation
+                    when this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol method:
+                    // Method-return taint on Task<T>/ValueTask<T> widens the
+                    // awaited T, not the non-null task envelope itself.
+                    return !IsTaskLikeEnvelope(method.ReturnType)
+                        && this.ShouldPromoteToNullableReference(method);
+
+                case ElementAccessExpressionSyntax elementAccess:
+                    return this.context.GetSymbolInfo(elementAccess).Symbol is IPropertySymbol indexer
+                        && this.ShouldPromoteToNullableReference(indexer);
+
+                case IdentifierNameSyntax:
+                case MemberAccessExpressionSyntax:
+                    ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
+                    return symbol is IFieldSymbol or IPropertySymbol or ILocalSymbol or IParameterSymbol
+                        && this.ShouldPromoteToNullableReference(symbol);
+
+                default:
+                    return false;
+            }
+        }
+
+        private bool AwaitedReceiverValueIsPromotedNullable(ExpressionSyntax expression)
+        {
+            switch (expression)
+            {
+                case ParenthesizedExpressionSyntax parenthesized:
+                    return this.AwaitedReceiverValueIsPromotedNullable(parenthesized.Expression);
+
+                case CastExpressionSyntax cast:
+                    return this.AwaitedReceiverValueIsPromotedNullable(cast.Expression);
+
+                case ConditionalExpressionSyntax conditional:
+                    return this.AwaitedReceiverValueIsPromotedNullable(conditional.WhenTrue)
+                        || this.AwaitedReceiverValueIsPromotedNullable(conditional.WhenFalse);
+
+                case InvocationExpressionSyntax invocation
+                    when this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol method:
+                    return IsTaskLikeEnvelope(method.ReturnType)
+                        && this.ShouldPromoteToNullableReference(method);
+
+                default:
+                    return false;
+            }
+        }
+
+        private static bool IsTaskLikeEnvelope(ITypeSymbol type)
+        {
+            if (type is not INamedTypeSymbol named
+                || !named.IsGenericType
+                || named.TypeArguments.Length != 1
+                || named.Name is not ("Task" or "ValueTask"))
+            {
+                return false;
+            }
+
+            return named.ContainingNamespace.ToDisplayString() == "System.Threading.Tasks";
         }
 
         // Issue #2164: true when <paramref name="recv"/> reads a nullable
