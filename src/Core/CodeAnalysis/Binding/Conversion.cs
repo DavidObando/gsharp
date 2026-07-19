@@ -752,6 +752,16 @@ public sealed class Conversion
             return Conversion.Implicit;
         }
 
+        // Issue #2390: a nullable over a same-compilation value type has no
+        // ClrType during binding, but its CLR storage is still Nullable<T> and
+        // therefore has the standard nullable boxing conversion to object.
+        if (from is NullableTypeSymbol fromUserValueNullable
+            && NullableLifting.IsAnyValueTypeNullable(fromUserValueNullable)
+            && to?.ClrType.IsSameAs(typeof(object)) == true)
+        {
+            return Conversion.Implicit;
+        }
+
         // Issue #1218: an enum value boxes implicitly to its CLR reference base
         // types — System.Object, System.ValueType, and System.Enum. An
         // EnumSymbol carries no ClrType during binding (the enum is still being
@@ -2337,6 +2347,12 @@ public sealed class Conversion
 
     private static bool IsValueTypeLikeFrom(TypeSymbol type)
     {
+        if (type is NullableTypeSymbol nullable
+            && NullableLifting.IsAnyValueTypeNullable(nullable))
+        {
+            return true;
+        }
+
         // User structs (non-class StructSymbol) and user enums are CLR value
         // types even though their symbols carry no ClrType.
         if (type is StructSymbol s && !s.IsClass)
@@ -2354,6 +2370,23 @@ public sealed class Conversion
 
     private static bool IsValueTypeAssignableToInterface(TypeSymbol from, TypeSymbol to)
     {
+        // Nullable<T> has the boxing conversions of its underlying value type:
+        // a present value boxes as T and a missing value boxes as null.
+        if (from is NullableTypeSymbol nullable
+            && NullableLifting.IsAnyValueTypeNullable(nullable))
+        {
+            return IsValueTypeAssignableToInterface(nullable.UnderlyingType, to);
+        }
+
+        // A same-compilation enum has no ClrType yet, but its emitted base type
+        // is System.Enum, so it implements the CLR interfaces exposed by Enum.
+        if (from is EnumSymbol
+            && to?.ClrType is { IsInterface: true } enumInterface
+            && ClrTypeUtilities.IsAssignableByName(enumInterface, typeof(System.Enum)))
+        {
+            return true;
+        }
+
         // User-declared struct → user-declared interface: walk the struct's
         // declared interface list.
         if (from is StructSymbol fromStruct && to is InterfaceSymbol toInterface)
