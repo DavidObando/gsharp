@@ -758,6 +758,101 @@ public sealed partial class CSharpToGSharpTranslator
             return translated;
         }
 
+        // Issue #2511: element-access arguments are call-like value sinks too.
+        // Apply the established forgiveness predicate only when Roslyn bound the
+        // argument to a non-null reference parameter that cs2gs will keep
+        // non-null. Arrays and numeric/string/span indices therefore stay on
+        // their existing paths, explicitly nullable indexer contracts remain
+        // untouched, and nullable-enabled projects receive no new assertions.
+        // A genuinely null oblivious key follows the existing `!!` bridge
+        // policy and fails at runtime before the index operation.
+        private GExpression TranslateIndexArgumentWithNullForgiveness(ArgumentSyntax argument)
+        {
+            GExpression translated = this.TranslateExpression(argument.Expression);
+            if (!this.IsObliviousCompilation()
+                || !this.IndexArgumentTargetsNonNullableReference(argument)
+                || !this.IndexArgumentValueNeedsNullForgiveness(argument.Expression))
+            {
+                return translated;
+            }
+
+            GExpression assertionOperand = argument.Expression is ConditionalExpressionSyntax
+                or SwitchExpressionSyntax
+                or ConditionalAccessExpressionSyntax
+                    ? new ParenthesizedExpression(translated)
+                    : translated;
+            return new NonNullAssertionExpression(assertionOperand);
+        }
+
+        private bool IndexArgumentValueNeedsNullForgiveness(ExpressionSyntax value)
+        {
+            if (value is PostfixUnaryExpressionSyntax
+                    { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
+                || this.IsWithinExpressionTreeLambda(value))
+            {
+                return false;
+            }
+
+            if (this.ReceiverNeedsNullForgiveness(value))
+            {
+                return true;
+            }
+
+            switch (value)
+            {
+                case ParenthesizedExpressionSyntax parenthesized:
+                    return this.IndexArgumentValueNeedsNullForgiveness(parenthesized.Expression);
+
+                case ConditionalExpressionSyntax conditional:
+                    return this.IndexArgumentValueNeedsNullForgiveness(conditional.WhenTrue)
+                        || this.IndexArgumentValueNeedsNullForgiveness(conditional.WhenFalse);
+
+                case SwitchExpressionSyntax switchExpression:
+                    return switchExpression.Arms.Any(arm =>
+                        this.IndexArgumentValueNeedsNullForgiveness(arm.Expression));
+
+                case ConditionalAccessExpressionSyntax:
+                    return true;
+            }
+
+            ISymbol symbol = this.context.GetSymbolInfo(value).Symbol;
+            return symbol is IFieldSymbol or IPropertySymbol or ILocalSymbol or IParameterSymbol or IMethodSymbol
+                && this.IsNullablePromotedValue(value)
+                && !this.IsDominatedByNullCheckGuard(value, symbol);
+        }
+
+        private bool IndexArgumentTargetsNonNullableReference(ArgumentSyntax argument)
+        {
+            if (this.context.SemanticModel.GetOperation(argument) is not IArgumentOperation
+                {
+                    Parameter: { } parameter,
+                })
+            {
+                return false;
+            }
+
+            return this.ParameterWillRemainNonNullableReference(parameter);
+        }
+
+        private bool ParameterWillRemainNonNullableReference(IParameterSymbol parameter)
+        {
+            if (parameter.Type is not { IsReferenceType: true } parameterType
+                || parameterType.NullableAnnotation == NullableAnnotation.Annotated)
+            {
+                return false;
+            }
+
+            bool parameterDeclaredInThisCompilation = parameter.DeclaringSyntaxReferences
+                .Any(reference => this.context.Compilation.ContainsSyntaxTree(reference.SyntaxTree));
+
+            // Only a parameter declaration translated by this compilation can
+            // have its rendered signature widened. Project-reference and CLR
+            // metadata parameters keep the contract gsc binds at this call site,
+            // even when sibling analysis records nullable flow for their source.
+            return !(parameterDeclaredInThisCompilation
+                && this.ShouldPromoteToNullableReference(parameter));
+        }
+
         /// <summary>
         /// Determines whether <paramref name="recv"/> needs a G# <c>!!</c>
         /// assertion because it is either a declared-nullable reference narrowed
@@ -1555,13 +1650,6 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            ITypeSymbol parameterType = parameter.Type;
-            if (parameterType is not { IsReferenceType: true }
-                || parameterType.NullableAnnotation == NullableAnnotation.Annotated)
-            {
-                return false;
-            }
-
             // If cs2gs will ALSO promote the bound parameter to nullable (the
             // ordinary same-project method case above), the argument already
             // widens `T? -> T?` with no `!!` required — forcing one here would
@@ -1587,11 +1675,7 @@ public sealed partial class CSharpToGSharpTranslator
             // symbol category entirely and leaves the same-project method
             // case (whose parameter genuinely has a declaring syntax node
             // here) unaffected.
-            bool parameterDeclaredInThisCompilation = parameter.DeclaringSyntaxReferences
-                .Any(reference => this.context.Compilation.ContainsSyntaxTree(reference.SyntaxTree));
-
-            return !(parameterDeclaredInThisCompilation
-                && this.ShouldPromoteToNullableReference(parameter));
+            return this.ParameterWillRemainNonNullableReference(parameter);
         }
 
         private bool IsUnguardedForwardOfTaintedValueAsRuntimeLambdaResult(ExpressionSyntax use)
