@@ -1226,6 +1226,52 @@ public sealed class BoundScope
     }
 
     /// <summary>
+    /// Resolves a nested type through a source class and its base-class chain,
+    /// returning the effective base construction that declares it.
+    /// </summary>
+    /// <param name="container">The source class used to qualify the nested type.</param>
+    /// <param name="simpleName">The nested type's simple name.</param>
+    /// <param name="preferredArity">The preferred generic arity.</param>
+    /// <param name="type">The nested type definition.</param>
+    /// <param name="declaringContainer">The effective declaring construction.</param>
+    /// <returns>Whether a nested type was found.</returns>
+    public bool TryLookupNestedTypeAliasIncludingInherited(
+        StructSymbol container,
+        string simpleName,
+        int preferredArity,
+        out TypeSymbol type,
+        out StructSymbol declaringContainer)
+    {
+        for (var c = container.BaseClass; c != null; c = c.BaseClass)
+        {
+            var definition = c.Definition ?? c;
+            if (!TryLookupNestedTypeAlias(definition, simpleName, preferredArity, out type))
+            {
+                if (TypeMemberModel.DeclaresAnyStaticMember(c, simpleName))
+                {
+                    break;
+                }
+
+                continue;
+            }
+
+            if (!ReferenceEquals(c, container) && IsPrivateNestedType(type))
+            {
+                type = null;
+                declaringContainer = null;
+                return false;
+            }
+
+            declaringContainer = TypeMemberModel.ResolveStaticMemberOwner(container, c);
+            return true;
+        }
+
+        type = null;
+        declaringContainer = null;
+        return false;
+    }
+
+    /// <summary>
     /// Gets the set of declared type aliases.
     /// </summary>
     /// <returns>The map of alias names to underlying types.</returns>
@@ -2633,4 +2679,12 @@ public sealed class BoundScope
 
         return true;
     }
+
+    private static bool IsPrivateNestedType(TypeSymbol type) => type switch
+    {
+        StructSymbol s => s.Accessibility == Accessibility.Private,
+        InterfaceSymbol i => i.Accessibility == Accessibility.Private,
+        EnumSymbol e => e.Accessibility == Accessibility.Private,
+        _ => false,
+    };
 }

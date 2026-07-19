@@ -18,13 +18,14 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundFieldAssignmentExpression : BoundExpression
 {
-    public BoundFieldAssignmentExpression(SyntaxNode syntax, VariableSymbol receiver, StructSymbol structType, FieldSymbol field, BoundExpression value)
+    public BoundFieldAssignmentExpression(SyntaxNode syntax, VariableSymbol receiver, StructSymbol structType, FieldSymbol field, BoundExpression value, TypeSymbol resultType = null)
         : base(syntax)
     {
         Receiver = receiver;
         StructType = structType;
         Field = field;
         Value = value;
+        ResultType = resultType;
     }
 
     /// <summary>
@@ -49,13 +50,20 @@ public sealed class BoundFieldAssignmentExpression : BoundExpression
         Value = value;
     }
 
-    private BoundFieldAssignmentExpression(SyntaxNode syntax, BoundExpression receiverExpression, StructSymbol structType, FieldSymbol field, BoundExpression value)
+    private BoundFieldAssignmentExpression(
+        SyntaxNode syntax,
+        BoundExpression receiverExpression,
+        StructSymbol structType,
+        FieldSymbol field,
+        BoundExpression value,
+        TypeSymbol resultType)
         : base(syntax)
     {
         ReceiverExpression = receiverExpression;
         StructType = structType;
         Field = field;
         Value = value;
+        ResultType = resultType;
     }
 
     public VariableSymbol Receiver { get; }
@@ -83,7 +91,9 @@ public sealed class BoundFieldAssignmentExpression : BoundExpression
 
     public BoundExpression Value { get; }
 
-    public override TypeSymbol Type => Field.Type;
+    public TypeSymbol ResultType { get; }
+
+    public override TypeSymbol Type => ResultType ?? Field.Type;
 
     public override BoundNodeKind Kind => BoundNodeKind.FieldAssignmentExpression;
 
@@ -97,14 +107,16 @@ public sealed class BoundFieldAssignmentExpression : BoundExpression
     /// <param name="structType">The declaring struct/class type.</param>
     /// <param name="field">The field to write.</param>
     /// <param name="value">The value to assign.</param>
+    /// <param name="resultType">The substituted assignment result type, or null.</param>
     /// <returns>A new <see cref="BoundFieldAssignmentExpression"/> with an expression receiver.</returns>
     public static BoundFieldAssignmentExpression WithExpressionReceiver(
         SyntaxNode syntax,
         BoundExpression receiverExpression,
         StructSymbol structType,
         FieldSymbol field,
-        BoundExpression value)
+        BoundExpression value,
+        TypeSymbol resultType = null)
     {
-        return new BoundFieldAssignmentExpression(syntax, receiverExpression, structType, field, value);
+        return new BoundFieldAssignmentExpression(syntax, receiverExpression, structType, field, value, resultType);
     }
 }

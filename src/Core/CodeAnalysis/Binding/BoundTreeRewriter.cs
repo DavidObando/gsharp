@@ -1693,7 +1693,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundEventSubscriptionExpression(null, receiver, node.StructType, node.Event, handler, node.IsAdd);
+        return new BoundEventSubscriptionExpression(null, receiver, node.StructType, node.Event, handler, node.IsAdd, node.EventType);
     }
 
     /// <summary>Rewrites a CLR binary operator call (Stream C).</summary>
@@ -1975,7 +1975,7 @@ public abstract class BoundTreeRewriter
                 return node;
             }
 
-            return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, node.StructType, node.Field, value);
+            return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, node.StructType, node.Field, value, node.ResultType);
         }
 
         if (value == node.Value)
@@ -1991,7 +1991,7 @@ public abstract class BoundTreeRewriter
         // static routing and mis-codegen/crash.
         return node.InterfaceType != null
             ? new BoundFieldAssignmentExpression(null, node.Field, node.InterfaceType, value)
-            : new BoundFieldAssignmentExpression(null, node.Receiver, node.StructType, node.Field, value);
+            : new BoundFieldAssignmentExpression(null, node.Receiver, node.StructType, node.Field, value, node.ResultType);
     }
 
     /// <summary>Rewrites a property read (ADR-0051).</summary>
@@ -2092,8 +2092,8 @@ public abstract class BoundTreeRewriter
         }
 
         return node.FunctionType != null
-            ? new BoundMethodGroupExpression(node.Syntax, receiver, node.Function, node.FunctionType)
-            : new BoundMethodGroupExpression(node.Syntax, receiver, node.Candidates);
+            ? new BoundMethodGroupExpression(node.Syntax, receiver, node.Function, node.FunctionType, node.StaticOwnerType)
+            : new BoundMethodGroupExpression(node.Syntax, receiver, node.Candidates, node.StaticOwnerType);
     }
 
     /// <summary>Rewrites a CLR method-group expression (issue #337).</summary>

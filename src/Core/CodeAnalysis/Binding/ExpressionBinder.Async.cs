@@ -92,10 +92,17 @@ internal sealed partial class ExpressionBinder
             // reporting an immediate "unable to find member". Non-+/-
             // operators (issue #2154) can never be an event, so skip straight
             // to the compound-assignment fallback.
-            if (isEventCapableOperator && TypeMemberModel.TryGetStaticEvent(staticStruct, eventName, out var ev))
+            if (isEventCapableOperator
+                && TypeMemberModel.TryGetStaticEventIncludingInherited(staticStruct, eventName, out var ev, out var eventOwner))
             {
-                var userHandler = BindEventSubscriptionHandler(syntax.Value, ev.Type);
-                return new BoundEventSubscriptionExpression(null, receiver: null, staticStruct, ev, userHandler, isAdd);
+                if (!AccessibilityChecker.IsAccessible(ev.Accessibility, eventOwner, function))
+                {
+                    Diagnostics.ReportMemberInaccessible(eventNameSyntax.Location, ev.Name, eventOwner.Name, ev.Accessibility);
+                }
+
+                var eventType = eventOwner.SubstituteMemberType(ev.Type);
+                var userHandler = BindEventSubscriptionHandler(syntax.Value, eventType);
+                return new BoundEventSubscriptionExpression(null, receiver: null, eventOwner, ev, userHandler, isAdd, eventType);
             }
 
             // ADR-0053: `Type.StaticField op= rhs` / `Type.StaticProp op= rhs`.
@@ -106,8 +113,16 @@ internal sealed partial class ExpressionBinder
                 return compoundResult;
             }
 
-            Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName);
-            return new BoundErrorExpression(null);
+            if (TypeMemberModel.GetNearestImportedBase(staticStruct)?.ClrType is Type importedBaseClr)
+            {
+                receiverClrType = importedBaseClr;
+                flags = BindingFlags.Public | BindingFlags.Static;
+            }
+            else
+            {
+                Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName);
+                return new BoundErrorExpression(null);
+            }
         }
         else if (accessor.LeftPart is NameExpressionSyntax ifaceLeftName
             && scope.TryLookupTypeAlias(ifaceLeftName.IdentifierToken.Text, out var ifaceTypeAlias)
@@ -143,7 +158,20 @@ internal sealed partial class ExpressionBinder
             // TYPE, resolved to the constructed symbol (mirroring the READ /
             // simple-write paths) rather than bound as element access, and the
             // carried construction drives per-construction emit/storage.
-            _ = ctorImported;
+            if (ctorStruct != null
+                && isEventCapableOperator
+                && TypeMemberModel.TryGetStaticEventIncludingInherited(ctorStruct, eventName, out var ctorEvent, out var ctorEventOwner))
+            {
+                if (!AccessibilityChecker.IsAccessible(ctorEvent.Accessibility, ctorEventOwner, function))
+                {
+                    Diagnostics.ReportMemberInaccessible(eventNameSyntax.Location, ctorEvent.Name, ctorEventOwner.Name, ctorEvent.Accessibility);
+                }
+
+                var eventType = ctorEventOwner.SubstituteMemberType(ctorEvent.Type);
+                var handler = BindEventSubscriptionHandler(syntax.Value, eventType);
+                return new BoundEventSubscriptionExpression(null, receiver: null, ctorEventOwner, ctorEvent, handler, isAdd, eventType);
+            }
+
             if (ctorStruct != null
                 && TryBindUserTypeStaticCompoundAssignment(ctorStruct, eventNameSyntax, syntax, baseOpSyntaxKind, out var ctorStructCompound))
             {
@@ -156,8 +184,22 @@ internal sealed partial class ExpressionBinder
                 return ctorCompound;
             }
 
-            Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName);
-            return new BoundErrorExpression(null);
+            if (ctorStruct != null
+                && TypeMemberModel.GetNearestImportedBase(ctorStruct)?.ClrType is Type constructedImportedBase)
+            {
+                receiverClrType = constructedImportedBase;
+                flags = BindingFlags.Public | BindingFlags.Static;
+            }
+            else if (ctorImported != null)
+            {
+                receiverClrType = ctorImported.ClassType;
+                flags = BindingFlags.Public | BindingFlags.Static;
+            }
+            else
+            {
+                Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName);
+                return new BoundErrorExpression(null);
+            }
         }
         else
         {

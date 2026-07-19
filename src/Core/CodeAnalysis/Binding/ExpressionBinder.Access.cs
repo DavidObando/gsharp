@@ -95,7 +95,11 @@ internal sealed partial class ExpressionBinder
     /// variadic) are filtered out; the group is only produced when at least one
     /// usable candidate remains.
     /// </summary>
-    private bool TryBuildUserMethodGroup(BoundExpression receiver, ImmutableArray<FunctionSymbol> methods, out BoundExpression methodGroup)
+    private bool TryBuildUserMethodGroup(
+        BoundExpression receiver,
+        ImmutableArray<FunctionSymbol> methods,
+        out BoundExpression methodGroup,
+        StructSymbol staticOwnerType = null)
     {
         methodGroup = null;
 
@@ -135,7 +139,10 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        methodGroup = BuildInstanceMethodGroup(receiver, usable.ToImmutable());
+        var usableMethods = usable.ToImmutable();
+        methodGroup = staticOwnerType == null
+            ? BuildInstanceMethodGroup(receiver, usableMethods)
+            : new BoundMethodGroupExpression(null, receiver, usableMethods, staticOwnerType);
         return true;
     }
 

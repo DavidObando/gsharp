@@ -21,7 +21,8 @@ public sealed class BoundEventSubscriptionExpression : BoundExpression
         TypeSymbol structType,
         EventSymbol eventSymbol,
         BoundExpression handler,
-        bool isAdd)
+        bool isAdd,
+        TypeSymbol eventType = null)
         : base(syntax)
     {
         Receiver = receiver;
@@ -29,6 +30,7 @@ public sealed class BoundEventSubscriptionExpression : BoundExpression
         Event = eventSymbol;
         Handler = handler;
         IsAdd = isAdd;
+        EventType = eventType ?? eventSymbol.Type;
     }
 
     public BoundExpression Receiver { get; }
@@ -47,6 +49,8 @@ public sealed class BoundEventSubscriptionExpression : BoundExpression
     public BoundExpression Handler { get; }
 
     public bool IsAdd { get; }
+
+    public TypeSymbol EventType { get; }
 
     public override TypeSymbol Type => TypeSymbol.Void;
 
