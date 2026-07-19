@@ -362,13 +362,7 @@ internal sealed partial class ExpressionBinder
         // genuinely imported CLR delegate) fills in the omitted parameter
         // types before falling through to the same method-group / conversion
         // handling below that already covers typed lambdas.
-        BoundExpression bound;
-        if (handlerSyntax is LambdaExpressionSyntax lambdaHandler
-            && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(targetDelegateType, out var handlerTargetFnType))
-        {
-            bound = lambdas.BindLambdaExpression(lambdaHandler, handlerTargetFnType);
-        }
-        else
+        if (!TryBindLambdaExpressionWithTargetType(handlerSyntax, targetDelegateType, out var bound))
         {
             bound = BindExpression(handlerSyntax);
         }

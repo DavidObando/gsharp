@@ -188,21 +188,25 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// Issue #1316: binds the RHS of a simple assignment, threading the resolved
-    /// LHS <paramref name="targetType"/> into the binder for target-typed RHS
-    /// forms (if-/conditional-/switch-expression). This engages the same
-    /// branch-unification and nil-&gt;<c>T?</c> adaptation already used for a
-    /// <c>let x T? = ...</c> initializer (see StatementBinder), so a conditional
-    /// RHS with a <c>nil</c> arm unifies to the target instead of failing
-    /// GS0155. Other RHS forms keep their context-free binding; the per-form
-    /// conversion below still validates the result and reports genuine
-    /// mismatches.
+    /// Issue #1316 / #2410: binds the RHS of a simple assignment, threading
+    /// the resolved LHS <paramref name="targetType"/> into the binder for
+    /// target-typed RHS forms. Conditional forms engage the same branch-unification and
+    /// nil-&gt;<c>T?</c> adaptation already used for a <c>let x T? = ...</c>
+    /// initializer. Lambda forms reuse the event-subscription target-typing
+    /// path so imported delegate fields/properties can supply omitted
+    /// parameter types. Other RHS forms keep their context-free binding; the
+    /// per-form conversion below still validates genuine mismatches.
     /// </summary>
     /// <param name="syntax">The RHS expression syntax.</param>
     /// <param name="targetType">The resolved LHS declared type, or <see langword="null"/>.</param>
     /// <returns>The bound RHS expression.</returns>
     private BoundExpression BindAssignmentRhs(ExpressionSyntax syntax, TypeSymbol targetType)
     {
+        if (TryBindLambdaExpressionWithTargetType(syntax, targetType, out var targetTypedLambda))
+        {
+            return targetTypedLambda;
+        }
+
         if (targetType != null
             && (syntax is IfExpressionSyntax
                 || syntax is ConditionalExpressionSyntax
@@ -522,7 +526,6 @@ internal sealed partial class ExpressionBinder
         // ADR-0053: user-defined struct/class type → static field write.
         if (scope.TryLookupTypeAlias(receiverName, out var typeAlias) && typeAlias is StructSymbol userStruct)
         {
-            var staticValue = BindExpression(syntax.Value);
             var fieldName = syntax.FieldIdentifier.Text;
             if (TypeMemberModel.TryGetStaticField(userStruct, fieldName, out var staticField))
             {
@@ -531,6 +534,7 @@ internal sealed partial class ExpressionBinder
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
                 }
 
+                var staticValue = BindAssignmentRhs(syntax.Value, staticField.Type);
                 var staticConverted = conversions.BindConversion(syntax.Value.Location, staticValue, staticField.Type);
                 return new BoundFieldAssignmentExpression(null, null, userStruct, staticField, staticConverted);
             }
@@ -544,6 +548,7 @@ internal sealed partial class ExpressionBinder
                     return new BoundErrorExpression(null);
                 }
 
+                var staticValue = BindAssignmentRhs(syntax.Value, prop.Type);
                 var propConverted = conversions.BindConversion(syntax.Value.Location, staticValue, prop.Type);
                 return new BoundPropertyAssignmentExpression(null, receiver: null, userStruct, prop, propConverted);
             }
@@ -558,7 +563,6 @@ internal sealed partial class ExpressionBinder
         // BoundFieldAssignmentExpression resolved by symbol identity.
         if (scope.TryLookupTypeAlias(receiverName, out var ifaceAlias) && ifaceAlias is InterfaceSymbol userInterface)
         {
-            var staticValue = BindExpression(syntax.Value);
             var fieldName = syntax.FieldIdentifier.Text;
             var staticField = userInterface.GetStaticField(fieldName);
             if (staticField != null)
@@ -568,6 +572,7 @@ internal sealed partial class ExpressionBinder
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
                 }
 
+                var staticValue = BindAssignmentRhs(syntax.Value, staticField.Type);
                 var staticConverted = conversions.BindConversion(syntax.Value.Location, staticValue, staticField.Type);
                 return new BoundFieldAssignmentExpression(null, staticField, userInterface, staticConverted);
             }
@@ -582,7 +587,6 @@ internal sealed partial class ExpressionBinder
         // in-compilation source type win over a same-named imported CLR type.
         if (scope.TryLookupImportedClass(receiverName, declaration: null, out var importedClass))
         {
-            var staticValue = BindExpression(syntax.Value);
             if (!importedClass.TryLookupMember(syntax.FieldIdentifier.Text, ne: null, out var staticMember))
             {
                 Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
@@ -597,6 +601,7 @@ internal sealed partial class ExpressionBinder
 
             _ = staticWritable;
             _ = staticTargetType;
+            var staticValue = BindAssignmentRhs(syntax.Value, staticTargetSymbol);
             var staticConverted = conversions.BindConversion(syntax.Value.Location, staticValue, staticTargetSymbol);
             return new BoundClrPropertyAssignmentExpression(null, receiver: null, staticMember, staticConverted, staticTargetSymbol);
         }
@@ -1845,9 +1850,10 @@ internal sealed partial class ExpressionBinder
             return receiver;
         }
 
-        var value = BindExpression(syntax.Value);
         var fieldName = syntax.FieldIdentifier.Text;
         var receiverType = receiver.Type;
+        BoundExpression value = null;
+        BoundExpression BindValue(TypeSymbol targetType) => value ??= BindAssignmentRhs(syntax.Value, targetType);
 
         // User-defined struct/class receiver → field or property write.
         if (receiverType is StructSymbol structSym)
@@ -1876,7 +1882,7 @@ internal sealed partial class ExpressionBinder
                     field,
                     $"{declaringType.Name}.{field.Name}");
 
-                var converted = conversions.BindConversion(syntax.Value.Location, value, field.Type);
+                var converted = conversions.BindConversion(syntax.Value.Location, BindValue(field.Type), field.Type);
                 return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiver, declaringType, field, converted);
             }
 
@@ -1896,7 +1902,7 @@ internal sealed partial class ExpressionBinder
                     Diagnostics.ReportMemberInaccessible(syntax.FieldIdentifier.Location, prop.Name, propDeclaringType.Name, prop.Accessibility);
                 }
 
-                var propConverted = conversions.BindConversion(syntax.Value.Location, value, prop.Type);
+                var propConverted = conversions.BindConversion(syntax.Value.Location, BindValue(prop.Type), prop.Type);
                 EnforceInitOnlyAssignment(prop, receiver, syntax.EqualsToken.Location);
                 return new BoundPropertyAssignmentExpression(null, receiver, structSym, prop, propConverted);
             }
@@ -1917,7 +1923,7 @@ internal sealed partial class ExpressionBinder
 
                     _ = inhWritable;
                     _ = inhTargetType;
-                    var inhConverted = conversions.BindConversion(syntax.Value.Location, value, inhTargetSymbol);
+                    var inhConverted = conversions.BindConversion(syntax.Value.Location, BindValue(inhTargetSymbol), inhTargetSymbol);
                     return new BoundClrPropertyAssignmentExpression(null, receiver, clrMember, inhConverted, inhTargetSymbol);
                 }
             }
@@ -1940,7 +1946,7 @@ internal sealed partial class ExpressionBinder
                     return new BoundErrorExpression(null);
                 }
 
-                var ifaceConverted = conversions.BindConversion(syntax.Value.Location, value, ifaceProp.Type);
+                var ifaceConverted = conversions.BindConversion(syntax.Value.Location, BindValue(ifaceProp.Type), ifaceProp.Type);
                 EnforceInitOnlyAssignment(ifaceProp, receiver, syntax.EqualsToken.Location);
                 return new BoundPropertyAssignmentExpression(null, receiver, null, ifaceProp, ifaceConverted);
             }
@@ -1974,7 +1980,7 @@ internal sealed partial class ExpressionBinder
 
             _ = instWritable;
             _ = instTargetType;
-            var instConverted = conversions.BindConversion(syntax.Value.Location, value, instTargetSymbol);
+            var instConverted = conversions.BindConversion(syntax.Value.Location, BindValue(instTargetSymbol), instTargetSymbol);
             return new BoundClrPropertyAssignmentExpression(null, receiver, instanceMember, instConverted, instTargetSymbol);
         }
 
@@ -2002,7 +2008,8 @@ internal sealed partial class ExpressionBinder
         ImportedClassSymbol constructedImported)
     {
         var fieldName = syntax.FieldIdentifier.Text;
-        var value = BindExpression(syntax.Value);
+        BoundExpression value = null;
+        BoundExpression BindValue(TypeSymbol targetType) => value ??= BindAssignmentRhs(syntax.Value, targetType);
 
         // User class/struct → static field or static property write.
         if (constructedStruct != null)
@@ -2014,7 +2021,7 @@ internal sealed partial class ExpressionBinder
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
                 }
 
-                var staticConverted = conversions.BindConversion(syntax.Value.Location, value, staticField.Type);
+                var staticConverted = conversions.BindConversion(syntax.Value.Location, BindValue(staticField.Type), staticField.Type);
                 return new BoundFieldAssignmentExpression(null, null, constructedStruct, staticField, staticConverted);
             }
 
@@ -2026,7 +2033,7 @@ internal sealed partial class ExpressionBinder
                     return new BoundErrorExpression(null);
                 }
 
-                var propConverted = conversions.BindConversion(syntax.Value.Location, value, prop.Type);
+                var propConverted = conversions.BindConversion(syntax.Value.Location, BindValue(prop.Type), prop.Type);
                 return new BoundPropertyAssignmentExpression(null, receiver: null, constructedStruct, prop, propConverted);
             }
 
@@ -2046,7 +2053,7 @@ internal sealed partial class ExpressionBinder
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
                 }
 
-                var ifaceConverted = conversions.BindConversion(syntax.Value.Location, value, ifaceStaticField.Type);
+                var ifaceConverted = conversions.BindConversion(syntax.Value.Location, BindValue(ifaceStaticField.Type), ifaceStaticField.Type);
                 return new BoundFieldAssignmentExpression(null, ifaceStaticField, constructedInterface, ifaceConverted);
             }
 
@@ -2060,7 +2067,7 @@ internal sealed partial class ExpressionBinder
         if (constructedImported.TryLookupMember(fieldName, ne: null, out var staticMember)
             && TryGetWritableClrMember(staticMember, out _, out var staticTargetSymbol, out _))
         {
-            var staticConverted = conversions.BindConversion(syntax.Value.Location, value, staticTargetSymbol);
+            var staticConverted = conversions.BindConversion(syntax.Value.Location, BindValue(staticTargetSymbol), staticTargetSymbol);
             return new BoundClrPropertyAssignmentExpression(null, receiver: null, staticMember, staticConverted, staticTargetSymbol);
         }
 

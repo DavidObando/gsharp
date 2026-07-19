@@ -266,6 +266,24 @@ internal sealed partial class ExpressionBinder
         return conversions.BindConversion(syntax, targetType);
     }
 
+    private bool TryBindLambdaExpressionWithTargetType(
+        ExpressionSyntax syntax,
+        TypeSymbol targetType,
+        out BoundExpression bound)
+    {
+        // Keep event handlers and assignment RHS binding on one target-typing path.
+        bound = null;
+        if (syntax is not LambdaExpressionSyntax lambda
+            || targetType == null
+            || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(targetType, out var targetFunctionType))
+        {
+            return false;
+        }
+
+        bound = lambdas.BindLambdaExpression(lambda, targetFunctionType);
+        return true;
+    }
+
     internal BoundExpression BindExpression(ExpressionSyntax syntax, bool canBeVoid = false)
     {
         var result = BindExpressionpublic(syntax);
