@@ -2227,12 +2227,15 @@ internal sealed class MemberLookup
     /// bound the index argument expressions — keeping
     /// <see cref="MemberLookup"/> free of <c>BindExpression</c> side effects.
     /// </summary>
+    /// <param name="targetType">The symbolic receiver type used to recover
+    /// same-compilation generic arguments from the erased CLR shape.</param>
     /// <param name="clrTarget">The CLR receiver type whose indexers to probe.</param>
     /// <param name="boundArguments">The pre-bound index argument expressions.</param>
     /// <param name="indexer">The matching <see cref="PropertyInfo"/>, on success.</param>
     /// <param name="resolvedArguments">The arguments in parameter order, including omitted optional defaults.</param>
     /// <returns><see langword="true"/> when a matching indexer is found.</returns>
     public bool TryResolveClrIndexer(
+        TypeSymbol targetType,
         Type clrTarget,
         ImmutableArray<BoundExpression> boundArguments,
         out PropertyInfo indexer,
@@ -2244,13 +2247,97 @@ internal sealed class MemberLookup
         var properties = ClrTypeUtilities.SafeGetProperties(clrTarget, BindingFlags.Public | BindingFlags.Instance)
             .Where(static property => property.GetMethod != null && property.GetIndexParameters().Length > 0)
             .ToArray();
+        var hasSymbolicArgument = boundArguments.Any(static argument =>
+            argument.Type?.ClrType == null
+            || TypeSymbol.ContainsTypeParameter(argument.Type)
+            || TypeSymbol.ContainsSameCompilationUserType(argument.Type)
+            || argument.Type is ImportedTypeSymbol { HasSubstitutableTypeArgument: true });
+        if (hasSymbolicArgument)
+        {
+            var applicable = new List<(PropertyInfo Property, ImmutableArray<TypeSymbol> ParameterTypes)>();
+            foreach (var property in properties)
+            {
+                var parameters = property.GetIndexParameters();
+                if (parameters.Length != boundArguments.Length)
+                {
+                    continue;
+                }
+
+                var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(parameters.Length);
+                var candidateApplicable = true;
+                for (var i = 0; i < parameters.Length; i++)
+                {
+                    var parameterType = GetIndexerParameterTypeSymbol(targetType, property, i);
+                    parameterTypes.Add(parameterType);
+                    var conversion = ClassifySymbolicIndexerConversion(boundArguments[i].Type, parameterType);
+                    if (!conversion.IsImplicit)
+                    {
+                        candidateApplicable = false;
+                        break;
+                    }
+                }
+
+                if (candidateApplicable)
+                {
+                    applicable.Add((property, parameterTypes.MoveToImmutable()));
+                }
+            }
+
+            if (applicable.Count != 0)
+            {
+                (PropertyInfo Property, ImmutableArray<TypeSymbol> ParameterTypes)? winner = null;
+                foreach (var candidate in applicable)
+                {
+                    var betterThanAll = true;
+                    foreach (var other in applicable)
+                    {
+                        if (ReferenceEquals(candidate.Property, other.Property))
+                        {
+                            continue;
+                        }
+
+                        if (!IsBetterSymbolicIndexerCandidate(candidate.ParameterTypes, other.ParameterTypes, boundArguments))
+                        {
+                            betterThanAll = false;
+                            break;
+                        }
+                    }
+
+                    if (betterThanAll)
+                    {
+                        winner = candidate;
+                        break;
+                    }
+                }
+
+                if (winner.HasValue)
+                {
+                    indexer = winner.Value.Property;
+                    resolvedArguments = boundArguments;
+                    return true;
+                }
+
+                // Do not retry a genuine symbolic ambiguity against the
+                // object-erased CLR shape: doing so can incorrectly prefer an
+                // object overload over a more specific symbolic interface.
+                return false;
+            }
+        }
+
         var argTypes = new Type[boundArguments.Length];
         for (var i = 0; i < boundArguments.Length; i++)
         {
             argTypes[i] = boundArguments[i].Type?.ClrType;
             if (argTypes[i] == null)
             {
-                return false;
+                // Issue #2471: imported generic receivers constructed with a
+                // same-compilation source type use System.Object as the
+                // reflection-time placeholder for that symbolic argument.
+                // Project an index argument with the same not-yet-emitted type
+                // onto that placeholder as well, so overload resolution sees
+                // the erased shape while the original BoundExpression keeps
+                // the real source TypeSymbol for conversion and emit.
+                argTypes[i] = this.binderCtx.References.GetCoreType("System.Object");
             }
         }
 
@@ -2502,6 +2589,253 @@ internal sealed class MemberLookup
     /// alongside <see cref="ClrTypeUtilities.ClearCache"/>.
     /// </summary>
     internal static void ClearCache() => methodsIncludingSelfAndInterfacesCache = new ConditionalWeakTable<Type, System.Collections.Concurrent.ConcurrentDictionary<string, IReadOnlyList<MethodInfo>>>();
+
+    internal static TypeSymbol GetIndexerParameterTypeSymbol(
+        TypeSymbol targetType,
+        PropertyInfo closedIndexer,
+        int parameterIndex)
+    {
+        var closedParameter = closedIndexer.GetIndexParameters()[parameterIndex];
+        if (targetType is ImportedTypeSymbol imported
+            && imported.OpenDefinition is Type openDefinition
+            && !imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            var openIndexer = FindOpenIndexerDefinition(openDefinition, closedIndexer);
+            var openParameters = openIndexer?.GetIndexParameters();
+            if (openParameters != null && parameterIndex < openParameters.Length)
+            {
+                return SubstituteOpenIndexerType(
+                    imported,
+                    openParameters[parameterIndex].ParameterType,
+                    closedParameter.ParameterType);
+            }
+        }
+
+        var closedParameterType = closedParameter.ParameterType;
+        if (closedParameterType.IsConstructedGenericType)
+        {
+            return ImportedTypeSymbol.GetConstructed(
+                closedParameterType,
+                closedParameterType.GetGenericTypeDefinition(),
+                closedParameterType.GetGenericArguments()
+                    .Select(TypeSymbol.FromClrType)
+                    .ToImmutableArray());
+        }
+
+        return ClrNullability.GetParameterTypeSymbol(closedParameter);
+    }
+
+    internal static PropertyInfo FindOpenIndexerDefinition(Type openDefinition, PropertyInfo closedIndexer)
+    {
+        var candidates = ClrTypeUtilities.SafeGetProperties(
+            openDefinition,
+            BindingFlags.Public | BindingFlags.Instance);
+        var token = closedIndexer.MetadataToken;
+        foreach (var candidate in candidates)
+        {
+            if (candidate.MetadataToken == token)
+            {
+                return candidate;
+            }
+        }
+
+        var closedParameters = closedIndexer.GetIndexParameters();
+        foreach (var candidate in candidates)
+        {
+            if (!string.Equals(candidate.Name, closedIndexer.Name, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var openParameters = candidate.GetIndexParameters();
+            if (openParameters.Length != closedParameters.Length)
+            {
+                continue;
+            }
+
+            var matches = true;
+            for (var i = 0; i < openParameters.Length; i++)
+            {
+                var openType = openParameters[i].ParameterType;
+                var closedType = closedParameters[i].ParameterType;
+                if (!openType.IsGenericParameter && !ClrTypeUtilities.AreSame(openType, closedType))
+                {
+                    matches = false;
+                    break;
+                }
+            }
+
+            if (matches)
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    internal static TypeSymbol SubstituteOpenIndexerType(
+        ImportedTypeSymbol target,
+        Type openType,
+        Type closedType)
+    {
+        if (openType.IsGenericParameter
+            && openType.DeclaringMethod == null
+            && openType.GenericParameterPosition < target.TypeArguments.Length)
+        {
+            return target.TypeArguments[openType.GenericParameterPosition];
+        }
+
+        if (openType.IsByRef)
+        {
+            return ByRefTypeSymbol.Get(
+                SubstituteOpenIndexerType(target, openType.GetElementType()!, closedType.GetElementType()!));
+        }
+
+        if (openType.IsArray && openType.GetArrayRank() == 1
+            && closedType.IsArray && closedType.GetArrayRank() == 1)
+        {
+            return SliceTypeSymbol.Get(
+                SubstituteOpenIndexerType(target, openType.GetElementType()!, closedType.GetElementType()!));
+        }
+
+        if (openType.IsGenericType && closedType.IsGenericType)
+        {
+            var openArguments = openType.GetGenericArguments();
+            var closedArguments = closedType.GetGenericArguments();
+            if (openArguments.Length == closedArguments.Length)
+            {
+                var symbolicArguments = ImmutableArray.CreateBuilder<TypeSymbol>(openArguments.Length);
+                for (var i = 0; i < openArguments.Length; i++)
+                {
+                    symbolicArguments.Add(SubstituteOpenIndexerType(target, openArguments[i], closedArguments[i]));
+                }
+
+                return ImportedTypeSymbol.GetConstructed(
+                    closedType,
+                    openType.GetGenericTypeDefinition(),
+                    symbolicArguments.MoveToImmutable());
+            }
+        }
+
+        return TypeSymbol.FromClrType(closedType);
+    }
+
+    private static bool IsBetterSymbolicIndexerCandidate(
+        ImmutableArray<TypeSymbol> candidate,
+        ImmutableArray<TypeSymbol> other,
+        ImmutableArray<BoundExpression> arguments)
+    {
+        var hasBetterConversion = false;
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var source = arguments[i].Type;
+            var candidateConversion = ClassifySymbolicIndexerConversion(source, candidate[i]);
+            var otherConversion = ClassifySymbolicIndexerConversion(source, other[i]);
+            if (candidateConversion.IsIdentity != otherConversion.IsIdentity)
+            {
+                if (!candidateConversion.IsIdentity)
+                {
+                    return false;
+                }
+
+                hasBetterConversion = true;
+                continue;
+            }
+
+            var candidateToOther = ClassifySymbolicIndexerConversion(candidate[i], other[i]).IsImplicit;
+            var otherToCandidate = ClassifySymbolicIndexerConversion(other[i], candidate[i]).IsImplicit;
+            if (candidateToOther == otherToCandidate)
+            {
+                continue;
+            }
+
+            if (!candidateToOther)
+            {
+                return false;
+            }
+
+            hasBetterConversion = true;
+        }
+
+        return hasBetterConversion;
+    }
+
+    private static (bool IsImplicit, bool IsIdentity) ClassifySymbolicIndexerConversion(
+        TypeSymbol source,
+        TypeSymbol target)
+    {
+        if (SameTypeSymbol(source, target))
+        {
+            return (true, true);
+        }
+
+        if (TryClassifyConstructedGenericConversion(source, target, out var constructedImplicit))
+        {
+            return (constructedImplicit, false);
+        }
+
+        var conversion = Conversion.ClassifyNonStructural(source, target);
+        return (conversion.IsImplicit, conversion.IsIdentity);
+    }
+
+    private static bool TryClassifyConstructedGenericConversion(
+        TypeSymbol source,
+        TypeSymbol target,
+        out bool isImplicit)
+    {
+        isImplicit = false;
+        if (source is not ImportedTypeSymbol sourceImported
+            || target is not ImportedTypeSymbol targetImported
+            || sourceImported.OpenDefinition == null
+            || targetImported.OpenDefinition == null
+            || sourceImported.TypeArguments.IsDefaultOrEmpty
+            || targetImported.TypeArguments.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        ImmutableArray<TypeSymbol> sourceArguments;
+        if (ClrTypeUtilities.AreSame(sourceImported.OpenDefinition, targetImported.OpenDefinition))
+        {
+            sourceArguments = sourceImported.TypeArguments;
+        }
+        else if (!TryMapThroughImplemented(sourceImported, targetImported.OpenDefinition, out sourceArguments))
+        {
+            return false;
+        }
+
+        if (sourceArguments.Length != targetImported.TypeArguments.Length)
+        {
+            return true;
+        }
+
+        var genericParameters = targetImported.OpenDefinition.GetGenericArguments();
+        for (var i = 0; i < sourceArguments.Length; i++)
+        {
+            var variance = genericParameters[i].GenericParameterAttributes
+                & GenericParameterAttributes.VarianceMask;
+            var compatible = variance switch
+            {
+                GenericParameterAttributes.Covariant =>
+                    Binder.IsReferenceTypeForConstraint(sourceArguments[i])
+                    && Binder.IsReferenceTypeForConstraint(targetImported.TypeArguments[i])
+                    && ClassifySymbolicIndexerConversion(sourceArguments[i], targetImported.TypeArguments[i]).IsImplicit,
+                GenericParameterAttributes.Contravariant =>
+                    Binder.IsReferenceTypeForConstraint(sourceArguments[i])
+                    && Binder.IsReferenceTypeForConstraint(targetImported.TypeArguments[i])
+                    && ClassifySymbolicIndexerConversion(targetImported.TypeArguments[i], sourceArguments[i]).IsImplicit,
+                _ => SameTypeSymbol(sourceArguments[i], targetImported.TypeArguments[i]),
+            };
+            if (!compatible)
+            {
+                return true;
+            }
+        }
+
+        isImplicit = true;
+        return true;
+    }
 
     /// <summary>
     /// Issue #2375: builds the <see cref="FunctionTypeSymbol"/> shape of a
@@ -2957,6 +3291,39 @@ internal sealed class MemberLookup
         if (a == null || b == null)
         {
             return false;
+        }
+
+        if (a is ImportedTypeSymbol importedA
+            && b is ImportedTypeSymbol importedB
+            && importedA.OpenDefinition != null
+            && importedB.OpenDefinition != null
+            && (!importedA.TypeArguments.IsDefaultOrEmpty || !importedB.TypeArguments.IsDefaultOrEmpty))
+        {
+            if (!ClrTypeUtilities.AreSame(importedA.OpenDefinition, importedB.OpenDefinition)
+                || importedA.TypeArguments.Length != importedB.TypeArguments.Length)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < importedA.TypeArguments.Length; i++)
+            {
+                if (!SameTypeSymbol(importedA.TypeArguments[i], importedB.TypeArguments[i]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        if (a is SliceTypeSymbol sliceA && b is SliceTypeSymbol sliceB)
+        {
+            return SameTypeSymbol(sliceA.ElementType, sliceB.ElementType);
+        }
+
+        if (a is NullableTypeSymbol nullableA && b is NullableTypeSymbol nullableB)
+        {
+            return SameTypeSymbol(nullableA.UnderlyingType, nullableB.UnderlyingType);
         }
 
         // Constructed user generics are interned (StructSymbol.Construct uses a
