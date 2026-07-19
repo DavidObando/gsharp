@@ -2605,8 +2605,16 @@ internal sealed class MemberLookup
         indexer = null;
         resolvedArguments = default;
 
-        var properties = ClrTypeUtilities.SafeGetProperties(clrTarget, BindingFlags.Public | BindingFlags.Instance)
+        var declaringTypes = clrTarget.IsInterface
+            ? EnumerateSelfAndInterfaces(clrTarget)
+            : new[] { clrTarget };
+        var properties = declaringTypes
+            .SelectMany(type => ClrTypeUtilities.SafeGetProperties(
+                type,
+                BindingFlags.Public | BindingFlags.Instance))
             .Where(static property => property.GetMethod != null && property.GetIndexParameters().Length > 0)
+            .GroupBy(static property => (property.Module, property.MetadataToken))
+            .Select(static group => group.First())
             .ToArray();
         var hasSymbolicArgument = boundArguments.Any(static argument =>
             argument.Type?.ClrType == null
@@ -2957,11 +2965,29 @@ internal sealed class MemberLookup
         int parameterIndex)
     {
         var closedParameter = closedIndexer.GetIndexParameters()[parameterIndex];
-        if (targetType is ImportedTypeSymbol imported
-            && imported.OpenDefinition is Type openDefinition
-            && !imported.TypeArguments.IsDefaultOrEmpty)
+        if (GetImportedTypeSymbol(targetType) is ImportedTypeSymbol importedInterface
+            && importedInterface.ClrType?.IsInterface == true
+            && TryGetSymbolicDeclaringContext(
+                importedInterface,
+                closedIndexer.DeclaringType,
+                out var openDefinition,
+                out var declaringTypeArguments))
         {
             var openIndexer = FindOpenIndexerDefinition(openDefinition, closedIndexer);
+            var openParameters = openIndexer?.GetIndexParameters();
+            if (openParameters != null && parameterIndex < openParameters.Length)
+            {
+                return MapOpenClrTypeToSymbolic(
+                    openParameters[parameterIndex].ParameterType,
+                    openDefinition,
+                    declaringTypeArguments);
+            }
+        }
+        else if (targetType is ImportedTypeSymbol imported
+            && imported.OpenDefinition is Type importedOpenDefinition
+            && !imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            var openIndexer = FindOpenIndexerDefinition(importedOpenDefinition, closedIndexer);
             var openParameters = openIndexer?.GetIndexParameters();
             if (openParameters != null && parameterIndex < openParameters.Length)
             {
@@ -2985,6 +3011,195 @@ internal sealed class MemberLookup
 
         return ClrNullability.GetParameterTypeSymbol(closedParameter);
     }
+
+    /// <summary>
+    /// Resolves a CLR property's type through a symbolic imported receiver,
+    /// including properties declared on inherited generic interfaces.
+    /// </summary>
+    /// <param name="targetType">The symbolic imported receiver type.</param>
+    /// <param name="closedProperty">The reflected property selected from the erased receiver.</param>
+    /// <returns>The property type after symbolic receiver substitution.</returns>
+    internal static TypeSymbol GetClrPropertyTypeSymbol(TypeSymbol targetType, PropertyInfo closedProperty)
+    {
+        if (GetImportedTypeSymbol(targetType) is ImportedTypeSymbol imported
+            && TryGetSymbolicDeclaringContext(
+                imported,
+                closedProperty.DeclaringType,
+                out var openDefinition,
+                out var declaringTypeArguments))
+        {
+            var openProperty = FindOpenIndexerDefinition(openDefinition, closedProperty);
+            if (openProperty != null)
+            {
+                return MapOpenClrTypeToSymbolic(
+                    openProperty.PropertyType,
+                    openDefinition,
+                    declaringTypeArguments);
+            }
+        }
+
+        return ClrNullability.GetPropertyTypeSymbol(closedProperty);
+    }
+
+    /// <summary>Resolves an imported event handler type through a symbolic receiver/interface hierarchy.</summary>
+    /// <param name="targetType">The symbolic imported receiver type.</param>
+    /// <param name="closedEvent">The reflected event selected from the erased receiver.</param>
+    /// <returns>The event handler type after symbolic receiver substitution.</returns>
+    internal static TypeSymbol GetClrEventHandlerTypeSymbol(TypeSymbol targetType, EventInfo closedEvent)
+    {
+        if (GetImportedTypeSymbol(targetType) is ImportedTypeSymbol imported
+            && TryGetSymbolicDeclaringContext(
+                imported,
+                closedEvent.DeclaringType,
+                out var openDefinition,
+                out var declaringTypeArguments))
+        {
+            var openEvent = ClrTypeUtilities.SafeGetEvents(
+                    openDefinition,
+                    BindingFlags.Public | BindingFlags.Instance)
+                .FirstOrDefault(candidate => candidate.Name == closedEvent.Name);
+            if (openEvent?.EventHandlerType != null)
+            {
+                var mapped = MapOpenClrTypeToSymbolic(
+                    openEvent.EventHandlerType,
+                    openDefinition,
+                    declaringTypeArguments);
+                if (mapped.ClrType?.ContainsGenericParameters != true)
+                {
+                    return mapped;
+                }
+            }
+        }
+
+        return TypeSymbol.FromClrType(closedEvent.EventHandlerType);
+    }
+
+    /// <summary>
+    /// Reconstructs the symbolic imported interface that actually declares a
+    /// reflected member reached through a possibly derived constraint.
+    /// </summary>
+    /// <param name="targetType">The symbolic imported receiver type.</param>
+    /// <param name="member">The reflected member reached through the receiver.</param>
+    /// <returns>The symbolic declaring interface used to parent the emitted member reference.</returns>
+    internal static TypeSymbol GetClrMemberDeclaringTypeSymbol(
+        TypeSymbol targetType,
+        MemberInfo member)
+    {
+        if (GetImportedTypeSymbol(targetType) is ImportedTypeSymbol imported
+            && TryGetSymbolicDeclaringContext(
+                imported,
+                member?.DeclaringType,
+                out var openDefinition,
+                out var declaringTypeArguments))
+        {
+            return openDefinition.IsGenericTypeDefinition
+                ? ImportedTypeSymbol.GetConstructed(
+                    member.DeclaringType,
+                    openDefinition,
+                    declaringTypeArguments)
+                : ImportedTypeSymbol.Get(openDefinition);
+        }
+
+        return targetType;
+    }
+
+    /// <summary>Resolves an imported method return through a symbolic receiver/interface hierarchy.</summary>
+    /// <param name="targetType">The symbolic imported receiver type.</param>
+    /// <param name="closedMethod">The reflected method selected from the erased receiver.</param>
+    /// <returns>The method return type after symbolic receiver substitution.</returns>
+    internal static TypeSymbol GetClrMethodReturnTypeSymbol(
+        TypeSymbol targetType,
+        MethodInfo closedMethod)
+    {
+        if (GetImportedTypeSymbol(targetType) is ImportedTypeSymbol imported
+            && TryGetSymbolicDeclaringContext(
+                imported,
+                closedMethod?.DeclaringType,
+                out var openDefinition,
+                out var declaringTypeArguments))
+        {
+            var openMethod = TryGetOpenMethodOnDeclaringType(openDefinition, closedMethod);
+            if (openMethod != null)
+            {
+                return MapOpenClrTypeToSymbolic(
+                    openMethod.ReturnType,
+                    openDefinition,
+                    declaringTypeArguments);
+            }
+        }
+
+        return TypeSymbol.FromClrType(closedMethod.ReturnType);
+    }
+
+    /// <summary>Finds the symbolic generic context for a reflected declaring type.</summary>
+    /// <param name="imported">The symbolic imported receiver.</param>
+    /// <param name="declaringType">The reflected member's declaring type.</param>
+    /// <param name="openDefinition">The open declaring type definition.</param>
+    /// <param name="typeArguments">The receiver-projected declaring type arguments.</param>
+    /// <returns><see langword="true"/> when a symbolic declaring context was found.</returns>
+    internal static bool TryGetSymbolicDeclaringContext(
+        ImportedTypeSymbol imported,
+        Type declaringType,
+        out Type openDefinition,
+        out ImmutableArray<TypeSymbol> typeArguments)
+    {
+        openDefinition = null;
+        typeArguments = default;
+        if (imported?.ClrType == null || declaringType == null)
+        {
+            return false;
+        }
+
+        var receiverOpenDefinition = imported.OpenDefinition
+            ?? (imported.ClrType.IsGenericType
+                ? imported.ClrType.GetGenericTypeDefinition()
+                : imported.ClrType);
+        var receiverTypeArguments = !imported.TypeArguments.IsDefaultOrEmpty
+            ? imported.TypeArguments
+            : (imported.ClrType.IsGenericType
+                ? imported.ClrType.GetGenericArguments()
+                    .Select(TypeSymbol.FromClrType)
+                    .ToImmutableArray()
+                : ImmutableArray<TypeSymbol>.Empty);
+
+        openDefinition = declaringType.IsGenericType
+            ? declaringType.GetGenericTypeDefinition()
+            : declaringType;
+        if (ClrTypeUtilities.AreSame(receiverOpenDefinition, openDefinition))
+        {
+            typeArguments = receiverTypeArguments;
+            return true;
+        }
+
+        if (imported.OpenDefinition != null
+            && !imported.TypeArguments.IsDefaultOrEmpty
+            && TryMapThroughImplemented(imported, openDefinition, out typeArguments))
+        {
+            return true;
+        }
+
+        if (declaringType.IsGenericType)
+        {
+            typeArguments = declaringType.GetGenericArguments()
+                .Select(TypeSymbol.FromClrType)
+                .ToImmutableArray();
+            return true;
+        }
+
+        typeArguments = ImmutableArray<TypeSymbol>.Empty;
+        return true;
+    }
+
+    /// <summary>Unwraps an imported type from an optional CLR nullability annotation.</summary>
+    /// <param name="type">The type symbol to unwrap.</param>
+    /// <returns>The imported type symbol, or <c>null</c> for another symbol kind.</returns>
+    internal static ImportedTypeSymbol GetImportedTypeSymbol(TypeSymbol type)
+        => type switch
+        {
+            ImportedTypeSymbol imported => imported,
+            NullabilityAnnotatedTypeSymbol { BaseType: ImportedTypeSymbol imported } => imported,
+            _ => null,
+        };
 
     internal static PropertyInfo FindOpenIndexerDefinition(Type openDefinition, PropertyInfo closedIndexer)
     {

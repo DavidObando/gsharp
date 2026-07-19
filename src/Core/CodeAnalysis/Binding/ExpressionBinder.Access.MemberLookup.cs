@@ -934,7 +934,45 @@ internal sealed partial class ExpressionBinder
         // matches the single argument by assignability).
         // Issue #209: when the target carries inner-position nullable flags,
         // use them to type the element correctly (e.g., `list[0]` on `List<string?>` → `string?`).
-        if (target.Type is NullabilityAnnotatedTypeSymbol annotIdx && annotIdx.ClrType is System.Type clrAnnotIdx)
+        if (target.Type is TypeParameterSymbol tpIndexTarget
+            && tpIndexTarget.ClrInterfaceConstraint is TypeSymbol clrIndexConstraint
+            && clrIndexConstraint.ClrType is System.Type clrConstraintType)
+        {
+            var idxArgs = ImmutableArray.Create(BoundIndexArg());
+            if (this.memberLookup.TryResolveClrIndexer(
+                clrIndexConstraint,
+                clrConstraintType,
+                idxArgs,
+                out var idxProp,
+                out var resolvedIdxArgs))
+            {
+                if (idxProp.GetGetMethod(nonPublic: false) == null)
+                {
+                    Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
+                    return new BoundErrorExpression(null);
+                }
+
+                var elementType = MemberLookup.GetClrPropertyTypeSymbol(clrIndexConstraint, idxProp);
+                var declaringInterface = MemberLookup.GetClrMemberDeclaringTypeSymbol(
+                    clrIndexConstraint,
+                    idxProp);
+                var convertedIdxArgs = BindClrIndexerArguments(
+                    clrIndexConstraint,
+                    idxProp,
+                    resolvedIdxArgs,
+                    indexSyntax.Location);
+                return ConversionClassifier.AutoDereferenceRefReturn(
+                    new BoundClrIndexExpression(
+                        null,
+                        target,
+                        idxProp,
+                        convertedIdxArgs,
+                        elementType,
+                        tpIndexTarget,
+                        declaringInterface));
+            }
+        }
+        else if (target.Type is NullabilityAnnotatedTypeSymbol annotIdx && annotIdx.ClrType is System.Type clrAnnotIdx)
         {
             var idxArgsAnnot = ImmutableArray.Create(BoundIndexArg());
             if (this.memberLookup.TryResolveClrIndexer(target.Type, clrAnnotIdx, idxArgsAnnot, out var idxPropAnnot, out var resolvedIdxArgsAnnot))
@@ -1446,11 +1484,29 @@ internal sealed partial class ExpressionBinder
             PropertyInfo indexer,
             ImmutableArray<BoundExpression> arguments,
             BoundExpression value,
-            TypeSymbol resultType)
+            TypeSymbol resultType,
+            TypeParameterSymbol constrainedReceiverTypeParameter = null,
+            TypeSymbol constrainedInterfaceType = null)
         {
             return hasNarrowedTarget
-                ? BoundClrIndexAssignmentExpression.WithExpressionTarget(null, target, indexer, arguments, value, resultType)
-                : new BoundClrIndexAssignmentExpression(null, variable, indexer, arguments, value, resultType);
+                ? BoundClrIndexAssignmentExpression.WithExpressionTarget(
+                    null,
+                    target,
+                    indexer,
+                    arguments,
+                    value,
+                    resultType,
+                    constrainedReceiverTypeParameter,
+                    constrainedInterfaceType)
+                : new BoundClrIndexAssignmentExpression(
+                    null,
+                    variable,
+                    indexer,
+                    arguments,
+                    value,
+                    resultType,
+                    constrainedReceiverTypeParameter,
+                    constrainedInterfaceType);
         }
 
         BoundExpression BindValue(TypeSymbol elementType)
@@ -1535,7 +1591,44 @@ internal sealed partial class ExpressionBinder
         // Phase 4 exit: CLR indexer write on an imported reference type
         // (e.g. `d["k"] = 1` on Dictionary[string, int]).
         // Issue #209: honour inner-position nullable flags when present.
-        if (targetType is NullabilityAnnotatedTypeSymbol annotWr && targetType.ClrType is System.Type clrAnnotWr)
+        if (targetType is TypeParameterSymbol tpIndexTarget
+            && tpIndexTarget.ClrInterfaceConstraint is TypeSymbol clrIndexConstraint
+            && clrIndexConstraint.ClrType is System.Type clrConstraintType)
+        {
+            var idxArgs = ImmutableArray.Create(BindIndexValue());
+            if (this.memberLookup.TryResolveClrIndexer(
+                clrIndexConstraint,
+                clrConstraintType,
+                idxArgs,
+                out var idxProp,
+                out var resolvedIdxArgs))
+            {
+                if (idxProp.GetSetMethod(nonPublic: false) == null)
+                {
+                    Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
+                    return new BoundErrorExpression(null);
+                }
+
+                var elementType = MemberLookup.GetClrPropertyTypeSymbol(clrIndexConstraint, idxProp);
+                var declaringInterface = MemberLookup.GetClrMemberDeclaringTypeSymbol(
+                    clrIndexConstraint,
+                    idxProp);
+                var value = BindValue(elementType);
+                var convertedArgs = BindClrIndexerArguments(
+                    clrIndexConstraint,
+                    idxProp,
+                    resolvedIdxArgs,
+                    indexSyntax.Location);
+                return MakeClrIndexAssignment(
+                    idxProp,
+                    convertedArgs,
+                    value,
+                    elementType,
+                    tpIndexTarget,
+                    declaringInterface);
+            }
+        }
+        else if (targetType is NullabilityAnnotatedTypeSymbol annotWr && targetType.ClrType is System.Type clrAnnotWr)
         {
             var idxArgsAnnotWr = ImmutableArray.Create(BindIndexValue());
             if (this.memberLookup.TryResolveClrIndexer(targetType, clrAnnotWr, idxArgsAnnotWr, out var idxPropAnnotWr, out var resolvedIdxArgsAnnotWr))
@@ -3083,6 +3176,37 @@ internal sealed partial class ExpressionBinder
                 }
 
                 return new BoundPropertyAccessExpression(null, receiver, null, ifaceProp);
+            }
+        }
+
+        if (tpRecv.ClrInterfaceConstraint is TypeSymbol clrInterfaceConstraint
+            && clrInterfaceConstraint.ClrType is Type clrInterface
+            && clrInterface.IsInterface)
+        {
+            var clrProperty = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
+                clrInterface,
+                memberName,
+                BindingFlags.Public | BindingFlags.Instance);
+            if (clrProperty != null && clrProperty.GetIndexParameters().Length == 0)
+            {
+                if (clrProperty.GetGetMethod(nonPublic: false) == null)
+                {
+                    Diagnostics.ReportCannotAssign(ne.Location, memberName);
+                    return new BoundErrorExpression(null);
+                }
+
+                var propertyType = MemberLookup.GetClrPropertyTypeSymbol(clrInterfaceConstraint, clrProperty);
+                var declaringInterface = MemberLookup.GetClrMemberDeclaringTypeSymbol(
+                    clrInterfaceConstraint,
+                    clrProperty);
+                return ConversionClassifier.AutoDereferenceRefReturn(
+                    new BoundClrPropertyAccessExpression(
+                        null,
+                        receiver,
+                        clrProperty,
+                        propertyType,
+                        constrainedReceiverTypeParameter: tpRecv,
+                        constrainedInterfaceType: declaringInterface));
             }
         }
 

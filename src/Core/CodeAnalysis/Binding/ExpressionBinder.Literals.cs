@@ -1642,6 +1642,46 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
+            if (tp.ClrInterfaceConstraint is TypeSymbol clrInterfaceConstraint
+                && clrInterfaceConstraint.ClrType is Type clrInterface
+                && clrInterface.IsInterface)
+            {
+                var clrProperty = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
+                    clrInterface,
+                    memberName,
+                    BindingFlags.Public | BindingFlags.Instance);
+                if (clrProperty != null && clrProperty.GetIndexParameters().Length == 0)
+                {
+                    if (clrProperty.GetSetMethod(nonPublic: false) == null)
+                    {
+                        Diagnostics.ReportCannotAssign(initSyntax.FieldIdentifier.Location, memberName);
+                        _ = BindExpression(initSyntax.Value);
+                        continue;
+                    }
+
+                    var propertyType = MemberLookup.GetClrPropertyTypeSymbol(clrInterfaceConstraint, clrProperty);
+                    var declaringInterface = MemberLookup.GetClrMemberDeclaringTypeSymbol(
+                        clrInterfaceConstraint,
+                        clrProperty);
+                    var propertyValue = BindExpression(initSyntax.Value);
+                    var converted = conversions.BindConversion(
+                        initSyntax.Value.Location,
+                        propertyValue,
+                        propertyType);
+                    statements.Add(new BoundExpressionStatement(
+                        initSyntax,
+                        new BoundClrPropertyAssignmentExpression(
+                            initSyntax,
+                            receiverExpr,
+                            clrProperty,
+                            converted,
+                            propertyType,
+                            tp,
+                            declaringInterface)));
+                    continue;
+                }
+            }
+
             Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, memberName);
             _ = BindExpression(initSyntax.Value);
         }

@@ -20,13 +20,22 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundClrPropertyAssignmentExpression : BoundExpression
 {
-    public BoundClrPropertyAssignmentExpression(SyntaxNode syntax, BoundExpression receiver, MemberInfo member, BoundExpression value, TypeSymbol resultType)
+    public BoundClrPropertyAssignmentExpression(
+        SyntaxNode syntax,
+        BoundExpression receiver,
+        MemberInfo member,
+        BoundExpression value,
+        TypeSymbol resultType,
+        TypeParameterSymbol constrainedReceiverTypeParameter = null,
+        TypeSymbol constrainedInterfaceType = null)
         : base(syntax)
     {
         Receiver = receiver;
         Member = member;
         Value = value;
         Type = resultType;
+        ConstrainedReceiverTypeParameter = constrainedReceiverTypeParameter;
+        ConstrainedInterfaceType = constrainedInterfaceType;
     }
 
     public BoundExpression Receiver { get; }
@@ -34,6 +43,12 @@ public sealed class BoundClrPropertyAssignmentExpression : BoundExpression
     public MemberInfo Member { get; }
 
     public BoundExpression Value { get; }
+
+    public TypeParameterSymbol ConstrainedReceiverTypeParameter { get; }
+
+    public TypeSymbol ConstrainedInterfaceType { get; }
+
+    public bool IsConstrainedTypeParameterAccess => ConstrainedReceiverTypeParameter != null;
 
     public override TypeSymbol Type { get; }
 

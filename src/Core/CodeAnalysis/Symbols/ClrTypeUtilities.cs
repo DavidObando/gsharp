@@ -636,6 +636,36 @@ public static class ClrTypeUtilities
     public static EventInfo SafeGetEvent(Type type, string name, BindingFlags flags)
         => SafeGetMember(type, name, flags, (t, f) => t.GetEvent(name, f), SafeGetEvents);
 
+    /// <summary>Looks up an event by name across an interface and its inherited interfaces.</summary>
+    /// <param name="type">The interface type to search.</param>
+    /// <param name="name">The event name.</param>
+    /// <param name="flags">The binding flags controlling visibility.</param>
+    /// <returns>The matching event, or <c>null</c> when none is found.</returns>
+    public static EventInfo SafeGetEventIncludingInterfaces(Type type, string name, BindingFlags flags)
+    {
+        var direct = SafeGetEvent(type, name, flags);
+        if (direct != null)
+        {
+            return direct;
+        }
+
+        if (type is null)
+        {
+            return null;
+        }
+
+        foreach (var iface in SafeGetInterfaces(type))
+        {
+            var inherited = SafeGetEvent(iface, name, flags);
+            if (inherited != null)
+            {
+                return inherited;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// Issues #529 / #572: looks up a property by name, walking the transitive
     /// interface hierarchy. For interface types this surfaces inherited

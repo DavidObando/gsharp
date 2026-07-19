@@ -22,7 +22,15 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundClrIndexAssignmentExpression : BoundExpression
 {
-    public BoundClrIndexAssignmentExpression(SyntaxNode syntax, VariableSymbol target, PropertyInfo indexer, ImmutableArray<BoundExpression> arguments, BoundExpression value, TypeSymbol resultType)
+    public BoundClrIndexAssignmentExpression(
+        SyntaxNode syntax,
+        VariableSymbol target,
+        PropertyInfo indexer,
+        ImmutableArray<BoundExpression> arguments,
+        BoundExpression value,
+        TypeSymbol resultType,
+        TypeParameterSymbol constrainedReceiverTypeParameter = null,
+        TypeSymbol constrainedInterfaceType = null)
         : base(syntax)
     {
         Target = target;
@@ -30,9 +38,19 @@ public sealed class BoundClrIndexAssignmentExpression : BoundExpression
         Arguments = arguments;
         Value = value;
         Type = resultType;
+        ConstrainedReceiverTypeParameter = constrainedReceiverTypeParameter;
+        ConstrainedInterfaceType = constrainedInterfaceType;
     }
 
-    private BoundClrIndexAssignmentExpression(SyntaxNode syntax, BoundExpression targetExpression, PropertyInfo indexer, ImmutableArray<BoundExpression> arguments, BoundExpression value, TypeSymbol resultType)
+    private BoundClrIndexAssignmentExpression(
+        SyntaxNode syntax,
+        BoundExpression targetExpression,
+        PropertyInfo indexer,
+        ImmutableArray<BoundExpression> arguments,
+        BoundExpression value,
+        TypeSymbol resultType,
+        TypeParameterSymbol constrainedReceiverTypeParameter,
+        TypeSymbol constrainedInterfaceType)
         : base(syntax)
     {
         TargetExpression = targetExpression;
@@ -40,6 +58,8 @@ public sealed class BoundClrIndexAssignmentExpression : BoundExpression
         Arguments = arguments;
         Value = value;
         Type = resultType;
+        ConstrainedReceiverTypeParameter = constrainedReceiverTypeParameter;
+        ConstrainedInterfaceType = constrainedInterfaceType;
     }
 
     public VariableSymbol Target { get; }
@@ -58,6 +78,12 @@ public sealed class BoundClrIndexAssignmentExpression : BoundExpression
 
     public BoundExpression Value { get; }
 
+    public TypeParameterSymbol ConstrainedReceiverTypeParameter { get; }
+
+    public TypeSymbol ConstrainedInterfaceType { get; }
+
+    public bool IsConstrainedTypeParameterAccess => ConstrainedReceiverTypeParameter != null;
+
     public override TypeSymbol Type { get; }
 
     public override BoundNodeKind Kind => BoundNodeKind.ClrIndexAssignmentExpression;
@@ -73,6 +99,8 @@ public sealed class BoundClrIndexAssignmentExpression : BoundExpression
     /// <param name="arguments">The indexer argument expressions.</param>
     /// <param name="value">The value to assign.</param>
     /// <param name="resultType">The result type of the assignment expression.</param>
+    /// <param name="constrainedReceiverTypeParameter">The constrained receiver type parameter, if any.</param>
+    /// <param name="constrainedInterfaceType">The imported interface declaring the constrained indexer, if any.</param>
     /// <returns>A new <see cref="BoundClrIndexAssignmentExpression"/> with an expression target.</returns>
     public static BoundClrIndexAssignmentExpression WithExpressionTarget(
         SyntaxNode syntax,
@@ -80,8 +108,18 @@ public sealed class BoundClrIndexAssignmentExpression : BoundExpression
         PropertyInfo indexer,
         ImmutableArray<BoundExpression> arguments,
         BoundExpression value,
-        TypeSymbol resultType)
+        TypeSymbol resultType,
+        TypeParameterSymbol constrainedReceiverTypeParameter = null,
+        TypeSymbol constrainedInterfaceType = null)
     {
-        return new BoundClrIndexAssignmentExpression(syntax, targetExpression, indexer, arguments, value, resultType);
+        return new BoundClrIndexAssignmentExpression(
+            syntax,
+            targetExpression,
+            indexer,
+            arguments,
+            value,
+            resultType,
+            constrainedReceiverTypeParameter,
+            constrainedInterfaceType);
     }
 }

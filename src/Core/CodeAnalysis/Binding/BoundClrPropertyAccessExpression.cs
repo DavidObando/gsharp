@@ -20,13 +20,22 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundClrPropertyAccessExpression : BoundExpression
 {
-    public BoundClrPropertyAccessExpression(SyntaxNode syntax, BoundExpression receiver, MemberInfo member, TypeSymbol resultType, TypeSymbol staticContainerType = null)
+    public BoundClrPropertyAccessExpression(
+        SyntaxNode syntax,
+        BoundExpression receiver,
+        MemberInfo member,
+        TypeSymbol resultType,
+        TypeSymbol staticContainerType = null,
+        TypeParameterSymbol constrainedReceiverTypeParameter = null,
+        TypeSymbol constrainedInterfaceType = null)
         : base(syntax)
     {
         Receiver = receiver;
         Member = member;
         Type = resultType;
         StaticContainerType = staticContainerType;
+        ConstrainedReceiverTypeParameter = constrainedReceiverTypeParameter;
+        ConstrainedInterfaceType = constrainedInterfaceType;
     }
 
     public BoundExpression Receiver { get; }
@@ -44,6 +53,15 @@ public sealed class BoundClrPropertyAccessExpression : BoundExpression
     /// instance member access.
     /// </summary>
     public TypeSymbol StaticContainerType { get; }
+
+    /// <summary>Gets the type parameter used for constrained interface dispatch, if any.</summary>
+    public TypeParameterSymbol ConstrainedReceiverTypeParameter { get; }
+
+    /// <summary>Gets the imported interface that owns the constrained member reference, if any.</summary>
+    public TypeSymbol ConstrainedInterfaceType { get; }
+
+    /// <summary>Gets a value indicating whether this access dispatches through a type-parameter constraint.</summary>
+    public bool IsConstrainedTypeParameterAccess => ConstrainedReceiverTypeParameter != null;
 
     public override TypeSymbol Type { get; }
 
