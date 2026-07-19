@@ -265,19 +265,13 @@ public sealed class TranslateStage : IMigrationStage
                 Directory.CreateDirectory(Path.GetDirectoryName(gsPath));
                 File.WriteAllText(gsPath, printed);
 
-                var declaredTypeNames = new List<string>();
-                var baseClassNames = new List<string>();
-                CollectTypeGraph(unit.Members, declaredTypeNames, baseClassNames);
-
                 string relativeGsPath = MigrationPipeline.SanitizeAppId(context.App.Id) + "/" +
                     gsRelativePath.Replace(Path.DirectorySeparatorChar, '/');
                 var emitted = new EmittedGsFile(
                     gsPath,
                     relativeGsPath,
                     document.FilePath,
-                    printed,
-                    declaredTypeNames,
-                    baseClassNames)
+                    printed)
                 {
                     IsFromReferencedProject = isReferencedProject,
                 };
@@ -339,8 +333,6 @@ public sealed class TranslateStage : IMigrationStage
                     continue;
                 }
 
-                string className = Path.GetFileNameWithoutExtension(resxPath);
-
                 string gsRelativePath = OutputPathForResx(
                     resxPath,
                     currentProject,
@@ -356,9 +348,7 @@ public sealed class TranslateStage : IMigrationStage
                     gsPath,
                     relativeGsPath,
                     resxPath,
-                    generated,
-                    new[] { className },
-                    Array.Empty<string>())
+                    generated)
                 {
                     IsFromReferencedProject = isReferencedProject,
                 };
@@ -742,59 +732,5 @@ public sealed class TranslateStage : IMigrationStage
                 privateAssets ?? "all",
                 includeAssets));
         }
-    }
-
-    /// <summary>
-    /// Walks the emitted declarations of one file, recording the simple names of
-    /// the types declared (including nested types) and the simple names of the
-    /// base classes they extend. This drives the base-before-subclass compile
-    /// ordering in <see cref="CompileStage"/>.
-    /// </summary>
-    private static void CollectTypeGraph(
-        IReadOnlyList<GNode> members,
-        List<string> declaredTypeNames,
-        List<string> baseClassNames)
-    {
-        if (members is null)
-        {
-            return;
-        }
-
-        foreach (GNode member in members)
-        {
-            if (member is TypeDeclaration type)
-            {
-                declaredTypeNames.Add(type.Name);
-                if (type.BaseType is NamedTypeReference baseRef)
-                {
-                    baseClassNames.Add(SimpleName(baseRef.Name));
-                }
-
-                // Implemented interfaces are dependencies too: gsc's interface-
-                // satisfaction binding is order-sensitive, so a type must be
-                // compiled after the interfaces it declares (CompileStage ordering).
-                foreach (GTypeReference iface in type.Interfaces)
-                {
-                    if (iface is NamedTypeReference ifaceRef)
-                    {
-                        baseClassNames.Add(SimpleName(ifaceRef.Name));
-                    }
-                }
-
-                CollectTypeGraph(type.Members, declaredTypeNames, baseClassNames);
-            }
-        }
-    }
-
-    /// <summary>Returns the last dotted segment of a (possibly qualified) name.</summary>
-    private static string SimpleName(string name)
-    {
-        if (string.IsNullOrEmpty(name))
-        {
-            return name;
-        }
-
-        int dot = name.LastIndexOf('.');
-        return dot >= 0 ? name.Substring(dot + 1) : name;
     }
 }
