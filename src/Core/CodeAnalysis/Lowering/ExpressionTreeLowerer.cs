@@ -27,6 +27,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
     private static readonly TypeSymbol BindingFlagsTypeSymbol = TypeSymbol.FromClrType(typeof(BindingFlags));
     private static readonly TypeSymbol ReflectionConstructorInfoTypeSymbol = TypeSymbol.FromClrType(typeof(ConstructorInfo));
     private static readonly TypeSymbol ReflectionFieldInfoTypeSymbol = TypeSymbol.FromClrType(typeof(FieldInfo));
+    private static readonly TypeSymbol ReflectionMethodInfoTypeSymbol = TypeSymbol.FromClrType(typeof(MethodInfo));
     private static readonly TypeSymbol ReflectionPropertyInfoTypeSymbol = TypeSymbol.FromClrType(typeof(PropertyInfo));
     private static readonly TypeSymbol ReflectionMemberInfoTypeSymbol = TypeSymbol.FromClrType(typeof(MemberInfo));
     private static readonly TypeSymbol ExpressionTypeSymbol = TypeSymbol.FromClrType(typeof(System.Linq.Expressions.Expression));
@@ -185,6 +186,14 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         nameof(Type.GetField),
         typeof(string),
         typeof(BindingFlags));
+    private static readonly MethodInfo TypeGetMethodByParameterTypesMethod = GetRequiredMethod(
+        typeof(Type),
+        nameof(Type.GetMethod),
+        typeof(string),
+        typeof(BindingFlags),
+        typeof(System.Reflection.Binder),
+        typeof(Type[]),
+        typeof(ParameterModifier[]));
     private static readonly MethodInfo TypeGetPropertyMethod = GetRequiredMethod(
         typeof(Type),
         nameof(Type.GetProperty),
@@ -885,22 +894,6 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         BoundClrBinaryOperatorExpression expression,
         Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap)
     {
-        // Issue #2388: the nullable-lifted same-compilation struct operator
-        // shape (Function set, Method null) has no reflection MethodInfo
-        // available at lowering time (the declaring struct's operator is
-        // still TypeBuilder-backed) — the `Expression.Equal`/`Expression.Add`
-        // etc. factories all require an actual MethodInfo for a user-defined
-        // operator overload, so this shape cannot yet be lowered into an
-        // expression tree. The imported-CLR-type shape (Method set) is
-        // unaffected: `Expression.Equal(nullableLeft, nullableRight, false,
-        // method)` already performs the Nullable<T> unwrap/lift itself at
-        // expression-tree-compile time, so no change is needed there.
-        if (expression.Method == null)
-        {
-            throw new NotSupportedException(
-                "Expression trees do not yet support a nullable-lifted same-compilation user operator call (issue #2388).");
-        }
-
         var methodName = expression.OperatorKind switch
         {
             SyntaxKind.PlusToken => nameof(System.Linq.Expressions.Expression.Add),
@@ -927,6 +920,13 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         var leftExpr = UpcastToExpression(this.TranslateExpression(expression.Left, parameterMap));
         var rightExpr = UpcastToExpression(this.TranslateExpression(expression.Right, parameterMap));
         var resultType = TypeSymbol.FromClrType(typeof(System.Linq.Expressions.BinaryExpression));
+
+        // Issue #2398: same-compilation operators have no MethodInfo until the
+        // emitted declaring type exists. Resolve it at runtime from the exact
+        // closed owner and substituted parameter signature.
+        var operatorMethod = expression.Method != null
+            ? BuildMethodInfoConstant(expression.Method)
+            : BuildUserOperatorMethodInfoLookup(expression);
 
         // Issue #2373: unlike the arithmetic/bitwise/shift/logical factories,
         // the six relational/equality factories do NOT expose a 3-arg
@@ -956,7 +956,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                     leftExpr,
                     rightExpr,
                     new BoundLiteralExpression(null, false, TypeSymbol.Bool),
-                    BuildMethodInfoConstant(expression.Method)));
+                    operatorMethod));
         }
 
         var factory = GetRequiredMethod(
@@ -973,7 +973,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             ImmutableArray.Create<BoundExpression>(
                 leftExpr,
                 rightExpr,
-                BuildMethodInfoConstant(expression.Method)));
+                operatorMethod));
     }
 
     private BoundExpression BuildClrUnaryOperatorExpression(
@@ -1168,7 +1168,33 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
     }
 
     private static BoundExpression BuildMethodInfoConstant(MethodInfo method)
-        => new BoundLiteralExpression(null, method, TypeSymbol.FromClrType(typeof(MethodInfo)));
+        => new BoundLiteralExpression(null, method, ReflectionMethodInfoTypeSymbol);
+
+    private static BoundExpression BuildUserOperatorMethodInfoLookup(BoundClrBinaryOperatorExpression expression)
+    {
+        var function = expression.Function
+            ?? throw new NotSupportedException("A same-compilation expression-tree operator requires a function symbol.");
+        var ownerType = expression.FunctionOwnerType ?? function.StaticOwnerType as StructSymbol
+            ?? throw new NotSupportedException($"Operator '{function.Name}' has no same-compilation declaring type.");
+
+        var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(function.Parameters.Length);
+        foreach (var parameter in function.Parameters)
+        {
+            parameterTypes.Add(ownerType.SubstituteMemberType(parameter.Type));
+        }
+
+        return new BoundImportedInstanceCallExpression(
+            expression.Syntax,
+            CreateTypeOf(ownerType),
+            TypeGetMethodByParameterTypesMethod,
+            ReflectionMethodInfoTypeSymbol,
+            ImmutableArray.Create<BoundExpression>(
+                new BoundLiteralExpression(null, function.Name, TypeSymbol.String),
+                BuildBindingFlagsConstant(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static),
+                new BoundLiteralExpression(null, null, TypeSymbol.Null),
+                BuildTypeArray(parameterTypes.MoveToImmutable()),
+                new BoundLiteralExpression(null, null, TypeSymbol.Null)));
+    }
 
     private static BoundExpression BuildMemberInfoConstant(MemberInfo member)
         => new BoundLiteralExpression(null, member, ReflectionMemberInfoTypeSymbol);
