@@ -49,6 +49,90 @@ internal sealed class InterfaceImplEmitter
     }
 
     /// <summary>
+    /// Issue #2443: binds G# methods and property/event accessors to virtual
+    /// slots inherited from imported CLR base classes. Exact-signature
+    /// overrides would usually reuse the slot from their Virtual/ReuseSlot
+    /// flags alone, but an explicit MethodImpl also supports covariant returns
+    /// and records the intended external declaration unambiguously.
+    /// </summary>
+    internal void EmitExternalBaseMethodImpls(StructSymbol structSymbol)
+    {
+        if (structSymbol == null
+            || !this.cache.StructTypeDefs.TryGetValue(structSymbol, out var implTypeDef))
+        {
+            return;
+        }
+
+        foreach (var method in structSymbol.Methods)
+        {
+            if (method.ExternalOverriddenMethod != null
+                && this.cache.MethodHandles.TryGetValue(method, out var implHandle))
+            {
+                var declaration = this.outer.memberRefs.GetMethodEntityHandle(
+                    method.ExternalOverriddenMethod,
+                    method.ExternalOverrideContainingType);
+                this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implHandle, declaration);
+            }
+        }
+
+        foreach (var property in structSymbol.Properties)
+        {
+            if (!this.cache.PropertyAccessorHandles.TryGetValue(property, out var accessors))
+            {
+                continue;
+            }
+
+            if (property.ExternalOverriddenGetter != null && accessors.Getter.HasValue)
+            {
+                var declaration = this.outer.memberRefs.GetMethodEntityHandle(
+                    property.ExternalOverriddenGetter,
+                    property.ExternalOverrideContainingType);
+                this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, accessors.Getter.Value, declaration);
+            }
+
+            if (property.ExternalOverriddenSetter != null && accessors.Setter.HasValue)
+            {
+                var declaration = this.outer.memberRefs.GetMethodEntityHandle(
+                    property.ExternalOverriddenSetter,
+                    property.ExternalOverrideContainingType);
+                this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, accessors.Setter.Value, declaration);
+            }
+        }
+
+        foreach (var eventSymbol in structSymbol.Events)
+        {
+            if (!this.cache.EventAccessorHandles.TryGetValue(eventSymbol, out var accessors))
+            {
+                continue;
+            }
+
+            if (eventSymbol.ExternalOverriddenAddMethod != null)
+            {
+                var declaration = this.outer.memberRefs.GetMethodEntityHandle(
+                    eventSymbol.ExternalOverriddenAddMethod,
+                    eventSymbol.ExternalOverrideContainingType);
+                this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, accessors.Add, declaration);
+            }
+
+            if (eventSymbol.ExternalOverriddenRemoveMethod != null)
+            {
+                var declaration = this.outer.memberRefs.GetMethodEntityHandle(
+                    eventSymbol.ExternalOverriddenRemoveMethod,
+                    eventSymbol.ExternalOverrideContainingType);
+                this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, accessors.Remove, declaration);
+            }
+
+            if (eventSymbol.ExternalOverriddenRaiseMethod != null && accessors.Raise.HasValue)
+            {
+                var declaration = this.outer.memberRefs.GetMethodEntityHandle(
+                    eventSymbol.ExternalOverriddenRaiseMethod,
+                    eventSymbol.ExternalOverrideContainingType);
+                this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, accessors.Raise.Value, declaration);
+            }
+        }
+    }
+
+    /// <summary>
     /// Issue #985 / #2010: emit MethodImpl rows for covariant-return interface
     /// bridges AND for mangled-name explicit interface implementations. A
     /// method whose <see cref="FunctionSymbol.ExplicitInterfaceSlot"/> is set

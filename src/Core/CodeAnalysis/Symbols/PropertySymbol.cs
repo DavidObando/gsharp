@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Reflection;
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -106,6 +107,15 @@ public sealed class PropertySymbol : Symbol
 
     /// <summary>Gets or sets the synthesized setter function symbol.</summary>
     public FunctionSymbol SetterSymbol { get; set; }
+
+    /// <summary>Gets or sets the imported CLR getter slot overridden by this property.</summary>
+    public MethodInfo ExternalOverriddenGetter { get; set; }
+
+    /// <summary>Gets or sets the imported CLR setter slot overridden by this property.</summary>
+    public MethodInfo ExternalOverriddenSetter { get; set; }
+
+    /// <summary>Gets or sets the imported constructed base type that owns the overridden accessors.</summary>
+    public TypeSymbol ExternalOverrideContainingType { get; set; }
 
     /// <summary>
     /// Gets a value indicating whether this property is an indexer member

@@ -91,6 +91,7 @@ internal sealed class TypeDefEmitter
     private readonly Action<SignatureTypeEncoder, TypeSymbol> encodeTypeSymbol;
     private readonly Action<ReturnTypeEncoder, TypeSymbol, RefKind> encodeReturnSymbol;
     private readonly Func<Type, TypeReferenceHandle> getTypeReference;
+    private readonly Func<Type, EntityHandle> getImportedTypeHandle;
     private readonly Func<StructSymbol, EntityHandle> getUserStructTypeSpec;
     private readonly Func<StructSymbol, EntityHandle> resolveConstructedBaseCtorToken;
     private readonly Func<StructSymbol, ConstructorSymbol, EntityHandle> resolveConstructedBaseExplicitCtorToken;
@@ -101,6 +102,7 @@ internal sealed class TypeDefEmitter
     private readonly Action<ParameterHandle> emitIsReadOnlyAttributeOnParameter;
     private readonly Action<ParameterHandle> emitParamArrayAttributeOnParameter;
     private readonly Func<ConstructorInfo, MemberReferenceHandle> getCtorReference;
+    private readonly Func<ConstructorInfo, TypeSymbol, MemberReferenceHandle> getCtorReferenceForType;
     private readonly Func<StructSymbol, int> emitStaticConstructorBodyBytes;
     private readonly Func<StructSymbol, EntityHandle, int> emitClassDefaultConstructorBodyBytes;
     private readonly Func<StructSymbol, EntityHandle, int> emitClassPrimaryConstructorBodyBytes;
@@ -115,6 +117,7 @@ internal sealed class TypeDefEmitter
         Action<SignatureTypeEncoder, TypeSymbol> encodeTypeSymbol,
         Action<ReturnTypeEncoder, TypeSymbol, RefKind> encodeReturnSymbol,
         Func<Type, TypeReferenceHandle> getTypeReference,
+        Func<Type, EntityHandle> getImportedTypeHandle,
         Func<StructSymbol, EntityHandle> getUserStructTypeSpec,
         Func<StructSymbol, EntityHandle> resolveConstructedBaseCtorToken,
         Func<StructSymbol, ConstructorSymbol, EntityHandle> resolveConstructedBaseExplicitCtorToken,
@@ -125,6 +128,7 @@ internal sealed class TypeDefEmitter
         Action<ParameterHandle> emitIsReadOnlyAttributeOnParameter,
         Action<ParameterHandle> emitParamArrayAttributeOnParameter,
         Func<ConstructorInfo, MemberReferenceHandle> getCtorReference,
+        Func<ConstructorInfo, TypeSymbol, MemberReferenceHandle> getCtorReferenceForType,
         Func<StructSymbol, int> emitStaticConstructorBodyBytes,
         Func<StructSymbol, EntityHandle, int> emitClassDefaultConstructorBodyBytes,
         Func<StructSymbol, EntityHandle, int> emitClassPrimaryConstructorBodyBytes,
@@ -138,6 +142,7 @@ internal sealed class TypeDefEmitter
         this.encodeTypeSymbol = encodeTypeSymbol ?? throw new ArgumentNullException(nameof(encodeTypeSymbol));
         this.encodeReturnSymbol = encodeReturnSymbol ?? throw new ArgumentNullException(nameof(encodeReturnSymbol));
         this.getTypeReference = getTypeReference ?? throw new ArgumentNullException(nameof(getTypeReference));
+        this.getImportedTypeHandle = getImportedTypeHandle ?? throw new ArgumentNullException(nameof(getImportedTypeHandle));
         this.getUserStructTypeSpec = getUserStructTypeSpec ?? throw new ArgumentNullException(nameof(getUserStructTypeSpec));
         this.resolveConstructedBaseCtorToken = resolveConstructedBaseCtorToken ?? throw new ArgumentNullException(nameof(resolveConstructedBaseCtorToken));
         this.resolveConstructedBaseExplicitCtorToken = resolveConstructedBaseExplicitCtorToken ?? throw new ArgumentNullException(nameof(resolveConstructedBaseExplicitCtorToken));
@@ -148,6 +153,7 @@ internal sealed class TypeDefEmitter
         this.emitIsReadOnlyAttributeOnParameter = emitIsReadOnlyAttributeOnParameter ?? throw new ArgumentNullException(nameof(emitIsReadOnlyAttributeOnParameter));
         this.emitParamArrayAttributeOnParameter = emitParamArrayAttributeOnParameter ?? throw new ArgumentNullException(nameof(emitParamArrayAttributeOnParameter));
         this.getCtorReference = getCtorReference ?? throw new ArgumentNullException(nameof(getCtorReference));
+        this.getCtorReferenceForType = getCtorReferenceForType ?? throw new ArgumentNullException(nameof(getCtorReferenceForType));
         this.emitStaticConstructorBodyBytes = emitStaticConstructorBodyBytes ?? throw new ArgumentNullException(nameof(emitStaticConstructorBodyBytes));
         this.emitClassDefaultConstructorBodyBytes = emitClassDefaultConstructorBodyBytes ?? throw new ArgumentNullException(nameof(emitClassDefaultConstructorBodyBytes));
         this.emitClassPrimaryConstructorBodyBytes = emitClassPrimaryConstructorBodyBytes ?? throw new ArgumentNullException(nameof(emitClassPrimaryConstructorBodyBytes));
@@ -524,12 +530,12 @@ internal sealed class TypeDefEmitter
             {
                 baseType = baseHandle;
             }
-            else if (structSym.ImportedBaseType?.ClrType is Type importedBaseClr)
+            else if (structSym.ImportedBaseType?.ClrType != null)
             {
                 // Issue #296: the class inherits from an imported CLR base
                 // class; reference it as the TypeDef's base type so the emitted
                 // metadata extends the imported base.
-                baseType = this.getTypeReference(importedBaseClr);
+                baseType = this.GetImportedBaseTypeHandle(structSym.ImportedBaseType);
             }
             else
             {
@@ -702,10 +708,10 @@ internal sealed class TypeDefEmitter
             {
                 baseType = baseHandle;
             }
-            else if (structSym.ImportedBaseType?.ClrType is Type importedBaseClr)
+            else if (structSym.ImportedBaseType?.ClrType != null)
             {
                 // Issue #296: nested class inheriting an imported CLR base.
-                baseType = this.getTypeReference(importedBaseClr);
+                baseType = this.GetImportedBaseTypeHandle(structSym.ImportedBaseType);
             }
             else
             {
@@ -1806,10 +1812,32 @@ internal sealed class TypeDefEmitter
         {
             // Issue #296: chain the generated ctor to the imported CLR base's
             // accessible parameterless constructor.
-            return this.GetImportedBaseDefaultCtorReference(importedBaseClr);
+            return this.GetImportedBaseDefaultCtorReference(classSym.ImportedBaseType);
         }
 
         return this.wellKnown.ObjectCtorRef;
+    }
+
+    /// <summary>
+    /// Returns a TypeRef or symbolic TypeSpec for an imported base class.
+    /// </summary>
+    private EntityHandle GetImportedBaseTypeHandle(TypeSymbol importedBaseType)
+    {
+        if (importedBaseType is ImportedTypeSymbol
+            {
+                OpenDefinition: not null,
+                HasSubstitutableTypeArgument: true,
+            })
+        {
+            var signature = new BlobBuilder();
+            this.encodeTypeSymbol(
+                new BlobEncoder(signature).TypeSpecificationSignature(),
+                importedBaseType);
+            return this.emitCtx.Metadata.AddTypeSpecification(
+                this.emitCtx.Metadata.GetOrAddBlob(signature));
+        }
+
+        return this.getImportedTypeHandle(importedBaseType.ClrType);
     }
 
     /// <summary>
@@ -1819,8 +1847,9 @@ internal sealed class TypeDefEmitter
     /// MetadataLoadContext). Falls back to a synthesized parameterless ctor
     /// reference when no explicit parameterless ctor is discoverable.
     /// </summary>
-    private EntityHandle GetImportedBaseDefaultCtorReference(Type importedBaseClr)
+    private EntityHandle GetImportedBaseDefaultCtorReference(TypeSymbol importedBaseType)
     {
+        var importedBaseClr = importedBaseType.ClrType;
         ConstructorInfo parameterless = null;
         foreach (var ctor in importedBaseClr.GetConstructors(
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
@@ -1839,7 +1868,7 @@ internal sealed class TypeDefEmitter
 
         if (parameterless != null)
         {
-            return this.getCtorReference(parameterless);
+            return this.getCtorReferenceForType(parameterless, importedBaseType);
         }
 
         // No explicit accessible parameterless ctor was found; reference a
@@ -1849,7 +1878,7 @@ internal sealed class TypeDefEmitter
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => r.Void(), _ => { });
         return this.emitCtx.Metadata.AddMemberReference(
-            parent: this.getTypeReference(importedBaseClr),
+            parent: this.GetImportedBaseTypeHandle(importedBaseType),
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
     }
@@ -1859,7 +1888,7 @@ internal sealed class TypeDefEmitter
     {
         if (init.IsClrBase)
         {
-            return this.getCtorReference(init.ClrConstructor);
+            return this.getCtorReferenceForType(init.ClrConstructor, classSym.ImportedBaseType);
         }
 
         var gsharpBase = init.GSharpBaseType;

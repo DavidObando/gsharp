@@ -1410,7 +1410,10 @@ public static class GSharpPrinter
         var explicitClause = declaration.ExplicitInterfaceType != null
             ? $"({RenderType(declaration.ExplicitInterfaceType)}) "
             : string.Empty;
-        var header = $"{RenderAttributeBlock(declaration.Attributes, indent)}{pad}{RenderVisibility(declaration.Visibility)}event {explicitClause}{declaration.Name} {RenderType(declaration.Type)}";
+        var modifiers = declaration.IsOpen
+            ? declaration.IsOverride ? "open override " : "open "
+            : declaration.IsOverride ? "override " : string.Empty;
+        var header = $"{RenderAttributeBlock(declaration.Attributes, indent)}{pad}{RenderVisibility(declaration.Visibility)}{modifiers}event {explicitClause}{declaration.Name} {RenderType(declaration.Type)}";
         if (!declaration.HasExplicitAccessors)
         {
             return header;

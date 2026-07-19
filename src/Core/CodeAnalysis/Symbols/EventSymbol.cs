@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Reflection;
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -77,6 +78,18 @@ public sealed class EventSymbol : Symbol
 
     /// <summary>Gets or sets the synthesized raise method symbol (issue #257). Null when no <c>raise</c> accessor is declared.</summary>
     public FunctionSymbol RaiseMethodSymbol { get; set; }
+
+    /// <summary>Gets or sets the imported CLR add slot overridden by this event.</summary>
+    public MethodInfo ExternalOverriddenAddMethod { get; set; }
+
+    /// <summary>Gets or sets the imported CLR remove slot overridden by this event.</summary>
+    public MethodInfo ExternalOverriddenRemoveMethod { get; set; }
+
+    /// <summary>Gets or sets the imported CLR raise slot overridden by this event.</summary>
+    public MethodInfo ExternalOverriddenRaiseMethod { get; set; }
+
+    /// <summary>Gets or sets the imported constructed base type that owns the overridden event accessors.</summary>
+    public TypeSymbol ExternalOverrideContainingType { get; set; }
 
     /// <summary>Gets or sets the explicit add body syntax (null for field-like events).</summary>
     public Syntax.BlockStatementSyntax AddBodySyntax { get; set; }
