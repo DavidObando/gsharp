@@ -26,9 +26,9 @@ internal static class ExternalClrOverrideResolver
         Accessibility accessibility)
     {
         bool sawName = false;
-        var importedBase = FindImportedBaseType(derivedType);
-        var typeArguments = GetSymbolicTypeArguments(importedBase);
-        foreach (var method in EnumerateMethods(GetReflectionBaseType(importedBase), name))
+        var externalBase = FindExternalBaseType(derivedType);
+        var typeArguments = GetSymbolicTypeArguments(externalBase);
+        foreach (var method in EnumerateMethods(GetReflectionBaseType(externalBase), name))
         {
             if (!IsAccessibleOverrideTarget(method, accessibility))
             {
@@ -45,13 +45,13 @@ internal static class ExternalClrOverrideResolver
 
             if (!method.IsVirtual || method.IsFinal)
             {
-                return new MatchResult<MethodInfo>(null, importedBase, sawName, IsSealed: true);
+                return new MatchResult<MethodInfo>(null, externalBase, sawName, IsSealed: true);
             }
 
-            return new MatchResult<MethodInfo>(method, importedBase, sawName, IsSealed: false);
+            return new MatchResult<MethodInfo>(method, externalBase, sawName, IsSealed: false);
         }
 
-        return new MatchResult<MethodInfo>(null, importedBase, sawName, IsSealed: false);
+        return new MatchResult<MethodInfo>(null, externalBase, sawName, IsSealed: false);
     }
 
     internal static MatchResult<PropertyInfo> FindProperty(
@@ -64,9 +64,9 @@ internal static class ExternalClrOverrideResolver
         Accessibility accessibility)
     {
         bool sawName = false;
-        var importedBase = FindImportedBaseType(derivedType);
-        var typeArguments = GetSymbolicTypeArguments(importedBase);
-        foreach (var property in EnumerateProperties(GetReflectionBaseType(importedBase), name))
+        var externalBase = FindExternalBaseType(derivedType);
+        var typeArguments = GetSymbolicTypeArguments(externalBase);
+        foreach (var property in EnumerateProperties(GetReflectionBaseType(externalBase), name))
         {
             var getter = property.GetGetMethod(nonPublic: true);
             var setter = property.GetSetMethod(nonPublic: true);
@@ -90,13 +90,13 @@ internal static class ExternalClrOverrideResolver
             if ((getter != null && (!getter.IsVirtual || getter.IsFinal))
                 || (setter != null && (!setter.IsVirtual || setter.IsFinal)))
             {
-                return new MatchResult<PropertyInfo>(null, importedBase, sawName, IsSealed: true);
+                return new MatchResult<PropertyInfo>(null, externalBase, sawName, IsSealed: true);
             }
 
-            return new MatchResult<PropertyInfo>(property, importedBase, sawName, IsSealed: false);
+            return new MatchResult<PropertyInfo>(property, externalBase, sawName, IsSealed: false);
         }
 
-        return new MatchResult<PropertyInfo>(null, importedBase, sawName, IsSealed: false);
+        return new MatchResult<PropertyInfo>(null, externalBase, sawName, IsSealed: false);
     }
 
     internal static MatchResult<EventInfo> FindEvent(
@@ -106,9 +106,9 @@ internal static class ExternalClrOverrideResolver
         Accessibility accessibility)
     {
         bool sawName = false;
-        var importedBase = FindImportedBaseType(derivedType);
-        var typeArguments = GetSymbolicTypeArguments(importedBase);
-        foreach (var eventInfo in EnumerateEvents(GetReflectionBaseType(importedBase), name))
+        var externalBase = FindExternalBaseType(derivedType);
+        var typeArguments = GetSymbolicTypeArguments(externalBase);
+        foreach (var eventInfo in EnumerateEvents(GetReflectionBaseType(externalBase), name))
         {
             var add = eventInfo.GetAddMethod(nonPublic: true);
             var remove = eventInfo.GetRemoveMethod(nonPublic: true);
@@ -127,16 +127,16 @@ internal static class ExternalClrOverrideResolver
             if ((add != null && (!add.IsVirtual || add.IsFinal))
                 || (remove != null && (!remove.IsVirtual || remove.IsFinal)))
             {
-                return new MatchResult<EventInfo>(null, importedBase, sawName, IsSealed: true);
+                return new MatchResult<EventInfo>(null, externalBase, sawName, IsSealed: true);
             }
 
-            return new MatchResult<EventInfo>(eventInfo, importedBase, sawName, IsSealed: false);
+            return new MatchResult<EventInfo>(eventInfo, externalBase, sawName, IsSealed: false);
         }
 
-        return new MatchResult<EventInfo>(null, importedBase, sawName, IsSealed: false);
+        return new MatchResult<EventInfo>(null, externalBase, sawName, IsSealed: false);
     }
 
-    private static TypeSymbol FindImportedBaseType(StructSymbol type)
+    private static TypeSymbol FindExternalBaseType(StructSymbol type)
     {
         for (var current = type; current != null; current = current.BaseClass)
         {
@@ -144,9 +144,16 @@ internal static class ExternalClrOverrideResolver
             {
                 return current.ImportedBaseType;
             }
+
+            if (current.IsAttributeClass)
+            {
+                // Attribute sugar emits System.Attribute rather than the CLR
+                // implicit Object base handled by this fallback.
+                return null;
+            }
         }
 
-        return null;
+        return type?.IsClass == true ? TypeSymbol.Object : null;
     }
 
     private static Type GetReflectionBaseType(TypeSymbol importedBase)

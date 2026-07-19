@@ -23,6 +23,143 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
     private static readonly Lazy<string> ExternalBaseAssembly = new(EmitExternalBaseAssembly);
 
     [Fact]
+    public void ImplicitObjectOverrides_SourceChainsAndGenericClasses_DispatchAndReflectBaseSlots()
+    {
+        const string Source = """
+            package Issue2486
+            import System
+
+            open class Root[T] {
+            }
+
+            class Derived : Root[int32] {
+                override func ToString() string -> "derived"
+                override func GetHashCode() int32 -> 2486
+                override func Equals(value object) bool -> true
+            }
+
+            open class OpenImplicit {
+                override func ToString() string -> "open"
+            }
+
+            class Generic[T] {
+                override func ToString() string -> "generic"
+            }
+
+            func Main() {
+                let value object = Derived()
+                Console.WriteLine(value.ToString())
+                Console.WriteLine(value.GetHashCode())
+                Console.WriteLine(value.Equals(Derived()))
+            }
+            """;
+
+        var result = Compile(Source, target: "exe");
+        try
+        {
+            Assert.Equal("derived\n2486\nTrue\n", Run(result.OutputPath));
+            IlVerifier.Verify(result.OutputPath);
+
+            var assembly = Assembly.LoadFrom(result.OutputPath);
+            var derived = assembly.GetType("Issue2486.Derived")!;
+            AssertOverrideSlot(
+                derived.GetMethod("ToString", BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)!,
+                typeof(object).GetMethod("ToString")!);
+            AssertOverrideSlot(
+                derived.GetMethod("GetHashCode", BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)!,
+                typeof(object).GetMethod("GetHashCode")!);
+            AssertOverrideSlot(
+                derived.GetMethod("Equals", BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)!,
+                typeof(object).GetMethod("Equals", new[] { typeof(object) })!);
+
+            var openImplicit = assembly.GetType("Issue2486.OpenImplicit")!;
+            Assert.False(openImplicit.IsSealed);
+            AssertOverrideSlot(openImplicit.GetMethod("ToString")!, typeof(object).GetMethod("ToString")!);
+
+            var generic = assembly.GetType("Issue2486.Generic`1")!;
+            Assert.True(generic.IsSealed);
+            AssertOverrideSlot(generic.GetMethod("ToString")!, typeof(object).GetMethod("ToString")!);
+
+            var consumerPath = EmitImplicitObjectConsumer(result.DirectoryPath, result.OutputPath);
+            Assert.Equal("derived\n2486\nTrue\ngeneric\n", Run(consumerPath));
+        }
+        finally
+        {
+            result.Dispose();
+        }
+    }
+
+    [Fact]
+    public void MatchingImplicitObjectVirtualWithoutOverride_RemainsAnAcceptedShadow()
+    {
+        const string Source = """
+            package Issue2486
+
+            class Shadow {
+                func ToString() string -> "shadow"
+            }
+            """;
+
+        var result = Compile(Source, target: "library");
+        try
+        {
+            IlVerifier.Verify(result.OutputPath);
+
+            var assembly = Assembly.LoadFrom(result.OutputPath);
+            var type = assembly.GetType("Issue2486.Shadow")!;
+            var instance = Activator.CreateInstance(type);
+            var shadow = type.GetMethod("ToString", BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)!;
+
+            Assert.True((shadow.Attributes & MethodAttributes.NewSlot) != 0);
+            Assert.Equal("shadow", shadow.Invoke(instance, null));
+            Assert.Equal("Issue2486.Shadow", typeof(object).GetMethod("ToString")!.Invoke(instance, null));
+        }
+        finally
+        {
+            result.Dispose();
+        }
+    }
+
+    [Theory]
+    [InlineData("""
+        package Issue2486
+        class Bad {
+            override func ToString(value int32) string -> "bad"
+        }
+        """, "GS0185")]
+    [InlineData("""
+        package Issue2486
+        class Bad {
+            protected override func MemberwiseClone() object -> this
+        }
+        """, "GS0184")]
+    [InlineData("""
+        package Issue2486
+        class Bad {
+            override func Missing() string -> "bad"
+        }
+        """, "GS0183")]
+    [InlineData("""
+        package Issue2486
+        struct Bad {
+            override func ToString() string -> "bad"
+        }
+        """, "GS0183")]
+    public void ImplicitObjectOverride_InvalidShapesRetainSpecificDiagnostics(string source, string diagnosticId)
+    {
+        var result = TryCompile(source, "library");
+        try
+        {
+            Assert.NotEqual(0, result.ExitCode);
+            Assert.Contains(diagnosticId, result.Stdout + result.Stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            result.Dispose();
+        }
+    }
+
+    [Fact]
     public void BclObjectOverride_DispatchesAndReflectsBaseSlot()
     {
         const string Source = """
@@ -368,6 +505,37 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
             OutputKind.ConsoleApplication,
             gsharpAssembly,
             baseAssembly);
+        return outputPath;
+    }
+
+    private static string EmitImplicitObjectConsumer(string directory, string gsharpAssembly)
+    {
+        var outputPath = Path.Combine(directory, "Issue2486Consumer.dll");
+        const string Source = """
+            using System;
+            using Issue2486;
+
+            internal static class Program
+            {
+                private static void Main()
+                {
+                    object value = new Derived();
+                    Console.WriteLine(value.ToString());
+                    Console.WriteLine(value.GetHashCode());
+                    Console.WriteLine(value.Equals(new Derived()));
+
+                    object generic = new Generic<string>();
+                    Console.WriteLine(generic.ToString());
+                }
+            }
+            """;
+
+        EmitCSharpAssembly(
+            outputPath,
+            "Issue2486Consumer",
+            Source,
+            OutputKind.ConsoleApplication,
+            gsharpAssembly);
         return outputPath;
     }
 
