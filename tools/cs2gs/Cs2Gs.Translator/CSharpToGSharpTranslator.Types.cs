@@ -181,7 +181,17 @@ public sealed partial class CSharpToGSharpTranslator
                 GExpression expressionBody;
                 try
                 {
-                    expressionBody = this.TranslateExpression((ExpressionSyntax)lambda.Body);
+                    // Issue #2496: callable-value nullability is distinct from
+                    // callable-return nullability. Apply forgiveness only at a
+                    // runtime lambda's semantically resolved non-null result
+                    // contract; expression trees and nullable delegate results
+                    // stay assertion-free.
+                    ExpressionSyntax bodyExpression = (ExpressionSyntax)lambda.Body;
+                    expressionBody = this.TranslateExpression(bodyExpression);
+                    if (this.IsUnguardedForwardOfTaintedValueAsRuntimeLambdaResult(bodyExpression))
+                    {
+                        expressionBody = new NonNullAssertionExpression(expressionBody);
+                    }
                 }
                 finally
                 {
