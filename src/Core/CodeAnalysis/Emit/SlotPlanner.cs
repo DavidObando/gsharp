@@ -1564,9 +1564,13 @@ internal sealed class SlotPlanner
             // BoundBinaryExpression before Stream C/D is even attempted — so
             // there is no Form-2 "nil" case to mirror here, unlike
             // IsLiftedValueTypeBinary above.
+            // Issue #2399: mirror the binder's canonical effective-storage
+            // test. A nullable reference annotation over a same-compilation
+            // class must not allocate Nullable<T> spill/result slots.
             return node.Left.Type is NullableTypeSymbol left
-                && (left.UnderlyingType?.ClrType is { IsValueType: true } || left.UnderlyingType is StructSymbol)
-                && node.Right.Type is NullableTypeSymbol;
+                && NullableLifting.IsAnyValueTypeNullable(left)
+                && node.Right.Type is NullableTypeSymbol right
+                && NullableLifting.IsAnyValueTypeNullable(right);
         }
 
         private static bool IsLiftedValueTypeBinary(BoundBinaryExpression node)
