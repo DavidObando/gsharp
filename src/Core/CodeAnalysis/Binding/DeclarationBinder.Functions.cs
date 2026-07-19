@@ -864,47 +864,22 @@ internal sealed partial class DeclarationBinder
     }
 
     /// <summary>
-    /// Binds a type-parameter list without constraint pre-publication. Made
-    /// <c>internal</c> (issue #1886) so <see cref="LambdaBinder"/> can bind the
-    /// <c>[T, U, ...]</c> list on a generic <c>let</c>-bound local function
-    /// declaration (<c>let Name[T] = func (...) ... { ... }</c>) using the exact
-    /// same routine as generic delegate/type declarations.
+    /// Binds a type-parameter list. Made <c>internal</c> (issue #1886) so
+    /// <see cref="LambdaBinder"/> can bind the <c>[T, U, ...]</c> list on a
+    /// generic <c>let</c>-bound local function declaration
+    /// (<c>let Name[T] = func (...) ... { ... }</c>) using the same routine as
+    /// other generic callable declarations.
     /// </summary>
     /// <param name="syntax">The type-parameter list syntax.</param>
     /// <returns>The bound type-parameter symbols.</returns>
     internal ImmutableArray<TypeParameterSymbol> BindTypeParameterList(TypeParameterListSyntax syntax)
-        => BindTypeParameterList(syntax, onBareSymbolsPublished: null);
-
-    /// <summary>
-    /// Binds a type-parameter list. The optional
-    /// <paramref name="onBareSymbolsPublished"/> callback runs after the bare
-    /// type-parameter symbols are created and published into the constraint
-    /// scope but BEFORE any constraint clause is resolved. Issue #1056 uses this
-    /// to register the declaring type's name shell (with its type parameters
-    /// already attached) so a self-referential base-class constraint such as the
-    /// CRTP-style <c>class Box[T Box[T]]</c> / <c>class Box[T Box]</c> resolves
-    /// the type's own name while its constraints are being bound.
-    /// </summary>
-    /// <param name="syntax">The type-parameter list syntax.</param>
-    /// <param name="onBareSymbolsPublished">Optional callback invoked with the bare type-parameter symbols between pass 1 (symbol creation) and pass 2 (constraint resolution).</param>
-    /// <returns>The bound type-parameter symbols.</returns>
-    private ImmutableArray<TypeParameterSymbol> BindTypeParameterList(
-        TypeParameterListSyntax syntax,
-        Action<ImmutableArray<TypeParameterSymbol>> onBareSymbolsPublished)
     {
         if (syntax == null)
         {
-            onBareSymbolsPublished?.Invoke(ImmutableArray<TypeParameterSymbol>.Empty);
             return ImmutableArray<TypeParameterSymbol>.Empty;
         }
 
         var symbols = CreateTypeParameterSymbols(syntax);
-
-        // Publish the bare symbols into the binder's type-parameter scope so the
-        // constraint type clauses bound in pass 2 can see them. Enclosing type
-        // parameters (e.g. for a generic method declared inside a generic type)
-        // remain visible because we copy the previous map.
-        onBareSymbolsPublished?.Invoke(symbols);
         ResolveTypeParameterConstraints(syntax, symbols);
         return symbols;
     }

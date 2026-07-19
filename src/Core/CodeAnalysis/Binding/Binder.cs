@@ -5243,9 +5243,9 @@ public sealed class Binder
 
         if (type is TypeParameterSymbol tp)
         {
-            // Propagate: if the source type parameter carries `class`, so
-            // does this substitution.
-            return tp.HasReferenceTypeConstraint;
+            // A class-base constraint proves the parameter is reference-shaped
+            // just as strongly as the explicit `class` flag.
+            return tp.HasReferenceTypeConstraint || tp.ClassConstraint != null;
         }
 
         if (type is StructSymbol structSym)

@@ -221,6 +221,24 @@ internal sealed partial class ExpressionBinder
                 return new BoundEventSubscriptionExpression(null, boundReceiver, userStruct, ev, userHandler, isAdd);
             }
 
+            // Issue #2519: a class-constrained type parameter exposes the same
+            // instance event surface as its constraint's fields, properties,
+            // and methods. TypeMemberModel walks inherited events; retain the
+            // constraint as the event owner while the receiver remains T.
+            if (isEventCapableOperator
+                && boundReceiver.Type is TypeParameterSymbol { ClassConstraint: StructSymbol classConstraint }
+                && TypeMemberModel.TryGetEvent(classConstraint, eventName, out var constrainedUserEvent))
+            {
+                var constrainedHandler = BindEventSubscriptionHandler(syntax.Value, constrainedUserEvent.Type);
+                return new BoundEventSubscriptionExpression(
+                    null,
+                    boundReceiver,
+                    classConstraint,
+                    constrainedUserEvent,
+                    constrainedHandler,
+                    isAdd);
+            }
+
             // ADR-0149 follow-up (issue #2370): event subscription through an
             // INTERFACE-typed receiver (`b: IFoo; b.Changed += h`). Interfaces
             // could always declare events, but no call-site binding ever
@@ -297,6 +315,19 @@ internal sealed partial class ExpressionBinder
                 {
                     var compoundResult = TryBindChainedCompoundAssignment(
                         compoundStruct, boundReceiver, eventName, eventNameSyntax, syntax, baseOpSyntaxKind);
+                    if (compoundResult != null)
+                    {
+                        return compoundResult;
+                    }
+                }
+
+                // Issue #2519: use the class constraint as the member surface
+                // for `T.member op= value`, matching simple reads/writes and
+                // method/event lookup through the same constrained receiver.
+                if (boundReceiver.Type is TypeParameterSymbol { ClassConstraint: StructSymbol compoundConstraint })
+                {
+                    var compoundResult = TryBindChainedCompoundAssignment(
+                        compoundConstraint, boundReceiver, eventName, eventNameSyntax, syntax, baseOpSyntaxKind);
                     if (compoundResult != null)
                     {
                         return compoundResult;
