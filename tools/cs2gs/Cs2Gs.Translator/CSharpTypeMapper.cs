@@ -998,7 +998,8 @@ public sealed class CSharpTypeMapper
             .Select(p => this.Map(p.Type, context, location))
             .ToList();
 
-        ITypeSymbol returnType = invoke.ReturnType;
+        ITypeSymbol declaredReturnType = invoke.ReturnType;
+        ITypeSymbol returnType = declaredReturnType;
         bool isAsync = false;
 
         // A delegate returning Task / Task<T> maps to the async arrow form
@@ -1014,10 +1015,98 @@ public sealed class CSharpTypeMapper
         var returns = new List<GTypeReference>();
         if (returnType != null && returnType.SpecialType != SpecialType.System_Void)
         {
-            returns.Add(this.Map(returnType, context, location));
+            GTypeReference mappedReturn = this.Map(returnType, context, location);
+
+            // Issue #2504: every structural projection of a source named
+            // delegate must consume the same Invoke-return taint as the named
+            // declaration itself. Task<T> arrows expose the unwrapped T result;
+            // ValueTask<T> remains an explicit envelope in the existing mapper,
+            // so promote its inner result in place.
+            if (declaredReturnType is INamedTypeSymbol { IsGenericType: true, TypeArguments.Length: 1 } taskLike
+                && taskLike.Name == "ValueTask"
+                && taskLike.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks"
+                && mappedReturn is NamedTypeReference { TypeArguments.Count: 1 } valueTaskMapped)
+            {
+                GTypeReference promotedInner = this.PromoteDelegateReturnPosition(
+                    valueTaskMapped.TypeArguments[0],
+                    taskLike.TypeArguments[0],
+                    invoke,
+                    context,
+                    new List<int>());
+                mappedReturn = ReferenceEquals(promotedInner, valueTaskMapped.TypeArguments[0])
+                    ? mappedReturn
+                    : new NamedTypeReference(valueTaskMapped.Name, new[] { promotedInner });
+            }
+            else
+            {
+                mappedReturn = this.PromoteDelegateReturnPosition(
+                    mappedReturn,
+                    returnType,
+                    invoke,
+                    context,
+                    new List<int>());
+            }
+
+            returns.Add(mappedReturn);
         }
 
         return new ArrowTypeReference(parameters, returns, isAsync);
+    }
+
+    private GTypeReference PromoteDelegateReturnPosition(
+        GTypeReference mapped,
+        ITypeSymbol returnType,
+        IMethodSymbol invoke,
+        TranslationContext context,
+        List<int> tuplePath)
+    {
+        if (context.Compilation.Options.NullableContextOptions != NullableContextOptions.Disable)
+        {
+            return mapped;
+        }
+
+        if (mapped is TupleTypeReference mappedTuple
+            && returnType is INamedTypeSymbol { IsTupleType: true } tupleType
+            && mappedTuple.ElementTypes.Count == tupleType.TupleElements.Length)
+        {
+            bool changed = false;
+            var elements = new List<GTypeReference>(mappedTuple.ElementTypes.Count);
+            for (int index = 0; index < mappedTuple.ElementTypes.Count; index++)
+            {
+                tuplePath.Add(index);
+                GTypeReference element = this.PromoteDelegateReturnPosition(
+                    mappedTuple.ElementTypes[index],
+                    tupleType.TupleElements[index].Type,
+                    invoke,
+                    context,
+                    tuplePath);
+                tuplePath.RemoveAt(tuplePath.Count - 1);
+                changed |= !ReferenceEquals(element, mappedTuple.ElementTypes[index]);
+                elements.Add(element);
+            }
+
+            return changed
+                ? new TupleTypeReference(elements) { IsNullable = mappedTuple.IsNullable }
+                : mapped;
+        }
+
+        bool tainted = tuplePath.Count == 0
+            ? ObliviousNullabilityAnalyzer.IsTainted(
+                context.Compilation,
+                invoke,
+                context.SiblingCompilations)
+            : ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                context.Compilation,
+                invoke,
+                tuplePath,
+                context.SiblingCompilations);
+
+        return tainted
+            && !mapped.IsNullable
+            && returnType is { IsReferenceType: true }
+            && returnType.NullableAnnotation != NullableAnnotation.Annotated
+                ? WithNullable(mapped, true)
+                : mapped;
     }
 }
 

@@ -246,9 +246,21 @@ public sealed partial class CSharpToGSharpTranslator
             // Issue #914 (oblivious sink): local-function/lambda return
             // promotion uses the same shared symbol-position decision as a
             // top-level method return.
-            return this.PromoteReturnIfTainted(
-                this.typeMapper.Map(returnType, this.context, location),
-                symbol);
+            GTypeReference mapped = this.typeMapper.Map(returnType, this.context, location);
+            mapped = this.PromoteTupleDeclarationIfTainted(mapped, returnType, symbol);
+
+            if (returnType is INamedTypeSymbol { IsGenericType: true } taskLike
+                && taskLike.TypeArguments.Length == 1
+                && taskLike.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks"
+                && taskLike.Name is "Task" or "ValueTask")
+            {
+                return this.PromoteTaskEnvelopeReturnIfTainted(
+                    mapped,
+                    taskLike.TypeArguments[0],
+                    symbol);
+            }
+
+            return this.PromoteReturnIfTainted(mapped, symbol);
         }
 
         private Parameter MapLambdaParameter(ParameterSyntax parameter)

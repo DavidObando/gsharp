@@ -198,12 +198,11 @@ namespace Demo
     }
 
     [Fact]
-    public void OverrideOfAbstractBase_IsNotSyncedByThisFix()
+    public void OverrideOfAbstractBase_ReturnContractConverges()
     {
-        // Negative/documentation control: base-class virtual/abstract
-        // contracts are NOT interfaces, so CollectInterfaceMethodEdges (like
-        // its pre-existing property counterpart) does not create any edge for
-        // them - only the override's own tainted body is promoted.
+        // Issue #2504 generalizes callable return contracts to base methods too:
+        // a method group bound through the base contract must expose the same
+        // promoted return shape as its nullable override.
         string printed = TranslateOblivious(@"
 namespace Demo
 {
@@ -218,7 +217,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("open func Get() string;", printed);
+        Assert.Contains("open func Get() string?;", printed);
         Assert.Contains("override func Get() string? -> nil", printed);
     }
 
