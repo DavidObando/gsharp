@@ -99,6 +99,16 @@ namespace Demo
                 _ => null,
             };
         }
+
+        public (string Action, string Method, Dictionary<string, string> Inputs) Parse(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return (null, null, null);
+            }
+
+            return (""/login"", ""POST"", new Dictionary<string, string>());
+        }
     }
 }");
 
@@ -110,6 +120,9 @@ namespace Demo
         Assert.Contains("dict[\"k\"] = box?.Text!!", printed);
         Assert.Contains("Field:", printed);
         Assert.Contains("default(string?)", printed);
+        Assert.Contains(
+            "Parse(text string) (string?, string?, Dictionary[string, string]?)",
+            printed);
         CompileWithGsc(printed);
     }
 
