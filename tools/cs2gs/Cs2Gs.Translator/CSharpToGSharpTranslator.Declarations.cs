@@ -1426,9 +1426,10 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             var primaryParameters = new List<Parameter>();
-            var propertiesAsParams = new HashSet<string>();
-            var propertiesAsBodyFields = new HashSet<string>();
-            var bodyFieldInitializers = new Dictionary<string, GExpression>();
+            var propertiesAsParams = new HashSet<IPropertySymbol>(SymbolEqualityComparer.Default);
+            var propertiesAsBodyFields = new HashSet<IPropertySymbol>(SymbolEqualityComparer.Default);
+            var bodyFieldInitializers =
+                new Dictionary<IPropertySymbol, GExpression>(SymbolEqualityComparer.Default);
             foreach (PropertyDeclarationSyntax prop in eligible)
             {
                 if (this.context.GetDeclaredSymbol(prop) is not IPropertySymbol propSymbol ||
@@ -1472,8 +1473,8 @@ public sealed partial class CSharpToGSharpTranslator
                     // parameter) reuses that machinery — the required/optional
                     // machinery on the primary constructor itself never needs
                     // to represent a non-constant value at all.
-                    propertiesAsBodyFields.Add(prop.Identifier.Text);
-                    bodyFieldInitializers[prop.Identifier.Text] = this.TranslateExpression(prop.Initializer.Value);
+                    propertiesAsBodyFields.Add(propSymbol);
+                    bodyFieldInitializers[propSymbol] = this.TranslateExpression(prop.Initializer.Value);
                     continue;
                 }
 
@@ -1482,7 +1483,7 @@ public sealed partial class CSharpToGSharpTranslator
                     : null;
 
                 primaryParameters.Add(new Parameter(SanitizeIdentifier(prop.Identifier.Text), type, defaultValue: defaultValue));
-                propertiesAsParams.Add(prop.Identifier.Text);
+                propertiesAsParams.Add(propSymbol);
             }
 
             if (primaryParameters.Count == 0 && propertiesAsBodyFields.Count == 0)
@@ -1490,7 +1491,10 @@ public sealed partial class CSharpToGSharpTranslator
                 return ConstructorLift.None;
             }
 
-            var reportedNames = propertiesAsParams.Concat(propertiesAsBodyFields).OrderBy(n => n, StringComparer.Ordinal);
+            var reportedNames = propertiesAsParams
+                .Concat(propertiesAsBodyFields)
+                .Select(p => p.Name)
+                .OrderBy(n => n, StringComparer.Ordinal);
             this.context.Report(new TranslationDiagnostic(
                 nameof(SyntaxKind.RecordDeclaration),
                 $"record '{record.Identifier.Text}' is canonicalized to a 'data class'/'data struct': body auto-property data member(s) {string.Join(", ", reportedNames)} become primary-constructor parameter fields (now public and mutable), or — for a non-constant initializer that cannot be a valid G# optional-parameter default — a plain body field carrying that initializer (ADR-0115 §B.3/§B.4, issue #2228, issue #2281).",
@@ -1564,7 +1568,9 @@ public sealed partial class CSharpToGSharpTranslator
                 return ConstructorLift.None;
             }
 
-            var paramToTarget = new Dictionary<IParameterSymbol, (string Name, ITypeSymbol Type, bool IsProperty)>(SymbolEqualityComparer.Default);
+            var paramToTarget =
+                new Dictionary<IParameterSymbol, (string Name, ITypeSymbol Type, IPropertySymbol Property)>(
+                    SymbolEqualityComparer.Default);
             var fieldInitializers = new Dictionary<string, GExpression>();
             var residualInitStatements = new List<GStatement>();
 
@@ -1586,7 +1592,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // constructor parameter named after the member.
                     string targetName;
                     ITypeSymbol targetType;
-                    bool targetIsProperty;
+                    IPropertySymbol targetProperty;
                     ISymbol leftSymbol = this.context.GetSymbolInfo(assignment.Left).Symbol;
                     if (leftSymbol is IFieldSymbol fieldSymbol &&
                         !fieldSymbol.IsStatic &&
@@ -1594,7 +1600,7 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         targetName = fieldSymbol.Name;
                         targetType = fieldSymbol.Type;
-                        targetIsProperty = false;
+                        targetProperty = null;
                     }
                     else if (leftSymbol is IPropertySymbol propertySymbol &&
                         !propertySymbol.IsStatic &&
@@ -1602,7 +1608,7 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         targetName = propertySymbol.Name;
                         targetType = propertySymbol.Type;
-                        targetIsProperty = true;
+                        targetProperty = propertySymbol;
 
                         // OD-T1: G# primary-constructor parameters are NOT
                         // properties, so a *class* that copies a constructor
@@ -1637,7 +1643,7 @@ public sealed partial class CSharpToGSharpTranslator
                             return ConstructorLift.None;
                         }
 
-                        paramToTarget[paramSymbol] = (targetName, targetType, targetIsProperty);
+                        paramToTarget[paramSymbol] = (targetName, targetType, targetProperty);
                         continue;
                     }
 
@@ -1668,7 +1674,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // is rejected). A constant assignment to a property therefore
                     // cannot be lifted to a member initializer; keep the explicit
                     // 'init' so its body faithfully assigns the property.
-                    if (targetIsProperty)
+                    if (targetProperty != null)
                     {
                         return ConstructorLift.None;
                     }
@@ -1718,10 +1724,10 @@ public sealed partial class CSharpToGSharpTranslator
 
             var primaryParameters = new List<Parameter>();
             var fieldsAsParams = new HashSet<string>();
-            var propertiesAsParams = new HashSet<string>();
+            var propertiesAsParams = new HashSet<IPropertySymbol>(SymbolEqualityComparer.Default);
             foreach (IParameterSymbol param in ctorSymbol.Parameters)
             {
-                (string Name, ITypeSymbol Type, bool IsProperty) target = paramToTarget[param];
+                (string Name, ITypeSymbol Type, IPropertySymbol Property) target = paramToTarget[param];
                 GTypeReference type = this.typeMapper.Map(target.Type, this.context, param.Locations.FirstOrDefault());
 
                 // Issue #914 (oblivious sink): a T2-lifted primary-constructor
@@ -1739,9 +1745,9 @@ public sealed partial class CSharpToGSharpTranslator
                 type = this.PromoteDelegateParameterInvokedWithNull(type, param);
                 GExpression liftedDefault = this.BuildOptionalParameterDefault(param, type, node);
                 primaryParameters.Add(new Parameter(SanitizeIdentifier(target.Name), type, defaultValue: liftedDefault));
-                if (target.IsProperty)
+                if (target.Property != null)
                 {
-                    propertiesAsParams.Add(target.Name);
+                    propertiesAsParams.Add(target.Property);
                 }
                 else
                 {
@@ -1749,7 +1755,10 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            var allParamNames = fieldsAsParams.Concat(propertiesAsParams).OrderBy(n => n).ToList();
+            var allParamNames = fieldsAsParams
+                .Concat(propertiesAsParams.Select(p => p.Name))
+                .OrderBy(n => n)
+                .ToList();
             if (allParamNames.Count > 0)
             {
                 this.context.Report(new TranslationDiagnostic(
