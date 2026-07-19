@@ -464,7 +464,7 @@ internal sealed partial class MethodBodyEmitter
         {
             this.il.OpCode(ILOpCode.Ldsfld);
             this.il.Token(fieldHandle);
-            this.EmitNarrowingCastIfNeeded(fa.Field.Type, fa.NarrowedType);
+            this.EmitNarrowingCastIfNeeded(GetEffectiveFieldType(fa), fa.NarrowedType);
             return;
         }
 
@@ -481,7 +481,7 @@ internal sealed partial class MethodBodyEmitter
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(fieldReceiverTp));
             this.il.OpCode(ILOpCode.Ldfld);
             this.il.Token(fieldHandle);
-            this.EmitNarrowingCastIfNeeded(fa.Field.Type, fa.NarrowedType);
+            this.EmitNarrowingCastIfNeeded(GetEffectiveFieldType(fa), fa.NarrowedType);
             return;
         }
 
@@ -514,8 +514,13 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.OpCode(ILOpCode.Ldfld);
         this.il.Token(fieldHandle);
-        this.EmitNarrowingCastIfNeeded(fa.Field.Type, fa.NarrowedType);
+        this.EmitNarrowingCastIfNeeded(GetEffectiveFieldType(fa), fa.NarrowedType);
     }
+
+    private static TypeSymbol GetEffectiveFieldType(BoundFieldAccessExpression access)
+        => access.StructType is StructSymbol owner
+            ? owner.SubstituteMemberType(access.Field.Type)
+            : access.Field.Type;
 
     private void EmitFieldAssignment(BoundFieldAssignmentExpression fas)
     {

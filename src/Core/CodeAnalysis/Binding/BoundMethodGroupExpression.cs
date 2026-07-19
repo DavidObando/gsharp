@@ -33,21 +33,42 @@ public sealed class BoundMethodGroupExpression : BoundExpression
     }
 
     public BoundMethodGroupExpression(SyntaxNode syntax, BoundExpression receiver, FunctionSymbol function, FunctionTypeSymbol type)
+        : this(syntax, receiver, function, type, staticOwnerType: null)
+    {
+    }
+
+    public BoundMethodGroupExpression(
+        SyntaxNode syntax,
+        BoundExpression receiver,
+        FunctionSymbol function,
+        FunctionTypeSymbol type,
+        StructSymbol staticOwnerType)
         : base(syntax)
     {
         Receiver = receiver;
         Function = function;
         FunctionType = type;
         Candidates = ImmutableArray.Create(function);
+        StaticOwnerType = staticOwnerType;
     }
 
     public BoundMethodGroupExpression(SyntaxNode syntax, BoundExpression receiver, ImmutableArray<FunctionSymbol> candidates)
+        : this(syntax, receiver, candidates, staticOwnerType: null)
+    {
+    }
+
+    public BoundMethodGroupExpression(
+        SyntaxNode syntax,
+        BoundExpression receiver,
+        ImmutableArray<FunctionSymbol> candidates,
+        StructSymbol staticOwnerType)
         : base(syntax)
     {
         Receiver = receiver;
         Function = candidates.IsDefaultOrEmpty ? null : candidates[0];
         FunctionType = null;
         Candidates = candidates;
+        StaticOwnerType = staticOwnerType;
     }
 
     /// <summary>
@@ -67,6 +88,9 @@ public sealed class BoundMethodGroupExpression : BoundExpression
     /// <c>[Function]</c> when there is a single candidate.
     /// </summary>
     public ImmutableArray<FunctionSymbol> Candidates { get; }
+
+    /// <summary>Gets the type used to qualify a static method group.</summary>
+    public StructSymbol StaticOwnerType { get; }
 
     public override TypeSymbol Type => FunctionType ?? (TypeSymbol)TypeSymbol.Error;
 

@@ -93,7 +93,7 @@ public static class TypeMemberModel
 
                 if (query.IncludeStatic)
                 {
-                    AddMethodsDeduped(ref builder, c.StaticMethods, name);
+                    AddMethodsDeduped(ref builder, c.StaticMethods, name, skipPrivate: !ReferenceEquals(c, structSymbol));
                 }
 
                 if (!query.IncludeInherited)
@@ -212,6 +212,11 @@ public static class TypeMemberModel
 
                 if (query.IncludeStatic && c.TryGetStaticField(name, out field))
                 {
+                    if (!ReferenceEquals(c, structSymbol) && field.Accessibility == Accessibility.Private)
+                    {
+                        break;
+                    }
+
                     declaringType = c;
                     return true;
                 }
@@ -241,6 +246,42 @@ public static class TypeMemberModel
         }
 
         field = null;
+        return false;
+    }
+
+    /// <summary>Tries to find an inherited static field and its effective declaring type.</summary>
+    /// <param name="type">The source type used to qualify the field.</param>
+    /// <param name="name">The field name.</param>
+    /// <param name="field">The declared field.</param>
+    /// <param name="declaringType">The effective declaring construction.</param>
+    /// <returns>Whether a field was found.</returns>
+    public static bool TryGetStaticFieldIncludingInherited(
+        StructSymbol type,
+        string name,
+        out FieldSymbol field,
+        out StructSymbol declaringType)
+    {
+        for (var c = type; c != null; c = c.BaseClass)
+        {
+            if (c.TryGetStaticField(name, out field))
+            {
+                if (!ReferenceEquals(c, type) && field.Accessibility == Accessibility.Private)
+                {
+                    break;
+                }
+
+                declaringType = ResolveStaticMemberOwner(type, c);
+                return true;
+            }
+
+            if (DeclaresAnyStaticMember(c, name))
+            {
+                break;
+            }
+        }
+
+        field = null;
+        declaringType = null;
         return false;
     }
 
@@ -373,6 +414,43 @@ public static class TypeMemberModel
         return false;
     }
 
+    /// <summary>Tries to find an inherited static property and its effective declaring type.</summary>
+    /// <param name="type">The source type used to qualify the property.</param>
+    /// <param name="name">The property name.</param>
+    /// <param name="property">The property in the effective owner context.</param>
+    /// <param name="declaringType">The effective declaring construction.</param>
+    /// <returns>Whether a property was found.</returns>
+    public static bool TryGetStaticPropertyIncludingInherited(
+        StructSymbol type,
+        string name,
+        out PropertySymbol property,
+        out StructSymbol declaringType)
+    {
+        for (var c = type; c != null; c = c.BaseClass)
+        {
+            var effective = ResolveStaticMemberOwner(type, c);
+            if (TryGetStaticProperty(effective, name, out property))
+            {
+                if (!ReferenceEquals(c, type) && property.Accessibility == Accessibility.Private)
+                {
+                    break;
+                }
+
+                declaringType = effective;
+                return true;
+            }
+
+            if (DeclaresAnyStaticMember(c, name))
+            {
+                break;
+            }
+        }
+
+        property = null;
+        declaringType = null;
+        return false;
+    }
+
     /// <summary>Tries to find an instance event named <paramref name="name"/> on <paramref name="type"/>, walking the base chain.</summary>
     /// <param name="type">The type to resolve against.</param>
     /// <param name="name">The event name.</param>
@@ -450,6 +528,91 @@ public static class TypeMemberModel
         return false;
     }
 
+    /// <summary>Tries to find an inherited static event and its effective declaring type.</summary>
+    /// <param name="type">The source type used to qualify the event.</param>
+    /// <param name="name">The event name.</param>
+    /// <param name="event">The declared event.</param>
+    /// <param name="declaringType">The effective declaring construction.</param>
+    /// <returns>Whether an event was found.</returns>
+    public static bool TryGetStaticEventIncludingInherited(
+        StructSymbol type,
+        string name,
+        out EventSymbol @event,
+        out StructSymbol declaringType)
+    {
+        for (var c = type; c != null; c = c.BaseClass)
+        {
+            var effective = ResolveStaticMemberOwner(type, c);
+            if (TryGetStaticEvent(effective, name, out @event))
+            {
+                if (!ReferenceEquals(c, type) && @event.Accessibility == Accessibility.Private)
+                {
+                    break;
+                }
+
+                declaringType = effective;
+                return true;
+            }
+
+            if (DeclaresAnyStaticMember(c, name))
+            {
+                break;
+            }
+        }
+
+        @event = null;
+        declaringType = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Resolves the base-class construction that owns a static member found
+    /// through <paramref name="lookupType"/>.
+    /// </summary>
+    /// <param name="lookupType">The source type used to qualify the member.</param>
+    /// <param name="declaredOwner">The member's declared owner.</param>
+    /// <returns>The owner construction in the lookup type's base chain.</returns>
+    public static StructSymbol ResolveStaticMemberOwner(StructSymbol lookupType, StructSymbol declaredOwner)
+    {
+        if (lookupType == null || declaredOwner == null)
+        {
+            return declaredOwner;
+        }
+
+        var declaredDefinition = declaredOwner.Definition ?? declaredOwner;
+        if (!declaredDefinition.TypeParameters.IsDefaultOrEmpty)
+        {
+            return lookupType.FindConstructedGenericBase(
+                candidate => ReferenceEquals(candidate, declaredDefinition)) ?? declaredOwner;
+        }
+
+        for (var c = lookupType; c != null; c = c.BaseClass)
+        {
+            if (ReferenceEquals(c.Definition ?? c, declaredDefinition))
+            {
+                return c;
+            }
+        }
+
+        return declaredOwner;
+    }
+
+    /// <summary>Finds the nearest imported CLR base under a source class chain.</summary>
+    /// <param name="type">The source class whose chain is searched.</param>
+    /// <returns>The imported base, or null.</returns>
+    public static TypeSymbol GetNearestImportedBase(StructSymbol type)
+    {
+        for (var c = type; c != null; c = c.BaseClass)
+        {
+            if (c.ImportedBaseType?.ClrType != null)
+            {
+                return c.ImportedBaseType;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// ADR-0112: tries to find the FIRST instance method named <paramref name="name"/>
     /// on <paramref name="type"/>, walking the base chain this-first (declaration order
@@ -525,6 +688,40 @@ public static class TypeMemberModel
 
         method = null;
         declaringType = null;
+        return false;
+    }
+
+    internal static bool DeclaresAnyStaticMember(StructSymbol type, string name)
+    {
+        if (type.TryGetStaticField(name, out _))
+        {
+            return true;
+        }
+
+        foreach (var property in type.StaticProperties)
+        {
+            if (property.Name == name)
+            {
+                return true;
+            }
+        }
+
+        foreach (var @event in type.StaticEvents)
+        {
+            if (@event.Name == name)
+            {
+                return true;
+            }
+        }
+
+        foreach (var method in type.StaticMethods)
+        {
+            if (method.Name == name)
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 
@@ -801,7 +998,11 @@ public static class TypeMemberModel
         return false;
     }
 
-    private static void AddMethodsDeduped(ref ImmutableArray<FunctionSymbol>.Builder builder, ImmutableArray<FunctionSymbol> source, string name)
+    private static void AddMethodsDeduped(
+        ref ImmutableArray<FunctionSymbol>.Builder builder,
+        ImmutableArray<FunctionSymbol> source,
+        string name,
+        bool skipPrivate = false)
     {
         if (source.IsDefaultOrEmpty)
         {
@@ -810,7 +1011,7 @@ public static class TypeMemberModel
 
         foreach (var m in source)
         {
-            if (m.Name != name)
+            if (m.Name != name || (skipPrivate && m.Accessibility == Accessibility.Private))
             {
                 continue;
             }

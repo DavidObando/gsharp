@@ -48,6 +48,7 @@ public sealed class StructSymbol : TypeSymbol
     private ImmutableArray<FieldSymbol> fieldsStore = ImmutableArray<FieldSymbol>.Empty;
     private ImmutableArray<PropertySymbol> propertiesStore = ImmutableArray<PropertySymbol>.Empty;
     private ImmutableArray<PropertySymbol> staticPropertiesStore = ImmutableArray<PropertySymbol>.Empty;
+    private ImmutableArray<EventSymbol> staticEventsStore = ImmutableArray<EventSymbol>.Empty;
 
     // Issue #1341: memoized substitution of the definition's instance-member
     // tables (whose member types may mention the type parameters) for a
@@ -408,7 +409,11 @@ public sealed class StructSymbol : TypeSymbol
     }
 
     /// <summary>Gets the static events declared inside a <c>shared</c> block (ADR-0053). Populated by the binder; defaults to empty.</summary>
-    public ImmutableArray<EventSymbol> StaticEvents { get; private set; } = ImmutableArray<EventSymbol>.Empty;
+    public ImmutableArray<EventSymbol> StaticEvents
+    {
+        get => Definition != null && !ReferenceEquals(Definition, this) ? Definition.StaticEvents : staticEventsStore;
+        private set => staticEventsStore = value;
+    }
 
     /// <summary>Gets the bound initializer expressions for static fields with non-default values (Issue #262). Keyed by field symbol.</summary>
     public ImmutableDictionary<FieldSymbol, BoundExpression> StaticFieldInitializers { get; private set; } = ImmutableDictionary<FieldSymbol, BoundExpression>.Empty;

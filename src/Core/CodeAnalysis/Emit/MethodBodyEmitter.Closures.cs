@@ -432,6 +432,13 @@ internal sealed partial class MethodBodyEmitter
         // function token (ilverify `DelegateCtor`). Re-resolve through the
         // receiver's type.
         EntityHandle ftnToken = staticHandle;
+        if (methodGroup.Receiver == null
+            && methodGroup.StaticOwnerType != null
+            && ReflectionMetadataEmitter.IsUserGenericTypeReference(methodGroup.StaticOwnerType))
+        {
+            ftnToken = this.outer.userTokens.ResolveUserStaticMethodToken(methodGroup.StaticOwnerType, methodGroup.Function);
+        }
+
         if (methodGroup.Receiver?.Type is StructSymbol receiverStruct
             && ReflectionMetadataEmitter.IsUserGenericTypeReference(receiverStruct)
             && this.outer.cache.MethodHandles.ContainsKey(methodGroup.Function))
@@ -534,9 +541,9 @@ internal sealed partial class MethodBodyEmitter
         // and non-capturing lambdas both flow through the closure builder
         // with the correct target delegate ctor (object, IntPtr).
         if (node.Handler is BoundFunctionLiteralExpression literalHandler
-            && node.Event.Type?.ClrType != null)
+            && node.EventType?.ClrType != null)
         {
-            var mappedDelegateType = this.outer.signatures.MapToReferenceClrType(node.Event.Type.ClrType);
+            var mappedDelegateType = this.outer.signatures.MapToReferenceClrType(node.EventType.ClrType);
             this.EmitFunctionLiteral(literalHandler, mappedDelegateType);
         }
         else
@@ -547,6 +554,18 @@ internal sealed partial class MethodBodyEmitter
         if (this.outer.cache.EventAccessorHandles.TryGetValue(node.Event, out var accessorHandles))
         {
             var accessorMethodSymbol = node.IsAdd ? node.Event.AddMethodSymbol : node.Event.RemoveMethodSymbol;
+            var accessorHandle = node.IsAdd ? accessorHandles.Add : accessorHandles.Remove;
+
+            if (node.Receiver == null
+                && node.StructType is StructSymbol staticOwner
+                && ReflectionMetadataEmitter.IsUserGenericTypeReference(staticOwner)
+                && accessorMethodSymbol != null)
+            {
+                var accessorToken = this.outer.userTokens.ResolveUserStaticMethodToken(staticOwner, accessorMethodSymbol, accessorHandle);
+                this.il.OpCode(ILOpCode.Call);
+                this.il.Token(accessorToken);
+                return;
+            }
 
             // ADR-0149 follow-up (issue #2370): a generic-interface-typed
             // receiver (`b: IWatchable[int32]; b.Changed += h`) must reach
@@ -564,7 +583,6 @@ internal sealed partial class MethodBodyEmitter
                 return;
             }
 
-            var accessorHandle = node.IsAdd ? accessorHandles.Add : accessorHandles.Remove;
             bool isStatic = node.Receiver == null;
             bool isVirtual = !isStatic && (node.StructType is InterfaceSymbol || node.Event.IsVirtual || node.Event.IsOverride);
             this.il.OpCode(isVirtual ? ILOpCode.Callvirt : ILOpCode.Call);

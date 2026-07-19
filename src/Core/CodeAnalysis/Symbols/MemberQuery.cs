@@ -56,6 +56,12 @@ public readonly struct MemberQuery
     public static MemberQuery Static(MemberKinds kinds = MemberKinds.All)
         => new(includeInstance: false, includeStatic: true, includeInherited: false, kinds);
 
+    /// <summary>Gets a query matching static members of the given kinds, walking the base-class chain.</summary>
+    /// <param name="kinds">The member-kind mask.</param>
+    /// <returns>The configured query.</returns>
+    public static MemberQuery InheritedStatic(MemberKinds kinds = MemberKinds.All)
+        => new(includeInstance: false, includeStatic: true, includeInherited: true, kinds);
+
     /// <summary>Returns a copy of this query with the kind mask replaced.</summary>
     /// <param name="kinds">The new kind mask.</param>
     /// <returns>The adjusted query.</returns>

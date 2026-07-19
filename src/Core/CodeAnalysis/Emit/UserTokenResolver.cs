@@ -1441,6 +1441,21 @@ internal sealed class UserTokenResolver
         return this.GetUserStructMethodRef(containingType, openDef, method.Name, this.EncodeOpenMethodSignature(method));
     }
 
+    /// <summary>Resolves a generic static accessor whose MethodDef is tracked outside the method caches.</summary>
+    /// <param name="containingType">The effective generic owner.</param>
+    /// <param name="method">The accessor method symbol.</param>
+    /// <param name="openDef">The accessor's emitted MethodDef.</param>
+    /// <returns>The MethodDef or TypeSpec-parented MemberRef token.</returns>
+    internal EntityHandle ResolveUserStaticMethodToken(StructSymbol containingType, FunctionSymbol method, EntityHandle openDef)
+    {
+        if (!ReflectionMetadataEmitter.IsUserGenericTypeReference(containingType))
+        {
+            return openDef;
+        }
+
+        return this.GetUserStructMethodRef(containingType, openDef, method.Name, this.EncodeOpenMethodSignature(method));
+    }
+
     /// <summary>
     /// Issue #1433: resolves the token for a call to a user <c>shared</c>
     /// (static) method whose declaring type is a user-declared INTERFACE

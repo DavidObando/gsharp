@@ -527,21 +527,32 @@ internal sealed partial class ExpressionBinder
         if (scope.TryLookupTypeAlias(receiverName, out var typeAlias) && typeAlias is StructSymbol userStruct)
         {
             var fieldName = syntax.FieldIdentifier.Text;
-            if (TypeMemberModel.TryGetStaticField(userStruct, fieldName, out var staticField))
+            if (TypeMemberModel.TryGetStaticFieldIncludingInherited(userStruct, fieldName, out var staticField, out var fieldOwner))
             {
+                if (!AccessibilityChecker.IsAccessible(staticField.Accessibility, fieldOwner, function))
+                {
+                    Diagnostics.ReportMemberInaccessible(syntax.FieldIdentifier.Location, staticField.Name, fieldOwner.Name, staticField.Accessibility);
+                }
+
                 if (staticField.IsReadOnly)
                 {
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
                 }
 
-                var staticValue = BindAssignmentRhs(syntax.Value, staticField.Type);
-                var staticConverted = conversions.BindConversion(syntax.Value.Location, staticValue, staticField.Type);
-                return new BoundFieldAssignmentExpression(null, null, userStruct, staticField, staticConverted);
+                var fieldType = fieldOwner.SubstituteMemberType(staticField.Type);
+                var staticValue = BindAssignmentRhs(syntax.Value, fieldType);
+                var staticConverted = conversions.BindConversion(syntax.Value.Location, staticValue, fieldType);
+                return new BoundFieldAssignmentExpression(null, null, fieldOwner, staticField, staticConverted, fieldType);
             }
 
             // Issue #263: static property assignment.
-            if (TypeMemberModel.TryGetStaticProperty(userStruct, fieldName, out var prop))
+            if (TypeMemberModel.TryGetStaticPropertyIncludingInherited(userStruct, fieldName, out var prop, out var propertyOwner))
             {
+                if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propertyOwner, function))
+                {
+                    Diagnostics.ReportMemberInaccessible(syntax.FieldIdentifier.Location, prop.Name, propertyOwner.Name, prop.Accessibility);
+                }
+
                 if (!prop.HasSetter)
                 {
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
@@ -550,7 +561,19 @@ internal sealed partial class ExpressionBinder
 
                 var staticValue = BindAssignmentRhs(syntax.Value, prop.Type);
                 var propConverted = conversions.BindConversion(syntax.Value.Location, staticValue, prop.Type);
-                return new BoundPropertyAssignmentExpression(null, receiver: null, userStruct, prop, propConverted);
+                return new BoundPropertyAssignmentExpression(null, receiver: null, propertyOwner, prop, propConverted);
+            }
+
+            if (TypeMemberModel.GetNearestImportedBase(userStruct)?.ClrType is Type importedBaseClr)
+            {
+                var importedBase = new ImportedClassSymbol(importedBaseClr, syntax, references: scope.References);
+                if (importedBase.TryLookupMember(fieldName, ne: null, out var inheritedStaticMember)
+                    && TryGetWritableClrMember(inheritedStaticMember, out _, out var inheritedTarget, out _))
+                {
+                    var inheritedValue = BindAssignmentRhs(syntax.Value, inheritedTarget);
+                    var inheritedConverted = conversions.BindConversion(syntax.Value.Location, inheritedValue, inheritedTarget);
+                    return new BoundClrPropertyAssignmentExpression(null, receiver: null, inheritedStaticMember, inheritedConverted, inheritedTarget);
+                }
             }
 
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
@@ -1110,9 +1133,15 @@ internal sealed partial class ExpressionBinder
         var memberName = memberNameSyntax.IdentifierToken.Text;
         var boundRhs = BindExpression(syntax.Value);
 
-        if (TypeMemberModel.TryGetStaticField(staticStruct, memberName, out var staticField))
+        if (TypeMemberModel.TryGetStaticFieldIncludingInherited(staticStruct, memberName, out var staticField, out var fieldOwner))
         {
-            var leftRead = new BoundFieldAccessExpression(null, receiver: null, staticStruct, staticField);
+            if (!AccessibilityChecker.IsAccessible(staticField.Accessibility, fieldOwner, function))
+            {
+                Diagnostics.ReportMemberInaccessible(memberNameSyntax.Location, staticField.Name, fieldOwner.Name, staticField.Accessibility);
+            }
+
+            var fieldType = fieldOwner.SubstituteMemberType(staticField.Type);
+            var leftRead = new BoundFieldAccessExpression(null, receiver: null, fieldOwner, staticField, fieldType);
             var binary = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftRead, boundRhs, syntax.Value.Location);
             if (binary == null)
             {
@@ -1126,13 +1155,18 @@ internal sealed partial class ExpressionBinder
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
             }
 
-            var converted = conversions.BindConversion(syntax.Value.Location, binary, staticField.Type);
-            result = new BoundFieldAssignmentExpression(null, null, staticStruct, staticField, converted);
+            var converted = conversions.BindConversion(syntax.Value.Location, binary, fieldType);
+            result = new BoundFieldAssignmentExpression(null, null, fieldOwner, staticField, converted, fieldType);
             return true;
         }
 
-        if (TypeMemberModel.TryGetStaticProperty(staticStruct, memberName, out var prop))
+        if (TypeMemberModel.TryGetStaticPropertyIncludingInherited(staticStruct, memberName, out var prop, out var propertyOwner))
         {
+            if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propertyOwner, function))
+            {
+                Diagnostics.ReportMemberInaccessible(memberNameSyntax.Location, prop.Name, propertyOwner.Name, prop.Accessibility);
+            }
+
             if (!prop.HasGetter || !prop.HasSetter)
             {
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
@@ -1140,7 +1174,7 @@ internal sealed partial class ExpressionBinder
                 return true;
             }
 
-            var leftRead = new BoundPropertyAccessExpression(null, receiver: null, staticStruct, prop);
+            var leftRead = new BoundPropertyAccessExpression(null, receiver: null, propertyOwner, prop);
             var binary = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftRead, boundRhs, syntax.Value.Location);
             if (binary == null)
             {
@@ -1150,7 +1184,7 @@ internal sealed partial class ExpressionBinder
             }
 
             var converted = conversions.BindConversion(syntax.Value.Location, binary, prop.Type);
-            result = new BoundPropertyAssignmentExpression(null, receiver: null, staticStruct, prop, converted);
+            result = new BoundPropertyAssignmentExpression(null, receiver: null, propertyOwner, prop, converted);
             return true;
         }
 
@@ -2014,19 +2048,30 @@ internal sealed partial class ExpressionBinder
         // User class/struct → static field or static property write.
         if (constructedStruct != null)
         {
-            if (TypeMemberModel.TryGetStaticField(constructedStruct, fieldName, out var staticField))
+            if (TypeMemberModel.TryGetStaticFieldIncludingInherited(constructedStruct, fieldName, out var staticField, out var fieldOwner))
             {
+                if (!AccessibilityChecker.IsAccessible(staticField.Accessibility, fieldOwner, function))
+                {
+                    Diagnostics.ReportMemberInaccessible(syntax.FieldIdentifier.Location, staticField.Name, fieldOwner.Name, staticField.Accessibility);
+                }
+
                 if (staticField.IsReadOnly)
                 {
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
                 }
 
-                var staticConverted = conversions.BindConversion(syntax.Value.Location, BindValue(staticField.Type), staticField.Type);
-                return new BoundFieldAssignmentExpression(null, null, constructedStruct, staticField, staticConverted);
+                var fieldType = fieldOwner.SubstituteMemberType(staticField.Type);
+                var staticConverted = conversions.BindConversion(syntax.Value.Location, BindValue(fieldType), fieldType);
+                return new BoundFieldAssignmentExpression(null, null, fieldOwner, staticField, staticConverted, fieldType);
             }
 
-            if (TypeMemberModel.TryGetStaticProperty(constructedStruct, fieldName, out var prop))
+            if (TypeMemberModel.TryGetStaticPropertyIncludingInherited(constructedStruct, fieldName, out var prop, out var propertyOwner))
             {
+                if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propertyOwner, function))
+                {
+                    Diagnostics.ReportMemberInaccessible(syntax.FieldIdentifier.Location, prop.Name, propertyOwner.Name, prop.Accessibility);
+                }
+
                 if (!prop.HasSetter)
                 {
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
@@ -2034,7 +2079,7 @@ internal sealed partial class ExpressionBinder
                 }
 
                 var propConverted = conversions.BindConversion(syntax.Value.Location, BindValue(prop.Type), prop.Type);
-                return new BoundPropertyAssignmentExpression(null, receiver: null, constructedStruct, prop, propConverted);
+                return new BoundPropertyAssignmentExpression(null, receiver: null, propertyOwner, prop, propConverted);
             }
 
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);

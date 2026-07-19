@@ -523,6 +523,12 @@ internal sealed partial class ExpressionBinder
                     break;
             }
         }
+        else if (leftPart is AccessorExpressionSyntax inheritedImportedNestedType
+            && !inheritedImportedNestedType.IsNullConditional
+            && TryResolveInheritedImportedNestedType(inheritedImportedNestedType, out var inheritedImportedNestedSymbol))
+        {
+            classSymbol = inheritedImportedNestedSymbol;
+        }
         else if (leftPart is IndexExpressionSyntax nestedTypeIndex
             && !nestedTypeIndex.IsNullConditional
             && TryResolveUserNestedTypeExpression(nestedTypeIndex, out var nestedTypeIndexSymbol))
@@ -572,6 +578,81 @@ internal sealed partial class ExpressionBinder
         }
 
         return BindAccessorStep(receiver, classSymbol, rightPart);
+    }
+
+    private bool TryResolveInheritedImportedNestedType(
+        AccessorExpressionSyntax syntax,
+        out ImportedClassSymbol nestedClassSymbol)
+    {
+        nestedClassSymbol = null;
+        StructSymbol sourceType = null;
+        if (syntax.LeftPart is NameExpressionSyntax sourceName
+            && scope.TryLookupTypeAlias(sourceName.IdentifierToken.Text, out var sourceAlias)
+            && sourceAlias is StructSymbol namedSourceType)
+        {
+            sourceType = namedSourceType;
+        }
+        else if (syntax.LeftPart is IndexExpressionSyntax constructedSource
+            && TryResolveConstructedGenericTypeReceiver(
+                constructedSource,
+                out var constructedStruct,
+                out _,
+                out _))
+        {
+            sourceType = constructedStruct;
+        }
+        else if (syntax.LeftPart is GenericNameExpressionSyntax genericSource
+            && TryResolveConstructedGenericTypeReceiver(
+                genericSource,
+                out var genericStruct,
+                out _,
+                out _))
+        {
+            sourceType = genericStruct;
+        }
+
+        if (sourceType == null
+            || TypeMemberModel.GetNearestImportedBase(sourceType)?.ClrType is not Type importedBase)
+        {
+            return false;
+        }
+
+        var importedBaseSymbol = new ImportedClassSymbol(importedBase, syntax.LeftPart, references: scope.References);
+        if (!TryResolveNestedTypeFromAccessorLeft(importedBaseSymbol, syntax.RightPart, out nestedClassSymbol))
+        {
+            return false;
+        }
+
+        nestedClassSymbol = CloseImportedNestedType(importedBase, nestedClassSymbol, syntax.RightPart);
+        return true;
+    }
+
+    private ImportedClassSymbol CloseImportedNestedType(
+        Type constructedOuter,
+        ImportedClassSymbol nested,
+        ExpressionSyntax syntax)
+    {
+        var nestedType = nested?.ClassType;
+        if (constructedOuter?.IsConstructedGenericType != true
+            || nestedType?.ContainsGenericParameters != true)
+        {
+            return nested;
+        }
+
+        var outerArguments = constructedOuter.GetGenericArguments();
+        if (nestedType.GetGenericArguments().Length != outerArguments.Length)
+        {
+            return nested;
+        }
+
+        try
+        {
+            return new ImportedClassSymbol(nestedType.MakeGenericType(outerArguments), syntax, references: scope.References);
+        }
+        catch (ArgumentException)
+        {
+            return nested;
+        }
     }
 
     /// <summary>
@@ -797,12 +878,20 @@ internal sealed partial class ExpressionBinder
         {
             var containerDef = (definitions[i - 1] as StructSymbol)?.Definition ?? definitions[i - 1];
             var arity = segments[i].Args.IsDefaultOrEmpty ? -1 : segments[i].Args.Length;
-            if (!scope.TryLookupNestedTypeAlias(containerDef, segments[i].Name, arity, out var nested))
+            if (scope.TryLookupNestedTypeAlias(containerDef, segments[i].Name, arity, out var nested))
+            {
+                definitions[i] = nested;
+            }
+            else if (definitions[i - 1] is StructSymbol containerStruct
+                && scope.TryLookupNestedTypeAliasIncludingInherited(containerStruct, segments[i].Name, arity, out var inheritedNested, out var declaringContainer))
+            {
+                definitions[i - 1] = declaringContainer;
+                definitions[i] = inheritedNested;
+            }
+            else
             {
                 return false;
             }
-
-            definitions[i] = nested;
         }
 
         // Thread the flattened enclosing construction's arguments (the own
@@ -826,13 +915,23 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            if (segments[i].Args.IsDefaultOrEmpty || segments[i].Args.Length != ownParams.Length)
+            var constructionArgs = definitions[i] is StructSymbol constructedStruct
+                && !constructedStruct.TypeArguments.IsDefaultOrEmpty
+                ? constructedStruct.TypeArguments
+                : segments[i].Args;
+            if (constructionArgs.IsDefaultOrEmpty || constructionArgs.Length != ownParams.Length)
             {
                 enclosingBuilder = null;
                 break;
             }
 
-            enclosingBuilder.AddRange(segments[i].Args);
+            if (definitions[i] is StructSymbol nestedConstruction
+                && !nestedConstruction.EnclosingTypeArguments.IsDefaultOrEmpty)
+            {
+                enclosingBuilder.AddRange(nestedConstruction.EnclosingTypeArguments);
+            }
+
+            enclosingBuilder.AddRange(constructionArgs);
         }
 
         var enclosingArgs = enclosingBuilder != null && enclosingBuilder.Count > 0
@@ -1611,13 +1710,15 @@ internal sealed partial class ExpressionBinder
         // ADR-0112: route through the canonical member-resolution layer.
         if (isCall)
         {
-            return !TypeMemberModel.GetMethods(structSym, headName, MemberQuery.Static(MemberKinds.Method)).IsEmpty;
+            return !TypeMemberModel.GetMethods(structSym, headName, MemberQuery.InheritedStatic(MemberKinds.Method)).IsEmpty
+                || ClrTypeExposesStaticMember(TypeMemberModel.GetNearestImportedBase(structSym)?.ClrType, headName);
         }
 
         return TypeMemberModel.LookupMember(
             structSym,
             headName,
-            MemberQuery.Static(MemberKinds.Field | MemberKinds.Property)) != null;
+            MemberQuery.InheritedStatic(MemberKinds.Field | MemberKinds.Property)) != null
+            || ClrTypeExposesStaticMember(TypeMemberModel.GetNearestImportedBase(structSym)?.ClrType, headName);
     }
 
     private BoundExpression BindEnumAccessorStep(EnumSymbol enumSymbol, ExpressionSyntax rightPart)
@@ -1674,6 +1775,16 @@ internal sealed partial class ExpressionBinder
                 if (TryResolveNestedTypeChainUnderReceiver(structSym, nested.LeftPart, out var innerReceiver))
                 {
                     return BindUserTypeStaticAccessorStep(innerReceiver, nested.RightPart);
+                }
+
+                if (TypeMemberModel.GetNearestImportedBase(structSym)?.ClrType is Type importedBase)
+                {
+                    var importedBaseSymbol = new ImportedClassSymbol(importedBase, nested.LeftPart, references: scope.References);
+                    if (TryResolveNestedTypeFromAccessorLeft(importedBaseSymbol, nested.LeftPart, out var importedNested))
+                    {
+                        importedNested = CloseImportedNestedType(importedBase, importedNested, nested.LeftPart);
+                        return BindAccessorStep(receiver: null, importedNested, nested.RightPart);
+                    }
                 }
 
                 var head = BindUserTypeStaticAccessorStep(structSym, nested.LeftPart);
@@ -1751,8 +1862,21 @@ internal sealed partial class ExpressionBinder
     {
         var container = outerConstructed.Definition ?? outerConstructed;
         var literalArity = structLiteral.TypeArgumentList != null ? structLiteral.TypeArgumentList.Arguments.Count : -1;
-        if (!scope.TryLookupNestedTypeAlias(container, structLiteral.TypeIdentifier.Text, literalArity, out var nestedType)
-            || nestedType is not StructSymbol nestedStructDef)
+        TypeSymbol nestedType;
+        StructSymbol declaringContainer = outerConstructed;
+        if (!scope.TryLookupNestedTypeAlias(container, structLiteral.TypeIdentifier.Text, literalArity, out nestedType)
+            && !scope.TryLookupNestedTypeAliasIncludingInherited(
+                outerConstructed,
+                structLiteral.TypeIdentifier.Text,
+                literalArity,
+                out nestedType,
+                out declaringContainer))
+        {
+            Diagnostics.ReportUnableToFindType(structLiteral.TypeIdentifier.Location, structLiteral.TypeIdentifier.Text);
+            return new BoundErrorExpression(null);
+        }
+
+        if (nestedType is not StructSymbol nestedStructDef)
         {
             Diagnostics.ReportUnableToFindType(structLiteral.TypeIdentifier.Location, structLiteral.TypeIdentifier.Text);
             return new BoundErrorExpression(null);
@@ -1761,7 +1885,7 @@ internal sealed partial class ExpressionBinder
         // The enclosing construction already flattens its own enclosing chain in
         // EnclosingTypeArguments; append its own TypeArguments so the nested
         // type sees the full outermost-first vector.
-        var enclosingArgs = FlattenConstructedEnclosingArguments(outerConstructed);
+        var enclosingArgs = FlattenConstructedEnclosingArguments(declaringContainer);
         return BindStructLiteralExpression(structLiteral, nestedStructDef.Definition ?? nestedStructDef, enclosingArgs);
     }
 
@@ -1795,9 +1919,19 @@ internal sealed partial class ExpressionBinder
         {
             var arity = segments[i].Args.IsDefaultOrEmpty ? -1 : segments[i].Args.Length;
             var lookupContainer = (containerDef as StructSymbol)?.Definition ?? containerDef;
-            if (!scope.TryLookupNestedTypeAlias(lookupContainer, segments[i].Name, arity, out var nested))
+            TypeSymbol nested;
+            if (!scope.TryLookupNestedTypeAlias(lookupContainer, segments[i].Name, arity, out nested))
             {
-                return false;
+                if (containerDef is StructSymbol containerStruct
+                    && scope.TryLookupNestedTypeAliasIncludingInherited(containerStruct, segments[i].Name, arity, out var inheritedNested, out var inheritedOwner))
+                {
+                    nested = inheritedNested;
+                    enclosingArgs = FlattenConstructedEnclosingArguments(inheritedOwner);
+                }
+                else
+                {
+                    return false;
+                }
             }
 
             if (i < segments.Count - 1)
@@ -2588,33 +2722,50 @@ internal sealed partial class ExpressionBinder
     /// <param name="name">The member name.</param>
     /// <returns><c>true</c> when a matching static member exists.</returns>
     private static bool ImportedTypeExposesStaticMember(StructSymbol structSym, string name)
-        => TypeMemberModel.TryGetStaticField(structSym, name, out _)
-            || TypeMemberModel.TryGetStaticProperty(structSym, name, out _)
-            || !TypeMemberModel.GetMethods(structSym, name, MemberQuery.Static(MemberKinds.Method)).IsDefaultOrEmpty;
+        => TypeMemberModel.TryGetStaticFieldIncludingInherited(structSym, name, out _, out _)
+            || TypeMemberModel.TryGetStaticPropertyIncludingInherited(structSym, name, out _, out _)
+            || !TypeMemberModel.GetMethods(structSym, name, MemberQuery.InheritedStatic(MemberKinds.Method)).IsDefaultOrEmpty;
 
     private BoundExpression BindUserTypeStaticMemberAccess(StructSymbol structSym, NameExpressionSyntax ne)
     {
         var memberName = ne.IdentifierToken.Text;
 
         // ADR-0112: static field/property lookups go through the canonical layer.
-        if (TypeMemberModel.TryGetStaticField(structSym, memberName, out var field))
+        if (TypeMemberModel.TryGetStaticFieldIncludingInherited(structSym, memberName, out var field, out var fieldOwner))
         {
-            return new BoundFieldAccessExpression(null, receiver: null, structSym, field);
+            if (!AccessibilityChecker.IsAccessible(field.Accessibility, fieldOwner, function))
+            {
+                Diagnostics.ReportMemberInaccessible(ne.Location, field.Name, fieldOwner.Name, field.Accessibility);
+            }
+
+            var fieldType = fieldOwner.SubstituteMemberType(field.Type);
+            return new BoundFieldAccessExpression(null, receiver: null, fieldOwner, field, fieldType);
         }
 
-        if (TypeMemberModel.TryGetStaticProperty(structSym, memberName, out var prop))
+        if (TypeMemberModel.TryGetStaticPropertyIncludingInherited(structSym, memberName, out var prop, out var propertyOwner))
         {
-            return new BoundPropertyAccessExpression(null, receiver: null, structSym, prop);
+            if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propertyOwner, function))
+            {
+                Diagnostics.ReportMemberInaccessible(ne.Location, prop.Name, propertyOwner.Name, prop.Accessibility);
+            }
+
+            return new BoundPropertyAccessExpression(null, receiver: null, propertyOwner, prop);
         }
 
         // ADR-0112: a static (shared) method named here in non-call position is a
         // method group with a null receiver. Overload selection (when more than
         // one shared overload shares the name) is deferred to the conversion
         // classifier, driven by the target delegate signature.
-        var staticMethods = TypeMemberModel.GetMethods(structSym, memberName, MemberQuery.Static(MemberKinds.Method));
-        if (TryBuildUserMethodGroup(receiver: null, staticMethods, out var staticGroup))
+        var staticMethods = TypeMemberModel.GetMethods(structSym, memberName, MemberQuery.InheritedStatic(MemberKinds.Method));
+        if (TryBuildUserMethodGroup(receiver: null, staticMethods, out var staticGroup, staticOwnerType: structSym))
         {
             return staticGroup;
+        }
+
+        if (TypeMemberModel.GetNearestImportedBase(structSym)?.ClrType is System.Type importedBase)
+        {
+            var imported = new ImportedClassSymbol(importedBase, ne, references: scope.References);
+            return BindAccessorStep(receiver: null, imported, ne);
         }
 
         Diagnostics.ReportUnableToFindMember(ne.Location, memberName);
@@ -2642,13 +2793,6 @@ internal sealed partial class ExpressionBinder
     {
         var structSym = ownerType as StructSymbol;
         var ifaceSym = ownerType as InterfaceSymbol;
-        var ownerDefinition = structSym?.Definition ?? (TypeSymbol)ifaceSym?.Definition;
-        var ownerDefTypeParameters = structSym?.Definition?.TypeParameters
-            ?? ifaceSym?.Definition?.TypeParameters
-            ?? ImmutableArray<TypeParameterSymbol>.Empty;
-        var ownerTypeArguments = structSym?.TypeArguments
-            ?? ifaceSym?.TypeArguments
-            ?? ImmutableArray<TypeSymbol>.Empty;
 
         var methodName = ce.Identifier.Text;
 
@@ -2688,14 +2832,36 @@ internal sealed partial class ExpressionBinder
         // for instance methods). A single-candidate group is returned unchanged
         // so the legacy per-position arity/optional/variadic diagnostics below
         // still apply (e.g. genuine arity mismatch on a non-overloaded method).
-        var staticMethodGroup = TypeMemberModel.GetMethods(ownerType, methodName, MemberQuery.Static(MemberKinds.Method));
+        var staticMethodGroup = TypeMemberModel.GetMethods(
+            ownerType,
+            methodName,
+            structSym != null ? MemberQuery.InheritedStatic(MemberKinds.Method) : MemberQuery.Static(MemberKinds.Method));
         if (!staticMethodGroup.IsDefaultOrEmpty)
         {
-            var method = overloads.SelectInstanceOverloadOrReport(staticMethodGroup, arguments, ce, methodName, argumentNames: default);
+            var selectionGroup = BuildConstructedStaticOverloadGroup(structSym, staticMethodGroup, out var originalMethods);
+            var method = overloads.SelectInstanceOverloadOrReport(selectionGroup, arguments, ce, methodName, argumentNames: default);
             if (method == null)
             {
                 return new BoundErrorExpression(null);
             }
+
+            if (originalMethods != null && originalMethods.TryGetValue(method, out var originalMethod))
+            {
+                method = originalMethod;
+            }
+
+            var effectiveOwnerType = structSym != null && method.StaticOwnerType is StructSymbol declaredOwner
+                ? TypeMemberModel.ResolveStaticMemberOwner(structSym, declaredOwner)
+                : ownerType;
+            var effectiveStructOwner = effectiveOwnerType as StructSymbol;
+            var effectiveInterfaceOwner = effectiveOwnerType as InterfaceSymbol;
+            var ownerDefinition = effectiveStructOwner?.Definition ?? (TypeSymbol)effectiveInterfaceOwner?.Definition;
+            var ownerDefTypeParameters = effectiveStructOwner?.Definition?.TypeParameters
+                ?? effectiveInterfaceOwner?.Definition?.TypeParameters
+                ?? ImmutableArray<TypeParameterSymbol>.Empty;
+            var ownerTypeArguments = effectiveStructOwner?.TypeArguments
+                ?? effectiveInterfaceOwner?.TypeArguments
+                ?? ImmutableArray<TypeSymbol>.Empty;
 
             // Issue #2071: enforce `protected`/`private` accessibility on static
             // (`shared`) method calls, mirroring the instance-call check in
@@ -3017,8 +3183,8 @@ internal sealed partial class ExpressionBinder
             // constructed generic INTERFACE owner; it is carried separately
             // because the emitter resolves interface- and struct-declared
             // statics through different TypeSpec helpers.
-            var staticGenericOwner = structSym?.Definition != null ? structSym : null;
-            var staticGenericInterfaceOwner = ifaceSym?.Definition != null ? ifaceSym : null;
+            var staticGenericOwner = effectiveStructOwner?.Definition != null ? effectiveStructOwner : null;
+            var staticGenericInterfaceOwner = effectiveInterfaceOwner?.Definition != null ? effectiveInterfaceOwner : null;
 
             // Issue #1931: stash the method's own (explicit or inferred) type
             // arguments on the bound node so the emitter's MethodSpec
@@ -3072,7 +3238,98 @@ internal sealed partial class ExpressionBinder
             return MakeStaticGenericCall(null);
         }
 
+        if (structSym != null
+            && TypeMemberModel.GetNearestImportedBase(structSym)?.ClrType is System.Type importedBase)
+        {
+            var imported = new ImportedClassSymbol(importedBase, ce, references: scope.References);
+            return BindAccessorCall(receiver: null, imported, ce);
+        }
+
         Diagnostics.ReportUnableToFindMember(ce.Location, methodName);
         return new BoundErrorExpression(null);
+    }
+
+    private static ImmutableArray<FunctionSymbol> BuildConstructedStaticOverloadGroup(
+        StructSymbol lookupType,
+        ImmutableArray<FunctionSymbol> methods,
+        out Dictionary<FunctionSymbol, FunctionSymbol> originalMethods)
+    {
+        originalMethods = null;
+        if (lookupType == null || methods.Length <= 1)
+        {
+            return methods;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<FunctionSymbol>(methods.Length);
+        foreach (var method in methods)
+        {
+            var owner = method.StaticOwnerType is StructSymbol declaredOwner
+                ? TypeMemberModel.ResolveStaticMemberOwner(lookupType, declaredOwner)
+                : null;
+            if (owner == null || owner.Definition == null)
+            {
+                if (!builder.Any(existing => BoundScope.FunctionSignaturesEqual(existing, method)))
+                {
+                    builder.Add(method);
+                }
+
+                continue;
+            }
+
+            var changed = false;
+            var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>(method.Parameters.Length);
+            foreach (var parameter in method.Parameters)
+            {
+                var parameterType = owner.SubstituteMemberType(parameter.Type);
+                changed |= !ReferenceEquals(parameterType, parameter.Type);
+                var constructedParameter = new ParameterSymbol(
+                    parameter.Name,
+                    parameterType,
+                    parameter.IsVariadic,
+                    parameter.DeclaringSyntax,
+                    parameter.IsScoped,
+                    parameter.RefKind);
+                if (parameter.HasExplicitDefaultValue)
+                {
+                    constructedParameter.SetExplicitDefaultValue(parameter.ExplicitDefaultValue);
+                }
+
+                parameters.Add(constructedParameter);
+            }
+
+            var returnType = owner.SubstituteMemberType(method.Type);
+            changed |= !ReferenceEquals(returnType, method.Type);
+            if (!changed)
+            {
+                if (!builder.Any(existing => BoundScope.FunctionSignaturesEqual(existing, method)))
+                {
+                    builder.Add(method);
+                }
+
+                continue;
+            }
+
+            var constructedMethod = new FunctionSymbol(
+                method.Name,
+                parameters.MoveToImmutable(),
+                returnType,
+                method.Declaration,
+                method.Package,
+                method.Accessibility)
+            {
+                IsStatic = method.IsStatic,
+                StaticOwnerType = owner,
+                TypeParameters = method.TypeParameters,
+                ReturnRefKind = method.ReturnRefKind,
+            };
+            if (!builder.Any(existing => BoundScope.FunctionSignaturesEqual(existing, constructedMethod)))
+            {
+                originalMethods ??= new Dictionary<FunctionSymbol, FunctionSymbol>();
+                originalMethods.Add(constructedMethod, method);
+                builder.Add(constructedMethod);
+            }
+        }
+
+        return builder.ToImmutable();
     }
 }

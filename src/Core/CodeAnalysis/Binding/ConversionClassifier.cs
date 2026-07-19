@@ -1470,8 +1470,12 @@ internal sealed class ConversionClassifier
         }
 
         FunctionSymbol pick = null;
+        StructSymbol pickOwner = null;
         foreach (var candidate in group.Candidates)
         {
+            var candidateOwner = group.StaticOwnerType != null && candidate.StaticOwnerType is StructSymbol declaredOwner
+                ? TypeMemberModel.ResolveStaticMemberOwner(group.StaticOwnerType, declaredOwner)
+                : null;
             var parameterOffset = candidate.IsExtension && group.Receiver != null ? 1 : 0;
             if (candidate.Parameters.Length - parameterOffset != targetParameterTypes.Length)
             {
@@ -1481,7 +1485,9 @@ internal sealed class ConversionClassifier
             var paramsMatch = true;
             for (var i = 0; i < targetParameterTypes.Length; i++)
             {
-                if (!ReferenceEquals(candidate.Parameters[i + parameterOffset].Type, targetParameterTypes[i]))
+                var candidateParameterType = candidateOwner?.SubstituteMemberType(candidate.Parameters[i + parameterOffset].Type)
+                    ?? candidate.Parameters[i + parameterOffset].Type;
+                if (!ReferenceEquals(candidateParameterType, targetParameterTypes[i]))
                 {
                     paramsMatch = false;
                     break;
@@ -1493,7 +1499,7 @@ internal sealed class ConversionClassifier
                 continue;
             }
 
-            var candidateReturn = candidate.Type ?? TypeSymbol.Void;
+            var candidateReturn = candidateOwner?.SubstituteMemberType(candidate.Type) ?? candidate.Type ?? TypeSymbol.Void;
             if (!ReferenceEquals(candidateReturn, targetReturnType))
             {
                 continue;
@@ -1501,11 +1507,25 @@ internal sealed class ConversionClassifier
 
             if (pick != null)
             {
+                var pickDefinition = pick.StaticOwnerType is StructSymbol pickDeclared
+                    ? pickDeclared.Definition ?? pickDeclared
+                    : null;
+                var candidateDefinition = candidate.StaticOwnerType is StructSymbol candidateDeclared
+                    ? candidateDeclared.Definition ?? candidateDeclared
+                    : null;
+                if (pickDefinition != null
+                    && candidateDefinition != null
+                    && !ReferenceEquals(pickDefinition, candidateDefinition))
+                {
+                    continue;
+                }
+
                 Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, groupName, targetType);
                 return new BoundErrorExpression(null);
             }
 
             pick = candidate;
+            pickOwner = candidateOwner;
         }
 
         if (pick == null)
@@ -1518,11 +1538,12 @@ internal sealed class ConversionClassifier
         var pickParams = ImmutableArray.CreateBuilder<TypeSymbol>(pick.Parameters.Length - pickParameterOffset);
         for (var i = pickParameterOffset; i < pick.Parameters.Length; i++)
         {
-            pickParams.Add(pick.Parameters[i].Type);
+            pickParams.Add(pickOwner?.SubstituteMemberType(pick.Parameters[i].Type) ?? pick.Parameters[i].Type);
         }
 
-        var pickFnType = FunctionTypeSymbol.Get(pickParams.MoveToImmutable(), pick.Type ?? TypeSymbol.Void);
-        var resolvedGroup = new BoundMethodGroupExpression(group.Syntax, group.Receiver, pick, pickFnType);
+        var pickReturn = pickOwner?.SubstituteMemberType(pick.Type) ?? pick.Type ?? TypeSymbol.Void;
+        var pickFnType = FunctionTypeSymbol.Get(pickParams.MoveToImmutable(), pickReturn);
+        var resolvedGroup = new BoundMethodGroupExpression(group.Syntax, group.Receiver, pick, pickFnType, pickOwner);
 
         // If the target is the native function type matching the pick exactly,
         // identity-convert; otherwise let the regular conversion machinery turn
