@@ -121,7 +121,21 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GTypeReference PromoteIfUsedAsNullable(GTypeReference type, ISymbol symbol)
         {
-            if (type == null || type.IsNullable)
+            if (type == null)
+            {
+                return type;
+            }
+
+            ITypeSymbol declaredType = symbol switch
+            {
+                IPropertySymbol property => property.Type,
+                IFieldSymbol field => field.Type,
+                ILocalSymbol local => local.Type,
+                IParameterSymbol parameter => parameter.Type,
+                _ => null,
+            };
+            type = this.PromoteTupleDeclarationIfTainted(type, declaredType, symbol);
+            if (type.IsNullable)
             {
                 return type;
             }
@@ -204,7 +218,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return envelope;
             }
 
-            GTypeReference promotedInner = this.PromoteTupleReturnIfTainted(
+            GTypeReference promotedInner = this.PromoteTupleDeclarationIfTainted(
                 named.TypeArguments[0], awaitedType, symbol);
             promotedInner = this.PromoteAwaitedReturnIfTainted(
                 promotedInner, awaitedType, symbol);
@@ -214,15 +228,15 @@ public sealed partial class CSharpToGSharpTranslator
                 : new NamedTypeReference(named.Name, new[] { promotedInner });
         }
 
-        // Issue #2469: tuple return leaves are independent declaration sinks.
+        // Issue #2469/#2490: tuple leaves are independent declaration sinks.
         // Their evidence lives in ObliviousNullabilityAnalyzer's element-path
-        // graph so tuple literals, forwarded tuple values, nested tuples,
-        // conditionals/switches, async envelopes, and contracts all converge on
-        // the same per-position answer.
-        private GTypeReference PromoteTupleReturnIfTainted(
+        // graph so tuple returns, parameters, locals, fields/properties, nested
+        // tuples, async envelopes, and contracts all converge on the same
+        // per-position answer.
+        private GTypeReference PromoteTupleDeclarationIfTainted(
             GTypeReference mapped,
             ITypeSymbol returnType,
-            IMethodSymbol symbol)
+            ISymbol symbol)
         {
             if (!this.IsObliviousCompilation()
                 || mapped is not TupleTypeReference tuple
@@ -238,7 +252,7 @@ public sealed partial class CSharpToGSharpTranslator
         private GTypeReference PromoteTupleElements(
             TupleTypeReference tuple,
             INamedTypeSymbol tupleType,
-            IMethodSymbol symbol,
+            ISymbol symbol,
             List<int> path)
         {
             var elements = new List<GTypeReference>(tuple.ElementTypes.Count);
@@ -296,6 +310,15 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             if (this.IsNullableInitializer(expression))
+            {
+                return true;
+            }
+
+            if (ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                this.context.Compilation,
+                expression,
+                this.context.SemanticModel,
+                this.context.SiblingCompilations))
             {
                 return true;
             }

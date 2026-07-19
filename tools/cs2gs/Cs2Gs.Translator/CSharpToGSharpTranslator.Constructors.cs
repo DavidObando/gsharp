@@ -900,7 +900,7 @@ public sealed partial class CSharpToGSharpTranslator
                     ITypeSymbol awaitedType = task.TypeArguments[0];
                     GTypeReference awaitedMapped = this.typeMapper.Map(
                         awaitedType, this.context, node.ReturnType.GetLocation());
-                    awaitedMapped = this.PromoteTupleReturnIfTainted(awaitedMapped, awaitedType, symbol);
+                    awaitedMapped = this.PromoteTupleDeclarationIfTainted(awaitedMapped, awaitedType, symbol);
                     return this.PromoteAwaitedReturnIfTainted(awaitedMapped, awaitedType, symbol);
                 }
 
@@ -914,7 +914,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // Issue #2469: promote tuple return leaves independently from
                 // the analyzer's element-path evidence graph. Applied before
                 // scalar promotion, which is a no-op for tuple value types.
-                mapped = this.PromoteTupleReturnIfTainted(mapped, returnType, symbol);
+                mapped = this.PromoteTupleDeclarationIfTainted(mapped, returnType, symbol);
 
                 // Issue #2423: a NON-async declaration (a C# interface member —
                 // interfaces cannot declare `async` members — or a synchronous

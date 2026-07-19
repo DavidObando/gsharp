@@ -45,7 +45,7 @@ public static class Parser
         Assert.Contains(
             "func Parse(text string) (string?, string?, Dictionary[string, string]?)",
             printed);
-        Assert.Contains("let method = parsed.Item2", printed);
+        Assert.Contains("let method string? = parsed.Item2", printed);
         Assert.DoesNotContain("nil!!", printed);
     }
 
