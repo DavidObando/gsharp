@@ -977,6 +977,24 @@ internal sealed class ConversionClassifier
                         // produced unverifiable IL at imported call sites.
                         rebound = udcArg;
                     }
+                    else if (substituted != null
+                        && argument.Type != targetType
+                        && argument is not BoundFunctionLiteralExpression
+                        && !OverloadResolution.IsUnresolvedMethodGroupArgument(argument))
+                    {
+                        // Issue #2391: overload resolution necessarily sees the
+                        // receiver's erased CLR signature, but conversion must
+                        // still honor the symbolic closed parameter recovered
+                        // above. Do not silently pass an unrelated source type
+                        // merely because both types share the same erasure
+                        // (for example Other? and Color? both riding through
+                        // Nullable<Int32>).
+                        var sourceIndex = i - receiverArgCount;
+                        var location = call != null && sourceIndex >= 0 && sourceIndex < call.Arguments.Count
+                            ? call.Arguments[sourceIndex].Location
+                            : call?.Location ?? default;
+                        rebound = BindConversion(location, argument, targetType);
+                    }
                 }
             }
 

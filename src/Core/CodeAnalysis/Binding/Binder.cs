@@ -2914,7 +2914,15 @@ public sealed class Binder
                 if (TypeSymbol.ContainsTypeParameter(ta) || TypeSymbol.ContainsSameCompilationUserType(ta))
                 {
                     hasTypeParameterArg = true;
-                    clrArgs[i] = scope.References.MapClrTypeToReferences(typeof(object));
+
+                    // Issue #2391: source enums use Int32 as their established
+                    // CLR ride-through. Preserve that surrogate when closing
+                    // an imported generic receiver as well; using object for a
+                    // struct-constrained interface leaves Nullable<T> member
+                    // signatures unconstructable and hides parameterized
+                    // methods from overload resolution.
+                    var erasedArgument = ta is EnumSymbol ? typeof(int) : typeof(object);
+                    clrArgs[i] = scope.References.MapClrTypeToReferences(erasedArgument);
                     continue;
                 }
 

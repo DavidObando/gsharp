@@ -887,6 +887,32 @@ internal sealed class MemberLookup
             return TypeSymbol.FromClrType(openClr);
         }
 
+        // Issue #2391: keep substituted Nullable<T> positions in the
+        // canonical G# nullable shape. The generic reconstruction below is
+        // appropriate for ordinary imported generics, but using it for an
+        // interface member such as IRepo<T>.Echo(T?) previously produced an
+        // ImportedTypeSymbol for System.Nullable<Color>. The matching return
+        // position was then distinct from the source Color? symbol even
+        // though both came from the same receiver substitution.
+        if (NullableLifting.IsValueTypeNullableClr(openClr))
+        {
+            var openUnderlying = openClr.GetGenericArguments()[0];
+            var mappedUnderlying = MapOpenClrTypeToSymbolic(
+                openUnderlying,
+                openDefinition,
+                typeArguments,
+                openMethodDefinition,
+                methodTypeArguments);
+
+            if (TypeSymbol.ContainsTypeParameter(mappedUnderlying)
+                || TypeSymbol.ContainsSameCompilationUserType(mappedUnderlying))
+            {
+                return NullableTypeSymbol.Get(mappedUnderlying);
+            }
+
+            return TypeSymbol.FromClrType(openClr);
+        }
+
         if (openClr.IsGenericType && !openClr.IsGenericTypeDefinition)
         {
             var openArgs = openClr.GetGenericArguments();
@@ -3090,6 +3116,16 @@ internal sealed class MemberLookup
             case null:
             case TypeParameterSymbol:
                 return contextObject;
+            case EnumSymbol:
+                // Issue #2391: same-compilation enums already use Int32 as
+                // their overload-resolution ride-through. Use that same
+                // surrogate when closing an imported generic receiver so a
+                // struct-constrained interface such as IRepo<Color> can expose
+                // a closed Echo(Nullable<Int32>) candidate instead of falling
+                // back to the unusable open Echo(Nullable<T>) signature.
+                return contextObject.Assembly == typeof(object).Assembly
+                    ? typeof(int)
+                    : contextObject.Assembly.GetType(typeof(int).FullName, throwOnError: false);
             case ImportedTypeSymbol imp when imp.OpenDefinition != null && !imp.TypeArguments.IsDefaultOrEmpty:
                 return TryBuildErasedClosedGeneric(
                     imp.OpenDefinition,
