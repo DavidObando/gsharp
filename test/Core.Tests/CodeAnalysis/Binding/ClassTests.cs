@@ -400,12 +400,14 @@ b.F()
         var derived = SyntaxTree.Parse(SourceText.From(@"
 package Demo
 class B : A {
+    init() : base(1) {}
     override func F() int32 { return 2 }
 }
 "));
         var baseType = SyntaxTree.Parse(SourceText.From(@"
 package Demo
 open class A {
+    init(value int32) {}
     open func F() int32 { return 1 }
 }
 "));
