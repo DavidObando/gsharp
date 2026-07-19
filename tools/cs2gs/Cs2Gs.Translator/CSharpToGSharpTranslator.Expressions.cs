@@ -777,6 +777,19 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // Issue #2496: `!!` is a runtime-only G# operator and therefore is
+            // never representable inside an expression tree (GS0473). Use the
+            // lambda's semantic converted type rather than call/constructor
+            // syntax so this covers overload-selected Expression<TDelegate>
+            // parameters, generic expression sinks, fluent APIs, and nested
+            // quoted lambdas uniformly. A user-authored C# suppression (`expr!`)
+            // has already returned above and still translates to `!!`, preserving
+            // the compiler's expression-tree restriction diagnostic.
+            if (this.IsWithinExpressionTreeLambda(recv))
+            {
+                return false;
+            }
+
             // Issue #2164: the classic lazy-singleton pattern initializes a
             // nullable static/instance field (or auto-property) under a null
             // guard (`if (F == null) { F = new(); } ... return F;` / `F ??= …;`),
@@ -852,6 +865,16 @@ public sealed partial class CSharpToGSharpTranslator
             // implicitly (oblivious, unchecked), so asserting `!!` here is the
             // minimal bridge, not a widening of the interface contract.
             if (this.IsUnguardedForwardOfTaintedValueInReturnPreservingBody(recv))
+            {
+                return true;
+            }
+
+            // Issue #2496: once callable values stop borrowing their synthesized
+            // method symbol's return taint, a runtime delegate lambda still needs
+            // the old, legitimate bridge at its RESULT seam. Keep that bridge
+            // narrowly target-typed to a non-null delegate return contract. The
+            // expression-tree guard above deliberately excludes quoted lambdas.
+            if (this.IsUnguardedForwardOfTaintedValueAsRuntimeLambdaResult(recv))
             {
                 return true;
             }
@@ -1447,6 +1470,95 @@ public sealed partial class CSharpToGSharpTranslator
 
             return !(parameterDeclaredInThisCompilation
                 && this.ShouldPromoteToNullableReference(parameter));
+        }
+
+        private bool IsUnguardedForwardOfTaintedValueAsRuntimeLambdaResult(ExpressionSyntax use)
+        {
+            if (!this.IsObliviousCompilation()
+                || this.IsWithinExpressionTreeLambda(use)
+                || this.FindResultLambda(use) is not { } lambda
+                || this.GetLambdaTargetDelegateType(lambda) is not { DelegateInvokeMethod: { } invoke }
+                || invoke.ReturnType is not { IsReferenceType: true }
+                || invoke.ReturnType.NullableAnnotation == NullableAnnotation.Annotated)
+            {
+                return false;
+            }
+
+            bool returnDeclaredInThisCompilation = invoke.DeclaringSyntaxReferences
+                .Any(reference => this.context.Compilation.ContainsSyntaxTree(reference.SyntaxTree));
+            if (returnDeclaredInThisCompilation
+                && this.ShouldPromoteToNullableReference(invoke))
+            {
+                return false;
+            }
+
+            return this.IsNullablePromotedValue(use)
+                || IsObliviousExternalNullableMember(this.context.GetSymbolInfo(use).Symbol);
+        }
+
+        private AnonymousFunctionExpressionSyntax FindResultLambda(ExpressionSyntax use)
+        {
+            SyntaxNode node = use;
+            while (node.Parent is ParenthesizedExpressionSyntax)
+            {
+                node = node.Parent;
+            }
+
+            if (node.Parent is AnonymousFunctionExpressionSyntax expressionLambda
+                && expressionLambda.Body == node)
+            {
+                return expressionLambda;
+            }
+
+            if (node.Parent is not ReturnStatementSyntax returnStatement)
+            {
+                return null;
+            }
+
+            for (SyntaxNode ancestor = returnStatement.Parent; ancestor != null; ancestor = ancestor.Parent)
+            {
+                if (ancestor is AnonymousFunctionExpressionSyntax lambda)
+                {
+                    return lambda;
+                }
+
+                if (ancestor is LocalFunctionStatementSyntax or BaseMethodDeclarationSyntax)
+                {
+                    return null;
+                }
+            }
+
+            return null;
+        }
+
+        private bool IsWithinExpressionTreeLambda(SyntaxNode node) =>
+            node.AncestorsAndSelf()
+                .OfType<AnonymousFunctionExpressionSyntax>()
+                .Any(lambda => this.IsExpressionTreeLambda(lambda));
+
+        private bool IsExpressionTreeLambda(AnonymousFunctionExpressionSyntax lambda) =>
+            this.context.GetTypeInfo(lambda).ConvertedType is INamedTypeSymbol converted
+                && converted.IsGenericType
+                && converted.OriginalDefinition.MetadataName == "Expression`1"
+                && converted.ContainingNamespace?.ToDisplayString() == "System.Linq.Expressions"
+                && converted.TypeArguments.Length == 1
+                && converted.TypeArguments[0].TypeKind == TypeKind.Delegate;
+
+        private INamedTypeSymbol GetLambdaTargetDelegateType(AnonymousFunctionExpressionSyntax lambda)
+        {
+            if (this.context.GetTypeInfo(lambda).ConvertedType is not INamedTypeSymbol converted)
+            {
+                return null;
+            }
+
+            if (converted.TypeKind == TypeKind.Delegate)
+            {
+                return converted;
+            }
+
+            return this.IsExpressionTreeLambda(lambda)
+                ? converted.TypeArguments[0] as INamedTypeSymbol
+                : null;
         }
 
         // Walks outward from <paramref name="use"/> through parentheses to find

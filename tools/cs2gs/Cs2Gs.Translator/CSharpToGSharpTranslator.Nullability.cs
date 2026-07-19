@@ -309,6 +309,19 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // Issue #2496: an anonymous function or method group is a callable
+            // value, not the value returned when that callable is invoked.
+            // Roslyn binds a lambda to a synthesized IMethodSymbol, so asking the
+            // oblivious-nullability fixpoint about that symbol can otherwise
+            // mistake return-position taint for nullability of the delegate /
+            // Expression<TDelegate> object itself. Keep callable-value
+            // nullability separate; lambda result contracts are handled at the
+            // lambda body seam instead.
+            if (this.IsCallableValueExpression(expression))
+            {
+                return false;
+            }
+
             if (this.IsNullableInitializer(expression))
             {
                 return true;
@@ -330,6 +343,17 @@ public sealed partial class CSharpToGSharpTranslator
                     this.ShouldPromoteToNullableReference(symbol),
                 _ => false,
             };
+        }
+
+        private bool IsCallableValueExpression(ExpressionSyntax expression)
+        {
+            while (expression is ParenthesizedExpressionSyntax parenthesized)
+            {
+                expression = parenthesized.Expression;
+            }
+
+            return expression is AnonymousFunctionExpressionSyntax
+                || this.context.SemanticModel.GetMemberGroup(expression).Length > 0;
         }
 
         // Issue #914 (oblivious sink): promote the arrow (delegate) parameter
