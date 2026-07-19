@@ -279,6 +279,7 @@ internal sealed partial class MethodBodyEmitter
         // above (issue #504).
         if (to is NullableTypeSymbol toNullable
             && !ReflectionMetadataEmitter.IsValueTypeNullable(toNullable)
+            && !ReflectionMetadataEmitter.IsValueTypeSymbol(from)
             && IsReferenceCompatible(from, toNullable.UnderlyingType))
         {
             return;
@@ -434,8 +435,15 @@ internal sealed partial class MethodBodyEmitter
         // reference (user-declared `InterfaceSymbol` or any CLR
         // interface), since a boxed value type held in an interface
         // slot needs `unbox.any` to surface as its native value type.
-        if ((from?.ClrType.IsSameAs(typeof(object)) == true || IsInterfaceSourceType(from))
-            && to?.ClrType != null && to.ClrType.IsValueType)
+        // Issue #2492: nullable object/interface annotations are still
+        // reference slots, and a nullable value-type target must retain its
+        // wrapper token so `unbox.any Nullable<T>` propagates null while
+        // preserving checked unboxing semantics for non-null values.
+        if (IsExplicitUnboxingSourceType(from)
+            && ((to is NullableTypeSymbol nullableUnboxTarget
+                    && NullableLifting.IsAnyValueTypeNullable(nullableUnboxTarget))
+                || (to is not NullableTypeSymbol
+                    && ReflectionMetadataEmitter.IsValueTypeSymbol(to))))
         {
             this.il.OpCode(ILOpCode.Unbox_any);
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(to));
@@ -450,7 +458,7 @@ internal sealed partial class MethodBodyEmitter
         // this verifies for any closing instantiation. `GetElementTypeToken`
         // resolves the correct token for both the bare and nullable-wrapped
         // type parameter.
-        if ((from?.ClrType.IsSameAs(typeof(object)) == true || IsInterfaceSourceType(from))
+        if (IsExplicitUnboxingSourceType(from)
             && (to is TypeParameterSymbol
                 || (to is NullableTypeSymbol toNullableTp && toNullableTp.UnderlyingType is TypeParameterSymbol)))
         {
