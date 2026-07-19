@@ -1743,21 +1743,6 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        // Arithmetic / bitwise: produces Nullable<R>. The same-compilation
-        // Function-carrying case has no runtime CLR Type for the result
-        // underlying, so constructing Nullable<R> symbolically (mirroring
-        // GetNullableCtorMemberRefForUserValueType) is deferred — reported
-        // as a known limitation. Imported-CLR arithmetic operators
-        // (op.Method, e.g. DateTime.op_Subtraction) are fully supported.
-        if (op.Function != null)
-        {
-            throw new NotSupportedException(
-                $"Lifted same-compilation arithmetic/bitwise operator '{op.OperatorKind}' on "
-                + $"'{op.Function.Name}' is not yet supported (issue #2388 scoped equality/ordering "
-                + "lifting; symbolic Nullable<R> construction for a same-compilation result type is "
-                + "deferred follow-up work).");
-        }
-
         this.EmitLiftedClrArithmetic(op, lhsSlot, rhsSlot, slots.ResultSlot, leftNullable, rightNullable);
     }
 
@@ -1830,18 +1815,14 @@ internal sealed partial class MethodBodyEmitter
         var getHasValueLhs = this.GetNullableHasValueRef(leftNullable);
         var getHasValueRhs = this.GetNullableHasValueRef(rightNullable);
 
-        var resultUnderlyingClr = op.Method.ReturnType;
-        if (!NullableLifting.TryConstructNullable(this.outer.emitCtx.References, resultUnderlyingClr, out var nullableClr))
+        if (op.Type is not NullableTypeSymbol resultNullable)
         {
             throw new InvalidOperationException(
-                $"Cannot construct Nullable<{resultUnderlyingClr.FullName}>: System.Nullable`1 is not resolvable in the reference set.");
+                $"Lifted CLR/user binary operator '{op.OperatorKind}' must produce a nullable result.");
         }
 
-        var nullableInnerArg = nullableClr.GetGenericArguments()[0];
-        var ctor = nullableClr.GetConstructor(new[] { nullableInnerArg })
-            ?? throw new InvalidOperationException(
-                $"Nullable<{nullableInnerArg.FullName}> has no single-arg constructor.");
-        var nullableToken = this.outer.memberRefs.GetTypeHandleForMember(nullableClr);
+        var nullableToken = this.outer.memberRefs.GetElementTypeToken(resultNullable);
+        var nullableCtor = this.GetNullableResultConstructor(resultNullable);
 
         var nullBranch = this.il.DefineLabel();
         var end = this.il.DefineLabel();
@@ -1859,7 +1840,7 @@ internal sealed partial class MethodBodyEmitter
         this.EmitUnwrappedNullableValue(rhsSlot, rightNullable);
         this.EmitCallResolvedClrOrFunctionOperator(op);
         this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(this.outer.memberRefs.GetCtorReference(ctor));
+        this.il.Token(nullableCtor);
         this.il.Branch(ILOpCode.Br, end);
 
         this.il.MarkLabel(nullBranch);
@@ -1869,6 +1850,35 @@ internal sealed partial class MethodBodyEmitter
         this.il.LoadLocal(resultSlot);
 
         this.il.MarkLabel(end);
+    }
+
+    private EntityHandle GetNullableResultConstructor(NullableTypeSymbol nullable)
+    {
+        if (NullableLifting.IsUserValueTypeNullable(nullable))
+        {
+            return this.outer.memberRefs.GetNullableCtorMemberRefForUserValueType(nullable);
+        }
+
+        if (nullable.UnderlyingType is TypeParameterSymbol typeParameter
+            && typeParameter.HasValueTypeConstraint)
+        {
+            return this.outer.memberRefs.GetNullableCtorMemberRefForOpenTypeParameter(nullable);
+        }
+
+        var resultUnderlyingClr = nullable.UnderlyingType?.ClrType
+            ?? throw new InvalidOperationException(
+                $"Lifted operator result '{nullable.UnderlyingType?.Name}' has no runtime or symbolic value-type representation.");
+        if (!NullableLifting.TryConstructNullable(this.outer.emitCtx.References, resultUnderlyingClr, out var nullableClr))
+        {
+            throw new InvalidOperationException(
+                $"Cannot construct Nullable<{resultUnderlyingClr.FullName}>: System.Nullable`1 is not resolvable in the reference set.");
+        }
+
+        var nullableInnerArg = nullableClr.GetGenericArguments()[0];
+        var ctor = nullableClr.GetConstructor(new[] { nullableInnerArg })
+            ?? throw new InvalidOperationException(
+                $"Nullable<{nullableInnerArg.FullName}> has no single-arg constructor.");
+        return this.outer.memberRefs.GetCtorReference(ctor);
     }
 
     // Issue #2388: HasValue/Value accessors on Nullable<T> need different
@@ -1904,18 +1914,29 @@ internal sealed partial class MethodBodyEmitter
     // operator, e.g. Meters.op_Equality) via the ordinary
     // FunctionHandles/MethodHandles cache — mirroring the two-cache
     // fallback used by every other same-compilation call site
-    // (EmitFunctionPointerFromMethod, BoundCallExpression emission).
-    // Generic same-compilation operator functions are out of scope for
-    // this lifted path (deferred follow-up).
+    // (EmitFunctionPointerFromMethod, BoundCallExpression emission). Issue
+    // #2400 additionally routes a closed generic FunctionOwnerType through a
+    // TypeSpec-parented MemberRef instead of calling the open MethodDef.
     private void EmitCallResolvedClrOrFunctionOperator(BoundClrBinaryOperatorExpression op)
     {
         if (op.Function != null)
         {
-            if (!this.outer.cache.FunctionHandles.TryGetValue(op.Function, out var fnHandle)
-                && !this.outer.cache.MethodHandles.TryGetValue(op.Function, out fnHandle))
+            EntityHandle fnHandle;
+            if (op.FunctionOwnerType != null
+                && ReflectionMetadataEmitter.IsUserGenericTypeReference(op.FunctionOwnerType))
             {
-                throw new InvalidOperationException(
-                    $"Lifted same-compilation operator '{op.Function.Name}' has no emitted MethodDef.");
+                fnHandle = this.outer.userTokens.ResolveUserStaticMethodToken(op.FunctionOwnerType, op.Function);
+            }
+            else
+            {
+                if (!this.outer.cache.FunctionHandles.TryGetValue(op.Function, out var definitionHandle)
+                    && !this.outer.cache.MethodHandles.TryGetValue(op.Function, out definitionHandle))
+                {
+                    throw new InvalidOperationException(
+                        $"Lifted same-compilation operator '{op.Function.Name}' has no emitted MethodDef.");
+                }
+
+                fnHandle = definitionHandle;
             }
 
             if (op.Function.IsGeneric && !op.Function.TypeParameters.IsDefaultOrEmpty)

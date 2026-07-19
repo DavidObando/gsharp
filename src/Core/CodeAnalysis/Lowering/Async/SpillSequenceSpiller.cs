@@ -510,7 +510,7 @@ public static class SpillSequenceSpiller
                         clrBinary.Left,
                         clrBinary.Right,
                         (l, r) => clrBinary.Function != null
-                            ? new BoundClrBinaryOperatorExpression(null, clrBinary.OperatorKind, l, r, clrBinary.Function, clrBinary.Type)
+                            ? new BoundClrBinaryOperatorExpression(null, clrBinary.OperatorKind, l, r, clrBinary.Function, clrBinary.FunctionOwnerType, clrBinary.Type)
                             : new BoundClrBinaryOperatorExpression(null, clrBinary.OperatorKind, l, r, clrBinary.Method, clrBinary.Type));
                 case BoundClrUnaryOperatorExpression clrUnary:
                     return SpillOneOperand(

@@ -494,6 +494,22 @@ public static class TypeMemberModel
     /// <param name="method">The found method on success.</param>
     /// <returns>True if found.</returns>
     public static bool TryGetStaticMethodIncludingInherited(TypeSymbol type, string name, out FunctionSymbol method)
+        => TryGetStaticMethodIncludingInherited(type, name, out method, out _);
+
+    /// <summary>
+    /// Tries to find the first static method named <paramref name="name"/> and
+    /// returns the constructed type level that supplied it.
+    /// </summary>
+    /// <param name="type">The type to resolve against.</param>
+    /// <param name="name">The method name.</param>
+    /// <param name="method">The found method on success.</param>
+    /// <param name="declaringType">The matching type level in the receiver's constructed base chain.</param>
+    /// <returns>True if found.</returns>
+    public static bool TryGetStaticMethodIncludingInherited(
+        TypeSymbol type,
+        string name,
+        out FunctionSymbol method,
+        out StructSymbol declaringType)
     {
         if (type is StructSymbol structSymbol)
         {
@@ -501,12 +517,14 @@ public static class TypeMemberModel
             {
                 if (c.TryGetStaticMethod(name, out method))
                 {
+                    declaringType = c;
                     return true;
                 }
             }
         }
 
         method = null;
+        declaringType = null;
         return false;
     }
 

@@ -28,11 +28,10 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// lifts them) while a same-compilation struct WITHOUT a user operator still
 /// correctly reports GS0129 (proving the fix does not make every value type
 /// universally nullable-comparable). Method bodies are bound but never
-/// invoked — this is pure binder coverage, independent of the tree-walking
-/// Evaluator (which does not implement nullable-lifting semantics for the
-/// same-compilation Function-carrying node shape; see
-/// Issue2388NullableCustomEqualityEmitTests for the compiled/run/ILVerify
-/// coverage that exercises the actual lifted comparisons).
+/// invoked — this is pure binder coverage. Issue #2400 adds tree-walking
+/// Evaluator coverage for the same-compilation Function-carrying shape, while
+/// Issue2388NullableCustomEqualityEmitTests covers compiled/run/ILVerify
+/// behavior.
 /// </summary>
 public class Issue2388NullableCustomEqualityBinderTests
 {

@@ -231,6 +231,85 @@ public class Issue2388NullableCustomEqualityEmitTests
     }
 
     [Fact]
+    public void ClosedGenericSameCompilationStruct_LiftedComparison_RunsAndVerifies()
+    {
+        var source = """
+            package GenericComparisonPkg
+
+            struct Box[T] {
+                var Value T
+                var Rank int32
+            }
+
+            func (left Box[T]) operator ==(right Box[T]) bool -> left.Rank == right.Rank
+            func (left Box[T]) operator <(right Box[T]) bool -> left.Rank < right.Rank
+
+            let low Box[string]? = Box[string]{Value: "low", Rank: 1}
+            let same Box[string]? = Box[string]{Value: "same", Rank: 1}
+            let high Box[string]? = Box[string]{Value: "high", Rank: 2}
+            let missing Box[string]? = nil
+
+            Console.WriteLine(low == same)
+            Console.WriteLine(low == missing)
+            Console.WriteLine(missing == missing)
+            Console.WriteLine(low < high)
+            Console.WriteLine(low < missing)
+            """;
+
+        Assert.Equal("True\nFalse\nTrue\nTrue\nFalse\n", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void ClosedGenericSameCompilationStruct_LiftedArithmeticReturningPrimitive_RunsAndVerifies()
+    {
+        var source = """
+            package GenericPrimitiveArithmeticPkg
+
+            struct Box[T] {
+                var Value T
+                var Rank int32
+            }
+
+            func (left Box[T]) operator +(right Box[T]) int32 -> left.Rank + right.Rank
+
+            let left Box[string]? = Box[string]{Value: "left", Rank: 20}
+            let right Box[string]? = Box[string]{Value: "right", Rank: 22}
+            let missing Box[string]? = nil
+            Console.WriteLine((left + right)!!)
+            Console.WriteLine(left!! + right!!)
+            Console.WriteLine(left + missing == nil)
+            """;
+
+        Assert.Equal("42\n42\nTrue\n", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void ClosedGenericSameCompilationStruct_LiftedArithmeticReturningGenericStruct_RunsAndVerifies()
+    {
+        var source = """
+            package GenericStructArithmeticPkg
+
+            struct Box[T] {
+                var Value T
+                var Rank int32
+            }
+
+            func (left Box[T]) operator +(right Box[T]) Box[T] {
+                return Box[T]{Value: left.Value, Rank: left.Rank + right.Rank}
+            }
+
+            let left Box[string]? = Box[string]{Value: "kept", Rank: 20}
+            let right Box[string]? = Box[string]{Value: "ignored", Rank: 22}
+            let missing Box[string]? = nil
+            Console.WriteLine((left + right)!!.Value)
+            Console.WriteLine((left + right)!!.Rank)
+            Console.WriteLine(left + missing == nil)
+            """;
+
+        Assert.Equal("kept\n42\nTrue\n", CompileAndRun(source));
+    }
+
+    [Fact]
     public void SameCompilationStruct_WithoutUserOperator_NullableEquality_StillReportsGS0129()
     {
         var (exitCode, stdout, _) = TryCompile("""

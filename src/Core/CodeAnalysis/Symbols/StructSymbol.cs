@@ -1627,6 +1627,22 @@ public sealed class StructSymbol : TypeSymbol
         ConstructedNestedGenericCache.Clear();
     }
 
+    /// <summary>
+    /// Substitutes this constructed type's arguments through a member type
+    /// declared on its generic definition.
+    /// </summary>
+    /// <param name="type">The open member type to close.</param>
+    /// <returns>The member type in this construction's context.</returns>
+    internal TypeSymbol SubstituteMemberType(TypeSymbol type)
+    {
+        if (type == null || Definition == null || ReferenceEquals(Definition, this))
+        {
+            return type;
+        }
+
+        return SubstituteTypeForConstruction(type, GetSubstitutionMap(), mapClrType);
+    }
+
     private static TypeArgsKey BuildArgsKey(ImmutableArray<TypeSymbol> typeArguments) => new(typeArguments);
 
     private static TypeSymbol EnclosingTypeOf(TypeSymbol type) => type switch
