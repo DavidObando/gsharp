@@ -87,7 +87,9 @@ public sealed partial class CSharpToGSharpTranslator
                     break;
 
                 case PropertyDeclarationSyntax property:
-                    if (lift.PropertiesAsPrimaryParameters.Contains(property.Identifier.Text))
+                    var propertySymbol = this.context.GetDeclaredSymbol(property) as IPropertySymbol;
+                    if (propertySymbol != null &&
+                        lift.PropertiesAsPrimaryParameters.Contains(propertySymbol))
                     {
                         break;
                     }
@@ -96,12 +98,12 @@ public sealed partial class CSharpToGSharpTranslator
                     // to a body field (see PropertiesAsBodyFields) emits as a plain
                     // `let Name Type = initializer` field rather than a primary-
                     // constructor parameter or a G# `prop`.
-                    if (lift.PropertiesAsBodyFields.Contains(property.Identifier.Text))
+                    if (propertySymbol != null &&
+                        lift.PropertiesAsBodyFields.Contains(propertySymbol))
                     {
-                        GExpression bodyFieldInit = lift.BodyFieldInitializers[property.Identifier.Text];
-                        GTypeReference bodyFieldType = this.context.GetDeclaredSymbol(property) is IPropertySymbol bodyFieldPropSymbol
-                            ? this.typeMapper.Map(bodyFieldPropSymbol.Type, this.context, property.Identifier.GetLocation())
-                            : null;
+                        GExpression bodyFieldInit = lift.BodyFieldInitializers[propertySymbol];
+                        GTypeReference bodyFieldType =
+                            this.typeMapper.Map(propertySymbol.Type, this.context, property.Identifier.GetLocation());
                         yield return (
                             new FieldDeclaration(
                                 BindingKind.Let,
@@ -119,7 +121,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // defining part is dropped in favor of its implementation
                     // part (which translates normally), and an unimplemented
                     // partial-property definition is elided outright.
-                    if (this.context.GetDeclaredSymbol(property) is IPropertySymbol { IsPartialDefinition: true })
+                    if (propertySymbol is { IsPartialDefinition: true })
                     {
                         break;
                     }
