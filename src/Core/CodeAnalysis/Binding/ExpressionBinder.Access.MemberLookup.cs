@@ -1426,6 +1426,33 @@ internal sealed partial class ExpressionBinder
         TextLocation diagnosticLocation,
         BoundExpression boundIndexOverride = null)
     {
+        // Issue #2488: direct indexed writes bypass the ordinary name-expression
+        // read binder, so explicitly reuse its narrowed receiver construction.
+        // Member/indexer lookup sees the effective type while loads still refer
+        // to the original variable slot.
+        var target = BuildNarrowedVariableRead(variable);
+        var targetType = target.Type;
+        var hasNarrowedTarget = target is not BoundVariableExpression targetVariable
+            || targetVariable.NarrowedType != null;
+
+        BoundExpression MakeIndexAssignment(BoundExpression index, BoundExpression value, TypeSymbol elementType)
+        {
+            return hasNarrowedTarget
+                ? BoundIndexAssignmentExpression.WithExpressionTarget(null, target, index, value, elementType)
+                : new BoundIndexAssignmentExpression(null, variable, index, value, elementType);
+        }
+
+        BoundExpression MakeClrIndexAssignment(
+            PropertyInfo indexer,
+            ImmutableArray<BoundExpression> arguments,
+            BoundExpression value,
+            TypeSymbol resultType)
+        {
+            return hasNarrowedTarget
+                ? BoundClrIndexAssignmentExpression.WithExpressionTarget(null, target, indexer, arguments, value, resultType)
+                : new BoundClrIndexAssignmentExpression(null, variable, indexer, arguments, value, resultType);
+        }
+
         BoundExpression BindValue(TypeSymbol elementType)
         {
             if (boundValueOverride != null)
@@ -1439,12 +1466,14 @@ internal sealed partial class ExpressionBinder
         if (boundIndexOverride != null
             && ClrTypeUtilities.AreSame(boundIndexOverride.Type?.ClrType, typeof(System.Index)))
         {
-            return BindSystemIndexAssignment(variable, boundIndexOverride, BindValue, diagnosticLocation);
+            return BindSystemIndexAssignment(
+                variable, target, targetType, hasNarrowedTarget, boundIndexOverride, BindValue, diagnosticLocation);
         }
 
         if (boundIndexOverride == null && TryBindSystemIndexValue(indexSyntax, out var systemIndex))
         {
-            return BindSystemIndexAssignment(variable, systemIndex, BindValue, diagnosticLocation);
+            return BindSystemIndexAssignment(
+                variable, target, targetType, hasNarrowedTarget, systemIndex, BindValue, diagnosticLocation);
         }
 
         BoundExpression BindIndexValue() => boundIndexOverride ?? BindExpression(indexSyntax);
@@ -1454,23 +1483,23 @@ internal sealed partial class ExpressionBinder
                 ? conversions.BindConversion(indexSyntax.Location, boundIndexOverride, targetType)
                 : conversions.BindConversion(indexSyntax, targetType);
 
-        var element = GetIndexElementType(variable.Type);
+        var element = GetIndexElementType(targetType);
         if (element != null)
         {
             var index = boundIndexOverride != null
                 ? ConvertArrayElementIndex(indexSyntax.Location, boundIndexOverride)
                 : BindArrayElementIndex(indexSyntax);
             var value = BindValue(element);
-            return new BoundIndexAssignmentExpression(null, variable, index, value, element);
+            return MakeIndexAssignment(index, value, element);
         }
 
         // ADR-0122 / issue #1014: pointer indexed write `p[i] = v` == `*(p + i) = v`.
-        if (variable.Type is PointerTypeSymbol pointerType)
+        if (targetType is PointerTypeSymbol pointerType)
         {
             // ADR-0122 §3 / issue #1033: a `*void` pointer has no element type,
             // so an indexed write `p[i] = v` is rejected (GS0403); cast to a
             // typed pointer `*T` first.
-            if (TypeSymbol.IsVoidPointer(variable.Type))
+            if (TypeSymbol.IsVoidPointer(targetType))
             {
                 Diagnostics.ReportVoidPointerOperationNotAllowed(diagnosticLocation, "index");
                 return new BoundErrorExpression(null);
@@ -1489,51 +1518,51 @@ internal sealed partial class ExpressionBinder
                     : conversions.BindConversion(indexSyntax, TypeSymbol.NInt);
             }
 
-            var elementPointer = LowerPointerOffset(new BoundVariableExpression(null, variable), pointerType, pointerIndex, subtract: false);
+            var elementPointer = LowerPointerOffset(target, pointerType, pointerIndex, subtract: false);
             var pointerValue = BindValue(pointerType.PointeeType);
             return new BoundIndirectAssignmentExpression(null, elementPointer, pointerValue);
         }
 
         // Phase 3.A.4: map indexed assignment `m[k] = v` — key bound to K,
         // value bound to V.
-        if (variable.Type is MapTypeSymbol mapType)
+        if (targetType is MapTypeSymbol mapType)
         {
             var keyExpr = ConvertIndexValue(mapType.KeyType);
             var valExpr = BindValue(mapType.ValueType);
-            return new BoundIndexAssignmentExpression(null, variable, keyExpr, valExpr, mapType.ValueType);
+            return MakeIndexAssignment(keyExpr, valExpr, mapType.ValueType);
         }
 
         // Phase 4 exit: CLR indexer write on an imported reference type
         // (e.g. `d["k"] = 1` on Dictionary[string, int]).
         // Issue #209: honour inner-position nullable flags when present.
-        if (variable.Type is NullabilityAnnotatedTypeSymbol annotWr && variable.Type.ClrType is System.Type clrAnnotWr)
+        if (targetType is NullabilityAnnotatedTypeSymbol annotWr && targetType.ClrType is System.Type clrAnnotWr)
         {
             var idxArgsAnnotWr = ImmutableArray.Create(BindIndexValue());
-            if (this.memberLookup.TryResolveClrIndexer(variable.Type, clrAnnotWr, idxArgsAnnotWr, out var idxPropAnnotWr, out var resolvedIdxArgsAnnotWr))
+            if (this.memberLookup.TryResolveClrIndexer(targetType, clrAnnotWr, idxArgsAnnotWr, out var idxPropAnnotWr, out var resolvedIdxArgsAnnotWr))
             {
                 if (!idxPropAnnotWr.CanWrite)
                 {
-                    Diagnostics.ReportTypeNotIndexable(diagnosticLocation, variable.Type);
+                    Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
                     return new BoundErrorExpression(null);
                 }
 
                 var valueTypeAnnotWr = annotWr.GetTypeArgumentSymbolForClrType(idxPropAnnotWr.PropertyType);
                 var boundValueAnnotWr = BindValue(valueTypeAnnotWr);
                 var convertedIdxArgsAnnotWr = BindClrIndexerArguments(
-                    variable.Type,
+                    targetType,
                     idxPropAnnotWr,
                     resolvedIdxArgsAnnotWr,
                     indexSyntax.Location);
-                return new BoundClrIndexAssignmentExpression(null, variable, idxPropAnnotWr, convertedIdxArgsAnnotWr, boundValueAnnotWr, valueTypeAnnotWr);
+                return MakeClrIndexAssignment(idxPropAnnotWr, convertedIdxArgsAnnotWr, boundValueAnnotWr, valueTypeAnnotWr);
             }
         }
-        else if ((variable.Type is ImportedTypeSymbol || variable.Type is StructSymbol) && variable.Type.ClrType is System.Type clrTarget)
+        else if ((targetType is ImportedTypeSymbol || targetType is StructSymbol) && targetType.ClrType is System.Type clrTarget)
         {
             var idxArgs = ImmutableArray.Create(BindIndexValue());
-            if (this.memberLookup.TryResolveClrIndexer(variable.Type, clrTarget, idxArgs, out var idxProp, out var resolvedIdxArgs))
+            if (this.memberLookup.TryResolveClrIndexer(targetType, clrTarget, idxArgs, out var idxProp, out var resolvedIdxArgs))
             {
                 var convertedIdxArgs = BindClrIndexerArguments(
-                    variable.Type,
+                    targetType,
                     idxProp,
                     resolvedIdxArgs,
                     indexSyntax.Location);
@@ -1550,21 +1579,21 @@ internal sealed partial class ExpressionBinder
                     {
                         if (IsReadOnlyRefReturn(idxProp, refGetter))
                         {
-                            Diagnostics.ReportCannotAssignReadOnlySpanElement(diagnosticLocation, variable.Type);
+                            Diagnostics.ReportCannotAssignReadOnlySpanElement(diagnosticLocation, targetType);
                             return new BoundErrorExpression(null);
                         }
 
-                        var resolvedElementType = variable.Type is ImportedTypeSymbol importedRefReturn
+                        var resolvedElementType = targetType is ImportedTypeSymbol importedRefReturn
                             ? MapErasedIndexerElementType(importedRefReturn, idxProp)
-                            : ResolveIndexerElementType(variable.Type, idxProp);
+                            : ResolveIndexerElementType(targetType, idxProp);
                         var pointeeType = resolvedElementType is ByRefTypeSymbol byRef
                             ? byRef.PointeeType
                             : TypeSymbol.FromClrType(refGetter.ReturnType.GetElementType()!);
                         var refValue = BindValue(pointeeType);
-                        return new BoundClrIndexAssignmentExpression(null, variable, idxProp, convertedIdxArgs, refValue, pointeeType);
+                        return MakeClrIndexAssignment(idxProp, convertedIdxArgs, refValue, pointeeType);
                     }
 
-                    Diagnostics.ReportTypeNotIndexable(diagnosticLocation, variable.Type);
+                    Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
                     return new BoundErrorExpression(null);
                 }
 
@@ -1580,24 +1609,24 @@ internal sealed partial class ExpressionBinder
                 // real element type (`T`), so the `T` value binds without a
                 // spurious boxing conversion — the WRITE-path counterpart to the
                 // READ-path element-type recovery (issues #313 / #671 / #957).
-                var valueType = variable.Type is ImportedTypeSymbol imported
+                var valueType = targetType is ImportedTypeSymbol imported
                     ? MapErasedIndexerElementType(imported, idxProp)
                     : ClrNullability.GetPropertyTypeSymbol(idxProp);
                 var boundValue = BindValue(valueType);
-                return new BoundClrIndexAssignmentExpression(null, variable, idxProp, convertedIdxArgs, boundValue, valueType);
+                return MakeClrIndexAssignment(idxProp, convertedIdxArgs, boundValue, valueType);
             }
         }
 
         // ADR-0118 / issue #944: index assignment on a user-defined type that
         // declares an indexer member. Binds `obj[i] = v` to a call of the
         // indexer setter (`obj.set_Item(i, v)`).
-        if (variable.Type is StructSymbol userIndexTarget
+        if (targetType is StructSymbol userIndexTarget
             && TryGetUserIndexer(userIndexTarget, out var writeIndexer, out var writeSubstitution)
             && writeIndexer.Parameters.Length == 1)
         {
             if (writeIndexer.SetterSymbol == null)
             {
-                Diagnostics.ReportTypeNotIndexable(diagnosticLocation, variable.Type);
+                Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
                 return new BoundErrorExpression(null);
             }
 
@@ -1612,7 +1641,7 @@ internal sealed partial class ExpressionBinder
             var value = BindValue(elementType);
             return new BoundUserInstanceCallExpression(
                 null,
-                new BoundVariableExpression(null, variable),
+                target,
                 writeIndexer.SetterSymbol,
                 ImmutableArray.Create(indexArg, value));
         }
@@ -1621,13 +1650,13 @@ internal sealed partial class ExpressionBinder
         // INTERFACE-typed receiver — the write-side counterpart of the read
         // branch above. Dispatches via `callvirt` through the interface's own
         // set_Item slot.
-        if (variable.Type is InterfaceSymbol writeIndexIface
+        if (targetType is InterfaceSymbol writeIndexIface
             && TryGetUserIndexer(writeIndexIface, out var writeIfaceIndexer, out var writeIfaceSubstitution)
             && writeIfaceIndexer.Parameters.Length == 1)
         {
             if (writeIfaceIndexer.SetterSymbol == null)
             {
-                Diagnostics.ReportTypeNotIndexable(diagnosticLocation, variable.Type);
+                Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
                 return new BoundErrorExpression(null);
             }
 
@@ -1642,14 +1671,14 @@ internal sealed partial class ExpressionBinder
             var value = BindValue(elementType);
             return new BoundUserInstanceCallExpression(
                 null,
-                new BoundVariableExpression(null, variable),
+                target,
                 writeIfaceIndexer.SetterSymbol,
                 ImmutableArray.Create(indexArg, value));
         }
 
-        if (variable.Type != TypeSymbol.Error)
+        if (targetType != TypeSymbol.Error)
         {
-            Diagnostics.ReportTypeNotIndexable(diagnosticLocation, variable.Type);
+            Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
         }
 
         return new BoundErrorExpression(null);
@@ -2164,24 +2193,29 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindSystemIndexAssignment(
         VariableSymbol variable,
+        BoundExpression target,
+        TypeSymbol targetType,
+        bool hasNarrowedTarget,
         BoundExpression indexValue,
         Func<TypeSymbol, BoundExpression> bindValue,
         TextLocation diagnosticLocation)
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
 
-        var element = GetIndexElementType(variable.Type);
+        var element = GetIndexElementType(targetType);
         if (element != null)
         {
             var idx = BuildSystemIndexOffset(
                 indexValue,
-                new BoundLenExpression(null, new BoundVariableExpression(null, variable)),
+                new BoundLenExpression(null, target),
                 statements);
-            var assignment = new BoundIndexAssignmentExpression(null, variable, idx, bindValue(element), element);
+            var assignment = hasNarrowedTarget
+                ? BoundIndexAssignmentExpression.WithExpressionTarget(null, target, idx, bindValue(element), element)
+                : new BoundIndexAssignmentExpression(null, variable, idx, bindValue(element), element);
             return new BoundBlockExpression(null, statements.ToImmutable(), assignment);
         }
 
-        var clrType = variable.Type.ClrType;
+        var clrType = targetType.ClrType;
         if (clrType != null)
         {
             PropertyInfo indexer;
@@ -2194,49 +2228,45 @@ internal sealed partial class ExpressionBinder
             {
                 var lengthExpr = new BoundClrPropertyAccessExpression(
                     null,
-                    new BoundVariableExpression(null, variable),
+                    target,
                     lengthMember,
                     TypeSymbol.Int32);
                 arguments = ImmutableArray.Create(BuildSystemIndexOffset(indexValue, lengthExpr, statements));
             }
             else
             {
-                Diagnostics.ReportTypeNotIndexable(diagnosticLocation, variable.Type);
+                Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
                 return new BoundErrorExpression(null);
             }
 
             var getter = indexer.GetGetMethod(nonPublic: false);
-            var valueType = ResolveIndexerElementType(variable.Type, indexer);
+            var valueType = ResolveIndexerElementType(targetType, indexer);
             if (!indexer.CanWrite)
             {
                 if (getter == null || !getter.ReturnType.IsByRef)
                 {
-                    Diagnostics.ReportTypeNotIndexable(diagnosticLocation, variable.Type);
+                    Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
                     return new BoundErrorExpression(null);
                 }
 
                 if (IsReadOnlyRefReturn(indexer, getter))
                 {
-                    Diagnostics.ReportCannotAssignReadOnlySpanElement(diagnosticLocation, variable.Type);
+                    Diagnostics.ReportCannotAssignReadOnlySpanElement(diagnosticLocation, targetType);
                     return new BoundErrorExpression(null);
                 }
 
                 valueType = valueType is ByRefTypeSymbol byRef ? byRef.PointeeType : valueType;
             }
 
-            return new BoundBlockExpression(
-                null,
-                statements.ToImmutable(),
-                new BoundClrIndexAssignmentExpression(
-                    null,
-                    variable,
-                    indexer,
-                    arguments,
-                    bindValue(valueType),
-                    valueType));
+            var assignment = hasNarrowedTarget
+                ? BoundClrIndexAssignmentExpression.WithExpressionTarget(
+                    null, target, indexer, arguments, bindValue(valueType), valueType)
+                : new BoundClrIndexAssignmentExpression(
+                    null, variable, indexer, arguments, bindValue(valueType), valueType);
+            return new BoundBlockExpression(null, statements.ToImmutable(), assignment);
         }
 
-        if (variable.Type is StructSymbol userTarget
+        if (targetType is StructSymbol userTarget
             && TryGetUserIndexer(userTarget, out var userIndexer, out var substitution)
             && userIndexer.Parameters.Length == 1
             && userIndexer.SetterSymbol != null)
@@ -2251,7 +2281,7 @@ internal sealed partial class ExpressionBinder
                     : userIndexer.Type;
                 return new BoundUserInstanceCallExpression(
                     null,
-                    new BoundVariableExpression(null, variable),
+                    target,
                     userIndexer.SetterSymbol,
                     ImmutableArray.Create(
                         conversions.BindConversion(diagnosticLocation, indexValue, parameterType),
@@ -2259,7 +2289,7 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        Diagnostics.ReportTypeNotIndexable(diagnosticLocation, variable.Type);
+        Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
         return new BoundErrorExpression(null);
     }
 
