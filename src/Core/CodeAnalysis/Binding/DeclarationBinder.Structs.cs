@@ -1043,6 +1043,7 @@ internal sealed partial class DeclarationBinder
                     // base class chain per ADR-0017.
                     FunctionSymbol overriddenMethod = null;
                     MethodInfo externalOverriddenMethod = null;
+                    TypeSymbol externalOverrideContainingType = null;
                     bool reportedMissingOverride = false;
                     if (methodSyntax.IsOverride)
                     {
@@ -1078,6 +1079,7 @@ internal sealed partial class DeclarationBinder
                             if (externalMatch.Member != null)
                             {
                                 externalOverriddenMethod = externalMatch.Member;
+                                externalOverrideContainingType = externalMatch.ContainingType;
                             }
                             else if (externalMatch.IsSealed)
                             {
@@ -1196,6 +1198,7 @@ internal sealed partial class DeclarationBinder
                         isOverride: methodSyntax.IsOverride);
                     methodSymbol.OverriddenMethod = overriddenMethod;
                     methodSymbol.ExternalOverriddenMethod = externalOverriddenMethod;
+                    methodSymbol.ExternalOverrideContainingType = externalOverrideContainingType;
                     methodSymbol.TypeParameters = methodTypeParameters;
                     methodSymbol.ReturnRefKind = methodReturnRefKind;
                     methodSymbol.IsAsync = methodSyntax.IsAsync || isAsyncIteratorReturnType(returnType);
@@ -1476,6 +1479,7 @@ internal sealed partial class DeclarationBinder
 
                 // Validate: override needs base property
                 PropertyInfo externalOverriddenProperty = null;
+                TypeSymbol externalPropertyContainingType = null;
                 if (isOverride)
                 {
                     if (structSymbol.BaseClass != null && TypeMemberModel.TryGetProperty(structSymbol.BaseClass, propName, out var baseProp))
@@ -1498,6 +1502,7 @@ internal sealed partial class DeclarationBinder
                         if (externalMatch.Member != null)
                         {
                             externalOverriddenProperty = externalMatch.Member;
+                            externalPropertyContainingType = externalMatch.ContainingType;
                         }
                         else if (externalMatch.IsSealed)
                         {
@@ -1553,6 +1558,7 @@ internal sealed partial class DeclarationBinder
                 {
                     propertySymbol.ExternalOverriddenGetter = externalOverriddenProperty.GetGetMethod(nonPublic: true);
                     propertySymbol.ExternalOverriddenSetter = externalOverriddenProperty.GetSetMethod(nonPublic: true);
+                    propertySymbol.ExternalOverrideContainingType = externalPropertyContainingType;
                 }
 
                 // Create backing field for auto-properties
@@ -1697,6 +1703,7 @@ internal sealed partial class DeclarationBinder
                 }
 
                 EventInfo externalOverriddenEvent = null;
+                TypeSymbol externalEventContainingType = null;
                 if (isOverride)
                 {
                     if (structSymbol.BaseClass != null && TypeMemberModel.TryGetEvent(structSymbol.BaseClass, eventName, out var baseEvent))
@@ -1720,6 +1727,7 @@ internal sealed partial class DeclarationBinder
                         if (externalMatch.Member != null)
                         {
                             externalOverriddenEvent = externalMatch.Member;
+                            externalEventContainingType = externalMatch.ContainingType;
                         }
                         else if (externalMatch.IsSealed)
                         {
@@ -1765,6 +1773,7 @@ internal sealed partial class DeclarationBinder
                     eventSymbol.ExternalOverriddenAddMethod = externalOverriddenEvent.GetAddMethod(nonPublic: true);
                     eventSymbol.ExternalOverriddenRemoveMethod = externalOverriddenEvent.GetRemoveMethod(nonPublic: true);
                     eventSymbol.ExternalOverriddenRaiseMethod = externalOverriddenEvent.GetRaiseMethod(nonPublic: true);
+                    eventSymbol.ExternalOverrideContainingType = externalEventContainingType;
                 }
 
                 // Create backing field for field-like events

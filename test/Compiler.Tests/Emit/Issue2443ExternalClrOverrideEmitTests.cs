@@ -86,6 +86,11 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
             open class AbstractDerived : ExternalBase[int32] {
                 open override func AbstractName() string;
             }
+
+            open class GenericDerived[T] : ExternalBase[T] {
+                override func Echo(value T) string -> "generic"
+                override func AbstractName() string -> "generic-abstract"
+            }
             """;
 
         var result = Compile(Source, target: "library", ExternalBaseAssembly.Value);
@@ -120,8 +125,16 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
                 abstractDerived.GetMethod("AbstractName")!,
                 closedBase.GetMethod("AbstractName")!);
 
+            var genericDerived = derivedAssembly.GetType("Issue2443.GenericDerived`1")!;
+            Assert.True(genericDerived.BaseType!.IsGenericType);
+            Assert.Equal(
+                genericDerived.GetGenericArguments()[0],
+                genericDerived.BaseType.GetGenericArguments()[0]);
+
             var consumerPath = EmitCSharpConsumer(result.DirectoryPath, result.OutputPath, ExternalBaseAssembly.Value);
-            Assert.Equal("echo:4\nid\nMarker\n7\n13\n5\nabstract\n", Run(consumerPath));
+            Assert.Equal(
+                "echo:4\nid\nMarker\n7\n13\n5\nabstract\ngeneric\ngeneric-abstract\n",
+                Run(consumerPath));
         }
         finally
         {
@@ -315,6 +328,10 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
                     Console.WriteLine(value[3]);
                     Console.WriteLine(value.CallProtected(4));
                     Console.WriteLine(value.AbstractName());
+
+                    ExternalBase<int> generic = new GenericDerived<int>();
+                    Console.WriteLine(generic.Echo(4));
+                    Console.WriteLine(generic.AbstractName());
                 }
             }
             """;

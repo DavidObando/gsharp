@@ -68,7 +68,9 @@ internal sealed class InterfaceImplEmitter
             if (method.ExternalOverriddenMethod != null
                 && this.cache.MethodHandles.TryGetValue(method, out var implHandle))
             {
-                var declaration = this.outer.memberRefs.GetMethodReference(method.ExternalOverriddenMethod);
+                var declaration = this.outer.memberRefs.GetMethodEntityHandle(
+                    method.ExternalOverriddenMethod,
+                    method.ExternalOverrideContainingType);
                 this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implHandle, declaration);
             }
         }
@@ -82,13 +84,17 @@ internal sealed class InterfaceImplEmitter
 
             if (property.ExternalOverriddenGetter != null && accessors.Getter.HasValue)
             {
-                var declaration = this.outer.memberRefs.GetMethodReference(property.ExternalOverriddenGetter);
+                var declaration = this.outer.memberRefs.GetMethodEntityHandle(
+                    property.ExternalOverriddenGetter,
+                    property.ExternalOverrideContainingType);
                 this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, accessors.Getter.Value, declaration);
             }
 
             if (property.ExternalOverriddenSetter != null && accessors.Setter.HasValue)
             {
-                var declaration = this.outer.memberRefs.GetMethodReference(property.ExternalOverriddenSetter);
+                var declaration = this.outer.memberRefs.GetMethodEntityHandle(
+                    property.ExternalOverriddenSetter,
+                    property.ExternalOverrideContainingType);
                 this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, accessors.Setter.Value, declaration);
             }
         }
@@ -102,19 +108,25 @@ internal sealed class InterfaceImplEmitter
 
             if (eventSymbol.ExternalOverriddenAddMethod != null)
             {
-                var declaration = this.outer.memberRefs.GetMethodReference(eventSymbol.ExternalOverriddenAddMethod);
+                var declaration = this.outer.memberRefs.GetMethodEntityHandle(
+                    eventSymbol.ExternalOverriddenAddMethod,
+                    eventSymbol.ExternalOverrideContainingType);
                 this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, accessors.Add, declaration);
             }
 
             if (eventSymbol.ExternalOverriddenRemoveMethod != null)
             {
-                var declaration = this.outer.memberRefs.GetMethodReference(eventSymbol.ExternalOverriddenRemoveMethod);
+                var declaration = this.outer.memberRefs.GetMethodEntityHandle(
+                    eventSymbol.ExternalOverriddenRemoveMethod,
+                    eventSymbol.ExternalOverrideContainingType);
                 this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, accessors.Remove, declaration);
             }
 
             if (eventSymbol.ExternalOverriddenRaiseMethod != null && accessors.Raise.HasValue)
             {
-                var declaration = this.outer.memberRefs.GetMethodReference(eventSymbol.ExternalOverriddenRaiseMethod);
+                var declaration = this.outer.memberRefs.GetMethodEntityHandle(
+                    eventSymbol.ExternalOverriddenRaiseMethod,
+                    eventSymbol.ExternalOverrideContainingType);
                 this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, accessors.Raise.Value, declaration);
             }
         }

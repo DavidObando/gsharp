@@ -26,7 +26,9 @@ internal static class ExternalClrOverrideResolver
         Accessibility accessibility)
     {
         bool sawName = false;
-        foreach (var method in EnumerateMethods(FindImportedBaseType(derivedType), name))
+        var importedBase = FindImportedBaseType(derivedType);
+        var typeArguments = GetSymbolicTypeArguments(importedBase);
+        foreach (var method in EnumerateMethods(GetReflectionBaseType(importedBase), name))
         {
             if (!IsAccessibleOverrideTarget(method, accessibility))
             {
@@ -35,21 +37,21 @@ internal static class ExternalClrOverrideResolver
 
             sawName = true;
             if (method.GetGenericArguments().Length != typeParameters.Length
-                || !ParametersMatch(method.GetParameters(), parameters, typeParameters)
-                || !ReturnMatches(method.ReturnType, returnType, returnRefKind, typeParameters))
+                || !ParametersMatch(method.GetParameters(), parameters, typeParameters, typeArguments)
+                || !ReturnMatches(method.ReturnType, returnType, returnRefKind, typeParameters, typeArguments))
             {
                 continue;
             }
 
             if (!method.IsVirtual || method.IsFinal)
             {
-                return new MatchResult<MethodInfo>(null, sawName, IsSealed: true);
+                return new MatchResult<MethodInfo>(null, importedBase, sawName, IsSealed: true);
             }
 
-            return new MatchResult<MethodInfo>(method, sawName, IsSealed: false);
+            return new MatchResult<MethodInfo>(method, importedBase, sawName, IsSealed: false);
         }
 
-        return new MatchResult<MethodInfo>(null, sawName, IsSealed: false);
+        return new MatchResult<MethodInfo>(null, importedBase, sawName, IsSealed: false);
     }
 
     internal static MatchResult<PropertyInfo> FindProperty(
@@ -62,7 +64,9 @@ internal static class ExternalClrOverrideResolver
         Accessibility accessibility)
     {
         bool sawName = false;
-        foreach (var property in EnumerateProperties(FindImportedBaseType(derivedType), name))
+        var importedBase = FindImportedBaseType(derivedType);
+        var typeArguments = GetSymbolicTypeArguments(importedBase);
+        foreach (var property in EnumerateProperties(GetReflectionBaseType(importedBase), name))
         {
             var getter = property.GetGetMethod(nonPublic: true);
             var setter = property.GetSetMethod(nonPublic: true);
@@ -77,8 +81,8 @@ internal static class ExternalClrOverrideResolver
                 || (hasSetter && setter == null)
                 || (!hasGetter && getter != null)
                 || (!hasSetter && setter != null)
-                || !ParametersMatch(property.GetIndexParameters(), indexParameters, ImmutableArray<TypeParameterSymbol>.Empty)
-                || !PropertyTypeMatches(property.PropertyType, propertyType, hasSetter))
+                || !ParametersMatch(property.GetIndexParameters(), indexParameters, ImmutableArray<TypeParameterSymbol>.Empty, typeArguments)
+                || !PropertyTypeMatches(property.PropertyType, propertyType, hasSetter, typeArguments))
             {
                 continue;
             }
@@ -86,13 +90,13 @@ internal static class ExternalClrOverrideResolver
             if ((getter != null && (!getter.IsVirtual || getter.IsFinal))
                 || (setter != null && (!setter.IsVirtual || setter.IsFinal)))
             {
-                return new MatchResult<PropertyInfo>(null, sawName, IsSealed: true);
+                return new MatchResult<PropertyInfo>(null, importedBase, sawName, IsSealed: true);
             }
 
-            return new MatchResult<PropertyInfo>(property, sawName, IsSealed: false);
+            return new MatchResult<PropertyInfo>(property, importedBase, sawName, IsSealed: false);
         }
 
-        return new MatchResult<PropertyInfo>(null, sawName, IsSealed: false);
+        return new MatchResult<PropertyInfo>(null, importedBase, sawName, IsSealed: false);
     }
 
     internal static MatchResult<EventInfo> FindEvent(
@@ -102,7 +106,9 @@ internal static class ExternalClrOverrideResolver
         Accessibility accessibility)
     {
         bool sawName = false;
-        foreach (var eventInfo in EnumerateEvents(FindImportedBaseType(derivedType), name))
+        var importedBase = FindImportedBaseType(derivedType);
+        var typeArguments = GetSymbolicTypeArguments(importedBase);
+        foreach (var eventInfo in EnumerateEvents(GetReflectionBaseType(importedBase), name))
         {
             var add = eventInfo.GetAddMethod(nonPublic: true);
             var remove = eventInfo.GetRemoveMethod(nonPublic: true);
@@ -113,7 +119,7 @@ internal static class ExternalClrOverrideResolver
             }
 
             sawName = true;
-            if (!TypeMatches(eventInfo.EventHandlerType, handlerType, ImmutableArray<TypeParameterSymbol>.Empty))
+            if (!TypeMatches(eventInfo.EventHandlerType, handlerType, ImmutableArray<TypeParameterSymbol>.Empty, typeArguments))
             {
                 continue;
             }
@@ -121,27 +127,38 @@ internal static class ExternalClrOverrideResolver
             if ((add != null && (!add.IsVirtual || add.IsFinal))
                 || (remove != null && (!remove.IsVirtual || remove.IsFinal)))
             {
-                return new MatchResult<EventInfo>(null, sawName, IsSealed: true);
+                return new MatchResult<EventInfo>(null, importedBase, sawName, IsSealed: true);
             }
 
-            return new MatchResult<EventInfo>(eventInfo, sawName, IsSealed: false);
+            return new MatchResult<EventInfo>(eventInfo, importedBase, sawName, IsSealed: false);
         }
 
-        return new MatchResult<EventInfo>(null, sawName, IsSealed: false);
+        return new MatchResult<EventInfo>(null, importedBase, sawName, IsSealed: false);
     }
 
-    private static Type FindImportedBaseType(StructSymbol type)
+    private static TypeSymbol FindImportedBaseType(StructSymbol type)
     {
         for (var current = type; current != null; current = current.BaseClass)
         {
-            if (current.ImportedBaseType?.ClrType != null)
+            if (current.ImportedBaseType != null)
             {
-                return current.ImportedBaseType.ClrType;
+                return current.ImportedBaseType;
             }
         }
 
         return null;
     }
+
+    private static Type GetReflectionBaseType(TypeSymbol importedBase)
+        => importedBase is ImportedTypeSymbol { OpenDefinition: not null } imported
+            && imported.HasSubstitutableTypeArgument
+                ? imported.OpenDefinition
+                : importedBase?.ClrType;
+
+    private static ImmutableArray<TypeSymbol> GetSymbolicTypeArguments(TypeSymbol importedBase)
+        => importedBase is ImportedTypeSymbol { OpenDefinition: not null, HasSubstitutableTypeArgument: true } imported
+            ? imported.TypeArguments
+            : ImmutableArray<TypeSymbol>.Empty;
 
     private static IEnumerable<MethodInfo> EnumerateMethods(Type baseType, string name)
     {
@@ -218,7 +235,8 @@ internal static class ExternalClrOverrideResolver
     private static bool ParametersMatch(
         ParameterInfo[] clrParameters,
         ImmutableArray<ParameterSymbol> parameters,
-        ImmutableArray<TypeParameterSymbol> typeParameters)
+        ImmutableArray<TypeParameterSymbol> typeParameters,
+        ImmutableArray<TypeSymbol> containingTypeArguments)
     {
         if (clrParameters.Length != parameters.Length)
         {
@@ -241,7 +259,7 @@ internal static class ExternalClrOverrideResolver
             }
 
             if (clrRefKind != parameters[i].RefKind
-                || !TypeMatches(clrType, parameters[i].Type, typeParameters))
+                || !TypeMatches(clrType, parameters[i].Type, typeParameters, containingTypeArguments))
             {
                 return false;
             }
@@ -254,7 +272,8 @@ internal static class ExternalClrOverrideResolver
         Type clrReturnType,
         TypeSymbol returnType,
         RefKind returnRefKind,
-        ImmutableArray<TypeParameterSymbol> typeParameters)
+        ImmutableArray<TypeParameterSymbol> typeParameters,
+        ImmutableArray<TypeSymbol> containingTypeArguments)
     {
         var clrReturnsByRef = clrReturnType.IsByRef;
         if ((returnRefKind == RefKind.Ref) != clrReturnsByRef)
@@ -267,7 +286,7 @@ internal static class ExternalClrOverrideResolver
             clrReturnType = clrReturnType.GetElementType();
         }
 
-        if (TypeMatches(clrReturnType, returnType, typeParameters))
+        if (TypeMatches(clrReturnType, returnType, typeParameters, containingTypeArguments))
         {
             return true;
         }
@@ -275,14 +294,23 @@ internal static class ExternalClrOverrideResolver
         return returnRefKind == RefKind.None && IsCovariantReturn(clrReturnType, returnType);
     }
 
-    private static bool PropertyTypeMatches(Type clrPropertyType, TypeSymbol propertyType, bool hasSetter)
-        => TypeMatches(clrPropertyType, propertyType, ImmutableArray<TypeParameterSymbol>.Empty)
+    private static bool PropertyTypeMatches(
+        Type clrPropertyType,
+        TypeSymbol propertyType,
+        bool hasSetter,
+        ImmutableArray<TypeSymbol> containingTypeArguments)
+        => TypeMatches(
+            clrPropertyType,
+            propertyType,
+            ImmutableArray<TypeParameterSymbol>.Empty,
+            containingTypeArguments)
             || (!hasSetter && IsCovariantReturn(clrPropertyType, propertyType));
 
     private static bool TypeMatches(
         Type clrType,
         TypeSymbol type,
-        ImmutableArray<TypeParameterSymbol> methodTypeParameters)
+        ImmutableArray<TypeParameterSymbol> methodTypeParameters,
+        ImmutableArray<TypeSymbol> containingTypeArguments)
     {
         type = type switch
         {
@@ -292,12 +320,20 @@ internal static class ExternalClrOverrideResolver
 
         if (type is TypeParameterSymbol typeParameter)
         {
-            return clrType != null
-                && clrType.IsGenericParameter
-                && clrType.DeclaringMethod != null
-                && typeParameter.Ordinal < methodTypeParameters.Length
-                && ReferenceEquals(typeParameter, methodTypeParameters[typeParameter.Ordinal])
-                && clrType.GenericParameterPosition == typeParameter.Ordinal;
+            if (clrType == null || !clrType.IsGenericParameter)
+            {
+                return false;
+            }
+
+            if (clrType.DeclaringMethod != null)
+            {
+                return typeParameter.Ordinal < methodTypeParameters.Length
+                    && ReferenceEquals(typeParameter, methodTypeParameters[typeParameter.Ordinal])
+                    && clrType.GenericParameterPosition == typeParameter.Ordinal;
+            }
+
+            return clrType.GenericParameterPosition < containingTypeArguments.Length
+                && TypeSymbolsMatch(containingTypeArguments[clrType.GenericParameterPosition], typeParameter);
         }
 
         var effectiveClrType = NullableLifting.GetEffectiveClrType(type);
@@ -307,6 +343,18 @@ internal static class ExternalClrOverrideResolver
         }
 
         return false;
+    }
+
+    private static bool TypeSymbolsMatch(TypeSymbol left, TypeSymbol right)
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+
+        var leftClr = NullableLifting.GetEffectiveClrType(left);
+        var rightClr = NullableLifting.GetEffectiveClrType(right);
+        return leftClr != null && rightClr != null && ClrTypeUtilities.AreSame(leftClr, rightClr);
     }
 
     private static bool IsCovariantReturn(Type baseReturnType, TypeSymbol derivedReturnType)
@@ -351,6 +399,7 @@ internal static class ExternalClrOverrideResolver
 
     internal readonly record struct MatchResult<T>(
         T Member,
+        TypeSymbol ContainingType,
         bool SawName,
         bool IsSealed)
         where T : MemberInfo;

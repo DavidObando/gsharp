@@ -88,6 +88,9 @@ public sealed class EventSymbol : Symbol
     /// <summary>Gets or sets the imported CLR raise slot overridden by this event.</summary>
     public MethodInfo ExternalOverriddenRaiseMethod { get; set; }
 
+    /// <summary>Gets or sets the imported constructed base type that owns the overridden event accessors.</summary>
+    public TypeSymbol ExternalOverrideContainingType { get; set; }
+
     /// <summary>Gets or sets the explicit add body syntax (null for field-like events).</summary>
     public Syntax.BlockStatementSyntax AddBodySyntax { get; set; }
 

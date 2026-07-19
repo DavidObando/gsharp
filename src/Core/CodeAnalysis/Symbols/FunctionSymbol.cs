@@ -216,6 +216,13 @@ public sealed class FunctionSymbol : Symbol
     /// </summary>
     public MethodInfo ExternalOverriddenMethod { get; set; }
 
+    /// <summary>
+    /// Gets or sets the imported constructed base type that owns
+    /// <see cref="ExternalOverriddenMethod"/>. Preserves symbolic generic type
+    /// arguments when the base is inherited as <c>Base[T]</c>.
+    /// </summary>
+    public TypeSymbol ExternalOverrideContainingType { get; set; }
+
     /// <summary>Gets or sets a value indicating whether this function is an extension function (Phase 3.B.6, ADR-0019). When true, the function's first parameter is the receiver and call sites <c>x.Foo(args)</c> bind to <c>Foo(x, args)</c>.</summary>
     public bool IsExtension { get; set; }
 

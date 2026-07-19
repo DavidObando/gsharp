@@ -114,6 +114,9 @@ public sealed class PropertySymbol : Symbol
     /// <summary>Gets or sets the imported CLR setter slot overridden by this property.</summary>
     public MethodInfo ExternalOverriddenSetter { get; set; }
 
+    /// <summary>Gets or sets the imported constructed base type that owns the overridden accessors.</summary>
+    public TypeSymbol ExternalOverrideContainingType { get; set; }
+
     /// <summary>
     /// Gets a value indicating whether this property is an indexer member
     /// (ADR-0118 / issue #944). Indexers are emitted as the CLR default
