@@ -1489,22 +1489,17 @@ internal sealed partial class ExpressionBinder
     {
         liftedResultType = null;
 
+        // Issue #2399: use the canonical effective-storage predicate rather
+        // than treating every Nullable<StructSymbol> as System.Nullable<T>.
+        // StructSymbol also represents classes, whose `T?` is only a nullable
+        // reference annotation; routing one through the lifted value-type
+        // spill/HasValue pipeline produces invalid metadata/IL. The canonical
+        // predicate includes CLR value types, same-compilation value structs,
+        // and struct-constrained type parameters while excluding classes.
         bool leftIsNullableValueType = left.Type is NullableTypeSymbol leftNullable
-            && leftNullable.UnderlyingType?.ClrType is { IsValueType: true };
+            && NullableLifting.IsAnyValueTypeNullable(leftNullable);
         bool rightIsNullableValueType = right.Type is NullableTypeSymbol rightNullable
-            && rightNullable.UnderlyingType?.ClrType is { IsValueType: true };
-
-        // A struct-typed same-compilation operand has no static ClrType, so
-        // the `IsValueType: true` check above never matches it directly —
-        // detect that shape via NullableTypeSymbol alone (any nullable
-        // wrapper) so `MyStruct? == MyStruct?` (Stream D) also lifts.
-        bool leftIsNullableStruct = left.Type is NullableTypeSymbol leftStructNullable
-            && leftStructNullable.UnderlyingType is StructSymbol;
-        bool rightIsNullableStruct = right.Type is NullableTypeSymbol rightStructNullable
-            && rightStructNullable.UnderlyingType is StructSymbol;
-
-        leftIsNullableValueType |= leftIsNullableStruct;
-        rightIsNullableValueType |= rightIsNullableStruct;
+            && NullableLifting.IsAnyValueTypeNullable(rightNullable);
 
         if (!leftIsNullableValueType && !rightIsNullableValueType)
         {
