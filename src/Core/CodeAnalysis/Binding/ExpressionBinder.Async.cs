@@ -238,6 +238,53 @@ internal sealed partial class ExpressionBinder
                 return new BoundEventSubscriptionExpression(null, boundReceiver, userIface, ifaceEv, ifaceHandler, isAdd);
             }
 
+            if (isEventCapableOperator
+                && boundReceiver.Type is TypeParameterSymbol tpReceiver
+                && tpReceiver.ClrInterfaceConstraint is TypeSymbol clrInterfaceConstraint
+                && clrInterfaceConstraint.ClrType is Type clrInterface
+                && clrInterface.IsInterface)
+            {
+                var constrainedEvent = ClrTypeUtilities.SafeGetEventIncludingInterfaces(
+                    clrInterface,
+                    eventName,
+                    BindingFlags.Public | BindingFlags.Instance);
+                if (constrainedEvent != null)
+                {
+                    var constrainedHandlerType = constrainedEvent.EventHandlerType;
+                    var constrainedHandlerTypeSymbol = MemberLookup.GetClrEventHandlerTypeSymbol(
+                        clrInterfaceConstraint,
+                        constrainedEvent);
+                    var constrainedBoundHandler = BindEventSubscriptionHandler(syntax.Value, constrainedHandlerTypeSymbol);
+                    BoundExpression constrainedConvertedHandler;
+                    if (constrainedBoundHandler is BoundFunctionLiteralExpression
+                        || constrainedBoundHandler is BoundMethodGroupExpression
+                        || constrainedBoundHandler is BoundClrMethodGroupExpression
+                        || (constrainedBoundHandler.Type is FunctionTypeSymbol constrainedFunction
+                            && IsSignatureCompatibleWithDelegate(constrainedFunction, constrainedHandlerType)))
+                    {
+                        constrainedConvertedHandler = constrainedBoundHandler;
+                    }
+                    else
+                    {
+                        constrainedConvertedHandler = conversions.BindConversion(
+                            syntax.Value.Location,
+                            constrainedBoundHandler,
+                            constrainedHandlerTypeSymbol);
+                    }
+
+                    return new BoundClrEventSubscriptionExpression(
+                        null,
+                        boundReceiver,
+                        constrainedEvent,
+                        constrainedConvertedHandler,
+                        isAdd,
+                        tpReceiver,
+                        MemberLookup.GetClrMemberDeclaringTypeSymbol(
+                            clrInterfaceConstraint,
+                            constrainedEvent));
+                }
+            }
+
             receiverClrType = boundReceiver.Type?.ClrType;
             if (receiverClrType == null)
             {

@@ -5555,7 +5555,9 @@ public sealed class Binder
         }
 
         var openDefName = constraintClr.GetGenericTypeDefinition().FullName;
-        var constraintArgs = (constraint as ImportedTypeSymbol)?.TypeArguments ?? ImmutableArray<TypeSymbol>.Empty;
+        var constraintArgs = MemberLookup.GetImportedTypeSymbol(constraint)?.TypeArguments
+            ?? ImmutableArray<TypeSymbol>.Empty;
+        var constraintClrArgs = constraintClr.GetGenericArguments();
 
         foreach (var candidate in EnumerateSelfAndInterfaces(typeArgClr))
         {
@@ -5565,7 +5567,12 @@ public sealed class Binder
                 continue;
             }
 
-            if (GenericConstraintArgumentsMatch(candidate.GetGenericArguments(), constraintArgs, tp, typeArgClr))
+            if (GenericConstraintArgumentsMatch(
+                candidate.GetGenericArguments(),
+                constraintArgs,
+                constraintClrArgs,
+                tp,
+                typeArgClr))
             {
                 return true;
             }
@@ -5590,10 +5597,14 @@ public sealed class Binder
     private static bool GenericConstraintArgumentsMatch(
         Type[] candidateArgs,
         ImmutableArray<TypeSymbol> constraintArgs,
+        Type[] constraintClrArgs,
         TypeParameterSymbol tp,
         Type typeArgClr)
     {
-        if (constraintArgs.IsDefaultOrEmpty || candidateArgs.Length != constraintArgs.Length)
+        var expectedCount = !constraintArgs.IsDefaultOrEmpty
+            ? constraintArgs.Length
+            : constraintClrArgs?.Length ?? 0;
+        if (expectedCount == 0 || candidateArgs.Length != expectedCount)
         {
             return false;
         }
@@ -5603,9 +5614,11 @@ public sealed class Binder
             // A self-referential constraint argument (the constrained parameter
             // itself) is expected to be the type argument; any other argument is
             // matched against its own resolved CLR type.
-            var expectedName = constraintArgs[i] is TypeParameterSymbol cArgTp && ReferenceEquals(cArgTp, tp)
-                ? typeArgClr.FullName
-                : constraintArgs[i].ClrType?.FullName;
+            var expectedName = !constraintArgs.IsDefaultOrEmpty
+                ? (constraintArgs[i] is TypeParameterSymbol cArgTp && ReferenceEquals(cArgTp, tp)
+                    ? typeArgClr.FullName
+                    : constraintArgs[i].ClrType?.FullName)
+                : constraintClrArgs[i].FullName;
 
             if (expectedName == null
                 || !string.Equals(candidateArgs[i].FullName, expectedName, StringComparison.Ordinal))

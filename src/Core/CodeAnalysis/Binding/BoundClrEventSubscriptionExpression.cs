@@ -19,13 +19,22 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundClrEventSubscriptionExpression : BoundExpression
 {
-    public BoundClrEventSubscriptionExpression(SyntaxNode syntax, BoundExpression receiver, EventInfo eventInfo, BoundExpression handler, bool isAdd)
+    public BoundClrEventSubscriptionExpression(
+        SyntaxNode syntax,
+        BoundExpression receiver,
+        EventInfo eventInfo,
+        BoundExpression handler,
+        bool isAdd,
+        TypeParameterSymbol constrainedReceiverTypeParameter = null,
+        TypeSymbol constrainedInterfaceType = null)
         : base(syntax)
     {
         Receiver = receiver;
         Event = eventInfo;
         Handler = handler;
         IsAdd = isAdd;
+        ConstrainedReceiverTypeParameter = constrainedReceiverTypeParameter;
+        ConstrainedInterfaceType = constrainedInterfaceType;
     }
 
     public BoundExpression Receiver { get; }
@@ -35,6 +44,12 @@ public sealed class BoundClrEventSubscriptionExpression : BoundExpression
     public BoundExpression Handler { get; }
 
     public bool IsAdd { get; }
+
+    public TypeParameterSymbol ConstrainedReceiverTypeParameter { get; }
+
+    public TypeSymbol ConstrainedInterfaceType { get; }
+
+    public bool IsConstrainedTypeParameterAccess => ConstrainedReceiverTypeParameter != null;
 
     public override TypeSymbol Type => TypeSymbol.Void;
 

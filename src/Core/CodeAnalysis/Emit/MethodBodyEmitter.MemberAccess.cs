@@ -959,6 +959,28 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitClrPropertyAccess(BoundClrPropertyAccessExpression access)
     {
+        if (access.IsConstrainedTypeParameterAccess)
+        {
+            if (access.Member is not PropertyInfo constrainedProperty)
+            {
+                throw new NotSupportedException("Imported interface constraints cannot expose instance fields.");
+            }
+
+            var constrainedGetter = ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(
+                constrainedProperty,
+                wantSetter: false)
+                ?? throw new InvalidOperationException(
+                    $"Property '{constrainedProperty.DeclaringType?.FullName}.{constrainedProperty.Name}' has no public getter.");
+            this.EmitConstrainedTypeParameterReceiver(access.Receiver);
+            this.il.OpCode(ILOpCode.Constrained);
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(access.ConstrainedReceiverTypeParameter));
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(
+                constrainedGetter,
+                access.ConstrainedInterfaceType));
+            return;
+        }
+
         // Phase 4 / Stream B: property or field read on a CLR receiver.
         // Properties dispatch to their `get_X` accessor (callvirt for
         // reference types, call for value types); fields use `ldfld`.
@@ -1060,6 +1082,32 @@ internal sealed partial class MethodBodyEmitter
                 + "Check AssignmentValueSpillCollector and its ancestor walker.");
         }
 
+        if (assn.IsConstrainedTypeParameterAccess)
+        {
+            if (assn.Member is not PropertyInfo constrainedProperty)
+            {
+                throw new NotSupportedException("Imported interface constraints cannot expose instance fields.");
+            }
+
+            var constrainedSetter = ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(
+                constrainedProperty,
+                wantSetter: true)
+                ?? throw new InvalidOperationException(
+                    $"Property '{constrainedProperty.DeclaringType?.FullName}.{constrainedProperty.Name}' has no public setter.");
+            this.EmitConstrainedTypeParameterReceiver(assn.Receiver);
+            this.EmitExpression(assn.Value);
+            this.il.OpCode(ILOpCode.Dup);
+            this.il.StoreLocal(valueSlot);
+            this.il.OpCode(ILOpCode.Constrained);
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(assn.ConstrainedReceiverTypeParameter));
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(
+                constrainedSetter,
+                assn.ConstrainedInterfaceType));
+            this.il.LoadLocal(valueSlot);
+            return;
+        }
+
         if (!isStatic)
         {
             this.EmitInstanceReceiver(assn.Receiver);
@@ -1104,6 +1152,28 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitClrIndex(BoundClrIndexExpression idx)
     {
+        if (idx.IsConstrainedTypeParameterAccess)
+        {
+            var constrainedGetter = ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(
+                idx.Indexer,
+                wantSetter: false)
+                ?? throw new InvalidOperationException(
+                    $"Indexer on '{idx.Indexer.DeclaringType?.FullName}' has no public getter.");
+            this.EmitConstrainedTypeParameterReceiver(idx.Target);
+            foreach (var arg in idx.Arguments)
+            {
+                this.EmitExpression(arg);
+            }
+
+            this.il.OpCode(ILOpCode.Constrained);
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(idx.ConstrainedReceiverTypeParameter));
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(
+                constrainedGetter,
+                idx.ConstrainedInterfaceType));
+            return;
+        }
+
         // #313: indexing an erased generic over a type parameter (e.g.
         // `items[0]` where `items: List[T]`, or `map["k"]` where
         // `map: Dictionary[string, T]`). At runtime the receiver is a closed
@@ -1194,6 +1264,36 @@ internal sealed partial class MethodBodyEmitter
     private void EmitClrIndexAssignment(BoundClrIndexAssignmentExpression ixa)
     {
         var setter = ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(ixa.Indexer, wantSetter: true);
+
+        if (ixa.IsConstrainedTypeParameterAccess)
+        {
+            if (setter == null)
+            {
+                throw new InvalidOperationException(
+                    $"Indexer on '{ixa.Indexer.DeclaringType?.FullName}' has no public setter.");
+            }
+
+            BoundExpression constrainedReceiver = ixa.TargetExpression
+                ?? new BoundVariableExpression(null, ixa.Target);
+            var constrainedValueSlot = this.indexAssignmentValueSlots[ixa];
+            this.EmitConstrainedTypeParameterReceiver(constrainedReceiver);
+            foreach (var arg in ixa.Arguments)
+            {
+                this.EmitExpression(arg);
+            }
+
+            this.EmitExpression(ixa.Value);
+            this.il.OpCode(ILOpCode.Dup);
+            this.il.StoreLocal(constrainedValueSlot);
+            this.il.OpCode(ILOpCode.Constrained);
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(ixa.ConstrainedReceiverTypeParameter));
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(
+                setter,
+                ixa.ConstrainedInterfaceType));
+            this.il.LoadLocal(constrainedValueSlot);
+            return;
+        }
 
         // ADR-0056 §2: span element write. `Span[T]` has no setter; its
         // indexer getter returns `ref T`. Obtain the managed pointer via

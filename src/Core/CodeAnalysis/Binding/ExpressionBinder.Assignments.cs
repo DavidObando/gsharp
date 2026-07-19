@@ -792,6 +792,41 @@ internal sealed partial class ExpressionBinder
                 return new BoundPropertyAssignmentExpression(null, assignmentReceiver, null, tpIfaceProp, tpIfaceConverted);
             }
 
+            if (tpVarType.ClrInterfaceConstraint is TypeSymbol clrInterfaceConstraint
+                && clrInterfaceConstraint.ClrType is Type clrInterface
+                && clrInterface.IsInterface)
+            {
+                var clrProperty = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
+                    clrInterface,
+                    syntax.FieldIdentifier.Text,
+                    BindingFlags.Public | BindingFlags.Instance);
+                if (clrProperty != null && clrProperty.GetIndexParameters().Length == 0)
+                {
+                    if (clrProperty.GetSetMethod(nonPublic: false) == null)
+                    {
+                        Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
+                        return new BoundErrorExpression(null);
+                    }
+
+                    var propertyType = MemberLookup.GetClrPropertyTypeSymbol(clrInterfaceConstraint, clrProperty);
+                    var declaringInterface = MemberLookup.GetClrMemberDeclaringTypeSymbol(
+                        clrInterfaceConstraint,
+                        clrProperty);
+                    var constrainedConverted = conversions.BindConversion(
+                        syntax.Value.Location,
+                        BindValue(propertyType),
+                        propertyType);
+                    return new BoundClrPropertyAssignmentExpression(
+                        null,
+                        assignmentReceiver,
+                        clrProperty,
+                        constrainedConverted,
+                        propertyType,
+                        tpVarType,
+                        declaringInterface);
+                }
+            }
+
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
             return new BoundErrorExpression(null);
         }
@@ -1988,6 +2023,45 @@ internal sealed partial class ExpressionBinder
                 var ifaceConverted = conversions.BindConversion(syntax.Value.Location, BindValue(ifaceProp.Type), ifaceProp.Type);
                 EnforceInitOnlyAssignment(ifaceProp, receiver, syntax.EqualsToken.Location);
                 return new BoundPropertyAssignmentExpression(null, receiver, null, ifaceProp, ifaceConverted);
+            }
+
+            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
+            return new BoundErrorExpression(null);
+        }
+
+        if (receiverType is TypeParameterSymbol tpReceiver
+            && tpReceiver.ClrInterfaceConstraint is TypeSymbol clrInterfaceConstraint
+            && clrInterfaceConstraint.ClrType is Type constraintClrType
+            && constraintClrType.IsInterface)
+        {
+            var clrProperty = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
+                constraintClrType,
+                fieldName,
+                BindingFlags.Public | BindingFlags.Instance);
+            if (clrProperty != null && clrProperty.GetIndexParameters().Length == 0)
+            {
+                if (clrProperty.GetSetMethod(nonPublic: false) == null)
+                {
+                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
+                    return new BoundErrorExpression(null);
+                }
+
+                var propertyType = MemberLookup.GetClrPropertyTypeSymbol(clrInterfaceConstraint, clrProperty);
+                var declaringInterface = MemberLookup.GetClrMemberDeclaringTypeSymbol(
+                    clrInterfaceConstraint,
+                    clrProperty);
+                var constrainedConverted = conversions.BindConversion(
+                    syntax.Value.Location,
+                    BindValue(propertyType),
+                    propertyType);
+                return new BoundClrPropertyAssignmentExpression(
+                    null,
+                    receiver,
+                    clrProperty,
+                    constrainedConverted,
+                    propertyType,
+                    tpReceiver,
+                    declaringInterface);
             }
 
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);

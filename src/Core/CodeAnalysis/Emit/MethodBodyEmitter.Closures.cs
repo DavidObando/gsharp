@@ -490,7 +490,11 @@ internal sealed partial class MethodBodyEmitter
         var isStatic = subscription.Receiver == null;
         var receiverIsValueType = !isStatic && ReflectionMetadataEmitter.IsValueTypeSymbol(subscription.Receiver.Type);
 
-        if (!isStatic)
+        if (subscription.IsConstrainedTypeParameterAccess)
+        {
+            this.EmitConstrainedTypeParameterReceiver(subscription.Receiver);
+        }
+        else if (!isStatic)
         {
             this.EmitInstanceReceiver(subscription.Receiver);
         }
@@ -518,8 +522,20 @@ internal sealed partial class MethodBodyEmitter
                 $"Event '{subscription.Event.DeclaringType?.FullName}.{subscription.Event.Name}' has no public {(subscription.IsAdd ? "add" : "remove")} accessor.");
         }
 
-        this.il.OpCode(isStatic || receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(accessor));
+        if (subscription.IsConstrainedTypeParameterAccess)
+        {
+            this.il.OpCode(ILOpCode.Constrained);
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(subscription.ConstrainedReceiverTypeParameter));
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(
+                accessor,
+                subscription.ConstrainedInterfaceType));
+        }
+        else
+        {
+            this.il.OpCode(isStatic || receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
+            this.il.Token(this.outer.memberRefs.GetMethodReference(accessor));
+        }
     }
 
     private void EmitUserEventSubscription(BoundEventSubscriptionExpression node)

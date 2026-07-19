@@ -19,13 +19,22 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundClrIndexExpression : BoundExpression
 {
-    public BoundClrIndexExpression(SyntaxNode syntax, BoundExpression target, PropertyInfo indexer, ImmutableArray<BoundExpression> arguments, TypeSymbol resultType)
+    public BoundClrIndexExpression(
+        SyntaxNode syntax,
+        BoundExpression target,
+        PropertyInfo indexer,
+        ImmutableArray<BoundExpression> arguments,
+        TypeSymbol resultType,
+        TypeParameterSymbol constrainedReceiverTypeParameter = null,
+        TypeSymbol constrainedInterfaceType = null)
         : base(syntax)
     {
         Target = target;
         Indexer = indexer;
         Arguments = arguments;
         Type = resultType;
+        ConstrainedReceiverTypeParameter = constrainedReceiverTypeParameter;
+        ConstrainedInterfaceType = constrainedInterfaceType;
     }
 
     public BoundExpression Target { get; }
@@ -33,6 +42,12 @@ public sealed class BoundClrIndexExpression : BoundExpression
     public PropertyInfo Indexer { get; }
 
     public ImmutableArray<BoundExpression> Arguments { get; }
+
+    public TypeParameterSymbol ConstrainedReceiverTypeParameter { get; }
+
+    public TypeSymbol ConstrainedInterfaceType { get; }
+
+    public bool IsConstrainedTypeParameterAccess => ConstrainedReceiverTypeParameter != null;
 
     public override TypeSymbol Type { get; }
 
