@@ -377,6 +377,45 @@ b.F()
     }
 
     [Fact]
+    public void Override_DerivedDeclaredBeforeBase_Dispatches()
+    {
+        var source = @"
+class B : A {
+    override func F() int32 { return 2 }
+}
+open class A {
+    open func F() int32 { return 1 }
+}
+var b = B{}
+b.F()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(2, result.Value);
+    }
+
+    [Fact]
+    public void Override_DerivedTreeBeforeBaseTree_Binds()
+    {
+        var derived = SyntaxTree.Parse(SourceText.From(@"
+package Demo
+class B : A {
+    override func F() int32 { return 2 }
+}
+"));
+        var baseType = SyntaxTree.Parse(SourceText.From(@"
+package Demo
+open class A {
+    open func F() int32 { return 1 }
+}
+"));
+        var result = new Compilation(derived, baseType)
+            .Evaluate(new Dictionary<VariableSymbol, object>());
+
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
     public void Override_OfNonOpenMethod_Diagnoses()
     {
         var source = @"

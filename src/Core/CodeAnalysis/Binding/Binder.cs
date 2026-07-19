@@ -892,8 +892,69 @@ public sealed class Binder
             }
         }
 
-        foreach (var (structSyntax, structSymbol) in declaredStructs)
+        // Issue #2489: shells make base types resolvable up front, but override
+        // validation also needs the base type's members. Bind same-compilation
+        // base classes before their derived classes, independent of tree/source
+        // order.
+        var declarationsByName = declaredStructs
+            .Select((declaration, index) => (declaration.Symbol.Name, Index: index))
+            .GroupBy(entry => entry.Name, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Select(entry => entry.Index).ToList(), StringComparer.Ordinal);
+        var bindingState = new byte[declaredStructs.Count];
+        var bindingOrder = new List<int>(declaredStructs.Count);
+
+        void AddBaseFirst(int index)
         {
+            if (bindingState[index] == 2)
+            {
+                return;
+            }
+
+            if (bindingState[index] == 1)
+            {
+                return;
+            }
+
+            bindingState[index] = 1;
+            var (syntax, symbol) = declaredStructs[index];
+            TypeClauseSyntax baseType = syntax.BaseTypeClauses.Count > 0
+                ? syntax.BaseTypeClauses[0]
+                : syntax.BaseTypeIdentifier == null
+                    ? null
+                    : new TypeClauseSyntax(syntax.SyntaxTree, syntax.BaseTypeIdentifier);
+            var baseName = baseType?.QualifierIdentifierTokens.LastOrDefault()?.Text
+                ?? baseType?.Identifier?.Text;
+            if (symbol.IsClass && baseName != null && declarationsByName.TryGetValue(baseName, out var candidates))
+            {
+                var requestedPackage = baseType.HasQualifier
+                    ? baseType.DottedName[..^(baseName.Length + 1)]
+                    : symbol.PackageName;
+                var matchingPackage = candidates.Where(candidate =>
+                    declaredStructs[candidate].Symbol.IsClass &&
+                    declaredStructs[candidate].Symbol.PackageName == requestedPackage).ToList();
+                var baseIndex = matchingPackage.Count == 1
+                    ? matchingPackage[0]
+                    : candidates.Count(candidate => declaredStructs[candidate].Symbol.IsClass) == 1
+                        ? candidates.Single(candidate => declaredStructs[candidate].Symbol.IsClass)
+                        : -1;
+                if (baseIndex >= 0)
+                {
+                    AddBaseFirst(baseIndex);
+                }
+            }
+
+            bindingState[index] = 2;
+            bindingOrder.Add(index);
+        }
+
+        for (var i = 0; i < declaredStructs.Count; i++)
+        {
+            AddBaseFirst(i);
+        }
+
+        foreach (var index in bindingOrder)
+        {
+            var (structSyntax, structSymbol) = declaredStructs[index];
             var owningPackage = packageByTree[structSyntax.SyntaxTree];
             RunWithPackage(owningPackage, structSyntax.SyntaxTree, () => binder.declarations.BindStructDeclarationBody(structSyntax, owningPackage, structSymbol));
         }
