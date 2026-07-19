@@ -7,6 +7,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Threading;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -85,6 +86,17 @@ public sealed class StructSymbol : TypeSymbol
     private ImmutableArray<PropertySymbol> substitutedStaticProperties;
     private ImmutableArray<PropertySymbol> substitutedStaticPropertiesSource;
     private bool substitutedStaticPropertiesComputed;
+    private ImmutableArray<ParameterSymbol> primaryConstructorParametersStore = ImmutableArray<ParameterSymbol>.Empty;
+    private ImmutableArray<InterfaceSymbol> interfacesStore = ImmutableArray<InterfaceSymbol>.Empty;
+    private ImmutableArray<TypeSymbol> implementedClrInterfacesStore = ImmutableArray<TypeSymbol>.Empty;
+    private ImmutableArray<EventSymbol> eventsStore = ImmutableArray<EventSymbol>.Empty;
+    private TypeSymbol importedBaseTypeStore;
+    private StructSymbol baseClassStore;
+    private BaseClassSnapshot substitutedBaseClass;
+    private ParameterArraySnapshot substitutedPrimaryConstructorParameters;
+    private InterfaceArraySnapshot substitutedInterfaces;
+    private TypeArraySnapshot substitutedImplementedClrInterfaces;
+    private TypeSnapshot substitutedImportedBaseType;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="StructSymbol"/> class.
@@ -245,10 +257,10 @@ public sealed class StructSymbol : TypeSymbol
         IsData = isData;
         IsInline = isInline;
         IsClass = isClass;
-        PrimaryConstructorParameters = primaryConstructorParameters;
+        primaryConstructorParametersStore = primaryConstructorParameters;
         IsOpen = isOpen;
-        BaseClass = baseClass;
-        Interfaces = ImmutableArray<InterfaceSymbol>.Empty;
+        baseClassStore = baseClass;
+        interfacesStore = ImmutableArray<InterfaceSymbol>.Empty;
         Definition = this;
     }
 
@@ -290,7 +302,13 @@ public sealed class StructSymbol : TypeSymbol
     public bool IsClass { get; }
 
     /// <summary>Gets the Kotlin-style primary constructor parameters (Phase 3.B.3 sub-step 2). Each entry corresponds 1:1 to a field of the same name and type on this class; empty when no primary constructor was declared (default parameterless ctor).</summary>
-    public ImmutableArray<ParameterSymbol> PrimaryConstructorParameters { get; private set; }
+    public ImmutableArray<ParameterSymbol> PrimaryConstructorParameters
+    {
+        get => Definition != null && !ReferenceEquals(Definition, this)
+            ? GetSubstitutedPrimaryConstructorParameters()
+            : primaryConstructorParametersStore;
+        private set => primaryConstructorParametersStore = value;
+    }
 
     /// <summary>Gets a value indicating whether this type carries an explicit primary constructor (Phase 3.B.3 sub-step 2).</summary>
     public bool HasPrimaryConstructor => !PrimaryConstructorParameters.IsDefaultOrEmpty;
@@ -325,10 +343,27 @@ public sealed class StructSymbol : TypeSymbol
     }
 
     /// <summary>Gets the immediate base class (Phase 3.B.3 sub-step 3), or <c>null</c> when this class derives directly from <c>System.Object</c>. Always null for structs.</summary>
-    public StructSymbol BaseClass { get; private set; }
+    public StructSymbol BaseClass
+    {
+        get
+        {
+            if (Definition == null || ReferenceEquals(Definition, this))
+            {
+                return Volatile.Read(ref baseClassStore);
+            }
+
+            return GetSubstitutedBaseClass();
+        }
+    }
 
     /// <summary>Gets the interfaces this type implements (Phase 3.B.4). Populated by the binder after the symbol is constructed; defaults to empty.</summary>
-    public ImmutableArray<InterfaceSymbol> Interfaces { get; private set; }
+    public ImmutableArray<InterfaceSymbol> Interfaces
+    {
+        get => Definition != null && !ReferenceEquals(Definition, this)
+            ? GetSubstitutedInterfaces()
+            : interfacesStore;
+        private set => interfacesStore = value;
+    }
 
     /// <summary>
     /// Gets the imported (CLR) interfaces this class implements (issue #525).
@@ -339,7 +374,13 @@ public sealed class StructSymbol : TypeSymbol
     /// the resulting class is a real CLR implementer (<c>Type.GetInterfaces()</c>
     /// surfaces the interface and dispatch through interface receivers works).
     /// </summary>
-    public ImmutableArray<TypeSymbol> ImplementedClrInterfaces { get; private set; } = ImmutableArray<TypeSymbol>.Empty;
+    public ImmutableArray<TypeSymbol> ImplementedClrInterfaces
+    {
+        get => Definition != null && !ReferenceEquals(Definition, this)
+            ? GetSubstitutedImplementedClrInterfaces()
+            : implementedClrInterfacesStore;
+        private set => implementedClrInterfacesStore = value;
+    }
 
     /// <summary>Gets the methods declared inside the class body (Phase 3.B.3 sub-step 2b). Populated by the binder after the symbol is constructed; defaults to empty.</summary>
     /// <remarks>
@@ -368,7 +409,11 @@ public sealed class StructSymbol : TypeSymbol
     }
 
     /// <summary>Gets the events declared on this type (ADR-0052). Populated by the binder after the symbol is constructed; defaults to empty.</summary>
-    public ImmutableArray<EventSymbol> Events { get; private set; } = ImmutableArray<EventSymbol>.Empty;
+    public ImmutableArray<EventSymbol> Events
+    {
+        get => Definition != null && !ReferenceEquals(Definition, this) ? Definition.Events : eventsStore;
+        private set => eventsStore = value;
+    }
 
     /// <summary>Gets the static fields declared inside a <c>shared</c> block (ADR-0053). Populated by the binder; defaults to empty.</summary>
     /// <remarks>Issue #1341: forwarded from <see cref="Definition"/> on a constructed instance (static members are shared by identity per issue #1209) so reads are order-independent.</remarks>
@@ -499,7 +544,12 @@ public sealed class StructSymbol : TypeSymbol
     /// <c>.ctor()</c>; member lookup walks into this type so inherited CLR
     /// members are accessible on instances of the derived GSharp class.
     /// </summary>
-    public TypeSymbol ImportedBaseType { get; private set; }
+    public TypeSymbol ImportedBaseType
+    {
+        get => Definition != null && !ReferenceEquals(Definition, this)
+            ? GetSubstitutedImportedBaseType()
+            : Volatile.Read(ref importedBaseTypeStore);
+    }
 
     /// <summary>
     /// Gets the explicit base-constructor initializer (<c>: Base(args)</c>) declared
@@ -599,7 +649,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <param name="importedBaseType">The imported CLR base type symbol.</param>
     public void SetImportedBaseType(TypeSymbol importedBaseType)
     {
-        ImportedBaseType = importedBaseType;
+        Volatile.Write(ref importedBaseTypeStore, importedBaseType);
     }
 
     /// <summary>Sets <see cref="BaseConstructorInitializer"/> after binding the base-constructor argument list (issue #306).</summary>
@@ -677,7 +727,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <param name="baseClass">The resolved base class symbol, or <c>null</c>.</param>
     public void SetBaseClass(StructSymbol baseClass)
     {
-        BaseClass = baseClass;
+        Volatile.Write(ref baseClassStore, baseClass);
     }
 
     /// <summary>
@@ -1707,31 +1757,6 @@ public sealed class StructSymbol : TypeSymbol
         constructed.Definition = definition;
         constructed.TypeArguments = typeArguments;
         constructed.mapClrType = mapClrType;
-        if (!definition.Interfaces.IsDefaultOrEmpty)
-        {
-            var substitutedIfaces = ImmutableArray.CreateBuilder<InterfaceSymbol>(definition.Interfaces.Length);
-            foreach (var iface in definition.Interfaces)
-            {
-                substitutedIfaces.Add((InterfaceSymbol)SubstituteTypeForConstruction(iface, subst, mapClrType));
-            }
-
-            constructed.SetInterfaces(substitutedIfaces.MoveToImmutable());
-        }
-        else
-        {
-            constructed.SetInterfaces(definition.Interfaces);
-        }
-
-        if (!definition.ImplementedClrInterfaces.IsDefaultOrEmpty)
-        {
-            var substitutedClrIfaces = ImmutableArray.CreateBuilder<TypeSymbol>(definition.ImplementedClrInterfaces.Length);
-            foreach (var iface in definition.ImplementedClrInterfaces)
-            {
-                substitutedClrIfaces.Add(SubstituteTypeForConstruction(iface, subst, mapClrType));
-            }
-
-            constructed.SetImplementedClrInterfaces(substitutedClrIfaces.MoveToImmutable());
-        }
 
         // Issue #1341: Methods and the static-member tables below are
         // generically erased (ADR-0004) and shared with the definition by
@@ -1762,11 +1787,6 @@ public sealed class StructSymbol : TypeSymbol
         // definition is emitted; the external accessor call is parented at the
         // constructed TypeSpec by the emitter, and inside-the-type access lowers
         // against the definition).
-        if (definition.ImportedBaseType != null)
-        {
-            constructed.SetImportedBaseType(definition.ImportedBaseType);
-        }
-
         return constructed;
     }
 
@@ -1798,17 +1818,6 @@ public sealed class StructSymbol : TypeSymbol
         constructed.EnclosingTypeArguments = enclosingTypeArguments;
         constructed.mapClrType = mapClrType;
         constructed.ContainingType = definition.ContainingType;
-        constructed.SetInterfaces(definition.Interfaces);
-        if (!definition.ImplementedClrInterfaces.IsDefaultOrEmpty)
-        {
-            constructed.SetImplementedClrInterfaces(definition.ImplementedClrInterfaces);
-        }
-
-        if (definition.ImportedBaseType != null)
-        {
-            constructed.SetImportedBaseType(definition.ImportedBaseType);
-        }
-
         return constructed;
     }
 
@@ -1854,17 +1863,6 @@ public sealed class StructSymbol : TypeSymbol
         // argument no matter when it is first computed.
         constructed.nestedOwnTypeParameters = definition.TypeParameters;
         constructed.ContainingType = definition.ContainingType;
-        constructed.SetInterfaces(definition.Interfaces);
-        if (!definition.ImplementedClrInterfaces.IsDefaultOrEmpty)
-        {
-            constructed.SetImplementedClrInterfaces(definition.ImplementedClrInterfaces);
-        }
-
-        if (definition.ImportedBaseType != null)
-        {
-            constructed.SetImportedBaseType(definition.ImportedBaseType);
-        }
-
         return constructed;
     }
 
@@ -1874,9 +1872,10 @@ public sealed class StructSymbol : TypeSymbol
     // a construction's type arguments are fixed, so the map is cached.
     private Dictionary<TypeParameterSymbol, TypeSymbol> GetSubstitutionMap()
     {
-        if (substitutionMap != null)
+        var existing = Volatile.Read(ref substitutionMap);
+        if (existing != null)
         {
-            return substitutionMap;
+            return existing;
         }
 
         var def = Definition;
@@ -1915,8 +1914,136 @@ public sealed class StructSymbol : TypeSymbol
             }
         }
 
-        substitutionMap = map;
-        return map;
+        return Interlocked.CompareExchange(ref substitutionMap, map, null) ?? map;
+    }
+
+    private StructSymbol GetSubstitutedBaseClass()
+    {
+        var source = Definition.BaseClass;
+        var snapshot = Volatile.Read(ref substitutedBaseClass);
+        if (snapshot != null && ReferenceEquals(snapshot.Source, source))
+        {
+            return snapshot.Value;
+        }
+
+        var value = source == null
+            ? null
+            : SubstituteTypeForConstruction(source, GetSubstitutionMap(), mapClrType) as StructSymbol;
+        Volatile.Write(ref substitutedBaseClass, new BaseClassSnapshot(source, value));
+        return value;
+    }
+
+    private ImmutableArray<ParameterSymbol> GetSubstitutedPrimaryConstructorParameters()
+    {
+        var source = Definition.PrimaryConstructorParameters;
+        var snapshot = Volatile.Read(ref substitutedPrimaryConstructorParameters);
+        if (snapshot != null && snapshot.Source.Equals(source))
+        {
+            return snapshot.Value;
+        }
+
+        ImmutableArray<ParameterSymbol> value;
+        if (source.IsDefaultOrEmpty)
+        {
+            value = source;
+        }
+        else
+        {
+            var builder = ImmutableArray.CreateBuilder<ParameterSymbol>(source.Length);
+            foreach (var parameter in source)
+            {
+                builder.Add(new ParameterSymbol(
+                    parameter.Name,
+                    SubstituteTypeForConstruction(parameter.Type, GetSubstitutionMap(), mapClrType),
+                    isVariadic: parameter.IsVariadic,
+                    isScoped: parameter.IsScoped,
+                    refKind: parameter.RefKind));
+            }
+
+            value = builder.MoveToImmutable();
+        }
+
+        Volatile.Write(
+            ref substitutedPrimaryConstructorParameters,
+            new ParameterArraySnapshot(source, value));
+        return value;
+    }
+
+    private ImmutableArray<InterfaceSymbol> GetSubstitutedInterfaces()
+    {
+        var source = Definition.Interfaces;
+        var snapshot = Volatile.Read(ref substitutedInterfaces);
+        if (snapshot != null && snapshot.Source.Equals(source))
+        {
+            return snapshot.Value;
+        }
+
+        ImmutableArray<InterfaceSymbol> value;
+        if (source.IsDefaultOrEmpty)
+        {
+            value = source;
+        }
+        else
+        {
+            var builder = ImmutableArray.CreateBuilder<InterfaceSymbol>(source.Length);
+            foreach (var iface in source)
+            {
+                builder.Add((InterfaceSymbol)SubstituteTypeForConstruction(
+                    iface,
+                    GetSubstitutionMap(),
+                    mapClrType));
+            }
+
+            value = builder.MoveToImmutable();
+        }
+
+        Volatile.Write(ref substitutedInterfaces, new InterfaceArraySnapshot(source, value));
+        return value;
+    }
+
+    private ImmutableArray<TypeSymbol> GetSubstitutedImplementedClrInterfaces()
+    {
+        var source = Definition.ImplementedClrInterfaces;
+        var snapshot = Volatile.Read(ref substitutedImplementedClrInterfaces);
+        if (snapshot != null && snapshot.Source.Equals(source))
+        {
+            return snapshot.Value;
+        }
+
+        ImmutableArray<TypeSymbol> value;
+        if (source.IsDefaultOrEmpty)
+        {
+            value = source;
+        }
+        else
+        {
+            var builder = ImmutableArray.CreateBuilder<TypeSymbol>(source.Length);
+            foreach (var iface in source)
+            {
+                builder.Add(SubstituteTypeForConstruction(iface, GetSubstitutionMap(), mapClrType));
+            }
+
+            value = builder.MoveToImmutable();
+        }
+
+        Volatile.Write(
+            ref substitutedImplementedClrInterfaces,
+            new TypeArraySnapshot(source, value));
+        return value;
+    }
+
+    private TypeSymbol GetSubstitutedImportedBaseType()
+    {
+        var source = Definition.ImportedBaseType;
+        var snapshot = Volatile.Read(ref substitutedImportedBaseType);
+        if (snapshot != null && ReferenceEquals(snapshot.Source, source))
+        {
+            return snapshot.Value;
+        }
+
+        var value = SubstituteTypeForConstruction(source, GetSubstitutionMap(), mapClrType);
+        Volatile.Write(ref substitutedImportedBaseType, new TypeSnapshot(source, value));
+        return value;
     }
 
     // Issue #1341: lazily substitutes the definition's instance fields for this
@@ -2374,5 +2501,76 @@ public sealed class StructSymbol : TypeSymbol
         }
 
         return type;
+    }
+
+    private sealed class BaseClassSnapshot
+    {
+        public BaseClassSnapshot(StructSymbol source, StructSymbol value)
+        {
+            Source = source;
+            Value = value;
+        }
+
+        public StructSymbol Source { get; }
+
+        public StructSymbol Value { get; }
+    }
+
+    private sealed class ParameterArraySnapshot
+    {
+        public ParameterArraySnapshot(
+            ImmutableArray<ParameterSymbol> source,
+            ImmutableArray<ParameterSymbol> value)
+        {
+            Source = source;
+            Value = value;
+        }
+
+        public ImmutableArray<ParameterSymbol> Source { get; }
+
+        public ImmutableArray<ParameterSymbol> Value { get; }
+    }
+
+    private sealed class InterfaceArraySnapshot
+    {
+        public InterfaceArraySnapshot(
+            ImmutableArray<InterfaceSymbol> source,
+            ImmutableArray<InterfaceSymbol> value)
+        {
+            Source = source;
+            Value = value;
+        }
+
+        public ImmutableArray<InterfaceSymbol> Source { get; }
+
+        public ImmutableArray<InterfaceSymbol> Value { get; }
+    }
+
+    private sealed class TypeArraySnapshot
+    {
+        public TypeArraySnapshot(
+            ImmutableArray<TypeSymbol> source,
+            ImmutableArray<TypeSymbol> value)
+        {
+            Source = source;
+            Value = value;
+        }
+
+        public ImmutableArray<TypeSymbol> Source { get; }
+
+        public ImmutableArray<TypeSymbol> Value { get; }
+    }
+
+    private sealed class TypeSnapshot
+    {
+        public TypeSnapshot(TypeSymbol source, TypeSymbol value)
+        {
+            Source = source;
+            Value = value;
+        }
+
+        public TypeSymbol Source { get; }
+
+        public TypeSymbol Value { get; }
     }
 }
