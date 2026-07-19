@@ -32,14 +32,14 @@ internal sealed partial class DeclarationBinder
 
         var seenParameterNames = new HashSet<string>();
 
-        // Phase 4.1 / ADR-0020: bind generic type parameters first so that
-        // BindTypeClause can find them when binding parameter / return types.
-        var typeParameters = BindTypeParameterList(syntax.TypeParameterList);
         var previousTypeParameters = binderCtx.CurrentTypeParameters;
-        if (!typeParameters.IsDefaultOrEmpty)
+        var ownerTypeParameters = GetGenericOperatorOwnerTypeParameters(syntax, package);
+        if (!ownerTypeParameters.IsDefaultOrEmpty)
         {
-            binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
-            foreach (var tp in typeParameters)
+            binderCtx.CurrentTypeParameters = previousTypeParameters == null
+                ? new Dictionary<string, TypeParameterSymbol>()
+                : new Dictionary<string, TypeParameterSymbol>(previousTypeParameters);
+            foreach (var tp in ownerTypeParameters)
             {
                 binderCtx.CurrentTypeParameters[tp.Name] = tp;
             }
@@ -47,12 +47,104 @@ internal sealed partial class DeclarationBinder
 
         try
         {
+            // Phase 4.1 / ADR-0020: bind generic type parameters first so that
+            // BindTypeClause can find them when binding parameter / return types.
+            // Issue #2402: an open-self operator declaration (`Box[T]`) uses the
+            // owner's type parameters, published above, rather than declaring a
+            // generic operator method.
+            var typeParameters = BindTypeParameterList(syntax.TypeParameterList);
+            if (!typeParameters.IsDefaultOrEmpty)
+            {
+                var functionTypeParameterScope = binderCtx.CurrentTypeParameters == null
+                    ? new Dictionary<string, TypeParameterSymbol>()
+                    : new Dictionary<string, TypeParameterSymbol>(binderCtx.CurrentTypeParameters);
+                foreach (var tp in typeParameters)
+                {
+                    functionTypeParameterScope[tp.Name] = tp;
+                }
+
+                binderCtx.CurrentTypeParameters = functionTypeParameterScope;
+            }
+
             BindFunctionDeclarationCore(syntax, package, typeParameters, parameters, seenParameterNames);
         }
         finally
         {
             binderCtx.CurrentTypeParameters = previousTypeParameters;
         }
+    }
+
+    private ImmutableArray<TypeParameterSymbol> GetGenericOperatorOwnerTypeParameters(
+        FunctionDeclarationSyntax syntax,
+        PackageSymbol package)
+    {
+        if (syntax.IsExtension && syntax.Identifier.Text.StartsWith("op_", StringComparison.Ordinal))
+        {
+            return TryGetOpenSelfTypeParameters(syntax.Receiver.Type, package);
+        }
+
+        if (syntax.IsConversionOperator)
+        {
+            if (syntax.Parameters.Count > 0)
+            {
+                var sourceOwner = TryGetOpenSelfTypeParameters(syntax.Parameters[0].Type, package);
+                if (!sourceOwner.IsDefaultOrEmpty)
+                {
+                    return sourceOwner;
+                }
+            }
+
+            return TryGetOpenSelfTypeParameters(syntax.Type, package);
+        }
+
+        return ImmutableArray<TypeParameterSymbol>.Empty;
+    }
+
+    private ImmutableArray<TypeParameterSymbol> TryGetOpenSelfTypeParameters(
+        TypeClauseSyntax syntax,
+        PackageSymbol package)
+    {
+        if (syntax == null
+            || syntax.HasQualifier
+            || !syntax.HasTypeArguments
+            || syntax.IsArray
+            || syntax.IsNullable
+            || !scope.TryLookupTypeAlias(syntax.Identifier.Text, syntax.TypeArguments.Count, out var candidate)
+            || candidate is not StructSymbol candidateStruct)
+        {
+            return ImmutableArray<TypeParameterSymbol>.Empty;
+        }
+
+        var owner = candidateStruct.Definition ?? candidateStruct;
+        if (package == null
+            || !owner.IsGenericDefinition
+            || owner.TypeParameters.Length != syntax.TypeArguments.Count
+            || !string.Equals(owner.PackageName, package.Name, StringComparison.Ordinal))
+        {
+            return ImmutableArray<TypeParameterSymbol>.Empty;
+        }
+
+        for (var i = 0; i < owner.TypeParameters.Length; i++)
+        {
+            var argument = syntax.TypeArguments[i];
+            if (argument.Identifier == null
+                || argument.HasQualifier
+                || argument.HasTypeArguments
+                || argument.IsArray
+                || argument.IsNullable
+                || argument.IsTuple
+                || argument.IsFunction
+                || argument.IsMap
+                || argument.IsChannel
+                || argument.IsPointer
+                || argument.IsSequence
+                || argument.Identifier.Text != owner.TypeParameters[i].Name)
+            {
+                return ImmutableArray<TypeParameterSymbol>.Empty;
+            }
+        }
+
+        return owner.TypeParameters;
     }
 
     private void BindFunctionDeclarationCore(
