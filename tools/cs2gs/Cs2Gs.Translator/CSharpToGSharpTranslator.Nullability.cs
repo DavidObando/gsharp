@@ -204,28 +204,25 @@ public sealed partial class CSharpToGSharpTranslator
                 return envelope;
             }
 
-            GTypeReference promotedInner = this.PromoteAwaitedReturnIfTainted(
+            GTypeReference promotedInner = this.PromoteTupleReturnIfTainted(
                 named.TypeArguments[0], awaitedType, symbol);
+            promotedInner = this.PromoteAwaitedReturnIfTainted(
+                promotedInner, awaitedType, symbol);
 
             return ReferenceEquals(promotedInner, named.TypeArguments[0])
                 ? envelope
                 : new NamedTypeReference(named.Name, new[] { promotedInner });
         }
 
-        // Issue #914 (oblivious sink): promote the ELEMENT types of a tuple return
-        // to `T?` for every position whose returned tuple-expression element is a
-        // promoted-nullable value. A method returning `(string Dir, string Path)`
-        // whose body does `return (dir, file)` — where `dir`/`file` are promoted
-        // `string?` locals — must render `(string?, string?)`, otherwise the
-        // `(string?, string?) -> (string, string)` return is rejected (GS0155).
-        // This stays separate because it answers a different question: tuple
-        // ELEMENT positions have no symbol of their own, so each returned value
-        // is inspected and any symbol value still routes through
-        // ShouldPromoteToNullableReference via IsNullablePromotedValue.
+        // Issue #2469: tuple return leaves are independent declaration sinks.
+        // Their evidence lives in ObliviousNullabilityAnalyzer's element-path
+        // graph so tuple literals, forwarded tuple values, nested tuples,
+        // conditionals/switches, async envelopes, and contracts all converge on
+        // the same per-position answer.
         private GTypeReference PromoteTupleReturnIfTainted(
             GTypeReference mapped,
             ITypeSymbol returnType,
-            SyntaxNode node)
+            IMethodSymbol symbol)
         {
             if (!this.IsObliviousCompilation()
                 || mapped is not TupleTypeReference tuple
@@ -235,87 +232,53 @@ public sealed partial class CSharpToGSharpTranslator
                 return mapped;
             }
 
-            List<TupleExpressionSyntax> returnedTuples = this.EnumerateMemberReturnExpressions(node)
-                .Select(UnwrapParenthesized)
-                .OfType<TupleExpressionSyntax>()
-                .Where(t => t.Arguments.Count == tuple.ElementTypes.Count)
-                .ToList();
+            return this.PromoteTupleElements(tuple, tupleType, symbol, new List<int>());
+        }
 
-            if (returnedTuples.Count == 0)
-            {
-                return mapped;
-            }
-
+        private GTypeReference PromoteTupleElements(
+            TupleTypeReference tuple,
+            INamedTypeSymbol tupleType,
+            IMethodSymbol symbol,
+            List<int> path)
+        {
             var elements = new List<GTypeReference>(tuple.ElementTypes.Count);
             bool changed = false;
             for (int i = 0; i < tuple.ElementTypes.Count; i++)
             {
                 GTypeReference element = tuple.ElementTypes[i];
                 IFieldSymbol elementField = tupleType.TupleElements[i];
-                if (!element.IsNullable
+                path.Add(i);
+                if (element is TupleTypeReference nestedMapped
+                    && elementField.Type is INamedTypeSymbol { IsTupleType: true } nestedType)
+                {
+                    GTypeReference promotedNested = this.PromoteTupleElements(
+                        nestedMapped,
+                        nestedType,
+                        symbol,
+                        path);
+                    changed |= !ReferenceEquals(promotedNested, element);
+                    element = promotedNested;
+                }
+                else if (!element.IsNullable
                     && elementField.Type is { IsReferenceType: true }
                     && elementField.Type.NullableAnnotation != NullableAnnotation.Annotated
-                    && returnedTuples.Any(t => this.IsNullablePromotedValue(t.Arguments[i].Expression)))
+                    && ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                        this.context.Compilation,
+                        symbol,
+                        path,
+                        this.context.SiblingCompilations))
                 {
                     element = MakeNullable(element);
                     changed = true;
                 }
 
+                path.RemoveAt(path.Count - 1);
                 elements.Add(element);
             }
 
             return changed
                 ? new TupleTypeReference(elements) { IsNullable = tuple.IsNullable }
-                : mapped;
-        }
-
-        // Issue #914: the `return`-position value expressions that belong to a
-        // method/accessor <paramref name="node"/> itself — its arrow expression
-        // body and every `return` statement not nested inside a lambda / local
-        // function (whose returns have their own contract). Used to inspect the
-        // returned tuple shapes for per-element nullable promotion.
-        private IEnumerable<ExpressionSyntax> EnumerateMemberReturnExpressions(SyntaxNode node)
-        {
-            ExpressionSyntax arrowBody = node switch
-            {
-                MethodDeclarationSyntax method => method.ExpressionBody?.Expression,
-                AccessorDeclarationSyntax accessor => accessor.ExpressionBody?.Expression,
-                _ => null,
-            };
-            if (arrowBody != null)
-            {
-                yield return arrowBody;
-            }
-
-            SyntaxNode body = node switch
-            {
-                MethodDeclarationSyntax method => method.Body,
-                AccessorDeclarationSyntax accessor => accessor.Body,
-                _ => null,
-            };
-            if (body == null)
-            {
-                yield break;
-            }
-
-            foreach (SyntaxNode descendant in body.DescendantNodes(
-                n => n is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax)))
-            {
-                if (descendant is ReturnStatementSyntax { Expression: { } returned })
-                {
-                    yield return returned;
-                }
-            }
-        }
-
-        private static ExpressionSyntax UnwrapParenthesized(ExpressionSyntax expression)
-        {
-            while (expression is ParenthesizedExpressionSyntax paren)
-            {
-                expression = paren.Expression;
-            }
-
-            return expression;
+                : tuple;
         }
 
         // Issue #914: whether <paramref name="expression"/> yields a
@@ -324,8 +287,7 @@ public sealed partial class CSharpToGSharpTranslator
         // <see cref="IsNullableInitializer"/>, which also consults declared BCL
         // annotations) OR a field / property / local / parameter the whole-program
         // taint analysis promoted to `T?`, OR a method / local function whose
-        // return the analysis proved null-tainted. Shared by the tuple-return
-        // element promotion.
+        // return the analysis proved null-tainted.
         private bool IsNullablePromotedValue(ExpressionSyntax expression)
         {
             if (expression == null)

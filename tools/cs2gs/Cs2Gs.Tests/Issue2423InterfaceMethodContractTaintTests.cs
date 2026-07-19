@@ -68,14 +68,9 @@ namespace Cs2Gs.Tests;
 /// awaited results (mirroring the #2421 async fix), so a value-typed
 /// `Task&lt;int&gt;` is never promoted. Base/override contracts are
 /// deliberately NOT synced (consistent with the pre-existing property
-/// behavior, which only handles interfaces). Tuple-returning interface
-/// methods are also NOT synced by this fix: tuple-return promotion
-/// (`PromoteTupleReturnIfTainted`) is an entirely separate, per-declaration
-/// SYNTACTIC mechanism that inspects a method's OWN `return` expressions — an
-/// interface method has no body/no `return` expressions to inspect, so it can
-/// never itself be promoted regardless of what an implementation's body
-/// contains; bridging that is a materially different mechanism and out of
-/// scope for this precise, symbol-taint-only fix.
+/// behavior, which only handles interfaces). Issue #2469 subsequently added
+/// an independent element-path graph for tuple returns; its contract handling
+/// is covered by the tuple-specific test below.
 /// </para>
 /// </summary>
 public class Issue2423InterfaceMethodContractTaintTests
@@ -228,15 +223,8 @@ namespace Demo
     }
 
     [Fact]
-    public void TupleReturningInterfaceMethod_IsNotSyncedByThisFix()
+    public void TupleReturningInterfaceMethod_IsSyncedByTupleElementAnalysis()
     {
-        // Negative/documentation control: tuple-return promotion is a
-        // separate, per-declaration SYNTACTIC mechanism
-        // (PromoteTupleReturnIfTainted) keyed off a method's OWN `return`
-        // expressions; an interface method has no body to inspect, so its
-        // tuple return can never be promoted by that mechanism regardless of
-        // what an implementation's body does. This fix's taint-graph sync
-        // does not bridge that gap (out of scope - see class remarks).
         string printed = TranslateOblivious(@"
 namespace Demo
 {
@@ -255,7 +243,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("func Get() (string, string);", printed);
+        Assert.Contains("func Get() (string?, string);", printed);
         Assert.Contains("func Get() (string?, string)", printed);
     }
 

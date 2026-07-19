@@ -205,6 +205,109 @@ internal static class ObliviousNullabilityAnalyzer
     }
 
     /// <summary>
+    /// Whether one reference-typed leaf inside a tuple-valued declaration is
+    /// null-tainted. Tuple leaves are tracked independently so evidence for
+    /// one element never widens its siblings.
+    /// </summary>
+    /// <param name="compilation">The compilation containing the query.</param>
+    /// <param name="symbol">The tuple-valued declaration symbol.</param>
+    /// <param name="elementPath">Zero-based indexes from the outer tuple to the leaf.</param>
+    /// <param name="siblingCompilations">Other compilations loaded in the same translation run.</param>
+    /// <returns><see langword="true"/> when the selected tuple leaf is null-tainted.</returns>
+    public static bool IsTupleElementTainted(
+        CSharpCompilation compilation,
+        ISymbol symbol,
+        IReadOnlyList<int> elementPath,
+        IReadOnlyList<CSharpCompilation> siblingCompilations)
+    {
+        if (symbol == null
+            || elementPath == null
+            || elementPath.Count == 0
+            || compilation == null
+            || compilation.Options.NullableContextOptions != NullableContextOptions.Disable)
+        {
+            return false;
+        }
+
+        return IsTupleElementTaintedCore(
+            compilation,
+            Canonical(symbol),
+            EncodeTuplePath(elementPath),
+            siblingCompilations,
+            new HashSet<TupleElementQuery>(TupleElementQueryComparer.Instance));
+    }
+
+    private static bool IsTupleElementTaintedCore(
+        CSharpCompilation compilation,
+        ISymbol symbol,
+        string path,
+        IReadOnlyList<CSharpCompilation> siblingCompilations,
+        HashSet<TupleElementQuery> visited)
+    {
+        var key = new TupleElementKey(symbol, path);
+        if (!visited.Add(new TupleElementQuery(compilation, key)))
+        {
+            return false;
+        }
+
+        TaintResult result = Cache.GetValue(compilation, Compute);
+        if (result.TupleTainted.Contains(key))
+        {
+            return true;
+        }
+
+        foreach ((TupleElementKey target, ISymbol source) in result.TupleScalarEdges)
+        {
+            if (TupleElementKeyComparer.Instance.Equals(target, key)
+                && IsTainted(compilation, source, siblingCompilations))
+            {
+                return true;
+            }
+        }
+
+        foreach ((TupleElementKey target, TupleElementKey source) in result.TupleEdges)
+        {
+            if (TupleElementKeyComparer.Instance.Equals(target, key)
+                && IsTupleElementTaintedCore(
+                    compilation,
+                    source.Symbol,
+                    source.Path,
+                    siblingCompilations,
+                    visited))
+            {
+                return true;
+            }
+        }
+
+        if (siblingCompilations != null)
+        {
+            foreach (CSharpCompilation sibling in siblingCompilations)
+            {
+                if (sibling == null
+                    || ReferenceEquals(sibling, compilation)
+                    || sibling.Options.NullableContextOptions != NullableContextOptions.Disable)
+                {
+                    continue;
+                }
+
+                ISymbol remapped = RemapToCompilation(sibling, symbol);
+                if (remapped != null
+                    && IsTupleElementTaintedCore(
+                        sibling,
+                        Canonical(remapped),
+                        path,
+                        siblingCompilations,
+                        visited))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Finds the symbol in <paramref name="targetCompilation"/>'s own symbol
     /// table that is the "same" declaration as <paramref name="symbol"/>,
     /// which may have been resolved through an entirely different
@@ -298,12 +401,16 @@ internal static class ObliviousNullabilityAnalyzer
     private static TaintResult Compute(Compilation compilation)
     {
         var tainted = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        var tupleTainted = new HashSet<TupleElementKey>(TupleElementKeyComparer.Instance);
 
         // Transitive edges: (target <- source). If `source` is tainted then
         // `target` becomes tainted. Both are canonicalized declaration symbols
         // (field/property/parameter/local for a value target; method for a
         // return target; field/property/parameter/local/method for a source).
         var edges = new List<(ISymbol Target, ISymbol Source)>();
+        var tupleEdges = new List<(TupleElementKey Target, TupleElementKey Source)>();
+        var tupleScalarEdges = new List<(TupleElementKey Target, ISymbol Source)>();
+        var scalarTupleEdges = new List<(ISymbol Target, TupleElementKey Source)>();
 
         foreach (SyntaxTree tree in compilation.SyntaxTrees)
         {
@@ -322,6 +429,15 @@ internal static class ObliviousNullabilityAnalyzer
             // records a transitive edge from the return symbol to the returned
             // value's source.
             SeedReturnTaint(root, model, tainted, edges);
+            CollectTupleFlows(
+                root,
+                model,
+                tainted,
+                edges,
+                tupleTainted,
+                tupleEdges,
+                tupleScalarEdges,
+                scalarTupleEdges);
         }
 
         // Issue #2285: an interface member and every member that implements it
@@ -330,6 +446,7 @@ internal static class ObliviousNullabilityAnalyzer
         // parameter) to `T?` while leaving the other (the interface property it
         // satisfies) non-null `T` — see <see cref="CollectInterfaceImplementationEdges"/>.
         CollectInterfaceImplementationEdges(compilation, edges);
+        CollectTupleContractEdges(compilation, tupleTainted, tupleEdges);
 
         // Fixpoint: propagate taint along the edge set until it stabilizes.
         bool changed = true;
@@ -344,9 +461,40 @@ internal static class ObliviousNullabilityAnalyzer
                     changed = true;
                 }
             }
+
+            foreach ((TupleElementKey target, ISymbol source) in tupleScalarEdges)
+            {
+                if (!tupleTainted.Contains(target) && tainted.Contains(source))
+                {
+                    tupleTainted.Add(target);
+                    changed = true;
+                }
+            }
+
+            foreach ((ISymbol target, TupleElementKey source) in scalarTupleEdges)
+            {
+                if (!tainted.Contains(target) && tupleTainted.Contains(source))
+                {
+                    tainted.Add(target);
+                    changed = true;
+                }
+            }
+
+            foreach ((TupleElementKey target, TupleElementKey source) in tupleEdges)
+            {
+                if (!tupleTainted.Contains(target) && tupleTainted.Contains(source))
+                {
+                    tupleTainted.Add(target);
+                    changed = true;
+                }
+            }
         }
 
-        return new TaintResult(tainted);
+        return new TaintResult(
+            tainted,
+            tupleTainted,
+            tupleEdges,
+            tupleScalarEdges);
     }
 
     // Seeds direct null evidence for a value declaration symbol (field /
@@ -554,6 +702,833 @@ internal static class ObliviousNullabilityAnalyzer
             }
         }
     }
+
+    // Issue #2469: tuple-valued declarations need the same direct/transitive
+    // evidence graph as scalar declarations, but keyed by an element path.
+    // This pass covers tuple literals, nested tuples, conditionals/switches,
+    // tuple locals/parameters/properties, calls, and deconstruction.
+    private static void CollectTupleFlows(
+        SyntaxNode root,
+        SemanticModel model,
+        HashSet<ISymbol> tainted,
+        List<(ISymbol Target, ISymbol Source)> edges,
+        HashSet<TupleElementKey> tupleTainted,
+        List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges,
+        List<(TupleElementKey Target, ISymbol Source)> tupleScalarEdges,
+        List<(ISymbol Target, TupleElementKey Source)> scalarTupleEdges)
+    {
+        foreach (SyntaxNode node in root.DescendantNodes())
+        {
+            switch (node)
+            {
+                case MethodDeclarationSyntax method:
+                    CollectTupleReturnFlows(
+                        model.GetDeclaredSymbol(method),
+                        method.ExpressionBody?.Expression,
+                        method.Body,
+                        model,
+                        tupleTainted,
+                        tupleEdges,
+                        tupleScalarEdges);
+                    break;
+
+                case LocalFunctionStatementSyntax localFunction:
+                    CollectTupleReturnFlows(
+                        model.GetDeclaredSymbol(localFunction),
+                        localFunction.ExpressionBody?.Expression,
+                        localFunction.Body,
+                        model,
+                        tupleTainted,
+                        tupleEdges,
+                        tupleScalarEdges);
+                    break;
+
+                case PropertyDeclarationSyntax property:
+                    IPropertySymbol propertySymbol = model.GetDeclaredSymbol(property);
+                    if (TryGetTupleType(propertySymbol, out INamedTypeSymbol propertyTuple))
+                    {
+                        if (property.Initializer?.Value is ExpressionSyntax initializer)
+                        {
+                            CollectTupleValueFlow(
+                                Canonical(propertySymbol),
+                                propertyTuple,
+                                initializer,
+                                model,
+                                string.Empty,
+                                tupleTainted,
+                                tupleEdges,
+                                tupleScalarEdges);
+                        }
+
+                        CollectTupleGetterFlows(
+                            propertySymbol,
+                            propertyTuple,
+                            property.ExpressionBody?.Expression,
+                            property.AccessorList,
+                            model,
+                            tupleTainted,
+                            tupleEdges,
+                            tupleScalarEdges);
+                    }
+
+                    break;
+
+                case IndexerDeclarationSyntax indexer:
+                    IPropertySymbol indexerSymbol = model.GetDeclaredSymbol(indexer);
+                    if (TryGetTupleType(indexerSymbol, out INamedTypeSymbol indexerTuple))
+                    {
+                        CollectTupleGetterFlows(
+                            indexerSymbol,
+                            indexerTuple,
+                            indexer.ExpressionBody?.Expression,
+                            indexer.AccessorList,
+                            model,
+                            tupleTainted,
+                            tupleEdges,
+                            tupleScalarEdges);
+                    }
+
+                    break;
+
+                case VariableDeclaratorSyntax declarator
+                    when declarator.Initializer?.Value is ExpressionSyntax initializer:
+                    ISymbol declared = model.GetDeclaredSymbol(declarator);
+                    if (TryGetTupleType(declared, out INamedTypeSymbol declaredTuple))
+                    {
+                        CollectTupleValueFlow(
+                            Canonical(declared),
+                            declaredTuple,
+                            initializer,
+                            model,
+                            string.Empty,
+                            tupleTainted,
+                            tupleEdges,
+                            tupleScalarEdges);
+                    }
+
+                    break;
+
+                case AssignmentExpressionSyntax assignment
+                    when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression):
+                    ISymbol target = ResolveAssignable(assignment.Left, model);
+                    if (TryGetTupleType(target, out INamedTypeSymbol targetTuple))
+                    {
+                        CollectTupleValueFlow(
+                            target,
+                            targetTuple,
+                            assignment.Right,
+                            model,
+                            string.Empty,
+                            tupleTainted,
+                            tupleEdges,
+                            tupleScalarEdges);
+                    }
+                    else if (assignment.Left is TupleExpressionSyntax or DeclarationExpressionSyntax)
+                    {
+                        CollectDeconstructionFlow(
+                            assignment.Left,
+                            assignment.Right,
+                            model,
+                            tainted,
+                            edges,
+                            scalarTupleEdges);
+                    }
+
+                    break;
+
+                case InvocationExpressionSyntax
+                    or ObjectCreationExpressionSyntax
+                    or ConstructorInitializerSyntax:
+                    CollectTupleArgumentFlows(
+                        node,
+                        model,
+                        tupleTainted,
+                        tupleEdges,
+                        tupleScalarEdges);
+                    break;
+            }
+        }
+    }
+
+    private static void CollectTupleReturnFlows(
+        IMethodSymbol method,
+        ExpressionSyntax arrowBody,
+        BlockSyntax body,
+        SemanticModel model,
+        HashSet<TupleElementKey> tupleTainted,
+        List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges,
+        List<(TupleElementKey Target, ISymbol Source)> tupleScalarEdges)
+    {
+        if (!TryGetTupleType(method, out INamedTypeSymbol tupleType))
+        {
+            return;
+        }
+
+        ISymbol target = Canonical(method);
+        if (arrowBody != null)
+        {
+            CollectTupleValueFlow(
+                target,
+                tupleType,
+                arrowBody,
+                model,
+                string.Empty,
+                tupleTainted,
+                tupleEdges,
+                tupleScalarEdges);
+        }
+
+        foreach (ReturnStatementSyntax statement in EnumerateOwnReturns(body))
+        {
+            if (statement.Expression != null)
+            {
+                CollectTupleValueFlow(
+                    target,
+                    tupleType,
+                    statement.Expression,
+                    model,
+                    string.Empty,
+                    tupleTainted,
+                    tupleEdges,
+                    tupleScalarEdges);
+            }
+        }
+    }
+
+    private static void CollectTupleGetterFlows(
+        IPropertySymbol property,
+        INamedTypeSymbol tupleType,
+        ExpressionSyntax arrowBody,
+        AccessorListSyntax accessorList,
+        SemanticModel model,
+        HashSet<TupleElementKey> tupleTainted,
+        List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges,
+        List<(TupleElementKey Target, ISymbol Source)> tupleScalarEdges)
+    {
+        ISymbol target = Canonical(property);
+        if (arrowBody != null)
+        {
+            CollectTupleValueFlow(
+                target,
+                tupleType,
+                arrowBody,
+                model,
+                string.Empty,
+                tupleTainted,
+                tupleEdges,
+                tupleScalarEdges);
+        }
+
+        AccessorDeclarationSyntax getter = accessorList?.Accessors
+            .FirstOrDefault(a => a.IsKind(SyntaxKind.GetAccessorDeclaration));
+        if (getter?.ExpressionBody?.Expression is ExpressionSyntax getterArrow)
+        {
+            CollectTupleValueFlow(
+                target,
+                tupleType,
+                getterArrow,
+                model,
+                string.Empty,
+                tupleTainted,
+                tupleEdges,
+                tupleScalarEdges);
+        }
+
+        foreach (ReturnStatementSyntax statement in EnumerateOwnReturns(getter?.Body))
+        {
+            if (statement.Expression != null)
+            {
+                CollectTupleValueFlow(
+                    target,
+                    tupleType,
+                    statement.Expression,
+                    model,
+                    string.Empty,
+                    tupleTainted,
+                    tupleEdges,
+                    tupleScalarEdges);
+            }
+        }
+    }
+
+    private static void CollectTupleArgumentFlows(
+        SyntaxNode call,
+        SemanticModel model,
+        HashSet<TupleElementKey> tupleTainted,
+        List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges,
+        List<(TupleElementKey Target, ISymbol Source)> tupleScalarEdges)
+    {
+        ImmutableArray<IArgumentOperation> arguments = model.GetOperation(call) switch
+        {
+            IInvocationOperation invocation => invocation.Arguments,
+            IObjectCreationOperation creation => creation.Arguments,
+            _ => default,
+        };
+
+        if (arguments.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        foreach (IArgumentOperation argument in arguments)
+        {
+            if (argument.Parameter is IParameterSymbol parameter
+                && argument.Value?.Syntax is ExpressionSyntax value
+                && TryGetTupleType(parameter, out INamedTypeSymbol tupleType))
+            {
+                CollectTupleValueFlow(
+                    Canonical(parameter),
+                    tupleType,
+                    value,
+                    model,
+                    string.Empty,
+                    tupleTainted,
+                    tupleEdges,
+                    tupleScalarEdges);
+            }
+        }
+    }
+
+    private static void CollectTupleValueFlow(
+        ISymbol target,
+        INamedTypeSymbol targetTuple,
+        ExpressionSyntax value,
+        SemanticModel model,
+        string prefix,
+        HashSet<TupleElementKey> tupleTainted,
+        List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges,
+        List<(TupleElementKey Target, ISymbol Source)> tupleScalarEdges)
+    {
+        value = UnwrapTupleValue(value);
+        switch (value)
+        {
+            case null:
+                return;
+
+            case ConditionalExpressionSyntax conditional:
+                CollectTupleValueFlow(target, targetTuple, conditional.WhenTrue, model, prefix, tupleTainted, tupleEdges, tupleScalarEdges);
+                CollectTupleValueFlow(target, targetTuple, conditional.WhenFalse, model, prefix, tupleTainted, tupleEdges, tupleScalarEdges);
+                return;
+
+            case SwitchExpressionSyntax switchExpression:
+                foreach (SwitchExpressionArmSyntax arm in switchExpression.Arms)
+                {
+                    CollectTupleValueFlow(target, targetTuple, arm.Expression, model, prefix, tupleTainted, tupleEdges, tupleScalarEdges);
+                }
+
+                return;
+
+            case TupleExpressionSyntax tuple
+                when tuple.Arguments.Count == targetTuple.TupleElements.Length:
+                for (int i = 0; i < targetTuple.TupleElements.Length; i++)
+                {
+                    ITypeSymbol targetType = targetTuple.TupleElements[i].Type;
+                    ExpressionSyntax elementValue = tuple.Arguments[i].Expression;
+                    string path = AppendTuplePath(prefix, i);
+                    if (targetType is INamedTypeSymbol { IsTupleType: true } nestedTarget)
+                    {
+                        CollectTupleValueFlow(
+                            target,
+                            nestedTarget,
+                            elementValue,
+                            model,
+                            path,
+                            tupleTainted,
+                            tupleEdges,
+                            tupleScalarEdges);
+                    }
+                    else if (IsEligibleTupleLeaf(targetType))
+                    {
+                        var targetKey = new TupleElementKey(target, path);
+                        if (IsDirectlyNullable(elementValue, model))
+                        {
+                            tupleTainted.Add(targetKey);
+                        }
+                        else if (TryResolveTupleElementSource(elementValue, model, out TupleElementKey tupleSource))
+                        {
+                            tupleEdges.Add((targetKey, tupleSource));
+                        }
+                        else
+                        {
+                            foreach (ISymbol scalarSource in ResolveSources(elementValue, model))
+                            {
+                                tupleScalarEdges.Add((targetKey, scalarSource));
+                            }
+                        }
+                    }
+                }
+
+                return;
+        }
+
+        if (IsDefaultTupleValue(value, model))
+        {
+            TaintAllTupleLeaves(target, targetTuple, prefix, tupleTainted);
+            return;
+        }
+
+        if (TryResolveTupleSource(value, model, out ISymbol source, out INamedTypeSymbol sourceTuple))
+        {
+            AddTupleShapeEdges(
+                target,
+                targetTuple,
+                prefix,
+                source,
+                sourceTuple,
+                string.Empty,
+                tupleTainted,
+                tupleEdges);
+        }
+    }
+
+    private static void AddTupleShapeEdges(
+        ISymbol target,
+        INamedTypeSymbol targetTuple,
+        string targetPrefix,
+        ISymbol source,
+        INamedTypeSymbol sourceTuple,
+        string sourcePrefix,
+        HashSet<TupleElementKey> tupleTainted,
+        List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges)
+    {
+        int count = System.Math.Min(targetTuple.TupleElements.Length, sourceTuple.TupleElements.Length);
+        for (int i = 0; i < count; i++)
+        {
+            ITypeSymbol targetType = targetTuple.TupleElements[i].Type;
+            ITypeSymbol sourceType = sourceTuple.TupleElements[i].Type;
+            string targetPath = AppendTuplePath(targetPrefix, i);
+            string sourcePath = AppendTuplePath(sourcePrefix, i);
+
+            if (targetType is INamedTypeSymbol { IsTupleType: true } nestedTarget
+                && sourceType is INamedTypeSymbol { IsTupleType: true } nestedSource)
+            {
+                AddTupleShapeEdges(
+                    target,
+                    nestedTarget,
+                    targetPath,
+                    source,
+                    nestedSource,
+                    sourcePath,
+                    tupleTainted,
+                    tupleEdges);
+            }
+            else if (IsEligibleTupleLeaf(targetType))
+            {
+                var targetKey = new TupleElementKey(target, targetPath);
+                if (sourceType is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.Annotated })
+                {
+                    tupleTainted.Add(targetKey);
+                }
+                else
+                {
+                    tupleEdges.Add((targetKey, new TupleElementKey(source, sourcePath)));
+                }
+            }
+        }
+    }
+
+    private static void TaintAllTupleLeaves(
+        ISymbol target,
+        INamedTypeSymbol tupleType,
+        string prefix,
+        HashSet<TupleElementKey> tupleTainted)
+    {
+        for (int i = 0; i < tupleType.TupleElements.Length; i++)
+        {
+            ITypeSymbol elementType = tupleType.TupleElements[i].Type;
+            string path = AppendTuplePath(prefix, i);
+            if (elementType is INamedTypeSymbol { IsTupleType: true } nested)
+            {
+                TaintAllTupleLeaves(target, nested, path, tupleTainted);
+            }
+            else if (IsEligibleTupleLeaf(elementType))
+            {
+                tupleTainted.Add(new TupleElementKey(target, path));
+            }
+        }
+    }
+
+    private static void CollectDeconstructionFlow(
+        ExpressionSyntax targetPattern,
+        ExpressionSyntax value,
+        SemanticModel model,
+        HashSet<ISymbol> tainted,
+        List<(ISymbol Target, ISymbol Source)> edges,
+        List<(ISymbol Target, TupleElementKey Source)> scalarTupleEdges)
+    {
+        value = UnwrapTupleValue(value);
+        if (value is ConditionalExpressionSyntax conditional)
+        {
+            CollectDeconstructionFlow(targetPattern, conditional.WhenTrue, model, tainted, edges, scalarTupleEdges);
+            CollectDeconstructionFlow(targetPattern, conditional.WhenFalse, model, tainted, edges, scalarTupleEdges);
+            return;
+        }
+
+        if (value is SwitchExpressionSyntax switchExpression)
+        {
+            foreach (SwitchExpressionArmSyntax arm in switchExpression.Arms)
+            {
+                CollectDeconstructionFlow(targetPattern, arm.Expression, model, tainted, edges, scalarTupleEdges);
+            }
+
+            return;
+        }
+
+        if (value is TupleExpressionSyntax tupleValue
+            && TryGetDeconstructionElements(targetPattern, out IReadOnlyList<ExpressionSyntax> targets)
+            && targets.Count == tupleValue.Arguments.Count)
+        {
+            for (int i = 0; i < targets.Count; i++)
+            {
+                CollectDeconstructionFlow(
+                    targets[i],
+                    tupleValue.Arguments[i].Expression,
+                    model,
+                    tainted,
+                    edges,
+                    scalarTupleEdges);
+            }
+
+            return;
+        }
+
+        if (value is TupleExpressionSyntax declarationTupleValue
+            && targetPattern is DeclarationExpressionSyntax
+                { Designation: ParenthesizedVariableDesignationSyntax declarationPattern }
+            && declarationPattern.Variables.Count == declarationTupleValue.Arguments.Count)
+        {
+            for (int i = 0; i < declarationPattern.Variables.Count; i++)
+            {
+                CollectDesignationFlow(
+                    declarationPattern.Variables[i],
+                    declarationTupleValue.Arguments[i].Expression,
+                    model,
+                    tainted,
+                    edges,
+                    scalarTupleEdges);
+            }
+
+            return;
+        }
+
+        if (TryResolveDeconstructionTarget(targetPattern, model, out ISymbol scalarTarget))
+        {
+            if (IsDirectlyNullable(value, model))
+            {
+                tainted.Add(scalarTarget);
+            }
+            else if (TryResolveTupleElementSource(value, model, out TupleElementKey elementSource))
+            {
+                scalarTupleEdges.Add((scalarTarget, elementSource));
+            }
+            else
+            {
+                AddEdges(scalarTarget, value, model, edges);
+            }
+
+            return;
+        }
+
+        if (TryResolveTupleSource(value, model, out ISymbol tupleSource, out INamedTypeSymbol sourceTuple))
+        {
+            if (targetPattern is DeclarationExpressionSyntax
+                { Designation: ParenthesizedVariableDesignationSyntax forwardedPattern })
+            {
+                CollectDesignationPatternFromTupleSource(
+                    forwardedPattern,
+                    tupleSource,
+                    sourceTuple,
+                    string.Empty,
+                    model,
+                    scalarTupleEdges);
+                return;
+            }
+
+            CollectPatternFromTupleSource(
+                targetPattern,
+                tupleSource,
+                sourceTuple,
+                string.Empty,
+                model,
+                scalarTupleEdges);
+        }
+    }
+
+    private static void CollectDesignationFlow(
+        VariableDesignationSyntax target,
+        ExpressionSyntax value,
+        SemanticModel model,
+        HashSet<ISymbol> tainted,
+        List<(ISymbol Target, ISymbol Source)> edges,
+        List<(ISymbol Target, TupleElementKey Source)> scalarTupleEdges)
+    {
+        if (target is ParenthesizedVariableDesignationSyntax parenthesized
+            && value is TupleExpressionSyntax tuple
+            && parenthesized.Variables.Count == tuple.Arguments.Count)
+        {
+            for (int i = 0; i < parenthesized.Variables.Count; i++)
+            {
+                CollectDesignationFlow(
+                    parenthesized.Variables[i],
+                    tuple.Arguments[i].Expression,
+                    model,
+                    tainted,
+                    edges,
+                    scalarTupleEdges);
+            }
+
+            return;
+        }
+
+        if (target is not SingleVariableDesignationSyntax single
+            || model.GetDeclaredSymbol(single) is not ISymbol declared
+            || !IsValueDeclarationSymbol(declared))
+        {
+            return;
+        }
+
+        ISymbol scalarTarget = Canonical(declared);
+        if (IsDirectlyNullable(value, model))
+        {
+            tainted.Add(scalarTarget);
+        }
+        else if (TryResolveTupleElementSource(value, model, out TupleElementKey elementSource))
+        {
+            scalarTupleEdges.Add((scalarTarget, elementSource));
+        }
+        else
+        {
+            AddEdges(scalarTarget, value, model, edges);
+        }
+    }
+
+    private static void CollectPatternFromTupleSource(
+        ExpressionSyntax pattern,
+        ISymbol source,
+        INamedTypeSymbol sourceTuple,
+        string prefix,
+        SemanticModel model,
+        List<(ISymbol Target, TupleElementKey Source)> scalarTupleEdges)
+    {
+        if (!TryGetDeconstructionElements(pattern, out IReadOnlyList<ExpressionSyntax> targets))
+        {
+            return;
+        }
+
+        int count = System.Math.Min(targets.Count, sourceTuple.TupleElements.Length);
+        for (int i = 0; i < count; i++)
+        {
+            ITypeSymbol sourceType = sourceTuple.TupleElements[i].Type;
+            string path = AppendTuplePath(prefix, i);
+            if (sourceType is INamedTypeSymbol { IsTupleType: true } nested)
+            {
+                CollectPatternFromTupleSource(targets[i], source, nested, path, model, scalarTupleEdges);
+            }
+            else if (TryResolveDeconstructionTarget(targets[i], model, out ISymbol scalarTarget))
+            {
+                scalarTupleEdges.Add((scalarTarget, new TupleElementKey(source, path)));
+            }
+        }
+    }
+
+    private static void CollectDesignationPatternFromTupleSource(
+        ParenthesizedVariableDesignationSyntax pattern,
+        ISymbol source,
+        INamedTypeSymbol sourceTuple,
+        string prefix,
+        SemanticModel model,
+        List<(ISymbol Target, TupleElementKey Source)> scalarTupleEdges)
+    {
+        int count = System.Math.Min(pattern.Variables.Count, sourceTuple.TupleElements.Length);
+        for (int i = 0; i < count; i++)
+        {
+            VariableDesignationSyntax target = pattern.Variables[i];
+            ITypeSymbol sourceType = sourceTuple.TupleElements[i].Type;
+            string path = AppendTuplePath(prefix, i);
+            if (target is ParenthesizedVariableDesignationSyntax nestedPattern
+                && sourceType is INamedTypeSymbol { IsTupleType: true } nestedTuple)
+            {
+                CollectDesignationPatternFromTupleSource(
+                    nestedPattern,
+                    source,
+                    nestedTuple,
+                    path,
+                    model,
+                    scalarTupleEdges);
+            }
+            else if (target is SingleVariableDesignationSyntax single
+                && model.GetDeclaredSymbol(single) is ISymbol declared
+                && IsValueDeclarationSymbol(declared))
+            {
+                scalarTupleEdges.Add((Canonical(declared), new TupleElementKey(source, path)));
+            }
+        }
+    }
+
+    private static bool TryGetDeconstructionElements(
+        ExpressionSyntax pattern,
+        out IReadOnlyList<ExpressionSyntax> elements)
+    {
+        if (pattern is TupleExpressionSyntax tuple)
+        {
+            elements = tuple.Arguments.Select(a => a.Expression).ToList();
+            return true;
+        }
+
+        elements = null;
+        return false;
+    }
+
+    private static bool TryResolveDeconstructionTarget(
+        ExpressionSyntax target,
+        SemanticModel model,
+        out ISymbol symbol)
+    {
+        symbol = target switch
+        {
+            IdentifierNameSyntax identifier => model.GetSymbolInfo(identifier).Symbol,
+            DeclarationExpressionSyntax { Designation: SingleVariableDesignationSyntax single } =>
+                model.GetDeclaredSymbol(single),
+            _ => null,
+        };
+
+        if (symbol != null && IsValueDeclarationSymbol(symbol))
+        {
+            symbol = Canonical(symbol);
+            return true;
+        }
+
+        symbol = null;
+        return false;
+    }
+
+    private static bool TryResolveTupleSource(
+        ExpressionSyntax expression,
+        SemanticModel model,
+        out ISymbol symbol,
+        out INamedTypeSymbol tupleType)
+    {
+        expression = UnwrapTupleValue(expression);
+        symbol = expression switch
+        {
+            InvocationExpressionSyntax invocation => model.GetSymbolInfo(invocation).Symbol,
+            IdentifierNameSyntax or MemberAccessExpressionSyntax => model.GetSymbolInfo(expression).Symbol,
+            _ => null,
+        };
+
+        if (TryGetTupleType(symbol, out tupleType))
+        {
+            symbol = Canonical(symbol);
+            return true;
+        }
+
+        symbol = null;
+        tupleType = null;
+        return false;
+    }
+
+    private static bool TryResolveTupleElementSource(
+        ExpressionSyntax expression,
+        SemanticModel model,
+        out TupleElementKey source)
+    {
+        expression = UnwrapTupleValue(expression);
+        if (expression is MemberAccessExpressionSyntax member
+            && model.GetSymbolInfo(member).Symbol is IFieldSymbol field
+            && model.GetTypeInfo(member.Expression).Type is INamedTypeSymbol { IsTupleType: true } receiverTuple)
+        {
+            int index = TupleElementIndex(receiverTuple, field);
+            if (index >= 0)
+            {
+                if (TryResolveTupleSource(member.Expression, model, out ISymbol symbol, out _))
+                {
+                    source = new TupleElementKey(symbol, index.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    return true;
+                }
+
+                if (TryResolveTupleElementSource(member.Expression, model, out TupleElementKey parent))
+                {
+                    source = new TupleElementKey(parent.Symbol, AppendTuplePath(parent.Path, index));
+                    return true;
+                }
+            }
+        }
+
+        source = default;
+        return false;
+    }
+
+    private static int TupleElementIndex(INamedTypeSymbol tupleType, IFieldSymbol field)
+    {
+        IFieldSymbol canonicalField = field.CorrespondingTupleField ?? field;
+        for (int i = 0; i < tupleType.TupleElements.Length; i++)
+        {
+            IFieldSymbol candidate = tupleType.TupleElements[i].CorrespondingTupleField
+                ?? tupleType.TupleElements[i];
+            if (SymbolEqualityComparer.Default.Equals(candidate, canonicalField)
+                || tupleType.TupleElements[i].Name == field.Name)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool TryGetTupleType(ISymbol symbol, out INamedTypeSymbol tupleType)
+    {
+        ITypeSymbol type = symbol switch
+        {
+            IMethodSymbol method => UnwrapAwaitedType(method.ReturnType),
+            IPropertySymbol property => property.Type,
+            IFieldSymbol field => field.Type,
+            ILocalSymbol local => local.Type,
+            IParameterSymbol parameter => parameter.Type,
+            _ => null,
+        };
+
+        tupleType = type as INamedTypeSymbol;
+        return tupleType is { IsTupleType: true };
+    }
+
+    private static bool IsEligibleTupleLeaf(ITypeSymbol type) =>
+        type is { IsReferenceType: true }
+            && type.NullableAnnotation != NullableAnnotation.Annotated;
+
+    private static bool IsDefaultTupleValue(ExpressionSyntax expression, SemanticModel model) =>
+        expression is DefaultExpressionSyntax
+            || (expression is LiteralExpressionSyntax literal
+                && literal.IsKind(SyntaxKind.DefaultLiteralExpression)
+                && model.GetTypeInfo(literal).ConvertedType is INamedTypeSymbol { IsTupleType: true });
+
+    private static ExpressionSyntax UnwrapTupleValue(ExpressionSyntax expression)
+    {
+        while (true)
+        {
+            switch (expression)
+            {
+                case ParenthesizedExpressionSyntax parenthesized:
+                    expression = parenthesized.Expression;
+                    continue;
+                case CastExpressionSyntax cast:
+                    expression = cast.Expression;
+                    continue;
+                case AwaitExpressionSyntax awaitExpression:
+                    expression = awaitExpression.Expression;
+                    continue;
+                default:
+                    return expression;
+            }
+        }
+    }
+
+    private static string AppendTuplePath(string prefix, int index) =>
+        string.IsNullOrEmpty(prefix)
+            ? index.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : prefix + "." + index.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    private static string EncodeTuplePath(IReadOnlyList<int> path) =>
+        string.Join(".", path.Select(i => i.ToString(System.Globalization.CultureInfo.InvariantCulture)));
 
     // Return taint: for each method / accessor / local function, examine every
     // `return` (or arrow expression body) that belongs to it (not to a nested
@@ -905,6 +1880,88 @@ internal static class ObliviousNullabilityAnalyzer
         ISymbol implCanonical = Canonical(implementingMethod);
         edges.Add((interfaceCanonical, implCanonical));
         edges.Add((implCanonical, interfaceCanonical));
+    }
+
+    private static void CollectTupleContractEdges(
+        Compilation compilation,
+        HashSet<TupleElementKey> tupleTainted,
+        List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges)
+    {
+        foreach (INamedTypeSymbol type in EnumerateSourceNamedTypes(compilation))
+        {
+            foreach (IMethodSymbol method in type.GetMembers().OfType<IMethodSymbol>())
+            {
+                if (method.MethodKind != MethodKind.Ordinary
+                    || !TryGetTupleType(method, out INamedTypeSymbol methodTuple))
+                {
+                    continue;
+                }
+
+                if (method.OverriddenMethod is IMethodSymbol overridden
+                    && TryGetTupleType(overridden, out INamedTypeSymbol overriddenTuple))
+                {
+                    AddTupleContractPair(
+                        method,
+                        methodTuple,
+                        overridden,
+                        overriddenTuple,
+                        tupleTainted,
+                        tupleEdges);
+                }
+            }
+
+            foreach (INamedTypeSymbol iface in type.AllInterfaces)
+            {
+                foreach (IMethodSymbol interfaceMethod in iface.GetMembers().OfType<IMethodSymbol>())
+                {
+                    if (interfaceMethod.MethodKind != MethodKind.Ordinary
+                        || !TryGetTupleType(interfaceMethod, out INamedTypeSymbol interfaceTuple)
+                        || type.FindImplementationForInterfaceMember(interfaceMethod) is not IMethodSymbol implementation
+                        || !TryGetTupleType(implementation, out INamedTypeSymbol implementationTuple))
+                    {
+                        continue;
+                    }
+
+                    AddTupleContractPair(
+                        interfaceMethod,
+                        interfaceTuple,
+                        implementation,
+                        implementationTuple,
+                        tupleTainted,
+                        tupleEdges);
+                }
+            }
+        }
+    }
+
+    private static void AddTupleContractPair(
+        IMethodSymbol first,
+        INamedTypeSymbol firstTuple,
+        IMethodSymbol second,
+        INamedTypeSymbol secondTuple,
+        HashSet<TupleElementKey> tupleTainted,
+        List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges)
+    {
+        ISymbol firstCanonical = Canonical(first);
+        ISymbol secondCanonical = Canonical(second);
+        AddTupleShapeEdges(
+            firstCanonical,
+            firstTuple,
+            string.Empty,
+            secondCanonical,
+            secondTuple,
+            string.Empty,
+            tupleTainted,
+            tupleEdges);
+        AddTupleShapeEdges(
+            secondCanonical,
+            secondTuple,
+            string.Empty,
+            firstCanonical,
+            firstTuple,
+            string.Empty,
+            tupleTainted,
+            tupleEdges);
     }
 
     // Unwraps a (non-generic-parameter) `System.Threading.Tasks.Task<T>` or
@@ -1347,10 +2404,83 @@ internal static class ObliviousNullabilityAnalyzer
         return IsNullLiteral(expression);
     }
 
+    private readonly struct TupleElementKey
+    {
+        public TupleElementKey(ISymbol symbol, string path)
+        {
+            this.Symbol = Canonical(symbol);
+            this.Path = path;
+        }
+
+        public ISymbol Symbol { get; }
+
+        public string Path { get; }
+    }
+
+    private readonly struct TupleElementQuery
+    {
+        public TupleElementQuery(CSharpCompilation compilation, TupleElementKey key)
+        {
+            this.Compilation = compilation;
+            this.Key = key;
+        }
+
+        public CSharpCompilation Compilation { get; }
+
+        public TupleElementKey Key { get; }
+    }
+
+    private sealed class TupleElementKeyComparer : IEqualityComparer<TupleElementKey>
+    {
+        public static TupleElementKeyComparer Instance { get; } = new();
+
+        public bool Equals(TupleElementKey x, TupleElementKey y) =>
+            SymbolEqualityComparer.Default.Equals(x.Symbol, y.Symbol)
+                && string.Equals(x.Path, y.Path, System.StringComparison.Ordinal);
+
+        public int GetHashCode(TupleElementKey obj)
+        {
+            int symbolHash = obj.Symbol == null
+                ? 0
+                : SymbolEqualityComparer.Default.GetHashCode(obj.Symbol);
+            return System.HashCode.Combine(symbolHash, obj.Path);
+        }
+    }
+
+    private sealed class TupleElementQueryComparer : IEqualityComparer<TupleElementQuery>
+    {
+        public static TupleElementQueryComparer Instance { get; } = new();
+
+        public bool Equals(TupleElementQuery x, TupleElementQuery y) =>
+            ReferenceEquals(x.Compilation, y.Compilation)
+                && TupleElementKeyComparer.Instance.Equals(x.Key, y.Key);
+
+        public int GetHashCode(TupleElementQuery obj) =>
+            System.HashCode.Combine(
+                System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj.Compilation),
+                TupleElementKeyComparer.Instance.GetHashCode(obj.Key));
+    }
+
     private sealed class TaintResult
     {
-        public TaintResult(HashSet<ISymbol> tainted) => this.Tainted = tainted;
+        public TaintResult(
+            HashSet<ISymbol> tainted,
+            HashSet<TupleElementKey> tupleTainted,
+            List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges,
+            List<(TupleElementKey Target, ISymbol Source)> tupleScalarEdges)
+        {
+            this.Tainted = tainted;
+            this.TupleTainted = tupleTainted;
+            this.TupleEdges = tupleEdges;
+            this.TupleScalarEdges = tupleScalarEdges;
+        }
 
         public HashSet<ISymbol> Tainted { get; }
+
+        public HashSet<TupleElementKey> TupleTainted { get; }
+
+        public List<(TupleElementKey Target, TupleElementKey Source)> TupleEdges { get; }
+
+        public List<(TupleElementKey Target, ISymbol Source)> TupleScalarEdges { get; }
     }
 }
