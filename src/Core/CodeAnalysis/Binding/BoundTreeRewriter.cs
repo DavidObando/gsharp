@@ -1712,7 +1712,7 @@ public abstract class BoundTreeRewriter
         // Function (nullable-lifted same-compilation struct operator) the
         // original node carried — exactly one is non-null.
         return node.Function != null
-            ? new BoundClrBinaryOperatorExpression(null, node.OperatorKind, left, right, node.Function, node.Type)
+            ? new BoundClrBinaryOperatorExpression(null, node.OperatorKind, left, right, node.Function, node.FunctionOwnerType, node.Type)
             : new BoundClrBinaryOperatorExpression(null, node.OperatorKind, left, right, node.Method, node.Type);
     }
 

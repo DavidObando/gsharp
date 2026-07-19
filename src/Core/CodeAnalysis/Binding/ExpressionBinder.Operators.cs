@@ -1573,13 +1573,18 @@ internal sealed partial class ExpressionBinder
                 : right.Type as StructSymbol;
 
             FunctionSymbol userOp = null;
-            if (leftStructType != null && TypeMemberModel.TryGetStaticMethodIncludingInherited(leftStructType, userOpName, out var leftOp))
+            StructSymbol userOpOwner = null;
+            if (leftStructType != null
+                && TypeMemberModel.TryGetStaticMethodIncludingInherited(leftStructType, userOpName, out var leftOp, out var leftOwner))
             {
                 userOp = leftOp;
+                userOpOwner = leftOwner;
             }
-            else if (rightStructType != null && TypeMemberModel.TryGetStaticMethodIncludingInherited(rightStructType, userOpName, out var rightOp))
+            else if (rightStructType != null
+                && TypeMemberModel.TryGetStaticMethodIncludingInherited(rightStructType, userOpName, out var rightOp, out var rightOwner))
             {
                 userOp = rightOp;
+                userOpOwner = rightOwner;
             }
             else if (left.Type != null && scope.TryLookupExtensionFunction(left.Type, userOpName, out var leftExt))
             {
@@ -1592,14 +1597,38 @@ internal sealed partial class ExpressionBinder
 
             if (userOp != null && userOp.Parameters.Length == 2)
             {
-                if (TryLiftNullableClrOperatorOperands(opKind, ref left, ref right, leftLocation, rightLocation, userOp.Type, out var liftedResultType))
+                // Issue #2400: StaticMethods on a constructed generic struct
+                // intentionally expose the definition's FunctionSymbol. Close
+                // its parameter/result types in the declaring construction so
+                // overload applicability and the bound call use Box[int32],
+                // not the open Box[T] signature.
+                var leftParameterType = userOpOwner?.SubstituteMemberType(userOp.Parameters[0].Type)
+                    ?? userOp.Parameters[0].Type;
+                var rightParameterType = userOpOwner?.SubstituteMemberType(userOp.Parameters[1].Type)
+                    ?? userOp.Parameters[1].Type;
+                var resultType = userOpOwner?.SubstituteMemberType(userOp.Type) ?? userOp.Type;
+
+                if (CanApplyLiftedUserOperator(left.Type, leftParameterType)
+                    && CanApplyLiftedUserOperator(right.Type, rightParameterType)
+                    && TryLiftNullableClrOperatorOperands(opKind, ref left, ref right, leftLocation, rightLocation, resultType, out var liftedResultType))
                 {
-                    return new BoundClrBinaryOperatorExpression(null, opKind, left, right, userOp, liftedResultType);
+                    return new BoundClrBinaryOperatorExpression(null, opKind, left, right, userOp, userOpOwner, liftedResultType);
                 }
 
-                var convertedLeft = conversions.BindConversion(leftLocation, left, userOp.Parameters[0].Type);
-                var convertedRight = conversions.BindConversion(rightLocation, right, userOp.Parameters[1].Type);
-                return new BoundCallExpression(null, userOp, ImmutableArray.Create(convertedLeft, convertedRight));
+                var convertedLeft = conversions.BindConversion(leftLocation, left, leftParameterType);
+                var convertedRight = conversions.BindConversion(rightLocation, right, rightParameterType);
+                return new BoundCallExpression(
+                    null,
+                    userOp,
+                    ImmutableArray.Create(convertedLeft, convertedRight),
+                    resultType)
+                {
+                    StaticGenericOwnerType = userOpOwner != null
+                        && (!userOpOwner.TypeArguments.IsDefaultOrEmpty
+                            || !(userOpOwner.Definition ?? userOpOwner).TypeParameters.IsDefaultOrEmpty)
+                        ? userOpOwner
+                        : null,
+                };
             }
         }
 
@@ -1639,6 +1668,15 @@ internal sealed partial class ExpressionBinder
         }
 
         return null;
+    }
+
+    private static bool CanApplyLiftedUserOperator(TypeSymbol operandType, TypeSymbol parameterType)
+    {
+        var underlyingOperand = operandType is NullableTypeSymbol nullable
+            ? nullable.UnderlyingType
+            : operandType;
+        var conversion = Conversion.Classify(underlyingOperand, parameterType);
+        return conversion.Exists && conversion.IsImplicit;
     }
 
     /// <summary>

@@ -1421,18 +1421,57 @@ public sealed partial class Evaluator
 
     private object EvaluateClrBinaryOperatorExpression(BoundClrBinaryOperatorExpression node)
     {
-        // Issue #2388: the nullable-lifted same-compilation struct operator
-        // shape (Function set, Method null) needs the same HasValue-branch
-        // lifting semantics as the IL emitter's EmitLiftedNullableClrBinary;
-        // the tree-walking interpreter does not implement that lifting, so
-        // fail loudly rather than silently invoking the unlifted operator on
-        // a boxed Nullable<T>. The compiled (gsc-emitted) path is unaffected
-        // — this only affects direct BoundTree interpretation via Evaluator.
         if (node.Function != null)
         {
-            throw new NotSupportedException(
-                "Evaluator: nullable-lifted same-compilation user operator calls (issue #2388) are not supported by "
-                + "the tree-walking interpreter; compile and run instead.");
+            var leftValue = EvaluateExpression(node.Left);
+            var rightValue = EvaluateExpression(node.Right);
+            var leftPresent = leftValue != null;
+            var rightPresent = rightValue != null;
+
+            if (node.OperatorKind == SyntaxKind.EqualsEqualsToken)
+            {
+                if (leftPresent != rightPresent)
+                {
+                    return false;
+                }
+
+                if (!leftPresent)
+                {
+                    return true;
+                }
+            }
+            else if (node.OperatorKind == SyntaxKind.BangEqualsToken)
+            {
+                if (leftPresent != rightPresent)
+                {
+                    return true;
+                }
+
+                if (!leftPresent)
+                {
+                    return false;
+                }
+            }
+            else if (!leftPresent || !rightPresent)
+            {
+                if (node.OperatorKind is SyntaxKind.LessToken
+                    or SyntaxKind.LessOrEqualsToken
+                    or SyntaxKind.GreaterToken
+                    or SyntaxKind.GreaterOrEqualsToken)
+                {
+                    return false;
+                }
+
+                return null;
+            }
+
+            var locals = new ConcurrentDictionary<VariableSymbol, object>();
+            locals[node.Function.Parameters[0]] = leftValue;
+            locals[node.Function.Parameters[1]] = rightValue;
+            using (PushFrame(locals))
+            {
+                return EvaluateFunctionBody(program.Functions[node.Function]);
+            }
         }
 
         var left = EvaluateExpression(node.Left);
