@@ -1866,7 +1866,7 @@ public sealed partial class CSharpToGSharpTranslator
                     GExpression qualifiedReceiver = new MemberAccessExpression(
                         qualifier, SanitizeIdentifier(receiverId.Identifier.Text));
 
-                    if (this.ReceiverNeedsNullForgiveness(receiverId) ||
+                    if (this.ReceiverNeedsNullForgiveness(receiverId, isDereferenceReceiver: true) ||
                         this.ReceiverIsNullableReferenceFieldOrProperty(receiverId))
                     {
                         qualifiedReceiver = new NonNullAssertionExpression(qualifiedReceiver);
@@ -1876,7 +1876,7 @@ public sealed partial class CSharpToGSharpTranslator
                         qualifiedReceiver, SanitizeIdentifier(member.Name.Identifier.Text));
                 }
 
-                if (this.ReceiverNeedsNullForgiveness(member.Expression) ||
+                if (this.ReceiverNeedsNullForgiveness(member.Expression, isDereferenceReceiver: true) ||
                     this.ReceiverIsNullableReferenceFieldOrProperty(member.Expression) ||
                     (member.Expression is IdentifierNameSyntax hoistedId &&
                      this.context.GetSymbolInfo(hoistedId).Symbol is { } hoistedSymbol &&

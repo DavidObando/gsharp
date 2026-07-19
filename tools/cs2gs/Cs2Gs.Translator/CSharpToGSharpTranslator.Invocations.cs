@@ -244,22 +244,18 @@ public sealed partial class CSharpToGSharpTranslator
 
             var arguments = this.TranslateCallArguments(invocation, invocation.ArgumentList.Arguments);
 
-            // Directly invoking a nullable-reference delegate field/property
-            // (`handler(args)` where `handler` is `((T) -> R)?`) needs a `!!`
-            // assertion on the callee: G# smart-casts only locals, never a
-            // field/property chain, so an unforgiven nullable delegate field is
-            // "not a function" (GS0131) even inside an `if handler != nil` guard.
-            // This is the invocation-callee analog of the receiver `!!` pass
-            // (#1594). It is restricted to a field/property callee: a `!!`-asserted
-            // callee only parses as `recv!!.member`, never as a standalone `recv!!`
-            // invocation target, so a nullable LOCAL/PARAMETER delegate callee is
-            // NOT forgiven here — gsc smart-casts those from an `if d != nil` guard
-            // instead (the promotion that made them `T?` comes from #2113).
+            // Directly invoking a nullable delegate value needs the same receiver
+            // forgiveness as `.Invoke(...)`: fields/properties retain #1594's
+            // behavior, while issue #2506 adds promoted method/property/indexer
+            // results such as `FindFactory()()`. Keep the decision receiver-only
+            // so callable-return taint is asserted on the produced delegate value,
+            // never on a method group.
             if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol
                     { MethodKind: MethodKind.DelegateInvoke }
-                && this.context.GetSymbolInfo(invocation.Expression).Symbol
-                    is IFieldSymbol or IPropertySymbol
-                && this.ReceiverIsNullableReferenceFieldOrProperty(invocation.Expression))
+                && (this.ReceiverNeedsNullForgiveness(
+                        invocation.Expression,
+                        isDereferenceReceiver: true)
+                    || this.ReceiverIsNullableReferenceFieldOrProperty(invocation.Expression)))
             {
                 target = new NonNullAssertionExpression(target);
             }
