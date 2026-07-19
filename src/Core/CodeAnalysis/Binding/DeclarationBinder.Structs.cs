@@ -1044,7 +1044,6 @@ internal sealed partial class DeclarationBinder
                     FunctionSymbol overriddenMethod = null;
                     MethodInfo externalOverriddenMethod = null;
                     TypeSymbol externalOverrideContainingType = null;
-                    bool reportedMissingOverride = false;
                     if (methodSyntax.IsOverride)
                     {
                         // ADR-0063 §8: when the base exposes a name-overload set, the
@@ -1161,28 +1160,8 @@ internal sealed partial class DeclarationBinder
                             if (SignaturesMatch(shadowed, methodParameters, returnType, methodReturnRefKind, shadowedTypeArgSubst, methodIsAsync))
                             {
                                 Diagnostics.ReportMissingOverride(methodSyntax.Identifier.Location, shadowed.ReceiverType.Name, methodName);
-                                reportedMissingOverride = true;
                                 break;
                             }
-                        }
-                    }
-
-                    if (!methodSyntax.IsOverride && !reportedMissingOverride)
-                    {
-                        var externalMatch = ExternalClrOverrideResolver.FindMethod(
-                            structSymbol,
-                            methodName,
-                            methodParameters,
-                            returnType,
-                            methodReturnRefKind,
-                            methodTypeParameters,
-                            methodAccessibility);
-                        if (externalMatch.Member != null)
-                        {
-                            Diagnostics.ReportMissingOverride(
-                                methodSyntax.Identifier.Location,
-                                externalMatch.Member.DeclaringType?.Name ?? structSymbol.ImportedBaseType?.Name ?? "?",
-                                methodName);
                         }
                     }
 
@@ -1518,24 +1497,6 @@ internal sealed partial class DeclarationBinder
                         }
                     }
                 }
-                else
-                {
-                    var externalMatch = ExternalClrOverrideResolver.FindProperty(
-                        structSymbol,
-                        propName,
-                        indexerParameters,
-                        propType,
-                        hasGetter,
-                        hasSetter,
-                        propAccessibility);
-                    if (externalMatch.Member != null)
-                    {
-                        Diagnostics.ReportMissingOverride(
-                            propSyntax.Identifier.Location,
-                            externalMatch.Member.DeclaringType?.Name ?? structSymbol.ImportedBaseType?.Name ?? "?",
-                            propName);
-                    }
-                }
 
                 var propertySymbol = new PropertySymbol(
                     propName,
@@ -1741,21 +1702,6 @@ internal sealed partial class DeclarationBinder
                         {
                             Diagnostics.ReportNoBaseMethodToOverride(eventSyntax.Identifier.Location, eventName);
                         }
-                    }
-                }
-                else
-                {
-                    var externalMatch = ExternalClrOverrideResolver.FindEvent(
-                        structSymbol,
-                        eventName,
-                        handlerType,
-                        eventAccessibility);
-                    if (externalMatch.Member != null)
-                    {
-                        Diagnostics.ReportMissingOverride(
-                            eventSyntax.Identifier.Location,
-                            externalMatch.Member.DeclaringType?.Name ?? structSymbol.ImportedBaseType?.Name ?? "?",
-                            eventName);
                     }
                 }
 

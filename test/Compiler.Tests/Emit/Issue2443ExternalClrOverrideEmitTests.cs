@@ -142,6 +142,39 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
         }
     }
 
+    [Fact]
+    public void MatchingExternalVirtualWithoutOverride_RemainsAnAcceptedShadow()
+    {
+        const string Source = """
+            package Issue2443
+            import Issue2443Base
+
+            class ShadowingDerived : ExternalBase[int32] {
+                func Echo(value int32) string -> "shadow"
+                override func AbstractName() string -> "abstract"
+            }
+            """;
+
+        var result = Compile(Source, target: "library", ExternalBaseAssembly.Value);
+        try
+        {
+            var baseAssembly = Assembly.LoadFrom(ExternalBaseAssembly.Value);
+            var derivedAssembly = Assembly.LoadFrom(result.OutputPath);
+            var derivedType = derivedAssembly.GetType("Issue2443.ShadowingDerived")!;
+            var instance = Activator.CreateInstance(derivedType);
+            var closedBase = baseAssembly.GetType("Issue2443Base.ExternalBase`1")!.MakeGenericType(typeof(int));
+            var shadow = derivedType.GetMethod("Echo", BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)!;
+
+            Assert.True((shadow.Attributes & MethodAttributes.NewSlot) != 0);
+            Assert.Equal("shadow", shadow.Invoke(instance, new object[] { 1 }));
+            Assert.Equal("base", closedBase.GetMethod("Echo")!.Invoke(instance, new object[] { 1 }));
+        }
+        finally
+        {
+            result.Dispose();
+        }
+    }
+
     [Theory]
     [InlineData("""
         package Issue2443
@@ -154,19 +187,11 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
         package Issue2443
         import Issue2443Base
         class Bad : ExternalBase[int32] {
-            func Echo(value int32) string -> "bad"
-            override func AbstractName() string -> "abstract"
-        }
-        """, "GS0182")]
-    [InlineData("""
-        package Issue2443
-        import Issue2443Base
-        class Bad : ExternalBase[int32] {
             override func Echo(value string) string -> value
             override func AbstractName() string -> "abstract"
         }
         """, "GS0185")]
-    public void InvalidExternalOverrideShapes_ReportInsteadOfShadowing(string source, string diagnosticId)
+    public void InvalidExplicitExternalOverrideShapes_Report(string source, string diagnosticId)
     {
         var result = TryCompile(source, "library", ExternalBaseAssembly.Value);
         try
