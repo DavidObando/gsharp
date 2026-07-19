@@ -615,6 +615,11 @@ internal sealed partial class ExpressionBinder
                 implicitProp.Property);
         }
 
+        return BuildNarrowedVariableRead(variable);
+    }
+
+    private BoundExpression BuildNarrowedVariableRead(VariableSymbol variable)
+    {
         return BuildNarrowedRead(
             new BoundVariableExpression(null, variable),
             variable.Type,
