@@ -1115,36 +1115,56 @@ public sealed partial class CSharpToGSharpTranslator
                 ? autoPropertyLift
                 : this.AnalyzeConstructorLift(node, mergedMembers, symbol, kind.Value);
 
-            // Issue #1990: a G# `struct`/`data struct` can NEVER carry an
-            // explicit `init(...)` constructor — the parser only accepts it on a
-            // `class` header (`DeclarationBinder.BindConstructors` early-returns
-            // for a non-class type). ADR-0115 §B.5 and §B.14 document this as a
-            // BY-DESIGN restriction: a G# value aggregate admits no explicit
-            // `init` at all, full stop — it is constructed only via primary
-            // constructors and struct literals. The lift above only drops the
-            // explicit constructor for the single-ctor, fully-liftable shape; a
-            // struct with MULTIPLE instance constructors — or one unliftable
-            // constructor (e.g. it reads an instance member, or reassigns a
-            // field) — leaves `lift.DropConstructor` false. There is no
-            // canonical G# form for this C# shape (silently downgrading the
-            // type to a `class` would flip value semantics to reference
-            // semantics — `Equals`, `default(T)`, copy-vs-alias, and boxing all
-            // change — which is exactly the kind of guess ADR-0115 §B forbids).
-            // Per the translator's "never guess" rule, record this as a loud,
-            // structured unsupported-construct gap instead and drop the type
-            // from the emitted output, same as the `unsupported aggregate kind`
-            // path above: a human must either rework the C# source to a single
-            // liftable constructor, explicitly accept a documented class
-            // downgrade, or file a G# language-gap issue to allow explicit
-            // `init` on a struct.
+            // Issues #1990/#2435: G# value aggregates have no explicit `init`
+            // member, but a C# struct constructor whose complete effect is a
+            // once-only set of member assignments can still be represented at
+            // every call site as a struct literal. Keep the struct and omit those
+            // constructor declarations; BuildObjectCreationCore resolves the
+            // actual overload and replays its analyzed plan. If even one
+            // constructor has logic the literal cannot preserve, diagnose the
+            // whole unsupported shape explicitly rather than silently dropping
+            // the type or changing value semantics via a class downgrade.
+            HashSet<ConstructorDeclarationSyntax> callSiteLoweredStructConstructors = null;
             if (!lift.DropConstructor &&
                 (kind == TypeDeclarationKind.Struct || kind == TypeDeclarationKind.DataStruct) &&
                 mergedMembers.OfType<ConstructorDeclarationSyntax>().Any(c => !c.Modifiers.Any(SyntaxKind.StaticKeyword)))
             {
-                this.context.ReportUnsupported(
-                    node,
-                    $"'{node.Identifier.Text}' has no canonical G# form: it is a '{(kind == TypeDeclarationKind.DataStruct ? "record struct" : "struct")}' with multiple and/or unliftable instance constructors, and a G# struct/data struct admits no explicit 'init(...)' constructor by design (ADR-0115 §B.5, §B.14; issue #1990). Silently mapping it to a class would change value semantics to reference semantics (Equals/GetHashCode become reference-identity, default(T) becomes null, copies become aliases, storage becomes heap-allocated), so it is not auto-translated. Rework the C# type to a single liftable constructor, explicitly accept a documented class downgrade and re-author it as a class, or file a G# language-gap issue requesting explicit 'init' support on structs.");
-                return null;
+                callSiteLoweredStructConstructors = new HashSet<ConstructorDeclarationSyntax>();
+                string unsupportedConstructorReason = null;
+                foreach (ConstructorDeclarationSyntax ctor in mergedMembers
+                    .OfType<ConstructorDeclarationSyntax>()
+                    .Where(c => !c.Modifiers.Any(SyntaxKind.StaticKeyword)))
+                {
+                    using IDisposable modelScope = this.context.UseSemanticModelFor(ctor.SyntaxTree);
+                    var ctorSymbol = this.context.GetDeclaredSymbol(ctor) as IMethodSymbol;
+                    if (!this.TryAnalyzeStructConstructor(
+                        ctorSymbol,
+                        symbol,
+                        out _,
+                        out unsupportedConstructorReason))
+                    {
+                        break;
+                    }
+
+                    callSiteLoweredStructConstructors.Add(ctor);
+                }
+
+                int instanceConstructorCount = mergedMembers
+                    .OfType<ConstructorDeclarationSyntax>()
+                    .Count(c => !c.Modifiers.Any(SyntaxKind.StaticKeyword));
+                if (callSiteLoweredStructConstructors.Count != instanceConstructorCount)
+                {
+                    this.context.ReportUnsupported(
+                        node,
+                        $"'{node.Identifier.Text}' has no canonical G# form: it is a '{(kind == TypeDeclarationKind.DataStruct ? "record struct" : "struct")}' with an instance constructor that cannot be lowered to call-site struct literals. {unsupportedConstructorReason} A G# struct/data struct admits no explicit 'init(...)' constructor by design (ADR-0115 §B.5, §B.14; issues #1990 and #2435). Silently mapping it to a class would change value semantics to reference semantics (Equals/GetHashCode become reference-identity, default(T) becomes null, copies become aliases, storage becomes heap-allocated), so it is not auto-translated.");
+                    return null;
+                }
+
+                this.context.Report(new TranslationDiagnostic(
+                    nameof(SyntaxKind.ConstructorDeclaration),
+                    $"struct '{node.Identifier.Text}' constructor overloads are lowered at their call sites to G# struct literals because G# value aggregates have no explicit 'init(...)' members (issue #2435).",
+                    node.GetLocation(),
+                    TranslationSeverity.Info));
             }
 
             // Issue #2003: a primary-constructor parameter (native C#12 shape or
@@ -1192,7 +1212,13 @@ public sealed partial class CSharpToGSharpTranslator
                 // in a different `SyntaxTree`; resolve it (and everything nested
                 // inside it) through that tree's own semantic model.
                 using IDisposable modelScope = this.context.UseSemanticModelFor(member.SyntaxTree);
-                foreach ((GMember translated, bool isStatic) in this.TranslateMember(member, kind.Value, lift, propertyCtorInits, primaryCtorParamNames))
+                foreach ((GMember translated, bool isStatic) in this.TranslateMember(
+                    member,
+                    kind.Value,
+                    lift,
+                    propertyCtorInits,
+                    primaryCtorParamNames,
+                    callSiteLoweredStructConstructors))
                 {
                     // A C# operator overload translates to a receiver-clause
                     // `func (a T) operator <op>(...)`; like every receiver-clause

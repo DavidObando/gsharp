@@ -1282,6 +1282,56 @@ public sealed partial class CSharpToGSharpTranslator
                 return collectionInitializer;
             }
 
+            var valueType = typeSymbol as INamedTypeSymbol;
+            bool isSourceValueStruct =
+                valueType is { TypeKind: TypeKind.Struct, SpecialType: SpecialType.None } &&
+                !valueType.IsTupleType &&
+                !valueType.DeclaringSyntaxReferences.IsEmpty;
+
+            string structUnsupportedReason = null;
+            if (isSourceValueStruct &&
+                (initializer == null || initializer.IsKind(SyntaxKind.ObjectInitializerExpression)))
+            {
+                bool builtStructFields = this.TryBuildSourceStructConstructorFields(
+                    creationNode,
+                    valueType,
+                    arguments,
+                    out List<FieldInitializer> constructorFields,
+                    out bool usesCallablePrimaryConstructor,
+                    out structUnsupportedReason);
+                if (builtStructFields && !usesCallablePrimaryConstructor)
+                {
+                    if (initializer != null)
+                    {
+                        List<FieldInitializer> initializerFields = this.TranslateObjectInitializerFields(initializer);
+                        var initializedNames = new HashSet<string>(
+                            constructorFields.Select(field => field.Name),
+                            StringComparer.Ordinal);
+                        FieldInitializer duplicate = initializerFields.FirstOrDefault(field => initializedNames.Contains(field.Name));
+                        if (duplicate != null)
+                        {
+                            string message =
+                                $"object initializer overwrites constructor-initialized struct member '{duplicate.Name}'. " +
+                                "Collapsing both writes into one G# struct-literal field could drop constructor evaluation " +
+                                "or side effects (issue #2435).";
+                            this.context.ReportUnsupported(
+                                initializer,
+                                message);
+                        }
+                        else
+                        {
+                            constructorFields.AddRange(initializerFields);
+                        }
+                    }
+
+                    return new CompositeLiteralExpression(type, constructorFields);
+                }
+                else if (!builtStructFields && structUnsupportedReason != null)
+                {
+                    this.context.ReportUnsupported(creationNode, structUnsupportedReason);
+                }
+            }
+
             if (initializer != null && initializer.IsKind(SyntaxKind.ObjectInitializerExpression))
             {
                 // An object initializer `new T { Field = value, ... }` with NO
@@ -1324,65 +1374,56 @@ public sealed partial class CSharpToGSharpTranslator
             // initializer shape) has no field to zip into either, so it must NOT
             // be silently absorbed into a bogus zip — skip straight to
             // `BuildConstruction` and let the initializer's own diagnostic stand.
-            if (initializer == null &&
-                typeSymbol is INamedTypeSymbol { TypeKind: TypeKind.Struct, SpecialType: SpecialType.None } valueType &&
-                !valueType.IsTupleType &&
-                !valueType.DeclaringSyntaxReferences.IsEmpty)
+            return BuildConstruction(type, arguments);
+        }
+
+        private bool TryBuildSourceStructConstructorFields(
+            BaseObjectCreationExpressionSyntax creationNode,
+            INamedTypeSymbol valueType,
+            IReadOnlyList<GExpression> arguments,
+            out List<FieldInitializer> fieldInitializers,
+            out bool usesCallablePrimaryConstructor,
+            out string unsupportedReason)
+        {
+            fieldInitializers = null;
+            usesCallablePrimaryConstructor = false;
+            var ctorSymbol = this.context.GetSymbolInfo(creationNode).Symbol as IMethodSymbol;
+            if (ctorSymbol == null)
             {
-                // A parameterless `new T()` on a source value struct has no callable
-                // constructor surface in G# either; the default (zero-initialised)
-                // value is the empty struct literal `T{}`. Emitting a `T()` call here
-                // would surface as GS0130 ("function 'T' doesn't exist").
-                if (arguments.Count == 0)
-                {
-                    return new CompositeLiteralExpression(type, new List<FieldInitializer>());
-                }
-
-                // Issue #1739: the positional arguments must zip to the members the
-                // ACTUAL invoked constructor assigns them to (in ITS parameter
-                // order), never to `valueType`'s members in bare declaration order —
-                // a hand-written struct is free to declare members in any order
-                // relative to its constructor's parameter list, and a "trivial" ctor
-                // parameter can rename or transform on its way to the member.
-                // `GetSymbolInfo` gives the exact overload Roslyn resolved for this
-                // call site (handling overloads precisely, unlike an arity guess),
-                // and `arguments` is already reordered by `TranslateArguments` into
-                // that constructor's parameter DECLARATION order.
-                var ctorSymbol = this.context.GetSymbolInfo(creationNode).Symbol as IMethodSymbol;
-
-                // A `record struct` / `data struct`'s POSITIONAL primary constructor
-                // is declared as its OWN G# primary constructor (e.g. `data struct
-                // Pos(X int32, Y int32)`) and, unlike a plain struct, IS directly
-                // callable in G# — so `new Pos(1, 2)` maps to the genuine
-                // constructor call `Pos(1, 2)`, not a struct literal; that also
-                // sidesteps the fact that a record's primary ctor has no
-                // `ConstructorDeclarationSyntax` body to walk.
-                if (valueType.IsRecord &&
-                    ctorSymbol != null &&
-                    ctorSymbol.DeclaringSyntaxReferences.Length == 1 &&
-                    ctorSymbol.DeclaringSyntaxReferences[0].GetSyntax() is not ConstructorDeclarationSyntax)
-                {
-                    return BuildConstruction(type, arguments);
-                }
-
-                if (this.TryMapCtorParametersToMembers(ctorSymbol, valueType, out List<string> targetNames, out string unsupportedReason))
-                {
-                    var fieldInitializers = new List<FieldInitializer>();
-                    for (int i = 0; i < arguments.Count; i++)
-                    {
-                        fieldInitializers.Add(new FieldInitializer(targetNames[i], arguments[i]));
-                    }
-
-                    return new CompositeLiteralExpression(type, fieldInitializers);
-                }
-
-                // The constructor's logic cannot be expressed by a G# struct literal
-                // (it has no callable constructor body to run the logic in) — report
-                // it rather than emit a silently-wrong positional zip (issue #1739).
-                this.context.ReportUnsupported(creationNode, unsupportedReason);
+                unsupportedReason = "the invoked source struct constructor could not be resolved; " +
+                    "a G# struct literal cannot be built safely (issue #2435).";
+                return false;
             }
 
-            return BuildConstruction(type, arguments);
+            if (ctorSymbol.DeclaringSyntaxReferences.IsEmpty && arguments.Count == 0)
+            {
+                fieldInitializers = new List<FieldInitializer>();
+                unsupportedReason = null;
+                return true;
+            }
+
+            if (ctorSymbol.DeclaringSyntaxReferences.Length == 1 &&
+                ctorSymbol.DeclaringSyntaxReferences[0].GetSyntax() is TypeDeclarationSyntax { ParameterList: not null })
+            {
+                usesCallablePrimaryConstructor = true;
+                unsupportedReason = null;
+                return true;
+            }
+
+            if (!this.TryAnalyzeStructConstructor(
+                ctorSymbol,
+                valueType,
+                out StructConstructorPlan plan,
+                out unsupportedReason))
+            {
+                return false;
+            }
+
+            return this.TryInstantiateStructConstructorPlan(
+                plan,
+                arguments,
+                out fieldInitializers,
+                out unsupportedReason);
         }
 
         /// <summary>
@@ -1541,6 +1582,11 @@ public sealed partial class CSharpToGSharpTranslator
         /// </summary>
         private GExpression BuildObjectInitializerLiteral(InitializerExpressionSyntax initializer, GTypeReference type)
         {
+            return new CompositeLiteralExpression(type, this.TranslateObjectInitializerFields(initializer));
+        }
+
+        private List<FieldInitializer> TranslateObjectInitializerFields(InitializerExpressionSyntax initializer)
+        {
             var fieldInitializers = new List<FieldInitializer>();
             foreach (ExpressionSyntax element in initializer.Expressions)
             {
@@ -1585,7 +1631,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            return new CompositeLiteralExpression(type, fieldInitializers);
+            return fieldInitializers;
         }
 
         /// <summary>
@@ -1791,165 +1837,344 @@ public sealed partial class CSharpToGSharpTranslator
             return elements;
         }
 
-        /// <summary>
-        /// Resolves a source struct's positional constructor to the members its
-        /// parameters actually initialize, in constructor parameter order (issue
-        /// #1739). Only the trivial "assign-through" ctor shape is resolved — every
-        /// statement a plain <c>Member = param;</c> assignment, one per parameter,
-        /// with no transformation, no chained <c>this(...)</c>/<c>base(...)</c>
-        /// call, and no expression-bodied ctor. A G# struct literal has no callable
-        /// constructor body to run other logic in, so any ctor that does not fit
-        /// this shape cannot be translated correctly — the caller reports it
-        /// unsupported rather than falling back to a guessed member order.
-        /// </summary>
-        /// <param name="ctorSymbol">The constructor symbol resolved for the <c>new</c> call site (via the semantic model), or <see langword="null"/> if unresolved.</param>
-        /// <param name="valueType">The source struct type being constructed.</param>
-        /// <param name="targetNames">On success, the member name each positional argument (in argument order) initializes.</param>
-        /// <param name="unsupportedReason">On failure, a human-readable reason suitable for <see cref="TranslationContext.ReportUnsupported"/>.</param>
-        /// <returns><see langword="true"/> if every constructor parameter was resolved to exactly one member.</returns>
-        private bool TryMapCtorParametersToMembers(
+        private bool TryAnalyzeStructConstructor(
             IMethodSymbol ctorSymbol,
             INamedTypeSymbol valueType,
-            out List<string> targetNames,
+            out StructConstructorPlan plan,
             out string unsupportedReason)
         {
-            targetNames = null;
+            return this.TryAnalyzeStructConstructor(
+                ctorSymbol,
+                valueType,
+                new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default),
+                out plan,
+                out unsupportedReason);
+        }
 
-            if (ctorSymbol == null || ctorSymbol.MethodKind != MethodKind.Constructor)
+        private bool TryAnalyzeStructConstructor(
+            IMethodSymbol ctorSymbol,
+            INamedTypeSymbol valueType,
+            HashSet<IMethodSymbol> activeConstructors,
+            out StructConstructorPlan plan,
+            out string unsupportedReason)
+        {
+            plan = null;
+            if (ctorSymbol == null ||
+                valueType == null ||
+                ctorSymbol.MethodKind != MethodKind.Constructor)
             {
-                unsupportedReason = "the invoked struct constructor could not be resolved via the semantic " +
-                    "model; a positional G# struct literal cannot be built without knowing which member each " +
-                    "argument initializes (issue #1739).";
+                unsupportedReason = "the invoked struct constructor could not be resolved via the semantic model; " +
+                    "a G# struct literal cannot be built safely (issue #1739; issue #2435).";
                 return false;
             }
 
-            // A `record struct` / `data struct`'s POSITIONAL primary constructor
-            // (`data struct Point(int X, int Y)`) never reaches this point — the
-            // caller routes it to a genuine constructor call instead (records have
-            // a real, directly callable primary constructor in G#), since it has
-            // no `ConstructorDeclarationSyntax` body to walk here.
-            if (ctorSymbol.DeclaringSyntaxReferences.Length != 1 ||
-                ctorSymbol.DeclaringSyntaxReferences[0].GetSyntax() is not ConstructorDeclarationSyntax ctorSyntax ||
-                ctorSyntax.Body == null ||
-                ctorSyntax.Initializer != null)
+            if (!activeConstructors.Add(ctorSymbol.OriginalDefinition))
             {
-                unsupportedReason = "struct constructor is not a simple block-bodied constructor with no " +
-                    "chained this()/base() call; a positional G# struct literal cannot express its logic " +
-                    "(issue #1739).";
+                unsupportedReason = "struct constructor delegation is recursive; a G# struct literal cannot express it (issue #2435).";
                 return false;
             }
 
-            // The constructor may live in a different file than the one currently
-            // being translated (the active `this.context.SemanticModel` is pinned
-            // to the current tree), so its body must be analyzed via a semantic
-            // model for ITS OWN tree. When the project is loaded through
-            // MSBuildWorkspace, a struct declared in a REFERENCED project surfaces
-            // as a source symbol whose tree belongs to that project's compilation
-            // (a `CompilationReference`) — asking the CURRENT compilation for a
-            // model over that foreign tree throws, so resolve the model from the
-            // compilation that owns the tree. The zip must still happen for such
-            // types: in a co-translated bundle (e.g. the library + its .Tests
-            // project in test-parity) the struct is emitted as G# source with no
-            // callable constructor, so `new T(a, b)` has to become a composite
-            // literal exactly as it does for a same-project struct.
-            SemanticModel ctorModel;
+            try
+            {
+                if (ctorSymbol.DeclaringSyntaxReferences.Length != 1 ||
+                    ctorSymbol.DeclaringSyntaxReferences[0].GetSyntax() is not ConstructorDeclarationSyntax ctorSyntax ||
+                    ctorSyntax.Body == null ||
+                    ctorSyntax.ExpressionBody != null)
+                {
+                    unsupportedReason = "struct constructor is not a single block-bodied source constructor; " +
+                        "a G# struct literal cannot express its logic (issue #1739; issue #2435).";
+                    return false;
+                }
+
+                if (!this.TryGetStructConstructorSemanticModel(ctorSyntax, out SemanticModel ctorModel))
+                {
+                    unsupportedReason = "struct constructor syntax belongs to no reachable compilation; " +
+                        "its body cannot be analyzed for a G# struct literal (issue #1739; issue #2435).";
+                    return false;
+                }
+
+                var initializations = new List<StructMemberInitialization>();
+                var memberNames = new HashSet<string>(StringComparer.Ordinal);
+                var parameterUseCounts = new int[ctorSymbol.Parameters.Length];
+
+                if (ctorSyntax.Initializer != null)
+                {
+                    if (!ctorSyntax.Initializer.ThisOrBaseKeyword.IsKind(SyntaxKind.ThisKeyword))
+                    {
+                        unsupportedReason = "struct constructor has a base-constructor initializer; " +
+                            "a G# struct literal cannot express it (issue #2435).";
+                        return false;
+                    }
+
+                    var delegatedCtor = ctorModel.GetSymbolInfo(ctorSyntax.Initializer).Symbol as IMethodSymbol;
+                    if (!this.TryAnalyzeStructConstructor(
+                        delegatedCtor,
+                        valueType,
+                        activeConstructors,
+                        out StructConstructorPlan delegatedPlan,
+                        out unsupportedReason))
+                    {
+                        return false;
+                    }
+
+                    SeparatedSyntaxList<ArgumentSyntax> initializerArguments = ctorSyntax.Initializer.ArgumentList.Arguments;
+                    if (initializerArguments.Any(a => a.NameColon != null || !a.RefKindKeyword.IsKind(SyntaxKind.None)) ||
+                        initializerArguments.Count != delegatedCtor.Parameters.Length)
+                    {
+                        unsupportedReason = "struct constructor delegation uses named, ref/out/in, optional, or otherwise " +
+                            "non-positional arguments; no canonical G# struct-literal lowering exists yet (issue #2435).";
+                        return false;
+                    }
+
+                    foreach (StructMemberInitialization delegatedInitialization in delegatedPlan.Initializations)
+                    {
+                        StructMemberInitialization remapped = delegatedInitialization;
+                        if (delegatedInitialization.ParameterOrdinal is int delegatedOrdinal)
+                        {
+                            ExpressionSyntax argumentExpression = initializerArguments[delegatedOrdinal].Expression;
+                            if (!this.TryClassifyStructInitializerValue(
+                                argumentExpression,
+                                ctorModel,
+                                ctorSymbol,
+                                out int? parameterOrdinal,
+                                out ExpressionSyntax fixedExpression,
+                                out unsupportedReason))
+                            {
+                                return false;
+                            }
+
+                            remapped = parameterOrdinal is int remappedOrdinal
+                                ? new StructMemberInitialization(delegatedInitialization.MemberName, remappedOrdinal)
+                                : new StructMemberInitialization(delegatedInitialization.MemberName, fixedExpression);
+                        }
+
+                        if (!memberNames.Add(remapped.MemberName))
+                        {
+                            unsupportedReason = $"struct constructor initializes member '{remapped.MemberName}' more than once across " +
+                                "constructor delegation; collapsing those writes into one struct-literal field could drop evaluation " +
+                                "or side effects (issue #2435).";
+                            return false;
+                        }
+
+                        if (remapped.ParameterOrdinal is int ordinal)
+                        {
+                            parameterUseCounts[ordinal]++;
+                        }
+
+                        initializations.Add(remapped);
+                    }
+                }
+
+                foreach (StatementSyntax statement in ctorSyntax.Body.Statements)
+                {
+                    if (statement is not ExpressionStatementSyntax exprStatement ||
+                        exprStatement.Expression is not AssignmentExpressionSyntax assignment ||
+                        !assignment.OperatorToken.IsKind(SyntaxKind.EqualsToken))
+                    {
+                        unsupportedReason = "struct constructor has a statement other than a plain member assignment; " +
+                            "a G# struct literal cannot express its logic (issue #1739; issue #2435).";
+                        return false;
+                    }
+
+                    ISymbol leftSymbol = ctorModel.GetSymbolInfo(assignment.Left).Symbol;
+                    string memberName = leftSymbol switch
+                    {
+                        IFieldSymbol f when !f.IsStatic &&
+                            SymbolEqualityComparer.Default.Equals(f.ContainingType, valueType.OriginalDefinition) => f.Name,
+                        IPropertySymbol p when !p.IsStatic &&
+                            SymbolEqualityComparer.Default.Equals(p.ContainingType, valueType.OriginalDefinition) => p.Name,
+                        _ => null,
+                    };
+
+                    if (memberName == null || !memberNames.Add(memberName))
+                    {
+                        unsupportedReason = "struct constructor assignment does not target a unique instance field/property " +
+                            "of the declaring struct; a G# struct literal cannot preserve it (issue #2435).";
+                        return false;
+                    }
+
+                    if (!this.TryClassifyStructInitializerValue(
+                        assignment.Right,
+                        ctorModel,
+                        ctorSymbol,
+                        out int? parameterOrdinal,
+                        out ExpressionSyntax fixedExpression,
+                        out unsupportedReason))
+                    {
+                        return false;
+                    }
+
+                    if (parameterOrdinal is int ordinal)
+                    {
+                        parameterUseCounts[ordinal]++;
+                        initializations.Add(new StructMemberInitialization(memberName, ordinal));
+                    }
+                    else
+                    {
+                        initializations.Add(new StructMemberInitialization(memberName, fixedExpression));
+                    }
+                }
+
+                if (parameterUseCounts.Any(count => count != 1))
+                {
+                    unsupportedReason = "struct constructor does not consume every argument exactly once in a direct member " +
+                        "assignment/delegation. Repeating an argument expression could duplicate side effects, while omitting it " +
+                        "could drop evaluation; no canonical G# struct-literal lowering exists (issue #1739; issue #2435).";
+                    return false;
+                }
+
+                int declaredInstanceConstructorCount = ctorSymbol.ContainingType.InstanceConstructors.Count(
+                    constructor => !constructor.DeclaringSyntaxReferences.IsEmpty);
+                bool fixedInitializersAreDeclaredOnType =
+                    declaredInstanceConstructorCount == 1 &&
+                    ctorSyntax.Initializer == null;
+                plan = new StructConstructorPlan(
+                    ctorSymbol,
+                    initializations,
+                    fixedInitializersAreDeclaredOnType);
+                unsupportedReason = null;
+                return true;
+            }
+            finally
+            {
+                activeConstructors.Remove(ctorSymbol.OriginalDefinition);
+            }
+        }
+
+        private bool TryGetStructConstructorSemanticModel(
+            ConstructorDeclarationSyntax ctorSyntax,
+            out SemanticModel ctorModel)
+        {
             if (this.context.Compilation.ContainsSyntaxTree(ctorSyntax.SyntaxTree))
             {
                 ctorModel = this.context.Compilation.GetSemanticModel(ctorSyntax.SyntaxTree);
+                return true;
             }
-            else
-            {
-                Compilation owningCompilation = this.context.Compilation.References
-                    .OfType<CompilationReference>()
-                    .Select(reference => (Compilation)reference.Compilation)
-                    .FirstOrDefault(candidate => candidate.ContainsSyntaxTree(ctorSyntax.SyntaxTree));
-                if (owningCompilation is null)
-                {
-                    unsupportedReason = "struct constructor syntax belongs to no reachable compilation; " +
-                        "its body cannot be analyzed for a positional G# struct literal (issue #1739).";
-                    return false;
-                }
 
+            Compilation owningCompilation = this.context.Compilation.References
+                .OfType<CompilationReference>()
+                .Select(reference => (Compilation)reference.Compilation)
+                .FirstOrDefault(candidate => candidate.ContainsSyntaxTree(ctorSyntax.SyntaxTree));
+            if (owningCompilation != null)
+            {
                 ctorModel = owningCompilation.GetSemanticModel(ctorSyntax.SyntaxTree);
+                return true;
             }
 
-            // Keyed by parameter ORDINAL rather than by `IParameterSymbol` itself:
-            // for a GENERIC struct (`Slot<T>`), `ctorModel` resolves the ctor body
-            // against the type's ORIGINAL (unbound) definition, so the parameter
-            // symbols seen here are `Slot<T>`'s, while `ctorSymbol` (passed in from
-            // the `new Slot<int>(...)` call site) is the CONSTRUCTED method whose
-            // parameters belong to `Slot<int>` — two distinct, non-equal symbols
-            // for the same declaration. Ordinal position is substitution-invariant
-            // and is exactly what the final zip below needs anyway.
-            var paramToMember = new Dictionary<int, string>();
-            foreach (StatementSyntax statement in ctorSyntax.Body.Statements)
+            ctorModel = null;
+            return false;
+        }
+
+        private bool TryClassifyStructInitializerValue(
+            ExpressionSyntax expression,
+            SemanticModel ctorModel,
+            IMethodSymbol ctorSymbol,
+            out int? parameterOrdinal,
+            out ExpressionSyntax fixedExpression,
+            out string unsupportedReason)
+        {
+            ISymbol directSymbol = ctorModel.GetSymbolInfo(expression).Symbol;
+            if (directSymbol is IParameterSymbol parameter &&
+                SymbolEqualityComparer.Default.Equals(
+                    parameter.ContainingSymbol.OriginalDefinition,
+                    ctorSymbol.OriginalDefinition))
             {
-                if (statement is not ExpressionStatementSyntax exprStatement ||
-                    exprStatement.Expression is not AssignmentExpressionSyntax assignment ||
-                    !assignment.OperatorToken.IsKind(SyntaxKind.EqualsToken))
+                parameterOrdinal = parameter.Ordinal;
+                fixedExpression = null;
+                unsupportedReason = null;
+                return true;
+            }
+
+            foreach (SyntaxNode descendant in expression.DescendantNodesAndSelf())
+            {
+                if (descendant is ThisExpressionSyntax or BaseExpressionSyntax)
                 {
-                    unsupportedReason = "struct constructor has a statement other than a plain member " +
-                        "assignment; a positional G# struct literal cannot express its logic (issue #1739).";
+                    parameterOrdinal = null;
+                    fixedExpression = null;
+                    unsupportedReason = "struct constructor initializer expression reads the current instance; " +
+                        "a G# struct literal has no constructor-body receiver (issue #2435).";
                     return false;
                 }
 
-                ISymbol leftSymbol = ctorModel.GetSymbolInfo(assignment.Left).Symbol;
-
-                // Any field or property this constructor legally assigns is a
-                // valid struct-literal target — the C# compiler already enforces
-                // that only a setter/init accessor OR (for a get-only auto-
-                // property) the declaring type's OWN constructor may assign it.
-                // Issue #1739's second defect was a stale "settable" filter that
-                // actually tested READABILITY (`GetMethod != null`), which could
-                // admit a get-only COMPUTED property (no backing storage) as a
-                // zip target; that class of member can never appear here because
-                // the ctor could not legally assign it in the first place.
-                // Compared against the type's ORIGINAL DEFINITION rather than
-                // `valueType` directly: for a generic struct, `f`/`p` are resolved
-                // against the ctor's OWN (unbound) declaring tree, so their
-                // `ContainingType` is `Slot<T>` even when `valueType` is the
-                // constructed `Slot<int>` — `OriginalDefinition` makes both sides
-                // the same unbound symbol regardless of type-argument substitution.
-                string memberName = leftSymbol switch
+                if (descendant is not SimpleNameSyntax simpleName)
                 {
-                    IFieldSymbol f when !f.IsStatic && SymbolEqualityComparer.Default.Equals(f.ContainingType, valueType.OriginalDefinition) => f.Name,
-                    IPropertySymbol p when !p.IsStatic && SymbolEqualityComparer.Default.Equals(p.ContainingType, valueType.OriginalDefinition) => p.Name,
-                    _ => null,
+                    continue;
+                }
+
+                ISymbol symbol = ctorModel.GetSymbolInfo(simpleName).Symbol;
+                bool isInstanceMember = symbol switch
+                {
+                    IFieldSymbol field => !field.IsStatic,
+                    IPropertySymbol property => !property.IsStatic,
+                    IMethodSymbol method => !method.IsStatic,
+                    IEventSymbol @event => !@event.IsStatic,
+                    _ => false,
                 };
 
-                // The right-hand side must be exactly a reference to one of the
-                // constructor's OWN parameters — anything else (a literal, a
-                // computed expression, a call) is a transformation the struct
-                // literal cannot replay. Compared via `OriginalDefinition` for the
-                // same reason as above: `rightParameter` belongs to the ctor's
-                // unbound declaration, while `ctorSymbol` may be a constructed
-                // generic method resolved at the `new Slot<int>(...)` call site.
-                ISymbol rightSymbol = ctorModel.GetSymbolInfo(assignment.Right).Symbol;
-                bool isPlainParameterAssign = memberName != null &&
-                    rightSymbol is IParameterSymbol rightParameter &&
-                    SymbolEqualityComparer.Default.Equals(rightParameter.ContainingSymbol.OriginalDefinition, ctorSymbol.OriginalDefinition) &&
-                    !paramToMember.ContainsKey(rightParameter.Ordinal);
-
-                if (!isPlainParameterAssign)
+                if (symbol is IParameterSymbol or ILocalSymbol || isInstanceMember)
                 {
-                    unsupportedReason = "struct constructor assigns a member from something other than a " +
-                        "plain, once-only parameter reference (a transformation, method call, or repeated " +
-                        "parameter use); a positional G# struct literal cannot express its logic (issue #1739).";
+                    parameterOrdinal = null;
+                    fixedExpression = null;
+                    unsupportedReason = "struct constructor initializer expression transforms a constructor parameter, local, " +
+                        "or instance member instead of assigning a parameter directly. Re-evaluating it in a G# struct literal " +
+                        "cannot be proven equivalent (issue #1739; issue #2435).";
                     return false;
                 }
-
-                paramToMember[((IParameterSymbol)rightSymbol).Ordinal] = memberName;
             }
 
-            if (paramToMember.Count != ctorSymbol.Parameters.Length)
+            parameterOrdinal = null;
+            fixedExpression = expression;
+            unsupportedReason = null;
+            return true;
+        }
+
+        private bool TryInstantiateStructConstructorPlan(
+            StructConstructorPlan plan,
+            IReadOnlyList<GExpression> arguments,
+            out List<FieldInitializer> fieldInitializers,
+            out string unsupportedReason)
+        {
+            fieldInitializers = new List<FieldInitializer>();
+            if (arguments.Count != plan.Constructor.Parameters.Length)
             {
-                unsupportedReason = "struct constructor does not assign every parameter directly to a member " +
-                    "(some parameter feeds other logic, e.g. validation); a positional G# struct literal cannot " +
-                    "express its logic (issue #1739).";
+                unsupportedReason = "translated constructor argument count does not match the resolved struct constructor; " +
+                    "a G# struct literal cannot be built safely (issue #2435).";
                 return false;
             }
 
-            targetNames = ctorSymbol.Parameters.Select(p => paramToMember[p.Ordinal]).ToList();
+            foreach (StructMemberInitialization initialization in plan.Initializations)
+            {
+                if (initialization.ParameterOrdinal == null &&
+                    plan.FixedInitializersAreDeclaredOnType)
+                {
+                    continue;
+                }
+
+                GExpression value;
+                if (initialization.ParameterOrdinal is int ordinal)
+                {
+                    value = arguments[ordinal];
+                }
+                else
+                {
+                    ExpressionSyntax fixedExpression = initialization.FixedExpression;
+                    if (!this.context.Compilation.ContainsSyntaxTree(fixedExpression.SyntaxTree))
+                    {
+                        unsupportedReason = "a source struct constructor in another compilation contains a fixed initializer " +
+                            "expression; that expression cannot yet be rebound safely at this call site (issue #2435).";
+                        fieldInitializers = null;
+                        return false;
+                    }
+
+                    using IDisposable modelScope = this.context.UseSemanticModelFor(fixedExpression.SyntaxTree);
+                    value = this.TranslateExpression(fixedExpression);
+                }
+
+                fieldInitializers.Add(new FieldInitializer(
+                    SanitizeIdentifier(initialization.MemberName),
+                    value));
+            }
+
             unsupportedReason = null;
             return true;
         }

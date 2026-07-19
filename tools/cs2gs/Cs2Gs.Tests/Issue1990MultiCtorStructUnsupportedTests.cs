@@ -31,12 +31,12 @@ namespace Cs2Gs.Tests;
 /// <c>default(T)</c> becomes <c>null</c>, copy-on-assign becomes aliasing,
 /// storage becomes heap-allocated — which is exactly the kind of silent
 /// approximation ADR-0115 §B ("the translator never guesses") forbids. Per
-/// ADR-0115's own guidance, this construct has no canonical G# form, so it is
-/// now reported as a loud <c>Unsupported</c> diagnostic and the type is
-/// dropped from the emitted output (same pattern as the "unsupported
-/// aggregate kind" gap), leaving a human to decide: rework the C# source to a
-/// single liftable constructor, explicitly accept a documented class
-/// downgrade, or file a G# language-gap issue for explicit struct <c>init</c>.
+/// ADR-0115's own guidance, a constructor shape that cannot be replayed as a
+/// call-site struct literal is reported as a loud <c>Unsupported</c>
+/// diagnostic and the type is dropped from the emitted output. Issue #2435
+/// later generalized the representable case: multiple simple constructors are
+/// preserved by lowering each resolved overload at its call sites, while the
+/// non-representable cases below remain explicit gaps.
 /// </summary>
 public class Issue1990MultiCtorStructUnsupportedTests
 {
@@ -65,8 +65,9 @@ namespace Demo
     }
 }");
 
-        // No canonical G# form is invented: the struct is not emitted as a
-        // class OR a struct with an invalid init.
+        // The one-argument overload consumes `both` twice. Repeating the caller's
+        // argument expression in two literal fields could duplicate side effects,
+        // so no canonical G# form is invented.
         Assert.DoesNotContain("class Point", printed);
         Assert.DoesNotContain("struct Point", printed);
 

@@ -27,7 +27,8 @@ public sealed partial class CSharpToGSharpTranslator
             TypeDeclarationKind ownerKind,
             ConstructorLift lift,
             IReadOnlyList<(string Name, GExpression Value)> propertyCtorInits,
-            IReadOnlyCollection<string> primaryCtorParamNames = null)
+            IReadOnlyCollection<string> primaryCtorParamNames = null,
+            IReadOnlyCollection<ConstructorDeclarationSyntax> callSiteLoweredStructConstructors = null)
         {
             switch (member)
             {
@@ -156,6 +157,11 @@ public sealed partial class CSharpToGSharpTranslator
                     break;
 
                 case ConstructorDeclarationSyntax ctor:
+                    if (callSiteLoweredStructConstructors?.Contains(ctor) == true)
+                    {
+                        break;
+                    }
+
                     // T2: a fully-lifted constructor is dropped entirely; its field
                     // initialization moved to field initializers / primary-ctor
                     // parameters (ADR-0115 §B.3). Assignments whose RHS reads an
