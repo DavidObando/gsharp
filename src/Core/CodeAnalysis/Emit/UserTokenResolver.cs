@@ -1964,7 +1964,7 @@ internal sealed class UserTokenResolver
         if (property == null
             || !ImportedMemberRefFactory.TryNormalizeToSymbolicContainer(receiverType, out var openDef, out var typeArguments)
             || typeArguments.IsDefaultOrEmpty
-            || !(typeArguments.Any(TypeSymbol.ContainsTypeParameter) || typeArguments.Any(ReflectionMetadataEmitter.ArgIsSymbolicUserDefined)))
+            || !typeArguments.Any(TypeSymbol.RequiresSymbolicProjection))
         {
             return false;
         }
@@ -2007,7 +2007,7 @@ internal sealed class UserTokenResolver
         if (method == null
             || !ImportedMemberRefFactory.TryNormalizeToSymbolicContainer(receiverType, out var openDef, out var typeArguments)
             || typeArguments.IsDefaultOrEmpty
-            || !(typeArguments.Any(TypeSymbol.ContainsTypeParameter) || typeArguments.Any(ReflectionMetadataEmitter.ArgIsSymbolicUserDefined)))
+            || !typeArguments.Any(TypeSymbol.RequiresSymbolicProjection))
         {
             return false;
         }
