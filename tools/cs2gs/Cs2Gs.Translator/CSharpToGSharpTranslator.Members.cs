@@ -597,8 +597,8 @@ public sealed partial class CSharpToGSharpTranslator
             IMethodSymbol invoke = symbol?.DelegateInvokeMethod;
 
             List<Parameter> parameters = this.MapParameterList(node.ParameterList);
-            GTypeReference returnType = invoke != null && invoke.ReturnsVoid
-                ? null
+            GTypeReference returnType = invoke != null
+                ? this.MapDelegateLikeReturnType(invoke, isAsync: false, node.ReturnType.GetLocation())
                 : this.MapTypeSyntax(node.ReturnType);
             List<TypeParameter> typeParameters = this.MapTypeParameters(symbol);
 

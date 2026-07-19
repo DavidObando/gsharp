@@ -790,6 +790,15 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // Issue #2504/#2496: a method group or lambda is the callable value
+            // itself, never the nullable value produced by invoking it. External
+            // oblivious-return forgiveness belongs at the callable's result
+            // contract, not as `MethodGroup!!` on the delegate conversion seam.
+            if (this.IsCallableValueExpression(recv))
+            {
+                return false;
+            }
+
             // Issue #2164: the classic lazy-singleton pattern initializes a
             // nullable static/instance field (or auto-property) under a null
             // guard (`if (F == null) { F = new(); } ... return F;` / `F ??= …;`),

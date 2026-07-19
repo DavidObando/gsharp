@@ -59,6 +59,7 @@ internal static class ObliviousNullabilityAnalyzer
     // a fresh entry and stale ones are collectible — same pattern as the
     // subclassed-base-types / partial-type-parts caches in the translator.
     private static readonly ConditionalWeakTable<Compilation, TaintResult> Cache = new();
+    private static readonly ConditionalWeakTable<Compilation, SourceAssemblySet> SourceAssemblies = new();
 
     // Which source expressions a transitive return/forwarding edge follows.
     private enum SourceScope
@@ -102,6 +103,7 @@ internal static class ObliviousNullabilityAnalyzer
             return false;
         }
 
+        RegisterSourceAssemblies(compilation, null);
         return Cache.GetValue(compilation, Compute).Tainted.Contains(Canonical(symbol));
     }
 
@@ -130,8 +132,10 @@ internal static class ObliviousNullabilityAnalyzer
     /// <para>
     /// Deliberately scoped to <paramref name="symbol"/> ITSELF (plus its
     /// remapped counterpart in each sibling) — never a same-compilation
-    /// backward walk through <paramref name="compilation"/>'s own assignment
-    /// edges to some OTHER, indirectly-connected declaration. Issue #2412's
+    /// backward walk through ordinary assignment edges to some OTHER,
+    /// indirectly-connected declaration. The sole exception is issue #2504's
+    /// explicitly tracked named-delegate return-contract edge, whose source
+    /// callable may be declared in a referenced sibling. Issue #2412's
     /// own worked example is explicit that the fix must insert `!!`
     /// forgiveness AT THE CONSUMPTION SITE while leaving the consuming
     /// project's OWN declarations (e.g. an object-initializer target
@@ -167,6 +171,7 @@ internal static class ObliviousNullabilityAnalyzer
             return false;
         }
 
+        RegisterSourceAssemblies(compilation, siblingCompilations);
         return IsTaintedCore(
             compilation,
             Canonical(symbol),
@@ -200,6 +205,7 @@ internal static class ObliviousNullabilityAnalyzer
             return false;
         }
 
+        RegisterSourceAssemblies(compilation, siblingCompilations);
         return IsTupleElementTaintedCore(
             compilation,
             Canonical(symbol),
@@ -232,6 +238,7 @@ internal static class ObliviousNullabilityAnalyzer
             return false;
         }
 
+        RegisterSourceAssemblies(compilation, siblingCompilations);
         return IsTupleElementTaintedCore(
             compilation,
             source.Symbol,
@@ -267,6 +274,20 @@ internal static class ObliviousNullabilityAnalyzer
                     compilation,
                     source.Symbol,
                     source.Path,
+                    siblingCompilations,
+                    scalarVisited,
+                    tupleVisited))
+            {
+                return true;
+            }
+        }
+
+        foreach ((ISymbol target, ISymbol source) in result.DelegateReturnEdges)
+        {
+            if (SymbolEqualityComparer.Default.Equals(target, query.Symbol)
+                && IsTaintedCore(
+                    compilation,
+                    source,
                     siblingCompilations,
                     scalarVisited,
                     tupleVisited))
@@ -487,6 +508,7 @@ internal static class ObliviousNullabilityAnalyzer
         var tupleEdges = new List<(TupleElementKey Target, TupleElementKey Source)>();
         var tupleScalarEdges = new List<(TupleElementKey Target, ISymbol Source)>();
         var scalarTupleEdges = new List<(ISymbol Target, TupleElementKey Source)>();
+        var delegateReturnEdges = new List<(ISymbol Target, ISymbol Source)>();
 
         foreach (SyntaxTree tree in compilation.SyntaxTrees)
         {
@@ -514,6 +536,15 @@ internal static class ObliviousNullabilityAnalyzer
                 tupleEdges,
                 tupleScalarEdges,
                 scalarTupleEdges);
+            CollectDelegateReturnContractEdges(
+                compilation,
+                root,
+                model,
+                tainted,
+                edges,
+                delegateReturnEdges,
+                tupleTainted,
+                tupleEdges);
         }
 
         // Issue #2285: an interface member and every member that implements it
@@ -522,7 +553,7 @@ internal static class ObliviousNullabilityAnalyzer
         // parameter) to `T?` while leaving the other (the interface property it
         // satisfies) non-null `T` — see <see cref="CollectInterfaceImplementationEdges"/>.
         CollectInterfaceImplementationEdges(compilation, edges);
-        CollectOverrideParameterEdges(compilation, edges);
+        CollectOverrideContractEdges(compilation, edges);
         CollectTupleContractEdges(compilation, tupleTainted, tupleEdges);
 
         // Fixpoint: propagate taint along the edge set until it stabilizes.
@@ -572,7 +603,8 @@ internal static class ObliviousNullabilityAnalyzer
             tupleTainted,
             tupleEdges,
             tupleScalarEdges,
-            scalarTupleEdges);
+            scalarTupleEdges,
+            delegateReturnEdges);
     }
 
     // Seeds direct null evidence for a value declaration symbol (field /
@@ -833,6 +865,17 @@ internal static class ObliviousNullabilityAnalyzer
                         model.GetDeclaredSymbol(localFunction),
                         localFunction.ExpressionBody?.Expression,
                         localFunction.Body,
+                        model,
+                        tupleTainted,
+                        tupleEdges,
+                        tupleScalarEdges);
+                    break;
+
+                case AnonymousFunctionExpressionSyntax lambda:
+                    CollectTupleReturnFlows(
+                        model.GetSymbolInfo(lambda).Symbol as IMethodSymbol,
+                        lambda.Body as ExpressionSyntax,
+                        lambda.Body as BlockSyntax,
                         model,
                         tupleTainted,
                         tupleEdges,
@@ -1676,6 +1719,17 @@ internal static class ObliviousNullabilityAnalyzer
                         scalarTupleEdges);
                     break;
 
+                case AnonymousFunctionExpressionSyntax lambda:
+                    SeedMethodLikeReturnTaint(
+                        model.GetSymbolInfo(lambda).Symbol,
+                        lambda.Body as ExpressionSyntax,
+                        lambda.Body as BlockSyntax,
+                        model,
+                        tainted,
+                        edges,
+                        scalarTupleEdges);
+                    break;
+
                 // Property / indexer getters: the "return type" is the
                 // property's own type and the taint TARGET is the property
                 // symbol itself. A getter whose expression body / `get` accessor
@@ -2018,21 +2072,12 @@ internal static class ObliviousNullabilityAnalyzer
             return;
         }
 
-        ITypeSymbol effectiveReturnType = UnwrapAwaitedType(interfaceMethod.ReturnType);
-        if (!interfaceMethod.ReturnsVoid
-            && effectiveReturnType is { IsReferenceType: true }
-            && effectiveReturnType.NullableAnnotation != NullableAnnotation.Annotated)
-        {
-            ISymbol interfaceCanonical = Canonical(interfaceMethod);
-            ISymbol implCanonical = Canonical(implementingMethod);
-            edges.Add((interfaceCanonical, implCanonical));
-            edges.Add((implCanonical, interfaceCanonical));
-        }
+        AddReturnContractEdges(interfaceMethod, implementingMethod, edges);
 
         AddParameterContractEdges(interfaceMethod.Parameters, implementingMethod.Parameters, edges);
     }
 
-    private static void CollectOverrideParameterEdges(
+    private static void CollectOverrideContractEdges(
         Compilation compilation,
         List<(ISymbol Target, ISymbol Source)> edges)
     {
@@ -2043,6 +2088,7 @@ internal static class ObliviousNullabilityAnalyzer
                 if (method.MethodKind == MethodKind.Ordinary
                     && method.OverriddenMethod is IMethodSymbol overridden)
                 {
+                    AddReturnContractEdges(method, overridden, edges);
                     AddParameterContractEdges(method.Parameters, overridden.Parameters, edges);
                 }
             }
@@ -2055,6 +2101,26 @@ internal static class ObliviousNullabilityAnalyzer
                 }
             }
         }
+    }
+
+    private static void AddReturnContractEdges(
+        IMethodSymbol first,
+        IMethodSymbol second,
+        List<(ISymbol Target, ISymbol Source)> edges)
+    {
+        ITypeSymbol effectiveReturnType = UnwrapAwaitedType(first.ReturnType);
+        if (first.ReturnsVoid
+            || second.ReturnsVoid
+            || effectiveReturnType is not { IsReferenceType: true }
+            || effectiveReturnType.NullableAnnotation == NullableAnnotation.Annotated)
+        {
+            return;
+        }
+
+        ISymbol firstCanonical = Canonical(first);
+        ISymbol secondCanonical = Canonical(second);
+        edges.Add((firstCanonical, secondCanonical));
+        edges.Add((secondCanonical, firstCanonical));
     }
 
     private static void AddParameterContractEdges(
@@ -2157,6 +2223,123 @@ internal static class ObliviousNullabilityAnalyzer
             string.Empty,
             tupleTainted,
             tupleEdges);
+    }
+
+    // Issue #2504: a source named delegate's Invoke return is a declaration
+    // contract just like an interface/base method return. Roslyn exposes the
+    // selected method group or synthesized lambda method and the converted
+    // delegate type at every conversion seam, independent of whether that seam
+    // is an initializer, assignment, argument, return, or multicast update.
+    private static void CollectDelegateReturnContractEdges(
+        Compilation compilation,
+        SyntaxNode root,
+        SemanticModel model,
+        HashSet<ISymbol> tainted,
+        List<(ISymbol Target, ISymbol Source)> edges,
+        List<(ISymbol Target, ISymbol Source)> delegateReturnEdges,
+        HashSet<TupleElementKey> tupleTainted,
+        List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges)
+    {
+        foreach (ExpressionSyntax expression in root.DescendantNodes().OfType<ExpressionSyntax>())
+        {
+            bool isLambda = expression is AnonymousFunctionExpressionSyntax;
+            if (!isLambda && model.GetMemberGroup(expression).IsDefaultOrEmpty)
+            {
+                continue;
+            }
+
+            if (model.GetTypeInfo(expression).ConvertedType is not INamedTypeSymbol delegateType
+                || delegateType.TypeKind != TypeKind.Delegate
+                || !IsSourceDelegateType(compilation, delegateType)
+                || delegateType.DelegateInvokeMethod is not IMethodSymbol invoke
+                || invoke.ReturnsVoid)
+            {
+                continue;
+            }
+
+            IMethodSymbol source = model.GetSymbolInfo(expression).Symbol as IMethodSymbol;
+            if (source == null || source.ReturnsVoid)
+            {
+                continue;
+            }
+
+            if (TryGetTupleType(invoke, out INamedTypeSymbol invokeTuple)
+                && TryGetTupleType(source, out INamedTypeSymbol sourceTuple))
+            {
+                AddTupleContractPair(
+                    invoke,
+                    invokeTuple,
+                    source,
+                    sourceTuple,
+                    tupleTainted,
+                    tupleEdges);
+                continue;
+            }
+
+            if (!IsEligibleScalarTarget(invoke))
+            {
+                continue;
+            }
+
+            ISymbol invokeCanonical = Canonical(invoke);
+            ISymbol sourceCanonical = Canonical(source);
+            edges.Add((invokeCanonical, sourceCanonical));
+            edges.Add((sourceCanonical, invokeCanonical));
+            delegateReturnEdges.Add((invokeCanonical, sourceCanonical));
+            delegateReturnEdges.Add((sourceCanonical, invokeCanonical));
+
+            if (UnwrapAwaitedType(source.ReturnType).NullableAnnotation == NullableAnnotation.Annotated)
+            {
+                tainted.Add(invokeCanonical);
+            }
+        }
+    }
+
+    private static bool IsSourceDelegateType(Compilation compilation, INamedTypeSymbol delegateType)
+    {
+        SourceAssemblySet assemblies = SourceAssemblies.GetValue(
+            compilation,
+            static current => new SourceAssemblySet(current.Assembly.Identity.GetDisplayName()));
+        lock (assemblies.Names)
+        {
+            return assemblies.Names.Contains(delegateType.ContainingAssembly.Identity.GetDisplayName());
+        }
+    }
+
+    private static void RegisterSourceAssemblies(
+        CSharpCompilation compilation,
+        IReadOnlyList<CSharpCompilation> siblingCompilations)
+    {
+        var compilations = new List<CSharpCompilation> { compilation };
+        if (siblingCompilations != null)
+        {
+            compilations.AddRange(siblingCompilations.Where(candidate => candidate != null));
+        }
+
+        string[] names = compilations
+            .Select(candidate => candidate.Assembly.Identity.GetDisplayName())
+            .Distinct(System.StringComparer.Ordinal)
+            .ToArray();
+
+        foreach (CSharpCompilation candidate in compilations)
+        {
+            SourceAssemblySet assemblies = SourceAssemblies.GetValue(
+                candidate,
+                static current => new SourceAssemblySet(current.Assembly.Identity.GetDisplayName()));
+            bool changed = false;
+            lock (assemblies.Names)
+            {
+                foreach (string name in names)
+                {
+                    changed |= assemblies.Names.Add(name);
+                }
+            }
+
+            if (changed)
+            {
+                Cache.Remove(candidate);
+            }
+        }
     }
 
     // Unwraps a (non-generic-parameter) `System.Threading.Tasks.Task<T>` or
@@ -2336,6 +2519,15 @@ internal static class ObliviousNullabilityAnalyzer
             return;
         }
 
+        // Issue #2504/#2496: assigning or returning a lambda/method group moves
+        // the callable object, not the value produced by invoking it. Its result
+        // taint is wired separately to the converted named delegate's Invoke
+        // contract; it must never make the delegate envelope itself nullable.
+        if (IsCallableValueExpression(value, model))
+        {
+            return;
+        }
+
         if (IsDirectlyNullable(value, model))
         {
             tainted.Add(target);
@@ -2387,6 +2579,17 @@ internal static class ObliviousNullabilityAnalyzer
         }
 
         AddEdges(target, value, model, edges, scope);
+    }
+
+    private static bool IsCallableValueExpression(ExpressionSyntax expression, SemanticModel model)
+    {
+        while (expression is ParenthesizedExpressionSyntax parenthesized)
+        {
+            expression = parenthesized.Expression;
+        }
+
+        return expression is AnonymousFunctionExpressionSyntax
+            || !model.GetMemberGroup(expression).IsDefaultOrEmpty;
     }
 
     private static IEnumerable<ISymbol> ResolveSources(
@@ -2775,13 +2978,15 @@ internal static class ObliviousNullabilityAnalyzer
             HashSet<TupleElementKey> tupleTainted,
             List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges,
             List<(TupleElementKey Target, ISymbol Source)> tupleScalarEdges,
-            List<(ISymbol Target, TupleElementKey Source)> scalarTupleEdges)
+            List<(ISymbol Target, TupleElementKey Source)> scalarTupleEdges,
+            List<(ISymbol Target, ISymbol Source)> delegateReturnEdges)
         {
             this.Tainted = tainted;
             this.TupleTainted = tupleTainted;
             this.TupleEdges = tupleEdges;
             this.TupleScalarEdges = tupleScalarEdges;
             this.ScalarTupleEdges = scalarTupleEdges;
+            this.DelegateReturnEdges = delegateReturnEdges;
         }
 
         public HashSet<ISymbol> Tainted { get; }
@@ -2793,5 +2998,17 @@ internal static class ObliviousNullabilityAnalyzer
         public List<(TupleElementKey Target, ISymbol Source)> TupleScalarEdges { get; }
 
         public List<(ISymbol Target, TupleElementKey Source)> ScalarTupleEdges { get; }
+
+        public List<(ISymbol Target, ISymbol Source)> DelegateReturnEdges { get; }
+    }
+
+    private sealed class SourceAssemblySet
+    {
+        public SourceAssemblySet(string currentAssembly)
+        {
+            this.Names = new HashSet<string>(System.StringComparer.Ordinal) { currentAssembly };
+        }
+
+        public HashSet<string> Names { get; }
     }
 }
