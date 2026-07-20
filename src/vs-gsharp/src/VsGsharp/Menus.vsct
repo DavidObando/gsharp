@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable">
+  <Extern href="stdidcmd.h" />
+  <Extern href="vsshlids.h" />
+  <Commands package="guidGSharpPackage">
+    <Groups>
+      <Group guid="guidGSharpCommands" id="GSharpMenuGroup" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_TOOLS" />
+      </Group>
+    </Groups>
+    <Buttons>
+      <Button guid="guidGSharpCommands" id="RestartServer" priority="0x0100" type="Button">
+        <Parent guid="guidGSharpCommands" id="GSharpMenuGroup" />
+        <Strings><ButtonText>G#: Restart Language Server</ButtonText></Strings>
+      </Button>
+      <Button guid="guidGSharpCommands" id="ShowOutput" priority="0x0110" type="Button">
+        <Parent guid="guidGSharpCommands" id="GSharpMenuGroup" />
+        <Strings><ButtonText>G#: Show Output</ButtonText></Strings>
+      </Button>
+      <Button guid="guidGSharpCommands" id="ReportIssue" priority="0x0120" type="Button">
+        <Parent guid="guidGSharpCommands" id="GSharpMenuGroup" />
+        <Strings><ButtonText>G#: Report Issue</ButtonText></Strings>
+      </Button>
+    </Buttons>
+  </Commands>
+  <Symbols>
+    <GuidSymbol name="guidGSharpPackage" value="{8B9C259A-CBF6-4E6B-941E-5566D7FB5156}" />
+    <GuidSymbol name="guidGSharpCommands" value="{D157AC8A-6B90-4C67-9BD6-CB4A59C44F13}">
+      <IDSymbol name="GSharpMenuGroup" value="0x1020" />
+      <IDSymbol name="RestartServer" value="0x0100" />
+      <IDSymbol name="ShowOutput" value="0x0101" />
+      <IDSymbol name="ReportIssue" value="0x0102" />
+    </GuidSymbol>
+  </Symbols>
+</CommandTable>

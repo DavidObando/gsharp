@@ -179,6 +179,12 @@ within VS Code (search for "G#") or from the command line:
 code --install-extension gsharplang.vscode-gsharp
 ```
 
+The repository also builds a
+[G# extension for Visual Studio 2022 and Visual Studio 2026](src/vs-gsharp/README.md).
+It provides the same language server and editor assets plus native CPS
+projects, NuGet, managed debugging, Test Explorer, project/item templates,
+snippets, and all six G# themes.
+
 ## Interoperating with .NET
 
 Every .NET type — your packages, third-party NuGet packages, the BCL —

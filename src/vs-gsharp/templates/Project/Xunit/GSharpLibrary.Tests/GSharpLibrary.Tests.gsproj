@@ -1,0 +1,17 @@
+<Project Sdk="Gsharp.NET.Sdk/0.3.159">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>$ext_safeprojectname$.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageReference Include="coverlet.collector" Version="6.0.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\$ext_safeprojectname$\$ext_safeprojectname$.gsproj" />
+  </ItemGroup>
+</Project>

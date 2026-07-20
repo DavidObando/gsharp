@@ -1,0 +1,23 @@
+<VSTemplate Version="3.0.0" Type="Project"
+            xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+  <TemplateData>
+    <Name>G# Class Library</Name>
+    <Description>A .NET class library written in G#.</Description>
+    <Icon>GSharp.ico</Icon>
+    <!-- The New Project index requires a built-in category; the .gsproj extension selects G# CPS. -->
+    <ProjectType>CSharp</ProjectType>
+    <LanguageTag>C#</LanguageTag>
+    <ProjectTypeTag>Library</ProjectTypeTag>
+    <TemplateID>GSharp.VisualStudio.Library</TemplateID>
+    <DefaultName>GSharpLibrary</DefaultName>
+    <ProvideDefaultName>true</ProvideDefaultName>
+    <CreateNewFolder>true</CreateNewFolder>
+    <CreateInPlace>true</CreateInPlace>
+    <SortOrder>110</SortOrder>
+  </TemplateData>
+  <TemplateContent>
+    <Project File="GSharpLibrary.gsproj" TargetFileName="$projectname$.gsproj" ReplaceParameters="true">
+      <ProjectItem ReplaceParameters="true">Greeter.gs</ProjectItem>
+    </Project>
+  </TemplateContent>
+</VSTemplate>

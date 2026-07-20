@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -26,6 +27,18 @@ public class Program
     /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
     public static async Task Main(string[] args)
     {
+        if (ShouldWaitForDebugger(args))
+        {
+            await Console.Error.WriteLineAsync(
+                $"Waiting for debugger attachment to process {Environment.ProcessId}.");
+            while (!Debugger.IsAttached)
+            {
+                await Task.Delay(100);
+            }
+
+            Debugger.Break();
+        }
+
         ILogger logger = NullLogger.Instance;
         var logFile = GetLogPath(args);
         if (logFile != null)
@@ -82,6 +95,9 @@ public class Program
             (logger as IDisposable)?.Dispose();
         }
     }
+
+    internal static bool ShouldWaitForDebugger(string[] args)
+        => args.Any(arg => string.Equals(arg, "--debug", StringComparison.OrdinalIgnoreCase));
 
     private static async Task RunAsync(Stream sending, Stream receiving, ILogger logger)
     {

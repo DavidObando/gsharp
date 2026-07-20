@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CodeSnippets xmlns="http://schemas.microsoft.com/VisualStudio/2005/CodeSnippet">
+  <CodeSnippet Format="1.0.0">
+    <Header>
+      <Title>Ref parameter</Title>
+      <Shortcut>refparam</Shortcut>
+      <Description>Function with a `ref` parameter (ADR-0060).</Description>
+      <Author>GSharp</Author>
+      <SnippetTypes>
+        <SnippetType>Expansion</SnippetType>
+      </SnippetTypes>
+    </Header>
+    <Snippet>
+      <Declarations>
+        <Literal Editable="true">
+          <ID>p1</ID>
+          <ToolTip>name</ToolTip>
+          <Default>name</Default>
+        </Literal>
+        <Literal Editable="true">
+          <ID>p2</ID>
+          <ToolTip>p</ToolTip>
+          <Default>p</Default>
+        </Literal>
+        <Literal Editable="true">
+          <ID>p3</ID>
+          <ToolTip>Type</ToolTip>
+          <Default>Type</Default>
+        </Literal>
+        <Literal Editable="true">
+          <ID>p4</ID>
+          <ToolTip>returnType</ToolTip>
+          <Default>returnType</Default>
+        </Literal>
+      </Declarations>
+      <Code Language="GSharp"><![CDATA[func $p1$(ref $p2$ $p3$) $p4$ {
+	$end$
+}]]></Code>
+    </Snippet>
+  </CodeSnippet>
+</CodeSnippets>

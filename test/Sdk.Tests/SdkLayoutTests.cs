@@ -109,6 +109,16 @@ public class SdkLayoutTests
         // ProduceReferenceAssembly pipeline (which sets @(IntermediateRefAssembly)
         // to obj/refint/{name}.dll) is honored.
         Assert.Equal("$(_GsharpRefAssemblyPath)", attrs["RefAssembly"]);
+
+        var runSettingsTarget = doc.Descendants(MsbuildNs + "Target")
+            .Single(t => (string)t.Attribute("Name") == "_GsharpGenerateRunSettings");
+        Assert.Equal("CoreCompile", (string)runSettingsTarget.Attribute("BeforeTargets"));
+        Assert.Contains(
+            "$(MSBuildProjectDirectory)",
+            doc.Descendants(MsbuildNs + "RunSettingsFilePath").Single().Value);
+        Assert.Contains(
+            runSettingsTarget.Descendants(MsbuildNs + "_GsharpRunSettingsLine"),
+            line => line.Attribute("Include")?.Value.Contains("$(TargetFramework)") == true);
     }
 
     [Fact]
@@ -118,6 +128,20 @@ public class SdkLayoutTests
         var text = File.ReadAllText(path);
         Assert.Contains("<ProduceReferenceAssembly", text, System.StringComparison.Ordinal);
         Assert.Contains(">true</ProduceReferenceAssembly>", text, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Sdk_Props_Excludes_LanguageServer_Cache_From_Default_Items()
+    {
+        var path = Path.Combine(RepoRoot.SdkSourceDir, "Sdk", "Sdk.props");
+        var doc = XDocument.Load(path);
+        var elements = doc.Root!.Elements().ToList();
+        var excludes = elements
+            .TakeWhile(element => element.Name.LocalName != "Import")
+            .Descendants(MsbuildNs + "DefaultItemExcludes")
+            .Single();
+
+        Assert.Contains("**/*.gsproj.lscache", excludes.Value, System.StringComparison.Ordinal);
     }
 
     [Fact]

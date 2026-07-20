@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CodeSnippets xmlns="http://schemas.microsoft.com/VisualStudio/2005/CodeSnippet">
+  <CodeSnippet Format="1.0.0">
+    <Header>
+      <Title>Ref-aliasing local</Title>
+      <Shortcut>letref</Shortcut>
+      <Description>Immutable ref-aliasing local (ADR-0060 follow-up).</Description>
+      <Author>GSharp</Author>
+      <SnippetTypes>
+        <SnippetType>Expansion</SnippetType>
+      </SnippetTypes>
+    </Header>
+    <Snippet>
+      <Declarations>
+        <Literal Editable="true">
+          <ID>p1</ID>
+          <ToolTip>alias</ToolTip>
+          <Default>alias</Default>
+        </Literal>
+        <Literal Editable="true">
+          <ID>p2</ID>
+          <ToolTip>lvalue</ToolTip>
+          <Default>lvalue</Default>
+        </Literal>
+      </Declarations>
+      <Code Language="GSharp"><![CDATA[let ref $p1$ = $p2$]]></Code>
+    </Snippet>
+  </CodeSnippet>
+</CodeSnippets>

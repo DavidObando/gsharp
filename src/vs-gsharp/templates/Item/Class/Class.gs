@@ -1,0 +1,4 @@
+package $rootnamespace$
+
+class $safeitemname$ {
+}

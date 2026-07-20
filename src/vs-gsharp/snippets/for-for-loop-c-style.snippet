@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CodeSnippets xmlns="http://schemas.microsoft.com/VisualStudio/2005/CodeSnippet">
+  <CodeSnippet Format="1.0.0">
+    <Header>
+      <Title>For loop (C-style)</Title>
+      <Shortcut>for</Shortcut>
+      <Description>C-style for loop.</Description>
+      <Author>GSharp</Author>
+      <SnippetTypes>
+        <SnippetType>Expansion</SnippetType>
+      </SnippetTypes>
+    </Header>
+    <Snippet>
+      <Declarations>
+        <Literal Editable="true">
+          <ID>p1</ID>
+          <ToolTip>i</ToolTip>
+          <Default>i</Default>
+        </Literal>
+        <Literal Editable="true">
+          <ID>p2</ID>
+          <ToolTip>0</ToolTip>
+          <Default>0</Default>
+        </Literal>
+        <Literal Editable="true">
+          <ID>p3</ID>
+          <ToolTip>count</ToolTip>
+          <Default>count</Default>
+        </Literal>
+      </Declarations>
+      <Code Language="GSharp"><![CDATA[for $p1$ := $p2$; $p1$ < $p3$; $p1$++ {
+	$end$
+}]]></Code>
+    </Snippet>
+  </CodeSnippet>
+</CodeSnippets>

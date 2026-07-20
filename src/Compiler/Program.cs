@@ -384,7 +384,14 @@ public class Program
         using (var pdbStream = pdbOutputPath is null ? null : File.Create(pdbOutputPath))
         using (var docStream = string.IsNullOrEmpty(documentationOutputPath) ? null : File.Create(documentationOutputPath))
         {
-            result = compilation.Emit(peStream, pdbStream, refStream, docStream, args.AssemblyName, args.Version);
+            result = compilation.Emit(
+                peStream,
+                pdbStream,
+                refStream,
+                docStream,
+                args.AssemblyName,
+                args.Version,
+                GetTargetFrameworkMoniker(args.TargetFramework));
         }
 
         // Apply /nowarn, /warnaserror filtering.
@@ -432,6 +439,46 @@ public class Program
         }
 
         return Success;
+    }
+
+    private static string GetTargetFrameworkMoniker(string targetFramework)
+    {
+        if (string.IsNullOrWhiteSpace(targetFramework))
+        {
+            return null;
+        }
+
+        var tfm = targetFramework.Split('-')[0];
+        if (tfm.StartsWith("netstandard", StringComparison.OrdinalIgnoreCase))
+        {
+            return ".NETStandard,Version=v" + tfm.Substring("netstandard".Length);
+        }
+
+        if (tfm.StartsWith("netcoreapp", StringComparison.OrdinalIgnoreCase))
+        {
+            return ".NETCoreApp,Version=v" + tfm.Substring("netcoreapp".Length);
+        }
+
+        if (!tfm.StartsWith("net", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var version = tfm.Substring(3);
+        if (version.Contains('.'))
+        {
+            var identifier = int.TryParse(version.Split('.')[0], out var major) && major >= 5
+                ? ".NETCoreApp"
+                : ".NETFramework";
+            return $"{identifier},Version=v{version}";
+        }
+
+        if (version.Length < 2 || !version.All(char.IsDigit))
+        {
+            return null;
+        }
+
+        return ".NETFramework,Version=v" + string.Join(".", version.Select(c => c.ToString()));
     }
 
     /// <summary>

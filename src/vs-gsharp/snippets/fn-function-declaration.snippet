@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CodeSnippets xmlns="http://schemas.microsoft.com/VisualStudio/2005/CodeSnippet">
+  <CodeSnippet Format="1.0.0">
+    <Header>
+      <Title>Function declaration</Title>
+      <Shortcut>fn</Shortcut>
+      <Description>Function declaration.</Description>
+      <Author>GSharp</Author>
+      <SnippetTypes>
+        <SnippetType>Expansion</SnippetType>
+      </SnippetTypes>
+    </Header>
+    <Snippet>
+      <Declarations>
+        <Literal Editable="true">
+          <ID>p1</ID>
+          <ToolTip>name</ToolTip>
+          <Default>name</Default>
+        </Literal>
+        <Literal Editable="true">
+          <ID>p2</ID>
+          <ToolTip>params</ToolTip>
+          <Default>params</Default>
+        </Literal>
+        <Literal Editable="true">
+          <ID>p3</ID>
+          <ToolTip>returnType</ToolTip>
+          <Default>returnType</Default>
+        </Literal>
+      </Declarations>
+      <Code Language="GSharp"><![CDATA[func $p1$($p2$) $p3$ {
+	$end$
+}]]></Code>
+    </Snippet>
+  </CodeSnippet>
+</CodeSnippets>

@@ -7,4 +7,14 @@
 
   <Import Project="$(MSBuildToolsPath)\Microsoft.Common.targets" />
 
+  <ItemGroup Condition="'$(BuildingInsideVisualStudio)' == 'true'">
+    <PropertyPageSchema Include="$(MSBuildThisFileDirectory)Gsharp.CollectedPackageReference.xaml">
+      <Context>ProjectSubscriptionService</Context>
+    </PropertyPageSchema>
+    <PropertyPageSchema Include="$(MSBuildThisFileDirectory)Gsharp.ProjectItemsSchema.xaml" />
+    <PropertyPageSchema Include="$(MSBuildThisFileDirectory)Gsharp.File.xaml">
+      <Context>File</Context>
+    </PropertyPageSchema>
+  </ItemGroup>
+
 </Project>

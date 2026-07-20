@@ -763,6 +763,10 @@ internal sealed class ReflectionMetadataEmitter
     /// <c>AssemblyInformationalVersionAttribute</c> on the assembly so NuGet
     /// and consumer tooling can display the package version.
     /// </param>
+    /// <param name="targetFrameworkMoniker">
+    /// Optional long target framework moniker emitted as
+    /// <c>TargetFrameworkAttribute</c>.
+    /// </param>
     public static void Emit(
         BoundProgram program,
         Stream peStream,
@@ -774,10 +778,12 @@ internal sealed class ReflectionMetadataEmitter
         Lowering.Iterators.AsyncIteratorRewriteResult asyncIteratorRewriteResult = null,
         DebugInformationOptions debugInformation = null,
         Stream pdbStream = null,
-        string assemblyVersion = null)
+        string assemblyVersion = null,
+        string targetFrameworkMoniker = null)
     {
         var emitter = new ReflectionMetadataEmitter(program, references, assemblyName, metadataOnly);
         emitter.emitCtx.AssemblyVersionOverride = assemblyVersion;
+        emitter.emitCtx.TargetFrameworkMoniker = targetFrameworkMoniker;
 
         emitter.emitCtx.DebugInformation = debugInformation ?? new DebugInformationOptions();
         emitter.emitCtx.PdbStream = pdbStream;

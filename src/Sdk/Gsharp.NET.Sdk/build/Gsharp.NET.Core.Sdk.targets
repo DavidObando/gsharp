@@ -18,7 +18,31 @@
        bare '.xml' filename. -->
   <PropertyGroup>
     <DocumentationFile Condition=" '$(GenerateDocumentationFile)' == 'true' and '$(DocumentationFile)' == '' ">$(IntermediateOutputPath)$(TargetName).xml</DocumentationFile>
+    <_GsharpShouldGenerateRunSettings Condition=" '$(IsTestProject)' == 'true' and '$(RunSettingsFilePath)' == '' ">true</_GsharpShouldGenerateRunSettings>
+    <RunSettingsFilePath Condition=" '$(_GsharpShouldGenerateRunSettings)' == 'true' ">$(MSBuildProjectDirectory)\$(IntermediateOutputPath)gsharp.generated.runsettings</RunSettingsFilePath>
   </PropertyGroup>
+
+  <!-- Visual Studio's legacy VSTest launcher does not infer a target framework
+       for non-C#/VB CPS projects. Supply the same standard runsettings property
+       framework adapters already honor, without overriding user runsettings. -->
+  <Target Name="_GsharpGenerateRunSettings"
+          BeforeTargets="CoreCompile"
+          Condition=" '$(_GsharpShouldGenerateRunSettings)' == 'true' ">
+    <ItemGroup>
+      <_GsharpRunSettingsLine Include="&lt;RunSettings&gt;" />
+      <_GsharpRunSettingsLine Include="  &lt;RunConfiguration&gt;" />
+      <_GsharpRunSettingsLine Include="    &lt;TargetFrameworkVersion&gt;$(TargetFramework)&lt;/TargetFrameworkVersion&gt;" />
+      <_GsharpRunSettingsLine Include="  &lt;/RunConfiguration&gt;" />
+      <_GsharpRunSettingsLine Include="&lt;/RunSettings&gt;" />
+    </ItemGroup>
+    <WriteLinesToFile Lines="@(_GsharpRunSettingsLine)"
+                      File="$(RunSettingsFilePath)"
+                      Overwrite="True"
+                      WriteOnlyWhenDifferent="True" />
+    <ItemGroup>
+      <FileWrites Include="$(RunSettingsFilePath)" />
+    </ItemGroup>
+  </Target>
 
   <!-- Locate and add mscorlib unless NoStdLib. Mirrors peachpie's Core.Sdk.targets. -->
   <ItemGroup Condition=" '$(NoStdLib)' != 'true' ">
@@ -51,6 +75,7 @@
       <_GsharpCoreCompileInputsToHash Include="$(TreatWarningsAsErrors)" />
       <_GsharpCoreCompileInputsToHash Include="$(WarningsAsErrors)" />
       <_GsharpCoreCompileInputsToHash Include="$(OutputType)" />
+      <_GsharpCoreCompileInputsToHash Include="$(TargetFramework)" />
       <_GsharpCoreCompileInputsToHash Include="$(Optimize)" />
       <_GsharpCoreCompileInputsToHash Include="$(SourceLink)" />
       <_GsharpCoreCompileInputsToHash Include="$(EmbedAllSources)" />

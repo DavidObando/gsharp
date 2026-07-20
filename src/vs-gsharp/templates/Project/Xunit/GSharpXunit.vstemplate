@@ -1,0 +1,28 @@
+<VSTemplate Version="3.0.0" Type="ProjectGroup"
+            xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+  <TemplateData>
+    <Name>G# xUnit Test Solution</Name>
+    <Description>A G# class library with an xUnit test project.</Description>
+    <Icon>GSharp.ico</Icon>
+    <!-- The New Project index requires a built-in category; the .gsproj extension selects G# CPS. -->
+    <ProjectType>CSharp</ProjectType>
+    <LanguageTag>C#</LanguageTag>
+    <ProjectTypeTag>Test</ProjectTypeTag>
+    <TemplateID>GSharp.VisualStudio.Xunit</TemplateID>
+    <DefaultName>GSharpLibrary</DefaultName>
+    <ProvideDefaultName>true</ProvideDefaultName>
+    <CreateNewFolder>true</CreateNewFolder>
+    <CreateInPlace>true</CreateInPlace>
+    <SortOrder>130</SortOrder>
+  </TemplateData>
+  <TemplateContent>
+    <ProjectCollection>
+      <ProjectTemplateLink ProjectName="$safeprojectname$" CopyParameters="true">
+        GSharpLibrary\GSharpLibrary.vstemplate
+      </ProjectTemplateLink>
+      <ProjectTemplateLink ProjectName="$safeprojectname$.Tests" CopyParameters="true">
+        GSharpLibrary.Tests\GSharpLibrary.Tests.vstemplate
+      </ProjectTemplateLink>
+    </ProjectCollection>
+  </TemplateContent>
+</VSTemplate>

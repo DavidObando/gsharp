@@ -1,0 +1,164 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <RootNamespace>GSharp.VisualStudio</RootNamespace>
+    <AssemblyName>GSharp.VisualStudio</AssemblyName>
+    <VSSDKBuildToolsAutoSetup>true</VSSDKBuildToolsAutoSetup>
+    <GeneratePkgDefFile>true</GeneratePkgDefFile>
+    <UseCodebase>true</UseCodebase>
+    <LanguageServerPublishDir>$(BaseIntermediateOutputPath)gsharp-language-server\</LanguageServerPublishDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectCapability Include="CreateVsixContainer" />
+    <VSCTCompile Include="Menus.vsct">
+      <ResourceName>Menus.ctmenu</ResourceName>
+    </VSCTCompile>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.14.40265" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VisualStudio.LanguageServer.Client" Version="17.14.60" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VisualStudio.ProjectSystem.SDK" Version="17.9.380" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="18.8.739" />
+    <PackageReference Include="Nerdbank.GitVersioning" Version="3.11.13-beta" PrivateAssets="all" />
+    <Reference Include="System.ComponentModel.Composition" />
+    <Reference Include="System.Design" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="source.extension.vsixmanifest">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="GSharp.TextMate.pkgdef">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="..\..\..\vscode-gsharp\syntaxes\gsharp.tmLanguage.json"
+             Link="Grammars\gsharp.tmLanguage.json">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="..\..\..\vscode-gsharp\syntaxes\gsharp-markdown-injection.json"
+             Link="Grammars\gsharp-markdown-injection.json">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="..\..\..\vscode-gsharp\language-configuration.json"
+             Link="Grammars\language-configuration.json">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="..\..\..\vscode-gsharp\icon.png" Link="Resources\icon.png">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="..\..\LICENSE.txt" Link="LICENSE.txt">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="..\..\snippets\*.snippet" Link="Snippets\%(Filename)%(Extension)">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="..\..\snippets\snippets.pkgdef" Link="Snippets\snippets.pkgdef">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="..\..\themes\GSharp.Themes.pkgdef" Link="Themes\GSharp.Themes.pkgdef">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+  </ItemGroup>
+
+  <Target Name="PublishGSharpLanguageServer" BeforeTargets="PrepareForBuild">
+    <MSBuild Projects="..\..\..\LanguageServer\LanguageServer.csproj"
+             Targets="Restore;Publish"
+             Properties="Configuration=$(Configuration);PublishDir=$(MSBuildProjectDirectory)\$(LanguageServerPublishDir);SelfContained=false;UseAppHost=false" />
+  </Target>
+
+  <Target Name="GetVsixVersion"
+          DependsOnTargets="GetNuGetPackageVersion"
+          Returns="$(NuGetPackageVersion)" />
+
+  <Target Name="IncludeGSharpLanguageServerInVsix"
+          BeforeTargets="GetVsixSourceItems"
+          DependsOnTargets="PublishGSharpLanguageServer">
+    <ItemGroup>
+      <Content Include="$(LanguageServerPublishDir)**\*"
+               Link=".server\%(RecursiveDir)%(Filename)%(Extension)">
+        <IncludeInVSIX>true</IncludeInVSIX>
+      </Content>
+    </ItemGroup>
+  </Target>
+
+  <Target Name="BuildGSharpTemplates"
+          BeforeTargets="GetVsixSourceItems"
+          DependsOnTargets="GetBuildVersion">
+    <PropertyGroup>
+      <GSharpTemplateRoot>$(BaseIntermediateOutputPath)vs-templates\</GSharpTemplateRoot>
+      <GSharpTemplateStage>$(GSharpTemplateRoot)source\</GSharpTemplateStage>
+    </PropertyGroup>
+    <RemoveDir Directories="$(GSharpTemplateStage)" />
+    <ItemGroup>
+      <_GSharpTemplateSource Include="..\..\templates\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_GSharpTemplateSource)"
+          DestinationFiles="@(_GSharpTemplateSource->'$(GSharpTemplateStage)%(RecursiveDir)%(Filename)%(Extension)')" />
+    <ItemGroup>
+      <_GSharpTemplateProject Include="$(GSharpTemplateStage)Project\**\*.gsproj" />
+    </ItemGroup>
+    <XmlPoke XmlInputPath="%(_GSharpTemplateProject.Identity)"
+             Query="/Project/@Sdk"
+             Value="Gsharp.NET.Sdk/$(NuGetPackageVersion)" />
+    <ZipDirectory SourceDirectory="$(GSharpTemplateStage)Project\Console"
+                  DestinationFile="$(GSharpTemplateRoot)GSharpConsole.zip"
+                  Overwrite="true" />
+    <ZipDirectory SourceDirectory="$(GSharpTemplateStage)Project\Library"
+                  DestinationFile="$(GSharpTemplateRoot)GSharpLibrary.zip"
+                  Overwrite="true" />
+    <ZipDirectory SourceDirectory="$(GSharpTemplateStage)Project\Web"
+                  DestinationFile="$(GSharpTemplateRoot)GSharpWeb.zip"
+                  Overwrite="true" />
+    <ZipDirectory SourceDirectory="$(GSharpTemplateStage)Project\Xunit"
+                  DestinationFile="$(GSharpTemplateRoot)GSharpXunit.zip"
+                  Overwrite="true" />
+    <ZipDirectory SourceDirectory="$(GSharpTemplateStage)Item\Class"
+                  DestinationFile="$(GSharpTemplateRoot)GSharpClass.zip"
+                  Overwrite="true" />
+    <ZipDirectory SourceDirectory="$(GSharpTemplateStage)Item\DataClass"
+                  DestinationFile="$(GSharpTemplateRoot)GSharpDataClass.zip"
+                  Overwrite="true" />
+    <ZipDirectory SourceDirectory="$(GSharpTemplateStage)Item\Interface"
+                  DestinationFile="$(GSharpTemplateRoot)GSharpInterface.zip"
+                  Overwrite="true" />
+    <ZipDirectory SourceDirectory="$(GSharpTemplateStage)Item\Package"
+                  DestinationFile="$(GSharpTemplateRoot)GSharpPackage.zip"
+                  Overwrite="true" />
+    <ItemGroup>
+      <Content Include="$(GSharpTemplateRoot)GSharpConsole.zip"
+               Link="ProjectTemplates\GSharp\1033\GSharpConsole.zip">
+        <IncludeInVSIX>true</IncludeInVSIX>
+      </Content>
+      <Content Include="$(GSharpTemplateRoot)GSharpLibrary.zip"
+               Link="ProjectTemplates\GSharp\1033\GSharpLibrary.zip">
+        <IncludeInVSIX>true</IncludeInVSIX>
+      </Content>
+      <Content Include="$(GSharpTemplateRoot)GSharpWeb.zip"
+               Link="ProjectTemplates\GSharp\1033\GSharpWeb.zip">
+        <IncludeInVSIX>true</IncludeInVSIX>
+      </Content>
+      <Content Include="$(GSharpTemplateRoot)GSharpXunit.zip"
+               Link="ProjectTemplates\GSharp\1033\GSharpXunit.zip">
+        <IncludeInVSIX>true</IncludeInVSIX>
+      </Content>
+      <Content Include="$(GSharpTemplateRoot)GSharpClass.zip"
+               Link="ItemTemplates\GSharp\1033\GSharpClass.zip">
+        <IncludeInVSIX>true</IncludeInVSIX>
+      </Content>
+      <Content Include="$(GSharpTemplateRoot)GSharpDataClass.zip"
+               Link="ItemTemplates\GSharp\1033\GSharpDataClass.zip">
+        <IncludeInVSIX>true</IncludeInVSIX>
+      </Content>
+      <Content Include="$(GSharpTemplateRoot)GSharpInterface.zip"
+               Link="ItemTemplates\GSharp\1033\GSharpInterface.zip">
+        <IncludeInVSIX>true</IncludeInVSIX>
+      </Content>
+      <Content Include="$(GSharpTemplateRoot)GSharpPackage.zip"
+               Link="ItemTemplates\GSharp\1033\GSharpPackage.zip">
+        <IncludeInVSIX>true</IncludeInVSIX>
+      </Content>
+    </ItemGroup>
+  </Target>
+</Project>

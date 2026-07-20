@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CodeSnippets xmlns="http://schemas.microsoft.com/VisualStudio/2005/CodeSnippet">
+  <CodeSnippet Format="1.0.0">
+    <Header>
+      <Title>Switch / pattern match</Title>
+      <Shortcut>match</Shortcut>
+      <Description>Switch statement with pattern cases (brace-block arms).</Description>
+      <Author>GSharp</Author>
+      <SnippetTypes>
+        <SnippetType>Expansion</SnippetType>
+      </SnippetTypes>
+    </Header>
+    <Snippet>
+      <Declarations>
+        <Literal Editable="true">
+          <ID>p1</ID>
+          <ToolTip>value</ToolTip>
+          <Default>value</Default>
+        </Literal>
+        <Literal Editable="true">
+          <ID>p2</ID>
+          <ToolTip>pattern</ToolTip>
+          <Default>pattern</Default>
+        </Literal>
+      </Declarations>
+      <Code Language="GSharp"><![CDATA[switch $p1$ {
+	case $p2$ {
+		$end$
+	}
+	default {
+		
+	}
+}]]></Code>
+    </Snippet>
+  </CodeSnippet>
+</CodeSnippets>

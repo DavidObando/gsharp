@@ -1,0 +1,25 @@
+<VSTemplate Version="3.0.0" Type="Project"
+            xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+  <TemplateData>
+    <Name>G# Console Application</Name>
+    <Description>A .NET console application written in G#.</Description>
+    <Icon>GSharp.ico</Icon>
+    <!-- The New Project index requires a built-in category; the .gsproj extension selects G# CPS. -->
+    <ProjectType>CSharp</ProjectType>
+    <LanguageTag>C#</LanguageTag>
+    <PlatformTag>Windows</PlatformTag>
+    <ProjectTypeTag>Console</ProjectTypeTag>
+    <TemplateID>GSharp.VisualStudio.Console</TemplateID>
+    <DefaultName>GSharpConsoleApp</DefaultName>
+    <ProvideDefaultName>true</ProvideDefaultName>
+    <CreateNewFolder>true</CreateNewFolder>
+    <CreateInPlace>true</CreateInPlace>
+    <SortOrder>100</SortOrder>
+  </TemplateData>
+  <TemplateContent>
+    <Project File="GSharpConsole.gsproj" TargetFileName="$projectname$.gsproj" ReplaceParameters="true">
+      <ProjectItem ReplaceParameters="true">Program.gs</ProjectItem>
+      <ProjectItem ReplaceParameters="true">README.md</ProjectItem>
+    </Project>
+  </TemplateContent>
+</VSTemplate>

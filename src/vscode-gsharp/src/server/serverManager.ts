@@ -159,7 +159,7 @@ export class ServerManager {
         ...process.env,
         // Pin the host to the resolved/acquired runtime (DOTNET_ROOT, DOTNET_MULTILEVEL_LOOKUP).
         ...dotnetRuntime.env,
-        DOTNET_EnableDiagnostics: '0',
+        DOTNET_EnableDiagnostics: options.waitForDebugger ? '1' : '0',
         DOTNET_CLI_UI_LANGUAGE: 'en',
         DOTNET_NOLOGO: '1',
         DOTNET_CLI_TELEMETRY_OPTOUT: '1',
@@ -179,7 +179,7 @@ export class ServerManager {
           command: dotnetPath,
           args: [...args, '--debug'],
           transport: TransportKind.stdio,
-          options: { env },
+          options: { env: { ...env, DOTNET_EnableDiagnostics: '1' } },
         },
       };
 
