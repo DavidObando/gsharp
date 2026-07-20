@@ -2069,7 +2069,7 @@ internal sealed partial class ExpressionBinder
         }
 
         // CLR receiver → property/field write via reflection.
-        if (receiverType is not NullableTypeSymbol && receiverType?.ClrType != null)
+        if (CanBindClrInstanceMember(receiver))
         {
             var clrReceiverType = receiverType.ClrType;
             MemberInfo instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, fieldName, BindingFlags.Public | BindingFlags.Instance);
