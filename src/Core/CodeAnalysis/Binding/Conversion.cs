@@ -903,7 +903,11 @@ public sealed class Conversion
                 {
                     foreach (var i in c.Interfaces)
                     {
-                        if (i == toInterface)
+                        // Issue #2535: lift declaration-site variance through a
+                        // class's implemented interface (e.g. C : IOut<object>
+                        // converts to IOut<object?>). Direct interface values
+                        // already use this same safe, reference-only check below.
+                        if (i == toInterface || IsVarianceCompatibleInterfaceConversion(i, toInterface))
                         {
                             return Conversion.Implicit;
                         }
