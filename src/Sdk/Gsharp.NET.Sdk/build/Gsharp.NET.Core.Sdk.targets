@@ -5,6 +5,9 @@
 
   <PropertyGroup>
     <CoreCompileDependsOn>_ComputeNonExistentFileProperty</CoreCompileDependsOn>
+    <!-- Avalonia's CompileAvaloniaXaml target hooks AfterCompile, a standard
+         Microsoft.Managed.Core target that the G# language SDK does not import. -->
+    <CompileDependsOn>$(CompileDependsOn);AfterCompile</CompileDependsOn>
 
     <!-- Phase 7.7b: hook into the NuGet Pack infrastructure so dotnet pack
          includes the reference assembly under ref/<tfm>/. The runtime assembly
@@ -280,6 +283,8 @@
           Inputs="$(MSBuildAllProjects);
                   @(Compile);
                   @(ReferencePathWithRefAssemblies);
+                  @(_CoreCompileResourceInputs);
+                  @(CompiledLicenseFile);
                   $(IntermediateOutputPath)$(TargetName).CoreCompileInputs.cache"
           Outputs="@(IntermediateAssembly);
                    $(DocumentationFile);
@@ -294,6 +299,11 @@
     <PropertyGroup>
       <_GsharpRefAssemblyPath Condition=" '$(ProduceReferenceAssembly)' == 'true' ">@(IntermediateRefAssembly)</_GsharpRefAssemblyPath>
     </PropertyGroup>
+    <ItemGroup>
+      <_GsharpCoreCompileResource Include="@(_CoreCompileResourceInputs)"
+                                  Condition="'%(_CoreCompileResourceInputs.WithCulture)' != 'true'" />
+      <_GsharpCoreCompileResource Include="@(CompiledLicenseFile)" />
+    </ItemGroup>
 
     <!-- Reference set forwarded to gsc via /r:. We pass
          @(ReferencePathWithRefAssemblies) — the same complete, transitively
@@ -327,6 +337,7 @@
         WarningsAsErrors="$(WarningsAsErrors)"
         Compile="@(Compile)"
         References="@(ReferencePathWithRefAssemblies)"
+        Resources="@(_GsharpCoreCompileResource)"
         ResponseFilePath="$(IntermediateOutputPath)$(TargetName).rsp" />
 
     <ItemGroup>
@@ -363,7 +374,48 @@
     </ItemGroup>
   </Target>
 
-  <!-- The CreateManifestResourceNames target is required by Common.targets; defer to C# semantics. -->
-  <Target Name="CreateManifestResourceNames" />
+  <Target Name="AfterCompile" />
+
+  <!-- Microsoft.Common.targets delegates language-specific manifest naming to
+       this target. Reuse the standard C# naming task without importing the
+       C#-specific managed compile pipeline. -->
+  <PropertyGroup>
+    <CreateManifestResourceNamesDependsOn />
+  </PropertyGroup>
+  <Target Name="CreateManifestResourceNames"
+          Condition=" '@(EmbeddedResource)' != '' "
+          DependsOnTargets="$(CreateManifestResourceNamesDependsOn)">
+    <ItemGroup>
+      <_Temporary Remove="@(_Temporary)" />
+    </ItemGroup>
+
+    <CreateCSharpManifestResourceName
+        ResourceFiles="@(EmbeddedResource)"
+        RootNamespace="$(RootNamespace)"
+        EnableCustomCulture="$(EnableCustomCulture)"
+        UseDependentUponConvention="$(EmbeddedResourceUseDependentUponConvention)"
+        Condition=" '%(EmbeddedResource.ManifestResourceName)' == '' and
+                    ('%(EmbeddedResource.WithCulture)' == 'false' or '%(EmbeddedResource.Type)' == 'Resx') ">
+      <Output TaskParameter="ResourceFilesWithManifestResourceNames" ItemName="_Temporary" />
+    </CreateCSharpManifestResourceName>
+
+    <CreateCSharpManifestResourceName
+        ResourceFiles="@(EmbeddedResource)"
+        RootNamespace="$(RootNamespace)"
+        PrependCultureAsDirectory="false"
+        UseDependentUponConvention="$(EmbeddedResourceUseDependentUponConvention)"
+        Condition=" '%(EmbeddedResource.ManifestResourceName)' == '' and
+                    '%(EmbeddedResource.WithCulture)' == 'true' and
+                    '%(EmbeddedResource.Type)' == 'Non-Resx' ">
+      <Output TaskParameter="ResourceFilesWithManifestResourceNames" ItemName="_Temporary" />
+    </CreateCSharpManifestResourceName>
+
+    <ItemGroup>
+      <EmbeddedResource Remove="@(EmbeddedResource)"
+                        Condition=" '%(EmbeddedResource.ManifestResourceName)' == '' " />
+      <EmbeddedResource Include="@(_Temporary)" />
+      <_Temporary Remove="@(_Temporary)" />
+    </ItemGroup>
+  </Target>
 
 </Project>

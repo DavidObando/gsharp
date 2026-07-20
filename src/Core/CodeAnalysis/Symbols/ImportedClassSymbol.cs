@@ -342,7 +342,11 @@ public sealed class ImportedClassSymbol : Symbol
             projectTypeArgument,
             ComputeInterpolatedStringArgFlags(callExpression, arguments.Length),
             argumentNames,
-            closed => MemberLookup.BuildSymbolicMethodTypeArgs(closed, typeArgSymbols, symbolicArgVector),
+            (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
+                closed,
+                typeArgSymbols,
+                symbolicArgVector,
+                isExpanded),
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(arguments),
             methodGroupInference: ExpressionBinder.MakeMethodGroupInference(arguments, ProjectMethodGroupType));
@@ -370,7 +374,11 @@ public sealed class ImportedClassSymbol : Symbol
                 // the type-erased `IEnumerable<object>`.
                 if (returnOverride == null)
                 {
-                    var symbolicMethodTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(result.Best, typeArgSymbols, symbolicArgVector);
+                    var symbolicMethodTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
+                        result.Best,
+                        typeArgSymbols,
+                        symbolicArgVector,
+                        result.IsExpanded);
                     returnOverride = MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(result.Best, symbolicMethodTypeArgs, receiverType: null);
                 }
 

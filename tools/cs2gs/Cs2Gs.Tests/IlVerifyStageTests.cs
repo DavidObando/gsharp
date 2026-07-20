@@ -125,6 +125,10 @@ public class IlVerifyStageTests
             new IlVerifyError("ReturnPtrToStack", "Acc::Add(Acc, int32)", "fp 1"),
             new IlVerifyError("Constrained", "P::Sum<T>(T[])", "fp 2"),
             new IlVerifyError("CallAbstract", "P::Sum<T>(T[])", "fp 3"),
+            new IlVerifyError(
+                "StackUnexpected",
+                "CompiledAvaloniaXaml.XamlIlContext+Context`1::get_ParentProvider()",
+                "fp 4"),
             new IlVerifyError("StackUnexpected", "P::Main(string[])", "real"),
         };
 

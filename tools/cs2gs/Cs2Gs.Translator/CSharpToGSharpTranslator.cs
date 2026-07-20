@@ -229,7 +229,15 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         var typeMapper = new CSharpTypeMapper(anonymousTypeRegistry);
-        var visitor = new DeclarationVisitor(context, typeMapper, openBases, staticUsingTargets, entryPoint, partialTypeParts, this.preservePartialParts, this.markMergedTypePartial);
+        var visitor = new DeclarationVisitor(
+            context,
+            typeMapper,
+            openBases,
+            staticUsingTargets,
+            entryPoint,
+            partialTypeParts,
+            this.preservePartialParts,
+            this.markMergedTypePartial);
 
         // Issue #2382: a NATIVE C# top-level-statements program (`GlobalStatementSyntax`
         // members directly under the compilation unit — no enclosing class/method

@@ -241,7 +241,9 @@ public sealed class TranslateStage : IMigrationStage
             List<string> retainedFilePaths = hasAnalyzerReferences
                 ? currentProject.Documents.Select(d => d.FilePath).ToList()
                 : null;
-            var translator = new CSharpToGSharpTranslator(markMergedTypePartial: hasAnalyzerReferences, retainedFilePaths: retainedFilePaths);
+            var translator = new CSharpToGSharpTranslator(
+                markMergedTypePartial: hasAnalyzerReferences,
+                retainedFilePaths: retainedFilePaths);
 
             EmitFriendAssemblyAnnotations(
                 context,

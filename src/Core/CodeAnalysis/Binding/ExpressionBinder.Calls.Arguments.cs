@@ -834,6 +834,9 @@ internal sealed partial class ExpressionBinder
             ? (source, target) => IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target)
             : null;
 
+        var inheritedSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(
+            null,
+            ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
         var resolution = OverloadResolution.Resolve(
             candidates,
             argTypes,
@@ -841,6 +844,11 @@ internal sealed partial class ExpressionBinder
             scope.References.MapClrTypeToReferences,
             ComputeInterpolatedStringArgFlags(ce.Arguments, arguments.Length),
             argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
+            recoverTypeArgSymbols: (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
+                closed,
+                typeArgSymbols,
+                inheritedSymbolicArgs,
+                isExpanded),
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
             structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
@@ -883,8 +891,11 @@ internal sealed partial class ExpressionBinder
                 // parameter list, so the method-type-argument inference vector must
                 // not carry the receiver as slot 0 — otherwise lambda-only-inferable
                 // method type parameters never unify and erase to `<object>`.
-                var inheritedSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(null, ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
-                var inheritedSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(resolution.Best, typeArgSymbols, inheritedSymbolicArgs);
+                var inheritedSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
+                    resolution.Best,
+                    typeArgSymbols,
+                    inheritedSymbolicArgs,
+                    resolution.IsExpanded);
                 var inheritedTypeArgSymbolsForCall = !inheritedSymbolicTypeArgs.IsDefault ? inheritedSymbolicTypeArgs : typeArgSymbols;
                 var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols)
                     ?? MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(resolution.Best, inheritedSymbolicTypeArgs, receiver?.Type)
@@ -893,7 +904,12 @@ internal sealed partial class ExpressionBinder
                 var inheritedParameters = resolution.Best.GetParameters();
                 var inheritedMapping = resolution.ParameterMapping;
                 var inheritedExpandedArgs = resolution.IsExpanded
-                    ? overloads.ExpandParamsArguments(arguments, inheritedParameters, ce, parameterMapping: inheritedMapping)
+                    ? overloads.ExpandParamsArguments(
+                        arguments,
+                        inheritedParameters,
+                        ce,
+                        parameterMapping: inheritedMapping,
+                        symbolicMethodTypeArgs: inheritedTypeArgSymbolsForCall)
                     : arguments;
                 var inheritedDownstreamMapping = resolution.IsExpanded ? default : inheritedMapping;
 
@@ -1224,6 +1240,11 @@ internal sealed partial class ExpressionBinder
             scope.References.MapClrTypeToReferences,
             ComputeInterpolatedStringArgFlags(ce.Arguments, argTypes.Length, receiverArgCount: 1),
             argumentNames: extensionArgumentNames,
+            recoverTypeArgSymbols: (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
+                closed,
+                typeArgSymbols,
+                extensionSymbolicArgs,
+                isExpanded),
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments, argumentOffset: 1),
             structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments, argumentOffset: 1),
@@ -1256,7 +1277,11 @@ internal sealed partial class ExpressionBinder
         // method-type-args may then surface a symbolic return like
         // `[]T` from `[]T{}.ToArray()` instead of the erased
         // `object[]`.
-        var extensionSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(best, typeArgSymbols, extensionSymbolicArgs);
+        var extensionSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
+            best,
+            typeArgSymbols,
+            extensionSymbolicArgs,
+            resolution.IsExpanded);
         var extensionTypeArgSymbolsForCall = !extensionSymbolicTypeArgs.IsDefault ? extensionSymbolicTypeArgs : typeArgSymbols;
         var returnOverride = ResolveImportedGenericReturnType(best, typeArgSymbols)
             ?? MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(best, extensionSymbolicTypeArgs, receiver?.Type);
@@ -1291,7 +1316,13 @@ internal sealed partial class ExpressionBinder
                 expandedMapping = offset.MoveToImmutable();
             }
 
-            bound = overloads.ExpandParamsArguments(bound, parameters, ce, receiverArgCount: 1, parameterMapping: expandedMapping);
+            bound = overloads.ExpandParamsArguments(
+                bound,
+                parameters,
+                ce,
+                receiverArgCount: 1,
+                parameterMapping: expandedMapping,
+                symbolicMethodTypeArgs: extensionTypeArgSymbolsForCall);
         }
 
         var downstreamMapping = resolution.IsExpanded ? default : resolution.ParameterMapping;

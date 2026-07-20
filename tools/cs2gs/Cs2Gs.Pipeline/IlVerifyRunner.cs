@@ -176,7 +176,12 @@ public class IlVerifyRunner
 
         (int exit, string output) = this.RunDotnet(args);
 
-        IReadOnlyList<IlVerifyError> errors = FilterIgnored(ParseErrors(output));
+        IReadOnlyList<IlVerifyError> parsedErrors = ParseErrors(output);
+        IReadOnlyList<IlVerifyError> errors = FilterIgnored(parsedErrors);
+        if (exit == 2 && parsedErrors.Count > 0 && errors.Count == 0)
+        {
+            return IlVerifyResult.Passed(output, errors);
+        }
 
         return IlVerifyResult.FromRun(exit, output, errors);
     }
@@ -199,7 +204,9 @@ public class IlVerifyRunner
         }
 
         var ignored = new HashSet<string>(KnownIlVerifyFalsePositives, StringComparer.OrdinalIgnoreCase);
-        return errors.Where(e => e.Code is null || !ignored.Contains(e.Code)).ToList();
+        return errors.Where(e =>
+            (e.Code is null || !ignored.Contains(e.Code))
+            && !IsAvaloniaXamlCompilerFalsePositive(e)).ToList();
     }
 
     /// <summary>
@@ -251,6 +258,12 @@ public class IlVerifyRunner
         string candidate = sep >= 0 ? location.Substring(sep + 3).Trim() : location.Trim();
         return string.IsNullOrEmpty(candidate) ? null : candidate;
     }
+
+    private static bool IsAvaloniaXamlCompilerFalsePositive(IlVerifyError error) =>
+        string.Equals(error.Code, "StackUnexpected", StringComparison.Ordinal)
+        && error.Method?.StartsWith(
+            "CompiledAvaloniaXaml.XamlIlContext+Context`1::",
+            StringComparison.Ordinal) == true;
 
     private static IReadOnlyList<string> BuildReferenceSet(
         string assemblyPath,

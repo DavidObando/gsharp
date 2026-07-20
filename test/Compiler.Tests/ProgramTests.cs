@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Reflection.Metadata;
 using Xunit;
 
 namespace GSharp.Compiler.Tests;
@@ -170,6 +171,46 @@ public class ProgramTests
         {
             try { Directory.Delete(tempDir, recursive: true); } catch { }
             try { File.Delete(sample); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Main_WithResource_EmbedsNamedManagedResource()
+    {
+        var name = $"ResourceLib{Guid.NewGuid():N}";
+        var sample = Path.Combine(Path.GetTempPath(), name + ".gs");
+        var resource = Path.Combine(Path.GetTempPath(), name + ".txt");
+        var tempDir = Directory.CreateTempSubdirectory("gsc_resource_").FullName;
+        var outPath = Path.Combine(tempDir, name + ".dll");
+        File.WriteAllText(sample, $"package {name}\n");
+        File.WriteAllText(resource, "embedded by gsc");
+        try
+        {
+            var exit = Program.Main(new[]
+            {
+                "/out:" + outPath,
+                "/target:library",
+                $"/resource:{resource},Demo.Payload,private",
+                sample,
+            });
+
+            Assert.Equal(0, exit);
+            var assembly = Assembly.Load(File.ReadAllBytes(outPath));
+            using var stream = assembly.GetManifestResourceStream("Demo.Payload");
+            Assert.NotNull(stream);
+            using var reader = new StreamReader(stream!);
+            Assert.Equal("embedded by gsc", reader.ReadToEnd());
+
+            using var peReader = new System.Reflection.PortableExecutable.PEReader(File.OpenRead(outPath));
+            var metadata = peReader.GetMetadataReader();
+            var manifestResource = metadata.GetManifestResource(metadata.ManifestResources.Single());
+            Assert.Equal(ManifestResourceAttributes.Private, manifestResource.Attributes);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            try { File.Delete(sample); } catch { }
+            try { File.Delete(resource); } catch { }
         }
     }
 

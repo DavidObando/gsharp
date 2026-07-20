@@ -36,13 +36,15 @@ internal sealed partial class OverloadResolver
     /// <param name="callSyntax">The originating call expression; used to surface conversion diagnostics for individual variadic elements when present.</param>
     /// <param name="receiverArgCount">The number of leading argument slots reserved for a synthesised receiver (0 for plain calls, 1 for imported extension calls).</param>
     /// <param name="parameterMapping">Issue #506 follow-up: when non-default, the source-order mapping from each input argument to its parameter slot, as produced by overload resolution for calls combining named arguments with expanded <c>params</c> form. Causes the expander to emit arguments already in parameter order with optional slots filled by their defaults.</param>
+    /// <param name="symbolicMethodTypeArgs">The real symbolic method type arguments when reflection used erased placeholders to close the selected generic method.</param>
     /// <returns>An argument list of length <paramref name="parameters"/>.Length whose final element is the packed array.</returns>
     public ImmutableArray<BoundExpression> ExpandParamsArguments(
         ImmutableArray<BoundExpression> arguments,
         System.Reflection.ParameterInfo[] parameters,
         CallExpressionSyntax callSyntax,
         int receiverArgCount = 0,
-        ImmutableArray<int> parameterMapping = default)
+        ImmutableArray<int> parameterMapping = default,
+        ImmutableArray<TypeSymbol> symbolicMethodTypeArgs = default)
     {
         var paramsIndex = parameters.Length - 1;
         var paramArrayType = parameters[paramsIndex].ParameterType;
@@ -50,6 +52,30 @@ internal sealed partial class OverloadResolver
         var elementTypeSymbol = elementClrType == null
             ? TypeSymbol.Object
             : TypeSymbol.FromClrType(elementClrType);
+        if (!symbolicMethodTypeArgs.IsDefaultOrEmpty
+            && parameters[paramsIndex].Member is MethodInfo method
+            && method.IsGenericMethod)
+        {
+            var openMethod = method.IsGenericMethodDefinition
+                ? method
+                : method.GetGenericMethodDefinition();
+            var openParameters = openMethod.GetParameters();
+            var openElementType = openParameters[paramsIndex].ParameterType.GetElementType();
+            if (openElementType != null)
+            {
+                var symbolicElementType = MemberLookup.MapOpenClrTypeToSymbolic(
+                    openElementType,
+                    openDefinition: null,
+                    typeArguments: default,
+                    openMethodDefinition: openMethod,
+                    methodTypeArguments: symbolicMethodTypeArgs);
+                if (TypeSymbol.RequiresSymbolicProjection(symbolicElementType))
+                {
+                    elementTypeSymbol = symbolicElementType;
+                }
+            }
+        }
+
         var sliceType = SliceTypeSymbol.Get(elementTypeSymbol);
 
         // Issue #506 follow-up: when a parameter mapping is supplied (named
@@ -153,7 +179,13 @@ internal sealed partial class OverloadResolver
             return udc;
         }
 
-        return arg;
+        var diagnosticIndex = sourceIndex - receiverArgCount;
+        var diagnosticLocation = callSyntax != null
+            && diagnosticIndex >= 0
+            && diagnosticIndex < callSyntax.Arguments.Count
+                ? callSyntax.Arguments[diagnosticIndex].Location
+                : callSyntax?.Location ?? default;
+        return conversions.BindConversion(diagnosticLocation, arg, elementTypeSymbol);
     }
 
     /// <summary>
