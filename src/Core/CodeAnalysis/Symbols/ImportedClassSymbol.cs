@@ -260,6 +260,12 @@ public sealed class ImportedClassSymbol : Symbol
             var t = NullableTypeSymbol.GetEffectiveClrType(arguments[i].Type);
             if (t == null && arguments[i].Type != TypeSymbol.Null)
             {
+                if (OverloadResolution.IsUnresolvedMethodGroupArgument(arguments[i]))
+                {
+                    argTypes[i] = null;
+                    continue;
+                }
+
                 if (arguments[i].Type is StructSymbol { IsClass: true } ss)
                 {
                     t = ss.ImportedBaseType?.ClrType ?? typeof(object);
@@ -338,7 +344,8 @@ public sealed class ImportedClassSymbol : Symbol
             argumentNames,
             closed => MemberLookup.BuildSymbolicMethodTypeArgs(closed, typeArgSymbols, symbolicArgVector),
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
-            constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(arguments));
+            constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(arguments),
+            methodGroupInference: ExpressionBinder.MakeMethodGroupInference(arguments, ProjectMethodGroupType));
 
         switch (result.Outcome)
         {
@@ -407,6 +414,27 @@ public sealed class ImportedClassSymbol : Symbol
     /// <returns>Whether we found a matching function or not.</returns>
     public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function)
         => TryLookupFunction(text, callExpression, arguments, out function, out _);
+
+    private static Type ProjectMethodGroupType(TypeSymbol type)
+    {
+        var clrType = NullableTypeSymbol.GetEffectiveClrType(type);
+        if (clrType != null)
+        {
+            return clrType;
+        }
+
+        if (type is StructSymbol { IsClass: true } userClass)
+        {
+            return userClass.ImportedBaseType?.ClrType ?? typeof(object);
+        }
+
+        if (type is EnumSymbol)
+        {
+            return typeof(int);
+        }
+
+        return MemberLookup.TryProjectErasedClrType(type, out var erased) ? erased : null;
+    }
 
     /// <summary>
     /// ADR-0055 Tier 4 (#369): produces the per-argument flags marking which

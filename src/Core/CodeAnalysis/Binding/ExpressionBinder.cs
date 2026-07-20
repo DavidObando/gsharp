@@ -1486,6 +1486,147 @@ internal sealed partial class ExpressionBinder
         return null;
     }
 
+    internal static Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>> MakeMethodGroupInference(
+        IReadOnlyList<BoundExpression> arguments,
+        Func<TypeSymbol, Type> projectType,
+        int argumentOffset = 0)
+    {
+        if (arguments == null || !arguments.Any(OverloadResolution.IsUnresolvedMethodGroupArgument))
+        {
+            return null;
+        }
+
+        return (argumentIndex, delegateParameterTypes) =>
+        {
+            var sourceIndex = argumentIndex - argumentOffset;
+            if (sourceIndex < 0 || sourceIndex >= arguments.Count)
+            {
+                return null;
+            }
+
+            return ResolveMethodGroupInferenceSignature(arguments[sourceIndex], delegateParameterTypes, projectType);
+        };
+    }
+
+    private static Tuple<Type[], Type> ResolveMethodGroupInferenceSignature(
+        BoundExpression argument,
+        IReadOnlyList<Type> delegateParameterTypes,
+        Func<TypeSymbol, Type> projectType)
+    {
+        if (argument is BoundClrMethodGroupExpression { ResolvedMethod: null } clrGroup)
+        {
+            var closesExtensionReceiver = clrGroup.Receiver != null
+                && clrGroup.Candidates.All(candidate => candidate.IsStatic);
+            var resolutionArguments = new Type[delegateParameterTypes.Count + (closesExtensionReceiver ? 1 : 0)];
+            if (closesExtensionReceiver)
+            {
+                var receiverClr = projectType(clrGroup.Receiver.Type);
+                if (receiverClr == null)
+                {
+                    return null;
+                }
+
+                resolutionArguments[0] = receiverClr;
+            }
+
+            for (var i = 0; i < delegateParameterTypes.Count; i++)
+            {
+                resolutionArguments[i + (closesExtensionReceiver ? 1 : 0)] = delegateParameterTypes[i];
+            }
+
+            var resolution = OverloadResolution.Resolve(clrGroup.Candidates, resolutionArguments);
+            if (resolution.Outcome != OverloadResolution.ResolutionOutcome.Resolved)
+            {
+                return null;
+            }
+
+            var method = resolution.Best;
+            var parameters = method.GetParameters();
+            var parameterOffset = closesExtensionReceiver ? 1 : 0;
+            var signatureParameters = new Type[parameters.Length - parameterOffset];
+            for (var i = parameterOffset; i < parameters.Length; i++)
+            {
+                signatureParameters[i - parameterOffset] = parameters[i].ParameterType;
+            }
+
+            return Tuple.Create(signatureParameters, method.ReturnType);
+        }
+
+        if (argument is not BoundMethodGroupExpression { FunctionType: null } userGroup)
+        {
+            return null;
+        }
+
+        var matches = new List<(Tuple<Type[], Type> Signature, OverloadResolution.ImplicitConversionKind[] Conversions)>();
+        foreach (var candidate in userGroup.Candidates)
+        {
+            var candidateOwner = userGroup.StaticOwnerType != null && candidate.StaticOwnerType is StructSymbol declaredOwner
+                ? TypeMemberModel.ResolveStaticMemberOwner(userGroup.StaticOwnerType, declaredOwner)
+                : null;
+            var parameterOffset = candidate.IsExtension && userGroup.Receiver != null ? 1 : 0;
+            if (candidate.Parameters.Length - parameterOffset != delegateParameterTypes.Count)
+            {
+                continue;
+            }
+
+            var parameterTypes = new Type[delegateParameterTypes.Count];
+            var conversions = new OverloadResolution.ImplicitConversionKind[delegateParameterTypes.Count];
+            var compatible = true;
+            for (var i = 0; i < parameterTypes.Length; i++)
+            {
+                var parameterSymbol = candidateOwner?.SubstituteMemberType(candidate.Parameters[i + parameterOffset].Type)
+                    ?? candidate.Parameters[i + parameterOffset].Type;
+                parameterTypes[i] = projectType(parameterSymbol);
+                conversions[i] = parameterTypes[i] == null
+                    ? OverloadResolution.ImplicitConversionKind.None
+                    : OverloadResolution.ClassifyImplicit(parameterTypes[i], delegateParameterTypes[i]);
+                if (conversions[i] == OverloadResolution.ImplicitConversionKind.None)
+                {
+                    compatible = false;
+                    break;
+                }
+            }
+
+            if (!compatible)
+            {
+                continue;
+            }
+
+            var returnSymbol = candidateOwner?.SubstituteMemberType(candidate.Type) ?? candidate.Type ?? TypeSymbol.Void;
+            var returnType = projectType(returnSymbol);
+            if (returnType == null)
+            {
+                continue;
+            }
+
+            matches.Add((Tuple.Create(parameterTypes, returnType), conversions));
+        }
+
+        var best = matches.Where(candidate =>
+            !matches.Any(other =>
+                !ReferenceEquals(candidate.Signature, other.Signature)
+                && IsBetterMethodGroupConversion(other.Conversions, candidate.Conversions))).ToList();
+        return best.Count == 1 ? best[0].Signature : null;
+    }
+
+    private static bool IsBetterMethodGroupConversion(
+        IReadOnlyList<OverloadResolution.ImplicitConversionKind> candidate,
+        IReadOnlyList<OverloadResolution.ImplicitConversionKind> other)
+    {
+        var strictlyBetter = false;
+        for (var i = 0; i < candidate.Count; i++)
+        {
+            if (candidate[i] > other[i])
+            {
+                return false;
+            }
+
+            strictlyBetter |= candidate[i] < other[i];
+        }
+
+        return strictlyBetter;
+    }
+
     /// <summary>
     /// Issue #1582: resolves the CLR/metadata base type that a user-defined G#
     /// class (transitively) derives from, so inherited CLR members can be
