@@ -718,18 +718,31 @@ internal sealed partial class ExpressionBinder
         }
         else
         {
-            if (!scope.TryLookupImportedClass(name, declaration: null, out var importedClass))
+            if (scope.TryLookupTypeAlias(name, preferredArity: 0, out var typeAlias)
+                && typeAlias is ImportedTypeSymbol { ClrType: not null } importedAlias)
+            {
+                clrType = importedAlias.ClrType;
+            }
+            else if (scope.TryLookupImport(name, out var aliasImport)
+                && aliasImport.IsAlias
+                && scope.References.TryResolveType(aliasImport.Target, out var aliasedType))
+            {
+                clrType = aliasedType;
+            }
+            else if (scope.TryLookupImportedClass(name, declaration: null, out var importedClass))
+            {
+                clrType = importedClass.ClassType;
+            }
+            else
             {
                 return false;
             }
 
-            if (importedClass.ClassType.IsGenericTypeDefinition)
+            if (clrType.IsGenericTypeDefinition)
             {
                 // User wrote `List(...)` without `[T]`; can't construct an open generic.
                 return false;
             }
-
-            clrType = importedClass.ClassType;
         }
 
         // Issue #2263: for an imported `data class` the CLR type carries a real
