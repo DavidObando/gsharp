@@ -14,7 +14,7 @@ namespace GSharp.Compiler.Tests.Emit;
 /// each of the five supported one-argument generic collection interfaces —
 /// <c>IEnumerable[T]</c>, <c>ICollection[T]</c>, <c>IList[T]</c>,
 /// <c>IReadOnlyList[T]</c>, <c>IReadOnlyCollection[T]</c> — when <c>T</c> is a
-/// generic type parameter (via <c>Conversion.SliceImplementsInterfaceSymbolically</c>),
+/// generic type parameter (via <c>Conversion.SliceConvertsToInterfaceSymbolically</c>),
 /// but <c>MethodBodyEmitter.IsReferenceCompatible</c> only mirrored the
 /// element-INDEPENDENT #2140 array supertypes and threw
 /// <see cref="NotSupportedException"/> (surfaced as GS9998) for these five

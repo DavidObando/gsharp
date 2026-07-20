@@ -823,6 +823,23 @@ internal sealed partial class MethodBodyEmitter
             return true;
         }
 
+        // Issue #2516: slice-to-array/interface compatibility is deliberately
+        // narrower than CLR array covariance. Reuse the binder's classification
+        // before the general CLR assignability shortcuts below: exact array and
+        // invariant-interface elements remain required, while covariant
+        // read-only interfaces may widen their reference element.
+        if ((a is SliceTypeSymbol || a is ImportedTypeSymbol { ClrType: { IsArray: true } })
+            && (b is SliceTypeSymbol or ArrayTypeSymbol
+                || b?.ClrType?.IsArray == true
+                || b?.ClrType?.IsInterface == true))
+        {
+            return Conversion.ClassifyNonStructural(a, b) is
+            {
+                Exists: true,
+                IsImplicit: true,
+            };
+        }
+
         // Issue #521: standard CLR reference upcast. A reference-typed
         // value of CLR type `a` widens to any base class or implemented
         // CLR interface `b` as a no-op at the IL level (the reference
@@ -834,69 +851,14 @@ internal sealed partial class MethodBodyEmitter
             return true;
         }
 
-        // Issue #570: cross-context interface implementation check for the
-        // emitter's reference-compatibility decision. When `a` is a slice
-        // type (backed by T[]) and `b` is an interface, the same-context
-        // IsAssignableByName path above fails because the two types live in
-        // different Type.Assembly instances. Use ImplementsInterfaceByName
-        // to recognise the no-op widening.
+        // Issue #570: cross-context interface implementation check for
+        // non-slice reference types. Slices were classified above so CLR array
+        // covariance cannot bypass G#'s element restrictions.
         if (a?.ClrType != null && b?.ClrType != null
             && b.ClrType.IsInterface
             && ClrTypeUtilities.ImplementsInterfaceByName(a.ClrType, b.ClrType))
         {
             return true;
-        }
-
-        // Issue #821: cross-context slice-to-constructed-interface widening
-        // where the target is an <see cref="ImportedTypeSymbol"/> whose
-        // <c>ClrType</c> is the type-erased open-definition form (because
-        // <c>MakeGenericType</c> at substitution time could not produce a
-        // closed CLR type — the open def lives in a MetadataLoadContext while
-        // the arguments live in the host runtime). Match the slice's backing
-        // <c>T[]</c> interfaces against the open definition's full name and
-        // the symbolic <c>TypeArguments</c> by leaf-FullName so the CLR
-        // no-op upcast classifies correctly. Mirrors the binder fallback in
-        // <see cref="Conversion.SliceImplementsInterface"/>.
-        if (a is SliceTypeSymbol aSlice
-            && aSlice.ClrType != null
-            && b is ImportedTypeSymbol bImported
-            && bImported.OpenDefinition is { } bOpenDef
-            && !bImported.TypeArguments.IsDefaultOrEmpty)
-        {
-            foreach (var iface in aSlice.ClrType.GetInterfaces())
-            {
-                if (!iface.IsGenericType
-                    || !string.Equals(
-                        iface.GetGenericTypeDefinition().FullName,
-                        bOpenDef.FullName,
-                        StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                var ifaceArgs = iface.GetGenericArguments();
-                if (ifaceArgs.Length != bImported.TypeArguments.Length)
-                {
-                    continue;
-                }
-
-                var allMatch = true;
-                for (var i = 0; i < ifaceArgs.Length; i++)
-                {
-                    var symbolic = bImported.TypeArguments[i];
-                    if (symbolic?.ClrType is null
-                        || !string.Equals(ifaceArgs[i].FullName, symbolic.ClrType.FullName, StringComparison.Ordinal))
-                    {
-                        allMatch = false;
-                        break;
-                    }
-                }
-
-                if (allMatch)
-                {
-                    return true;
-                }
-            }
         }
 
         // Issue #2140: a G# slice `[]T` (any element type) is backed at
@@ -924,29 +886,6 @@ internal sealed partial class MethodBodyEmitter
             {
                 return true;
             }
-        }
-
-        // Issue #2323: extends #2140 to the five generic single-type-
-        // argument array interfaces — IEnumerable<T>, ICollection<T>,
-        // IList<T>, IReadOnlyList<T>, IReadOnlyCollection<T> — for a slice
-        // `[]T` whose element `T` is a generic type parameter or same-
-        // compilation user type. Such elements leave the slice's backing
-        // `ClrType` null during emit, so neither the #521 CLR reference-
-        // upcast arm nor the #570 `ImplementsInterfaceByName` arm above can
-        // fire (both require a non-null `ClrType` on `a`). The binder
-        // already accepts this exact conversion via
-        // `Conversion.SliceImplementsInterfaceSymbolically`; delegate to
-        // that SAME symbolic rule here rather than re-deriving a second,
-        // potentially divergent open-definition / type-argument match, so
-        // binder acceptance and emitter reference-compatibility can never
-        // disagree. That helper's `AreTypeArgumentsEquivalent` comparison
-        // still rejects a mismatched element type, preserving slice
-        // invariance and GS0155 for genuine element mismatches.
-        if (a is SliceTypeSymbol aSliceSymbolic
-            && aSliceSymbolic.ClrType == null
-            && Conversion.SliceImplementsInterfaceSymbolically(aSliceSymbolic, b))
-        {
-            return true;
         }
 
         return false;

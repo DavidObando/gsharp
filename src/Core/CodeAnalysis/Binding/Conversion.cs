@@ -1099,6 +1099,35 @@ public sealed class Conversion
             }
         }
 
+        // Issue #2516: the exact-element branches above are the only implicit
+        // slice-to-slice/array conversions G# permits. Stop here before the
+        // general CLR reference-upcast rule can admit unsafe array covariance.
+        if (from is SliceTypeSymbol
+            && (to is SliceTypeSymbol or ArrayTypeSymbol || to?.ClrType?.IsArray == true))
+        {
+            return Conversion.None;
+        }
+
+        // Imported CLR methods/properties can surface an SZ-array as a plain
+        // ImportedTypeSymbol rather than a SliceTypeSymbol. Apply the same
+        // element-invariance guard to that metadata path.
+        if (from is ImportedTypeSymbol { ClrType: { IsArray: true } importedArray }
+            && importedArray.GetArrayRank() == 1
+            && (to is SliceTypeSymbol or ArrayTypeSymbol || to?.ClrType?.IsArray == true))
+        {
+            var sourceElement = TypeSymbol.FromClrType(importedArray.GetElementType());
+            TypeSymbol importedTargetElement = to switch
+            {
+                SliceTypeSymbol targetSlice => targetSlice.ElementType,
+                ArrayTypeSymbol targetArray => targetArray.ElementType,
+                _ => TypeSymbol.FromClrType(to.ClrType.GetElementType()),
+            };
+
+            return AreTypeArgumentsEquivalent(sourceElement, importedTargetElement)
+                ? Conversion.Implicit
+                : Conversion.None;
+        }
+
         // Issue #2140: a G# slice `[]T` is backed at runtime by a CLR
         // one-dimensional array, which derives from the base class
         // `System.Array`. This upcast is element-INDEPENDENT and a no-op
@@ -1114,23 +1143,37 @@ public sealed class Conversion
             return Conversion.Implicit;
         }
 
-        // Slice-to-interface: a G# slice `[]T` is backed by a CLR `T[]`
-        // at runtime. Extend to every interface that `T[]` implements
-        // (IEnumerable<T>, IReadOnlyList<T>, IList<T>, non-generic
-        // IEnumerable/ICollection/IList, ICloneable, etc.) using the
-        // cross-context-safe `ImplementsInterfaceByName` walk (#570/#610).
-        //
-        // G# slices are invariant: `[]string` does NOT convert to
-        // `IEnumerable<object>` despite CLR array covariance.
-        // `ImplementsInterfaceByName` matches generic arguments by name,
-        // enforcing invariance. This block also serves as the invariance
-        // guard: slices that do NOT match are rejected here, preventing
-        // the general #521 arm below (whose same-context fast path would
-        // accept covariant matches via `IsAssignableFrom`) from firing.
+        // Slice-to-interface: `[]T` implements the five CLR array interfaces
+        // at the exact element type. A distinct target element is allowed only
+        // when that interface declares its parameter `out` and T converts to
+        // the target element by an implicit reference conversion. This composes
+        // array interface implementation with ordinary generic variance:
+        // `[]Dog -> IEnumerable[Dog] -> IEnumerable[Animal]`. IList/ICollection
+        // remain invariant, while IEnumerable/IReadOnlyList/
+        // IReadOnlyCollection widen safely. This guard prevents CLR array
+        // covariance from admitting any broader mutable conversion below.
         if (from is SliceTypeSymbol sliceForIface && to?.ClrType != null && to.ClrType.IsInterface)
         {
             if ((sliceForIface.ClrType != null && SliceImplementsInterface(sliceForIface, to))
-                || (sliceForIface.ClrType == null && SliceImplementsInterfaceSymbolically(sliceForIface, to)))
+                || SliceConvertsToInterfaceSymbolically(sliceForIface, to))
+            {
+                return Conversion.Implicit;
+            }
+
+            return Conversion.None;
+        }
+
+        // Same rule for an SZ-array returned from imported metadata. Reflection
+        // exposes that value as ImportedTypeSymbol(T[]) rather than []T, but G#
+        // must not gain broader CLR array covariance because of symbol shape.
+        if (from is ImportedTypeSymbol { ClrType: { IsArray: true } importedArrayForIface }
+            && importedArrayForIface.GetArrayRank() == 1
+            && to?.ClrType is { IsInterface: true })
+        {
+            if (ClrTypeUtilities.ImplementsInterfaceByName(importedArrayForIface, to.ClrType)
+                || ArrayElementConvertsToInterfaceSymbolically(
+                    TypeSymbol.FromClrType(importedArrayForIface.GetElementType()),
+                    to))
             {
                 return Conversion.Implicit;
             }
@@ -1284,17 +1327,14 @@ public sealed class Conversion
     }
 
     /// <summary>
-    /// Issue #1162: symbolic counterpart to <see cref="SliceImplementsInterface"/>
-    /// for a slice <c>[]T</c> whose element <c>T</c> is a same-compilation user
-    /// type and whose backing <see cref="TypeSymbol.ClrType"/> is therefore
-    /// <see langword="null"/> during binding. The backing CLR array cannot be
-    /// walked, so instead match the target interface's open definition against
-    /// the known generic interfaces that a one-dimensional <c>T[]</c> implements
-    /// (<c>IEnumerable&lt;T&gt;</c>, <c>IReadOnlyList&lt;T&gt;</c>,
-    /// <c>IReadOnlyCollection&lt;T&gt;</c>, <c>IList&lt;T&gt;</c>,
-    /// <c>ICollection&lt;T&gt;</c>) and require the single type argument to match
-    /// the slice element. Slice invariance is preserved because
-    /// <see cref="AreTypeArgumentsEquivalent"/> demands an exact element match.
+    /// Issue #1162/#2516: symbolic slice-to-interface conversion shared by
+    /// binding and emission. A one-dimensional <c>[]T</c> implements
+    /// <c>IEnumerable&lt;T&gt;</c>, <c>IReadOnlyList&lt;T&gt;</c>,
+    /// <c>IReadOnlyCollection&lt;T&gt;</c>, <c>IList&lt;T&gt;</c>, and
+    /// <c>ICollection&lt;T&gt;</c>. Exact element matches always convert.
+    /// Distinct reference elements convert only when the target interface's
+    /// CLR generic parameter is declared covariant and the element conversion
+    /// is implicit; invariant mutable interfaces therefore remain exact-only.
     ///
     /// Issue #2323: made <see langword="internal"/> (rather than
     /// <see langword="private"/>) so <c>MethodBodyEmitter.IsReferenceCompatible</c>
@@ -1312,7 +1352,12 @@ public sealed class Conversion
     /// <paramref name="targetInterface"/> under the symbolic slice-to-
     /// interface rule; otherwise <see langword="false"/>.
     /// </returns>
-    internal static bool SliceImplementsInterfaceSymbolically(SliceTypeSymbol slice, TypeSymbol targetInterface)
+    internal static bool SliceConvertsToInterfaceSymbolically(SliceTypeSymbol slice, TypeSymbol targetInterface)
+        => ArrayElementConvertsToInterfaceSymbolically(slice.ElementType, targetInterface);
+
+    internal static bool ArrayElementConvertsToInterfaceSymbolically(
+        TypeSymbol sourceElement,
+        TypeSymbol targetInterface)
     {
         // Issue #2140: element-INDEPENDENT non-generic array interfaces.
         // Every one-dimensional array implements these regardless of its
@@ -1325,13 +1370,13 @@ public sealed class Conversion
         }
 
         if (targetInterface is not ImportedTypeSymbol imported
-            || imported.OpenDefinition is null
-            || imported.TypeArguments.Length != 1)
+            || !TryGetConstructedGenericShape(imported, out var openDefinition, out var targetArguments)
+            || targetArguments.Length != 1)
         {
             return false;
         }
 
-        var openName = imported.OpenDefinition.FullName;
+        var openName = openDefinition.FullName;
         if (openName is null)
         {
             return false;
@@ -1349,7 +1394,25 @@ public sealed class Conversion
             return false;
         }
 
-        return AreTypeArgumentsEquivalent(imported.TypeArguments[0], slice.ElementType);
+        var targetElement = targetArguments[0];
+        if (AreTypeArgumentsEquivalent(targetElement, sourceElement))
+        {
+            return true;
+        }
+
+        var genericParameters = openDefinition.GetGenericArguments();
+        if (genericParameters.Length != 1
+            || (genericParameters[0].GenericParameterAttributes
+                & System.Reflection.GenericParameterAttributes.VarianceMask)
+                != System.Reflection.GenericParameterAttributes.Covariant
+            || !IsReferenceTypeArgument(sourceElement)
+            || !IsReferenceTypeArgument(targetElement))
+        {
+            return false;
+        }
+
+        var elementConversion = Classify(sourceElement, targetElement);
+        return elementConversion.Exists && elementConversion.IsImplicit;
     }
 
     /// <summary>
@@ -1375,6 +1438,13 @@ public sealed class Conversion
         }
 
         if (type is StructSymbol { IsClass: true })
+        {
+            return true;
+        }
+
+        // Slices/fixed arrays are CLR array references even while a
+        // same-compilation element leaves their ClrType unavailable.
+        if (type is SliceTypeSymbol or ArrayTypeSymbol)
         {
             return true;
         }
@@ -1513,7 +1583,7 @@ public sealed class Conversion
             null => false,
             EnumSymbol => false,
             StructSymbol s => s.IsClass,
-            TypeParameterSymbol tp => tp.HasReferenceTypeConstraint,
+            TypeParameterSymbol tp => tp.HasReferenceTypeConstraint || tp.ClassConstraint != null,
             _ => type.ClrType is not { IsValueType: true },
         };
     }

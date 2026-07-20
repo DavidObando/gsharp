@@ -280,27 +280,23 @@ public class Issue521ReferenceUpcastTests
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Negative: Slice covariance — []Derived → interface IEnumerable<Base>
-    //           is blocked by the invariance guard (Conversion.cs §570).
+    // Slice interface implementation composes with declared generic variance.
     // ─────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Slice_Invariant_DoesNotAllowSliceToCovariantInterface()
+    public void Slice_AllowsSafeCovariantInterfaceConversion()
     {
-        // G# slices are invariant with respect to interface generic args
-        // (Conversion.cs lines 438-447): []string must NOT implicitly
-        // convert to IEnumerable[object] even though CLR arrays are
-        // covariant. This pins the invariance guard.
         var source = """
             package P
+            import System
             import System.Collections.Generic
 
             var s = []string{"hello"}
             var e IEnumerable[object] = s
+            Console.WriteLine(Object.ReferenceEquals(s, e))
             """;
 
-        var diagnostics = CompileExpectingErrors(source);
-        Assert.Contains(diagnostics, d => d.Contains("GS0155") || d.Contains("Cannot convert"));
+        Assert.Equal("True\n", CompileAndRun(source));
     }
 
     // ─────────────────────────────────────────────────────────────────────
