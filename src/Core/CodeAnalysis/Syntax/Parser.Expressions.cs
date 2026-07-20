@@ -722,8 +722,30 @@ public partial class Parser
             if (Current.Kind == SyntaxKind.DotToken || Current.Kind == SyntaxKind.QuestionDotToken)
             {
                 var dotToken = NextToken();
-                var rightSide = ParseNameOrCallExpression();
-                current = new AccessorExpressionSyntax(syntaxTree, current, dotToken, rightSide);
+
+                // Issue #2534: give the canonical `base.M(...)` form its own
+                // syntax shape instead of relying on a binder-only rewrite of
+                // an ordinary name/member-access pair. Parse only the immediate
+                // call here so a following postfix chain binds to the call
+                // result (`base.M().N`) rather than hiding M inside the right
+                // side of a generic accessor. `base.Prop` remains an accessor,
+                // and a real value named `base` is recovered by the binder.
+                if (dotToken.Kind == SyntaxKind.DotToken
+                    && current is NameExpressionSyntax { IdentifierToken.Text: "base" } baseName
+                    && Current.Kind == SyntaxKind.IdentifierToken
+                    && (Peek(1).Kind == SyntaxKind.OpenParenthesisToken
+                        || (Peek(1).Kind == SyntaxKind.OpenSquareBracketToken && LooksLikeGenericCallSite(1))))
+                {
+                    var baseCall = (CallExpressionSyntax)(Peek(1).Kind == SyntaxKind.OpenParenthesisToken
+                        ? ParseCallExpression()
+                        : ParseGenericCallExpression());
+                    current = new BaseClassCallExpressionSyntax(syntaxTree, baseName.IdentifierToken, dotToken, baseCall);
+                }
+                else
+                {
+                    var rightSide = ParseNameOrCallExpression();
+                    current = new AccessorExpressionSyntax(syntaxTree, current, dotToken, rightSide);
+                }
             }
             else if (Current.Kind == SyntaxKind.RightArrowToken)
             {

@@ -155,18 +155,11 @@ internal sealed partial class ExpressionBinder
             var name = leftName.IdentifierToken.Text;
             var variableHit = scope.TryLookupSymbol(name) as VariableSymbol;
 
-            // Issue #986: `base.M(args)` — a non-virtual call to the nearest
-            // base class implementation of `M`, mirroring C# `base.M(...)`.
             // Issue #1104: `base.Prop` — a non-virtual read of the nearest base
             // class implementation of property `Prop`, mirroring C# `base.Prop`.
             // `base` is a contextual keyword: only intercepted when it is not a
             // real value in scope (so a hypothetical local named `base` still
             // wins).
-            if (name == "base" && variableHit == null && rightPart is CallExpressionSyntax baseCall)
-            {
-                return BindBaseClassCall(baseCall, leftName.Location, explicitBaseType: null, selectorLocation: leftName.Location);
-            }
-
             if (name == "base" && variableHit == null && rightPart is NameExpressionSyntax basePropName)
             {
                 return BindBaseClassPropertyRead(basePropName, leftName.Location, explicitBaseType: null, selectorLocation: leftName.Location);

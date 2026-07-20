@@ -2019,6 +2019,28 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Issue #2534: binds the canonical <c>base.M(args)</c> syntax. A real
+    /// value named <c>base</c> retains its historical member-call meaning;
+    /// otherwise the call resolves through the base-class overload set and
+    /// emits non-virtually.
+    /// </summary>
+    private BoundExpression BindBaseClassCallExpression(BaseClassCallExpressionSyntax syntax)
+    {
+        if (scope.TryLookupSymbol(syntax.BaseKeyword.Text) is VariableSymbol)
+        {
+            var receiver = new NameExpressionSyntax(syntax.SyntaxTree, syntax.BaseKeyword);
+            var accessor = new AccessorExpressionSyntax(syntax.SyntaxTree, receiver, syntax.DotToken, syntax.Call);
+            return BindAccessorExpression(accessor);
+        }
+
+        return BindBaseClassCall(
+            syntax.Call,
+            syntax.BaseKeyword.Location,
+            explicitBaseType: null,
+            selectorLocation: syntax.BaseKeyword.Location);
+    }
+
+    /// <summary>
     /// ADR-0091: produces a human-readable display name for the enclosing
     /// receiver type used in GS0338 messages. Falls back to a placeholder
     /// when the call site is not inside an instance member.

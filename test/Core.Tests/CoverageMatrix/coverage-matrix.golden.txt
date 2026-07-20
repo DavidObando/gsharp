@@ -27,6 +27,7 @@ BadToken
 BangBangToken
 BangEqualsToken
 BangToken
+BaseClassCallExpression
 BaseInterfaceCallExpression
 BinaryExpression
 BinaryPattern

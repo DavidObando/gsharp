@@ -375,6 +375,11 @@ public enum SyntaxKind
     // into the interface's MethodDef.
     BaseInterfaceCallExpression,
 
+    // Issue #2534: canonical base-class virtual implementation invocation
+    // `base.Method(args)`. Bound to BoundBaseClassCallExpression and emitted
+    // as a non-virtual `call` to the selected base implementation.
+    BaseClassCallExpression,
+
     // ADR-0100 / issue #795: `default(T)` and bare `default` expressions.
     // `default(T)` yields the zero/null value of any type clause T. The
     // bare `default` literal is valid in target-typed positions (let/var
