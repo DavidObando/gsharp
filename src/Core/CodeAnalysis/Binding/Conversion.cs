@@ -2458,7 +2458,19 @@ public sealed class Conversion
             return true;
         }
 
-        return false;
+        // Issue #2542: same-compilation classes and interfaces have no CLR
+        // backing while binding, so the CLR-only delegate checks cannot see a
+        // safe concrete-to-interface (or derived-to-base) return covariance.
+        // Reuse the scalar conversion rules, but require both ends to be
+        // reference-like and exclude structural projection. Function
+        // parameters remain exact in IsFunctionShapeAssignable.
+        if (!IsReferenceLikeTarget(fromReturn) || !IsReferenceLikeTarget(toReturn))
+        {
+            return false;
+        }
+
+        var conversion = ClassifyNonStructural(fromReturn, toReturn);
+        return conversion.Exists && conversion.IsImplicit;
     }
 
     private static bool IsEnumLikeType(TypeSymbol type)

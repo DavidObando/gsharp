@@ -110,7 +110,7 @@ internal sealed partial class MethodBodyEmitter
         // fire.
         if (conv.Expression.Type is FunctionTypeSymbol fnNoOpFrom
             && conv.Type is FunctionTypeSymbol fnNoOpTo
-            && IsReturnNullableWideningFunctionConversion(fnNoOpFrom, fnNoOpTo))
+            && IsRepresentationPreservingFunctionConversion(fnNoOpFrom, fnNoOpTo))
         {
             this.EmitExpression(conv.Expression);
             return;
@@ -552,14 +552,10 @@ internal sealed partial class MethodBodyEmitter
             $"Conversion from '{from.Name}' to '{to.Name}' is not yet supported by the emitter.");
     }
 
-    // Issue #1356: returns true when two function types differ only by a
-    // return-type nullable widening (`(P...) -> T` to `(P...) -> T?`, same
-    // underlying type), with identical parameter shapes. Such a conversion is a
-    // representation-preserving no-op because a nullable annotation erases to its
-    // underlying CLR type, so both function types materialise to the same
-    // delegate. The reverse direction (`T? -> T`) is not recognised — the binder
-    // already rejects it — so this never widens a narrowing.
-    private static bool IsReturnNullableWideningFunctionConversion(
+    // Issues #1356/#2542: nullable return widening erases to the same CLR type,
+    // and Func's return slot is CLR-covariant for reference upcasts. Both are
+    // no-ops; parameters must remain exact.
+    private static bool IsRepresentationPreservingFunctionConversion(
         FunctionTypeSymbol from,
         FunctionTypeSymbol to)
     {
@@ -576,8 +572,20 @@ internal sealed partial class MethodBodyEmitter
             }
         }
 
-        return to.ReturnType is NullableTypeSymbol toNullableReturn
-            && toNullableReturn.UnderlyingType == from.ReturnType;
+        if (to.ReturnType is NullableTypeSymbol toNullableReturn
+            && toNullableReturn.UnderlyingType == from.ReturnType)
+        {
+            return true;
+        }
+
+        if (!Conversion.IsReferenceLikeTarget(from.ReturnType)
+            || !Conversion.IsReferenceLikeTarget(to.ReturnType))
+        {
+            return false;
+        }
+
+        var returnConversion = Conversion.ClassifyNonStructural(from.ReturnType, to.ReturnType);
+        return returnConversion.Exists && returnConversion.IsImplicit;
     }
 
     // Issue #1236: emit a lifted numeric widening between two distinct value-type
