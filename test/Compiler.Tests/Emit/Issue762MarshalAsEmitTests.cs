@@ -84,6 +84,88 @@ func native_set_flag(@MarshalAs(UnmanagedType.I4) on bool) int32;
     }
 
     [Fact]
+    public void MarshalAs_Bool_OnRefBool_EmitsByRefSignatureAndFieldMarshal()
+    {
+        const string source = @"
+package P
+import System.Runtime.InteropServices
+
+@DllImport(""libfoo"", EntryPoint: ""set_flag"")
+func native_set_flag(@MarshalAs(UnmanagedType.Bool) ref flag bool) int32;
+";
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_2554_ref_bool_").FullName;
+        try
+        {
+            var (_, outPath) = WriteAndCompile(tempDir, source);
+            IlVerifier.Verify(outPath);
+
+            using var pe = new PEReader(File.OpenRead(outPath));
+            var md = pe.GetMetadataReader();
+            var method = FindMethod(md, "native_set_flag");
+            Assert.Contains((byte)SignatureTypeCode.ByReference, md.GetBlobBytes(method.Signature));
+
+            var parameter = method.GetParameters()
+                .Select(md.GetParameter)
+                .Single(p => md.GetString(p.Name) == "flag");
+            Assert.True((parameter.Attributes & ParameterAttributes.HasFieldMarshal) != 0);
+            Assert.Equal(new byte[] { (byte)UnmanagedType.Bool }, md.GetBlobBytes(parameter.GetMarshallingDescriptor()));
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    [Fact]
+    public void MarshalAs_Bool_OnLibraryImportRefBool_ReachesInnerPInvoke()
+    {
+        const string source = @"
+package P
+import System.Runtime.InteropServices
+
+@LibraryImport(""libfoo"", EntryPoint: ""set_flag"")
+func native_set_flag(@MarshalAs(UnmanagedType.Bool) ref flag bool) int32;
+";
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_2554_lib_ref_bool_").FullName;
+        try
+        {
+            var (_, outPath) = WriteAndCompile(tempDir, source);
+            IlVerifier.Verify(outPath);
+
+            using var pe = new PEReader(File.OpenRead(outPath));
+            var md = pe.GetMetadataReader();
+            var method = md.MethodDefinitions
+                .Select(md.GetMethodDefinition)
+                .Single(m => md.GetString(m.Name).Contains("native_set_flag")
+                    && (m.Attributes & MethodAttributes.PinvokeImpl) != 0);
+            var parameter = method.GetParameters()
+                .Select(md.GetParameter)
+                .Single(p => md.GetString(p.Name) == "flag");
+
+            Assert.True((parameter.Attributes & ParameterAttributes.HasFieldMarshal) != 0);
+            Assert.Equal(new byte[] { (byte)UnmanagedType.Bool }, md.GetBlobBytes(parameter.GetMarshallingDescriptor()));
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    [Fact]
     public void MarshalAs_LPArray_WithSizeParamIndex_EncodesAsLPArrayMaxParam()
     {
         const string source = @"

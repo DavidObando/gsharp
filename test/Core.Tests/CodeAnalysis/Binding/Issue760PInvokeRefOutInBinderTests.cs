@@ -186,6 +186,61 @@ func native_bool(ref b bool) int32;
         Assert.Contains(scope.Diagnostics, d => d.Id == "GS0352");
     }
 
+    [Theory]
+    [InlineData("Bool")]
+    [InlineData("I1")]
+    [InlineData("U1")]
+    public void DllImport_With_ExplicitlyMarshaled_RefBool_Is_Accepted(string unmanagedType)
+    {
+        var source = $@"
+package P
+import System.Runtime.InteropServices
+
+@DllImport(""libc"", EntryPoint: ""native_bool"")
+func native_bool(@MarshalAs(UnmanagedType.{unmanagedType}) ref b bool) int32;
+";
+        var scope = BindSource(source);
+        var fn = scope.Functions.Single(f => f.Name == "native_bool");
+
+        Assert.Equal(RefKind.Ref, fn.Parameters[0].RefKind);
+        Assert.NotNull(fn.Parameters[0].MarshalAsMetadata);
+        Assert.DoesNotContain(scope.Diagnostics, d => d.Id is "GS0352" or "GS0357" or "GS0358");
+    }
+
+    [Theory]
+    [InlineData("I4")]
+    [InlineData("VariantBool")]
+    public void DllImport_With_Unsupported_RefBool_MarshalForm_Reports_GS0352(string unmanagedType)
+    {
+        var source = $@"
+package P
+import System.Runtime.InteropServices
+
+@DllImport(""libc"", EntryPoint: ""native_bool"")
+func native_bool(@MarshalAs(UnmanagedType.{unmanagedType}) ref b bool) int32;
+";
+        var scope = BindSource(source);
+        Assert.Contains(scope.Diagnostics, d => d.Id == "GS0352");
+    }
+
+    [Fact]
+    public void LibraryImport_With_ExplicitlyMarshaled_OutBool_Is_Accepted()
+    {
+        const string source = @"
+package P
+import System.Runtime.InteropServices
+
+@LibraryImport(""libc"", EntryPoint: ""native_bool"")
+func native_bool(@MarshalAs(UnmanagedType.Bool) out b bool) int32;
+";
+        var scope = BindSource(source);
+        var fn = scope.Functions.Single(f => f.Name == "native_bool");
+
+        Assert.True(fn.PInvokeMetadata.IsLibraryImport);
+        Assert.Equal(RefKind.Out, fn.Parameters[0].RefKind);
+        Assert.DoesNotContain(scope.Diagnostics, d => d.Id is "GS0352" or "GS0357" or "GS0358" or "GS0360");
+    }
+
     [Fact]
     public void DllImport_With_Ref_Char_Reports_GS0352()
     {

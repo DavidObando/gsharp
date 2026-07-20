@@ -394,9 +394,12 @@ internal static class PInvokeBinder
     /// <item>A user struct whose blittability is established by
     /// <see cref="BlittableDetector"/> (issued GS0349 otherwise).</item>
     /// </list>
-    /// Every other pointee — <c>bool</c>, <c>char</c>, <c>string</c>,
-    /// <c>object</c>, <c>decimal</c>, slices, sequences, nullable types —
-    /// is rejected with the new GS0352 diagnostic. <c>ref string</c> is the
+    /// A <c>bool</c> pointee is also accepted when an explicit
+    /// <c>@MarshalAs(UnmanagedType.Bool|I1|U1)</c> defines its native width.
+    /// Every other pointee — including an unannotated <c>bool</c>,
+    /// <c>char</c>, <c>string</c>, <c>object</c>, <c>decimal</c>, slices,
+    /// sequences, and nullable types — is rejected with the new GS0352
+    /// diagnostic. <c>ref string</c> is the
     /// canonical user mistake the diagnostic message coaches against
     /// (recommend an explicit <c>nint</c> + Marshal.PtrToStringUTF8 round
     /// trip instead).
@@ -415,6 +418,16 @@ internal static class PInvokeBinder
         }
 
         if (IsBlittablePrimitive(pointee))
+        {
+            return;
+        }
+
+        // Issue #2554: bool itself is deliberately still non-blittable. An
+        // explicit descriptor makes the runtime marshal through a temporary
+        // of the requested ABI width, so ref/out/in bool is safe only for the
+        // three scalar forms supported by the CLR marshaller.
+        if (pointee == TypeSymbol.Bool
+            && parameter.MarshalAsMetadata?.UnmanagedType is UnmanagedType.Bool or UnmanagedType.I1 or UnmanagedType.U1)
         {
             return;
         }
