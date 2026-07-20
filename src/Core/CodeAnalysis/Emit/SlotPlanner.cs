@@ -1358,6 +1358,18 @@ internal sealed class SlotPlanner
 
         protected override void VisitUnaryExpression(BoundUnaryExpression node)
         {
+            // Issue #2544: non-identity lifted unary operators need the same
+            // Nullable<T>-typed spill slot as `!!` so emit can branch on
+            // HasValue and unwrap the present value exactly once.
+            if (node.Op.Kind != BoundUnaryOperatorKind.NullAssertion
+                && node.Op.Kind != BoundUnaryOperatorKind.Identity
+                && node.Operand.Type is NullableTypeSymbol liftedOperand
+                && node.Type is NullableTypeSymbol
+                && NullableLifting.IsValueTypeNullable(liftedOperand))
+            {
+                this.sink.Add(node);
+            }
+
             if (node.Op.Kind == BoundUnaryOperatorKind.NullAssertion)
             {
                 bool needsSlot = false;

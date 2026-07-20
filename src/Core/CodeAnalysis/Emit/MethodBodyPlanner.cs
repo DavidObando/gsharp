@@ -583,12 +583,11 @@ internal sealed class MethodBodyPlanner
             receiverSpillSlots[assn] = slot;
         }
 
-        // Issue #504: `!!` on a value-type `Nullable<T>` lowers to a
-        // `stloc tmp; ldloca tmp; call Nullable<T>::get_Value` sequence; the
-        // temp must be typed as `Nullable<T>` (not the unwrapped T). Reuse
-        // receiverSpillSlots — the dictionary already aggregates several
-        // distinct-by-node-identity scratch-slot kinds (receiver spills and
-        // assignment-value spills).
+        // Issue #504 / #2544: `!!` and lifted unary operators on a value-type
+        // `Nullable<T>` need a `Nullable<T>` spill so emit can call
+        // HasValue/get_Value from its address. Reuse receiverSpillSlots — the
+        // dictionary already aggregates several distinct-by-node-identity
+        // scratch-slot kinds (receiver spills and assignment-value spills).
         //
         // Issue #1591: the slot is keyed by the unwrap's OPERAND node, NOT by
         // the BoundUnaryExpression node itself. When the smart-cast-narrowed

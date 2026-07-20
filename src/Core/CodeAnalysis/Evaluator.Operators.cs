@@ -31,6 +31,16 @@ public sealed partial class Evaluator
     {
         var operand = EvaluateExpression(u.Operand);
 
+        // Issue #2544: lifted unary operators propagate an empty Nullable<T>.
+        // Present nullable values are boxed as T and continue through the
+        // existing underlying operation below.
+        if (operand == null
+            && u.Operand.Type is NullableTypeSymbol
+            && u.Type is NullableTypeSymbol)
+        {
+            return null;
+        }
+
         // Issue #615: unwrap enum operands to underlying before arithmetic/bitwise.
         var rawOperand = UnwrapEnumToUnderlying(operand);
 

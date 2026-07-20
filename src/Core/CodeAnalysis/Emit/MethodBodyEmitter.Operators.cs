@@ -190,6 +190,22 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #2544: predefined unary operators over Nullable<T> are lifted.
+        // Identity preserves the wrapper; other operators branch on HasValue.
+        if (u.Operand.Type is NullableTypeSymbol liftedOperand
+            && u.Type is NullableTypeSymbol liftedResult
+            && NullableLifting.IsValueTypeNullable(liftedOperand))
+        {
+            if (u.Op.Kind == BoundUnaryOperatorKind.Identity)
+            {
+                this.EmitExpression(u.Operand);
+                return;
+            }
+
+            this.EmitLiftedNullableUnary(u, liftedOperand, liftedResult);
+            return;
+        }
+
         // Issue #2023: checked integral negation (`-x` where x could be the
         // type's MinValue) must trap on overflow, matching #1881's checked
         // Sum/Difference/Product. Roslyn's own approach is followed: lower
@@ -239,6 +255,106 @@ internal sealed partial class MethodBodyEmitter
         {
             EmitSubI4Truncation(u.Op.Type);
         }
+    }
+
+    private void EmitLiftedNullableUnary(
+        BoundUnaryExpression u,
+        NullableTypeSymbol operandNullable,
+        NullableTypeSymbol resultNullable)
+    {
+        if (operandNullable != resultNullable)
+        {
+            throw new NotSupportedException(
+                $"Lifted unary operator '{u.Op.Kind}' with differing operand and result types is not supported.");
+        }
+
+        if (!this.receiverSpillSlots.TryGetValue(u.Operand, out var slot))
+        {
+            throw new InvalidOperationException(
+                $"No scratch slot pre-allocated for lifted unary operator '{u.Op.Kind}'.");
+        }
+
+        var nullResult = this.il.DefineLabel();
+        var end = this.il.DefineLabel();
+
+        this.EmitExpression(u.Operand);
+        this.il.StoreLocal(slot);
+        this.il.LoadLocalAddress(slot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(this.GetNullableHasValueRef(operandNullable));
+        this.il.Branch(ILOpCode.Brfalse, nullResult);
+
+        var underlying = operandNullable.UnderlyingType;
+        if (u.Op.Kind == BoundUnaryOperatorKind.Negation
+            && u.IsChecked
+            && IsIntegralNegationOperand(underlying))
+        {
+            if (underlying == TypeSymbol.Int64)
+            {
+                this.il.LoadConstantI8(0);
+            }
+            else
+            {
+                this.il.LoadConstantI4(0);
+            }
+
+            this.EmitUnwrappedNullableValue(slot, operandNullable);
+            this.il.OpCode(ILOpCode.Sub_ovf);
+            if (underlying == TypeSymbol.Int8)
+            {
+                this.il.OpCode(ILOpCode.Conv_ovf_i1);
+            }
+            else if (underlying == TypeSymbol.Int16)
+            {
+                this.il.OpCode(ILOpCode.Conv_ovf_i2);
+            }
+        }
+        else
+        {
+            this.EmitUnwrappedNullableValue(slot, operandNullable);
+            switch (u.Op.Kind)
+            {
+                case BoundUnaryOperatorKind.Negation:
+                    if (underlying == TypeSymbol.Decimal)
+                    {
+                        var neg = typeof(decimal).GetMethod("op_UnaryNegation", new[] { typeof(decimal) });
+                        this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(neg));
+                    }
+                    else
+                    {
+                        this.il.OpCode(ILOpCode.Neg);
+                    }
+
+                    break;
+                case BoundUnaryOperatorKind.LogicalNegation:
+                    this.il.LoadConstantI4(0);
+                    this.il.OpCode(ILOpCode.Ceq);
+                    break;
+                case BoundUnaryOperatorKind.OnesComplement:
+                    this.il.OpCode(ILOpCode.Not);
+                    break;
+                default:
+                    throw new NotSupportedException($"Lifted unary operator '{u.Op.Kind}' is not supported.");
+            }
+
+            if (u.Op.Kind == BoundUnaryOperatorKind.OnesComplement
+                || u.Op.Kind == BoundUnaryOperatorKind.Negation)
+            {
+                this.EmitSubI4Truncation(underlying);
+            }
+        }
+
+        this.il.OpCode(ILOpCode.Newobj);
+        this.il.Token(this.GetNullableResultConstructor(resultNullable));
+        this.il.Branch(ILOpCode.Br, end);
+
+        this.il.MarkLabel(nullResult);
+        this.il.LoadLocalAddress(slot);
+        this.il.OpCode(ILOpCode.Initobj);
+        this.il.Token(this.outer.memberRefs.GetElementTypeToken(resultNullable));
+        this.il.LoadLocal(slot);
+
+        this.il.MarkLabel(end);
     }
 
     /// <summary>
