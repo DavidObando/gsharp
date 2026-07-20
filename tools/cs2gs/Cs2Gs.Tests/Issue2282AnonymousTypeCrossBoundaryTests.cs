@@ -86,7 +86,7 @@ namespace Demo
         // lambda's parameter type) all reference the SAME synthesized type —
         // proving the type is nameable across the boundary, not just usable
         // as a same-scope value.
-        Assert.Contains("AnonymousType0{Id: table.Column", printed);
+        Assert.Contains("AnonymousType0(table.Column", printed);
         Assert.Contains("CreateTableBuilder[AnonymousType0]", printed);
         Assert.Contains("(x AnonymousType0)", printed);
         Assert.Contains("data class AnonymousType0(Id int32, Title string)", printed);

@@ -116,7 +116,7 @@ namespace Demo
         // ...and the SECOND file reuses that same synthesized type by name
         // rather than re-declaring its own copy (a re-declaration would ALSO
         // be a GS0102 collision, even for an identical shape).
-        Assert.Contains("AnonymousType0{Id: 2, Name: \"y\"}", printedB);
+        Assert.Contains("AnonymousType0(2, \"y\")", printedB);
         Assert.DoesNotContain("data class AnonymousType", printedB);
 
         CompileFilesTogether(("MigrationA.gs", printedA), ("MigrationB.gs", printedB));
