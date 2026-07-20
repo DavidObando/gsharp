@@ -6,6 +6,9 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -275,6 +278,63 @@ public class Issue2516ArrayCovarianceAsCastEmitTests
         Assert.Equal("3\n", output);
     }
 
+    [Fact]
+    public void AsCast_CSharpConsumer_ObservesCovariantEnumerable_ReflectionAndIdentity()
+    {
+        // Interoperability / reflection coverage: a plain C# PROGRAM (no gsc
+        // involved) references a G#-compiled library whose public API
+        // internally builds the covariant view via the `as`-cast workaround
+        // (`[]Dog as IEnumerable[Animal]`), then consumes it exactly like any
+        // other .NET IEnumerable<Animal> — enumerating it, reading each
+        // element's runtime type via reflection, and confirming the elements
+        // are the SAME references the library's own array holds (no copying
+        // occurred anywhere in the round trip).
+        var gsource = """
+            package Probe.Issue2516Interop
+            import System.Collections.Generic
+
+            public open class Animal { }
+            public class Dog : Animal { }
+
+            public class Library {
+                shared {
+                    public let dogs []Dog = []Dog{Dog(), Dog(), Dog()}
+
+                    public func GetAnimals() IEnumerable[Animal] {
+                        return Library.dogs as IEnumerable[Animal]
+                    }
+
+                    public func GetDogAt(i int32) Dog {
+                        return Library.dogs[i]
+                    }
+                }
+            }
+            """;
+
+        const string consumerSource = """
+            using System.Collections.Generic;
+            using System.Linq;
+            using Probe.Issue2516Interop;
+
+            public static class Consumer
+            {
+                public static string Run()
+                {
+                    IEnumerable<Animal> animals = Library.GetAnimals();
+                    List<Animal> list = animals.ToList();
+                    bool allDogs = list.All(a => a.GetType().Name == "Dog");
+                    bool allSameRef = System.Object.ReferenceEquals(list[0], Library.GetDogAt(0))
+                        && System.Object.ReferenceEquals(list[1], Library.GetDogAt(1))
+                        && System.Object.ReferenceEquals(list[2], Library.GetDogAt(2));
+                    return list.Count + "," + allDogs + "," + allSameRef;
+                }
+            }
+            """;
+
+        string output = CompileGsharpLibraryAndRunCSharpConsumer(gsource, consumerSource);
+        Assert.Equal("3,True,True", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue2516_").FullName;
@@ -433,6 +493,116 @@ public class Issue2516ArrayCovarianceAsCastEmitTests
                 $"exited {proc.ExitCode}\nstdout:\n{runOut}\nstderr:\n{runErr}");
 
             return runOut.Replace("\r\n", "\n");
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    // Interoperability helper (issue #2516's "reflection/C# consumer" coverage
+    // bullet): compiles `gSource` as a G# LIBRARY with gsc, then compiles a
+    // plain C# console program (`consumerCsSource`, in-memory via Roslyn —
+    // no gsc involved on this side) that references the freshly-built G#
+    // library assembly, and runs it. Returns the consumer program's captured
+    // stdout. This is the REVERSE direction of <see cref="CompileAndRunWithSiblingCs"/>
+    // (which has C# authoring the referenced assembly and G# the consumer):
+    // here G# is the library and ordinary .NET/C# is the consumer, proving
+    // the covariant `IEnumerable[Animal]` view gsc emits is a completely
+    // ordinary CLR interface reference from any external caller's
+    // perspective.
+    private static string CompileGsharpLibraryAndRunCSharpConsumer(string gSource, string consumerCsSource)
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_issue2516_interop_").FullName;
+        try
+        {
+            var gsSrcPath = Path.Combine(tempDir, "library.gs");
+            var libraryDllPath = Path.Combine(tempDir, "library.dll");
+            File.WriteAllText(gsSrcPath, gSource);
+
+            var gscArgs = new List<string>
+            {
+                "/out:" + libraryDllPath,
+                "/target:library",
+                "/targetframework:net10.0",
+                "/nowarn:GS9100",
+                gsSrcPath,
+            };
+
+            using var compileOut = new StringWriter();
+            using var compileErr = new StringWriter();
+            var prevOut = Console.Out;
+            var prevErr = Console.Error;
+            Console.SetOut(compileOut);
+            Console.SetError(compileErr);
+            int compileExit;
+            try
+            {
+                compileExit = Program.Main(gscArgs.ToArray());
+            }
+            finally
+            {
+                Console.SetOut(prevOut);
+                Console.SetError(prevErr);
+            }
+
+            Assert.True(
+                compileExit == 0,
+                $"gsc failed compiling the G# library:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
+
+            IlVerifier.Verify(libraryDllPath);
+
+            SyntaxTree consumerTree = CSharpSyntaxTree.ParseText(
+                consumerCsSource, new CSharpParseOptions(LanguageVersion.Latest));
+            var references = new List<MetadataReference>(
+                TrustedPlatformAssemblies().Select(path => MetadataReference.CreateFromFile(path)))
+            {
+                MetadataReference.CreateFromFile(libraryDllPath),
+            };
+            var consumerCompilation = CSharpCompilation.Create(
+                "Issue2516.CSharpConsumer",
+                new[] { consumerTree },
+                references,
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+            var consumerDllPath = Path.Combine(tempDir, "consumer.dll");
+            using (var stream = File.Create(consumerDllPath))
+            {
+                Microsoft.CodeAnalysis.Emit.EmitResult emitResult = consumerCompilation.Emit(stream);
+                Assert.True(
+                    emitResult.Success,
+                    "C# consumer failed to compile against the G# library:\n" +
+                        string.Join("\n", emitResult.Diagnostics));
+            }
+
+            File.WriteAllText(Path.Combine(tempDir, "consumer.runtimeconfig.json"), """
+                {
+                  "runtimeOptions": {
+                    "tfm": "net10.0",
+                    "framework": { "name": "Microsoft.NETCore.App", "version": "10.0.0" }
+                  }
+                }
+                """);
+
+            // Load both assemblies in-process and invoke `Consumer.Run()`
+            // directly — simpler and just as faithful as spawning `dotnet
+            // exec` for a library assembly with no entry point, and it keeps
+            // this helper self-contained (no extra host/runtimeconfig
+            // plumbing needed for a non-exe consumer).
+            var loadContext = new System.Runtime.Loader.AssemblyLoadContext("Issue2516Interop", isCollectible: true);
+            try
+            {
+                loadContext.LoadFromAssemblyPath(libraryDllPath);
+                var consumerAssembly = loadContext.LoadFromAssemblyPath(consumerDllPath);
+                var consumerType = consumerAssembly.GetType("Consumer", throwOnError: true);
+                var runMethod = consumerType.GetMethod("Run");
+                var result = (string)runMethod.Invoke(null, null);
+                return result;
+            }
+            finally
+            {
+                loadContext.Unload();
+            }
         }
         finally
         {

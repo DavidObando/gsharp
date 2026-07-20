@@ -597,6 +597,54 @@ public sealed class Issue2516ArrayCovarianceTranslationTests
         Assert.Contains("Repro.Accept((Repro.GetValues() as IEnumerable[IPerson]))", printed, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void NullableArrayReference_ArrayCovariance_EmitsAsCastWithNullableTarget()
+    {
+        string printed = Translate("""
+            #nullable enable
+            using System.Collections.Generic;
+
+            namespace Demo;
+
+            public interface IPerson { }
+            public sealed class Author : IPerson { }
+
+            public static class Repro
+            {
+                public static void Accept(IEnumerable<IPerson>? values) { }
+                public static void Test(Author[]? values) => Accept(values);
+            }
+            """,
+            NullableContextOptions.Enable);
+
+        Assert.Contains("func Test(values []?Author)", printed, StringComparison.Ordinal);
+        Assert.Contains("(values as IEnumerable[IPerson]?)", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NullableElementAnnotation_ArrayCovariance_EmitsAsCastWithNullableElement()
+    {
+        string printed = Translate("""
+            #nullable enable
+            using System.Collections.Generic;
+
+            namespace Demo;
+
+            public interface IPerson { }
+            public sealed class Author : IPerson { }
+
+            public static class Repro
+            {
+                public static void Accept(IEnumerable<IPerson?> values) { }
+                public static void Test(Author?[] values) => Accept(values);
+            }
+            """,
+            NullableContextOptions.Enable);
+
+        Assert.Contains("func Test(values []Author?)", printed, StringComparison.Ordinal);
+        Assert.Contains("(values as IEnumerable[IPerson?])", printed, StringComparison.Ordinal);
+    }
+
     private static MetadataReference CompileMetadataLibrary()
     {
         const string source = """
