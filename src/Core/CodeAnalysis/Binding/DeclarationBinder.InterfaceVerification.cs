@@ -129,6 +129,8 @@ internal sealed partial class DeclarationBinder
     {
         foreach (var (syntax, structSymbol) in pendingInterfaceImplementationChecks)
         {
+            ResolveExplicitClrInterfaceImplementations(structSymbol);
+
             var inheritedDefaultsBySignature = new Dictionary<string, (FunctionSymbol Method, InterfaceSymbol Iface)>(System.StringComparer.Ordinal);
             var conflictsReported = new HashSet<string>(System.StringComparer.Ordinal);
             var positionalInterfaceProps = new Dictionary<string, (ParameterSymbol Param, bool NeedsSetter)>(System.StringComparer.Ordinal);
@@ -147,6 +149,118 @@ internal sealed partial class DeclarationBinder
                     iface,
                     positionalInterfaceProps);
                 ResolveExplicitInterfaceEventImplementations(structSymbol, iface);
+            }
+
+            static void ResolveExplicitClrInterfaceImplementations(StructSymbol structSymbol)
+            {
+                foreach (var method in structSymbol.Methods)
+                {
+                    var target = method.ExplicitInterfaceClauseTarget;
+                    if (!method.HasExplicitInterfaceClause
+                        || target is InterfaceSymbol
+                        || target?.ClrType?.IsInterface != true)
+                    {
+                        continue;
+                    }
+
+                    foreach (var slot in target.ClrType.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+                    {
+                        if (!slot.IsSpecialName
+                            && slot.Name == method.Name
+                            && MemberLookup.MethodMatchesClrSignature(method, slot))
+                        {
+                            method.ExplicitInterfaceSlot = slot;
+                            method.ExplicitInterfaceSlotContainingType = target;
+                            break;
+                        }
+                    }
+                }
+
+                foreach (var property in structSymbol.Properties)
+                {
+                    var target = property.ExplicitInterfaceClauseTarget;
+                    if (!property.HasExplicitInterfaceClause
+                        || target is InterfaceSymbol
+                        || target?.ClrType?.IsInterface != true)
+                    {
+                        continue;
+                    }
+
+                    foreach (var slot in target.ClrType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+                    {
+                        if (!ExplicitClrPropertyMatches(property, target, slot))
+                        {
+                            continue;
+                        }
+
+                        property.ExplicitInterfaceGetterSlot = slot.GetMethod;
+                        property.ExplicitInterfaceSetterSlot = slot.SetMethod;
+                        property.ExplicitInterfaceSlotContainingType = target;
+                        break;
+                    }
+                }
+
+                foreach (var eventSymbol in structSymbol.Events)
+                {
+                    var target = eventSymbol.ExplicitInterfaceClauseTarget;
+                    if (!eventSymbol.HasExplicitInterfaceClause
+                        || target is InterfaceSymbol
+                        || target?.ClrType?.IsInterface != true)
+                    {
+                        continue;
+                    }
+
+                    foreach (var slot in target.ClrType.GetEvents(BindingFlags.Public | BindingFlags.Instance))
+                    {
+                        if (slot.Name != eventSymbol.Name
+                            || !TypeSignaturesEquivalent(
+                                eventSymbol.Type,
+                                MemberLookup.GetClrEventHandlerTypeSymbol(target, slot)))
+                        {
+                            continue;
+                        }
+
+                        eventSymbol.ExplicitInterfaceAddSlot = slot.AddMethod;
+                        eventSymbol.ExplicitInterfaceRemoveSlot = slot.RemoveMethod;
+                        eventSymbol.ExplicitInterfaceRaiseSlot = slot.RaiseMethod;
+                        eventSymbol.ExplicitInterfaceSlotContainingType = target;
+                        break;
+                    }
+                }
+            }
+
+            static bool ExplicitClrPropertyMatches(
+                PropertySymbol property,
+                TypeSymbol target,
+                PropertyInfo slot)
+            {
+                if (slot.Name != property.Name
+                    || (slot.GetMethod != null) != property.HasGetter
+                    || (slot.SetMethod != null) != property.HasSetter
+                    || !TypeSignaturesEquivalent(
+                        property.Type,
+                        MemberLookup.GetClrPropertyTypeSymbol(target, slot)))
+                {
+                    return false;
+                }
+
+                var slotParameters = slot.GetIndexParameters();
+                if (slotParameters.Length != property.Parameters.Length)
+                {
+                    return false;
+                }
+
+                for (var i = 0; i < slotParameters.Length; i++)
+                {
+                    if (!ClrTypeUtilities.AreSame(
+                        NullableLifting.GetEffectiveClrType(property.Parameters[i].Type),
+                        slotParameters[i].ParameterType))
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
             }
 
             SynthesizePositionalInterfaceProperties(structSymbol, positionalInterfaceProps);
@@ -606,7 +720,7 @@ internal sealed partial class DeclarationBinder
     /// </summary>
     private void VerifyExplicitInterfaceClauseResolution(StructDeclarationSyntax syntax, StructSymbol structSymbol)
     {
-        var seenSlots = new Dictionary<(InterfaceSymbol Iface, string Name), bool>();
+        var seenSlots = new Dictionary<(TypeSymbol Iface, string Name), bool>();
 
         if (!structSymbol.Methods.IsDefaultOrEmpty)
         {
@@ -629,7 +743,7 @@ internal sealed partial class DeclarationBinder
 
                 seenSlots[slot] = true;
 
-                if (method.ExplicitInterfaceMember == null)
+                if (method.ExplicitInterfaceMember == null && method.ExplicitInterfaceSlot == null)
                 {
                     Diagnostics.ReportExplicitInterfaceClauseMemberNotFound(
                         method.Declaration.Identifier.Location,
@@ -660,7 +774,9 @@ internal sealed partial class DeclarationBinder
 
                 seenSlots[slot] = true;
 
-                if (prop.ExplicitInterfaceMember == null)
+                if (prop.ExplicitInterfaceMember == null
+                    && prop.ExplicitInterfaceGetterSlot == null
+                    && prop.ExplicitInterfaceSetterSlot == null)
                 {
                     Diagnostics.ReportExplicitInterfaceClauseMemberNotFound(
                         prop.Declaration.Identifier.Location,
@@ -695,7 +811,9 @@ internal sealed partial class DeclarationBinder
 
                 seenSlots[slot] = true;
 
-                if (evt.ExplicitInterfaceMember == null)
+                if (evt.ExplicitInterfaceMember == null
+                    && evt.ExplicitInterfaceAddSlot == null
+                    && evt.ExplicitInterfaceRemoveSlot == null)
                 {
                     Diagnostics.ReportExplicitInterfaceClauseMemberNotFound(
                         evt.Declaration.Identifier.Location,
@@ -712,7 +830,7 @@ internal sealed partial class DeclarationBinder
         // interfaceimpl slot vs. a static-virtual method's own, unrelated
         // slot introduced by ADR-0089/#755), so they must never collide with
         // (or be conflated with) the instance sweep above.
-        var seenStaticSlots = new Dictionary<(InterfaceSymbol Iface, string Name), bool>();
+        var seenStaticSlots = new Dictionary<(TypeSymbol Iface, string Name), bool>();
 
         if (!structSymbol.StaticMethods.IsDefaultOrEmpty)
         {

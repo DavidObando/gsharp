@@ -40,15 +40,23 @@ internal static class ExplicitInterfaceMetadataNaming
     /// <param name="memberName">The declared (plain, source-visible) member name.</param>
     /// <param name="target">The resolved explicit-interface clause target, or <see langword="null"/>.</param>
     /// <returns>A collision-free metadata name, or <paramref name="memberName"/> unchanged.</returns>
-    internal static string GetMetadataName(string memberName, InterfaceSymbol target)
+    internal static string GetMetadataName(string memberName, TypeSymbol target)
     {
         if (target == null)
         {
             return memberName;
         }
 
-        return string.IsNullOrEmpty(target.PackageName)
-            ? $"{target.Name}.{memberName}"
-            : $"{target.PackageName}.{target.Name}.{memberName}";
+        if (target is InterfaceSymbol sourceInterface)
+        {
+            return string.IsNullOrEmpty(sourceInterface.PackageName)
+                ? $"{sourceInterface.Name}.{memberName}"
+                : $"{sourceInterface.PackageName}.{sourceInterface.Name}.{memberName}";
+        }
+
+        var interfaceName = target is ImportedTypeSymbol imported && imported.OpenDefinition != null
+            ? imported.OpenDefinition.FullName
+            : target.ClrType?.FullName;
+        return $"{interfaceName ?? target.Name}.{memberName}";
     }
 }

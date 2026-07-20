@@ -2050,6 +2050,23 @@ internal sealed class MemberLookup
     /// <returns><see langword="true"/> when a matching overload exists.</returns>
     public static bool HasMatchingMethodForClrSignature(StructSymbol structSymbol, MethodInfo clrMethod)
     {
+        foreach (var candidate in structSymbol.GetMethodsIncludingInherited(clrMethod.Name))
+        {
+            if (MethodMatchesClrSignature(candidate, clrMethod))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Determines whether one G# method matches an imported CLR method signature.</summary>
+    /// <param name="candidate">The candidate G# method.</param>
+    /// <param name="clrMethod">The imported CLR method.</param>
+    /// <returns><see langword="true"/> when the signatures match.</returns>
+    public static bool MethodMatchesClrSignature(FunctionSymbol candidate, MethodInfo clrMethod)
+    {
         var clrParams = clrMethod.GetParameters();
 
         // Issue #2230: an imported (metadata) interface method may itself be
@@ -2064,89 +2081,62 @@ internal sealed class MemberLookup
             ? clrMethod.GetGenericArguments()
             : System.Array.Empty<Type>();
 
-        foreach (var candidate in structSymbol.GetMethodsIncludingInherited(clrMethod.Name))
+        var callable = GetCallableParameters(candidate);
+        if (callable.Length != clrParams.Length)
         {
-            var callable = GetCallableParameters(candidate);
-            if (callable.Length != clrParams.Length)
-            {
-                continue;
-            }
+            return false;
+        }
 
-            var candidateTypeParams = candidate.TypeParameters.IsDefaultOrEmpty
-                ? ImmutableArray<TypeParameterSymbol>.Empty
-                : candidate.TypeParameters;
-            if (methodGenericParams.Length != candidateTypeParams.Length)
-            {
-                // Generic-arity mismatch: not a viable implementor of this
-                // interface method overload (mirrors issue #1007).
-                continue;
-            }
+        var candidateTypeParams = candidate.TypeParameters.IsDefaultOrEmpty
+            ? ImmutableArray<TypeParameterSymbol>.Empty
+            : candidate.TypeParameters;
+        if (methodGenericParams.Length != candidateTypeParams.Length)
+        {
+            return false;
+        }
 
-            // Issue #1071: an `async func` implementing a CLR interface method
-            // declared with an explicit `Task` / `Task[T]` return type has a
-            // declared (awaited) return of void / T. Compare the contract's
-            // unwrapped awaited result against the candidate's declared type.
-            if (candidate.IsAsync
-                && AsyncReturnTypeNormalizer.TryUnwrapTaskClrType(clrMethod.ReturnType, out var awaitedReturnClr))
+        if (candidate.IsAsync
+            && AsyncReturnTypeNormalizer.TryUnwrapTaskClrType(clrMethod.ReturnType, out var awaitedReturnClr))
+        {
+            if (!ClrParamTypeMatchesGenericMethodParam(candidate.Type, awaitedReturnClr, methodGenericParams, candidateTypeParams))
             {
-                if (!ClrParamTypeMatchesGenericMethodParam(candidate.Type, awaitedReturnClr, methodGenericParams, candidateTypeParams))
+                return false;
+            }
+        }
+        else if (!ClrParamTypeMatchesGenericMethodParam(candidate.Type, clrMethod.ReturnType, methodGenericParams, candidateTypeParams))
+        {
+            return false;
+        }
+
+        for (var i = 0; i < callable.Length; i++)
+        {
+            var clrParamType = clrParams[i].ParameterType;
+            var gsParam = callable[i];
+
+            if (clrParamType.IsByRef)
+            {
+                if (gsParam.RefKind == RefKind.None
+                    || !ClrParamTypeMatchesGenericMethodParam(
+                        gsParam.Type,
+                        clrParamType.GetElementType(),
+                        methodGenericParams,
+                        candidateTypeParams))
                 {
-                    continue;
+                    return false;
                 }
             }
-            else if (!ClrParamTypeMatchesGenericMethodParam(candidate.Type, clrMethod.ReturnType, methodGenericParams, candidateTypeParams))
+            else if (gsParam.RefKind != RefKind.None
+                || !ClrParamTypeMatchesGenericMethodParam(
+                    gsParam.Type,
+                    clrParamType,
+                    methodGenericParams,
+                    candidateTypeParams))
             {
-                continue;
-            }
-
-            var allMatch = true;
-            for (var i = 0; i < callable.Length; i++)
-            {
-                var clrParamType = clrParams[i].ParameterType;
-                var gsParam = callable[i];
-
-                if (clrParamType.IsByRef)
-                {
-                    // The CLR parameter is by-ref (out/ref/in) — compare the
-                    // element type and require the G# parameter's RefKind to be
-                    // non-None (Out, Ref, or In).
-                    if (gsParam.RefKind == RefKind.None)
-                    {
-                        allMatch = false;
-                        break;
-                    }
-
-                    var elementType = clrParamType.GetElementType();
-                    if (!ClrParamTypeMatchesGenericMethodParam(gsParam.Type, elementType, methodGenericParams, candidateTypeParams))
-                    {
-                        allMatch = false;
-                        break;
-                    }
-                }
-                else
-                {
-                    // Non-by-ref CLR parameter — the G# side must also be pass-by-value.
-                    if (gsParam.RefKind != RefKind.None)
-                    {
-                        allMatch = false;
-                        break;
-                    }
-
-                    if (!ClrParamTypeMatchesGenericMethodParam(gsParam.Type, clrParamType, methodGenericParams, candidateTypeParams))
-                    {
-                        allMatch = false;
-                        break;
-                    }
-                }
-            }
-
-            if (allMatch)
-            {
-                return true;
+                return false;
             }
         }
 
-        return false;
+        return true;
     }
 
     /// <summary>
