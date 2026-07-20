@@ -332,7 +332,7 @@ public sealed partial class CSharpToGSharpTranslator
             List<Parameter> parameters = this.MapParameters(symbol, node.ParameterList, skipFirst: false);
 
             List<GExpression> baseArguments = null;
-            bool isConvenience = false;
+            List<GExpression> delegatingArguments = null;
             if (node.Initializer != null)
             {
                 if (node.Initializer.ThisOrBaseKeyword.IsKind(SyntaxKind.BaseKeyword))
@@ -348,23 +348,16 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     // `: this(args)` (constructor delegation) maps to a G#
                     // `convenience init(params) { init(args); ... }`: the delegated
-                    // `init(args)` call is the first body statement (ADR-0065).
-                    isConvenience = true;
+                    // arguments are retained on the constructor model so its
+                    // canonical lowering always emits `init(args)` first.
+                    delegatingArguments = this.TranslateNullSeamArguments(
+                        node.Initializer.ArgumentList.Arguments, symbol);
                 }
             }
 
             BlockStatement body = this.TranslateBody(node, $"constructor on '{node.Identifier.Text}'");
 
-            if (isConvenience)
-            {
-                var delegated = new ExpressionStatement(new InvocationExpression(
-                    new IdentifierExpression("init"),
-                    this.TranslateNullSeamArguments(node.Initializer.ArgumentList.Arguments, symbol)));
-                var statements = new List<GStatement> { delegated };
-                statements.AddRange(body.Statements);
-                body = new BlockStatement(statements);
-            }
-            else if (propertyCtorInits != null && propertyCtorInits.Count > 0)
+            if (delegatingArguments == null && propertyCtorInits != null && propertyCtorInits.Count > 0)
             {
                 // OD-T1: move get-only auto-property inline initializers into the
                 // designated constructor body (G# has no property member
@@ -385,7 +378,7 @@ public sealed partial class CSharpToGSharpTranslator
                 baseArguments: baseArguments,
                 visibility: MapVisibility(symbol, this.context, node),
                 attributes: this.MapAttributes(node.AttributeLists),
-                isConvenience: isConvenience);
+                delegatingArguments: delegatingArguments);
         }
 
         /// <summary>
