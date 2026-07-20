@@ -69,6 +69,23 @@ public sealed record BoundUnaryOperator
             return new BoundUnaryOperator(syntaxKind, BoundUnaryOperatorKind.NullAssertion, operandType, underlying);
         }
 
+        // Issue #2544: predefined unary operators lift from T to T? when T is
+        // a value type. Resolve the underlying operation first so invalid
+        // combinations (for example, +bool? or !int32?) still fail normally.
+        if (operandType is NullableTypeSymbol nullable
+            && nullable.UnderlyingType?.ClrType is { IsValueType: true })
+        {
+            var underlyingOperator = Bind(syntaxKind, nullable.UnderlyingType);
+            if (underlyingOperator != null)
+            {
+                return new BoundUnaryOperator(
+                    syntaxKind,
+                    underlyingOperator.Kind,
+                    operandType,
+                    NullableTypeSymbol.Get(underlyingOperator.Type));
+            }
+        }
+
         foreach (var op in supportedOperators)
         {
             if (op.SyntaxKind == syntaxKind && op.OperandType == operandType)
