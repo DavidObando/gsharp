@@ -71,6 +71,7 @@ public sealed class Issue2525ImportedIndexerHidingPipelineTests
 
         Assert.Contains("value[\"key\"]", emitted, StringComparison.Ordinal);
         Assert.Contains("value[key] = replacement", emitted, StringComparison.Ordinal);
+        Assert.Contains("func ReadConstrained[T IDerived]", emitted, StringComparison.Ordinal);
         Assert.Contains("value[\"key\"] += \"!\"", emitted, StringComparison.Ordinal);
         Assert.Contains("value?[\"key\"]", emitted, StringComparison.Ordinal);
         Assert.Contains("Values: { [\"key\"] = \"nested\" }", Compact(emitted), StringComparison.Ordinal);
@@ -156,6 +157,10 @@ public sealed class Issue2525ImportedIndexerHidingPipelineTests
                 public static string ReadBase(IDerived value) => ((IBase)value)["key"];
 
                 public static T ReadGeneric<T>(IGenericDerived<T> value, T key) => value[key];
+
+                public static string ReadConstrained<T>(T value)
+                    where T : IDerived =>
+                    value["key"];
 
                 public static string ReadDiamond(IDiamondLeaf value) => value["key"];
 

@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Reflection;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -110,6 +111,22 @@ public sealed class Issue2525ImportedIndexerHidingEmitTests
                 }
             }
 
+            public interface IGenericOverloadBase<TBase>
+            {
+                string this[TBase key] { get; }
+            }
+
+            public interface IGenericOverloadDerived<TBase, TDerived> : IGenericOverloadBase<TBase>
+            {
+                string this[TDerived key] { get; }
+            }
+
+            public sealed class GenericOverloadStore<TBase, TDerived> : IGenericOverloadDerived<TBase, TDerived>
+            {
+                string IGenericOverloadBase<TBase>.this[TBase key] => "generic-base";
+                string IGenericOverloadDerived<TBase, TDerived>.this[TDerived key] => "generic-derived";
+            }
+
             public interface IRoot
             {
                 string this[string key] { get; set; }
@@ -169,6 +186,19 @@ public sealed class Issue2525ImportedIndexerHidingEmitTests
                 new string this[string key] { get; set; }
             }
 
+            public interface IDiamondInheritedLeaf : IDiamondLeft, IDiamondRight
+            {
+            }
+
+            public interface IDiamondSibling : IDiamondRoot
+            {
+                new string this[string key] { get; set; }
+            }
+
+            public interface IDiamondAmbiguous : IDiamondLeft, IDiamondSibling
+            {
+            }
+
             public sealed class DiamondStore : IDiamondLeaf
             {
                 private string root = "";
@@ -194,6 +224,24 @@ public sealed class Issue2525ImportedIndexerHidingEmitTests
                 }
             }
 
+            public sealed class InheritedDiamondStore : IDiamondInheritedLeaf
+            {
+                private string root = "";
+                private string left = "";
+
+                string IDiamondRoot.this[string key]
+                {
+                    get => "root-inherited:" + root;
+                    set => root = value;
+                }
+
+                string IDiamondLeft.this[string key]
+                {
+                    get => "left-inherited:" + left;
+                    set => left = value;
+                }
+            }
+
             public interface IOverloadBase
             {
                 string this[object key] { get; }
@@ -208,6 +256,39 @@ public sealed class Issue2525ImportedIndexerHidingEmitTests
             {
                 string IOverloadBase.this[object key] => "object";
                 string IOverloadDerived.this[string key] => "string";
+            }
+
+            public interface IOverloadHidingBase
+            {
+                string this[string key] { get; }
+                string this[object key] { get; }
+            }
+
+            public interface IOverloadHidingDerived : IOverloadHidingBase
+            {
+                new string this[string key] { get; }
+            }
+
+            public sealed class OverloadHidingStore : IOverloadHidingDerived
+            {
+                string IOverloadHidingBase.this[string key] => "hidden-base-string";
+                string IOverloadHidingBase.this[object key] => "visible-base-object";
+                string IOverloadHidingDerived.this[string key] => "derived-string";
+            }
+
+            public interface IGenericSlot<T>
+            {
+                string this[T key] { get; }
+            }
+
+            public interface IDualGeneric : IGenericSlot<int>, IGenericSlot<string>
+            {
+            }
+
+            public sealed class DualGenericStore : IDualGeneric
+            {
+                string IGenericSlot<int>.this[int key] => "dual-int";
+                string IGenericSlot<string>.this[string key] => "dual-string";
             }
 
             public interface IReturnBase
@@ -426,9 +507,12 @@ public sealed class Issue2525ImportedIndexerHidingEmitTests
         const string source = """
             package Issue2525
             import System
+            import System.Linq.Expressions
             import Issue2525.Contracts
 
             open data class Payload2525(Name string) {}
+            open data class BaseKey2525(Name string) {}
+            open data class DerivedKey2525(Name string) {}
 
             class Api {
                 shared {
@@ -436,6 +520,16 @@ public sealed class Issue2525ImportedIndexerHidingEmitTests
                     func Write(value IDerived, text string) { value["key"] = text }
                     func ReadBase(value IBase) string -> value["key"]
                     func WriteBase(value IBase, text string) { value["key"] = text }
+                    func ReadExpression() Expression[Func[IDerived, string]] ->
+                        (value IDerived) -> value["key"]
+                    func ReadConstrained[T IDerived](value T) string -> value["key"]
+                    func WriteConstrained[T IDerived](value T, text string) { value["key"] = text }
+                    func ReadGenericBase(
+                        value IGenericOverloadDerived[BaseKey2525, DerivedKey2525],
+                        key BaseKey2525) string -> value[key]
+                    func ReadGenericDerived(
+                        value IGenericOverloadDerived[BaseKey2525, DerivedKey2525],
+                        key DerivedKey2525) string -> value[key]
                     func Bump(value IIntDerived) int32 {
                         value[0] += 1
                         value[0]++
@@ -452,6 +546,8 @@ public sealed class Issue2525ImportedIndexerHidingEmitTests
                 let asBase IBase = derived
                 Api.WriteBase(asBase, "base")
                 Console.WriteLine(Api.ReadBase(asBase))
+                Api.WriteConstrained[SlotStore](slots, "constrained")
+                Console.WriteLine(Api.ReadConstrained[SlotStore](slots))
 
                 let ints = IntStore()
                 let intDerived IIntDerived = ints
@@ -475,6 +571,11 @@ public sealed class Issue2525ImportedIndexerHidingEmitTests
                 genericBase[baseKey] = Payload2525("generic-base")
                 Console.WriteLine(genericBase[baseKey].Name)
 
+                let genericOverload IGenericOverloadDerived[BaseKey2525, DerivedKey2525] =
+                    GenericOverloadStore[BaseKey2525, DerivedKey2525]()
+                Console.WriteLine(Api.ReadGenericBase(genericOverload, BaseKey2525("base")))
+                Console.WriteLine(Api.ReadGenericDerived(genericOverload, DerivedKey2525("derived")))
+
                 let multi = MultiLevelStore()
                 let leaf ILeaf = multi
                 leaf["key"] = "value"
@@ -487,10 +588,22 @@ public sealed class Issue2525ImportedIndexerHidingEmitTests
                 diamond["key"] = "value"
                 Console.WriteLine(diamond["key"])
 
+                let inheritedDiamond IDiamondInheritedLeaf = InheritedDiamondStore()
+                inheritedDiamond["key"] = "value"
+                Console.WriteLine(inheritedDiamond["key"])
+
                 let overloaded IOverloadDerived = OverloadStore()
                 Console.WriteLine(overloaded["key"])
                 let boxed object = "key"
                 Console.WriteLine(overloaded[boxed])
+
+                let overloadHiding IOverloadHidingDerived = OverloadHidingStore()
+                Console.WriteLine(overloadHiding["key"])
+                Console.WriteLine(overloadHiding[boxed])
+
+                let dualGeneric IDualGeneric = DualGenericStore()
+                Console.WriteLine(dualGeneric[1])
+                Console.WriteLine(dualGeneric["key"])
 
                 let changed IReturnDerived = ReturnStore()
                 Console.WriteLine(changed["key"].Length)
@@ -540,16 +653,24 @@ public sealed class Issue2525ImportedIndexerHidingEmitTests
             """
             derived:gsharp
             base:base
+            derived:constrained
             15
             15
             2
             generic-derived
             generic-base
+            generic-base
+            generic-derived
             leaf:value
             root:value
             diamond:value
+            left-inherited:value
             string
             object
+            derived-string
+            visible-base-object
+            dual-int
+            dual-string
             14
             25
             2525
@@ -575,11 +696,16 @@ public sealed class Issue2525ImportedIndexerHidingEmitTests
         var api = emitted.GetType("Issue2525.Api", throwOnError: true)!;
         Assert.Equal("Issue2525.Contracts.IDerived", api.GetMethod("Read")!.GetParameters()[0].ParameterType.FullName);
         Assert.Equal("Issue2525.Contracts.IBase", api.GetMethod("ReadBase")!.GetParameters()[0].ParameterType.FullName);
+        var expression = Assert.IsAssignableFrom<LambdaExpression>(
+            api.GetMethod("ReadExpression")!.Invoke(null, null));
+        var slotStore = Activator.CreateInstance(
+            contracts.GetType("Issue2525.Contracts.SlotStore", throwOnError: true)!)!;
+        Assert.Equal("derived:", expression.Compile().DynamicInvoke(slotStore));
 
         var consumerPath = EmitCSharpConsumer(result.DirectoryPath, result.OutputPath, result.ContractsPath);
         IlVerifier.Verify(consumerPath, additionalReferences: new[] { result.OutputPath, result.ContractsPath });
         Assert.Equal(
-            "derived:consumer\nbase:consumer-base\n4\n",
+            "derived:consumer\nbase:consumer-base\nderived:consumer-constrained\n4\nleft-inherited:csharp\n",
             Run(consumerPath));
     }
 
@@ -587,6 +713,7 @@ public sealed class Issue2525ImportedIndexerHidingEmitTests
     [InlineData("func Bad(value IGetDerived) { value[0] = 1 }")]
     [InlineData("func Bad(value ISetDerived) int32 -> value[0]")]
     [InlineData("func Bad(value IAmbiguous) string -> value[\"key\"]")]
+    [InlineData("func Bad(value IDiamondAmbiguous) string -> value[\"key\"]")]
     public void HiddenAccessorAvailabilityAndUnrelatedAmbiguity_ReportGS0116(string declaration)
     {
         var source = $$"""
@@ -780,10 +907,16 @@ public sealed class Issue2525ImportedIndexerHidingEmitTests
                     Console.WriteLine(Api.Read(derived));
                     Api.WriteBase(derived, "consumer-base");
                     Console.WriteLine(Api.ReadBase(derived));
+                    Api.WriteConstrained<SlotStore>(store, "consumer-constrained");
+                    Console.WriteLine(Api.ReadConstrained<SlotStore>(store));
 
                     IIntDerived ints = new IntStore();
                     ints[0] = 2;
                     Console.WriteLine(Api.Bump(ints));
+
+                    IDiamondInheritedLeaf diamond = new InheritedDiamondStore();
+                    diamond["key"] = "csharp";
+                    Console.WriteLine(diamond["key"]);
                 }
             }
             """;
