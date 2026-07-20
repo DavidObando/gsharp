@@ -91,6 +91,16 @@ public sealed partial class CSharpToGSharpTranslator
                     SanitizeIdentifier(identifier.Identifier.Text));
             }
 
+            // A bare type used as an expression receiver (Path.Combine,
+            // Task.FromResult, Console.WriteLine, ...) does not pass through
+            // type-syntax translation. Map it here so SDK implicit/global
+            // usings still contribute the namespace import required by G#.
+            if (this.context.SemanticModel.GetAliasInfo(identifier) is null &&
+                this.context.GetSymbolInfo(identifier).Symbol is INamedTypeSymbol type)
+            {
+                return new TypeExpression(this.typeMapper.Map(type, this.context, identifier.GetLocation()));
+            }
+
             return new IdentifierExpression(SanitizeIdentifier(identifier.Identifier.Text));
         }
 
