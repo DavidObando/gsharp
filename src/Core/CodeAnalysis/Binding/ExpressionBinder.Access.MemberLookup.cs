@@ -478,10 +478,7 @@ internal sealed partial class ExpressionBinder
 
                     return BindExtensionMethodGroupOrError(receiver, ne);
                 }
-                else if (receiver != null
-                    && receiver.Type?.ClrType != null
-                    && (receiver.Type is not NullableTypeSymbol
-                        || receiver is BoundClrPropertyAccessExpression))
+                else if (CanBindClrInstanceMember(receiver))
                 {
                     // Phase 4 exit: read a public instance property or field on
                     // a CLR receiver (e.g. `lst.Count`, `sb.Length`,
@@ -589,6 +586,18 @@ internal sealed partial class ExpressionBinder
             default:
                 return new BoundErrorExpression(null);
         }
+    }
+
+    /// <summary>
+    /// Returns whether CLR instance lookup may continue through a receiver.
+    /// Imported fields and properties can carry oblivious reference metadata as
+    /// a nullable type, but remain valid intermediate receivers in a member chain.
+    /// </summary>
+    private static bool CanBindClrInstanceMember(BoundExpression receiver)
+    {
+        return receiver?.Type?.ClrType != null
+            && (receiver.Type is not NullableTypeSymbol
+                || receiver is BoundClrPropertyAccessExpression);
     }
 
     /// <summary>
