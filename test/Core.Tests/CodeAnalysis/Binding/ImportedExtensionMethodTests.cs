@@ -33,6 +33,62 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 public class ImportedExtensionMethodTests
 {
     [Fact]
+    public void KeyValuePair_ForTupleIn_UsesImportedDeconstructPattern()
+    {
+        var source = @"
+import System.Collections.Generic
+
+var values = Dictionary[string, int32]()
+values.Add(""one"", 1)
+values.Add(""two"", 2)
+
+var total = 0
+for (key, value) in values {
+    total = total + value
+}
+total
+";
+        AssertCompilesWithoutErrors(source);
+        var result = new Compilation(SyntaxTree.Parse(SourceText.From(source)))
+            .Evaluate(new Dictionary<VariableSymbol, object>());
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(3, result.Value);
+    }
+
+    [Fact]
+    public void GenericDeconstructExtension_FromReferencedAssembly_Binds()
+    {
+        var source = @"
+package Demo
+import GSharp.Core.Tests.Fixtures
+
+func Run() int32 {
+    var pair = ImportedPair2537[int32](4, 5)
+    let (left, right) = pair
+    return left + right
+}
+";
+        AssertBindsWithoutErrors(source);
+        AssertCompilesWithoutErrors(source, FixtureResolver());
+    }
+
+    [Fact]
+    public void GenericLambdaExtensionOverload_FromReferencedAssembly_Binds()
+    {
+        var source = @"
+package Demo
+import GSharp.Core.Tests.Fixtures
+
+func Run() string? {
+    var pair = ImportedPair2537[int32](4, 5)
+    return pair.Transform(func(value int32) string { return value.ToString() })
+}
+";
+        AssertBindsWithoutErrors(source);
+    }
+
+    [Fact]
     public void Where_OnList_InstanceSyntax_Compiles()
     {
         var source = @"
@@ -212,14 +268,16 @@ func Run() string {
         // are loaded through a MetadataLoadContext — the cross-reflection-context
         // configuration that reproduces issue #322. The Default resolver loads
         // host runtime assemblies and would not exercise that path.
-        var fixturePath = typeof(Fixtures.Handler322Extensions).Assembly.Location;
-        var resolver = ReferenceResolver.WithReferences(new[] { fixturePath });
+        var resolver = FixtureResolver();
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var globalScope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(tree), resolver);
         var program = Binder.BindProgram(globalScope, resolver);
         var diagnostics = globalScope.Diagnostics.AddRange(program.Diagnostics);
         Assert.DoesNotContain(diagnostics, d => d.IsError);
     }
+
+    private static ReferenceResolver FixtureResolver()
+        => ReferenceResolver.WithReferences(new[] { typeof(Fixtures.Handler322Extensions).Assembly.Location });
 
     private static void AssertCompilesWithoutErrors(string source)
     {
@@ -228,6 +286,16 @@ func Run() string {
             success,
             "Emit failed:\n" + string.Join("\n", diagnostics.Select(d => d.ToString())));
         Assert.DoesNotContain(diagnostics, d => d.IsError);
+    }
+
+    private static void AssertCompilesWithoutErrors(string source, ReferenceResolver resolver)
+    {
+        var compilation = new Compilation(resolver, SyntaxTree.Parse(SourceText.From(source)));
+        using var peStream = new MemoryStream();
+        var result = compilation.Emit(peStream);
+        Assert.True(
+            result.Success,
+            "Emit failed:\n" + string.Join("\n", result.Diagnostics.Select(d => d.ToString())));
     }
 
     private static IReadOnlyList<Diagnostic> EmitDiagnostics(string source)
