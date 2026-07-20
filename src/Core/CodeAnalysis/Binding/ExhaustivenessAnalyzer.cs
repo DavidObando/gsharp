@@ -5,6 +5,7 @@
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Text;
 
@@ -22,6 +23,7 @@ public static class ExhaustivenessAnalyzer
     /// <returns>True for enum types, sealed interfaces, and sealed-hierarchy classes; otherwise false.</returns>
     public static bool IsExhaustiveDiscriminant(TypeSymbol type)
         => type is EnumSymbol
+        || type?.ClrType.IsEnumSafe() == true
         || type is InterfaceSymbol { IsSealed: true }
         || type is StructSymbol { IsSealedHierarchy: true };
 
@@ -96,25 +98,23 @@ public static class ExhaustivenessAnalyzer
             return false;
         }
 
-        if (discriminantType is EnumSymbol enumSymbol)
+        if (TryGetEnumVariants(discriminantType, out var enumVariants))
         {
-            discriminantDescription = $"enum '{enumSymbol.Name}'";
-            var coveredValues = new HashSet<int>();
+            discriminantDescription = $"enum '{discriminantType.Name}'";
+            var coveredValues = new HashSet<object>();
             foreach (var pattern in patternArray)
             {
                 foreach (var leaf in FlattenDisjunction(pattern))
                 {
                     if (leaf is BoundConstantPattern constant
-                        && constant.Value is BoundLiteralExpression literal
-                        && literal.Type == enumSymbol
-                        && literal.Value is int value)
+                        && constant.Value is BoundLiteralExpression literal)
                     {
-                        coveredValues.Add(value);
+                        coveredValues.Add(literal.Value);
                     }
                 }
             }
 
-            missingNames = enumSymbol.Members
+            missingNames = enumVariants
                 .Where(member => !coveredValues.Contains(member.Value))
                 .Select(member => member.Name)
                 .ToImmutableArray();
@@ -184,6 +184,31 @@ public static class ExhaustivenessAnalyzer
         }
 
         return false;
+    }
+
+    private static bool TryGetEnumVariants(
+        TypeSymbol type,
+        out ImmutableArray<(string Name, object Value)> variants)
+    {
+        if (type is EnumSymbol enumSymbol)
+        {
+            variants = enumSymbol.Members
+                .Select(member => (member.Name, (object)member.Value))
+                .ToImmutableArray();
+            return true;
+        }
+
+        if (type?.ClrType.IsEnumSafe() != true)
+        {
+            variants = ImmutableArray<(string Name, object Value)>.Empty;
+            return false;
+        }
+
+        variants = ClrTypeUtilities.SafeGetFields(type.ClrType, BindingFlags.Public | BindingFlags.Static)
+            .Where(field => field.IsLiteral)
+            .Select(field => (field.Name, field.GetRawConstantValue()))
+            .ToImmutableArray();
+        return true;
     }
 
     /// <summary>
