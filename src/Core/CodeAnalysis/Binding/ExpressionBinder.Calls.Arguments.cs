@@ -1048,6 +1048,27 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        // Issue #2523: a symbolic imported generic return keeps an erased CLR
+        // probe shape for binding (for example,
+        // IChain<object, object>) even when every symbolic argument now has a
+        // concrete CLR type. Reify that shape before extension-method generic
+        // inference so the receiver contributes its real base/interface
+        // substitutions (IQuery<TEntity>) rather than conflicting `object`
+        // evidence. Reification already preserves real Nullable<T> value
+        // arguments and erases only reference nullability, matching CLR type
+        // identity; it safely falls back to the cached probe shape for
+        // same-compilation/open arguments that cannot yet be closed.
+        if (receiver.Type is ImportedTypeSymbol symbolicImportedReceiver
+            && symbolicImportedReceiver.OpenDefinition != null
+            && !symbolicImportedReceiver.TypeArguments.IsDefaultOrEmpty)
+        {
+            var reifiedReceiver = symbolicImportedReceiver.ReifyClosedClrType();
+            if (reifiedReceiver != null && !reifiedReceiver.ContainsGenericParameters)
+            {
+                receiverClrType = reifiedReceiver;
+            }
+        }
+
         // Issue #1423: a user class that implements a generic collection
         // interface (e.g. `class EntryList : IReadOnlyCollection[Entry]`, which
         // extends `IEnumerable[Entry]`) erases to `System.Object` via
@@ -1133,6 +1154,44 @@ internal sealed partial class ExpressionBinder
         if (candidates.Count == 0)
         {
             return false;
+        }
+
+        // Issue #2523: when a symbolic imported receiver's own reconstructed
+        // CLR type is still unavailable, project it onto a candidate's declared
+        // generic receiver interface/base. This gives generic inference the
+        // subset of source arguments that the extension actually consumes
+        // (for example IIncludableQueryable<TEntity, TProperty?> ->
+        // IQueryable<TEntity>) without letting unrelated nullable or invariant
+        // source slots collapse that receiver to object.
+        if (receiver.Type is ImportedTypeSymbol symbolicReceiver)
+        {
+            foreach (var candidate in candidates)
+            {
+                var candidateParameters = candidate.GetParameters();
+                if (candidateParameters.Length == 0)
+                {
+                    continue;
+                }
+
+                var candidateReceiver = candidateParameters[0].ParameterType;
+                if (!candidateReceiver.IsGenericType)
+                {
+                    continue;
+                }
+
+                var candidateReceiverOpen = candidateReceiver.IsGenericTypeDefinition
+                    ? candidateReceiver
+                    : candidateReceiver.GetGenericTypeDefinition();
+                if (MemberLookup.TryProjectConstructedHierarchyClrType(
+                    symbolicReceiver,
+                    candidateReceiverOpen,
+                    out var projectedReceiver))
+                {
+                    receiverClrType = projectedReceiver;
+                    argTypes[0] = projectedReceiver;
+                    break;
+                }
+            }
         }
 
         // OverloadResolution.Resolve infers type arguments for open generic

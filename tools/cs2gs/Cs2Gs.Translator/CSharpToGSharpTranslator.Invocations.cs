@@ -1469,14 +1469,12 @@ public sealed partial class CSharpToGSharpTranslator
         //    an external oblivious type).
         // Both are forgiven identically here: the TARGET position (member/
         // Add-parameter/indexer-value) is what decides whether forgiveness is
-        // needed — gated to a target whose OWN type is a non-annotated,
-        // non-promoted reference type (i.e. one that genuinely expects
-        // non-null), so an ALREADY-nullable/promoted target (which accepts a
-        // `T?` value unchanged) and a nullable-enabled compilation (real
-        // annotations) are both left byte-identical. This is deliberately blind
-        // to whether the TARGET is an imported/metadata type or a source type —
-        // only the target's resolved type/promotion state matters, exactly like
-        // every other forgiveness sink in this file.
+        // needed. Issue #2521 requires that decision to use the EFFECTIVE
+        // emitted contract: a same-compilation declaration may genuinely widen
+        // to `T?`, but consumer-side taint cannot retroactively widen a project-
+        // reference or CLR-metadata member that was already emitted as `T`.
+        // An already-nullable target and a nullable-enabled compilation remain
+        // byte-identical.
         //
         // Deliberately NOT narrowed to exclude PREBUILT SIBLING projects (an
         // earlier version of this bridge tried exactly that, gating
@@ -1508,14 +1506,9 @@ public sealed partial class CSharpToGSharpTranslator
         {
             if (!this.IsObliviousCompilation()
                 || translatedValue is NonNullAssertionExpression
-                || targetType is not { IsReferenceType: true }
-                || targetType.NullableAnnotation == NullableAnnotation.Annotated)
-            {
-                return translatedValue;
-            }
-
-            if (targetSymbolForPromotionCheck != null
-                && this.ShouldPromoteToNullableReference(targetSymbolForPromotionCheck))
+                || !this.TargetWillRemainNonNullableReference(
+                    targetType,
+                    targetSymbolForPromotionCheck))
             {
                 return translatedValue;
             }
@@ -1811,10 +1804,11 @@ public sealed partial class CSharpToGSharpTranslator
                     // initializer symbol API — a plain `GetSymbolInfo` on the
                     // element has nothing to bind to, it is not itself a call
                     // syntax) so each argument's target parameter type decides
-                    // whether that argument needs forgiveness. `Add` parameters
-                    // are never tracked by the taint fixpoint (they're not a
-                    // symbol with its own declaration to promote), so no
-                    // promotion-check symbol is passed.
+                    // whether that argument needs forgiveness. Issue #2521 also
+                    // passes the parameter symbol so a same-compilation
+                    // promotion is honored while an imported parameter's
+                    // already-emitted contract cannot be widened by consumer
+                    // taint.
                     IMethodSymbol addMethod =
                         this.context.SemanticModel.GetCollectionInitializerSymbolInfo(complex).Symbol as IMethodSymbol;
                     GExpression keyValue = this.TranslateExpression(complex.Expressions[0]);
@@ -1822,9 +1816,9 @@ public sealed partial class CSharpToGSharpTranslator
                     if (addMethod is { Parameters.Length: 2 })
                     {
                         keyValue = this.ForgiveInitializerElementValue(
-                            complex.Expressions[0], keyValue, addMethod.Parameters[0].Type, targetSymbolForPromotionCheck: null);
+                            complex.Expressions[0], keyValue, addMethod.Parameters[0].Type, addMethod.Parameters[0]);
                         pairValue = this.ForgiveInitializerElementValue(
-                            complex.Expressions[1], pairValue, addMethod.Parameters[1].Type, targetSymbolForPromotionCheck: null);
+                            complex.Expressions[1], pairValue, addMethod.Parameters[1].Type, addMethod.Parameters[1]);
                     }
 
                     keyValue = this.CoerceArrayCovarianceConversion(complex.Expressions[0], keyValue);
@@ -1843,7 +1837,7 @@ public sealed partial class CSharpToGSharpTranslator
                     if (addMethod is { Parameters.Length: 1 })
                     {
                         bareValue = this.ForgiveInitializerElementValue(
-                            element, bareValue, addMethod.Parameters[0].Type, targetSymbolForPromotionCheck: null);
+                            element, bareValue, addMethod.Parameters[0].Type, addMethod.Parameters[0]);
                     }
 
                     bareValue = this.CoerceArrayCovarianceConversion(element, bareValue);

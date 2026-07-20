@@ -402,6 +402,29 @@ public sealed class Conversion
             return Conversion.Identity;
         }
 
+        // Issue #2523: a constructed imported reference type may carry
+        // symbolic arguments that its erased CLR shape cannot represent. For
+        // example, imported generic inference can surface
+        // IIncludableQueryable<TEntity, TProperty?> symbolically while its
+        // reflection probe shape is IIncludableQueryable<object, object>.
+        // Testing that erased shape against IQueryable<TEntity> loses the
+        // declared base-interface substitution and rejects a valid upcast.
+        //
+        // Project the source's open interface/base hierarchy through its
+        // symbolic arguments, then classify the resulting constructed target
+        // with ordinary CLR variance rules. This is framework-independent and
+        // applies equally to imported interfaces/classes, inferred or explicit
+        // method arguments, nested generic arguments, and cross-context CLR
+        // identities.
+        if (from is ImportedTypeSymbol fromConstructedReference
+            && to is ImportedTypeSymbol toConstructedReference
+            && TryClassifyConstructedImportedReferenceConversion(
+                fromConstructedReference,
+                toConstructedReference))
+        {
+            return Conversion.Implicit;
+        }
+
         // Phase 3.C.1 / ADR-0001: T → T? is an implicit widening; T? → T?
         // when underlyings match is identity. T? → T requires the bang
         // operator (Phase 3.C.3) and is not implicit here.
@@ -1712,6 +1735,81 @@ public sealed class Conversion
         for (var i = 0; i < from.TypeArguments.Length; i++)
         {
             if (!AreTypeArgumentsEquivalent(from.TypeArguments[i], to.TypeArguments[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #2523: classifies a reference conversion between constructed
+    /// imported generic types from their symbolic open-definition hierarchy
+    /// instead of their possibly-erased CLR probe types.
+    /// </summary>
+    private static bool TryClassifyConstructedImportedReferenceConversion(
+        ImportedTypeSymbol from,
+        ImportedTypeSymbol to)
+    {
+        if (from?.OpenDefinition == null
+            || from.TypeArguments.IsDefaultOrEmpty
+            || from.OpenDefinition.IsValueType
+            || !TryGetConstructedGenericShape(to, out var targetOpen, out var targetArguments)
+            || targetOpen == null
+            || targetOpen.IsValueType)
+        {
+            return false;
+        }
+
+        ImmutableArray<TypeSymbol> sourceArguments;
+        if (ClrTypeUtilities.AreSame(from.OpenDefinition, targetOpen))
+        {
+            sourceArguments = from.TypeArguments;
+        }
+        else if (!MemberLookup.TryMapConstructedTypeArgumentsThroughHierarchy(
+                     from,
+                     targetOpen,
+                     out sourceArguments))
+        {
+            return false;
+        }
+
+        if (sourceArguments.Length != targetArguments.Length)
+        {
+            return false;
+        }
+
+        var genericParameters = targetOpen.GetGenericArguments();
+        if (genericParameters.Length != sourceArguments.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < sourceArguments.Length; i++)
+        {
+            var sourceArgument = sourceArguments[i];
+            var targetArgument = targetArguments[i];
+            if (AreTypeArgumentsEquivalent(sourceArgument, targetArgument))
+            {
+                continue;
+            }
+
+            var variance = genericParameters[i].GenericParameterAttributes
+                & System.Reflection.GenericParameterAttributes.VarianceMask;
+            var compatible = variance switch
+            {
+                System.Reflection.GenericParameterAttributes.Covariant =>
+                    Binder.IsReferenceTypeForConstraint(sourceArgument)
+                    && Binder.IsReferenceTypeForConstraint(targetArgument)
+                    && Classify(sourceArgument, targetArgument) is { Exists: true, IsImplicit: true },
+                System.Reflection.GenericParameterAttributes.Contravariant =>
+                    Binder.IsReferenceTypeForConstraint(sourceArgument)
+                    && Binder.IsReferenceTypeForConstraint(targetArgument)
+                    && Classify(targetArgument, sourceArgument) is { Exists: true, IsImplicit: true },
+                _ => false,
+            };
+            if (!compatible)
             {
                 return false;
             }

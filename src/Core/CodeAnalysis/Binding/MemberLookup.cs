@@ -3300,6 +3300,54 @@ internal sealed class MemberLookup
     internal static TypeSymbol MergeInferredTypeArgument(TypeSymbol existing, TypeSymbol incoming)
         => MergeRecoveredTypeArgument(existing, incoming);
 
+    internal static bool TryMapConstructedTypeArgumentsThroughHierarchy(
+        ImportedTypeSymbol source,
+        Type targetOpenDefinition,
+        out ImmutableArray<TypeSymbol> mappedArguments)
+        => TryMapThroughImplemented(source, targetOpenDefinition, out mappedArguments);
+
+    internal static bool TryProjectConstructedHierarchyClrType(
+        ImportedTypeSymbol source,
+        Type targetOpenDefinition,
+        out Type projectedType)
+    {
+        projectedType = null;
+        if (source == null
+            || targetOpenDefinition == null
+            || !targetOpenDefinition.IsGenericTypeDefinition
+            || !TryMapThroughImplemented(source, targetOpenDefinition, out var mappedArguments)
+            || mappedArguments.Any(TypeSymbol.RequiresSymbolicProjection))
+        {
+            return false;
+        }
+
+        var contextObject = ResolveErasedObjectInContext(targetOpenDefinition);
+        var erasedArguments = Enumerable.Repeat(
+            contextObject,
+            targetOpenDefinition.GetGenericArguments().Length).ToArray();
+        Type erased;
+        try
+        {
+            erased = targetOpenDefinition.MakeGenericType(erasedArguments);
+        }
+        catch
+        {
+            return false;
+        }
+
+        var projected = ImportedTypeSymbol.GetConstructed(
+            erased,
+            targetOpenDefinition,
+            mappedArguments).ReifyClosedClrType();
+        if (projected == null || projected.ContainsGenericParameters)
+        {
+            return false;
+        }
+
+        projectedType = projected;
+        return true;
+    }
+
     private static bool IsBetterSymbolicIndexerCandidate(
         ImmutableArray<TypeSymbol> candidate,
         ImmutableArray<TypeSymbol> other,
@@ -4141,16 +4189,26 @@ internal sealed class MemberLookup
                 return;
             }
 
-            // Pattern A: actual is an ImportedTypeSymbol whose OpenDefinition matches exactly.
+            // Pattern A: actual is an imported constructed generic whose open
+            // definition matches exactly. Issue #2523 extends this from
+            // explicitly-symbolic constructions to ordinary fully-closed CLR
+            // returns as well: a non-nullable Include result can legitimately
+            // surface as plain IIncludableQueryable<Book, List<Component>>,
+            // and a following ThenInclude must still recover TEntity=Book from
+            // that receiver before a nullable selector result forces the next
+            // return back into symbolic form.
             if (actual is ImportedTypeSymbol imp
-                && imp.OpenDefinition != null
-                && ClrTypeUtilities.AreSame(imp.OpenDefinition, openDef)
-                && !imp.TypeArguments.IsDefaultOrEmpty
-                && imp.TypeArguments.Length == openArgs.Length)
+                && TryGetConstructedImportedProjection(imp, out var projectedImp)
+                && ClrTypeUtilities.AreSame(projectedImp.OpenDefinition, openDef)
+                && projectedImp.TypeArguments.Length == openArgs.Length)
             {
                 for (int j = 0; j < openArgs.Length; j++)
                 {
-                    UnifyForMethodTypeArgs(openArgs[j], imp.TypeArguments[j], openMethod, result);
+                    UnifyForMethodTypeArgs(
+                        openArgs[j],
+                        projectedImp.TypeArguments[j],
+                        openMethod,
+                        result);
                 }
 
                 return;
@@ -4229,9 +4287,10 @@ internal sealed class MemberLookup
             // Pattern C: actual is an ImportedTypeSymbol whose OpenDefinition is
             // a derived/implementing shape (e.g. List<T> formal-matched against
             // IEnumerable<TSource>). Walk the actual's interfaces/base.
-            if (actual is ImportedTypeSymbol imp2 && imp2.OpenDefinition != null && !imp2.TypeArguments.IsDefaultOrEmpty)
+            if (actual is ImportedTypeSymbol imp2
+                && TryGetConstructedImportedProjection(imp2, out var projectedImp2))
             {
-                if (TryMapThroughImplemented(imp2, openDef, out var liftedArgs))
+                if (TryMapThroughImplemented(projectedImp2, openDef, out var liftedArgs))
                 {
                     for (int j = 0; j < openArgs.Length && j < liftedArgs.Length; j++)
                     {
@@ -4240,6 +4299,33 @@ internal sealed class MemberLookup
                 }
             }
         }
+    }
+
+    private static bool TryGetConstructedImportedProjection(
+        ImportedTypeSymbol imported,
+        out ImportedTypeSymbol projected)
+    {
+        projected = null;
+        if (imported?.OpenDefinition != null
+            && !imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            projected = imported;
+            return true;
+        }
+
+        var clr = imported?.ClrType;
+        if (clr == null || !clr.IsGenericType || clr.IsGenericTypeDefinition)
+        {
+            return false;
+        }
+
+        projected = ImportedTypeSymbol.GetConstructed(
+            clr,
+            clr.GetGenericTypeDefinition(),
+            clr.GetGenericArguments()
+                .Select(TypeSymbol.FromClrType)
+                .ToImmutableArray());
+        return true;
     }
 
     /// <summary>
