@@ -552,6 +552,7 @@ function Convert-VsCodeSnippet {
             return '$' + $placeholders[$index].Id + '$'
         }
     )
+    $snippetCode = $snippetCode -replace '(?m)[ \t]+$', ''
 
     $declarationsXml = if ($placeholders.Count -eq 0) {
         ''
@@ -603,7 +604,7 @@ function New-SnippetPkgDef {
 ; Register G# code expansion snippets.
 [$RootKey$\Languages\CodeExpansions\GSharp\Paths]
 "GSharpSnippets"="$PackageFolder$"
-'@ -replace "`n", "`r`n"
+'@
 }
 
 function Get-ExpectedFiles {
