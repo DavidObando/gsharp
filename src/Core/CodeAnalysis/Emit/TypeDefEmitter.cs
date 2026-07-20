@@ -1602,7 +1602,9 @@ internal sealed class TypeDefEmitter
     /// ADR-0101 follow-up / issue #819: emits one <c>Parameter</c> row per
     /// primary-constructor parameter, giving each a metadata name and
     /// stamping <c>[ParamArrayAttribute]</c> on the trailing variadic
-    /// parameter (when present). Returns the handle of the first emitted
+    /// parameter (when present). Optional parameters also carry the CLR
+    /// Optional/HasDefault flags and Constant row. Returns the handle of the
+    /// first emitted
     /// row — or the next available row when the parameter list is empty —
     /// suitable to feed into <c>AddMethodDefinition.parameterList</c>.
     /// Primary-ctor parameters never carry <c>ref</c> / <c>out</c> / <c>in</c>
@@ -1626,11 +1628,19 @@ internal sealed class TypeDefEmitter
         for (var i = 0; i < parameters.Length; i++)
         {
             var p = parameters[i];
+            var attributes = p.HasExplicitDefaultValue
+                ? ParameterAttributes.Optional | ParameterAttributes.HasDefault
+                : ParameterAttributes.None;
             var paramHandle = this.emitCtx.Metadata.AddParameter(
-                attributes: ParameterAttributes.None,
+                attributes: attributes,
                 name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? string.Empty),
                 sequenceNumber: i + 1);
             handles.Add(paramHandle);
+
+            if (p.HasExplicitDefaultValue)
+            {
+                this.emitCtx.Metadata.AddConstant(paramHandle, p.ExplicitDefaultValue);
+            }
 
             if (p.IsVariadic)
             {
