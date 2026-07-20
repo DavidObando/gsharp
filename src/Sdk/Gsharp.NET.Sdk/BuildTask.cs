@@ -115,6 +115,16 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
     /// <summary>Gets or sets the managed resources to embed.</summary>
     public ITaskItem[] Resources { get; set; } = Array.Empty<ITaskItem>();
 
+    /// <summary>Gets or sets whether the task should return arguments without invoking gsc.</summary>
+    public string SkipCompilerExecution { get; set; }
+
+    /// <summary>Gets or sets whether the task should expose the generated compiler arguments.</summary>
+    public string ProvideCommandLineArgs { get; set; }
+
+    /// <summary>Gets the generated gsc command-line arguments for design-time builds.</summary>
+    [Output]
+    public ITaskItem[] CommandLineArgs { get; private set; } = Array.Empty<ITaskItem>();
+
     /// <inheritdoc/>
     public void Cancel() => this.cts.Cancel();
 
@@ -238,6 +248,22 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
         foreach (var s in this.Compile)
         {
             args.Add(QuoteIfNeeded(s.ItemSpec));
+        }
+
+        if (ParseBool(this.ProvideCommandLineArgs))
+        {
+            var commandLineArgs = new ITaskItem[args.Count];
+            for (var i = 0; i < args.Count; i++)
+            {
+                commandLineArgs[i] = new TaskItem(args[i]);
+            }
+
+            this.CommandLineArgs = commandLineArgs;
+        }
+
+        if (ParseBool(this.SkipCompilerExecution))
+        {
+            return true;
         }
 
         if (!string.IsNullOrEmpty(this.ResponseFilePath))

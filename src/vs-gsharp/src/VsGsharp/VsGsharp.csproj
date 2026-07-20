@@ -69,8 +69,8 @@
   </Target>
 
   <Target Name="GetVsixVersion"
-          DependsOnTargets="GetNuGetPackageVersion"
-          Returns="$(NuGetPackageVersion)" />
+          DependsOnTargets="GetBuildVersion"
+          Returns="$(FileVersion)" />
 
   <Target Name="IncludeGSharpLanguageServerInVsix"
           BeforeTargets="GetVsixSourceItems"
