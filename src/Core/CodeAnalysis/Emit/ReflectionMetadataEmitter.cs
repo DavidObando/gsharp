@@ -153,6 +153,7 @@ internal sealed class ReflectionMetadataEmitter
     // callers and delegate bindings through the one-line forwarders below
     // (repointed in E-21).
     internal readonly FunctionEmitter functions;
+    private readonly IReadOnlyList<(string Name, byte[] Data, bool IsPublic)> embeddedResources;
 
     // PR-E-3: the well-known BCL MemberRef/TypeRef fields
     // (notImplementedExceptionCtorRef, delegateCombineRef/RemoveRef,
@@ -695,9 +696,10 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
-    private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly)
+    private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly, IReadOnlyList<(string Name, byte[] Data, bool IsPublic)> embeddedResources)
     {
         this.emitCtx = new EmitContext(program, references, assemblyName, metadataOnly);
+        this.embeddedResources = embeddedResources;
         this.cache = new MetadataTokenCache();
         this.remaps = new GenericRemapState();
         this.signatures = new SignatureEncoder(this);
@@ -767,6 +769,7 @@ internal sealed class ReflectionMetadataEmitter
     /// Optional long target framework moniker emitted as
     /// <c>TargetFrameworkAttribute</c>.
     /// </param>
+    /// <param name="embeddedResources">Managed resources to embed in runtime assemblies.</param>
     public static void Emit(
         BoundProgram program,
         Stream peStream,
@@ -779,9 +782,10 @@ internal sealed class ReflectionMetadataEmitter
         DebugInformationOptions debugInformation = null,
         Stream pdbStream = null,
         string assemblyVersion = null,
-        string targetFrameworkMoniker = null)
+        string targetFrameworkMoniker = null,
+        IReadOnlyList<(string Name, byte[] Data, bool IsPublic)> embeddedResources = null)
     {
-        var emitter = new ReflectionMetadataEmitter(program, references, assemblyName, metadataOnly);
+        var emitter = new ReflectionMetadataEmitter(program, references, assemblyName, metadataOnly, embeddedResources);
         emitter.emitCtx.AssemblyVersionOverride = assemblyVersion;
         emitter.emitCtx.TargetFrameworkMoniker = targetFrameworkMoniker;
 
@@ -3834,6 +3838,7 @@ internal sealed class ReflectionMetadataEmitter
         // were buffered into emitCtx.PendingGenericParameters and are
         // flushed in sorted order here, just before PE serialisation.
         TypeDefEmitter.FlushPendingGenericParameters(this.emitCtx, this.memberRefs.GetElementTypeToken, this.BuildUnmanagedConstraintTypeSpec);
+        var managedResources = this.BuildManagedResources();
         var peHeaderBuilder = new PEHeaderBuilder(
             imageCharacteristics: entryHandle.IsNil
                 ? Characteristics.Dll | Characteristics.ExecutableImage
@@ -3858,6 +3863,7 @@ internal sealed class ReflectionMetadataEmitter
                 header: peHeaderBuilder,
                 metadataRootBuilder: new MetadataRootBuilder(this.emitCtx.Metadata),
                 ilStream: this.emitCtx.IlStream,
+                managedResources: managedResources,
                 entryPoint: entryHandle,
                 debugDirectoryBuilder: debugDirectory,
                 deterministicIdProvider: ComputeDeterministicContentId);
@@ -3875,6 +3881,31 @@ internal sealed class ReflectionMetadataEmitter
         {
             pdbBlob.WriteContentTo(this.emitCtx.PdbStream);
         }
+    }
+
+    private BlobBuilder BuildManagedResources()
+    {
+        if (this.emitCtx.MetadataOnly || this.embeddedResources == null || this.embeddedResources.Count == 0)
+        {
+            return null;
+        }
+
+        var blob = new BlobBuilder();
+        foreach (var resource in this.embeddedResources)
+        {
+            blob.Align(8);
+            var offset = (uint)blob.Count;
+            var data = resource.Data ?? Array.Empty<byte>();
+            blob.WriteInt32(data.Length);
+            blob.WriteBytes(data);
+            this.emitCtx.Metadata.AddManifestResource(
+                resource.IsPublic ? ManifestResourceAttributes.Public : ManifestResourceAttributes.Private,
+                this.emitCtx.Metadata.GetOrAddString(resource.Name),
+                implementation: default,
+                offset);
+        }
+
+        return blob;
     }
 
     /// <summary>

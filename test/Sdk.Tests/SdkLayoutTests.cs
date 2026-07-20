@@ -102,6 +102,7 @@ public class SdkLayoutTests
         // complete item csc consumes — so the MetadataLoadContext can resolve
         // every transitive dependency a referenced member touches (issue #340).
         Assert.Equal("@(ReferencePathWithRefAssemblies)", attrs["References"]);
+        Assert.Equal("@(_GsharpCoreCompileResource)", attrs["Resources"]);
         Assert.Equal("$(OutputType)", attrs["OutputType"]);
         Assert.Equal("$(TargetFramework)", attrs["TargetFramework"]);
 
@@ -109,6 +110,11 @@ public class SdkLayoutTests
         // ProduceReferenceAssembly pipeline (which sets @(IntermediateRefAssembly)
         // to obj/refint/{name}.dll) is honored.
         Assert.Equal("$(_GsharpRefAssemblyPath)", attrs["RefAssembly"]);
+        Assert.Contains("@(_CoreCompileResourceInputs)", (string)coreCompile.Attribute("Inputs"));
+        Assert.Contains(
+            coreCompile.Descendants(MsbuildNs + "_GsharpCoreCompileResource"),
+            resource => ((string)resource.Attribute("Condition") ?? string.Empty)
+                .Contains("WithCulture", System.StringComparison.Ordinal));
 
         var runSettingsTarget = doc.Descendants(MsbuildNs + "Target")
             .Single(t => (string)t.Attribute("Name") == "_GsharpGenerateRunSettings");
@@ -226,5 +232,19 @@ public class SdkLayoutTests
         var dependsOn = ((string)runGenerators.Attribute("DependsOnTargets"))
             .Split(';', System.StringSplitOptions.RemoveEmptyEntries);
         Assert.Contains("GenerateMSBuildEditorConfigFileShouldRun", dependsOn);
+    }
+
+    [Fact]
+    public void Core_Targets_Declares_AfterCompile_Hook_In_CompileDependsOn()
+    {
+        var path = Path.Combine(RepoRoot.SdkSourceDir, "build", "Gsharp.NET.Core.Sdk.targets");
+        var doc = XDocument.Load(path);
+
+        Assert.Contains(
+            doc.Descendants(MsbuildNs + "Target"),
+            target => (string)target.Attribute("Name") == "AfterCompile");
+        Assert.Contains(
+            doc.Descendants(MsbuildNs + "CompileDependsOn"),
+            property => property.Value.Contains("AfterCompile", System.StringComparison.Ordinal));
     }
 }

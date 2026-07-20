@@ -112,6 +112,9 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
     /// <summary>Gets or sets the ReferencePath item group (resolved metadata references).</summary>
     public ITaskItem[] References { get; set; } = Array.Empty<ITaskItem>();
 
+    /// <summary>Gets or sets the managed resources to embed.</summary>
+    public ITaskItem[] Resources { get; set; } = Array.Empty<ITaskItem>();
+
     /// <inheritdoc/>
     public void Cancel() => this.cts.Cancel();
 
@@ -202,6 +205,28 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
         foreach (var r in this.References)
         {
             args.Add(QuoteIfNeeded($"/r:{r.ItemSpec}"));
+        }
+
+        foreach (var resource in this.Resources)
+        {
+            var name = resource.GetMetadata("LogicalName");
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                name = resource.GetMetadata("ManifestResourceName");
+            }
+
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                name = Path.GetFileName(resource.ItemSpec);
+            }
+
+            var access = resource.GetMetadata("Access");
+            if (string.IsNullOrWhiteSpace(access))
+            {
+                access = "public";
+            }
+
+            args.Add(QuoteIfNeeded($"/resource:{resource.ItemSpec},{name},{access}"));
         }
 
         foreach (var s in this.Compile)

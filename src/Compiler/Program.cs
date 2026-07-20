@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -136,6 +137,9 @@ public class Program
                     // the correct consumer assembly name even if something
                     // forces GlobalScope/Diagnostics before Emit runs.
                     AssemblyName = parsed.AssemblyName,
+                    EmbeddedResources = parsed.Resources
+                        .Select(resource => (resource.Name, File.ReadAllBytes(Path.GetFullPath(resource.Path)), resource.IsPublic))
+                        .ToImmutableArray(),
                     DebugInformation =
                     {
                         Format = parsed.DebugFormat,
@@ -752,6 +756,8 @@ public class Program
           /target:exe|library|lib|dll   Output type (default: exe).
           /targetframework:<tfm>        Target framework moniker (alias: /tfm:<tfm>).
           /r:<file>, /reference:<file>  Reference an assembly.
+          /resource:<file>[,<name>[,public|private]]
+                                        Embed a managed resource (alias: /res).
           /analyzer:<file>              Analyzer/generator assembly; runs gsgen before compiling (repeatable).
           /gsgentool:<file>             Override the resolved path to gsgen.dll (default: sibling of gsc.dll).
           /lib:<path>                   Accepted for csc compatibility (currently a no-op).
@@ -833,6 +839,41 @@ public class Program
                         // Loaded into the binder's ReferenceResolver so imports can resolve types
                         // declared in user-supplied assemblies in addition to the BCL.
                         result.References.Add(value);
+                        break;
+
+                    case "resource":
+                    case "res":
+                        if (string.IsNullOrWhiteSpace(value))
+                        {
+                            throw new CommandLineException("/resource requires a path: /resource:<file>[,<name>].");
+                        }
+
+                        var resourceParts = value.Split(new[] { ',' }, 3);
+                        var resourcePath = resourceParts[0];
+                        var resourceName = resourceParts.Length < 2
+                            ? Path.GetFileName(resourcePath)
+                            : resourceParts[1];
+                        var resourceAccess = resourceParts.Length < 3 ? "public" : resourceParts[2];
+                        if (string.IsNullOrWhiteSpace(resourcePath) || string.IsNullOrWhiteSpace(resourceName))
+                        {
+                            throw new CommandLineException("/resource requires a non-empty path and name.");
+                        }
+
+                        if (!string.Equals(resourceAccess, "public", StringComparison.OrdinalIgnoreCase)
+                            && !string.Equals(resourceAccess, "private", StringComparison.OrdinalIgnoreCase))
+                        {
+                            throw new CommandLineException("/resource access must be 'public' or 'private'.");
+                        }
+
+                        if (result.Resources.Any(resource => string.Equals(resource.Name, resourceName, StringComparison.Ordinal)))
+                        {
+                            throw new CommandLineException($"Duplicate resource name '{resourceName}'.");
+                        }
+
+                        result.Resources.Add((
+                            resourcePath,
+                            resourceName,
+                            string.Equals(resourceAccess, "public", StringComparison.OrdinalIgnoreCase)));
                         break;
 
                     case "analyzer":
@@ -1202,6 +1243,9 @@ public class Program
         public List<string> SourceFiles { get; } = new();
 
         public List<string> References { get; } = new();
+
+        /// <summary>Gets the managed resources to embed, as source path and logical name pairs.</summary>
+        public List<(string Path, string Name, bool IsPublic)> Resources { get; } = new();
 
         /// <summary>Gets the analyzer/generator assembly paths (from /analyzer:&lt;path&gt;). Non-empty triggers a gsgen run (issue #2215).</summary>
         public List<string> AnalyzerPaths { get; } = new();

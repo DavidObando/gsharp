@@ -2301,17 +2301,21 @@ internal static class OverloadResolution
                     }
                     catch (ArgumentException)
                     {
+                        var recoveredSymbols = recoverTypeArgSymbols?.Invoke(gmi) ?? default;
+
                         // Issue #1325: live reflection rejects the `object`
                         // erasure of a user value type against a `struct`
                         // constraint. Retry over a value-type placeholder when
                         // the recovered symbols satisfy the real constraints.
-                        if (!TryCloseOverUserValueTypePlaceholders(gmi, explicitTypeArgsArray, recoverTypeArgSymbols?.Invoke(gmi) ?? default, out closed))
+                        if (TryCloseOverUserValueTypePlaceholders(gmi, explicitTypeArgsArray, recoveredSymbols, out closed))
+                        {
+                            paramTypeRewrite = static t => SubstituteClrType(t, typeof(UserValueTypeConstraintPlaceholder), typeof(object));
+                        }
+                        else if (!TryCloseOverUserReferenceTypePlaceholders(gmi, explicitTypeArgsArray, recoveredSymbols, out closed))
                         {
                             // Generic constraints not satisfied — drop this candidate.
                             return;
                         }
-
-                        paramTypeRewrite = static t => SubstituteClrType(t, typeof(UserValueTypeConstraintPlaceholder), typeof(object));
                     }
 
                     // Issue #750 / ADR-0088: same constraint check as the
@@ -2406,17 +2410,21 @@ internal static class OverloadResolution
                 }
                 catch (ArgumentException)
                 {
+                    var recoveredSymbols = recoverTypeArgSymbols?.Invoke(mi) ?? default;
+
                     // Issue #1325: live reflection rejects the `object` erasure
                     // of a user value type against a `struct` constraint. Retry
                     // over a value-type placeholder when the recovered symbols
                     // satisfy the real constraints.
-                    if (!TryCloseOverUserValueTypePlaceholders(mi, typeArgs, recoverTypeArgSymbols?.Invoke(mi) ?? default, out closed))
+                    if (TryCloseOverUserValueTypePlaceholders(mi, typeArgs, recoveredSymbols, out closed))
+                    {
+                        paramTypeRewrite = static t => SubstituteClrType(t, typeof(UserValueTypeConstraintPlaceholder), typeof(object));
+                    }
+                    else if (!TryCloseOverUserReferenceTypePlaceholders(mi, typeArgs, recoveredSymbols, out closed))
                     {
                         // Generic constraints not satisfied — drop this candidate.
                         return;
                     }
-
-                    paramTypeRewrite = static t => SubstituteClrType(t, typeof(UserValueTypeConstraintPlaceholder), typeof(object));
                 }
 
                 // Issue #750 / ADR-0088: explicitly validate generic-parameter
@@ -2550,16 +2558,28 @@ internal static class OverloadResolution
                 && gmi.GetGenericArguments().Length == explicitTypeArgs.Count)
             {
                 MethodInfo closed;
+                var recoveredSymbols = default(ImmutableArray<TypeSymbol>);
                 try
                 {
                     closed = gmi.MakeGenericMethod(explicitTypeArgs.ToArray());
                 }
                 catch (ArgumentException)
                 {
-                    return;
+                    recoveredSymbols = recoverTypeArgSymbols?.Invoke(gmi) ?? default;
+                    if (!TryCloseOverUserReferenceTypePlaceholders(
+                        gmi,
+                        explicitTypeArgs.ToArray(),
+                        recoveredSymbols,
+                        out closed))
+                    {
+                        return;
+                    }
                 }
 
-                if (!SatisfiesGenericConstraints(gmi, explicitTypeArgs.ToArray(), recoverTypeArgSymbols?.Invoke(closed) ?? default))
+                if (!SatisfiesGenericConstraints(
+                    gmi,
+                    explicitTypeArgs.ToArray(),
+                    recoveredSymbols.IsDefault ? recoverTypeArgSymbols?.Invoke(closed) ?? default : recoveredSymbols))
                 {
                     return;
                 }
@@ -2593,16 +2613,24 @@ internal static class OverloadResolution
             }
 
             MethodInfo closed;
+            var recoveredSymbols = default(ImmutableArray<TypeSymbol>);
             try
             {
                 closed = mi.MakeGenericMethod(typeArgs);
             }
             catch (ArgumentException)
             {
-                return;
+                recoveredSymbols = recoverTypeArgSymbols?.Invoke(mi) ?? default;
+                if (!TryCloseOverUserReferenceTypePlaceholders(mi, typeArgs, recoveredSymbols, out closed))
+                {
+                    return;
+                }
             }
 
-            if (!SatisfiesGenericConstraints(mi, typeArgs, recoverTypeArgSymbols?.Invoke(closed) ?? default))
+            if (!SatisfiesGenericConstraints(
+                mi,
+                typeArgs,
+                recoveredSymbols.IsDefault ? recoverTypeArgSymbols?.Invoke(closed) ?? default : recoveredSymbols))
             {
                 return;
             }
@@ -3885,6 +3913,9 @@ internal static class OverloadResolution
             var argIsUserValueType = !typeArgSymbols.IsDefaultOrEmpty
                 && i < typeArgSymbols.Length
                 && IsValueTypeErasedSymbol(typeArgSymbols[i]);
+            var argIsUserReferenceType = !typeArgSymbols.IsDefaultOrEmpty
+                && i < typeArgSymbols.Length
+                && typeArgSymbols[i] is StructSymbol { IsClass: true, ClrType: null };
 
             if ((special & GenericParameterAttributes.ReferenceTypeConstraint) != 0)
             {
@@ -3916,18 +3947,33 @@ internal static class OverloadResolution
                 // reference types require an actual ctor.
                 if (!arg.IsValueType && !argIsUserValueType)
                 {
-                    try
+                    if (argIsUserReferenceType)
                     {
-                        var ctor = arg.GetConstructor(Type.EmptyTypes);
-                        if (ctor is null || !ctor.IsPublic)
+                        var userClass = (StructSymbol)typeArgSymbols[i];
+                        if (userClass.HasPrimaryConstructor
+                            || (!userClass.EffectiveExplicitConstructors.IsDefaultOrEmpty
+                                && !userClass.EffectiveExplicitConstructors.Any(
+                                    constructor => constructor.Parameters.Length == 0
+                                        && constructor.Function.Accessibility == Accessibility.Public)))
                         {
                             return false;
                         }
                     }
-                    catch (Exception ex) when (IsMetadataLoadFailure(ex))
+                    else
                     {
-                        // Conservative: a load failure means we can't disprove
-                        // the constraint; keep the candidate alive.
+                        try
+                        {
+                            var ctor = arg.GetConstructor(Type.EmptyTypes);
+                            if (ctor is null || !ctor.IsPublic)
+                            {
+                                return false;
+                            }
+                        }
+                        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+                        {
+                            // Conservative: a load failure means we can't disprove
+                            // the constraint; keep the candidate alive.
+                        }
                     }
                 }
             }
@@ -3979,6 +4025,21 @@ internal static class OverloadResolution
                 if (argIsUserValueType && !constraint.IsInterface)
                 {
                     if (ValueTypeErasedSymbolSatisfiesBaseConstraint(typeArgSymbols[i], constraint))
+                    {
+                        continue;
+                    }
+
+                    return false;
+                }
+
+                // A same-compilation user class also has no CLR Type during
+                // binding and is represented by an object placeholder. Check
+                // its symbolic base chain for concrete class constraints.
+                if (argIsUserReferenceType && !constraint.IsInterface)
+                {
+                    if (UserReferenceTypeErasedSymbolSatisfiesBaseConstraint(
+                        (StructSymbol)typeArgSymbols[i],
+                        constraint))
                     {
                         continue;
                     }
@@ -4107,6 +4168,116 @@ internal static class OverloadResolution
         }
 
         return false;
+    }
+
+    private static bool UserReferenceTypeErasedSymbolSatisfiesBaseConstraint(
+        StructSymbol symbol,
+        Type constraint)
+    {
+        if (constraint is null || constraint.IsSameAs(typeof(object)))
+        {
+            return true;
+        }
+
+        for (var current = symbol; current != null; current = current.BaseClass)
+        {
+            Type importedBase = current.ImportedBaseType?.ClrType;
+            if (importedBase != null)
+            {
+                try
+                {
+                    return ClrTypeUtilities.IsAssignableByName(constraint, importedBase);
+                }
+                catch (Exception ex) when (IsMetadataLoadFailure(ex))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryCloseOverUserReferenceTypePlaceholders(
+        MethodInfo openDef,
+        Type[] typeArgs,
+        ImmutableArray<TypeSymbol> recoveredSymbols,
+        out MethodInfo closed)
+    {
+        closed = null;
+        if (openDef is null
+            || typeArgs is null
+            || recoveredSymbols.IsDefaultOrEmpty
+            || recoveredSymbols.Length != typeArgs.Length
+            || !SatisfiesGenericConstraints(openDef, typeArgs, recoveredSymbols))
+        {
+            return false;
+        }
+
+        var placeholders = (Type[])typeArgs.Clone();
+        var replaced = false;
+        for (var i = 0; i < placeholders.Length; i++)
+        {
+            if (recoveredSymbols[i] is not StructSymbol { IsClass: true, ClrType: null } symbol)
+            {
+                continue;
+            }
+
+            Type importedBase = null;
+            for (var current = symbol; current != null && importedBase == null; current = current.BaseClass)
+            {
+                importedBase = current.ImportedBaseType?.ClrType;
+            }
+
+            if (importedBase == null)
+            {
+                continue;
+            }
+
+            placeholders[i] = FindReferenceTypeConstraintPlaceholder(
+                importedBase,
+                openDef.GetGenericArguments()[i]);
+            replaced = true;
+        }
+
+        if (!replaced)
+        {
+            return false;
+        }
+
+        try
+        {
+            closed = openDef.MakeGenericMethod(placeholders);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static Type FindReferenceTypeConstraintPlaceholder(Type importedBase, Type genericParameter)
+    {
+        var special = genericParameter.GenericParameterAttributes
+            & GenericParameterAttributes.SpecialConstraintMask;
+        if (!importedBase.IsAbstract
+            || (special & GenericParameterAttributes.DefaultConstructorConstraint) == 0)
+        {
+            return importedBase;
+        }
+
+        try
+        {
+            return importedBase.Assembly.GetTypes().FirstOrDefault(type =>
+                !type.IsAbstract
+                && importedBase.IsAssignableFrom(type)
+                && type.GetConstructor(Type.EmptyTypes) is { IsPublic: true })
+                ?? importedBase;
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex) || ex is ReflectionTypeLoadException)
+        {
+            return importedBase;
+        }
     }
 
     /// <summary>

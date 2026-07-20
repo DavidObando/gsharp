@@ -93,6 +93,10 @@ public sealed partial class CSharpToGSharpTranslator
     // (GS0102). Null (default) preserves the exact prior no-filter behavior.
     private readonly HashSet<string> retainedFilePaths;
 
+    // File-driven generators such as Avalonia can add a partial declaration
+    // even when the C# code-behind declaration was not itself partial.
+    private readonly HashSet<string> forcedPartialFilePaths;
+
     // Issue #2292: one AnonymousTypeRegistry per resolved G# package, shared
     // across every document this translator instance translates (every
     // pipeline caller creates ONE CSharpToGSharpTranslator per project and
@@ -131,16 +135,24 @@ public sealed partial class CSharpToGSharpTranslator
     /// outside this set (i.e. excluded as generated) are not merged in. Pass
     /// <see langword="null"/> (default) to keep every part regardless of file.
     /// </param>
+    /// <param name="forcedPartialFilePaths">
+    /// Source files whose type declarations must remain partial because a
+    /// file-driven generator will add another declaration during the G# build.
+    /// </param>
     public CSharpToGSharpTranslator(
         bool preservePartialParts = false,
         bool markMergedTypePartial = false,
-        IReadOnlyCollection<string> retainedFilePaths = null)
+        IReadOnlyCollection<string> retainedFilePaths = null,
+        IReadOnlyCollection<string> forcedPartialFilePaths = null)
     {
         this.preservePartialParts = preservePartialParts;
         this.markMergedTypePartial = markMergedTypePartial;
         this.retainedFilePaths = retainedFilePaths is null
             ? null
             : new HashSet<string>(retainedFilePaths, StringComparer.Ordinal);
+        this.forcedPartialFilePaths = forcedPartialFilePaths is null
+            ? null
+            : new HashSet<string>(forcedPartialFilePaths, StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -229,7 +241,18 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         var typeMapper = new CSharpTypeMapper(anonymousTypeRegistry);
-        var visitor = new DeclarationVisitor(context, typeMapper, openBases, staticUsingTargets, entryPoint, partialTypeParts, this.preservePartialParts, this.markMergedTypePartial);
+        bool forceCurrentDocumentTypesPartial =
+            this.forcedPartialFilePaths?.Contains(context.FilePath) == true;
+        var visitor = new DeclarationVisitor(
+            context,
+            typeMapper,
+            openBases,
+            staticUsingTargets,
+            entryPoint,
+            partialTypeParts,
+            this.preservePartialParts,
+            this.markMergedTypePartial,
+            forceCurrentDocumentTypesPartial);
 
         // Issue #2382: a NATIVE C# top-level-statements program (`GlobalStatementSyntax`
         // members directly under the compilation unit — no enclosing class/method
@@ -705,6 +728,8 @@ public sealed partial class CSharpToGSharpTranslator
         // Issue #2215: see `CSharpToGSharpTranslator.markMergedTypePartial`.
         private readonly bool markMergedTypePartial;
 
+        private readonly bool forceCurrentDocumentTypesPartial;
+
         // Issue #1201 / ADR-0134: the types targeted by `using static X` in this
         // document. A bare reference to one of their static members is left
         // UNQUALIFIED (gsc resolves it through `import X`), unlike a sibling
@@ -770,7 +795,8 @@ public sealed partial class CSharpToGSharpTranslator
             IMethodSymbol entryPoint,
             Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts,
             bool preservePartialParts = false,
-            bool markMergedTypePartial = false)
+            bool markMergedTypePartial = false,
+            bool forceCurrentDocumentTypesPartial = false)
         {
             this.context = context;
             this.typeMapper = typeMapper;
@@ -779,6 +805,7 @@ public sealed partial class CSharpToGSharpTranslator
             this.partialTypeParts = partialTypeParts ?? new Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>>(SymbolEqualityComparer.Default);
             this.preservePartialParts = preservePartialParts;
             this.markMergedTypePartial = markMergedTypePartial;
+            this.forceCurrentDocumentTypesPartial = forceCurrentDocumentTypesPartial;
 
             // `entryPoint` is threaded in by the caller (`TranslateDocument`)
             // instead of being recomputed here: `Compilation.GetEntryPoint`

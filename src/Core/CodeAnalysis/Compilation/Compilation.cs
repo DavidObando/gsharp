@@ -61,6 +61,7 @@ public class Compilation
         PreprocessorSymbols = previous?.PreprocessorSymbols ?? ImmutableHashSet<string>.Empty;
         WarnOnMissingDocumentation = previous?.WarnOnMissingDocumentation ?? false;
         Logger = previous?.Logger ?? NullLogger.Instance;
+        EmbeddedResources = previous?.EmbeddedResources ?? ImmutableArray<(string Name, byte[] Data, bool IsPublic)>.Empty;
         debugInformation = CloneDebugInformation(previous?.DebugInformation);
     }
 
@@ -78,6 +79,9 @@ public class Compilation
     /// Gets the reference resolver used to look up imported CLR types.
     /// </summary>
     public ReferenceResolver References { get; }
+
+    /// <summary>Gets or sets the managed resources embedded in the runtime assembly.</summary>
+    public ImmutableArray<(string Name, byte[] Data, bool IsPublic)> EmbeddedResources { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether an implicit <c>import System</c>
@@ -427,7 +431,7 @@ public class Compilation
         try
         {
             using var stream = File.Create(program.PackageName + ".dll");
-            EmitAssembly(program, stream, References, asyncRewriteResult: lowered.AsyncRewriteResult, iteratorRewriteResult: lowered.IteratorRewriteResult, asyncIteratorRewriteResult: lowered.AsyncIteratorRewriteResult, debugInformation: DebugInformation, pdbStream: null);
+            EmitAssembly(program, stream, References, asyncRewriteResult: lowered.AsyncRewriteResult, iteratorRewriteResult: lowered.IteratorRewriteResult, asyncIteratorRewriteResult: lowered.AsyncIteratorRewriteResult, debugInformation: DebugInformation, pdbStream: null, embeddedResources: EmbeddedResources);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
@@ -557,7 +561,7 @@ public class Compilation
         {
             if (peStream is not null)
             {
-                EmitAssembly(program, peStream, References, assemblyName, assemblyVersion, metadataOnly: false, asyncRewriteResult: lowered.AsyncRewriteResult, iteratorRewriteResult: lowered.IteratorRewriteResult, asyncIteratorRewriteResult: lowered.AsyncIteratorRewriteResult, debugInformation: DebugInformation, pdbStream: pdbStream, targetFrameworkMoniker: targetFrameworkMoniker);
+                EmitAssembly(program, peStream, References, assemblyName, assemblyVersion, metadataOnly: false, asyncRewriteResult: lowered.AsyncRewriteResult, iteratorRewriteResult: lowered.IteratorRewriteResult, asyncIteratorRewriteResult: lowered.AsyncIteratorRewriteResult, debugInformation: DebugInformation, pdbStream: pdbStream, targetFrameworkMoniker: targetFrameworkMoniker, embeddedResources: EmbeddedResources);
             }
 
             if (refStream is not null)
@@ -690,9 +694,9 @@ public class Compilation
         };
     }
 
-    private static void EmitAssembly(BoundProgram program, Stream peStream, ReferenceResolver references, string assemblyName = null, string assemblyVersion = null, bool metadataOnly = false, Lowering.Async.AsyncStateMachineRewriteResult asyncRewriteResult = null, IteratorRewriteResult iteratorRewriteResult = null, AsyncIteratorRewriteResult asyncIteratorRewriteResult = null, DebugInformationOptions debugInformation = null, Stream pdbStream = null, string targetFrameworkMoniker = null)
+    private static void EmitAssembly(BoundProgram program, Stream peStream, ReferenceResolver references, string assemblyName = null, string assemblyVersion = null, bool metadataOnly = false, Lowering.Async.AsyncStateMachineRewriteResult asyncRewriteResult = null, IteratorRewriteResult iteratorRewriteResult = null, AsyncIteratorRewriteResult asyncIteratorRewriteResult = null, DebugInformationOptions debugInformation = null, Stream pdbStream = null, string targetFrameworkMoniker = null, IReadOnlyList<(string Name, byte[] Data, bool IsPublic)> embeddedResources = null)
     {
-        ReflectionMetadataEmitter.Emit(program, peStream, references, assemblyName, metadataOnly, asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult, debugInformation, pdbStream, assemblyVersion, targetFrameworkMoniker);
+        ReflectionMetadataEmitter.Emit(program, peStream, references, assemblyName, metadataOnly, asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult, debugInformation, pdbStream, assemblyVersion, targetFrameworkMoniker, embeddedResources);
     }
 
     private void PrepareReferencesForBinding(string assemblyName)
