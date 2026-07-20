@@ -627,7 +627,7 @@ public sealed partial class CSharpToGSharpTranslator
             // past the translated switch and emit that target only when needed.
             bool needsExitLabel = node.DescendantNodes()
                 .OfType<BreakStatementSyntax>()
-                .Any(b => BreakTargetsSwitch(b, node) && !IsRedundantSwitchSectionBreak(b));
+                .Any(b => GetBreakTarget(b) == node && !IsRedundantSwitchSectionBreak(b));
 
             // Issue #1884: a `goto case K;` / `goto default;` anywhere in this
             // switch (but not in a nested switch, whose own gotos target its
@@ -764,31 +764,24 @@ public sealed partial class CSharpToGSharpTranslator
 
         private IEnumerable<GStatement> TranslateBreakStatement(BreakStatementSyntax node)
         {
-            // The nearest breakable ancestor is the semantic target. Blocks,
-            // conditionals, try/using/lock statements, local functions, and
-            // lambdas do not require special cases; nested loops/switches do.
-            SwitchStatementSyntax enclosingSwitch = node.Ancestors()
-                .OfType<SwitchStatementSyntax>()
-                .FirstOrDefault();
-
-            if (enclosingSwitch != null && BreakTargetsSwitch(node, enclosingSwitch))
+            SyntaxNode target = GetBreakTarget(node);
+            if (target is SwitchStatementSyntax targetSwitch)
             {
                 if (IsRedundantSwitchSectionBreak(node))
                 {
                     return System.Array.Empty<GStatement>();
                 }
 
-                return new[] { (GStatement)new GotoStatement(SwitchExitLabelName(enclosingSwitch)) };
+                return new[] { (GStatement)new GotoStatement(SwitchExitLabelName(targetSwitch)) };
             }
 
             return new[] { (GStatement)new BreakStatement() };
         }
 
-        private static bool BreakTargetsSwitch(BreakStatementSyntax node, SwitchStatementSyntax target)
-        {
-            SyntaxNode breakTarget = node.Ancestors().FirstOrDefault(IsBreakTarget);
-            return breakTarget == target;
-        }
+        // The nearest loop or switch, rather than either kind in isolation,
+        // determines whether G# keeps the break or lowers it to a switch exit.
+        private static SyntaxNode GetBreakTarget(BreakStatementSyntax node)
+            => node.Ancestors().FirstOrDefault(IsBreakTarget);
 
         private static bool IsBreakTarget(SyntaxNode node)
             => node is SwitchStatementSyntax
