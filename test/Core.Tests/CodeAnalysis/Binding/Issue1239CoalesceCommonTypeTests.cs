@@ -48,6 +48,74 @@ class C {
     }
 
     [Fact]
+    public void RightSubtypeConvertsToNullableLeftInterface()
+    {
+        const string Source = @"package Issue2540.Iface
+
+interface ILogger { func Name() string; }
+class NullLogger : ILogger { func Name() string { return ""null"" } }
+class C {
+    func Pick(logger ILogger?) ILogger { return logger ?? NullLogger() }
+}
+";
+        var diagnostics = EmitDiagnostics(Source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0129");
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void ImportedRightSubtypeConvertsToNullableLeftInterface()
+    {
+        const string Source = @"package Issue2540.ImportedIface
+
+import System
+import System.IO
+
+class C {
+    func Pick(resource IDisposable?) IDisposable { return resource ?? MemoryStream() }
+}
+";
+        var diagnostics = EmitDiagnostics(Source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0129");
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void RightDelegateFactoryConvertsToNullableLeftDelegate()
+    {
+        const string Source = @"package Issue2540.Delegate
+
+interface ILogger { func Name() string; }
+class NullLogger : ILogger { func Name() string { return ""null"" } }
+class C {
+    func Pick(factory (() -> ILogger)?) () -> ILogger {
+        return factory ?? (() -> NullLogger())
+    }
+}
+";
+        var diagnostics = EmitDiagnostics(Source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0129");
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void UnrelatedDelegateFactoryReturnStillReportsError()
+    {
+        const string Source = @"package Issue2540.InvalidDelegate
+
+interface ILogger { }
+class Other { }
+class C {
+    func Bad(factory (() -> ILogger)?) () -> ILogger {
+        return factory ?? (() -> Other())
+    }
+}
+";
+        var diagnostics = EmitDiagnostics(Source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0129");
+    }
+
+    [Fact]
     public void ExplicitTargetType_BindsToInterface()
     {
         const string Source = @"package Issue1239.Target
