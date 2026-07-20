@@ -2122,31 +2122,53 @@ internal sealed partial class DeclarationBinder
     /// downstream — <see cref="VerifyInterfaceImplementations"/>'s trailing
     /// unresolved-clause sweep does not re-report a second diagnostic for it).
     /// </summary>
-    private InterfaceSymbol ResolveExplicitInterfaceClauseTarget(StructSymbol structSymbol, TypeClauseSyntax clauseTypeSyntax, string memberName)
+    private TypeSymbol ResolveExplicitInterfaceClauseTarget(StructSymbol structSymbol, TypeClauseSyntax clauseTypeSyntax, string memberName)
     {
         var boundType = bindTypeClause(clauseTypeSyntax);
-        if (boundType is not InterfaceSymbol clauseIface)
+        if (boundType is InterfaceSymbol clauseIface)
         {
-            if (boundType != null && boundType != TypeSymbol.Error)
+            if (!structSymbol.Interfaces.IsDefaultOrEmpty)
             {
-                Diagnostics.ReportExplicitInterfaceClauseTypeNotInterface(clauseTypeSyntax.Location, boundType.Name, memberName);
+                foreach (var candidateIface in structSymbol.Interfaces)
+                {
+                    if (TypeSignaturesEquivalent(candidateIface, clauseIface))
+                    {
+                        return candidateIface;
+                    }
+                }
             }
 
+            Diagnostics.ReportExplicitInterfaceClauseNotImplemented(clauseTypeSyntax.Location, structSymbol.Name, clauseIface.Name, memberName);
             return null;
         }
 
-        if (!structSymbol.Interfaces.IsDefaultOrEmpty)
+        if (boundType?.ClrType?.IsInterface == true)
         {
-            foreach (var candidateIface in structSymbol.Interfaces)
+            foreach (var candidateIface in structSymbol.ImplementedClrInterfaces)
             {
-                if (TypeSignaturesEquivalent(candidateIface, clauseIface))
+                if (TypeSignaturesEquivalent(candidateIface, boundType))
                 {
                     return candidateIface;
                 }
+
+                var candidateClr = candidateIface.ClrType;
+                if (candidateClr != null
+                    && candidateClr.GetInterfaces().Any(inherited =>
+                        ClrTypeUtilities.AreSame(inherited, boundType.ClrType)))
+                {
+                    return boundType;
+                }
             }
+
+            Diagnostics.ReportExplicitInterfaceClauseNotImplemented(clauseTypeSyntax.Location, structSymbol.Name, boundType.Name, memberName);
+            return null;
         }
 
-        Diagnostics.ReportExplicitInterfaceClauseNotImplemented(clauseTypeSyntax.Location, structSymbol.Name, clauseIface.Name, memberName);
+        if (boundType != null && boundType != TypeSymbol.Error)
+        {
+            Diagnostics.ReportExplicitInterfaceClauseTypeNotInterface(clauseTypeSyntax.Location, boundType.Name, memberName);
+        }
+
         return null;
     }
 

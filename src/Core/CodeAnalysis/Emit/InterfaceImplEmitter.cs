@@ -174,7 +174,9 @@ internal sealed class InterfaceImplEmitter
             var slot = method.ExplicitInterfaceSlot;
             if (slot != null)
             {
-                var slotRef = this.outer.memberRefs.GetMethodReference(slot);
+                var slotRef = this.outer.memberRefs.GetMethodEntityHandle(
+                    slot,
+                    method.ExplicitInterfaceSlotContainingType);
                 this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implHandle, slotRef);
             }
 
@@ -236,7 +238,7 @@ internal sealed class InterfaceImplEmitter
     /// <param name="structSymbol">The implementing class or struct.</param>
     internal void EmitExplicitInterfacePropertyMethodImpls(StructSymbol structSymbol)
     {
-        if (structSymbol == null || structSymbol.Properties.IsDefaultOrEmpty || structSymbol.Interfaces.IsDefaultOrEmpty)
+        if (structSymbol == null || structSymbol.Properties.IsDefaultOrEmpty)
         {
             return;
         }
@@ -249,12 +251,34 @@ internal sealed class InterfaceImplEmitter
         foreach (var prop in structSymbol.Properties)
         {
             var ifaceMember = prop.ExplicitInterfaceMember;
-            if (ifaceMember == null)
+            if (!this.cache.PropertyAccessorHandles.TryGetValue(prop, out var implAccessors))
             {
                 continue;
             }
 
-            if (!this.cache.PropertyAccessorHandles.TryGetValue(prop, out var implAccessors))
+            if (prop.ExplicitInterfaceGetterSlot != null && implAccessors.Getter.HasValue)
+            {
+                var declaration = this.outer.memberRefs.GetMethodEntityHandle(
+                    prop.ExplicitInterfaceGetterSlot,
+                    prop.ExplicitInterfaceSlotContainingType);
+                this.emitCtx.Metadata.AddMethodImplementation(
+                    implTypeDef,
+                    implAccessors.Getter.Value,
+                    declaration);
+            }
+
+            if (prop.ExplicitInterfaceSetterSlot != null && implAccessors.Setter.HasValue)
+            {
+                var declaration = this.outer.memberRefs.GetMethodEntityHandle(
+                    prop.ExplicitInterfaceSetterSlot,
+                    prop.ExplicitInterfaceSlotContainingType);
+                this.emitCtx.Metadata.AddMethodImplementation(
+                    implTypeDef,
+                    implAccessors.Setter.Value,
+                    declaration);
+            }
+
+            if (ifaceMember == null || structSymbol.Interfaces.IsDefaultOrEmpty)
             {
                 continue;
             }
@@ -323,7 +347,7 @@ internal sealed class InterfaceImplEmitter
     /// <param name="structSymbol">The implementing class or struct.</param>
     internal void EmitExplicitInterfaceEventMethodImpls(StructSymbol structSymbol)
     {
-        if (structSymbol == null || structSymbol.Events.IsDefaultOrEmpty || structSymbol.Interfaces.IsDefaultOrEmpty)
+        if (structSymbol == null || structSymbol.Events.IsDefaultOrEmpty)
         {
             return;
         }
@@ -336,12 +360,39 @@ internal sealed class InterfaceImplEmitter
         foreach (var ev in structSymbol.Events)
         {
             var ifaceMember = ev.ExplicitInterfaceMember;
-            if (ifaceMember == null)
+            if (!this.cache.EventAccessorHandles.TryGetValue(ev, out var implAccessors))
             {
                 continue;
             }
 
-            if (!this.cache.EventAccessorHandles.TryGetValue(ev, out var implAccessors))
+            if (ev.ExplicitInterfaceAddSlot != null)
+            {
+                var declaration = this.outer.memberRefs.GetMethodEntityHandle(
+                    ev.ExplicitInterfaceAddSlot,
+                    ev.ExplicitInterfaceSlotContainingType);
+                this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Add, declaration);
+            }
+
+            if (ev.ExplicitInterfaceRemoveSlot != null)
+            {
+                var declaration = this.outer.memberRefs.GetMethodEntityHandle(
+                    ev.ExplicitInterfaceRemoveSlot,
+                    ev.ExplicitInterfaceSlotContainingType);
+                this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Remove, declaration);
+            }
+
+            if (ev.ExplicitInterfaceRaiseSlot != null && implAccessors.Raise.HasValue)
+            {
+                var declaration = this.outer.memberRefs.GetMethodEntityHandle(
+                    ev.ExplicitInterfaceRaiseSlot,
+                    ev.ExplicitInterfaceSlotContainingType);
+                this.emitCtx.Metadata.AddMethodImplementation(
+                    implTypeDef,
+                    implAccessors.Raise.Value,
+                    declaration);
+            }
+
+            if (ifaceMember == null || structSymbol.Interfaces.IsDefaultOrEmpty)
             {
                 continue;
             }

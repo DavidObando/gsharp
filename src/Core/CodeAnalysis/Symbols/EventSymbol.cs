@@ -88,6 +88,18 @@ public sealed class EventSymbol : Symbol
     /// <summary>Gets or sets the imported CLR raise slot overridden by this event.</summary>
     public MethodInfo ExternalOverriddenRaiseMethod { get; set; }
 
+    /// <summary>Gets or sets the imported interface add slot explicitly implemented by this event.</summary>
+    public MethodInfo ExplicitInterfaceAddSlot { get; set; }
+
+    /// <summary>Gets or sets the imported interface remove slot explicitly implemented by this event.</summary>
+    public MethodInfo ExplicitInterfaceRemoveSlot { get; set; }
+
+    /// <summary>Gets or sets the imported interface raise slot explicitly implemented by this event.</summary>
+    public MethodInfo ExplicitInterfaceRaiseSlot { get; set; }
+
+    /// <summary>Gets or sets the imported interface type that owns the explicit accessor slots.</summary>
+    public TypeSymbol ExplicitInterfaceSlotContainingType { get; set; }
+
     /// <summary>Gets or sets the imported constructed base type that owns the overridden event accessors.</summary>
     public TypeSymbol ExternalOverrideContainingType { get; set; }
 
@@ -128,12 +140,12 @@ public sealed class EventSymbol : Symbol
     public bool HasExplicitInterfaceClause => Declaration?.HasExplicitInterfaceClause == true;
 
     /// <summary>
-    /// Gets or sets the <see cref="InterfaceSymbol"/> the explicit-interface
+    /// Gets or sets the interface type the explicit-interface
     /// qualifier clause (<see cref="HasExplicitInterfaceClause"/>) resolves
     /// to, bound by <see cref="Binding.DeclarationBinder.ResolveExplicitInterfaceClauses"/>.
     /// <c>null</c> until resolved.
     /// </summary>
-    public InterfaceSymbol ExplicitInterfaceClauseTarget { get; set; }
+    public TypeSymbol ExplicitInterfaceClauseTarget { get; set; }
 
     /// <summary>
     /// ADR-0105 Phase 2 — re-points this (reused) event at the declaration node

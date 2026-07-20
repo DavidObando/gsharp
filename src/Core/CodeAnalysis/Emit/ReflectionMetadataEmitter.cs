@@ -2539,6 +2539,22 @@ internal sealed class ReflectionMetadataEmitter
                         continue;
                     }
 
+                    var alreadyDeclared = false;
+                    foreach (var implemented in c.ImplementedClrInterfaces)
+                    {
+                        if (implemented?.ClrType != null
+                            && ClrTypeUtilities.AreSame(implemented.ClrType, declaringIface))
+                        {
+                            alreadyDeclared = true;
+                            break;
+                        }
+                    }
+
+                    if (alreadyDeclared)
+                    {
+                        continue;
+                    }
+
                     bridgeInterfaces ??= new System.Collections.Generic.HashSet<System.Type>();
                     if (bridgeInterfaces.Add(declaringIface))
                     {

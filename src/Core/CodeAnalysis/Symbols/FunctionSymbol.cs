@@ -379,6 +379,9 @@ public sealed class FunctionSymbol : Symbol
     /// </summary>
     public System.Reflection.MethodInfo ExplicitInterfaceSlot { get; set; }
 
+    /// <summary>Gets or sets the imported interface type that owns <see cref="ExplicitInterfaceSlot"/>.</summary>
+    public TypeSymbol ExplicitInterfaceSlotContainingType { get; set; }
+
     /// <summary>
     /// Gets or sets the in-compilation (G#) interface member this method
     /// explicitly implements (issue #2010; property/indexer generalization:
@@ -420,7 +423,7 @@ public sealed class FunctionSymbol : Symbol
     public bool HasExplicitInterfaceClause => Declaration?.HasExplicitInterfaceClause == true;
 
     /// <summary>
-    /// Gets or sets the <see cref="InterfaceSymbol"/> the explicit-interface
+    /// Gets or sets the interface type the explicit-interface
     /// qualifier clause (<see cref="HasExplicitInterfaceClause"/>) resolves
     /// to, bound by <see cref="Binding.DeclarationBinder.ResolveExplicitInterfaceClauses"/>
     /// once the containing type's interface list is fully known. <c>null</c>
@@ -428,7 +431,7 @@ public sealed class FunctionSymbol : Symbol
     /// bind to an interface implemented by the containing type (a diagnostic
     /// is reported in that case).
     /// </summary>
-    public InterfaceSymbol ExplicitInterfaceClauseTarget { get; set; }
+    public TypeSymbol ExplicitInterfaceClauseTarget { get; set; }
 
     /// <summary>Gets a value indicating whether this function is a P/Invoke stub (ADR-0086).</summary>
     public bool IsPInvoke => PInvokeMetadata != null;

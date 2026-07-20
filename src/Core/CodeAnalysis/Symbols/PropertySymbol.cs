@@ -114,6 +114,15 @@ public sealed class PropertySymbol : Symbol
     /// <summary>Gets or sets the imported CLR setter slot overridden by this property.</summary>
     public MethodInfo ExternalOverriddenSetter { get; set; }
 
+    /// <summary>Gets or sets the imported interface getter slot explicitly implemented by this property.</summary>
+    public MethodInfo ExplicitInterfaceGetterSlot { get; set; }
+
+    /// <summary>Gets or sets the imported interface setter slot explicitly implemented by this property.</summary>
+    public MethodInfo ExplicitInterfaceSetterSlot { get; set; }
+
+    /// <summary>Gets or sets the imported interface type that owns the explicit accessor slots.</summary>
+    public TypeSymbol ExplicitInterfaceSlotContainingType { get; set; }
+
     /// <summary>Gets or sets the imported constructed base type that owns the overridden accessors.</summary>
     public TypeSymbol ExternalOverrideContainingType { get; set; }
 
@@ -171,12 +180,12 @@ public sealed class PropertySymbol : Symbol
     public bool HasExplicitInterfaceClause => Declaration?.HasExplicitInterfaceClause == true;
 
     /// <summary>
-    /// Gets or sets the <see cref="InterfaceSymbol"/> the explicit-interface
+    /// Gets or sets the interface type the explicit-interface
     /// qualifier clause (<see cref="HasExplicitInterfaceClause"/>) resolves
     /// to, bound by <see cref="Binding.DeclarationBinder.ResolveExplicitInterfaceClauses"/>.
     /// <c>null</c> until resolved.
     /// </summary>
-    public InterfaceSymbol ExplicitInterfaceClauseTarget { get; set; }
+    public TypeSymbol ExplicitInterfaceClauseTarget { get; set; }
 
     /// <summary>
     /// ADR-0105 Phase 2 — re-points this (reused) property at the declaration
