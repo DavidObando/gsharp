@@ -16,9 +16,10 @@ namespace Cs2Gs.Pipeline;
 /// <c>test/Compiler.Tests/IlVerifier.cs</c>: invoke <c>dotnet tool run
 /// ilverify</c> with the process working directory anchored at the repo root so
 /// the <c>.config/dotnet-tools.json</c> manifest is discovered, pass every
-/// path absolute, and add the host runtime BCL plus the app's references to the
-/// verifier's reference set. All process I/O is local — it only shells out to
-/// <c>dotnet</c>; there is no network egress and no keys.
+/// path absolute, and add the host runtime BCL plus the app's references and
+/// output-local dependency assemblies to the verifier's reference set. All
+/// process I/O is local — it only shells out to <c>dotnet</c>; there is no
+/// network egress and no keys.
 /// </summary>
 public class IlVerifyRunner
 {
@@ -134,8 +135,9 @@ public class IlVerifyRunner
     /// Verifies the IL of the assembly at <paramref name="assemblyPath"/> with
     /// the repo-pinned <c>dotnet-ilverify</c>, honoring the
     /// <see cref="SkipEnvVar"/> bypass. The host runtime BCL is always added to
-    /// the reference set; <paramref name="additionalReferences"/> (the corpus
-    /// app's <c>ReferencedAssemblies</c>) are appended. The
+    /// the reference set; sibling-project and package assemblies copied beside
+    /// the output are preferred, then <paramref name="additionalReferences"/>
+    /// (the corpus app's compile-time references) are appended. The
     /// <see cref="KnownIlVerifyFalsePositives"/> codes are passed as ignore
     /// flags and filtered from the parsed errors.
     /// </summary>
@@ -283,17 +285,30 @@ public class IlVerifyRunner
             Add(reference);
         }
 
+        string outputDirectory = Path.GetDirectoryName(fullAssembly);
+        if (!string.IsNullOrEmpty(outputDirectory) && Directory.Exists(outputDirectory))
+        {
+            foreach (string reference in Directory.EnumerateFiles(
+                outputDirectory,
+                "*.dll",
+                SearchOption.TopDirectoryOnly).OrderBy(path => path, StringComparer.Ordinal))
+            {
+                Add(reference);
+            }
+        }
+
         if (additionalReferences is not null)
         {
-            // Skip package copies of framework assemblies so ilverify does not
-            // load two identities for the same assembly (Refs #914).
-            var runtimeFileNames = new HashSet<string>(
-                BuildDefaultRuntimeReferences().Select(Path.GetFileName),
+            // The build output contains the exact sibling/package implementation
+            // assemblies the migrated app loads. Prefer them over source-project
+            // ref assemblies or package-cache copies with the same identity.
+            var preferredFileNames = new HashSet<string>(
+                ordered.Select(Path.GetFileName),
                 StringComparer.OrdinalIgnoreCase);
             foreach (string reference in additionalReferences)
             {
                 if (!string.IsNullOrEmpty(reference)
-                    && runtimeFileNames.Contains(Path.GetFileName(reference)))
+                    && preferredFileNames.Contains(Path.GetFileName(reference)))
                 {
                     continue;
                 }
