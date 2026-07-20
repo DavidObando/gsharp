@@ -79,7 +79,7 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor CopyOrWithNotDataStruct = new("GS0161", DiagnosticSeverity.Error, "copy/with requires a data class or data struct receiver, but got '{0}'.");
     internal static readonly DiagnosticDescriptor NamedArgumentOnlyValidForCopy = new("GS0162", DiagnosticSeverity.Error, "Named arguments are only supported for data-struct .copy(...).");
     internal static readonly DiagnosticDescriptor DeconstructionFieldCountMismatch = new("GS0163", DiagnosticSeverity.Error, "Deconstruction requires {0} fields but was given {1}.");
-    internal static readonly DiagnosticDescriptor DeconstructionRequiresTupleOrDataStruct = new("GS0164", DiagnosticSeverity.Error, "Deconstruction requires a tuple or data struct initializer, but got '{0}'.");
+    internal static readonly DiagnosticDescriptor DeconstructionRequiresTupleOrDataStruct = new("GS0164", DiagnosticSeverity.Error, "Deconstruction requires a tuple, data struct, or accessible Deconstruct method, but got '{0}'.");
     internal static readonly DiagnosticDescriptor MultipleTopLevelFiles = new("GS0165", DiagnosticSeverity.Error, "Top-level statements may appear in at most one package per compilation.");
     internal static readonly DiagnosticDescriptor TopLevelStatementsConflictWithMain = new("GS0166", DiagnosticSeverity.Warning, "The entry point of the program is global statements; ignoring the explicit Main function entry point.");
     internal static readonly DiagnosticDescriptor MultiAssignmentMismatch = new("GS0167", DiagnosticSeverity.Error, "Multi-assignment has {0} target(s) but {1} value(s).");

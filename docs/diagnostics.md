@@ -121,7 +121,7 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0161 | Error | `copy`/`with` receiver is not a `data struct`. | `.copy(…)` used on a plain `struct`. |
 | GS0162 | Error | Named arguments only supported for `data struct` `.copy(…)`. | Named arguments passed to a regular function. |
 | GS0163 | Error | Deconstruction field count mismatch. | `let (a, b) = p` where `p` is a `data struct` with three fields. |
-| GS0164 | Error | Deconstruction requires a tuple or `data struct` initializer. | Deconstruction attempted on a plain `struct`. |
+| GS0164 | Error | Deconstruction requires a tuple, `data struct`, or accessible `Deconstruct` method. | Deconstruction attempted on a type without a supported deconstruction shape. |
 | GS0165 | Error | Top-level statements may appear in at most one package per compilation. | Two or more `package` declarations in a single compilation each contain top-level statements (see [ADR-0066](adr/0066-top-level-statement-mechanics.md)). |
 | GS0166 | Warning | Top-level statements conflict with an explicit `Main` function. | Both top-level statements and a `func Main()` are present; TLS wins, the explicit `Main` is shadowed (see [ADR-0066](adr/0066-top-level-statement-mechanics.md) §4). |
 | GS0167 | Error | Multi-assignment target/value count mismatch. | `a, b = 1, 2, 3` — three values for two targets. |
