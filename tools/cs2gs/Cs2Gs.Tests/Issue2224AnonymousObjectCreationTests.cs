@@ -26,11 +26,10 @@ namespace Cs2Gs.Tests;
 /// anonymous type is inferred as a generic type argument in one lambda and
 /// then spelled as another lambda's parameter type. #2282 therefore
 /// supersedes the <c>object { }</c> lowering with a synthesized,
-/// shape-deduplicated <c>data class</c> (<c>AnonymousType0{A: 1}</c>), which
+/// shape-deduplicated <c>data class</c> (<c>AnonymousType0(1)</c>), which
 /// is nameable at both the construction site and any type-position use, and
-/// still preserves member names and legality inside expression trees (a
-/// user-declared struct/class composite literal is explicitly permitted
-/// there, unlike a tuple literal).
+/// still preserves member names and legality inside expression trees (named
+/// class construction is permitted there, unlike a tuple literal).
 /// </summary>
 public class Issue2224AnonymousObjectCreationTests
 {
@@ -49,7 +48,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("return AnonymousType0{A: 1}", printed);
+        Assert.Contains("return AnonymousType0(1)", printed);
         Assert.Contains("data class AnonymousType0(A int32)", printed);
     }
 
@@ -70,7 +69,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("AnonymousType0{A: 1, B: \"two\"}", printed);
+        Assert.Contains("AnonymousType0(1, \"two\")", printed);
         Assert.Contains("data class AnonymousType0(A int32, B string)", printed);
         Assert.Contains("pair.A", printed);
         Assert.Contains("pair.B", printed);
@@ -102,7 +101,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("AnonymousType0{A: 1, B: \"two\"}", printed);
+        Assert.Contains("AnonymousType0(1, \"two\")", printed);
         Assert.Contains("pair.A", printed);
         Assert.Contains("pair.B", printed);
         Assert.DoesNotContain("pair!!", printed);
@@ -134,7 +133,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("AnonymousType0{id: id, Id: row.Id}", printed);
+        Assert.Contains("AnonymousType0(id, row.Id)", printed);
         Assert.Contains("data class AnonymousType0(id int32, Id int32)", printed);
     }
 
@@ -163,8 +162,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("AnonymousType0{A: 1, B: \"x\"}", printed);
-        Assert.Contains("AnonymousType0{A: 2, B: \"y\"}", printed);
+        Assert.Contains("AnonymousType0(1, \"x\")", printed);
+        Assert.Contains("AnonymousType0(2, \"y\")", printed);
 
         int declarationCount = 0;
         int index = 0;

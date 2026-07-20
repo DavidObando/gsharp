@@ -266,8 +266,8 @@ public sealed partial class CSharpToGSharpTranslator
 
         /// <summary>
         /// Translates a C# anonymous object creation (<c>new { A = 1, B = 2 }</c>)
-        /// to a G# composite literal constructing a synthesized <c>data
-        /// class</c> (<c>AnonymousType0{A: 1, B: 2}</c>, issue #2282). See
+        /// to a positional construction of a synthesized G# <c>data class</c>
+        /// (<c>AnonymousType0(1, 2)</c>, issues #2282 and #2538). See
         /// <see cref="CSharpTypeMapper.GetOrCreateAnonymousDataClass"/> for why
         /// a synthesized, shape-deduplicated data class supersedes both the
         /// original positional-tuple lowering (issue #1934, which dropped
@@ -275,18 +275,17 @@ public sealed partial class CSharpToGSharpTranslator
         /// literal (issue #2224, which cannot be spelled as an explicit TYPE —
         /// e.g. a lambda parameter's type inferred from another lambda's
         /// anonymous-typed return value, issue #2282's actual repro shape). A
-        /// user-declared struct/class composite literal — unlike a tuple
-        /// literal — is explicitly legal inside an expression-tree lambda, so
-        /// this remains safe even when the anonymous type is constructed
-        /// inside one. Each member's type annotation is the C# compiler's own
-        /// inferred anonymous-type property type, written out explicitly — G#
-        /// (unlike C#) has no type inference at this syntax position.
+        /// positional class construction — unlike a tuple literal — is legal
+        /// inside an expression-tree lambda. It also remains a direct
+        /// expression when used as a constructor-delegation argument; a class
+        /// composite literal lowers to setup statements before the delegation
+        /// and violates G#'s delegation-first rule (issue #2538).
         /// </summary>
         private GExpression TranslateAnonymousObjectCreation(AnonymousObjectCreationExpressionSyntax anonymous)
         {
             this.context.Report(new TranslationDiagnostic(
                 nameof(SyntaxKind.AnonymousObjectCreationExpression),
-                "anonymous object creation 'new { ... }' maps to a G# composite literal constructing a synthesized 'data class' (issue #2282); gsc reuses the same synthesized type for every structurally-identical anonymous-type shape, preserving named-member access at both the construction site and any type-position use.",
+                "anonymous object creation 'new { ... }' maps to positional construction of a synthesized G# 'data class' (issues #2282 and #2538); gsc reuses the same synthesized type for every structurally-identical anonymous-type shape, preserving named-member access at both the construction site and any type-position use.",
                 anonymous.GetLocation(),
                 TranslationSeverity.Info));
 
@@ -294,38 +293,11 @@ public sealed partial class CSharpToGSharpTranslator
                 ? this.typeMapper.GetOrCreateAnonymousDataClass(anonymousType, this.context, anonymous.GetLocation())
                 : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
 
-            var fieldInitializers = anonymous.Initializers
-                .Select(i => new FieldInitializer(AnonymousMemberName(i), this.TranslateExpression(i.Expression)))
+            var arguments = anonymous.Initializers
+                .Select(i => this.TranslateExpression(i.Expression))
                 .ToList();
 
-            return new CompositeLiteralExpression(syntheticType, fieldInitializers);
-        }
-
-        /// <summary>
-        /// Resolves an anonymous-object member's projected name: the explicit
-        /// <c>Name = expr</c> form carries it directly; otherwise (C# member-name
-        /// inference, e.g. <c>new { x.Id }</c> or <c>new { id }</c>) it is the
-        /// simple identifier of the initializer expression (a bare identifier or
-        /// the last segment of a member access) — the same rule the C# compiler
-        /// uses to name the synthesized anonymous-type property.
-        /// </summary>
-        /// <param name="declarator">The anonymous-object member declarator.</param>
-        /// <returns>The projected member name.</returns>
-        private static string AnonymousMemberName(AnonymousObjectMemberDeclaratorSyntax declarator)
-        {
-            if (declarator.NameEquals != null)
-            {
-                return declarator.NameEquals.Name.Identifier.Text;
-            }
-
-            return declarator.Expression switch
-            {
-                IdentifierNameSyntax id => id.Identifier.Text,
-                MemberAccessExpressionSyntax member => member.Name.Identifier.Text,
-                MemberBindingExpressionSyntax memberBinding => memberBinding.Name.Identifier.Text,
-                _ => throw new InvalidOperationException(
-                    $"anonymous-object member at {declarator.GetLocation()} has no explicit name and no inferable name (expression kind {declarator.Expression.Kind()})."),
-            };
+            return BuildConstruction(syntheticType, arguments);
         }
 
         private GExpression TranslateMemberAccess(MemberAccessExpressionSyntax member)

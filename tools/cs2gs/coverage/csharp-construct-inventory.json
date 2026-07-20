@@ -85,7 +85,8 @@
     "rule": "ADR-0115 \u00A7B.4",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/AnonymousObjectCreationExpression.cs",
-    "notes": "G# has no anonymous types; lowers to the same positional tuple literal used for C# named tuples, member names dropped (issue #1934)."
+    "issue": "https://github.com/DavidObando/gsharp/issues/2538",
+    "notes": "Lowers to positional construction of a shape-deduplicated synthesized data class, preserving named members and remaining a direct expression in constructor delegation (issues #2282 and #2538)."
   },
   {
     "kind": "AnonymousObjectMemberDeclarator",
@@ -94,7 +95,8 @@
     "rule": "ADR-0115 \u00A7B.4",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/AnonymousObjectCreationExpression.cs",
-    "notes": "Each declarator becomes one positional tuple-literal element (issue #1934); exercised by the AnonymousObjectCreationExpression fixture."
+    "issue": "https://github.com/DavidObando/gsharp/issues/2538",
+    "notes": "Each declarator supplies one positional synthesized-data-class constructor argument; the synthesized declaration preserves the projected member names (issues #2282 and #2538)."
   },
   {
     "kind": "ArgListExpression",

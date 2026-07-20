@@ -63,7 +63,7 @@ public sealed class Issue2496ExpressionTreeArgumentForgivenessTranslationTests
         Assert.Contains("HasKey((item Item) -> item.Id)", printed, StringComparison.Ordinal);
         Assert.Contains("HasIndex((item Item) -> item.Name)", printed, StringComparison.Ordinal);
         Assert.Contains("HasForeignKey((item Item) ->", printed, StringComparison.Ordinal);
-        Assert.Contains("ParentId: item.ParentId", printed, StringComparison.Ordinal);
+        Assert.Contains("AnonymousType0(item.ParentId, item.Name)", printed, StringComparison.Ordinal);
         Assert.Contains("HasOptional((item Item) -> item.ParentId)", printed, StringComparison.Ordinal);
         Assert.Contains("Selector[Item]((item Item) -> item.Id)", printed, StringComparison.Ordinal);
         Assert.Contains("GenericSink.Accept", printed, StringComparison.Ordinal);
