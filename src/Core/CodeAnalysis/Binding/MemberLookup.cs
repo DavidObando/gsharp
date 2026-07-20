@@ -2605,36 +2605,28 @@ internal sealed class MemberLookup
         indexer = null;
         resolvedArguments = default;
 
-        var declaringTypes = clrTarget.IsInterface
-            ? EnumerateSelfAndInterfaces(clrTarget)
-            : new[] { clrTarget };
-        var properties = declaringTypes
-            .SelectMany(type => ClrTypeUtilities.SafeGetProperties(
-                type,
-                BindingFlags.Public | BindingFlags.Instance))
-            .Where(static property => property.GetMethod != null && property.GetIndexParameters().Length > 0)
-            .GroupBy(static property => (property.Module, property.MetadataToken))
-            .Select(static group => group.First())
-            .ToArray();
+        var properties = CollectVisibleClrIndexers(targetType, clrTarget);
         var hasSymbolicArgument = boundArguments.Any(static argument =>
             argument.Type?.ClrType == null
             || TypeSymbol.ContainsTypeParameter(argument.Type)
             || TypeSymbol.ContainsSameCompilationUserType(argument.Type)
             || argument.Type is ImportedTypeSymbol { HasSubstitutableTypeArgument: true });
-        if (hasSymbolicArgument)
+        var hasSetOnlyIndexer = properties.Any(static property => property.GetGetMethod(nonPublic: false) == null);
+        if (hasSymbolicArgument || hasSetOnlyIndexer)
         {
             var applicable = new List<(PropertyInfo Property, ImmutableArray<TypeSymbol> ParameterTypes)>();
             foreach (var property in properties)
             {
                 var parameters = property.GetIndexParameters();
-                if (parameters.Length != boundArguments.Length)
+                if (boundArguments.Length > parameters.Length
+                    || parameters.Skip(boundArguments.Length).Any(static parameter => !parameter.IsOptional))
                 {
                     continue;
                 }
 
-                var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(parameters.Length);
+                var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(boundArguments.Length);
                 var candidateApplicable = true;
-                for (var i = 0; i < parameters.Length; i++)
+                for (var i = 0; i < boundArguments.Length; i++)
                 {
                     var parameterType = GetIndexerParameterTypeSymbol(targetType, property, i);
                     parameterTypes.Add(parameterType);
@@ -2682,13 +2674,20 @@ internal sealed class MemberLookup
                 if (winner.HasValue)
                 {
                     indexer = winner.Value.Property;
-                    resolvedArguments = boundArguments;
+                    resolvedArguments = ConversionClassifier.AppendOmittedOptionalArguments(
+                        boundArguments,
+                        indexer.GetIndexParameters());
                     return true;
                 }
 
                 // Do not retry a genuine symbolic ambiguity against the
                 // object-erased CLR shape: doing so can incorrectly prefer an
                 // object overload over a more specific symbolic interface.
+                return false;
+            }
+
+            if (hasSetOnlyIndexer)
+            {
                 return false;
             }
         }
@@ -3345,6 +3344,92 @@ internal sealed class MemberLookup
         }
 
         projectedType = projected;
+        return true;
+    }
+
+    private static PropertyInfo[] CollectVisibleClrIndexers(TypeSymbol targetType, Type clrTarget)
+    {
+        var declaringTypes = clrTarget.IsInterface
+            ? EnumerateSelfAndInterfaces(clrTarget)
+            : new[] { clrTarget };
+        var collected = new List<PropertyInfo>();
+        foreach (var declaringType in declaringTypes)
+        {
+            foreach (var property in ClrTypeUtilities.SafeGetProperties(
+                declaringType,
+                BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (property.GetIndexParameters().Length == 0
+                    || (property.GetGetMethod(nonPublic: false) == null
+                        && property.GetSetMethod(nonPublic: false) == null)
+                    || collected.Any(existing =>
+                        ReferenceEquals(existing.Module, property.Module)
+                        && existing.MetadataToken == property.MetadataToken
+                        && ClrTypeUtilities.AreSame(existing.DeclaringType, property.DeclaringType)))
+                {
+                    continue;
+                }
+
+                collected.Add(property);
+            }
+        }
+
+        // Issue #2525: hide only along an actual declaration ancestry edge.
+        // Same-signature slots from unrelated bases must remain ambiguous.
+        return collected
+            .Where(candidate => !collected.Any(other =>
+                !ReferenceEquals(candidate, other)
+                && IsMoreDerivedClrType(other.DeclaringType, candidate.DeclaringType)
+                && HaveSameIndexerSignature(targetType, other, candidate)))
+            .ToArray();
+    }
+
+    private static bool IsMoreDerivedClrType(Type derived, Type baseType)
+    {
+        if (derived == null || baseType == null || ClrTypeUtilities.AreSame(derived, baseType))
+        {
+            return false;
+        }
+
+        if (baseType.IsInterface)
+        {
+            return ClrTypeUtilities.SafeGetInterfaces(derived)
+                .Any(candidate => ClrTypeUtilities.AreSame(candidate, baseType));
+        }
+
+        for (var current = derived.BaseType; current != null; current = current.BaseType)
+        {
+            if (ClrTypeUtilities.AreSame(current, baseType))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HaveSameIndexerSignature(
+        TypeSymbol targetType,
+        PropertyInfo first,
+        PropertyInfo second)
+    {
+        var firstParameters = first.GetIndexParameters();
+        var secondParameters = second.GetIndexParameters();
+        if (firstParameters.Length != secondParameters.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < firstParameters.Length; i++)
+        {
+            if (!SameTypeSymbol(
+                GetIndexerParameterTypeSymbol(targetType, first, i),
+                GetIndexerParameterTypeSymbol(targetType, second, i)))
+            {
+                return false;
+            }
+        }
+
         return true;
     }
 

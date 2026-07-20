@@ -977,6 +977,12 @@ internal sealed partial class ExpressionBinder
             var idxArgsAnnot = ImmutableArray.Create(BoundIndexArg());
             if (this.memberLookup.TryResolveClrIndexer(target.Type, clrAnnotIdx, idxArgsAnnot, out var idxPropAnnot, out var resolvedIdxArgsAnnot))
             {
+                if (idxPropAnnot.GetGetMethod(nonPublic: false) == null)
+                {
+                    Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
+                    return new BoundErrorExpression(null);
+                }
+
                 var elemTypeAnnot = annotIdx.GetTypeArgumentSymbolForClrType(idxPropAnnot.PropertyType);
                 var convertedIdxArgsAnnot = BindClrIndexerArguments(
                     target.Type,
@@ -991,6 +997,12 @@ internal sealed partial class ExpressionBinder
             var idxArgs = ImmutableArray.Create(BoundIndexArg());
             if (this.memberLookup.TryResolveClrIndexer(target.Type, clrTarget, idxArgs, out var idxProp, out var resolvedIdxArgs))
             {
+                if (idxProp.GetGetMethod(nonPublic: false) == null)
+                {
+                    Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
+                    return new BoundErrorExpression(null);
+                }
+
                 var elementType = target.Type is ImportedTypeSymbol imported
                     ? MapErasedIndexerElementType(imported, idxProp)
                     : ClrNullability.GetPropertyTypeSymbol(idxProp);
@@ -1633,7 +1645,7 @@ internal sealed partial class ExpressionBinder
             var idxArgsAnnotWr = ImmutableArray.Create(BindIndexValue());
             if (this.memberLookup.TryResolveClrIndexer(targetType, clrAnnotWr, idxArgsAnnotWr, out var idxPropAnnotWr, out var resolvedIdxArgsAnnotWr))
             {
-                if (!idxPropAnnotWr.CanWrite)
+                if (idxPropAnnotWr.GetSetMethod(nonPublic: false) == null)
                 {
                     Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
                     return new BoundErrorExpression(null);
@@ -1665,7 +1677,7 @@ internal sealed partial class ExpressionBinder
                 // managed pointer. Detect the ref-returning getter and store through
                 // it. A `ReadOnlySpan[T]` getter is `ref readonly T` — writing is a
                 // hard error (GS0226).
-                if (!idxProp.CanWrite)
+                if (idxProp.GetSetMethod(nonPublic: false) == null)
                 {
                     var refGetter = idxProp.GetGetMethod(nonPublic: false);
                     if (refGetter != null && refGetter.ReturnType.IsByRef)

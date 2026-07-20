@@ -1316,7 +1316,11 @@ internal sealed partial class MethodBodyEmitter
                 this.EmitExpression(arg);
             }
 
-            this.il.OpCode(ILOpCode.Call);
+            // Span-like value types require a direct call; ref-returning
+            // interface indexers still dispatch virtually (#2525).
+            this.il.OpCode(ReflectionMetadataEmitter.IsValueTypeSymbol(receiver.Type)
+                ? ILOpCode.Call
+                : ILOpCode.Callvirt);
             // Issue #671: receiver-aware MemberRef for symbolic constructed generics.
             this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(refGetter, receiver.Type));
             this.EmitExpression(ixa.Value);
