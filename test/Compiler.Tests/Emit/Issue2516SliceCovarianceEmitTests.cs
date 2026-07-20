@@ -6,6 +6,9 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -193,6 +196,160 @@ public class Issue2516SliceCovarianceEmitTests
         Assert.NotEqual(0, exitCode);
         Assert.Contains("GS0155", diagnostics, StringComparison.Ordinal);
         Assert.DoesNotContain("GS9998", diagnostics, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NullableElementAnnotation_CovariantInterfaceConversion_Compiles()
+    {
+        // The covariant element conversion composes with a nullable ELEMENT
+        // envelope too (`[]Dog? -> IEnumerable[Animal?]`), not just a
+        // nullable outer array/interface reference.
+        var output = CompileAndRun("""
+            package Probe
+            import System
+            import System.Collections.Generic
+
+            open class Animal { }
+            class Dog : Animal { }
+
+            func Widen(items []Dog?) IEnumerable[Animal?] -> items
+
+            var dogs = []Dog?{Dog(), nil, Dog()}
+            var widened = Widen(dogs)
+            var count = 0
+            for item in widened {
+                count = count + 1
+            }
+            Console.WriteLine(count)
+            Console.WriteLine(Object.ReferenceEquals(dogs, widened))
+            """);
+
+        Assert.Equal("3\nTrue\n", output);
+    }
+
+    [Fact]
+    public void CSharpConsumer_ObservesCompilerCovariantEnumerable_ReflectionAndIdentity()
+    {
+        // Interoperability / reflection coverage: a plain C# PROGRAM (no gsc
+        // involved) references a G#-compiled library whose public API relies
+        // ENTIRELY on the new native slice-to-covariant-interface conversion
+        // (no translator-side cast, no compiler-side cast — a bare assignment),
+        // then consumes it exactly like any other .NET IEnumerable<Animal>:
+        // enumerating it, reading each element's runtime type via reflection,
+        // and confirming the elements are the SAME references the library's
+        // own array holds.
+        var gsource = """
+            package Probe.Issue2516Interop
+            import System.Collections.Generic
+
+            public open class Animal { }
+            public class Dog : Animal { }
+
+            public class Library {
+                shared {
+                    public let dogs []Dog = []Dog{Dog(), Dog(), Dog()}
+                    public let animals IEnumerable[Animal] = Library.dogs
+
+                    public func GetDogAt(i int32) Dog {
+                        return Library.dogs[i]
+                    }
+                }
+            }
+            """;
+
+        const string consumerSource = """
+            using System.Collections.Generic;
+            using System.Linq;
+            using Probe.Issue2516Interop;
+
+            public static class Consumer
+            {
+                public static string Run()
+                {
+                    IEnumerable<Animal> animals = Library.animals;
+                    List<Animal> list = animals.ToList();
+                    bool allDogs = list.All(a => a.GetType().Name == "Dog");
+                    bool allSameRef = System.Object.ReferenceEquals(list[0], Library.GetDogAt(0))
+                        && System.Object.ReferenceEquals(list[1], Library.GetDogAt(1))
+                        && System.Object.ReferenceEquals(list[2], Library.GetDogAt(2));
+                    return list.Count + "," + allDogs + "," + allSameRef;
+                }
+            }
+            """;
+
+        string output = CompileGsharpLibraryAndRunCSharpConsumer(gsource, consumerSource);
+        Assert.Equal("3,True,True", output);
+    }
+
+    private static string CompileGsharpLibraryAndRunCSharpConsumer(string gSource, string consumerCsSource)
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_issue2516_interop_").FullName;
+        try
+        {
+            var gsSrcPath = Path.Combine(tempDir, "library.gs");
+            var libraryDllPath = Path.Combine(tempDir, "library.dll");
+            File.WriteAllText(gsSrcPath, gSource);
+
+            int compileExit = RunCompiler(new[]
+            {
+                "/out:" + libraryDllPath,
+                "/target:library",
+                "/targetframework:net10.0",
+                "/nowarn:GS9100",
+                gsSrcPath,
+            }, out string diagnostics);
+            Assert.True(compileExit == 0, $"gsc failed compiling the G# library:\n{diagnostics}");
+
+            IlVerifier.Verify(libraryDllPath);
+
+            SyntaxTree consumerTree = CSharpSyntaxTree.ParseText(
+                consumerCsSource,
+                new CSharpParseOptions(LanguageVersion.Latest));
+            var references = new List<MetadataReference>(
+                TrustedPlatformAssemblies().Select(path => MetadataReference.CreateFromFile(path)))
+            {
+                MetadataReference.CreateFromFile(libraryDllPath),
+            };
+            var consumerCompilation = CSharpCompilation.Create(
+                "Issue2516.CSharpConsumer",
+                new[] { consumerTree },
+                references,
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+            var consumerDllPath = Path.Combine(tempDir, "consumer.dll");
+            using (var stream = File.Create(consumerDllPath))
+            {
+                Microsoft.CodeAnalysis.Emit.EmitResult emitResult = consumerCompilation.Emit(stream);
+                Assert.True(
+                    emitResult.Success,
+                    "C# consumer failed to compile against the G# library:\n" +
+                        string.Join("\n", emitResult.Diagnostics));
+            }
+
+            var loadContext = new System.Runtime.Loader.AssemblyLoadContext("Issue2516Interop", isCollectible: true);
+            try
+            {
+                loadContext.LoadFromAssemblyPath(libraryDllPath);
+                var consumerAssembly = loadContext.LoadFromAssemblyPath(consumerDllPath);
+                var consumerType = consumerAssembly.GetType("Consumer", throwOnError: true);
+                var runMethod = consumerType.GetMethod("Run");
+                return (string)runMethod.Invoke(null, null);
+            }
+            finally
+            {
+                loadContext.Unload();
+            }
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+            catch
+            {
+            }
+        }
     }
 
     private static (int ExitCode, string Diagnostics) Compile(string source)
