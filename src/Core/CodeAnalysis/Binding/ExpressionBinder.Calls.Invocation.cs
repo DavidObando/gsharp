@@ -2024,9 +2024,26 @@ internal sealed partial class ExpressionBinder
                     return symbolicStaticCall;
                 }
 
+                // Recover symbolic generic arguments before params expansion so
+                // the synthesized array uses the real element type rather than
+                // a live-reflection constraint placeholder.
+                var staticSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(
+                    receiverType: null,
+                    ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
+                var staticSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
+                    staticFn.Method,
+                    typeArgSymbols,
+                    staticSymbolicArgs,
+                    staticIsExpanded);
+                var staticTypeArgSymbolsForCall = !staticSymbolicTypeArgs.IsDefault ? staticSymbolicTypeArgs : typeArgSymbols;
                 var staticParameters = staticFn.Method.GetParameters();
                 var staticExpandedArgs = staticIsExpanded
-                    ? overloads.ExpandParamsArguments(arguments, staticParameters, ce, parameterMapping: staticMapping)
+                    ? overloads.ExpandParamsArguments(
+                        arguments,
+                        staticParameters,
+                        ce,
+                        parameterMapping: staticMapping,
+                        symbolicMethodTypeArgs: staticTypeArgSymbolsForCall)
                     : arguments;
                 var staticDownstreamMapping = staticIsExpanded ? default : staticMapping;
 
@@ -2038,12 +2055,6 @@ internal sealed partial class ExpressionBinder
                 // Issue #1512: computed BEFORE the delegate rebind so a lambda
                 // argument whose return is a method type parameter recovers its
                 // symbolic delegate target rather than erasing to `object`.
-                var staticSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(
-                    receiverType: null,
-                    ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
-                var staticSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(staticFn.Method, typeArgSymbols, staticSymbolicArgs);
-                var staticTypeArgSymbolsForCall = !staticSymbolicTypeArgs.IsDefault ? staticSymbolicTypeArgs : typeArgSymbols;
-
                 // Issue #1638: shared CLR call-argument-construction pipeline
                 // (interpolation rebind → handler args → delegate rebind →
                 // parameter conversions). Issue #889: void-izes value-returning
@@ -2525,6 +2536,9 @@ internal sealed partial class ExpressionBinder
                     ? (source, target) => IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target)
                     : null;
 
+                var preResolutionSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(
+                    null,
+                    ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
                 var resolution = OverloadResolution.Resolve(
                     candidates,
                     argTypes,
@@ -2532,6 +2546,11 @@ internal sealed partial class ExpressionBinder
                     scope.References.MapClrTypeToReferences,
                     ComputeInterpolatedStringArgFlags(ce.Arguments, arguments.Length),
                     argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
+                    recoverTypeArgSymbols: (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
+                        closed,
+                        typeArgSymbols,
+                        preResolutionSymbolicArgs,
+                        isExpanded),
                     supplementaryInterfaceCheck: supplementaryInterfaceCheck,
                     constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
                     structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
@@ -2576,7 +2595,11 @@ internal sealed partial class ExpressionBinder
                         // never unified and the call collapsed to `<object>`. The
                         // receiver still drives return-type Var substitution via
                         // `ResolveCallReturnTypeFromSymbolicTypeArgs` below.
-                        var instSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(resolution.Best, typeArgSymbols, instSymbolicArgs);
+                        var instSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
+                            resolution.Best,
+                            typeArgSymbols,
+                            instSymbolicArgs,
+                            resolution.IsExpanded);
                         var instTypeArgSymbolsForCall = !instSymbolicTypeArgs.IsDefault ? instSymbolicTypeArgs : typeArgSymbols;
                         var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols)
                             ?? MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(resolution.Best, instSymbolicTypeArgs, effectiveReceiverType)
@@ -2585,7 +2608,12 @@ internal sealed partial class ExpressionBinder
                         var instParameters = resolution.Best.GetParameters();
                         var instMapping = resolution.ParameterMapping;
                         var instExpandedArgs = resolution.IsExpanded
-                            ? overloads.ExpandParamsArguments(arguments, instParameters, ce, parameterMapping: instMapping)
+                            ? overloads.ExpandParamsArguments(
+                                arguments,
+                                instParameters,
+                                ce,
+                                parameterMapping: instMapping,
+                                symbolicMethodTypeArgs: instTypeArgSymbolsForCall)
                             : arguments;
                         var instDownstreamMapping = resolution.IsExpanded ? default : instMapping;
 

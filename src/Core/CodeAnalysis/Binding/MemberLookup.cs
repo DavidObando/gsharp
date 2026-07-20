@@ -998,10 +998,12 @@ internal sealed class MemberLookup
     /// </summary>
     /// <param name="openMethod">The open generic method definition.</param>
     /// <param name="symbolicArgTypes">Symbolic argument types in call order (receiver included as slot 0 for extension methods).</param>
+    /// <param name="isExpanded">Whether the final params-array parameter consumes individual trailing arguments.</param>
     /// <returns>An array sized to the open method's generic-parameter arity, with one entry per ordinal (<see langword="null"/> when unrecovered).</returns>
     public static TypeSymbol[] InferSymbolicMethodTypeArguments(
         MethodInfo openMethod,
-        ImmutableArray<TypeSymbol> symbolicArgTypes)
+        ImmutableArray<TypeSymbol> symbolicArgTypes,
+        bool isExpanded = false)
     {
         if (openMethod == null || !openMethod.IsGenericMethodDefinition)
         {
@@ -1012,10 +1014,50 @@ internal sealed class MemberLookup
         var result = new TypeSymbol[arity];
 
         var openParams = openMethod.GetParameters();
-        var pairs = Math.Min(openParams.Length, symbolicArgTypes.IsDefault ? 0 : symbolicArgTypes.Length);
-        for (int i = 0; i < pairs; i++)
+        var argumentCount = symbolicArgTypes.IsDefault ? 0 : symbolicArgTypes.Length;
+        if (isExpanded
+            && openParams.Length > 0
+            && OverloadResolution.IsParamsArrayParameter(openParams[^1])
+            && openParams[^1].ParameterType.GetElementType() is Type paramsElementType)
         {
-            UnifyForMethodTypeArgs(openParams[i].ParameterType, symbolicArgTypes[i], openMethod, result);
+            var paramsIndex = openParams.Length - 1;
+            var conflicting = new bool[arity];
+            var fixedPairs = Math.Min(paramsIndex, argumentCount);
+            for (var i = 0; i < fixedPairs; i++)
+            {
+                UnifyForMethodTypeArgs(openParams[i].ParameterType, symbolicArgTypes[i], openMethod, result);
+            }
+
+            for (var i = paramsIndex; i < argumentCount; i++)
+            {
+                var tailInference = new TypeSymbol[arity];
+                UnifyForMethodTypeArgs(paramsElementType, symbolicArgTypes[i], openMethod, tailInference);
+                for (var slot = 0; slot < arity; slot++)
+                {
+                    if (conflicting[slot] || tailInference[slot] == null)
+                    {
+                        continue;
+                    }
+
+                    if (result[slot] != null
+                        && !DeclarationBinder.TypeSignaturesEquivalent(result[slot], tailInference[slot]))
+                    {
+                        result[slot] = null;
+                        conflicting[slot] = true;
+                        continue;
+                    }
+
+                    result[slot] = MergeInferredTypeArgument(result[slot], tailInference[slot]);
+                }
+            }
+        }
+        else
+        {
+            var pairs = Math.Min(openParams.Length, argumentCount);
+            for (var i = 0; i < pairs; i++)
+            {
+                UnifyForMethodTypeArgs(openParams[i].ParameterType, symbolicArgTypes[i], openMethod, result);
+            }
         }
 
         return result;
@@ -1116,11 +1158,13 @@ internal sealed class MemberLookup
     /// <param name="closed">The closed generic method selected by overload resolution.</param>
     /// <param name="explicitTypeArgSymbols">The explicit symbols, or default when none were supplied.</param>
     /// <param name="symbolicArgTypes">Symbolic argument types in call order (receiver first when applicable).</param>
+    /// <param name="isExpanded">Whether params-array inference should unify trailing scalar arguments with the array element type.</param>
     /// <returns>The per-MVar vector (length == open arity), or default when nothing recoverable.</returns>
     public static ImmutableArray<TypeSymbol> BuildSymbolicMethodTypeArgs(
         MethodInfo closed,
         ImmutableArray<TypeSymbol> explicitTypeArgSymbols,
-        ImmutableArray<TypeSymbol> symbolicArgTypes)
+        ImmutableArray<TypeSymbol> symbolicArgTypes,
+        bool isExpanded = false)
     {
         if (closed == null || !closed.IsGenericMethod)
         {
@@ -1135,7 +1179,7 @@ internal sealed class MemberLookup
         }
 
         var inferred = !symbolicArgTypes.IsDefault && symbolicArgTypes.Length > 0
-            ? InferSymbolicMethodTypeArguments(openMethod, symbolicArgTypes)
+            ? InferSymbolicMethodTypeArguments(openMethod, symbolicArgTypes, isExpanded)
             : new TypeSymbol[arity];
 
         // Explicit list takes precedence at each slot when present.

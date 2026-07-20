@@ -235,6 +235,29 @@ public class SdkLayoutTests
     }
 
     [Fact]
+    public void Core_Targets_Computes_Standard_Manifest_Resource_Names()
+    {
+        var path = Path.Combine(RepoRoot.SdkSourceDir, "build", "Gsharp.NET.Core.Sdk.targets");
+        var doc = XDocument.Load(path);
+        var target = doc.Descendants(MsbuildNs + "Target")
+            .Single(t => (string)t.Attribute("Name") == "CreateManifestResourceNames");
+        var namingTasks = target.Elements(MsbuildNs + "CreateCSharpManifestResourceName").ToList();
+
+        Assert.Equal(2, namingTasks.Count);
+        Assert.All(
+            namingTasks,
+            task => Assert.Equal("$(RootNamespace)", (string)task.Attribute("RootNamespace")));
+        Assert.All(
+            namingTasks,
+            task => Assert.Equal(
+                "_Temporary",
+                (string)task.Element(MsbuildNs + "Output")?.Attribute("ItemName")));
+        Assert.Contains(
+            target.Descendants(MsbuildNs + "EmbeddedResource"),
+            item => (string)item.Attribute("Include") == "@(_Temporary)");
+    }
+
+    [Fact]
     public void Core_Targets_Declares_AfterCompile_Hook_In_CompileDependsOn()
     {
         var path = Path.Combine(RepoRoot.SdkSourceDir, "build", "Gsharp.NET.Core.Sdk.targets");

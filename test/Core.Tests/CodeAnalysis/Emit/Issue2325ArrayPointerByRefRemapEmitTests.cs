@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -230,12 +231,19 @@ public class Issue2325ArrayPointerByRefRemapEmitTests
         var ctor = typeof(ReflectionMetadataEmitter).GetConstructor(
             BindingFlags.NonPublic | BindingFlags.Instance,
             binder: null,
-            types: new[] { typeof(BoundProgram), typeof(ReferenceResolver), typeof(string), typeof(bool) },
+            types: new[]
+            {
+                typeof(BoundProgram),
+                typeof(ReferenceResolver),
+                typeof(string),
+                typeof(bool),
+                typeof(IReadOnlyList<(string Name, byte[] Data, bool IsPublic)>),
+            },
             modifiers: null)
             ?? throw new InvalidOperationException(
                 "ReflectionMetadataEmitter's private constructor signature changed; update this test's reflection probe.");
 
-        return (ReflectionMetadataEmitter)ctor.Invoke(new object[] { null, references, null, false });
+        return (ReflectionMetadataEmitter)ctor.Invoke(new object[] { null, references, null, false, null });
     }
 
     /// <summary>

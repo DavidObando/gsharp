@@ -666,7 +666,7 @@ internal static class OverloadResolution
     /// Optional callback that resolves a deferred method group from the input
     /// types of the candidate's delegate parameter for generic inference.
     /// </param>
-    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs = null, Func<Type, Type> projectTypeArgument = null, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null, Func<int, Type, bool> structuralProjectionArgumentCheck = null, Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>> methodGroupInference = null)
+    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs = null, Func<Type, Type> projectTypeArgument = null, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null, Func<int, Type, bool> structuralProjectionArgumentCheck = null, Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>> methodGroupInference = null)
         where T : MethodBase
     {
         var applicable = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)>();
@@ -2259,7 +2259,7 @@ internal static class OverloadResolution
     /// so the per-candidate work can be guarded against reflection load
     /// failures (issue #321) without disturbing the surrounding control flow.
     /// </summary>
-    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null, Func<int, Type, bool> structuralProjectionArgumentCheck = null, Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>> methodGroupInference = null)
+    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null, Func<int, Type, bool> structuralProjectionArgumentCheck = null, Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>> methodGroupInference = null)
         where T : MethodBase
     {
         {
@@ -2301,7 +2301,7 @@ internal static class OverloadResolution
                     }
                     catch (ArgumentException)
                     {
-                        var recoveredSymbols = recoverTypeArgSymbols?.Invoke(gmi) ?? default;
+                        var recoveredSymbols = recoverTypeArgSymbols?.Invoke(gmi, false) ?? default;
 
                         // Issue #1325: live reflection rejects the `object`
                         // erasure of a user value type against a `struct`
@@ -2321,7 +2321,7 @@ internal static class OverloadResolution
                     // Issue #750 / ADR-0088: same constraint check as the
                     // inference path. Required because MetadataLoadContext's
                     // MakeGenericMethod does not validate constraints.
-                    if (!SatisfiesGenericConstraints(gmi, explicitTypeArgsArray, recoverTypeArgSymbols?.Invoke(closed) ?? default))
+                    if (!SatisfiesGenericConstraints(gmi, explicitTypeArgsArray, recoverTypeArgSymbols?.Invoke(closed, false) ?? default))
                     {
                         return;
                     }
@@ -2410,7 +2410,7 @@ internal static class OverloadResolution
                 }
                 catch (ArgumentException)
                 {
-                    var recoveredSymbols = recoverTypeArgSymbols?.Invoke(mi) ?? default;
+                    var recoveredSymbols = recoverTypeArgSymbols?.Invoke(mi, false) ?? default;
 
                     // Issue #1325: live reflection rejects the `object` erasure
                     // of a user value type against a `struct` constraint. Retry
@@ -2435,7 +2435,7 @@ internal static class OverloadResolution
                 // bound with T = Nullable<int> survives applicability and the
                 // resolver picks the wrong overload, emitting IL that fails
                 // verification at runtime.
-                if (!SatisfiesGenericConstraints(mi, typeArgs, recoverTypeArgSymbols?.Invoke(closed) ?? default))
+                if (!SatisfiesGenericConstraints(mi, typeArgs, recoverTypeArgSymbols?.Invoke(closed, false) ?? default))
                 {
                     return;
                 }
@@ -2542,10 +2542,11 @@ internal static class OverloadResolution
     /// applicability check in <see cref="EvaluateCandidate"/> but rewrites the
     /// trailing parameter type to the element type for ranking purposes.
     /// </summary>
-    private static void EvaluateExpandedParamsCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null, Func<int, Type, bool> structuralProjectionArgumentCheck = null)
+    private static void EvaluateExpandedParamsCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null, Func<int, Type, bool> structuralProjectionArgumentCheck = null)
         where T : MethodBase
     {
         T candidate = rawCandidate;
+        Func<Type, Type> paramTypeRewrite = null;
 
         // Issue #506 follow-up: close open generic candidates before applicability
         // classification. Explicit type arguments win; otherwise infer from the
@@ -2565,12 +2566,13 @@ internal static class OverloadResolution
                 }
                 catch (ArgumentException)
                 {
-                    recoveredSymbols = recoverTypeArgSymbols?.Invoke(gmi) ?? default;
-                    if (!TryCloseOverUserReferenceTypePlaceholders(
-                        gmi,
-                        explicitTypeArgs.ToArray(),
-                        recoveredSymbols,
-                        out closed))
+                    recoveredSymbols = recoverTypeArgSymbols?.Invoke(gmi, true) ?? default;
+                    var explicitTypeArgsArray = explicitTypeArgs.ToArray();
+                    if (TryCloseOverUserValueTypePlaceholders(gmi, explicitTypeArgsArray, recoveredSymbols, out closed))
+                    {
+                        paramTypeRewrite = static t => SubstituteClrType(t, typeof(UserValueTypeConstraintPlaceholder), typeof(object));
+                    }
+                    else if (!TryCloseOverUserReferenceTypePlaceholders(gmi, explicitTypeArgsArray, recoveredSymbols, out closed))
                     {
                         return;
                     }
@@ -2579,7 +2581,7 @@ internal static class OverloadResolution
                 if (!SatisfiesGenericConstraints(
                     gmi,
                     explicitTypeArgs.ToArray(),
-                    recoveredSymbols.IsDefault ? recoverTypeArgSymbols?.Invoke(closed) ?? default : recoveredSymbols))
+                    recoveredSymbols.IsDefault ? recoverTypeArgSymbols?.Invoke(closed, true) ?? default : recoveredSymbols))
                 {
                     return;
                 }
@@ -2620,8 +2622,12 @@ internal static class OverloadResolution
             }
             catch (ArgumentException)
             {
-                recoveredSymbols = recoverTypeArgSymbols?.Invoke(mi) ?? default;
-                if (!TryCloseOverUserReferenceTypePlaceholders(mi, typeArgs, recoveredSymbols, out closed))
+                recoveredSymbols = recoverTypeArgSymbols?.Invoke(mi, true) ?? default;
+                if (TryCloseOverUserValueTypePlaceholders(mi, typeArgs, recoveredSymbols, out closed))
+                {
+                    paramTypeRewrite = static t => SubstituteClrType(t, typeof(UserValueTypeConstraintPlaceholder), typeof(object));
+                }
+                else if (!TryCloseOverUserReferenceTypePlaceholders(mi, typeArgs, recoveredSymbols, out closed))
                 {
                     return;
                 }
@@ -2630,7 +2636,7 @@ internal static class OverloadResolution
             if (!SatisfiesGenericConstraints(
                 mi,
                 typeArgs,
-                recoveredSymbols.IsDefault ? recoverTypeArgSymbols?.Invoke(closed) ?? default : recoveredSymbols))
+                recoveredSymbols.IsDefault ? recoverTypeArgSymbols?.Invoke(closed, true) ?? default : recoveredSymbols))
             {
                 return;
             }
@@ -2746,6 +2752,7 @@ internal static class OverloadResolution
                 target = parameters[slot].ParameterType;
             }
 
+            target = paramTypeRewrite?.Invoke(target) ?? target;
             paramTypes[i] = target;
             var conv = ClassifyImplicit(target, argTypes[i], supplementaryInterfaceCheck);
             if (conv == ImplicitConversionKind.None)
@@ -3950,7 +3957,8 @@ internal static class OverloadResolution
                     if (argIsUserReferenceType)
                     {
                         var userClass = (StructSymbol)typeArgSymbols[i];
-                        if (userClass.HasPrimaryConstructor
+                        if (userClass.IsAbstract
+                            || userClass.HasPrimaryConstructor
                             || (!userClass.EffectiveExplicitConstructors.IsDefaultOrEmpty
                                 && !userClass.EffectiveExplicitConstructors.Any(
                                     constructor => constructor.Parameters.Length == 0

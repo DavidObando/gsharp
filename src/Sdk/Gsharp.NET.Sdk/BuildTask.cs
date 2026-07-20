@@ -213,6 +213,12 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
             if (string.IsNullOrWhiteSpace(name))
             {
                 name = resource.GetMetadata("ManifestResourceName");
+                if (!string.IsNullOrWhiteSpace(name)
+                    && string.Equals(resource.GetMetadata("Type"), "Resx", StringComparison.OrdinalIgnoreCase)
+                    && !name.EndsWith(".resources", StringComparison.OrdinalIgnoreCase))
+                {
+                    name += ".resources";
+                }
             }
 
             if (string.IsNullOrWhiteSpace(name))

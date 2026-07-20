@@ -152,24 +152,6 @@ namespace Demo
         Assert.DoesNotContain("partial", printed);
     }
 
-    [Fact]
-    public void ForcedPartialFile_NonPartialSource_EmitsPartial()
-    {
-        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
-            new[] { ("MainWindow.axaml.cs", "namespace Demo { public class MainWindow { } }") });
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(
-            project.Compilation,
-            document.SemanticModel,
-            document.FilePath);
-        var translator = new CSharpToGSharpTranslator(
-            forcedPartialFilePaths: new[] { document.FilePath });
-
-        string printed = GSharpPrinter.Print(translator.TranslateDocument(document, context));
-
-        Assert.Contains("partial class MainWindow", printed);
-    }
-
     private static (string Generated, string User) TranslateBothInPreserveMode(
         (string FileName, string Source) generated,
         (string FileName, string Source) user)

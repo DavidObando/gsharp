@@ -241,18 +241,9 @@ public sealed class TranslateStage : IMigrationStage
             List<string> retainedFilePaths = hasAnalyzerReferences
                 ? currentProject.Documents.Select(d => d.FilePath).ToList()
                 : null;
-            IReadOnlyCollection<string> forcedPartialFilePaths = hasAnalyzerReferences
-                ? currentProject.AdditionalFiles
-                    .Where(IsXamlFile)
-                    .Select(path => path + ".cs")
-                    .Where(File.Exists)
-                    .Select(Path.GetFullPath)
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase)
-                : null;
             var translator = new CSharpToGSharpTranslator(
                 markMergedTypePartial: hasAnalyzerReferences,
-                retainedFilePaths: retainedFilePaths,
-                forcedPartialFilePaths: forcedPartialFilePaths);
+                retainedFilePaths: retainedFilePaths);
 
             EmitFriendAssemblyAnnotations(
                 context,
@@ -394,14 +385,6 @@ public sealed class TranslateStage : IMigrationStage
         EmitNerdbankGitVersioningBumps(context);
 
         return artifacts.Count == 0 ? StageOutcome.Passed() : StageOutcome.Failed(artifacts);
-    }
-
-    private static bool IsXamlFile(string path)
-    {
-        string extension = Path.GetExtension(path);
-        return extension.Equals(".axaml", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".xaml", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".paml", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void EmitFriendAssemblyAnnotations(

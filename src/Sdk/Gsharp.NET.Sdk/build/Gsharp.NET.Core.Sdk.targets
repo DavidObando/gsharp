@@ -374,8 +374,48 @@
     </ItemGroup>
   </Target>
 
-  <!-- The CreateManifestResourceNames target is required by Common.targets; defer to C# semantics. -->
   <Target Name="AfterCompile" />
-  <Target Name="CreateManifestResourceNames" />
+
+  <!-- Microsoft.Common.targets delegates language-specific manifest naming to
+       this target. Reuse the standard C# naming task without importing the
+       C#-specific managed compile pipeline. -->
+  <PropertyGroup>
+    <CreateManifestResourceNamesDependsOn />
+  </PropertyGroup>
+  <Target Name="CreateManifestResourceNames"
+          Condition=" '@(EmbeddedResource)' != '' "
+          DependsOnTargets="$(CreateManifestResourceNamesDependsOn)">
+    <ItemGroup>
+      <_Temporary Remove="@(_Temporary)" />
+    </ItemGroup>
+
+    <CreateCSharpManifestResourceName
+        ResourceFiles="@(EmbeddedResource)"
+        RootNamespace="$(RootNamespace)"
+        EnableCustomCulture="$(EnableCustomCulture)"
+        UseDependentUponConvention="$(EmbeddedResourceUseDependentUponConvention)"
+        Condition=" '%(EmbeddedResource.ManifestResourceName)' == '' and
+                    ('%(EmbeddedResource.WithCulture)' == 'false' or '%(EmbeddedResource.Type)' == 'Resx') ">
+      <Output TaskParameter="ResourceFilesWithManifestResourceNames" ItemName="_Temporary" />
+    </CreateCSharpManifestResourceName>
+
+    <CreateCSharpManifestResourceName
+        ResourceFiles="@(EmbeddedResource)"
+        RootNamespace="$(RootNamespace)"
+        PrependCultureAsDirectory="false"
+        UseDependentUponConvention="$(EmbeddedResourceUseDependentUponConvention)"
+        Condition=" '%(EmbeddedResource.ManifestResourceName)' == '' and
+                    '%(EmbeddedResource.WithCulture)' == 'true' and
+                    '%(EmbeddedResource.Type)' == 'Non-Resx' ">
+      <Output TaskParameter="ResourceFilesWithManifestResourceNames" ItemName="_Temporary" />
+    </CreateCSharpManifestResourceName>
+
+    <ItemGroup>
+      <EmbeddedResource Remove="@(EmbeddedResource)"
+                        Condition=" '%(EmbeddedResource.ManifestResourceName)' == '' " />
+      <EmbeddedResource Include="@(_Temporary)" />
+      <_Temporary Remove="@(_Temporary)" />
+    </ItemGroup>
+  </Target>
 
 </Project>

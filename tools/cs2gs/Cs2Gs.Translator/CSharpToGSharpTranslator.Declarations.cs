@@ -1384,8 +1384,7 @@ public sealed partial class CSharpToGSharpTranslator
             // keeps `partial` so gsc's own gsgen-produced part can merge into it.
             bool sourceWasPartial = node.Modifiers.Any(m => m.IsKind(SyntaxKind.PartialKeyword)) ||
                 (otherParts != null && otherParts.Any(p => p.Modifiers.Any(m => m.IsKind(SyntaxKind.PartialKeyword))));
-            bool isPartial = this.forceCurrentDocumentTypesPartial ||
-                (sourceWasPartial && (this.preservePartialParts || this.markMergedTypePartial));
+            bool isPartial = sourceWasPartial && (this.preservePartialParts || this.markMergedTypePartial);
 
             return new TypeDeclaration(
                 kind.Value,
