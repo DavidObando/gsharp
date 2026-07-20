@@ -25,13 +25,14 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
   // conversion operators (`explicit`/`implicit`), pattern combinators
   // (`and`/`or`/`not`), the `init()` constructor constraint (renamed from
   // `new()` by ADR-0097 / issue #997), the unsafe/low-level words
-  // (`unsafe`/`fixed`/`stackalloc`/`unmanaged`), and the overflow-context
+  // (`unsafe`/`fixed`/`stackalloc`/`unmanaged`/`sizeof`), partial declarations,
+  // and the overflow-context
   // markers `checked`/`unchecked` (issue #1881; `lock` is a reserved keyword,
   // not contextual — see `keywords` above).
   // `record` was removed in v0.2; the lexer still recognises it so the parser
   // can emit the GS0307 migration diagnostic, so we keep it here for fidelity.
   const contextualKeywords =
-    /\b(?:add|and|base|checked|convenience|data|deinit|delegate|event|explicit|fixed|get|implicit|in|init|inline|make|nameof|not|or|out|params|prop|raise|record|ref|remove|scoped|set|shared|stackalloc|this|typeof|unchecked|unmanaged|unsafe|when|with|yield)\b/;
+    /\b(?:add|and|base|checked|convenience|data|deinit|delegate|event|explicit|fixed|get|implicit|in|init|inline|make|nameof|not|or|out|params|partial|prop|raise|record|ref|remove|scoped|set|shared|sizeof|stackalloc|this|typeof|unchecked|unmanaged|unsafe|when|with|yield)\b/;
 
   // Built-in primitive type names (TypeSymbol). Width-bearing names are
   // canonical; friendly aliases (`int`, `long`, etc.) are accepted by the
@@ -81,6 +82,42 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
       pattern: /'(?:\\(?:u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|x[0-9a-fA-F]{1,4}|.)|[^'\\\r\n])'/,
       greedy: true,
     },
+    'assembly-annotation': {
+      pattern: /(@assembly:\s*)[A-Za-z_]\w*/,
+      lookbehind: true,
+      alias: 'attr-name',
+    },
+    'annotation-target': {
+      pattern: /(@)assembly(?=:)/,
+      lookbehind: true,
+      alias: 'keyword',
+    },
+    annotation: {
+      pattern: /@[A-Za-z_]\w*/,
+      alias: 'attr-name',
+    },
+    'explicit-interface-declaration': {
+      pattern:
+        /\b(?:func|prop|event)\s+\([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\[[^\]\r\n]+\])?\)\s+(?:this|[A-Za-z_]\w*)/,
+      inside: {
+        function: {
+          pattern: /(^func\s+\([^)]+\)\s+)[A-Za-z_]\w*$/,
+          lookbehind: true,
+        },
+        property: {
+          pattern:
+            /(^(?:prop|event)\s+\([^)]+\)\s+)(?:this|[A-Za-z_]\w*)$/,
+          lookbehind: true,
+        },
+        'class-name': {
+          pattern:
+            /(\()[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\[[^\]\r\n]+\])?(?=\))/,
+          lookbehind: true,
+        },
+        keyword: /^(?:func|prop|event)\b/,
+        punctuation: /[()]/,
+      },
+    },
     'class-name': [
       {
         // Type after declaration keywords.
@@ -96,6 +133,10 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
     keyword: keywords,
     'contextual-keyword': {
       pattern: contextualKeywords,
+      alias: 'keyword',
+    },
+    'anonymous-object': {
+      pattern: /\bobject(?=\s*(?:\{|:))/,
       alias: 'keyword',
     },
     'builtin-type': {
