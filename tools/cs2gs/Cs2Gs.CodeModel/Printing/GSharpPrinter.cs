@@ -1679,8 +1679,21 @@ public static class GSharpPrinter
             sb.Append($" : base({baseArgs})");
         }
 
+        BlockStatement body = constructor.Body;
+        if (constructor.DelegatingArguments != null)
+        {
+            var statements = new List<GStatement>
+            {
+                new ExpressionStatement(new InvocationExpression(
+                    new IdentifierExpression("init"),
+                    constructor.DelegatingArguments)),
+            };
+            statements.AddRange(body.Statements);
+            body = new BlockStatement(statements, body.IsUnsafe, body.IsChecked, body.IsUnchecked);
+        }
+
         sb.Append(' ');
-        sb.Append(RenderBlock(constructor.Body, indent));
+        sb.Append(RenderBlock(body, indent));
         return sb.ToString();
     }
 

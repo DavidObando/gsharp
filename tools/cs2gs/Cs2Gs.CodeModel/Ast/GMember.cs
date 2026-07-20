@@ -333,20 +333,23 @@ public sealed class ConstructorDeclaration : GMember
     /// <param name="visibility">The accessibility.</param>
     /// <param name="attributes">The constructor attributes.</param>
     /// <param name="isConvenience">Whether this is a delegating <c>convenience init</c>.</param>
+    /// <param name="delegatingArguments">The same-type initializer arguments, or <see langword="null"/> for no delegation.</param>
     public ConstructorDeclaration(
         IReadOnlyList<Parameter> parameters,
         BlockStatement body,
         IReadOnlyList<GExpression> baseArguments = null,
         Visibility visibility = Visibility.Default,
         IReadOnlyList<AttributeUse> attributes = null,
-        bool isConvenience = false)
+        bool isConvenience = false,
+        IReadOnlyList<GExpression> delegatingArguments = null)
     {
         Parameters = parameters ?? new List<Parameter>();
         Body = body;
         BaseArguments = baseArguments;
         Visibility = visibility;
         Attributes = attributes ?? new List<AttributeUse>();
-        IsConvenience = isConvenience;
+        IsConvenience = isConvenience || delegatingArguments != null;
+        DelegatingArguments = delegatingArguments;
     }
 
     /// <summary>
@@ -355,6 +358,12 @@ public sealed class ConstructorDeclaration : GMember
     /// delegation call (<c>init(args)</c>) is the first statement of the body.
     /// </summary>
     public bool IsConvenience { get; }
+
+    /// <summary>
+    /// Gets the same-type initializer arguments. The printer lowers these to
+    /// the first effective body statement, preserving their evaluation order.
+    /// </summary>
+    public IReadOnlyList<GExpression> DelegatingArguments { get; }
 
     /// <summary>Gets the constructor parameters.</summary>
     public IReadOnlyList<Parameter> Parameters { get; }
