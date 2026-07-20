@@ -37,6 +37,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 internal sealed partial class StatementBinder
 {
+    private static bool IsDiscard(SyntaxToken token) => token.Text == "_";
+
     /// <summary>Signature for the root <see cref="ExpressionBinder.BindExpression(ExpressionSyntax, bool)"/> entry point.</summary>
     /// <param name="syntax">The expression syntax to bind.</param>
     /// <param name="canBeVoid">Whether the expression is permitted to have <c>void</c> type.</param>
