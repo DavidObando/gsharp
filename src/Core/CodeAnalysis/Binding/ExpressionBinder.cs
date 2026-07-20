@@ -420,6 +420,8 @@ internal sealed partial class ExpressionBinder
                 // BoundBaseInterfaceCallExpression emits a non-virtual call
                 // into the interface's default body.
                 return BindBaseInterfaceCallExpression((BaseInterfaceCallExpressionSyntax)syntax);
+            case SyntaxKind.BaseClassCallExpression:
+                return BindBaseClassCallExpression((BaseClassCallExpressionSyntax)syntax);
             case SyntaxKind.RangeExpression:
                 // Issue #1038: a standalone range `lo..hi` (and the open forms)
                 // binds to a constructed `System.Range` value.

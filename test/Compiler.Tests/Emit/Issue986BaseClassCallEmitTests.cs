@@ -122,6 +122,61 @@ public class Issue986BaseClassCallEmitTests
     }
 
     [Fact]
+    public void Issue2534_EndToEnd_BaseCallResultChain_SelectsOverloadAndRuns()
+    {
+        var source = """
+            package Probe
+            import System
+
+            open class Formatter {
+                open func Format(value int32) string { return "number" }
+                open func Format(value string) string { return "text" }
+            }
+
+            class LoudFormatter() : Formatter {
+                override func Format(value int32) string {
+                    return base.Format(value).ToUpperInvariant()
+                }
+            }
+
+            func Main() {
+                Console.WriteLine(LoudFormatter().Format(1))
+            }
+            """;
+
+        Assert.Equal("NUMBER\n", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void Issue2534_Library_OverloadedBaseCall_UsesCallNotCallvirt()
+    {
+        var source = """
+            package Probe
+
+            open class Base {
+                open func Pick(value int32) string { return "number" }
+                open func Pick(value string) string { return "text" }
+            }
+
+            class Derived() : Base {
+                override func Pick(value int32) string {
+                    return base.Pick(value)
+                }
+            }
+            """;
+
+        var dllPath = CompileLibrary(source);
+        try
+        {
+            AssertMethodUsesCallNotCallvirt(dllPath, "Derived", "Pick");
+        }
+        finally
+        {
+            TryCleanup(dllPath);
+        }
+    }
+
+    [Fact]
     public void Library_BaseDotCall_PassesIlVerify_AndUsesCallNotCallvirt()
     {
         var source = """
@@ -141,63 +196,45 @@ public class Issue986BaseClassCallEmitTests
         var dllPath = CompileLibrary(source);
         try
         {
-            using var stream = File.OpenRead(dllPath);
-            using var peReader = new PEReader(stream);
-            var reader = peReader.GetMetadataReader();
-
-            // Find Circle::Tag — the override that contains the base `call`.
-            MethodDefinitionHandle? circleTag = null;
-            foreach (var typeHandle in reader.TypeDefinitions)
-            {
-                var td = reader.GetTypeDefinition(typeHandle);
-                if (!reader.StringComparer.Equals(td.Name, "Circle"))
-                {
-                    continue;
-                }
-
-                foreach (var mh in td.GetMethods())
-                {
-                    var md = reader.GetMethodDefinition(mh);
-                    if (reader.StringComparer.Equals(md.Name, "Tag"))
-                    {
-                        circleTag = mh;
-                    }
-                }
-            }
-
-            Assert.True(circleTag.HasValue, "expected to find Circle::Tag");
-
-            var method = reader.GetMethodDefinition(circleTag.Value);
-            Assert.True(method.RelativeVirtualAddress != 0, "Circle::Tag must carry a body");
-            var body = peReader.GetMethodBody(method.RelativeVirtualAddress);
-            var ilBytes = body.GetILBytes();
-            Assert.NotNull(ilBytes);
-
-            // ECMA-335 opcodes: `call` = 0x28; `callvirt` = 0x6F. The override
-            // body's only call is the base call, which MUST be a non-virtual
-            // `call` (a `callvirt` would re-dispatch into Circle::Tag and
-            // stack-overflow).
-            bool sawCall = false;
-            bool sawCallvirt = false;
-            for (int i = 0; i < ilBytes.Length; i++)
-            {
-                if (ilBytes[i] == 0x28)
-                {
-                    sawCall = true;
-                }
-                else if (ilBytes[i] == 0x6F)
-                {
-                    sawCallvirt = true;
-                }
-            }
-
-            Assert.True(sawCall, "Circle::Tag must contain a `call` opcode (non-virtual base class call)");
-            Assert.False(sawCallvirt, "Circle::Tag must NOT use `callvirt` for base.M() — it would re-enter the override");
+            AssertMethodUsesCallNotCallvirt(dllPath, "Circle", "Tag");
         }
         finally
         {
             TryCleanup(dllPath);
         }
+    }
+
+    private static void AssertMethodUsesCallNotCallvirt(string dllPath, string typeName, string methodName)
+    {
+        using var stream = File.OpenRead(dllPath);
+        using var peReader = new PEReader(stream);
+        var reader = peReader.GetMetadataReader();
+        MethodDefinitionHandle? target = null;
+        foreach (var typeHandle in reader.TypeDefinitions)
+        {
+            var td = reader.GetTypeDefinition(typeHandle);
+            if (!reader.StringComparer.Equals(td.Name, typeName))
+            {
+                continue;
+            }
+
+            foreach (var methodHandle in td.GetMethods())
+            {
+                var method = reader.GetMethodDefinition(methodHandle);
+                if (reader.StringComparer.Equals(method.Name, methodName))
+                {
+                    target = methodHandle;
+                }
+            }
+        }
+
+        Assert.True(target.HasValue, $"expected to find {typeName}::{methodName}");
+        var definition = reader.GetMethodDefinition(target.Value);
+        Assert.True(definition.RelativeVirtualAddress != 0, $"{typeName}::{methodName} must carry a body");
+        var ilBytes = peReader.GetMethodBody(definition.RelativeVirtualAddress).GetILBytes();
+        Assert.NotNull(ilBytes);
+        Assert.Contains((byte)0x28, ilBytes);
+        Assert.DoesNotContain((byte)0x6F, ilBytes);
     }
 
     private static string CompileLibrary(string source)
