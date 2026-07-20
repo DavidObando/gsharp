@@ -802,6 +802,27 @@ internal sealed partial class MethodBodyEmitter
             return true;
         }
 
+        // Issue #2523: constructed imported reference types can preserve their
+        // real generic arguments only symbolically while carrying an erased CLR
+        // probe shape. The binder classifies their declared imported
+        // interface/base conversion from that symbolic hierarchy; the emitted
+        // representation is still an ordinary CLR reference upcast and
+        // therefore requires no instruction. Reuse the binder classification
+        // instead of repeating nullable substitution, variance, and
+        // cross-context identity logic here.
+        if (a is ImportedTypeSymbol importedReference
+            && importedReference.OpenDefinition?.IsValueType == false
+            && !importedReference.TypeArguments.IsDefaultOrEmpty
+            && b is ImportedTypeSymbol
+            && Conversion.ClassifyNonStructural(a, b) is
+            {
+                Exists: true,
+                IsImplicit: true,
+            })
+        {
+            return true;
+        }
+
         // Issue #521: standard CLR reference upcast. A reference-typed
         // value of CLR type `a` widens to any base class or implemented
         // CLR interface `b` as a no-op at the IL level (the reference
