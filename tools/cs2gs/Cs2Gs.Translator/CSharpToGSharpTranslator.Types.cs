@@ -726,6 +726,21 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
+            if (this.RequiresEnumStatementFallback(node))
+            {
+                // Empty blocks do not round-trip, so discard a literal as the
+                // canonical side-effect-free statement.
+                cases.Add(new SwitchStatementCase(
+                    null,
+                    new BlockStatement(new GStatement[]
+                    {
+                        new LocalDeclarationStatement(
+                            BindingKind.Let,
+                            "_",
+                            initializer: LiteralExpression.Int("0")),
+                    })));
+            }
+
             yield return new SwitchStatement(subject, cases);
             if (needsExitLabel)
             {
@@ -734,6 +749,78 @@ public sealed partial class CSharpToGSharpTranslator
                     new BlockStatement(new List<GStatement>()));
             }
         }
+
+        private bool RequiresEnumStatementFallback(SwitchStatementSyntax node)
+        {
+            if (this.context.GetTypeInfo(node.Expression).Type is not INamedTypeSymbol { TypeKind: TypeKind.Enum } enumType)
+            {
+                return false;
+            }
+
+            var missingValues = new HashSet<object>(
+                enumType.GetMembers()
+                    .OfType<IFieldSymbol>()
+                    .Where(field => field.HasConstantValue)
+                    .Select(field => field.ConstantValue));
+
+            foreach (SwitchLabelSyntax label in node.Sections.SelectMany(section => section.Labels))
+            {
+                switch (label)
+                {
+                    case DefaultSwitchLabelSyntax:
+                        return false;
+
+                    case CaseSwitchLabelSyntax valueLabel:
+                        RemoveConstantValue(valueLabel.Value, missingValues);
+                        break;
+
+                    case CasePatternSwitchLabelSyntax { WhenClause: null } patternLabel
+                        when IsTotalPattern(patternLabel.Pattern):
+                        return false;
+
+                    case CasePatternSwitchLabelSyntax { WhenClause: null } patternLabel:
+                        RemoveCoveredPatternValues(patternLabel.Pattern, missingValues);
+                        break;
+                }
+            }
+
+            return missingValues.Count > 0;
+        }
+
+        private void RemoveConstantValue(ExpressionSyntax expression, HashSet<object> values)
+        {
+            Optional<object> constant = this.context.SemanticModel.GetConstantValue(expression);
+            if (constant.HasValue)
+            {
+                values.Remove(constant.Value);
+            }
+        }
+
+        private void RemoveCoveredPatternValues(PatternSyntax pattern, HashSet<object> values)
+        {
+            switch (pattern)
+            {
+                case ConstantPatternSyntax constant:
+                    this.RemoveConstantValue(constant.Expression, values);
+                    break;
+
+                case BinaryPatternSyntax binary when binary.IsKind(SyntaxKind.OrPattern):
+                    this.RemoveCoveredPatternValues(binary.Left, values);
+                    this.RemoveCoveredPatternValues(binary.Right, values);
+                    break;
+
+                case ParenthesizedPatternSyntax parenthesized:
+                    this.RemoveCoveredPatternValues(parenthesized.Pattern, values);
+                    break;
+            }
+        }
+
+        private static bool IsTotalPattern(PatternSyntax pattern)
+            => pattern is DiscardPatternSyntax or VarPatternSyntax
+            || (pattern is ParenthesizedPatternSyntax parenthesized && IsTotalPattern(parenthesized.Pattern))
+            || (pattern is BinaryPatternSyntax binary
+                && binary.IsKind(SyntaxKind.OrPattern)
+                && (IsTotalPattern(binary.Left) || IsTotalPattern(binary.Right)));
 
         private BlockStatement TranslateSwitchSectionBody(SwitchSectionSyntax section, string injectLabel = null)
         {
