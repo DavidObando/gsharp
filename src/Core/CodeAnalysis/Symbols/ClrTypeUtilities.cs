@@ -1065,6 +1065,35 @@ public static class ClrTypeUtilities
             var member = directLookup(type, flags);
             return member != null && CanLoadSignature(member) ? member : null;
         }
+        catch (AmbiguousMatchException)
+        {
+            for (var declaringType = type; declaringType != null; declaringType = declaringType.BaseType)
+            {
+                TMember match = null;
+                foreach (var member in safeEnumerate(type, flags))
+                {
+                    if (!string.Equals(member.Name, name, StringComparison.Ordinal)
+                        || !AreSame(member.DeclaringType, declaringType))
+                    {
+                        continue;
+                    }
+
+                    if (match != null)
+                    {
+                        return null;
+                    }
+
+                    match = member;
+                }
+
+                if (match != null)
+                {
+                    return match;
+                }
+            }
+
+            return null;
+        }
         catch (Exception ex) when (IsMetadataLoadFailure(ex))
         {
             // The direct lookup was poisoned by an unloadable member (the target
