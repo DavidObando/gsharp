@@ -846,21 +846,7 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool ParameterWillRemainNonNullableReference(IParameterSymbol parameter)
         {
-            if (parameter.Type is not { IsReferenceType: true } parameterType
-                || parameterType.NullableAnnotation == NullableAnnotation.Annotated)
-            {
-                return false;
-            }
-
-            bool parameterDeclaredInThisCompilation = parameter.DeclaringSyntaxReferences
-                .Any(reference => this.context.Compilation.ContainsSyntaxTree(reference.SyntaxTree));
-
-            // Only a parameter declaration translated by this compilation can
-            // have its rendered signature widened. Project-reference and CLR
-            // metadata parameters keep the contract gsc binds at this call site,
-            // even when sibling analysis records nullable flow for their source.
-            return !(parameterDeclaredInThisCompilation
-                && this.ShouldPromoteToNullableReference(parameter));
+            return this.TargetWillRemainNonNullableReference(parameter.Type, parameter);
         }
 
         /// <summary>
