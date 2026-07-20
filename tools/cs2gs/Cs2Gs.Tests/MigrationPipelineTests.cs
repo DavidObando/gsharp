@@ -201,6 +201,38 @@ public class MigrationPipelineTests
     }
 
     /// <summary>
+    /// MSBuild-generated friend-assembly metadata must become the equivalent
+    /// G# assembly annotation so migrated test projects can access internals.
+    /// </summary>
+    [Fact]
+    public async Task L2_Translate_PreservesInternalsVisibleTo()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            return;
+        }
+
+        string corpus = ResolveCorpusDir();
+        string outRoot = NewOutputRoot("l2-friend-assembly");
+        var options = new PipelineOptions { GscPath = compiler, OutputRoot = outRoot };
+        var pipeline = new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() });
+
+        CorpusApp l2 = CorpusDiscovery.FindById(corpus, "corpus/L2-Library");
+        RunResult result = await pipeline.RunAsync(new[] { l2 });
+        AppResult app = Assert.Single(result.Apps);
+
+        Assert.True(app.Succeeded);
+        string assemblyInfo = Directory.GetFiles(
+            Path.Combine(outRoot, result.RunId, MigrationPipeline.SanitizeAppId(l2.Id)),
+            "AssemblyInfo.gs",
+            SearchOption.AllDirectories).Single();
+        Assert.Equal(
+            "@assembly:InternalsVisibleTo(\"L2-Library.Tests\")" + Environment.NewLine,
+            File.ReadAllText(assemblyInfo));
+    }
+
+    /// <summary>
     /// Pointing the pipeline at <c>corpus/CompileGap-Library</c> translates
     /// cleanly but reaches the compile stage and captures a
     /// <c>compile-error</c> triage artifact. That fixture exists solely to

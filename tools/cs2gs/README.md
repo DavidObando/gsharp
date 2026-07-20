@@ -196,11 +196,11 @@ details.
 | App | translate | compile | ilverify | test-parity |
 | --- | --- | --- | --- | --- |
 | `corpus/L1-Console` | PASS | PASS | PASS | PASS |
-| `corpus/L2-Library` | PASS | PASS | PASS | FAIL ([#1929](https://github.com/DavidObando/gsharp/issues/1929), ledgered) |
-| `corpus/L3-Library` | PASS | PASS | PASS | skip (unverified, ledgered; [#1924](https://github.com/DavidObando/gsharp/issues/1924)/[#1929](https://github.com/DavidObando/gsharp/issues/1929)) |
+| `corpus/L2-Library` | PASS | PASS | PASS | PASS |
+| `corpus/L3-Library` | PASS | PASS | PASS | skip (unverified, ledgered; [#1924](https://github.com/DavidObando/gsharp/issues/1924)) |
 | `corpus/L4-Console` | PASS | PASS | PASS | PASS |
 | `corpus/L5-Console` | PASS | PASS | PASS | PASS |
-| `corpus/grid/G01…G14` (14 apps) | PASS | PASS | PASS | PASS |
+| `corpus/grid/G01…G14` (14 apps) | PASS except deliberate G07 unsupported operator | PASS | PASS | PASS |
 | `corpus/CompileGap-Library` | PASS | FAIL (deliberate, ledgered wontfix) | skip | skip |
 
 With `--baseline tools/cs2gs/triage/gaps.json` the run above gates green
