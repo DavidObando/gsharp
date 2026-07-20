@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PackageManifest Version="2.0.0"
+                 xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011"
+                 xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
+  <Metadata>
+    <Identity Id="GSharp.VisualStudio"
+              Version="|%CurrentProject%;GetVsixVersion|"
+              Language="en-US"
+              Publisher="gsharplang" />
+    <DisplayName>G# for Visual Studio</DisplayName>
+    <Description xml:space="preserve">G# language, project, build, test, and debugging support.</Description>
+    <MoreInfo>https://github.com/DavidObando/gsharp</MoreInfo>
+    <License>LICENSE.txt</License>
+    <Icon>Resources\icon.png</Icon>
+    <Tags>GSharp, G#, language, compiler, LSP</Tags>
+  </Metadata>
+  <Installation>
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.8,)">
+      <ProductArchitecture>amd64</ProductArchitecture>
+    </InstallationTarget>
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.8,)">
+      <ProductArchitecture>arm64</ProductArchitecture>
+    </InstallationTarget>
+  </Installation>
+  <Dependencies>
+    <Dependency Id="Microsoft.Framework.NDP"
+                DisplayName="Microsoft .NET Framework"
+                d:Source="Manual"
+                Version="[4.7.2,)" />
+  </Dependencies>
+  <Prerequisites>
+    <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor"
+                  Version="[17.8,)"
+                  DisplayName="Visual Studio core editor" />
+  </Prerequisites>
+  <Assets>
+    <Asset Type="Microsoft.VisualStudio.MefComponent"
+           d:Source="Project"
+           d:ProjectName="%CurrentProject%"
+           Path="|%CurrentProject%|" />
+    <Asset Type="Microsoft.VisualStudio.VsPackage"
+           d:Source="Project"
+           d:ProjectName="%CurrentProject%"
+           Path="|%CurrentProject%;PkgdefProjectOutputGroup|" />
+    <Asset Type="Microsoft.VisualStudio.VsPackage"
+           d:Source="File"
+           Path="Snippets\snippets.pkgdef" />
+    <Asset Type="Microsoft.VisualStudio.VsPackage"
+           d:Source="File"
+           Path="Themes\GSharp.Themes.pkgdef" />
+    <Asset Type="Microsoft.VisualStudio.ProjectTemplate"
+           d:Source="File"
+           Path="ProjectTemplates" />
+    <Asset Type="Microsoft.VisualStudio.ItemTemplate"
+           d:Source="File"
+           Path="ItemTemplates" />
+  </Assets>
+</PackageManifest>

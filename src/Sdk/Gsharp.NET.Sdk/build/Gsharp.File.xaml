@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Rule
+  Name="GSharp"
+  DisplayName="File Properties"
+  PageTemplate="generic"
+  Description="G# file properties"
+  xmlns="http://schemas.microsoft.com/build/2009/properties">
+
+  <Rule.DataSource>
+    <DataSource Persistence="ProjectFile" ItemType="Compile" HasConfigurationCondition="false" />
+  </Rule.DataSource>
+
+  <DynamicEnumProperty
+    Name="{}{ItemType}"
+    DisplayName="Build Action"
+    Description="How the file relates to the build."
+    EnumProvider="ItemTypes" />
+
+  <StringProperty Name="Identity" Visible="false" ReadOnly="true">
+    <StringProperty.DataSource>
+      <DataSource Persistence="Intrinsic" ItemType="Compile" PersistedName="Identity" />
+    </StringProperty.DataSource>
+  </StringProperty>
+
+  <StringProperty Name="FullPath" DisplayName="Full Path" ReadOnly="true">
+    <StringProperty.DataSource>
+      <DataSource Persistence="Intrinsic" ItemType="Compile" PersistedName="FullPath" />
+    </StringProperty.DataSource>
+  </StringProperty>
+
+  <StringProperty Name="FileNameAndExtension" DisplayName="File Name" ReadOnly="true">
+    <StringProperty.DataSource>
+      <DataSource Persistence="Intrinsic" ItemType="Compile" PersistedName="FileNameAndExtension" />
+    </StringProperty.DataSource>
+  </StringProperty>
+
+  <BoolProperty Name="Visible" Visible="false" />
+  <StringProperty Name="DependentUpon" Visible="false" />
+  <StringProperty Name="Link" Visible="false" />
+  <StringProperty Name="SubType" Visible="false" />
+</Rule>

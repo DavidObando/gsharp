@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CodeSnippets xmlns="http://schemas.microsoft.com/VisualStudio/2005/CodeSnippet">
+  <CodeSnippet Format="1.0.0">
+    <Header>
+      <Title>Enum declaration</Title>
+      <Shortcut>enum</Shortcut>
+      <Description>Enum declaration.</Description>
+      <Author>GSharp</Author>
+      <SnippetTypes>
+        <SnippetType>Expansion</SnippetType>
+      </SnippetTypes>
+    </Header>
+    <Snippet>
+      <Declarations>
+        <Literal Editable="true">
+          <ID>p1</ID>
+          <ToolTip>Name</ToolTip>
+          <Default>Name</Default>
+        </Literal>
+        <Literal Editable="true">
+          <ID>p2</ID>
+          <ToolTip>Value1</ToolTip>
+          <Default>Value1</Default>
+        </Literal>
+        <Literal Editable="true">
+          <ID>p3</ID>
+          <ToolTip>Value2</ToolTip>
+          <Default>Value2</Default>
+        </Literal>
+      </Declarations>
+      <Code Language="GSharp"><![CDATA[type $p1$ enum {
+	$p2$,
+	$p3$
+	$end$
+}]]></Code>
+    </Snippet>
+  </CodeSnippet>
+</CodeSnippets>

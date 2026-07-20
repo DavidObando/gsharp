@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CodeSnippets xmlns="http://schemas.microsoft.com/VisualStudio/2005/CodeSnippet">
+  <CodeSnippet Format="1.0.0">
+    <Header>
+      <Title>Switch expression arrow</Title>
+      <Shortcut>matchexpr</Shortcut>
+      <Description>Switch expression with `-&gt;` arms.</Description>
+      <Author>GSharp</Author>
+      <SnippetTypes>
+        <SnippetType>Expansion</SnippetType>
+      </SnippetTypes>
+    </Header>
+    <Snippet>
+      <Declarations>
+        <Literal Editable="true">
+          <ID>p1</ID>
+          <ToolTip>result</ToolTip>
+          <Default>result</Default>
+        </Literal>
+        <Literal Editable="true">
+          <ID>p2</ID>
+          <ToolTip>value</ToolTip>
+          <Default>value</Default>
+        </Literal>
+        <Literal Editable="true">
+          <ID>p3</ID>
+          <ToolTip>pattern</ToolTip>
+          <Default>pattern</Default>
+        </Literal>
+        <Literal Editable="true">
+          <ID>p4</ID>
+          <ToolTip>expr</ToolTip>
+          <Default>expr</Default>
+        </Literal>
+        <Literal Editable="true">
+          <ID>p5</ID>
+          <ToolTip>expr</ToolTip>
+          <Default>expr</Default>
+        </Literal>
+      </Declarations>
+      <Code Language="GSharp"><![CDATA[let $p1$ = switch $p2$ {
+	case $p3$ -> $p4$
+	default -> $p5$
+}]]></Code>
+    </Snippet>
+  </CodeSnippet>
+</CodeSnippets>

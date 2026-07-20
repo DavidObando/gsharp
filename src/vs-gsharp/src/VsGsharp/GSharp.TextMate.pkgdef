@@ -1,0 +1,8 @@
+[$RootKey$\TextMate\Repositories]
+"GSharp"="$PackageFolder$\Grammars"
+
+[$RootKey$\TextMate\LanguageConfiguration\GrammarMapping]
+"source.gsharp"="$PackageFolder$\Grammars\language-configuration.json"
+
+[$RootKey$\TextMate\LanguageConfiguration\ContentTypeMapping]
+"gsharp"="$PackageFolder$\Grammars\language-configuration.json"

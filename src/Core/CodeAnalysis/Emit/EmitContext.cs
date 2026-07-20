@@ -131,6 +131,11 @@ internal sealed class EmitContext
     public string AssemblyVersionOverride { get; set; }
 
     /// <summary>
+    /// Gets or sets the long target framework moniker stamped on the assembly.
+    /// </summary>
+    public string TargetFrameworkMoniker { get; set; }
+
+    /// <summary>
     /// Gets or sets the Portable PDB options for this emit. Set by the static
     /// <see cref="ReflectionMetadataEmitter.Emit"/> entry point; defaulted to
     /// a <see cref="DebugInformationFormat.None"/> instance by the constructor

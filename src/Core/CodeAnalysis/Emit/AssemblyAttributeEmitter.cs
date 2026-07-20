@@ -180,6 +180,16 @@ internal sealed class AssemblyAttributeEmitter
                 this.emitCtx.AssemblyVersionOverride);
         }
 
+        if (!string.IsNullOrEmpty(this.emitCtx.TargetFrameworkMoniker)
+            && !userDeclaredAttributeTypeNames.Contains("System.Runtime.Versioning.TargetFrameworkAttribute"))
+        {
+            this.attrEncoder.EmitStringAttribute(
+                assemblyHandle,
+                "System.Runtime.Versioning.TargetFrameworkAttribute",
+                typeof(System.Runtime.Versioning.TargetFrameworkAttribute),
+                this.emitCtx.TargetFrameworkMoniker);
+        }
+
         this.EmitGSharpTypeSemantics(assemblyHandle);
 
         // Issue #1929/#1953: producer-declared friend assemblies. Each

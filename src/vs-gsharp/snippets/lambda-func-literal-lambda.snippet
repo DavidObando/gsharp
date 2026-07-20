@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CodeSnippets xmlns="http://schemas.microsoft.com/VisualStudio/2005/CodeSnippet">
+  <CodeSnippet Format="1.0.0">
+    <Header>
+      <Title>Func literal (lambda)</Title>
+      <Shortcut>lambda</Shortcut>
+      <Description>Anonymous func literal.</Description>
+      <Author>GSharp</Author>
+      <SnippetTypes>
+        <SnippetType>Expansion</SnippetType>
+      </SnippetTypes>
+    </Header>
+    <Snippet>
+      <Declarations>
+        <Literal Editable="true">
+          <ID>p1</ID>
+          <ToolTip>params</ToolTip>
+          <Default>params</Default>
+        </Literal>
+        <Literal Editable="true">
+          <ID>p2</ID>
+          <ToolTip>returnType</ToolTip>
+          <Default>returnType</Default>
+        </Literal>
+      </Declarations>
+      <Code Language="GSharp"><![CDATA[func($p1$) $p2$ {
+	$end$
+}]]></Code>
+    </Snippet>
+  </CodeSnippet>
+</CodeSnippets>

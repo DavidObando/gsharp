@@ -49,6 +49,9 @@
     <None Include="build\Gsharp.NET.Sdk.props" Pack="true" PackagePath="build\Gsharp.NET.Sdk.props" />
     <None Include="build\Gsharp.NET.Current.Sdk.targets" Pack="true" PackagePath="build\Gsharp.NET.Current.Sdk.targets" />
     <None Include="build\Gsharp.NET.Core.Sdk.targets" Pack="true" PackagePath="build\Gsharp.NET.Core.Sdk.targets" />
+    <None Include="build\Gsharp.File.xaml" Pack="true" PackagePath="build\Gsharp.File.xaml" />
+    <None Include="build\Gsharp.CollectedPackageReference.xaml" Pack="true" PackagePath="build\Gsharp.CollectedPackageReference.xaml" />
+    <None Include="build\Gsharp.ProjectItemsSchema.xaml" Pack="true" PackagePath="build\Gsharp.ProjectItemsSchema.xaml" />
     <!-- Package metadata files -->
     <None Include="$(MSBuildThisFileDirectory)..\..\..\assets\PACKAGE_README.md" Pack="true" PackagePath="README.md" Visible="false" />
     <None Include="$(MSBuildThisFileDirectory)..\..\..\assets\gsharp-icon.png" Pack="true" PackagePath="icon.png" Visible="false" />

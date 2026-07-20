@@ -1,0 +1,14 @@
+<VSTemplate Version="3.0.0" Type="Item"
+            xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+  <TemplateData>
+    <Name>G# Interface</Name>
+    <Description>An empty G# interface.</Description>
+    <Icon>GSharp.ico</Icon>
+    <ProjectType>GSharp</ProjectType>
+    <DefaultName>Interface.gs</DefaultName>
+    <SortOrder>120</SortOrder>
+  </TemplateData>
+  <TemplateContent>
+    <ProjectItem ReplaceParameters="true">Interface.gs</ProjectItem>
+  </TemplateContent>
+</VSTemplate>

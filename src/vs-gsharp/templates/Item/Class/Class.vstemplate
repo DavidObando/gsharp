@@ -1,0 +1,14 @@
+<VSTemplate Version="3.0.0" Type="Item"
+            xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+  <TemplateData>
+    <Name>G# Class</Name>
+    <Description>An empty G# class.</Description>
+    <Icon>GSharp.ico</Icon>
+    <ProjectType>GSharp</ProjectType>
+    <DefaultName>Class.gs</DefaultName>
+    <SortOrder>100</SortOrder>
+  </TemplateData>
+  <TemplateContent>
+    <ProjectItem ReplaceParameters="true">Class.gs</ProjectItem>
+  </TemplateContent>
+</VSTemplate>

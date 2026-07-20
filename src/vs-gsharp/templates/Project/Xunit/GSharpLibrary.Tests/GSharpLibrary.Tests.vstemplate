@@ -1,0 +1,13 @@
+<VSTemplate Version="3.0.0" Type="Project"
+            xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+  <TemplateData>
+    <Name>G# xUnit Tests</Name>
+    <ProjectType>CSharp</ProjectType>
+    <Hidden>true</Hidden>
+  </TemplateData>
+  <TemplateContent>
+    <Project File="GSharpLibrary.Tests.gsproj" TargetFileName="$projectname$.gsproj" ReplaceParameters="true">
+      <ProjectItem ReplaceParameters="true">GreeterTests.gs</ProjectItem>
+    </Project>
+  </TemplateContent>
+</VSTemplate>

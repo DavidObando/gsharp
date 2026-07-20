@@ -1,0 +1,227 @@
+<Themes>
+  <Theme Name="GSharp Magma Dark" GUID="{ff950076-1bdd-cb3f-8017-c94c3c718f3c}" FallbackId="{1ded0138-47ce-435e-84ef-9ec1f439b749}">
+    <Category Name="Text Editor Language Service Items" GUID="{e0187991-b458-4f7e-8ca9-42c9a573b56c}">
+      <Color Name="Comment">
+        <Foreground Type="CT_RAW" Source="FF7E5E52" />
+      </Color>
+      <Color Name="Number">
+        <Foreground Type="CT_RAW" Source="FF39FF88" />
+      </Color>
+      <Color Name="Keyword">
+        <Foreground Type="CT_RAW" Source="FFFF4D3D" />
+      </Color>
+      <Color Name="String">
+        <Foreground Type="CT_RAW" Source="FFFFA630" />
+      </Color>
+      <Color Name="Identifier">
+        <Foreground Type="CT_RAW" Source="FFFFE8D6" />
+      </Color>
+    </Category>
+    <Category Name="Roslyn Text Editor MEF Items" GUID="{75a05685-00a8-4ded-bae5-e7a50bfa929a}">
+      <Color Name="xml doc comment - delimiter">
+        <Foreground Type="CT_RAW" Source="FF7E5E52" />
+      </Color>
+      <Color Name="xml doc comment - text">
+        <Foreground Type="CT_RAW" Source="FF7E5E52" />
+      </Color>
+      <Color Name="method name">
+        <Foreground Type="CT_RAW" Source="FFFFE45E" />
+      </Color>
+      <Color Name="xml doc comment - name">
+        <Foreground Type="CT_RAW" Source="FF22D3EE" />
+      </Color>
+      <Color Name="class name">
+        <Foreground Type="CT_RAW" Source="FF22D3EE" />
+      </Color>
+      <Color Name="event name">
+        <Foreground Type="CT_RAW" Source="FFFFE45E" />
+      </Color>
+      <Color Name="namespace name">
+        <Foreground Type="CT_RAW" Source="FFFFD0B0" />
+      </Color>
+      <Color Name="local name">
+        <Foreground Type="CT_RAW" Source="FFFFB37A" />
+      </Color>
+      <Color Name="field name">
+        <Foreground Type="CT_RAW" Source="FFFFB37A" />
+      </Color>
+      <Color Name="constant name">
+        <Foreground Type="CT_RAW" Source="FFFF2E63" />
+      </Color>
+      <Color Name="xml doc comment - attribute name">
+        <Foreground Type="CT_RAW" Source="FFFFB37A" />
+      </Color>
+      <Color Name="delegate name">
+        <Foreground Type="CT_RAW" Source="FF22D3EE" />
+      </Color>
+      <Color Name="enum name">
+        <Foreground Type="CT_RAW" Source="FF67E8F9" />
+      </Color>
+      <Color Name="interface name">
+        <Foreground Type="CT_RAW" Source="FF67E8F9" />
+      </Color>
+      <Color Name="struct name">
+        <Foreground Type="CT_RAW" Source="FF22D3EE" />
+      </Color>
+      <Color Name="type parameter name">
+        <Foreground Type="CT_RAW" Source="FF22D3EE" />
+      </Color>
+      <Color Name="enum member name">
+        <Foreground Type="CT_RAW" Source="FFFF2E63" />
+      </Color>
+      <Color Name="parameter name">
+        <Foreground Type="CT_RAW" Source="FFFFB37A" />
+      </Color>
+      <Color Name="label name">
+        <Foreground Type="CT_RAW" Source="FFFFB37A" />
+      </Color>
+      <Color Name="keyword - control">
+        <Foreground Type="CT_RAW" Source="FFFF4D3D" />
+      </Color>
+      <Color Name="string - verbatim">
+        <Foreground Type="CT_RAW" Source="FFFFA630" />
+      </Color>
+      <Color Name="xml doc comment - attribute value">
+        <Foreground Type="CT_RAW" Source="FFFFA630" />
+      </Color>
+      <Color Name="property name">
+        <Foreground Type="CT_RAW" Source="FFFFCBA0" />
+      </Color>
+      <Color Name="punctuation">
+        <Foreground Type="CT_RAW" Source="FFFFD0B0" />
+      </Color>
+      <Color Name="brace matching">
+        <Background Type="CT_RAW" Source="FF5A1A14" />
+        <Foreground Type="CT_RAW" Source="FF140C0C" />
+      </Color>
+      <Color Name="HTML Comment">
+        <Foreground Type="CT_RAW" Source="FF7E5E52" />
+      </Color>
+      <Color Name="Literal">
+        <Foreground Type="CT_RAW" Source="FF39FF88" />
+      </Color>
+      <Color Name="Number">
+        <Foreground Type="CT_RAW" Source="FF39FF88" />
+      </Color>
+      <Color Name="HTML Element Name">
+        <Foreground Type="CT_RAW" Source="FF22D3EE" />
+      </Color>
+      <Color Name="HTML Attribute Name">
+        <Foreground Type="CT_RAW" Source="FFFFB37A" />
+      </Color>
+      <Color Name="CSS Property Name">
+        <Foreground Type="CT_RAW" Source="FFFFB37A" />
+      </Color>
+      <Color Name="CSS Selector">
+        <Foreground Type="CT_RAW" Source="FF22D3EE" />
+      </Color>
+      <Color Name="Operator">
+        <Foreground Type="CT_RAW" Source="FFFFD0B0" />
+      </Color>
+      <Color Name="Preprocessor Keyword">
+        <Foreground Type="CT_RAW" Source="FFFF4D3D" />
+      </Color>
+      <Color Name="preprocessor text">
+        <Foreground Type="CT_RAW" Source="FFFFA630" />
+      </Color>
+      <Color Name="HTML Attribute Value">
+        <Foreground Type="CT_RAW" Source="FFFFA630" />
+      </Color>
+      <Color Name="CSS Property Value">
+        <Foreground Type="CT_RAW" Source="FF39FF88" />
+      </Color>
+      <Color Name="outlining.square">
+        <Background Type="CT_RAW" Source="FF140C0C" />
+        <Foreground Type="CT_RAW" Source="FF2A1614" />
+      </Color>
+      <Color Name="outlining.collapsehintadornment">
+        <Background Type="CT_RAW" Source="FF1E1010" />
+        <Foreground Type="CT_RAW" Source="FFFFE8D6" />
+      </Color>
+      <Color Name="CurrentLineActiveFormat">
+        <Background Type="CT_RAW" Source="FF1E1010" />
+        <Foreground Type="CT_RAW" Source="FFFFE8D6" />
+      </Color>
+      <Color Name="Selected Text">
+        <Background Type="CT_RAW" Source="FF5A1A14" />
+      </Color>
+      <Color Name="MarkerFormatDefinition/HighlightedReference">
+        <Background Type="CT_RAW" Source="FF140C0C" />
+        <Foreground Type="CT_RAW" Source="FFFF4D3D" />
+      </Color>
+      <Color Name="MarkerFormatDefinition/HighlightedDefinition">
+        <Background Type="CT_RAW" Source="FF140C0C" />
+        <Foreground Type="CT_RAW" Source="FFFF4D3D" />
+      </Color>
+      <Color Name="MarkerFormatDefinition/HighlightedWrittenReference">
+        <Background Type="CT_RAW" Source="FF140C0C" />
+        <Foreground Type="CT_RAW" Source="FFFF4D3D" />
+      </Color>
+      <Color Name="Line Number">
+        <Foreground Type="CT_RAW" Source="FF6B4A40" />
+      </Color>
+      <Color Name="outlining.verticalrule">
+        <Background Type="CT_RAW" Source="FF2A1614" />
+        <Foreground Type="CT_RAW" Source="FF2A1614" />
+      </Color>
+      <Color Name="OverviewMarginCaret">
+        <Foreground Type="CT_RAW" Source="FFFF4D3D" />
+      </Color>
+      <Color Name="OverviewMarginScrollButtonsMouseDown">
+        <Background Type="CT_RAW" Source="FF140C0C" />
+        <Foreground Type="CT_RAW" Source="FF3A201C" />
+      </Color>
+      <Color Name="OverviewMarginVisible">
+        <Background Type="CT_RAW" Source="FF1E1010" />
+        <Foreground Type="CT_RAW" Source="FF1E1010" />
+      </Color>
+      <Color Name="OverviewMarginScrollButtons">
+        <Background Type="CT_RAW" Source="FF140C0C" />
+        <Foreground Type="CT_RAW" Source="FF1E1010" />
+      </Color>
+      <Color Name="OverviewMarginScrollButtonsMouseOver">
+        <Background Type="CT_RAW" Source="FF140C0C" />
+        <Foreground Type="CT_RAW" Source="FF5A1A14" />
+      </Color>
+      <Color Name="OverviewMarginBackground">
+        <Background Type="CT_RAW" Source="FF140C0C" />
+      </Color>
+      <Color Name="RazorTagHelperElement">
+        <Foreground Type="CT_RAW" Source="FF22D3EE" />
+      </Color>
+      <Color Name="RazorComponentElement">
+        <Foreground Type="CT_RAW" Source="FF22D3EE" />
+      </Color>
+      <Color Name="RazorTagHelperAttribute">
+        <Foreground Type="CT_RAW" Source="FFFFB37A" />
+      </Color>
+      <Color Name="RazorComponentAttribute">
+        <Foreground Type="CT_RAW" Source="FFFFB37A" />
+      </Color>
+    </Category>
+    <Category Name="Text Editor Text Marker Items" GUID="{ff349800-ea43-46c1-8c98-878e78f46501}">
+      <Color Name="Collapsible Text (Collapsed)">
+        <Foreground Type="CT_RAW" Source="FFFFA630" />
+      </Color>
+    </Category>
+    <Category Name="Text Editor Text Manager Items" GUID="{58e96763-1d3b-4e05-b6ba-ff7115fd0b7b}">
+      <Color Name="Visible Whitespace">
+        <Background Type="CT_RAW" Source="FF140C0C" />
+        <Foreground Type="CT_RAW" Source="FF3A201C" />
+      </Color>
+      <Color Name="Plain Text">
+        <Background Type="CT_RAW" Source="FF140C0C" />
+        <Foreground Type="CT_RAW" Source="FFFFE8D6" />
+      </Color>
+      <Color Name="Inactive Selected Text">
+        <Background Type="CT_RAW" Source="FF3A1410" />
+      </Color>
+      <Color Name="Selected Text">
+        <Background Type="CT_RAW" Source="FF5A1A14" />
+      </Color>
+      <Color Name="Indicator Margin">
+        <Background Type="CT_RAW" Source="FF140C0C" />
+      </Color>
+    </Category>
+  </Theme>
+</Themes>

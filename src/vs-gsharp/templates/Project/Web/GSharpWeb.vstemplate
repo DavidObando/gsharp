@@ -1,0 +1,23 @@
+<VSTemplate Version="3.0.0" Type="Project"
+            xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+  <TemplateData>
+    <Name>G# Web Application</Name>
+    <Description>An ASP.NET Core web application written in G#.</Description>
+    <Icon>GSharp.ico</Icon>
+    <!-- The New Project index requires a built-in category; the .gsproj extension selects G# CPS. -->
+    <ProjectType>CSharp</ProjectType>
+    <LanguageTag>C#</LanguageTag>
+    <ProjectTypeTag>Web</ProjectTypeTag>
+    <TemplateID>GSharp.VisualStudio.Web</TemplateID>
+    <DefaultName>GSharpWebApp</DefaultName>
+    <ProvideDefaultName>true</ProvideDefaultName>
+    <CreateNewFolder>true</CreateNewFolder>
+    <CreateInPlace>true</CreateInPlace>
+    <SortOrder>120</SortOrder>
+  </TemplateData>
+  <TemplateContent>
+    <Project File="GSharpWeb.gsproj" TargetFileName="$projectname$.gsproj" ReplaceParameters="true">
+      <ProjectItem ReplaceParameters="true">Program.gs</ProjectItem>
+    </Project>
+  </TemplateContent>
+</VSTemplate>

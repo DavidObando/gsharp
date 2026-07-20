@@ -1,0 +1,3 @@
+; Register G# code expansion snippets.
+[$RootKey$\Languages\CodeExpansions\GSharp\Paths]
+"GSharpSnippets"="$PackageFolder$"

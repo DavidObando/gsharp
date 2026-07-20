@@ -138,6 +138,9 @@ public class ProgramTests
             var runtimeConfig = Path.ChangeExtension(outPath, ".runtimeconfig.json");
             Assert.True(File.Exists(runtimeConfig), "expected runtimeconfig.json beside output");
             Assert.Contains("Microsoft.NETCore.App", File.ReadAllText(runtimeConfig));
+            var assembly = Assembly.Load(File.ReadAllBytes(outPath));
+            var targetFramework = assembly.GetCustomAttribute<System.Runtime.Versioning.TargetFrameworkAttribute>();
+            Assert.Equal(".NETCoreApp,Version=v10.0", targetFramework?.FrameworkName);
         }
         finally
         {

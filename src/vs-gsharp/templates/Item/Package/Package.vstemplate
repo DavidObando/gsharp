@@ -1,0 +1,14 @@
+<VSTemplate Version="3.0.0" Type="Item"
+            xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+  <TemplateData>
+    <Name>G# Package File</Name>
+    <Description>An empty G# source file with a package declaration.</Description>
+    <Icon>GSharp.ico</Icon>
+    <ProjectType>GSharp</ProjectType>
+    <DefaultName>Source.gs</DefaultName>
+    <SortOrder>130</SortOrder>
+  </TemplateData>
+  <TemplateContent>
+    <ProjectItem ReplaceParameters="true">Package.gs</ProjectItem>
+  </TemplateContent>
+</VSTemplate>
