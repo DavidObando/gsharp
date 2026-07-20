@@ -89,6 +89,7 @@ public class SdkLayoutTests
         var coreCompile = doc.Descendants(MsbuildNs + "Target")
             .FirstOrDefault(t => (string)t.Attribute("Name") == "CoreCompile");
         Assert.NotNull(coreCompile);
+        Assert.Equal("@(GsharpCommandLineArgs)", (string)coreCompile.Attribute("Returns"));
 
         var buildTask = coreCompile.Element(MsbuildNs + "BuildTask");
         Assert.NotNull(buildTask);
@@ -105,6 +106,12 @@ public class SdkLayoutTests
         Assert.Equal("@(_GsharpCoreCompileResource)", attrs["Resources"]);
         Assert.Equal("$(OutputType)", attrs["OutputType"]);
         Assert.Equal("$(TargetFramework)", attrs["TargetFramework"]);
+        Assert.Equal("$(SkipCompilerExecution)", attrs["SkipCompilerExecution"]);
+        Assert.Equal("$(ProvideCommandLineArgs)", attrs["ProvideCommandLineArgs"]);
+        Assert.Contains(
+            buildTask.Elements(MsbuildNs + "Output"),
+            output => (string)output.Attribute("TaskParameter") == "CommandLineArgs"
+                && (string)output.Attribute("ItemName") == "GsharpCommandLineArgs");
 
         // Reference-assembly emit must be forwarded so MSBuild's
         // ProduceReferenceAssembly pipeline (which sets @(IntermediateRefAssembly)
@@ -125,6 +132,19 @@ public class SdkLayoutTests
         Assert.Contains(
             runSettingsTarget.Descendants(MsbuildNs + "_GsharpRunSettingsLine"),
             line => line.Attribute("Include")?.Value.Contains("$(TargetFramework)") == true);
+
+        var compileDesignTime = doc.Descendants(MsbuildNs + "Target")
+            .Single(t => (string)t.Attribute("Name") == "CompileDesignTime");
+        Assert.Equal("@(_CompilerCommandLineArgs)", (string)compileDesignTime.Attribute("Returns"));
+        Assert.Equal(
+            "_CheckCompileDesignTimePrerequisite;Compile",
+            (string)compileDesignTime.Attribute("DependsOnTargets"));
+        Assert.Equal(
+            "'$(IsCrossTargetingBuild)' != 'true'",
+            (string)compileDesignTime.Attribute("Condition"));
+        Assert.Contains(
+            compileDesignTime.Descendants(MsbuildNs + "_CompilerCommandLineArgs"),
+            item => (string)item.Attribute("Include") == "@(GsharpCommandLineArgs)");
     }
 
     [Fact]

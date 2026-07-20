@@ -290,6 +290,7 @@
                    $(DocumentationFile);
                    @(IntermediateRefAssembly);
                    @(_DebugSymbolsIntermediatePath)"
+          Returns="@(GsharpCommandLineArgs)"
           DependsOnTargets="$(CoreCompileDependsOn)">
 
     <!-- When the SDK asks for a reference assembly (ProduceReferenceAssembly=true),
@@ -338,7 +339,11 @@
         Compile="@(Compile)"
         References="@(ReferencePathWithRefAssemblies)"
         Resources="@(_GsharpCoreCompileResource)"
-        ResponseFilePath="$(IntermediateOutputPath)$(TargetName).rsp" />
+        SkipCompilerExecution="$(SkipCompilerExecution)"
+        ProvideCommandLineArgs="$(ProvideCommandLineArgs)"
+        ResponseFilePath="$(IntermediateOutputPath)$(TargetName).rsp">
+      <Output TaskParameter="CommandLineArgs" ItemName="GsharpCommandLineArgs" />
+    </BuildTask>
 
     <ItemGroup>
       <FileWrites Include="$(IntermediateOutputPath)$(TargetName)$(TargetExt)" />
@@ -356,6 +361,17 @@
                               '$(DebugType)' != ''                       and
                               '$(DebugType)' != 'none'                   and
                               '$(DebugType)' != 'embedded' " />
+    </ItemGroup>
+  </Target>
+
+  <!-- Visual Studio's managed CPS targets require each language SDK to expose
+       its design-time compiler arguments without running the compiler. -->
+  <Target Name="CompileDesignTime"
+          Returns="@(_CompilerCommandLineArgs)"
+          DependsOnTargets="_CheckCompileDesignTimePrerequisite;Compile"
+          Condition="'$(IsCrossTargetingBuild)' != 'true'">
+    <ItemGroup>
+      <_CompilerCommandLineArgs Include="@(GsharpCommandLineArgs)" />
     </ItemGroup>
   </Target>
 
