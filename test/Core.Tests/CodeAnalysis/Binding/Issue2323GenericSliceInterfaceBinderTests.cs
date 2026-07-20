@@ -16,7 +16,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Issue #2323: pins the binder-side acceptance (already implemented by
-/// <c>Conversion.SliceImplementsInterfaceSymbolically</c>) of a slice
+/// <c>Conversion.SliceConvertsToInterfaceSymbolically</c>) of a slice
 /// <c>[]T</c> converting to each of the five supported one-argument generic
 /// collection interfaces — <c>IEnumerable[T]</c>, <c>ICollection[T]</c>,
 /// <c>IList[T]</c>, <c>IReadOnlyList[T]</c>, <c>IReadOnlyCollection[T]</c> —

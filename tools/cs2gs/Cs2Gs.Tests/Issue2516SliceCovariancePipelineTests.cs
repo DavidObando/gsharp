@@ -1,4 +1,4 @@
-// <copyright file="Issue2516ArrayCovariancePipelineTests.cs" company="GSharp">
+// <copyright file="Issue2516SliceCovariancePipelineTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -20,7 +20,7 @@ namespace Cs2Gs.Tests;
 /// covariant argument read off a property, mirroring
 /// <c>BookLibrary.AddPersons(..., product.Authors, ...)</c>).
 /// </summary>
-public sealed class Issue2516ArrayCovariancePipelineTests
+public sealed class Issue2516SliceCovariancePipelineTests
 {
     [Fact]
     public async Task Pipeline_ViaSdkDefault_StableMinimalRepro_TranslatesAndCompiles()
@@ -71,10 +71,10 @@ public sealed class Issue2516ArrayCovariancePipelineTests
             Directory.GetFiles(runDirectory, "*.gs", SearchOption.AllDirectories)
                 .Select(File.ReadAllText));
 
-        // The bare (unwrapped) form the issue reports as producing GS0155
-        // must never appear; the materialized `as`-cast form must.
-        Assert.DoesNotContain("Repro.Accept(values)", emitted, StringComparison.Ordinal);
-        Assert.Contains("values as IEnumerable[IPerson]", emitted, StringComparison.Ordinal);
+        // Compiler-level slice/interface covariance makes the natural
+        // translation valid; cs2gs must not manufacture an `as` escape hatch.
+        Assert.Contains("Repro.Accept(values)", emitted, StringComparison.Ordinal);
+        Assert.DoesNotContain("values as IEnumerable[IPerson]", emitted, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -116,11 +116,56 @@ public sealed class Issue2516ArrayCovariancePipelineTests
             Directory.GetFiles(appRunDir, "*.gs", SearchOption.AllDirectories)
                 .Select(File.ReadAllText));
 
-        Assert.Contains("product.Authors as IEnumerable[IPerson]", emitted, StringComparison.Ordinal);
+        Assert.Contains("product.Authors", emitted, StringComparison.Ordinal);
+        Assert.DoesNotContain("product.Authors as", emitted, StringComparison.Ordinal);
         Assert.True(
             appResult.Succeeded,
             "Expected default --via-sdk/gsc compilation to accept the Oahu product.Authors -> IEnumerable<IPerson> shape. Stages: " +
                 string.Join("; ", appResult.Stages.Select(stage => stage.Stage + "=" + stage.Status)));
+    }
+
+    [Fact]
+    public async Task Pipeline_ViaSdkDefault_CompilerCovarianceCoversFormerSinkWorkarounds()
+    {
+        string compiler = FindSiblingTool("Compiler", "gsc.dll");
+        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
+        if (compiler is null
+            || repoRoot is null
+            || GsharpTestProjectRunner.ResolveLocalSdkPackage(repoRoot) is null)
+        {
+            return;
+        }
+
+        string sourceRoot = NewDirectory("scratch-projects");
+        string projectPath = WriteCompilerCovarianceSinkFixture(sourceRoot);
+        string outputRoot = NewDirectory("pipeline-tests");
+        var pipeline = new MigrationPipeline(
+            new PipelineOptions
+            {
+                GscPath = compiler,
+                OutputRoot = outputRoot,
+                SourceRoot = sourceRoot,
+            },
+            new IMigrationStage[] { new TranslateStage(), new CompileStage() });
+
+        RunResult result = await pipeline.RunAsync(
+            new[] { new CorpusApp("test/CompilerCovarianceSinks", projectPath, TargetKind.Library) });
+        AppResult appResult = Assert.Single(result.Apps);
+        Assert.True(
+            appResult.Succeeded,
+            "Expected compiler covariance to cover folded static initialization, constructor lifting, " +
+                "typed foreach, and expression-tree result conversion. Stages: " +
+                string.Join("; ", appResult.Stages.Select(stage => stage.Stage + "=" + stage.Status)));
+
+        string appRunDir = Path.Combine(
+            outputRoot,
+            result.RunId,
+            MigrationPipeline.SanitizeAppId(appResult.AppId));
+        string emitted = string.Join(
+            Environment.NewLine,
+            Directory.GetFiles(appRunDir, "*.gs", SearchOption.AllDirectories)
+                .Select(File.ReadAllText));
+        Assert.DoesNotContain(" as IEnumerable[IPerson]", emitted, StringComparison.Ordinal);
     }
 
     private static (string ProbeProject, string ConsumerProject) WriteStableMinimalReproFixture(string sourceRoot)
@@ -206,6 +251,63 @@ public sealed class Issue2516ArrayCovariancePipelineTests
                         AddPersons<Author>("authors", product.Authors, 0);
                     }
                 }
+            }
+            """);
+
+        return projectPath;
+    }
+
+    private static string WriteCompilerCovarianceSinkFixture(string sourceRoot)
+    {
+        File.WriteAllText(Path.Combine(sourceRoot, "Directory.Build.props"), "<Project></Project>");
+        string projectDir = Path.Combine(sourceRoot, "CompilerCovarianceSinks");
+        Directory.CreateDirectory(projectDir);
+
+        string projectPath = Path.Combine(projectDir, "CompilerCovarianceSinks.csproj");
+        File.WriteAllText(projectPath, ProjectFile(null, nullable: false));
+        File.WriteAllText(Path.Combine(projectDir, "Repro.cs"), """
+            using System;
+            using System.Collections.Generic;
+            using System.Linq.Expressions;
+
+            namespace CompilerCovarianceSinks;
+
+            public interface IPerson { }
+            public sealed class Author : IPerson { }
+
+            public sealed class Holder
+            {
+                public readonly IEnumerable<IPerson> People;
+
+                public Holder(Author[] people)
+                {
+                    People = people;
+                }
+            }
+
+            public static class Repro
+            {
+                public static readonly IEnumerable<IPerson> StaticPeople;
+
+                static Repro()
+                {
+                    StaticPeople = new Author[0];
+                }
+
+                public static void Accept(IEnumerable<IPerson> people) { }
+
+                public static Holder Create(Author[] people) => new Holder(people);
+
+                public static void Visit(IEnumerable<Author[]> groups)
+                {
+                    foreach (IEnumerable<IPerson> group in groups)
+                    {
+                        Accept(group);
+                    }
+                }
+
+                public static Expression<Func<Author[], IEnumerable<IPerson>>> Tree() =>
+                    people => people;
             }
             """);
 

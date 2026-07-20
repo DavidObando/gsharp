@@ -80,13 +80,11 @@ public sealed partial class CSharpToGSharpTranslator
 
                     try
                     {
-                        initializer = this.CoerceArrayCovarianceConversion(
+                        initializer = this.CoercePointerConversion(
                             declarator.Initializer.Value,
-                            this.CoercePointerConversion(
+                            this.CoerceConstantToUnsigned(
                                 declarator.Initializer.Value,
-                                this.CoerceConstantToUnsigned(
-                                    declarator.Initializer.Value,
-                                    this.TranslateExpression(declarator.Initializer.Value))));
+                                this.TranslateExpression(declarator.Initializer.Value)));
                     }
                     finally
                     {
@@ -1142,107 +1140,6 @@ public sealed partial class CSharpToGSharpTranslator
             return translated;
         }
 
-        // Issue #2516: a C# array-covariance conversion — `Derived[] -> Base[]`,
-        // or `Derived[] -> IEnumerable<Base>`/`IReadOnlyList<Base>`/
-        // `IReadOnlyCollection<Base>`/`IList<Base>`/`ICollection<Base>` — is a
-        // valid CLR reference conversion (ECMA-335 II.9.7 array covariance) that
-        // Roslyn has ALREADY proven legal at this position: `info.ConvertedType`
-        // differs from `info.Type` only because of it. But G# slices are
-        // DELIBERATELY invariant (Conversion.cs: "G# slices are invariant:
-        // []string does NOT convert to IEnumerable<object>"), so the bare
-        // translated array fails to bind at the covariant target (GS0155).
-        //
-        // Re-expressing the conversion as the canonical G# safe cast
-        // `(expr as T)` — via the same `CoerceOperandTo` every other reference-
-        // target coercion already uses — makes the value type-check exactly at
-        // the C#-converted type: `BindAsExpression` accepts ANY reference target
-        // regardless of slice invariance (it never calls `Conversion.Classify`),
-        // and `EmitAsExpression` lowers it to a bare CLR `isinst`, which always
-        // succeeds for a conversion Roslyn already proved implicit. The operand
-        // is evaluated exactly once (this only wraps the ALREADY-translated
-        // expression) and `isinst` returns the SAME reference rather than
-        // constructing a new object, so evaluation-once, reference identity, and
-        // C# enumeration/exception semantics are all preserved unchanged.
-        //
-        // An element-EXACT match against the five generic interfaces below, or
-        // an element-INDEPENDENT array supertype (`object`, `System.Array`, the
-        // non-generic `IEnumerable`/`ICollection`/`IList`, `ICloneable`, …), is
-        // left bare — G# already accepts those forms directly (issues #2140/
-        // #1162), so wrapping them too would just add visual noise with no
-        // functional benefit. Shared by every value-flow sink (argument, return,
-        // assignment, local, conditional/switch, delegate invocation, and
-        // collection/array-initializer element) so the lowering cannot drift
-        // between call sites.
-        private GExpression CoerceArrayCovarianceConversion(ExpressionSyntax expression, GExpression translated)
-        {
-            if (expression == null)
-            {
-                return translated;
-            }
-
-            TypeInfo info = this.context.GetTypeInfo(expression);
-            return NeedsArrayCovarianceConversion(info.Type, info.ConvertedType)
-                ? this.CoerceOperandTo(translated, info.ConvertedType)
-                : translated;
-        }
-
-        // True when `source` is a single-dimensional (SZ) array type and
-        // `converted` is a DISTINCT target reachable only through the CLR's
-        // covariant array-conversion rules — i.e. a shape G#'s invariant
-        // slice-to-array/slice-to-interface rules (Conversion.cs) reject bare.
-        // `converted` may be `null` for an expression with no resolved converted
-        // type (an unbound/erroneous tree); that never needs coercion. Only a
-        // reference-typed array element ever reaches the non-identical branches
-        // below — C# itself never offers an implicit array/interface conversion
-        // between a value-typed array and a differently-typed target (array
-        // covariance requires reference-typed elements), so no explicit
-        // value-type guard is needed here.
-        private static bool NeedsArrayCovarianceConversion(ITypeSymbol source, ITypeSymbol converted)
-        {
-            if (source is not IArrayTypeSymbol { IsSZArray: true } arraySource
-                || converted is null
-                || SymbolEqualityComparer.Default.Equals(source, converted))
-            {
-                return false;
-            }
-
-            if (converted is IArrayTypeSymbol { IsSZArray: true } arrayTarget)
-            {
-                // Rank and identity are already excluded above, so two distinct
-                // SZ array types can only still differ by element — always the
-                // covariant case (array-to-array covariance).
-                return !SymbolEqualityComparer.Default.Equals(arraySource.ElementType, arrayTarget.ElementType);
-            }
-
-            if (converted is INamedTypeSymbol { TypeKind: TypeKind.Interface, TypeArguments: [ITypeSymbol targetElement] } iface
-                && IsCovariantArrayElementInterface(iface.OriginalDefinition.SpecialType))
-            {
-                // An EXACT element match (`Author[] -> IEnumerable<Author>`) is
-                // already accepted bare by G# (Conversion.cs's
-                // SliceImplementsInterfaceSymbolically/SliceImplementsInterface);
-                // only a genuine covariant mismatch needs the wrap.
-                return !SymbolEqualityComparer.Default.Equals(arraySource.ElementType, targetElement);
-            }
-
-            // Any other reachable target (`object`, `System.Array`, a non-generic
-            // array interface, `ICloneable`, …) is an element-INDEPENDENT upcast
-            // G# already accepts bare (Conversion.cs's IsElementIndependentArrayInterface).
-            return false;
-        }
-
-        // The five BCL single-type-argument interfaces every one-dimensional
-        // array implements covariantly. Kept manually in sync with Conversion.cs's
-        // SliceImplementsInterfaceSymbolically array-interface list (the
-        // translator does not reference GSharp.Core, so there is no shared
-        // constant to draw from) — both sides need the SAME five interfaces so
-        // an exact-element match keeps translating bare on both ends.
-        private static bool IsCovariantArrayElementInterface(SpecialType specialType) => specialType is
-            SpecialType.System_Collections_Generic_IEnumerable_T or
-            SpecialType.System_Collections_Generic_ICollection_T or
-            SpecialType.System_Collections_Generic_IList_T or
-            SpecialType.System_Collections_Generic_IReadOnlyList_T or
-            SpecialType.System_Collections_Generic_IReadOnlyCollection_T;
-
         // Reports whether `type` is a value type that is not `System.Nullable<T>`,
         // i.e. a target for which G#'s `as` operator is invalid (GS0270) and the
         // conversion-call form must be used instead.
@@ -1885,7 +1782,6 @@ public sealed partial class CSharpToGSharpTranslator
                         this.TranslateExpression(assignment.Right));
                     assignRhs = this.CoerceCompoundAssignmentRhs(assignment, assignRhs);
                     assignRhs = this.CoercePointerConversion(assignment.Right, assignRhs);
-                    assignRhs = this.CoerceArrayCovarianceConversion(assignment.Right, assignRhs);
                     assignRhs = this.ForgiveEventSubscriptionRhs(assignment, assignRhs);
                     assignRhs = this.ForgiveElementAccessAssignmentRhs(assignment, assignRhs);
                     assignRhs = this.ForgiveObliviousExternalAssignmentRhs(assignment, assignRhs);

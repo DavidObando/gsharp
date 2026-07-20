@@ -310,10 +310,9 @@ public class Issue610CrossContextReferenceUpcastTests
     }
 
     [Fact]
-    public void Negative_SliceCovariance_StillBlocked()
+    public void Negative_InvariantSliceInterface_StillBlocked()
     {
-        // Slice invariance: []string must NOT convert to IEnumerable<object>
-        // even though CLR arrays are covariant. This pins the invariance guard.
+        // Mutable IList<T> stays invariant across reflection contexts.
         var sibling = """
             namespace NegSlice
             {
@@ -326,7 +325,7 @@ public class Issue610CrossContextReferenceUpcastTests
             import System.Collections.Generic
             import NegSlice
 
-            var items IEnumerable[object] = []string{"hello"}
+            var items IList[object] = []string{"hello"}
             """;
 
         var diagnostics = CompileExpectingErrorsWithSiblingCs(sibling, gsource, siblingName: "NegSlice");

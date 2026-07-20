@@ -440,16 +440,22 @@ internal static class OverloadResolution
             {
                 if (target.IsAssignableFrom(source))
                 {
-                    // Issue #570: G# slices are invariant. When the source
-                    // is an array type being passed to a generic interface,
-                    // CLR's IsAssignableFrom accepts covariant cases (e.g.
-                    // string[] → IEnumerable<object>). Guard against this
-                    // by cross-checking with ImplementsInterfaceByName which
-                    // matches generic args by name (invariantly).
-                    if (source.IsArray && target.IsInterface && target.IsGenericType
+                    // Issue #2516: CLR array assignability is broader than G#.
+                    // Distinct arrays remain invariant. Generic array
+                    // interfaces accept a distinct element only through their
+                    // own declared `out` variance and an implicit reference
+                    // conversion; IList/ICollection therefore stay exact-only.
+                    if (source.IsArray && target.IsArray)
+                    {
+                        // Distinct array identity was ruled out above.
+                    }
+                    else if (source.IsArray && target.IsInterface && target.IsGenericType
                         && !ClrTypeUtilities.ImplementsInterfaceByName(source, target))
                     {
-                        // Covariant match rejected — fall through.
+                        if (IsSafeArrayInterfaceVariance(target, source))
+                        {
+                            return ImplicitConversionKind.Reference;
+                        }
                     }
                     else
                     {
@@ -466,7 +472,9 @@ internal static class OverloadResolution
         // Issue #570/#610: cross-context reference upcast fallback. When the
         // same-context fast path above cannot fire (live-runtime ↔ MLC boundary),
         // walk the source's interface set and base-type chain by name.
-        if (target.IsInterface && ClrTypeUtilities.ImplementsInterfaceByName(source, target))
+        if (target.IsInterface
+            && (ClrTypeUtilities.ImplementsInterfaceByName(source, target)
+                || IsSafeArrayInterfaceVariance(target, source)))
         {
             return ImplicitConversionKind.Reference;
         }
@@ -1380,6 +1388,109 @@ internal static class OverloadResolution
         }
 
         return false;
+    }
+
+    private static bool IsSafeArrayInterfaceVariance(Type target, Type source)
+    {
+        if (!source.IsArray || source.GetArrayRank() != 1
+            || !target.IsInterface || !target.IsGenericType
+            || target.IsGenericTypeDefinition)
+        {
+            return false;
+        }
+
+        Type definition;
+        Type[] targetArguments;
+        try
+        {
+            definition = target.GetGenericTypeDefinition();
+            targetArguments = target.GetGenericArguments();
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+
+        var parameters = definition.GetGenericArguments();
+        if (parameters.Length != 1 || targetArguments.Length != 1
+            || (parameters[0].GenericParameterAttributes & GenericParameterAttributes.VarianceMask)
+                != GenericParameterAttributes.Covariant)
+        {
+            return false;
+        }
+
+        Type sourceArgument = null;
+        foreach (var implemented in ClrTypeUtilities.SafeGetInterfaces(source))
+        {
+            if (implemented.IsGenericType
+                && string.Equals(
+                    implemented.GetGenericTypeDefinition().FullName,
+                    definition.FullName,
+                    StringComparison.Ordinal))
+            {
+                sourceArgument = implemented.GetGenericArguments()[0];
+                break;
+            }
+        }
+
+        if (sourceArgument is null)
+        {
+            var definitionName = definition.FullName;
+            if (!string.Equals(
+                    definitionName,
+                    typeof(IEnumerable<>).FullName,
+                    StringComparison.Ordinal)
+                && !string.Equals(
+                    definitionName,
+                    typeof(IReadOnlyList<>).FullName,
+                    StringComparison.Ordinal)
+                && !string.Equals(
+                    definitionName,
+                    typeof(IReadOnlyCollection<>).FullName,
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            sourceArgument = source.GetElementType();
+        }
+
+        if (!IsClrVarianceReferenceType(sourceArgument)
+            || !IsClrVarianceReferenceType(targetArguments[0]))
+        {
+            return false;
+        }
+
+        return Conversion.ClassifyNonStructural(
+            TypeSymbol.FromClrType(sourceArgument),
+            TypeSymbol.FromClrType(targetArguments[0])) is
+        {
+            Exists: true,
+            IsImplicit: true,
+        };
+    }
+
+    private static bool IsClrVarianceReferenceType(Type type)
+    {
+        if (type is null || type.IsValueType)
+        {
+            return false;
+        }
+
+        if (!type.IsGenericParameter)
+        {
+            return true;
+        }
+
+        if ((type.GenericParameterAttributes & GenericParameterAttributes.ReferenceTypeConstraint) != 0)
+        {
+            return true;
+        }
+
+        return type.GetGenericParameterConstraints().Any(static constraint =>
+            !constraint.IsInterface
+            && !constraint.IsValueType
+            && !string.Equals(constraint.FullName, "System.Object", StringComparison.Ordinal));
     }
 
     /// <summary>

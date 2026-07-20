@@ -746,26 +746,16 @@ public sealed partial class CSharpToGSharpTranslator
         // `cond ? a : Continuation`). The shared <see cref="ReceiverNeedsNullForgiveness"/>
         // predicate already excludes null-comparison operands (flow there is not
         // NotNull), `?.` receivers, `this`/`base`, and literals.
-        // Issue #2516: every one of this method's call sites (return,
-        // conditional-expression arm, switch-expression arm, tuple-literal
-        // element, arrow-bodied return — see WrapExpressionBody) is a value-flow
-        // sink just like an argument/assignment/local, so an array-covariance
-        // conversion Roslyn applied HERE needs the same materialization those
-        // sinks get via CoerceArrayCovarianceConversion. Composing it here
-        // (rather than duplicating a call at every one of this method's own call
-        // sites) keeps the two concerns independently named while still routing
-        // every "value flows out of this expression position" sink through one
-        // shared lowering.
         private GExpression TranslateValueWithNullForgiveness(ExpressionSyntax value)
         {
             GExpression translated = this.TranslateExpression(value);
 
             if (this.ReceiverNeedsNullForgiveness(value))
             {
-                translated = new NonNullAssertionExpression(translated);
+                return new NonNullAssertionExpression(translated);
             }
 
-            return this.CoerceArrayCovarianceConversion(value, translated);
+            return translated;
         }
 
         // Issue #2511: element-access arguments are call-like value sinks too.

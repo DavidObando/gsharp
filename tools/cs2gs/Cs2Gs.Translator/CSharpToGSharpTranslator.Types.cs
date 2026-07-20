@@ -192,12 +192,6 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         expressionBody = new NonNullAssertionExpression(expressionBody);
                     }
-
-                    // Issue #2516: the lambda's inferred/target delegate return
-                    // type can covariantly widen an array-typed expression body
-                    // (e.g. `Func<IEnumerable<IPerson>> f = () => product.Authors;`)
-                    // exactly like an ordinary method return.
-                    expressionBody = this.CoerceArrayCovarianceConversion(bodyExpression, expressionBody);
                 }
                 finally
                 {
@@ -842,11 +836,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return new[] { (GStatement)new BreakStatement() };
             }
 
-            return new[]
-            {
-                (GStatement)new YieldStatement(
-                    this.CoerceArrayCovarianceConversion(node.Expression, this.TranslateExpression(node.Expression))),
-            };
+            return new[] { (GStatement)new YieldStatement(this.TranslateExpression(node.Expression)) };
         }
 
         private GStatement TranslateForEachVariable(ForEachVariableStatementSyntax node)

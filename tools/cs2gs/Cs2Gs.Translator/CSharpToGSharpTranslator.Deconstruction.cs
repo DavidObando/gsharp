@@ -860,18 +860,17 @@ public sealed partial class CSharpToGSharpTranslator
         {
             if (this.state.PendingSpillPrologue != null)
             {
-                return this.CoerceArrayCovarianceConversion(expression, this.TranslateExpression(expression));
+                return this.TranslateExpression(expression);
             }
 
             GTypeReference returnType = containingType != null ? this.ResolveExpressionType(expression) : null;
             if (returnType == null)
             {
-                return this.CoerceArrayCovarianceConversion(expression, this.TranslateExpression(expression));
+                return this.TranslateExpression(expression);
             }
 
-            return this.CoerceArrayCovarianceConversion(
-                expression,
-                this.WrapInNullSeamHelperIfCaptured(() => this.TranslateExpression(expression), returnType, containingType));
+            return this.WrapInNullSeamHelperIfCaptured(
+                () => this.TranslateExpression(expression), returnType, containingType);
         }
 
         // Issue #1849: as <see cref="TranslateNullSeamExpression"/>, but for a

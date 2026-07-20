@@ -255,22 +255,17 @@ public class Issue570SliceToInterfaceConversionEmitTests
     }
 
     [Fact]
-    public void SliceInvariance_StringToIEnumerableOfObject_StillRejected()
+    public void SliceInvariance_StringToIListOfObject_StillRejected()
     {
-        // Variance regression guard: G# slices are invariant.
-        // []string must NOT convert to IEnumerable<object> even though
-        // the CLR allows array reference covariance.
+        // IList<T> is invariant and mutable. CLR array covariance must not
+        // bypass G#'s exact-element requirement for this interface.
         var sibling = """
             namespace Probe.CSharp
             {
                 public static class Sink
                 {
-                    public static int CountObjects(System.Collections.Generic.IEnumerable<object> items)
-                    {
-                        int n = 0;
-                        foreach (var _ in items) n++;
-                        return n;
-                    }
+                    public static int CountObjects(System.Collections.Generic.IList<object> items)
+                        => items.Count;
                 }
             }
             """;

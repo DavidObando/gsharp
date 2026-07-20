@@ -196,11 +196,8 @@ let _ = Take([]int32{1, 2, 3})
     }
 
     [Fact]
-    public void Negative_SliceOfString_To_IEnumerableOfObject_Rejected()
+    public void SliceOfString_ToCovariantIEnumerableOfObject_Accepted()
     {
-        // Variance regression guard mirroring #570's invariance arm:
-        // `[]string` does NOT convert to `IEnumerable[object]` even
-        // though the CLR allows array reference covariance.
         const string source = @"
 package P
 import System.Collections.Generic
@@ -210,8 +207,7 @@ func Take(source IEnumerable[object]) int32 { return 0 }
 let _ = Take([]string{""a"", ""b""})
 ";
         var diags = GetDiagnostics(source);
-        Assert.NotEmpty(diags);
-        Assert.Contains(diags, d => d.Id == "GS0154" || d.Id == "GS0155");
+        Assert.Empty(diags);
     }
 
     private static ImmutableArrayOfDiagnostic GetDiagnostics(string source)
