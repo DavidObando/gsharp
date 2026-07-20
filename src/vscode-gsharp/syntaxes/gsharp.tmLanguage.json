@@ -159,6 +159,16 @@
     "annotations": {
       "patterns": [
         {
+          "name": "meta.annotation.assembly.gsharp",
+          "match": "(@)(assembly)(:)([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "punctuation.definition.annotation.gsharp" },
+            "2": { "name": "storage.modifier.annotation-target.gsharp" },
+            "3": { "name": "punctuation.separator.annotation-target.gsharp" },
+            "4": { "name": "storage.type.annotation.gsharp" }
+          }
+        },
+        {
           "name": "meta.annotation.gsharp",
           "match": "(@)([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
@@ -170,6 +180,39 @@
     },
     "declarations": {
       "patterns": [
+        {
+          "comment": "Explicit-interface function: `func (IFoo) Name(...)`",
+          "match": "\\b(func)\\s+(\\()([A-Za-z_][A-Za-z0-9_.]*(?:\\[[^\\]\\r\\n]+\\])?)(\\))\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.gsharp" },
+            "2": { "name": "punctuation.definition.interface.begin.gsharp" },
+            "3": { "name": "entity.name.type.interface.gsharp" },
+            "4": { "name": "punctuation.definition.interface.end.gsharp" },
+            "5": { "name": "entity.name.function.gsharp" }
+          }
+        },
+        {
+          "comment": "Explicit-interface property/indexer: `prop (IFoo) Name T`",
+          "match": "\\b(prop)\\s+(\\()([A-Za-z_][A-Za-z0-9_.]*(?:\\[[^\\]\\r\\n]+\\])?)(\\))\\s+(this|[A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.gsharp" },
+            "2": { "name": "punctuation.definition.interface.begin.gsharp" },
+            "3": { "name": "entity.name.type.interface.gsharp" },
+            "4": { "name": "punctuation.definition.interface.end.gsharp" },
+            "5": { "name": "entity.name.variable.property.gsharp" }
+          }
+        },
+        {
+          "comment": "Explicit-interface event: `event (IFoo) Changed Handler`",
+          "match": "\\b(event)\\s+(\\()([A-Za-z_][A-Za-z0-9_.]*(?:\\[[^\\]\\r\\n]+\\])?)(\\))\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.gsharp" },
+            "2": { "name": "punctuation.definition.interface.begin.gsharp" },
+            "3": { "name": "entity.name.type.interface.gsharp" },
+            "4": { "name": "punctuation.definition.interface.end.gsharp" },
+            "5": { "name": "entity.name.variable.event.gsharp" }
+          }
+        },
         {
           "comment": "Aggregate declarations per ADR-0078: `class|struct|enum|interface Name`",
           "match": "\\b(class|struct|enum|interface)\\s+([A-Za-z_][A-Za-z0-9_]*)",
@@ -220,7 +263,7 @@
         },
         {
           "name": "keyword.modifier.contextual.gsharp",
-          "match": "\\b(and|checked|convenience|data|deinit|delegate|event|explicit|fixed|implicit|in|init|inline|make|nameof|not|or|out|params|prop|raise|record|ref|remove|scoped|shared|stackalloc|typeof|unchecked|unmanaged|unsafe|when|with|yield)\\b"
+          "match": "\\b(and|checked|convenience|data|deinit|delegate|event|explicit|fixed|implicit|in|init|inline|make|nameof|not|or|out|params|partial|prop|raise|record|ref|remove|scoped|shared|sizeof|stackalloc|typeof|unchecked|unmanaged|unsafe|when|with|yield)\\b"
         },
         {
           "name": "keyword.other.accessor.gsharp",
@@ -229,6 +272,10 @@
         {
           "name": "keyword.other.gsharp",
           "match": "\\b(import|package|using|var|let|is|as|scope|chan|map)\\b"
+        },
+        {
+          "name": "keyword.declaration.anonymous-object.gsharp",
+          "match": "\\bobject(?=\\s*(?:\\{|:))"
         }
       ]
     },
@@ -252,7 +299,7 @@
         },
         {
           "name": "constant.language.null.gsharp",
-          "match": "\\b(nil|null)\\b"
+          "match": "\\bnil\\b"
         },
         {
           "name": "variable.language.this.gsharp",
@@ -264,8 +311,12 @@
       "comment": "Patterns are ordered longest-match-first so multi-character operators win over their single-character prefixes.",
       "patterns": [
         {
+          "name": "keyword.operator.spread.gsharp",
+          "match": "\\.\\.\\."
+        },
+        {
           "name": "keyword.operator.range.gsharp",
-          "match": "\\.\\.\\.|\\.\\."
+          "match": "\\.\\."
         },
         {
           "name": "keyword.operator.assignment.gsharp",

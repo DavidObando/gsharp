@@ -63,7 +63,7 @@ describe('gsharp.tmLanguage.json', () => {
     expect(uncovered).toEqual([]);
   });
 
-  it('covers the new 0.2 contextual keywords', () => {
+  it('covers compiler contextual keywords', () => {
     const contextual = repositoryMatchStrings('keywords').map(
       (m) => new RegExp(m),
     );
@@ -81,6 +81,8 @@ describe('gsharp.tmLanguage.json', () => {
       'not',
       'scoped',
       'ref',
+      'partial',
+      'sizeof',
     ];
     const missing = required.filter(
       (kw) => !contextual.some((r) => r.test(kw)),
@@ -94,6 +96,46 @@ describe('gsharp.tmLanguage.json', () => {
       ...repositoryMatchStrings('declarations'),
     ].map((m) => new RegExp(m));
     expect(matchers.some((r) => r.test('where'))).toBe(false);
+  });
+
+  it('does not treat the removed `null` alias as a literal', () => {
+    const constantMatchers = repositoryMatchStrings('constants').map(
+      (m) => new RegExp(m),
+    );
+    expect(constantMatchers.some((r) => r.test('null'))).toBe(false);
+  });
+
+  it('recognizes assembly-target annotations', () => {
+    const annotationMatchers = repositoryMatchStrings('annotations').map(
+      (m) => new RegExp(m),
+    );
+    expect(
+      annotationMatchers.some((r) =>
+        r.test('@assembly:InternalsVisibleTo'),
+      ),
+    ).toBe(true);
+  });
+
+  it('recognizes anonymous-object and explicit-interface declaration forms', () => {
+    const keywordMatchers = repositoryMatchStrings('keywords').map(
+      (m) => new RegExp(m),
+    );
+    expect(keywordMatchers.some((r) => r.test('object {'))).toBe(true);
+    expect(keywordMatchers.some((r) => r.test('object : IFoo {'))).toBe(true);
+
+    const declarationMatchers = repositoryMatchStrings('declarations').map(
+      (m) => new RegExp(m),
+    );
+    const declarations = [
+      'func (IFoo) M()',
+      'prop (IFoo) P int32',
+      'prop (IFoo) this[index int32] string',
+      'event (IFoo) Changed Handler',
+    ];
+    const missing = declarations.filter(
+      (declaration) => !declarationMatchers.some((r) => r.test(declaration)),
+    );
+    expect(missing).toEqual([]);
   });
 
   it('highlights all built-in primitive type names', () => {
@@ -157,7 +199,7 @@ describe('gsharp.tmLanguage.json', () => {
 
     const cases: [string, string][] = [
       ['..', 'keyword.operator.range.gsharp'],
-      ['...', 'keyword.operator.range.gsharp'],
+      ['...', 'keyword.operator.spread.gsharp'],
       ['->', 'keyword.operator.arrow.gsharp'],
       ['=>', 'keyword.operator.arrow.gsharp'],
       ['<-', 'keyword.operator.channel.gsharp'],
@@ -172,8 +214,10 @@ describe('gsharp.tmLanguage.json', () => {
       ['?[', 'keyword.operator.null-conditional.gsharp'],
       [':=', 'keyword.operator.assignment.gsharp'],
       ['<<=', 'keyword.operator.assignment.gsharp'],
+      ['>>>=', 'keyword.operator.assignment.gsharp'],
       ['>>=', 'keyword.operator.assignment.gsharp'],
       ['<<', 'keyword.operator.bitwise.gsharp'],
+      ['>>>', 'keyword.operator.bitwise.gsharp'],
       ['>>', 'keyword.operator.bitwise.gsharp'],
     ];
 
