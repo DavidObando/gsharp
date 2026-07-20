@@ -552,7 +552,7 @@ function Convert-VsCodeSnippet {
             return '$' + $placeholders[$index].Id + '$'
         }
     )
-    $snippetCode = $snippetCode -replace '(?m)[ \t]+$', ''
+    $snippetCode = $snippetCode -replace '(?m)[ \t]+(?=\r?$)', ''
 
     $declarationsXml = if ($placeholders.Count -eq 0) {
         ''
