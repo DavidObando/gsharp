@@ -178,6 +178,36 @@ public class Issue760PInvokeRefOutInEmitTests
         Assert.Equal("True\nTrue\n", output);
     }
 
+    [Theory]
+    [InlineData("DllImport")]
+    [InlineData("LibraryImport")]
+    public void ExplicitlyMarshaled_RefBool_RandR_WritesBack(string importAttribute)
+    {
+        if (!IsLibcCallable())
+        {
+            return;
+        }
+
+        // POSIX rand_r consumes and updates an unsigned int*. UnmanagedType.Bool
+        // gives the managed bool slot the same four-byte ABI representation.
+        var source = $$"""
+            package P
+            import System
+            import System.Runtime.InteropServices
+
+            @{{importAttribute}}("libc", EntryPoint: "rand_r")
+            func native_rand_r(@MarshalAs(UnmanagedType.Bool) ref seed bool) int32;
+
+            var seed = false
+            var rc = native_rand_r(ref seed)
+            Console.WriteLine(rc != 0)
+            Console.WriteLine(seed)
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("True\nTrue\n", output);
+    }
+
     [Fact]
     public void DllImport_RefParameter_EmitsByRefSignature_In_ImplMap()
     {

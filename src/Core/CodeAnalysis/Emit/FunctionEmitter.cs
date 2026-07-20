@@ -1232,8 +1232,9 @@ internal sealed class FunctionEmitter
             // ADR-0096 / issue #762: stamp HasFieldMarshal on the outer
             // Param row when the parameter carries an `@MarshalAs(...)`
             // override. The outer stub uses the user-visible managed
-            // type (e.g. `int32`) so the override applies here; the
-            // inner blittable P/Invoke has no FieldMarshal row.
+            // type (e.g. `int32`) so reflection preserves the source
+            // contract. The inner P/Invoke also receives the descriptor
+            // below because that is the actual unmanaged transition.
             var outerParamAttrs = ParameterAttributes.None;
             if (p.MarshalAsMetadata != null)
             {
@@ -1323,10 +1324,17 @@ internal sealed class FunctionEmitter
         var innerSeq = 1;
         foreach (var p in function.Parameters)
         {
-            this.emitCtx.Metadata.AddParameter(
-                attributes: ParameterAttributes.None,
+            var innerParamAttrs = p.MarshalAsMetadata == null
+                ? ParameterAttributes.None
+                : ParameterAttributes.HasFieldMarshal;
+            var innerParamHandle = this.emitCtx.Metadata.AddParameter(
+                attributes: innerParamAttrs,
                 name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? string.Empty),
                 sequenceNumber: innerSeq++);
+            if (p.MarshalAsMetadata != null)
+            {
+                EmitFieldMarshalRow(innerParamHandle, p.MarshalAsMetadata);
+            }
         }
 
         var innerName = "<" + function.Name + ">g__PInvoke|0_0";
