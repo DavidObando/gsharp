@@ -1236,6 +1236,11 @@ internal sealed partial class StatementBinder
             for (var i = 0; i < syntax.Identifiers.Count; i++)
             {
                 var idTok = syntax.Identifiers[i];
+                if (IsDiscard(idTok))
+                {
+                    continue;
+                }
+
                 var elemType = tupleType.ElementTypes[i];
                 var elemVar = bindLocalVariable(idTok, isReadOnly: true, elemType);
                 var access = new BoundTupleElementAccessExpression(null, new BoundVariableExpression(null, tempVar), tupleType, i);
@@ -1263,6 +1268,11 @@ internal sealed partial class StatementBinder
             for (var i = 0; i < syntax.Identifiers.Count; i++)
             {
                 var idTok = syntax.Identifiers[i];
+                if (IsDiscard(idTok))
+                {
+                    continue;
+                }
+
                 var field = fields[i];
                 var elemVar = bindLocalVariable(idTok, isReadOnly: true, field.Type);
                 var access = new BoundFieldAccessExpression(null, new BoundVariableExpression(null, tempVar), structType, field);
@@ -1321,6 +1331,11 @@ internal sealed partial class StatementBinder
             var statements = ImmutableArray.CreateBuilder<BoundStatement>();
             for (var i = 0; i < identifiers.Count; i++)
             {
+                if (IsDiscard(identifiers[i]))
+                {
+                    continue;
+                }
+
                 var elemType = tupleType.ElementTypes[i];
                 var elemVar = bindLocalVariable(identifiers[i], isReadOnly: true, elemType);
                 var access = new BoundTupleElementAccessExpression(null, elementAccessBase, tupleType, i);
@@ -1343,6 +1358,11 @@ internal sealed partial class StatementBinder
             var statements = ImmutableArray.CreateBuilder<BoundStatement>();
             for (var i = 0; i < identifiers.Count; i++)
             {
+                if (IsDiscard(identifiers[i]))
+                {
+                    continue;
+                }
+
                 var field = fields[i];
                 var elemVar = bindLocalVariable(identifiers[i], isReadOnly: true, field.Type);
                 var access = new BoundFieldAccessExpression(null, elementAccessBase, structType, field);
@@ -1506,7 +1526,6 @@ internal sealed partial class StatementBinder
             for (var i = 0; i < identifiers.Count; i++)
             {
                 var elementType = TypeSymbol.FromClrType(parameters[i + receiverOffset].ParameterType.GetElementType());
-                var variable = bindLocalVariable(identifiers[i], isReadOnly: true, elementType);
                 var temp = new LocalVariableSymbol(
                     $"<deconstruct{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
                     isReadOnly: false,
@@ -1516,10 +1535,14 @@ internal sealed partial class StatementBinder
                     null,
                     new BoundVariableExpression(null, temp)));
                 refKinds.Add(RefKind.Out);
-                declarations.Add(new BoundVariableDeclaration(
-                    null,
-                    variable,
-                    new BoundVariableExpression(null, temp)));
+                if (!IsDiscard(identifiers[i]))
+                {
+                    var variable = bindLocalVariable(identifiers[i], isReadOnly: true, elementType);
+                    declarations.Add(new BoundVariableDeclaration(
+                        null,
+                        variable,
+                        new BoundVariableExpression(null, temp)));
+                }
             }
 
             BoundExpression call = receiverOffset == 1
@@ -1551,7 +1574,10 @@ internal sealed partial class StatementBinder
     {
         for (var i = 0; i < identifiers.Count; i++)
         {
-            bindLocalVariable(identifiers[i], isReadOnly: true, TypeSymbol.Error);
+            if (!IsDiscard(identifiers[i]))
+            {
+                bindLocalVariable(identifiers[i], isReadOnly: true, TypeSymbol.Error);
+            }
         }
     }
 
@@ -1588,6 +1614,11 @@ internal sealed partial class StatementBinder
             if (!TypeMemberModel.TryGetFieldIncludingInherited(structType, fieldName, MemberQuery.Instance(MemberKinds.Field), out var field, out var declaringType))
             {
                 Diagnostics.ReportUnableToFindMember(fieldSyntax.FieldIdentifier.Location, fieldName);
+                continue;
+            }
+
+            if (IsDiscard(fieldSyntax.LocalIdentifier))
+            {
                 continue;
             }
 

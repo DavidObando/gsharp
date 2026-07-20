@@ -1044,6 +1044,11 @@ internal sealed partial class StatementBinder
             {
                 var nameExpr = (NameExpressionSyntax)targets[i];
                 var initializer = bindExpression(values[i]);
+                if (IsDiscard(nameExpr.IdentifierToken))
+                {
+                    continue;
+                }
+
                 var variable = bindLocalVariable(nameExpr.IdentifierToken, isReadOnly: false, type: initializer.Type);
                 statements.Add(new BoundVariableDeclaration(syntax, variable, initializer));
             }
@@ -1070,6 +1075,11 @@ internal sealed partial class StatementBinder
         for (var i = 0; i < targets.Length; i++)
         {
             var nameExpr = (NameExpressionSyntax)targets[i];
+            if (IsDiscard(nameExpr.IdentifierToken))
+            {
+                continue;
+            }
+
             var name = nameExpr.IdentifierToken.Text;
             var variable = bindVariableReference(name, nameExpr.IdentifierToken.Location);
             if (variable == null)
