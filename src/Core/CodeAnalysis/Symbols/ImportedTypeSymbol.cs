@@ -362,6 +362,13 @@ public sealed class ImportedTypeSymbol : TypeSymbol
                 isInitOnly: setter != null && IsInitOnlySetter(setter)));
         }
 
+        var primaryConstructorParameters = BuildPrimaryConstructorParameters(
+            fieldBuilder.ToImmutable(),
+            propertyBuilder.ToImmutable(),
+            fieldByToken,
+            semantics);
+        ApplyPrimaryConstructorDefaults(type, primaryConstructorParameters);
+
         var aggregate = new StructSymbol(
             name: BuildAggregateDisplayName(type),
             fields: fieldBuilder.ToImmutable(),
@@ -371,7 +378,7 @@ public sealed class ImportedTypeSymbol : TypeSymbol
             isData: semantics.IsData,
             isInline: false,
             isClass: !semantics.IsValueType,
-            primaryConstructorParameters: BuildPrimaryConstructorParameters(fieldBuilder.ToImmutable(), propertyBuilder.ToImmutable(), fieldByToken, semantics),
+            primaryConstructorParameters: primaryConstructorParameters,
             isOpen: false,
             baseClass: null,
             clrType: type);
@@ -479,6 +486,7 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         for (var i = 0; i < semantics.PrimaryConstructorParameterNames.Length; i++)
         {
             var name = semantics.PrimaryConstructorParameterNames[i];
+            ParameterSymbol parameter = null;
 
             // Prefer the exact backing field recorded by metadata token
             // (issue #1953 follow-up) — this is immune to the parameter name
@@ -492,23 +500,74 @@ public sealed class ImportedTypeSymbol : TypeSymbol
                 && fieldByToken != null
                 && fieldByToken.TryGetValue(tokens[i], out var tokenField))
             {
-                builder.Add(new ParameterSymbol(name, tokenField.Type));
+                parameter = new ParameterSymbol(name, tokenField.Type);
+            }
+            else if (fieldMap.TryGetValue(name, out var field))
+            {
+                parameter = new ParameterSymbol(name, field.Type);
+            }
+            else if (propertyMap.TryGetValue(name, out var property))
+            {
+                parameter = new ParameterSymbol(name, property.Type);
+            }
+
+            if (parameter == null)
+            {
                 continue;
             }
 
-            if (fieldMap.TryGetValue(name, out var field))
-            {
-                builder.Add(new ParameterSymbol(name, field.Type));
-                continue;
-            }
-
-            if (propertyMap.TryGetValue(name, out var property))
-            {
-                builder.Add(new ParameterSymbol(name, property.Type));
-            }
+            builder.Add(parameter);
         }
 
         return builder.ToImmutable();
+    }
+
+    private static void ApplyPrimaryConstructorDefaults(Type type, ImmutableArray<ParameterSymbol> parameters)
+    {
+        var clrParameters = FindPrimaryConstructorParameters(
+            type,
+            parameters.Select(static parameter => parameter.Name).ToImmutableArray());
+        for (var i = 0; i < parameters.Length && i < clrParameters.Length; i++)
+        {
+            if (TryGetOptionalDefault(clrParameters[i], out var defaultValue))
+            {
+                parameters[i].SetExplicitDefaultValue(defaultValue);
+            }
+        }
+    }
+
+    private static ParameterInfo[] FindPrimaryConstructorParameters(Type type, ImmutableArray<string> names)
+    {
+        foreach (var constructor in ClrTypeUtilities.SafeGetConstructors(type, BindingFlags.Public | BindingFlags.Instance))
+        {
+            var parameters = constructor.GetParameters();
+            if (parameters.Length == names.Length
+                && parameters.Select(static p => p.Name).SequenceEqual(names, StringComparer.Ordinal))
+            {
+                return parameters;
+            }
+        }
+
+        return Array.Empty<ParameterInfo>();
+    }
+
+    private static bool TryGetOptionalDefault(ParameterInfo parameter, out object value)
+    {
+        value = null;
+        try
+        {
+            if (!parameter.IsOptional && !parameter.HasDefaultValue)
+            {
+                return false;
+            }
+
+            value = parameter.RawDefaultValue;
+            return value != DBNull.Value && value != Missing.Value;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static ImmutableArray<FunctionSymbol> BuildMethods(Type type, StructSymbol aggregate, bool includeInternal)

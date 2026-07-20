@@ -755,6 +755,18 @@ internal sealed partial class ExpressionBinder
             && dataClassAggregate.IsData
             && dataClassAggregate.HasPrimaryConstructor)
         {
+            // Issue #2550: gsc data classes also expose a parameterless CLR
+            // constructor as an implementation detail. Bind their source-level
+            // construction through the imported primary-constructor metadata
+            // so `Settings()` supplies declared defaults instead of selecting
+            // that zero-initializing constructor. C# records have no gsc marker
+            // and keep using CLR overload resolution (#2291/#2458).
+            if (ImportedAssemblySemantics.TryGetTypeSemantics(clrType, out _))
+            {
+                result = overloads.BindConstructorCallExpression(syntax, dataClassAggregate);
+                return true;
+            }
+
             return TryBindClrConstructorFromType(
                 clrType,
                 syntax,
