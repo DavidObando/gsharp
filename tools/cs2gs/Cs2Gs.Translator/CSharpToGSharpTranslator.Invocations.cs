@@ -1061,7 +1061,9 @@ public sealed partial class CSharpToGSharpTranslator
             // is rejected (GS0190) — never assert inside a `nameof` argument.
             if (!IsNameOfArgument(argument) && this.ReceiverNeedsNullForgiveness(argument.Expression))
             {
-                return new NonNullAssertionExpression(this.TranslateExpression(argument.Expression));
+                return this.CoerceArrayCovarianceConversion(
+                    argument.Expression,
+                    new NonNullAssertionExpression(this.TranslateExpression(argument.Expression)));
             }
 
             // A C# argument whose declared numeric type differs from the type C#
@@ -1075,11 +1077,18 @@ public sealed partial class CSharpToGSharpTranslator
             // CoerceNumericArgumentToConverted (issue #1281) emits the bare operand
             // when gsc accepts the conversion on its own and keeps the explicit
             // `T(x)` wrap only where gsc still needs it.
-            return this.CoercePointerConversion(
+            //
+            // Issue #2516: CoerceArrayCovarianceConversion is applied OUTERMOST,
+            // after the numeric/pointer coercions, mirroring every other sink —
+            // it only ever fires for an array-typed source, so it never
+            // interferes with either of them.
+            return this.CoerceArrayCovarianceConversion(
                 argument.Expression,
-                this.CoerceNumericArgumentToConverted(
-                    argument,
-                    this.TranslateExpression(argument.Expression)));
+                this.CoercePointerConversion(
+                    argument.Expression,
+                    this.CoerceNumericArgumentToConverted(
+                        argument,
+                        this.TranslateExpression(argument.Expression))));
         }
 
         // Coerce an argument expression to the numeric type C# implicitly converted
@@ -1615,9 +1624,12 @@ public sealed partial class CSharpToGSharpTranslator
                     }
 
                     GExpression value = this.TranslateExpression(assignment.Right);
+                    value = this.CoerceArrayCovarianceConversion(
+                        assignment.Right,
+                        this.ForgiveObjectInitializerValue(assignment, value));
                     fieldInitializers.Add(new FieldInitializer(
                         SanitizeIdentifier(name.Identifier.Text),
-                        this.ForgiveObjectInitializerValue(assignment, value)));
+                        value));
                 }
                 else
                 {
@@ -1680,9 +1692,11 @@ public sealed partial class CSharpToGSharpTranslator
 
                     memberInitializers.Add(new FieldInitializer(
                         SanitizeIdentifier(name.Identifier.Text),
-                        this.ForgiveObjectInitializerValue(
-                            assignment,
-                            this.TranslateExpression(assignment.Right))));
+                        this.CoerceArrayCovarianceConversion(
+                            assignment.Right,
+                            this.ForgiveObjectInitializerValue(
+                                assignment,
+                                this.TranslateExpression(assignment.Right)))));
                 }
                 else
                 {
@@ -1766,11 +1780,13 @@ public sealed partial class CSharpToGSharpTranslator
                     // fixpoint may have promoted.
                     ITypeSymbol indexerValueType = this.context.GetTypeInfo(indexAccess).Type;
                     ISymbol indexerSymbol = this.context.GetSymbolInfo(indexAccess).Symbol;
-                    GExpression indexedValue = this.ForgiveInitializerElementValue(
+                    GExpression indexedValue = this.CoerceArrayCovarianceConversion(
                         indexedAssignment.Right,
-                        this.TranslateExpression(indexedAssignment.Right),
-                        indexerValueType,
-                        indexerSymbol);
+                        this.ForgiveInitializerElementValue(
+                            indexedAssignment.Right,
+                            this.TranslateExpression(indexedAssignment.Right),
+                            indexerValueType,
+                            indexerSymbol));
 
                     elements.Add(new CollectionInitializerElement(
                         this.TranslateIndexArgumentWithNullForgiveness(
@@ -1811,6 +1827,9 @@ public sealed partial class CSharpToGSharpTranslator
                             complex.Expressions[1], pairValue, addMethod.Parameters[1].Type, targetSymbolForPromotionCheck: null);
                     }
 
+                    keyValue = this.CoerceArrayCovarianceConversion(complex.Expressions[0], keyValue);
+                    pairValue = this.CoerceArrayCovarianceConversion(complex.Expressions[1], pairValue);
+
                     elements.Add(new CollectionInitializerElement(keyValue, pairValue, indexed: false));
                 }
                 else
@@ -1826,6 +1845,8 @@ public sealed partial class CSharpToGSharpTranslator
                         bareValue = this.ForgiveInitializerElementValue(
                             element, bareValue, addMethod.Parameters[0].Type, targetSymbolForPromotionCheck: null);
                     }
+
+                    bareValue = this.CoerceArrayCovarianceConversion(element, bareValue);
 
                     elements.Add(new CollectionInitializerElement(bareValue));
                 }
@@ -2266,7 +2287,7 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     updates.Add(new FieldInitializer(
                         SanitizeIdentifier(name.Identifier.Text),
-                        this.TranslateExpression(assignment.Right)));
+                        this.CoerceArrayCovarianceConversion(assignment.Right, this.TranslateExpression(assignment.Right))));
                 }
                 else
                 {

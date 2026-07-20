@@ -1357,7 +1357,9 @@ public sealed partial class CSharpToGSharpTranslator
                 // initializer) → the slice literal `[]T{a, b}`.
                 return new ArrayLiteralExpression(
                     elementType,
-                    creation.Initializer.Expressions.Select(this.TranslateExpression).ToList());
+                    creation.Initializer.Expressions
+                        .Select(e => this.CoerceArrayCovarianceConversion(e, this.TranslateExpression(e)))
+                        .ToList());
             }
 
             // `new T[n]` (runtime/constant length, no initializer) → the native
@@ -1628,7 +1630,9 @@ public sealed partial class CSharpToGSharpTranslator
             GTypeReference elementType = this.GetArrayElementType(creation, null);
             return new ArrayLiteralExpression(
                 elementType,
-                creation.Initializer.Expressions.Select(this.TranslateExpression).ToList());
+                creation.Initializer.Expressions
+                    .Select(e => this.CoerceArrayCovarianceConversion(e, this.TranslateExpression(e)))
+                    .ToList());
         }
 
         private GExpression TranslateInitializerExpression(InitializerExpressionSyntax initializer)
@@ -1640,7 +1644,9 @@ public sealed partial class CSharpToGSharpTranslator
             GTypeReference elementType = this.GetArrayElementType(initializer, null);
             return new ArrayLiteralExpression(
                 elementType,
-                initializer.Expressions.Select(this.TranslateExpression).ToList());
+                initializer.Expressions
+                    .Select(e => this.CoerceArrayCovarianceConversion(e, this.TranslateExpression(e)))
+                    .ToList());
         }
 
         private GExpression TranslateSizeOf(SizeOfExpressionSyntax sizeOf)
@@ -1869,7 +1875,11 @@ public sealed partial class CSharpToGSharpTranslator
                 return new ConversionExpression(elementType, translated);
             }
 
-            return translated;
+            // Issue #2516: a C# 12 collection-expression element that is itself
+            // an array flowing into a covariant element slot (e.g.
+            // `List[IEnumerable[IPerson]]{product.Authors}`) needs the same
+            // array-covariance materialization as every other value sink.
+            return this.CoerceArrayCovarianceConversion(element, translated);
         }
 
         private static bool IsPrimitiveNumeric(ITypeSymbol type) => type.SpecialType switch
