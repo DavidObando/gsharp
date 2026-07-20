@@ -843,7 +843,8 @@ internal sealed partial class ExpressionBinder
             argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
-            structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments));
+            structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
+            methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution));
 
         switch (resolution.Outcome)
         {
@@ -1225,7 +1226,8 @@ internal sealed partial class ExpressionBinder
             argumentNames: extensionArgumentNames,
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments, argumentOffset: 1),
-            structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments, argumentOffset: 1));
+            structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments, argumentOffset: 1),
+            methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution, argumentOffset: 1));
 
         switch (resolution.Outcome)
         {
@@ -2699,7 +2701,8 @@ internal sealed partial class ExpressionBinder
             interpolatedStringArgs,
             argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
-            structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments));
+            structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
+            methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution));
         if (resolution.Outcome != OverloadResolution.ResolutionOutcome.Resolved)
         {
             return false;

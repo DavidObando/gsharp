@@ -662,7 +662,11 @@ internal static class OverloadResolution
     /// Optional binder callback that recognizes an argument's symbolic object
     /// shape as projectable to a candidate CLR parameter type.
     /// </param>
-    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs = null, Func<Type, Type> projectTypeArgument = null, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null, Func<int, Type, bool> structuralProjectionArgumentCheck = null)
+    /// <param name="methodGroupInference">
+    /// Optional callback that resolves a deferred method group from the input
+    /// types of the candidate's delegate parameter for generic inference.
+    /// </param>
+    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs = null, Func<Type, Type> projectTypeArgument = null, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null, Func<int, Type, bool> structuralProjectionArgumentCheck = null, Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>> methodGroupInference = null)
         where T : MethodBase
     {
         var applicable = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)>();
@@ -686,7 +690,7 @@ internal static class OverloadResolution
             // rest.
             try
             {
-                EvaluateCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, interpolatedStringArgs, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck, structuralProjectionArgumentCheck);
+                EvaluateCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, interpolatedStringArgs, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck, structuralProjectionArgumentCheck, methodGroupInference);
             }
             catch (Exception ex) when (IsMetadataLoadFailure(ex))
             {
@@ -1066,16 +1070,23 @@ internal static class OverloadResolution
     /// definition from the supplied argument types. Implements a deliberately
     /// scoped subset of C# §7.5.2 "Type inference": only the input-type
     /// inference phase against argument CLR types, plus exact unification on
-    /// recursive generic / array shapes. Lambdas and unbound delegate-typed
-    /// arguments are not considered. Returns <see langword="true"/> with
+    /// recursive generic / array shapes. Deferred lambdas are not considered;
+    /// a deferred method group can contribute output inference through
+    /// <paramref name="methodGroupInference"/> after its delegate input types
+    /// are inferred from the other arguments. Returns <see langword="true"/> with
     /// <paramref name="typeArgs"/> populated when every method type parameter
     /// receives a single consistent bound; <see langword="false"/> otherwise.
     /// </summary>
     /// <param name="openMethod">An open generic method definition (i.e. <see cref="MethodBase.IsGenericMethodDefinition"/> is <see langword="true"/>).</param>
     /// <param name="argTypes">CLR types of the supplied arguments.</param>
     /// <param name="typeArgs">On success, the inferred type arguments in declaration order.</param>
+    /// <param name="methodGroupInference">Optional deferred method-group signature resolver.</param>
     /// <returns>Whether inference succeeded.</returns>
-    public static bool TryInferTypeArguments(MethodInfo openMethod, IReadOnlyList<Type> argTypes, out Type[] typeArgs)
+    public static bool TryInferTypeArguments(
+        MethodInfo openMethod,
+        IReadOnlyList<Type> argTypes,
+        out Type[] typeArgs,
+        Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>> methodGroupInference = null)
     {
         typeArgs = null;
         if (openMethod is null || !openMethod.IsGenericMethodDefinition)
@@ -1119,6 +1130,17 @@ internal static class OverloadResolution
             if (!UnifyForInference(parameters[i].ParameterType, arg, bounds))
             {
                 return false;
+            }
+        }
+
+        if (methodGroupInference != null)
+        {
+            for (var i = 0; i < argTypes.Count; i++)
+            {
+                if (argTypes[i] is null)
+                {
+                    TryInferMethodGroupArgument(parameters[i].ParameterType, i, bounds, methodGroupInference);
+                }
             }
         }
 
@@ -1388,6 +1410,57 @@ internal static class OverloadResolution
         }
 
         return false;
+    }
+
+    private static bool TryInferMethodGroupArgument(
+        Type delegateType,
+        int argumentIndex,
+        Dictionary<string, Type> bounds,
+        Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>> methodGroupInference)
+    {
+        if (!TryGetDelegateSignature(delegateType, out var delegateParameters, out var delegateReturn))
+        {
+            return false;
+        }
+
+        var closedInputs = new Type[delegateParameters.Length];
+        for (var i = 0; i < delegateParameters.Length; i++)
+        {
+            if (!TryCloseInferredType(delegateParameters[i], bounds, out closedInputs[i]))
+            {
+                return false;
+            }
+        }
+
+        var signature = methodGroupInference(argumentIndex, closedInputs);
+        if (signature?.Item1 is null
+            || signature.Item1.Length != delegateParameters.Length
+            || signature.Item2 is null)
+        {
+            return false;
+        }
+
+        var inferred = new Dictionary<string, Type>(bounds, StringComparer.Ordinal);
+        for (var i = 0; i < delegateParameters.Length; i++)
+        {
+            if (!UnifyForInference(delegateParameters[i], signature.Item1[i], inferred))
+            {
+                return false;
+            }
+        }
+
+        if (!UnifyForInference(delegateReturn, signature.Item2, inferred))
+        {
+            return false;
+        }
+
+        bounds.Clear();
+        foreach (var pair in inferred)
+        {
+            bounds.Add(pair.Key, pair.Value);
+        }
+
+        return true;
     }
 
     private static bool IsSafeArrayInterfaceVariance(Type target, Type source)
@@ -2186,7 +2259,7 @@ internal static class OverloadResolution
     /// so the per-candidate work can be guarded against reflection load
     /// failures (issue #321) without disturbing the surrounding control flow.
     /// </summary>
-    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null, Func<int, Type, bool> structuralProjectionArgumentCheck = null)
+    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null, Func<int, Type, bool> structuralProjectionArgumentCheck = null, Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>> methodGroupInference = null)
         where T : MethodBase
     {
         {
@@ -2266,6 +2339,7 @@ internal static class OverloadResolution
                 // unification, so the mapping must already be known before
                 // inference; we use this open candidate's parameters to compute it.
                 IReadOnlyList<Type> inferenceArgTypes = argTypes;
+                var inferenceMethodGroup = methodGroupInference;
                 if (argumentNames != null && HasAnyNamedArgument(argumentNames))
                 {
                     if (!TryBuildOrderedArgTypesForInference(mi, argTypes, argumentNames, out var orderedArgTypes))
@@ -2274,9 +2348,25 @@ internal static class OverloadResolution
                     }
 
                     inferenceArgTypes = orderedArgTypes;
+                    if (methodGroupInference != null
+                        && TryBuildNamedArgumentMapping(mi.GetParameters(), argTypes.Count, argumentNames, out var sourceToParameter))
+                    {
+                        var parameterToSource = Enumerable.Repeat(-1, mi.GetParameters().Length).ToArray();
+                        for (var sourceIndex = 0; sourceIndex < sourceToParameter.Length; sourceIndex++)
+                        {
+                            parameterToSource[sourceToParameter[sourceIndex]] = sourceIndex;
+                        }
+
+                        inferenceMethodGroup = (parameterIndex, delegateParameters) =>
+                            parameterIndex >= 0
+                                && parameterIndex < parameterToSource.Length
+                                && parameterToSource[parameterIndex] >= 0
+                                ? methodGroupInference(parameterToSource[parameterIndex], delegateParameters)
+                                : null;
+                    }
                 }
 
-                if (!TryInferTypeArguments(mi, inferenceArgTypes, out var typeArgs))
+                if (!TryInferTypeArguments(mi, inferenceArgTypes, out var typeArgs, inferenceMethodGroup))
                 {
                     return;
                 }

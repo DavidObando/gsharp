@@ -1459,6 +1459,11 @@ internal sealed class ConversionClassifier
             targetParameterTypes = pb.MoveToImmutable();
             targetReturnType = userDelegate.ReturnType;
         }
+        else if (MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(targetType, out var importedDelegate))
+        {
+            targetParameterTypes = importedDelegate.ParameterTypes;
+            targetReturnType = importedDelegate.ReturnType;
+        }
         else
         {
             if (targetType != null && targetType != TypeSymbol.Error)
@@ -1487,7 +1492,7 @@ internal sealed class ConversionClassifier
             {
                 var candidateParameterType = candidateOwner?.SubstituteMemberType(candidate.Parameters[i + parameterOffset].Type)
                     ?? candidate.Parameters[i + parameterOffset].Type;
-                if (!ReferenceEquals(candidateParameterType, targetParameterTypes[i]))
+                if (!AreMethodGroupTypesEquivalent(candidateParameterType, targetParameterTypes[i]))
                 {
                     paramsMatch = false;
                     break;
@@ -1500,7 +1505,7 @@ internal sealed class ConversionClassifier
             }
 
             var candidateReturn = candidateOwner?.SubstituteMemberType(candidate.Type) ?? candidate.Type ?? TypeSymbol.Void;
-            if (!ReferenceEquals(candidateReturn, targetReturnType))
+            if (!AreMethodGroupTypesEquivalent(candidateReturn, targetReturnType))
             {
                 continue;
             }
@@ -2163,6 +2168,12 @@ internal sealed class ConversionClassifier
 
         return ClrTypeUtilities.IsAssignableByName(invokeReturn, methodReturn);
     }
+
+    private static bool AreMethodGroupTypesEquivalent(TypeSymbol left, TypeSymbol right)
+        => ReferenceEquals(left, right)
+            || (left?.ClrType != null
+                && right?.ClrType != null
+                && ClrTypeUtilities.AreSame(left.ClrType, right.ClrType));
 
     // ADR-0062: an inner ref-kind modifier on a conditional ref-argument branch
     // must agree with the outer modifier text (`ref`, `out`, `in`, or `&`).

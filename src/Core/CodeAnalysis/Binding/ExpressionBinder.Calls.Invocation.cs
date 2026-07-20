@@ -2534,7 +2534,8 @@ internal sealed partial class ExpressionBinder
                     argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
                     supplementaryInterfaceCheck: supplementaryInterfaceCheck,
                     constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
-                    structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments));
+                    structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
+                    methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution));
                 switch (resolution.Outcome)
                 {
                     case OverloadResolution.ResolutionOutcome.Resolved:
