@@ -3655,8 +3655,10 @@ internal sealed class MemberLookup
     /// Issue #1422: projects a single symbolic type argument onto an erased CLR
     /// type in <paramref name="contextObject"/>'s load context. Nested
     /// constructed generics (carrying an <see cref="ImportedTypeSymbol.OpenDefinition"/>)
-    /// are rebuilt recursively so their generic shape survives; leaf type
-    /// parameters and other leaves collapse to <paramref name="contextObject"/>.
+    /// are rebuilt recursively so their generic shape survives; a nullable-
+    /// reference wrapper (#2523) recurses into its underlying so the same
+    /// rules apply through it; leaf type parameters and other genuinely
+    /// unresolved leaves collapse to <paramref name="contextObject"/>.
     /// Returns <see langword="null"/> when no useful erasure could be formed.
     /// </summary>
     /// <param name="symbolicArg">The symbolic type argument.</param>
@@ -3685,6 +3687,21 @@ internal sealed class MemberLookup
                     imp.OpenDefinition.GetGenericArguments(),
                     imp.TypeArguments,
                     contextObject);
+            case NullableTypeSymbol nullableArg:
+                // Issue #2523: a nullable-reference wrapper (e.g. `Child?`
+                // recovered as an imported generic method's inferred type
+                // argument, #2498/#2499) has no distinct CLR shape of its
+                // own — recurse into the underlying so it is erased (or
+                // preserved, see the `default` arm below) by the exact same
+                // rule as its non-nullable form. A value-type `Nullable<T>`
+                // (BCL or same-compilation struct/enum, including an open
+                // `struct`-constrained type parameter) keeps its own distinct
+                // runtime shape, so it still projects through
+                // `NullableLifting.GetEffectiveClrType` rather than recursing
+                // into the bare `T`.
+                return NullableLifting.IsAnyValueTypeNullable(nullableArg)
+                    ? (NullableLifting.GetEffectiveClrType(nullableArg) ?? contextObject)
+                    : ProjectSymbolicArgToErasedClr(nullableArg.UnderlyingType, contextObject);
             case TupleTypeSymbol tuple:
                 // Issue #1902: a positional tuple carrying a same-compilation
                 // user element (e.g. the `(Owner, Pet)` transparent identifier
@@ -3708,10 +3725,30 @@ internal sealed class MemberLookup
                 // case above.
                 return BuildErasedTupleInContext(tuple, contextObject);
             default:
-                // Concrete leaf (e.g. a fully-closed imported type): erase to the
-                // context placeholder so the shape stays in a single load context
-                // and mirrors how the same leaf is erased on the selector side.
-                return contextObject;
+                // Issue #2523: a concrete leaf that already carries a real,
+                // fully-resolved CLR type (e.g. a plain imported class/struct/
+                // interface, unrelated to whichever OTHER type-argument slot
+                // triggered this symbolic construction) must keep that real
+                // type rather than collapse to the `object` placeholder.
+                // Blanket-erasing every slot — including ones with nothing
+                // symbolic to preserve — silently destroyed the constructed
+                // generic's declared base-interface relationship whenever an
+                // imported generic method/type substituted only a SUBSET of
+                // its type parameters symbolically (e.g. EF Core's
+                // `IIncludableQueryable<TEntity,TProperty>` recovering a
+                // nullable `TProperty` while `TEntity` is an ordinary closed
+                // type): `IIncludableQueryable<object,object>` does not
+                // implement `IQueryable<Entity>`, but the real
+                // `IIncludableQueryable<Entity,Child>` does, so erasing
+                // `TEntity` broke every downstream base-interface conversion,
+                // return/assignment/argument check, and extension-receiver
+                // lookup for the OTHER, unrelated slot. A leaf with no CLR
+                // type yet (a same-compilation type still being built, or a
+                // bare type parameter — handled above) still falls back to
+                // the context placeholder, and a genuine cross-load-context
+                // mismatch is still caught by the caller's `MakeGenericType`
+                // try/catch, which falls back to the flat all-object erasure.
+                return symbolicArg?.ClrType ?? contextObject;
         }
     }
 
@@ -4142,15 +4179,25 @@ internal sealed class MemberLookup
             }
 
             // Pattern A: actual is an ImportedTypeSymbol whose OpenDefinition matches exactly.
+            // Issue #2523: when `actual` carries no symbolic OpenDefinition/
+            // TypeArguments (an ordinary closed imported generic reflected
+            // directly — e.g. a chained `Include(...).Include(...)` result
+            // whose OWN type arguments were already fully concrete, so no
+            // #833 symbolic construction was needed for IT), fall back to
+            // reflecting the shape straight off its ClrType. Without this, a
+            // later chained call (`.ThenInclude(...)`) that needs a method
+            // type parameter appearing ONLY in the receiver's declared shape
+            // (e.g. `TEntity`) — because the earlier link had nothing else
+            // to recover symbolically — silently failed to unify it at all,
+            // surfacing the raw unsubstituted `TEntity` in the result.
             if (actual is ImportedTypeSymbol imp
-                && imp.OpenDefinition != null
-                && ClrTypeUtilities.AreSame(imp.OpenDefinition, openDef)
-                && !imp.TypeArguments.IsDefaultOrEmpty
-                && imp.TypeArguments.Length == openArgs.Length)
+                && TryGetEffectiveGenericShape(imp, out var impOpenDef, out var impTypeArgs)
+                && ClrTypeUtilities.AreSame(impOpenDef, openDef)
+                && impTypeArgs.Length == openArgs.Length)
             {
                 for (int j = 0; j < openArgs.Length; j++)
                 {
-                    UnifyForMethodTypeArgs(openArgs[j], imp.TypeArguments[j], openMethod, result);
+                    UnifyForMethodTypeArgs(openArgs[j], impTypeArgs[j], openMethod, result);
                 }
 
                 return;
@@ -4229,9 +4276,12 @@ internal sealed class MemberLookup
             // Pattern C: actual is an ImportedTypeSymbol whose OpenDefinition is
             // a derived/implementing shape (e.g. List<T> formal-matched against
             // IEnumerable<TSource>). Walk the actual's interfaces/base.
-            if (actual is ImportedTypeSymbol imp2 && imp2.OpenDefinition != null && !imp2.TypeArguments.IsDefaultOrEmpty)
+            // Issue #2523: same ordinary-closed-generic fallback as Pattern A
+            // above — an actual with no symbolic OpenDefinition/TypeArguments
+            // still has a perfectly walkable closed ClrType shape.
+            if (actual is ImportedTypeSymbol imp2 && TryGetEffectiveGenericShape(imp2, out var imp2OpenDef, out var imp2TypeArgs))
             {
-                if (TryMapThroughImplemented(imp2, openDef, out var liftedArgs))
+                if (TryMapThroughImplemented(imp2OpenDef, imp2TypeArgs, openDef, out var liftedArgs))
                 {
                     for (int j = 0; j < openArgs.Length && j < liftedArgs.Length; j++)
                     {
@@ -4382,17 +4432,72 @@ internal sealed class MemberLookup
         };
     }
 
+    /// <summary>
+    /// Issue #2523: returns the generic shape (open definition + symbolic type
+    /// arguments) to use for structural unification (<see cref="UnifyForMethodTypeArgs"/>,
+    /// Patterns A/C) against <paramref name="imp"/>. Prefers the symbolic
+    /// <see cref="ImportedTypeSymbol.OpenDefinition"/>/<see cref="ImportedTypeSymbol.TypeArguments"/>
+    /// (#313/#833) when present. Falls back to reflecting the shape directly
+    /// off <see cref="TypeSymbol.ClrType"/> when they are absent — which is the
+    /// ordinary case for a receiver whose OWN type arguments were already fully
+    /// concrete (so no #833 symbolic construction was needed for it), e.g. a
+    /// chained `Include(...).Include(...)` link that itself needed no nullable/
+    /// same-compilation/type-parameter recovery. Without this fallback, a
+    /// LATER chained call needing a method type parameter that appears ONLY in
+    /// such a receiver's declared shape (e.g. the `TEntity` of `ThenInclude`,
+    /// recoverable only from the `Include` result it is chained off of) could
+    /// never unify it, silently leaving that slot unsubstituted.
+    /// </summary>
+    /// <param name="imp">The candidate receiver/argument symbol.</param>
+    /// <param name="openDefinition">The effective open generic definition, on success.</param>
+    /// <param name="typeArguments">The effective symbolic type arguments, on success.</param>
+    /// <returns><see langword="true"/> when an effective generic shape could be determined.</returns>
+    private static bool TryGetEffectiveGenericShape(ImportedTypeSymbol imp, out Type openDefinition, out ImmutableArray<TypeSymbol> typeArguments)
+    {
+        if (imp.OpenDefinition != null && !imp.TypeArguments.IsDefaultOrEmpty)
+        {
+            openDefinition = imp.OpenDefinition;
+            typeArguments = imp.TypeArguments;
+            return true;
+        }
+
+        var clr = imp.ClrType;
+        if (clr != null && clr.IsGenericType && !clr.IsGenericTypeDefinition)
+        {
+            openDefinition = clr.GetGenericTypeDefinition();
+            typeArguments = clr.GetGenericArguments().Select(TypeSymbol.FromClrType).ToImmutableArray();
+            return true;
+        }
+
+        openDefinition = null;
+        typeArguments = default;
+        return false;
+    }
+
     private static bool TryMapThroughImplemented(ImportedTypeSymbol imp, Type targetOpenDef, out ImmutableArray<TypeSymbol> liftedArgs)
     {
+        return TryMapThroughImplemented(imp?.OpenDefinition, imp?.TypeArguments ?? default, targetOpenDef, out liftedArgs);
+    }
+
+    /// <summary>
+    /// Issue #2523: overload accepting the (open definition, symbolic type
+    /// arguments) shape directly rather than an <see cref="ImportedTypeSymbol"/>,
+    /// so <see cref="TryGetEffectiveGenericShape"/>'s reflected-ClrType fallback
+    /// (used when the actual receiver carries no symbolic
+    /// <see cref="ImportedTypeSymbol.OpenDefinition"/>) can reuse the same
+    /// interface/base walk as the symbolic-shape callers below.
+    /// </summary>
+    private static bool TryMapThroughImplemented(Type openDefinition, ImmutableArray<TypeSymbol> typeArguments, Type targetOpenDef, out ImmutableArray<TypeSymbol> liftedArgs)
+    {
         liftedArgs = default;
-        if (imp.OpenDefinition == null)
+        if (openDefinition == null)
         {
             return false;
         }
 
         // Walk the open definition's interfaces/base for an instantiation of
         // targetOpenDef, then substitute the symbolic args back through.
-        foreach (var iface in EnumerateOpenInterfacesAndBases(imp.OpenDefinition))
+        foreach (var iface in EnumerateOpenInterfacesAndBases(openDefinition))
         {
             if (!iface.IsGenericType || !ClrTypeUtilities.AreSame(iface.GetGenericTypeDefinition(), targetOpenDef))
             {
@@ -4403,7 +4508,7 @@ internal sealed class MemberLookup
             var lifted = ImmutableArray.CreateBuilder<TypeSymbol>(openArgs.Length);
             foreach (var oa in openArgs)
             {
-                lifted.Add(MapOpenClrTypeToSymbolic(oa, imp.OpenDefinition, imp.TypeArguments));
+                lifted.Add(MapOpenClrTypeToSymbolic(oa, openDefinition, typeArguments));
             }
 
             liftedArgs = lifted.MoveToImmutable();
