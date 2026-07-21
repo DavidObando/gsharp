@@ -593,6 +593,17 @@ internal sealed partial class OverloadResolver
                     var implicitReceiver = new BoundVariableExpression(null, effThis);
                     return BindUserInstanceCall(implicitReceiver, implicitIfaceMethod, boundArguments.ToImmutable(), syntax, argumentNames);
                 }
+
+                // Issue #2600: an interface default method's implicit `this`
+                // also exposes System.Object members. This is the bare-call
+                // counterpart of the qualified interface-receiver fallback
+                // from issue #2304 and applies in every expression context,
+                // including interpolation holes.
+                var implicitObjectReceiver = new BoundVariableExpression(null, effThis);
+                if (tryBindInheritedClrInstanceCall(implicitObjectReceiver, typeof(object), syntax.Identifier.Text, boundArguments.ToImmutable(), syntax, out var implicitObjectCall, null, default, argumentNames))
+                {
+                    return implicitObjectCall;
+                }
             }
 
             // ADR-0089 / ADR-0090: implicit static-self dispatch inside a

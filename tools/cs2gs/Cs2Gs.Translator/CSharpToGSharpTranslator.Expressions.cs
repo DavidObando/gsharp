@@ -299,19 +299,43 @@ public sealed partial class CSharpToGSharpTranslator
                 anonymous.GetLocation(),
                 TranslationSeverity.Info));
 
-            GTypeReference syntheticType = this.context.GetTypeInfo(anonymous).Type is INamedTypeSymbol anonymousType
-                ? this.typeMapper.GetOrCreateAnonymousDataClass(anonymousType, this.context, anonymous.GetLocation())
-                : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+            (GTypeReference Type, IReadOnlyList<IPropertySymbol> Properties) shape =
+                this.context.GetTypeInfo(anonymous).Type is INamedTypeSymbol anonymousType
+                    ? this.typeMapper.GetOrCreateAnonymousDataClassShape(
+                        anonymousType,
+                        this.context,
+                        anonymous.GetLocation())
+                    : (new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType), Array.Empty<IPropertySymbol>());
 
-            var arguments = anonymous.Initializers
-                .Select(i => this.TranslateExpression(i.Expression))
-                .ToList();
+            // Roslyn exposes anonymous properties in constructor order. Drive
+            // construction from that same registered order rather than an
+            // independent member enumeration so declaration and call arity/order
+            // cannot diverge across files or projects.
+            var arguments = shape.Properties.Count == anonymous.Initializers.Count
+                ? shape.Properties
+                    .Select((_, index) => this.TranslateExpression(anonymous.Initializers[index].Expression))
+                    .ToList()
+                : anonymous.Initializers
+                    .Select(initializer => this.TranslateExpression(initializer.Expression))
+                    .ToList();
 
-            return BuildConstruction(syntheticType, arguments);
+            return BuildConstruction(shape.Type, arguments);
         }
 
         private GExpression TranslateMemberAccess(MemberAccessExpressionSyntax member)
         {
+            // C# permits namespace-qualified type expressions without importing
+            // their namespace, including relative qualification from the current
+            // namespace. G# resolves expression receivers as values/types, not as
+            // C# namespace paths. Collapse the whole bound type expression through
+            // the type mapper so it emits the canonical type name and records the
+            // namespace import needed by the generated file.
+            if (this.context.GetSymbolInfo(member).Symbol is INamedTypeSymbol qualifiedType)
+            {
+                return new TypeExpression(
+                    this.typeMapper.Map(qualifiedType, this.context, member.GetLocation()));
+            }
+
             // Issue #2351: a bare (non-invoked) reference to an extension
             // method's method group (e.g. assigned to a delegate) never goes
             // through TranslateInvocation, so track its declaring namespace
@@ -439,9 +463,22 @@ public sealed partial class CSharpToGSharpTranslator
             bool receiverIsAnonymousType =
                 this.context.GetTypeInfo(member.Expression).Type is { IsAnonymousType: true };
 
-            GExpression target = this.MemberBindsToNullableThisExtension(member) || receiverIsAnonymousType
-                ? this.TranslateExpression(member.Expression)
-                : this.TranslateReceiverWithNullForgiveness(member.Expression);
+            GExpression target;
+            if (this.context.GetSymbolInfo(member.Expression).Symbol is INamedTypeSymbol
+                { IsGenericType: true } receiverNamedType)
+            {
+                // A qualified generic type is a MemberAccessExpressionSyntax;
+                // translate its bound type so its type arguments are retained.
+                target = new TypeExpression(
+                    this.typeMapper.Map(receiverNamedType, this.context, member.Expression.GetLocation()));
+            }
+            else
+            {
+                target = this.MemberBindsToNullableThisExtension(member) || receiverIsAnonymousType
+                    ? this.TranslateExpression(member.Expression)
+                    : this.TranslateReceiverWithNullForgiveness(member.Expression);
+            }
+
             string memberName = member.Name.Identifier.Text;
 
             // Issue #1905: C# pointer member access (`p->X`) and plain member

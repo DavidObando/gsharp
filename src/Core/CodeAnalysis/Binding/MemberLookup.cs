@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using GSharp.Core.CodeAnalysis.Symbols;
 
@@ -40,6 +41,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </remarks>
 internal sealed class MemberLookup
 {
+    private static readonly ConditionalWeakTable<MethodInfo, MethodInfo> OpenMethodsByMappedMethod = new();
     private readonly BinderContext binderCtx;
 
     /// <summary>
@@ -184,6 +186,33 @@ internal sealed class MemberLookup
                 if (string.Equals(m.Name, n, StringComparison.Ordinal))
                 {
                     result.Add(m);
+                }
+            }
+
+            if (clrType.IsConstructedGenericType)
+            {
+                foreach (var openMethod in ClrTypeUtilities.SafeGetMethods(
+                    clrType.GetGenericTypeDefinition(),
+                    BindingFlags.Public | BindingFlags.Instance))
+                {
+                    if (!string.Equals(openMethod.Name, n, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        var mapped = TypeBuilder.GetMethod(clrType, openMethod);
+                        OpenMethodsByMappedMethod.GetValue(mapped, _ => openMethod);
+                        if (!IsMethodHiddenByExisting(result, mapped))
+                        {
+                            result.Add(mapped);
+                        }
+                    }
+                    catch (ArgumentException)
+                    {
+                        // Runtime constructed types already exposed their methods above.
+                    }
                 }
             }
 
@@ -3185,8 +3214,17 @@ internal sealed class MemberLookup
             var openParameters = openMethod?.GetParameters();
             if (openParameters != null && (uint)parameterIndex < (uint)openParameters.Length)
             {
+                var openParameterType = openParameters[parameterIndex].ParameterType;
+                if (openParameterType.IsByRef)
+                {
+                    return ByRefTypeSymbol.Get(MapOpenClrTypeToSymbolic(
+                        openParameterType.GetElementType(),
+                        openDefinition,
+                        declaringTypeArguments));
+                }
+
                 return MapOpenClrTypeToSymbolic(
-                    openParameters[parameterIndex].ParameterType,
+                    openParameterType,
                     openDefinition,
                     declaringTypeArguments);
             }
@@ -3194,6 +3232,9 @@ internal sealed class MemberLookup
 
         return TypeSymbol.FromClrType(closedMethod.GetParameters()[parameterIndex].ParameterType);
     }
+
+    internal static MethodInfo GetImportedMethodForEmission(MethodInfo method)
+        => OpenMethodsByMappedMethod.TryGetValue(method, out var openMethod) ? openMethod : method;
 
     /// <summary>Finds the symbolic generic context for a reflected declaring type.</summary>
     /// <param name="imported">The symbolic imported receiver.</param>
@@ -4234,6 +4275,12 @@ internal sealed class MemberLookup
         if (openDeclaringType == null || genericMethod == null)
         {
             return null;
+        }
+
+        if (OpenMethodsByMappedMethod.TryGetValue(genericMethod, out var mappedOpenMethod)
+            && ClrTypeUtilities.AreSame(mappedOpenMethod.DeclaringType, openDeclaringType))
+        {
+            return mappedOpenMethod;
         }
 
         if (ClrTypeUtilities.AreSame(genericMethod.DeclaringType, openDeclaringType))

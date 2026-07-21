@@ -666,7 +666,11 @@ internal static class OverloadResolution
     /// Optional callback that resolves a deferred method group from the input
     /// types of the candidate's delegate parameter for generic inference.
     /// </param>
-    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs = null, Func<Type, Type> projectTypeArgument = null, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null, Func<int, Type, bool> structuralProjectionArgumentCheck = null, Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>> methodGroupInference = null)
+    /// <param name="methodGroupArgumentCheck">
+    /// Optional callback identifying which source arguments are deferred method
+    /// groups, distinguishing them from other naturally untyped arguments.
+    /// </param>
+    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs = null, Func<Type, Type> projectTypeArgument = null, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null, Func<int, Type, bool> structuralProjectionArgumentCheck = null, Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>> methodGroupInference = null, Func<int, bool> methodGroupArgumentCheck = null)
         where T : MethodBase
     {
         var applicable = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)>();
@@ -690,7 +694,7 @@ internal static class OverloadResolution
             // rest.
             try
             {
-                EvaluateCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, interpolatedStringArgs, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck, structuralProjectionArgumentCheck, methodGroupInference);
+                EvaluateCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, interpolatedStringArgs, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck, structuralProjectionArgumentCheck, methodGroupInference, methodGroupArgumentCheck);
             }
             catch (Exception ex) when (IsMetadataLoadFailure(ex))
             {
@@ -2259,7 +2263,7 @@ internal static class OverloadResolution
     /// so the per-candidate work can be guarded against reflection load
     /// failures (issue #321) without disturbing the surrounding control flow.
     /// </summary>
-    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null, Func<int, Type, bool> structuralProjectionArgumentCheck = null, Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>> methodGroupInference = null)
+    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type> argTypes, IReadOnlyList<Type> explicitTypeArgs, Func<Type, Type> projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[] Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool> interpolatedStringArgs = null, IReadOnlyList<string> argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol>> recoverTypeArgSymbols = null, Func<Type, Type, bool> supplementaryInterfaceCheck = null, Func<int, Type, bool> constantNarrowingArgumentCheck = null, Func<int, Type, bool> structuralProjectionArgumentCheck = null, Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>> methodGroupInference = null, Func<int, bool> methodGroupArgumentCheck = null)
         where T : MethodBase
     {
         {
@@ -2478,6 +2482,25 @@ internal static class OverloadResolution
                 paramTypes[i] = paramTypeRewrite != null
                     ? paramTypeRewrite(parameters[paramIndex].ParameterType)
                     : parameters[paramIndex].ParameterType;
+
+                if (argTypes[i] is null
+                    && methodGroupInference != null
+                    && methodGroupArgumentCheck?.Invoke(i) == true)
+                {
+                    if (!TryGetDelegateSignature(paramTypes[i], out var delegateParameters, out var delegateReturn)
+                        || !IsMethodGroupSignatureCompatible(
+                            methodGroupInference(i, delegateParameters),
+                            delegateParameters,
+                            delegateReturn))
+                    {
+                        ok = false;
+                        break;
+                    }
+
+                    conversions[i] = ImplicitConversionKind.Identity;
+                    continue;
+                }
+
                 var conv = ClassifyImplicit(paramTypes[i], argTypes[i], supplementaryInterfaceCheck);
                 if (conv == ImplicitConversionKind.None)
                 {
@@ -2527,6 +2550,33 @@ internal static class OverloadResolution
                 applicable.Add((candidate, conversions, paramTypes, mapping, false));
             }
         }
+    }
+
+    private static bool IsMethodGroupSignatureCompatible(
+        Tuple<Type[], Type> signature,
+        IReadOnlyList<Type> delegateParameters,
+        Type delegateReturn)
+    {
+        if (signature?.Item1 is null
+            || signature.Item1.Length != delegateParameters.Count
+            || signature.Item2 is null)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < delegateParameters.Count; i++)
+        {
+            if (ClassifyImplicit(signature.Item1[i], delegateParameters[i]) == ImplicitConversionKind.None)
+            {
+                return false;
+            }
+        }
+
+        var methodVoid = string.Equals(signature.Item2.FullName, "System.Void", StringComparison.Ordinal);
+        var delegateVoid = string.Equals(delegateReturn?.FullName, "System.Void", StringComparison.Ordinal);
+        return methodVoid || delegateVoid
+            ? methodVoid && delegateVoid
+            : ClassifyImplicit(delegateReturn, signature.Item2) != ImplicitConversionKind.None;
     }
 
     /// <summary>

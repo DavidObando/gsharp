@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
@@ -17,21 +18,10 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Regression tests for issue #2342: <c>CSharpToGSharpTranslator</c> keys its
-/// per-package <see cref="Cs2Gs.Translator.AnonymousTypeRegistry"/> (issue
-/// #2292) by resolved G# package name, so two files in DIFFERENT packages —
-/// e.g. the real Oahu.Data shape, where <c>Oahu.BooksDatabase</c> and
-/// <c>Oahu.BooksDatabase.Migrations</c> each independently synthesize an
-/// anonymous-object shape from an EF-Core-style migration — each mint their
-/// OWN <c>AnonymousType0</c> starting from zero. cs2gs's translation output is
-/// therefore, by design, two same-simple-name top-level
-/// <c>data class AnonymousType0</c> declarations in two different <c>package</c>
-/// blocks. Before the #2342 fix, <c>gsc</c> rejected compiling both files
-/// together with <c>GS0102</c> ("'AnonymousType0' is already declared") because
-/// <c>BoundScope.TryDeclareTypeAlias</c> treated every top-level declaration in
-/// the WHOLE compilation as one flat, package-blind scope. After the fix, both
-/// packages' independently-synthesized shapes compile and emit as distinct
-/// types.
+/// Regression tests for issue #2342: independently synthesized anonymous
+/// shapes in different packages compile and emit as distinct package-qualified
+/// types. Issue #2598 now gives distinct shapes distinct stable simple names as
+/// well, preventing imported-package lookup from selecting the wrong arity.
 /// </summary>
 public class Issue2342CrossPackageAnonymousTypeCollisionTests
 {
@@ -41,12 +31,8 @@ public class Issue2342CrossPackageAnonymousTypeCollisionTests
         // Mirrors the real Oahu.Data shape: a "BooksDatabase" file with its own
         // top-level query shape, and a "BooksDatabase.Migrations" file (a child
         // package) whose migration independently projects an anonymous object.
-        // Both synthesize a shape named "AnonymousType0" (each package's
-        // registry starts counting at zero), and since one package is a strict
-        // dotted PREFIX of the other, the fix must also correctly treat them as
-        // distinct (mirroring the Foo/Foo.Bar prefix-package binder/compiler
-        // tests) rather than accidentally conflating a prefix relationship with
-        // sameness.
+        // One package is a strict dotted prefix of the other, so both package
+        // identity and shape identity must remain distinct.
         const string BooksDatabaseSource = @"
 namespace Oahu.BooksDatabase
 {
@@ -74,12 +60,15 @@ namespace Oahu.BooksDatabase.Migrations
             BooksDatabaseSource,
             "InitialCreate.cs",
             MigrationSource);
+        string booksType = AnonymousTypeName(printedBooksDatabase);
+        string migrationType = AnonymousTypeName(printedMigration);
 
         Assert.Contains("package Oahu.BooksDatabase", printedBooksDatabase);
-        Assert.Contains("data class AnonymousType0(SeriesId int32, BookId int32)", printedBooksDatabase);
+        Assert.Contains($"data class {booksType}(SeriesId int32, BookId int32)", printedBooksDatabase);
 
         Assert.Contains("package Oahu.BooksDatabase.Migrations", printedMigration);
-        Assert.Contains("data class AnonymousType0(Alias string, AudibleId string)", printedMigration);
+        Assert.Contains($"data class {migrationType}(Alias string, AudibleId string)", printedMigration);
+        Assert.NotEqual(booksType, migrationType);
 
         // The proof that matters: gsc must compile BOTH files together (as two
         // distinct packages) with no GS0102 "already declared" collision, and
@@ -88,9 +77,12 @@ namespace Oahu.BooksDatabase.Migrations
             ("BookRepository.gs", printedBooksDatabase),
             ("InitialCreate.gs", printedMigration));
 
-        AssertTypeIsEmitted(dllPath, "Oahu.BooksDatabase.AnonymousType0");
-        AssertTypeIsEmitted(dllPath, "Oahu.BooksDatabase.Migrations.AnonymousType0");
+        AssertTypeIsEmitted(dllPath, $"Oahu.BooksDatabase.{booksType}");
+        AssertTypeIsEmitted(dllPath, $"Oahu.BooksDatabase.Migrations.{migrationType}");
     }
+
+    private static string AnonymousTypeName(string printed) =>
+        Regex.Match(printed, @"data class (AnonymousType\d+_[0-9A-F]{16})\(").Groups[1].Value;
 
     private static (string PrintedA, string PrintedB) TranslateTwoFiles(
         string fileNameA,
@@ -130,9 +122,8 @@ namespace Oahu.BooksDatabase.Migrations
     }
 
     /// <summary>
-    /// Compiles every <c>(fileName, contents)</c> pair together, as ONE gsc
-    /// invocation spanning multiple packages, asserting zero compiler errors,
-    /// and returns the path to the emitted assembly for further inspection.
+    /// Compiles every <c>(fileName, contents)</c> pair together and returns the
+    /// emitted assembly for inspection.
     /// </summary>
     private static string CompileFilesTogether(params (string FileName, string Contents)[] files)
     {

@@ -7,6 +7,8 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection.Metadata;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.Translator.Coverage;
 using Microsoft.CodeAnalysis;
@@ -63,21 +65,11 @@ public sealed class CSharpTypeMapper
     /// combinatorially explode across a large file). See
     /// <see cref="GetOrCreateAnonymousDataClass"/>.
     /// <para>
-    /// Issue #2292: this dictionary (and the synthetic-name counter) is now
-    /// owned by an <see cref="AnonymousTypeRegistry"/> that is shared across
-    /// EVERY <see cref="CSharpTypeMapper"/> instance translating documents
-    /// into the SAME G# package (<c>CSharpToGSharpTranslator</c> creates one
-    /// mapper per source file but keeps one registry per resolved package),
-    /// rather than living directly on this per-file mapper. Two unrelated
-    /// files in the same package used to each start their own private
-    /// dictionary/counter at zero, so a distinct shape in file B could still
-    /// mint the SAME synthetic name (<c>AnonymousType0</c>) as an unrelated
-    /// shape already declared in file A — both top-level declarations landing
-    /// in the same package caused GS0102 "already declared" even though
-    /// per-file the mapper looked file-scoped. Sharing the registry across the
-    /// whole package closes that gap while still deduplicating identical
-    /// shapes package-wide (a shape already declared by an earlier file is
-    /// reused, not re-declared, by a later one).
+    /// The <see cref="AnonymousTypeRegistry"/> is shared by every mapper for a
+    /// package so identical shapes are declared once (#2292). Names are derived
+    /// from the complete ordered shape rather than a translation-local counter,
+    /// keeping distinct declarations unambiguous across packages and projects
+    /// even when one package imports another (#2598).
     /// </para>
     /// </summary>
     private readonly AnonymousTypeRegistry anonymousTypeRegistry;
@@ -147,8 +139,7 @@ public sealed class CSharpTypeMapper
     /// mapper translating a document into the same G# package (issue #2292).
     /// </summary>
     /// <param name="anonymousTypeRegistry">
-    /// The package-scoped registry of already-synthesized anonymous-type
-    /// shapes and the next available synthetic-name index.
+    /// The package-scoped registry of already-synthesized anonymous-type shapes.
     /// </param>
     public CSharpTypeMapper(AnonymousTypeRegistry anonymousTypeRegistry)
     {
@@ -426,27 +417,28 @@ public sealed class CSharpTypeMapper
     /// <param name="context">The translation context that accumulates diagnostics.</param>
     /// <param name="location">The originating C# source location for diagnostics.</param>
     /// <returns>A reference to the synthesized (or already-cached) data class.</returns>
-    public NamedTypeReference GetOrCreateAnonymousDataClass(INamedTypeSymbol anonymousType, TranslationContext context, Location location)
+    public NamedTypeReference GetOrCreateAnonymousDataClass(INamedTypeSymbol anonymousType, TranslationContext context, Location location) =>
+        this.GetOrCreateAnonymousDataClassShape(anonymousType, context, location).Type;
+
+    internal (NamedTypeReference Type, IReadOnlyList<IPropertySymbol> Properties) GetOrCreateAnonymousDataClassShape(
+        INamedTypeSymbol anonymousType,
+        TranslationContext context,
+        Location location)
     {
         List<IPropertySymbol> properties = anonymousType.GetMembers().OfType<IPropertySymbol>().ToList();
         string shapeKey = string.Join(
             "|",
             properties.Select(p => p.Name + ":" + p.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)));
 
-        // Issue #2292: the shape->name dictionary and the synthetic-name
-        // counter both live on the shared package-scoped `anonymousTypeRegistry`
-        // (not on this per-file mapper), so a shape already synthesized by an
-        // EARLIER file in the same package is reused here (no re-declaration,
-        // avoiding a same-name GS0102 for an identical shape), and a shape
-        // that is new to this file still draws its synthetic index from the
-        // package-wide counter (so a distinct shape never collides with a
-        // name already minted by another file in the same package).
+        // A shape synthesized by an earlier file in the same package is reused
+        // without redeclaration. A new shape gets the same deterministic name
+        // in every document or project that translates it (#2598).
         if (this.anonymousTypeRegistry.TryGetExisting(shapeKey, out NamedTypeReference existing))
         {
-            return existing;
+            return (existing, properties);
         }
 
-        string syntheticName = this.anonymousTypeRegistry.NextSyntheticName();
+        string syntheticName = AnonymousTypeRegistry.SyntheticName(shapeKey, properties.Count);
         var parameters = properties
             .Select(p => new Cs2Gs.CodeModel.Ast.Parameter(CSharpToGSharpTranslator.SanitizeIdentifier(p.Name), this.Map(p.Type, context, location)))
             .ToList();
@@ -466,7 +458,7 @@ public sealed class CSharpTypeMapper
         var reference = new NamedTypeReference(syntheticName);
         this.anonymousTypeRegistry.Register(shapeKey, reference);
         this.pendingAnonymousDataClasses.Add(declaration);
-        return reference;
+        return (reference, properties);
     }
 
     /// <summary>
@@ -1185,26 +1177,14 @@ public sealed class CSharpTypeMapper
 }
 
 /// <summary>
-/// Issue #2292: the shape-&gt;synthesized-type dictionary and synthetic-name
-/// counter that <see cref="CSharpTypeMapper.GetOrCreateAnonymousDataClass"/>
-/// uses, factored out of <see cref="CSharpTypeMapper"/> so it can be shared
-/// across every mapper instance translating a document into the SAME G#
-/// package. <c>CSharpToGSharpTranslator</c> creates one <see cref="CSharpTypeMapper"/>
-/// per source file (so per-file state like <see cref="CSharpTypeMapper.ShortenedNamespaces"/>
-/// stays file-scoped) but keeps exactly one <see cref="AnonymousTypeRegistry"/>
-/// per resolved package name, keyed in a dictionary that outlives any single
-/// <c>TranslateDocument</c> call. Without this, two unrelated files in the
-/// same package each started counting from <c>AnonymousType0</c>, so a
-/// DISTINCT shape in file B could mint the exact name already used by an
-/// UNRELATED shape in file A — both top-level <c>data class</c> declarations
-/// landing in the same package/namespace, which is a GS0102 "already
-/// declared" collision at the gsc compile stage even though each file's own
-/// translation looked internally consistent.
+/// Stores the anonymous shapes already declared in one G# package. The
+/// registry is shared across that package's documents for declaration
+/// deduplication (#2292), while <see cref="SyntheticName"/> derives names from
+/// complete ordered shapes so independent packages and projects agree (#2598).
 /// </summary>
 public sealed class AnonymousTypeRegistry
 {
     private readonly Dictionary<string, NamedTypeReference> byShape = new(System.StringComparer.Ordinal);
-    private int nextIndex;
 
     /// <summary>
     /// Looks up an already-synthesized data-class reference for
@@ -1219,14 +1199,19 @@ public sealed class AnonymousTypeRegistry
         this.byShape.TryGetValue(shapeKey, out existing);
 
     /// <summary>
-    /// Mints the next package-wide-unique synthetic name (<c>AnonymousType0</c>,
-    /// <c>AnonymousType1</c>, ...). Drawing from a single counter shared by
-    /// every file in the package (rather than each file counting from zero)
-    /// is what prevents two distinct shapes in different files from
-    /// colliding on the same name.
+    /// Produces a deterministic synthetic name from the complete ordered shape.
+    /// The name is therefore identical wherever the same shape is translated
+    /// and different for unrelated shapes even when separate documents,
+    /// packages, projects, or translator instances are involved.
     /// </summary>
-    /// <returns>The next unused synthetic type name.</returns>
-    public string NextSyntheticName() => $"AnonymousType{this.nextIndex++}";
+    /// <param name="shapeKey">The ordered member-name/type shape.</param>
+    /// <param name="arity">The number of members in the shape.</param>
+    /// <returns>A stable shape-derived synthetic type name.</returns>
+    public static string SyntheticName(string shapeKey, int arity)
+    {
+        byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(shapeKey));
+        return $"AnonymousType{arity}_{System.Convert.ToHexString(hash, 0, 8)}";
+    }
 
     /// <summary>
     /// Records that <paramref name="shapeKey"/> now resolves to

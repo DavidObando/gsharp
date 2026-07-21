@@ -612,6 +612,11 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private BoundExpression BindExtensionMethodGroupOrError(BoundExpression receiver, NameExpressionSyntax name)
     {
+        if (receiver is BoundErrorExpression)
+        {
+            return receiver;
+        }
+
         if (receiver != null)
         {
             var userCandidates = scope.TryLookupExtensionFunctions(receiver.Type, name.IdentifierToken.Text);

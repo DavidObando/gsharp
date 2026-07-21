@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.Loader;
 using GsCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GsSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree;
@@ -159,6 +160,80 @@ public class Issue2291ImportedRecordWithCopyTests
     }
 
     [Fact]
+    public void Imported_SealedCSharpRecord_QualifiedTypeClause_With_Runs()
+    {
+        var referencePath = EmitCSharpReferenceLibrary(
+            nameof(this.Imported_SealedCSharpRecord_QualifiedTypeClause_With_Runs),
+            """
+            namespace Records
+            {
+                public sealed record Settings
+                {
+                    public string Label { get; init; } = "ready";
+                    public int Retries { get; init; } = 3;
+                }
+            }
+            """,
+            out var libraryPath);
+
+        using var resolver = ReferenceResolver.WithReferences(new[] { referencePath });
+        resolver.CurrentAssemblyName = "Consumer";
+        Assert.True(resolver.TryResolveType("Records.Settings", out var reflected));
+        Assert.True(ImportedAssemblySemantics.TryDetectCSharpRecordSemantics(reflected, out _));
+
+        var consumer = new GsCompilation(
+            resolver,
+            GsSyntaxTree.Parse(SourceText.From(
+                """
+                package Consumer
+
+                func Change(value Records.Settings) Records.Settings ->
+                    value with { Label = "copied", Retries = 8 }
+
+                func Main() {
+                    let original = Records.Settings()
+                    let changed = Change(original)
+                    Console.WriteLine(original.Label)
+                    Console.WriteLine(original.Retries)
+                    Console.WriteLine(changed.Label)
+                    Console.WriteLine(changed.Retries)
+                }
+                """)));
+
+        using var peStream = new MemoryStream();
+        var result = consumer.Emit(peStream, pdbStream: null, refStream: null, assemblyName: "Consumer");
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
+
+        peStream.Position = 0;
+        var loadContext = new AssemblyLoadContext("Issue2551-QualifiedRecord", isCollectible: true);
+        loadContext.Resolving += (context, name) =>
+            string.Equals(name.Name, "CSharpLib2291", StringComparison.Ordinal)
+                ? context.LoadFromAssemblyPath(libraryPath)
+                : null;
+        try
+        {
+            var assembly = loadContext.LoadFromStream(peStream);
+            var stdout = Console.Out;
+            using var captured = new StringWriter();
+            Console.SetOut(captured);
+            try
+            {
+                assembly.EntryPoint!.Invoke(null, null);
+            }
+            finally
+            {
+                Console.SetOut(stdout);
+            }
+
+            Assert.Equal("ready\n3\ncopied\n8\n", captured.ToString().Replace("\r\n", "\n", StringComparison.Ordinal));
+        }
+        finally
+        {
+            loadContext.Unload();
+        }
+    }
+
+    [Fact]
     public void Imported_PlainCSharpClass_With_StillReportsGs0161()
     {
         var libraryPath = EmitCSharpLibrary(
@@ -194,6 +269,31 @@ public class Issue2291ImportedRecordWithCopyTests
         Directory.CreateDirectory(outputDir);
         var libraryPath = Path.Combine(outputDir, "CSharpLib2291.dll");
 
+        var compilation = CreateCSharpCompilation(recordSource);
+        using (var peStream = File.Create(libraryPath))
+        {
+            var emitResult = compilation.Emit(peStream);
+            Assert.True(emitResult.Success, string.Join(Environment.NewLine, emitResult.Diagnostics));
+        }
+
+        return libraryPath;
+    }
+
+    private static string EmitCSharpReferenceLibrary(string caseName, string recordSource, out string implementationPath)
+    {
+        implementationPath = EmitCSharpLibrary(caseName, recordSource);
+        var referencePath = Path.Combine(Path.GetDirectoryName(implementationPath)!, "CSharpLib2291.ref.dll");
+        var compilation = CreateCSharpCompilation(recordSource);
+        using var peStream = File.Create(referencePath);
+        var emitResult = compilation.Emit(
+            peStream,
+            options: new Microsoft.CodeAnalysis.Emit.EmitOptions(metadataOnly: true, includePrivateMembers: false));
+        Assert.True(emitResult.Success, string.Join(Environment.NewLine, emitResult.Diagnostics));
+        return referencePath;
+    }
+
+    private static CSharpCompilation CreateCSharpCompilation(string recordSource)
+    {
         var syntaxTree = Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(
             recordSource,
             new CSharpParseOptions(LanguageVersion.Latest));
@@ -207,18 +307,10 @@ public class Issue2291ImportedRecordWithCopyTests
             .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))
             .ToList();
 
-        var compilation = CSharpCompilation.Create(
+        return CSharpCompilation.Create(
             "CSharpLib2291",
             new[] { syntaxTree },
             references,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-
-        using (var peStream = File.Create(libraryPath))
-        {
-            var emitResult = compilation.Emit(peStream);
-            Assert.True(emitResult.Success, string.Join(Environment.NewLine, emitResult.Diagnostics));
-        }
-
-        return libraryPath;
     }
 }

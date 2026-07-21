@@ -1560,7 +1560,7 @@ internal sealed partial class StatementBinder
                 : new BoundImportedInstanceCallExpression(
                     null,
                     receiver,
-                    method,
+                    MemberLookup.GetImportedMethodForEmission(method),
                     TypeSymbol.Void,
                     arguments.MoveToImmutable(),
                     refKinds.MoveToImmutable());
