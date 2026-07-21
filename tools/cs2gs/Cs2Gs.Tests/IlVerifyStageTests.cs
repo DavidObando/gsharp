@@ -156,33 +156,39 @@ public class IlVerifyStageTests
         const string Conversion =
             "Oahu.Core.UI.Avalonia.Views.ConversionView+XamlClosure_2::Build_1([System.ComponentModel]System.IServiceProvider)";
         var builder = new TriageBuilder("run_1", "2026-07-21T00:00:00Z", "0.3.0", "corpus/Oahu.UI");
+        string bookLibraryError = AvaloniaObjectSlotError(BookLibrary, "[System.ComponentModel.Primitives]System.ComponentModel.ISupportInitialize");
+        string conversionError = AvaloniaObjectSlotError(Conversion, "[System.ComponentModel.Primitives]System.ComponentModel.ISupportInitialize");
 
         Assert.Equal(
             "sha256:9d0322446fc5a1cc4b78e2a66d5d83354b6e527fcd49d9f907fe63ccbb034a53",
-            builder.IlVerifyFailure(new IlVerifyError("StackUnexpected", BookLibrary, BookLibrary)).Fingerprint);
+            builder.IlVerifyFailure(new IlVerifyError("StackUnexpected", BookLibrary, bookLibraryError)).Fingerprint);
         Assert.Equal(
             "sha256:94a053bb50ec2721c8600fe77dd02aa29a401f95bf174b39b459218f5dfea5a7",
-            builder.IlVerifyFailure(new IlVerifyError("StackUnexpected", Conversion, Conversion)).Fingerprint);
+            builder.IlVerifyFailure(new IlVerifyError("StackUnexpected", Conversion, conversionError)).Fingerprint);
 
         var errors = new[]
         {
-            new IlVerifyError("StackUnexpected", BookLibrary, BookLibrary),
-            new IlVerifyError("StackUnexpected", Conversion, Conversion),
+            new IlVerifyError("StackUnexpected", BookLibrary, bookLibraryError),
+            new IlVerifyError("StackUnexpected", Conversion, conversionError),
             new IlVerifyError(
                 "StackUnexpected",
                 "Demo.View+XamlClosure_17::Build_42([System.ComponentModel]System.IServiceProvider)",
-                "generalized"),
+                AvaloniaObjectSlotError(
+                    "Demo.View+XamlClosure_17::Build_42([System.ComponentModel]System.IServiceProvider)",
+                    "Demo.Control")),
             new IlVerifyError("StackUnexpected", "Demo.View+XamlClosure_1::CreateContext()", "real create"),
             new IlVerifyError("StackUnexpected", "Demo.View+Closure_1::Build_1()", "real closure"),
             new IlVerifyError("ReturnVoid", "Demo.View+XamlClosure_1::Build_1()", "real code"),
+            new IlVerifyError("StackUnexpected", BookLibrary, "[found value 'int32'][expected ref 'object']"),
         };
 
         IReadOnlyList<IlVerifyError> filtered = IlVerifyRunner.FilterIgnored(errors);
 
-        Assert.Equal(3, filtered.Count);
+        Assert.Equal(4, filtered.Count);
         Assert.Contains(filtered, e => e.Method!.EndsWith("::CreateContext()", StringComparison.Ordinal));
         Assert.Contains(filtered, e => e.Method!.Contains("+Closure_1::", StringComparison.Ordinal));
         Assert.Contains(filtered, e => e.Code == "ReturnVoid");
+        Assert.Contains(filtered, e => e.RawLine!.Contains("found value 'int32'", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -460,6 +466,10 @@ public class IlVerifyStageTests
         Assert.True((bool)result.GetType().GetField("BeginCalled")!.GetValue(result)!);
         Assert.True((bool)result.GetType().GetField("EndCalled")!.GetValue(result)!);
     }
+
+    private static string AvaloniaObjectSlotError(string method, string expected) =>
+        $"[IL]: Error [StackUnexpected]: [/proof/Oahu.UI.dll : {method}]" +
+        $"[offset 0x0000001B][found ref 'object'][expected ref '{expected}'] Unexpected type on the stack.";
 
     private static string FindCompiler()
     {

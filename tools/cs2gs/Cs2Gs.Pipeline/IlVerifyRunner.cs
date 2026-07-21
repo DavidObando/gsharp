@@ -43,7 +43,11 @@ public class IlVerifyRunner
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex AvaloniaXamlClosureBuildPattern = new Regex(
-        @"(?:^|\+)XamlClosure_\d+::Build_\d+\(",
+        @"(?:^|\+)XamlClosure_\d+::Build_\d+\(\[System\.ComponentModel\]System\.IServiceProvider\)$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex AvaloniaObjectSlotStackMismatchPattern = new Regex(
+        @"\[found ref 'object'\]\[expected ref '[^'\r\n]+'\] Unexpected type on the stack\.$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly object ToolRestoreSync = new();
@@ -271,10 +275,12 @@ public class IlVerifyRunner
             return false;
         }
 
-        return error.Method.StartsWith(
+        bool generatedContextMethod = error.Method.StartsWith(
                 "CompiledAvaloniaXaml.XamlIlContext+Context`1::",
-                StringComparison.Ordinal)
-            || AvaloniaXamlClosureBuildPattern.IsMatch(error.Method);
+                StringComparison.Ordinal);
+        bool generatedClosureObjectSlot = AvaloniaXamlClosureBuildPattern.IsMatch(error.Method)
+            && AvaloniaObjectSlotStackMismatchPattern.IsMatch(error.RawLine ?? string.Empty);
+        return generatedContextMethod || generatedClosureObjectSlot;
     }
 
     private static IReadOnlyList<string> BuildReferenceSet(
