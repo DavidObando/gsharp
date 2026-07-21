@@ -510,7 +510,8 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression translated = this.TranslateExpression(recv);
 
             if (this.ReceiverNeedsNullForgiveness(recv, isDereferenceReceiver: true)
-                || this.ReceiverIsNullableReferenceFieldOrProperty(recv))
+                || this.ReceiverIsNullableReferenceFieldOrProperty(recv)
+                || this.NullableReferenceValueMayBeNull(recv))
             {
                 translated = new NonNullAssertionExpression(translated);
             }
@@ -737,7 +738,75 @@ public sealed partial class CSharpToGSharpTranslator
                 return new NonNullAssertionExpression(translated);
             }
 
-            return translated;
+            (ITypeSymbol targetType, ISymbol targetSymbol) = this.FindContextualValueTarget(value);
+            return this.ForgiveNullableReferenceValue(value, translated, targetType, targetSymbol);
+        }
+
+        private GExpression ForgiveNullableReferenceValue(
+            ExpressionSyntax value,
+            GExpression translated,
+            ITypeSymbol targetType,
+            ISymbol targetSymbol)
+        {
+            if (translated is NonNullAssertionExpression
+                || value is PostfixUnaryExpressionSyntax
+                    { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
+                || this.IsWithinExpressionTreeLambda(value)
+                || !this.TargetWillRemainNonNullableReference(targetType, targetSymbol)
+                || !this.NullableReferenceValueMayBeNull(value))
+            {
+                return translated;
+            }
+
+            GExpression operand = value is ConditionalExpressionSyntax
+                or SwitchExpressionSyntax
+                or ConditionalAccessExpressionSyntax
+                    ? new ParenthesizedExpression(translated)
+                    : translated;
+            return new NonNullAssertionExpression(operand);
+        }
+
+        private bool NullableReferenceValueMayBeNull(ExpressionSyntax value)
+        {
+            if (value is PostfixUnaryExpressionSyntax
+                    { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
+                || this.IsWithinExpressionTreeLambda(value))
+            {
+                return false;
+            }
+
+            TypeInfo typeInfo = this.context.GetTypeInfo(value);
+            ITypeSymbol type = typeInfo.Type ?? typeInfo.ConvertedType;
+            return type is { IsReferenceType: true }
+                && typeInfo.Nullability.FlowState == NullableFlowState.MaybeNull
+                && (type.NullableAnnotation == NullableAnnotation.Annotated
+                    || typeInfo.Nullability.Annotation == NullableAnnotation.Annotated);
+        }
+
+        private (ITypeSymbol Type, ISymbol Symbol) FindContextualValueTarget(ExpressionSyntax value)
+        {
+            SyntaxNode current = value;
+            while (current.Parent is ParenthesizedExpressionSyntax
+                or ConditionalExpressionSyntax
+                or SwitchExpressionArmSyntax)
+            {
+                current = current.Parent;
+            }
+
+            ISymbol target = current.Parent switch
+            {
+                ReturnStatementSyntax => this.context.SemanticModel.GetEnclosingSymbol(value.SpanStart),
+                ArrowExpressionClauseSyntax arrow => this.context.GetDeclaredSymbol(arrow.Parent),
+                _ => null,
+            };
+
+            ITypeSymbol targetType = target switch
+            {
+                IMethodSymbol method => method.ReturnType,
+                IPropertySymbol property => property.Type,
+                _ => this.context.GetTypeInfo(value).ConvertedType,
+            };
+            return (targetType, target);
         }
 
         // Issue #2511: element-access arguments are call-like value sinks too.
@@ -751,8 +820,7 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateIndexArgumentWithNullForgiveness(ArgumentSyntax argument)
         {
             GExpression translated = this.TranslateExpression(argument.Expression);
-            if (!this.IsObliviousCompilation()
-                || !this.IndexArgumentTargetsNonNullableReference(argument)
+            if (!this.IndexArgumentTargetsNonNullableReference(argument)
                 || !this.IndexArgumentValueNeedsNullForgiveness(argument.Expression))
             {
                 return translated;
@@ -775,7 +843,18 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            ISymbol valueSymbol = this.context.GetSymbolInfo(value).Symbol;
+            if (valueSymbol != null && this.IsDominatedByNullCheckGuard(value, valueSymbol))
+            {
+                return false;
+            }
+
             if (this.ReceiverNeedsNullForgiveness(value))
+            {
+                return true;
+            }
+
+            if (this.NullableReferenceValueMayBeNull(value))
             {
                 return true;
             }
@@ -797,8 +876,9 @@ public sealed partial class CSharpToGSharpTranslator
                     return true;
             }
 
-            ISymbol symbol = this.context.GetSymbolInfo(value).Symbol;
-            return symbol is IFieldSymbol or IPropertySymbol or ILocalSymbol or IParameterSymbol or IMethodSymbol
+            ISymbol symbol = valueSymbol;
+            return this.IsObliviousCompilation()
+                && symbol is IFieldSymbol or IPropertySymbol or ILocalSymbol or IParameterSymbol or IMethodSymbol
                 && this.IsNullablePromotedValue(value)
                 && !this.IsDominatedByNullCheckGuard(value, symbol);
         }

@@ -95,6 +95,17 @@ public sealed partial class CSharpToGSharpTranslator
                     }
                 }
 
+                if (initializer != null
+                    && declarator.Initializer?.Value is { } initializerSyntax
+                    && this.context.GetDeclaredSymbol(declarator) is ILocalSymbol localTarget)
+                {
+                    initializer = this.ForgiveNullableReferenceValue(
+                        initializerSyntax,
+                        initializer,
+                        localTarget.Type,
+                        localTarget);
+                }
+
                 // Issue #1954: `var g2 = grid;` — a simple `var` local initialized
                 // directly from another local/parameter/field that is ITSELF a
                 // tracked flat-lowered multi-dim array (see `multiDimArrays`)
@@ -1785,6 +1796,24 @@ public sealed partial class CSharpToGSharpTranslator
                     assignRhs = this.ForgiveEventSubscriptionRhs(assignment, assignRhs);
                     assignRhs = this.ForgiveElementAccessAssignmentRhs(assignment, assignRhs);
                     assignRhs = this.ForgiveObliviousExternalAssignmentRhs(assignment, assignRhs);
+                    if (assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
+                    {
+                        ISymbol assignmentTarget = this.context.GetSymbolInfo(assignment.Left).Symbol;
+                        ITypeSymbol assignmentTargetType = assignmentTarget switch
+                        {
+                            ILocalSymbol local => local.Type,
+                            IParameterSymbol parameter => parameter.Type,
+                            IFieldSymbol field => field.Type,
+                            IPropertySymbol property => property.Type,
+                            _ => this.context.GetTypeInfo(assignment.Left).Type,
+                        };
+                        assignRhs = this.ForgiveNullableReferenceValue(
+                            assignment.Right,
+                            assignRhs,
+                            assignmentTargetType,
+                            assignmentTarget);
+                    }
+
                     return new AssignmentStatement(
                         this.TranslateAssignmentTarget(assignment.Left),
                         assignRhs,

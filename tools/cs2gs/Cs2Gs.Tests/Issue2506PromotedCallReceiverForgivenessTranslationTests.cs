@@ -219,7 +219,7 @@ public sealed class Issue2506PromotedCallReceiverForgivenessTranslationTests
     }
 
     [Fact]
-    public void ConditionalAccessNullableEnabledFlowAndExpressionTrees_AvoidObliviousOverAssertion()
+    public void ConditionalAccessExpressionTreesAndNullableEnabledReceivers_UseCorrectBoundary()
     {
         string oblivious = Translate("""
             using System;
@@ -274,8 +274,8 @@ public sealed class Issue2506PromotedCallReceiverForgivenessTranslationTests
             }
             """);
 
-        Assert.Contains("Repro.ExplicitMaybe().Name", enabled, StringComparison.Ordinal);
-        Assert.Contains("Repro.ExplicitMaybe()!!.Name", enabled, StringComparison.Ordinal);
+        Assert.Equal(2, CountOccurrences(enabled, "Repro.ExplicitMaybe()!!.Name"));
+        Assert.DoesNotContain("Repro.ExplicitMaybe().Name", enabled, StringComparison.Ordinal);
         Assert.Contains("Repro.Always().Name", enabled, StringComparison.Ordinal);
         Assert.DoesNotContain("Repro.Always()!!.Name", enabled, StringComparison.Ordinal);
         Assert.Contains("item!!.Name", enabled, StringComparison.Ordinal);

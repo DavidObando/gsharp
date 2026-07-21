@@ -117,13 +117,11 @@ namespace Demo
     }
 
     [Fact]
-    public void Enabled_NullConditionalIndex_AssignedToArrayElement_StaysUnpromoted()
+    public void Enabled_NullConditionalIndex_AssignedToNonNullElement_IsForgiven()
     {
-        // The SAME shape under a nullable-ENABLED compilation (`Infix` is
-        // explicitly `string?[]`, so the assignment is a legal, if
-        // warning-worthy, `string? -> string` conversion): the fix is gated to
-        // oblivious compilations only, so no `!!` is inserted and the RHS is
-        // byte-identical to pre-#2259 behavior.
+        // Nullable-enabled C# also permits this warning-level conversion.
+        // Preserve that boundary with an assertion rather than widening the
+        // destination array's element contract.
         string printed = TranslateEnabled(@"
 namespace Demo
 {
@@ -141,8 +139,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("parts[i] = punct.Infix?[x]", printed);
-        Assert.DoesNotContain("!!", printed);
+        Assert.Contains("parts[i] = (punct.Infix?[x])!!", printed);
     }
 
     private static string TranslateOblivious(string source)
