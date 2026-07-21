@@ -15,6 +15,40 @@ namespace GSharp.Compiler.Tests;
 public class ImportedTypeIdentityTests
 {
     [Fact]
+    public void QualifiedImportedConstructor_WithObjectInitializer_BindsExactOahuSiteDespiteLocalTypeCollision()
+    {
+        var source = """
+            package Oahu.Cli.Commands
+            import System
+            import Spectre.Console
+            import Spectre.Console.Rendering
+
+            class Rule {}
+
+            class UiPreviewCommand {
+                shared {
+                    func RenderPreview(console IAnsiConsole, args string) {
+                        let rule = Spectre.Console.Rule(args){Justification = Justify.Left}
+                        console.Write(rule!!)
+                    }
+                }
+            }
+
+            UiPreviewCommand.RenderPreview(AnsiConsole.Console, "Theme")
+            """;
+        var spectrePath = typeof(Spectre.Console.Rule).Assembly.Location;
+
+        var (exitCode, output) = Compile(
+            source,
+            spectrePath,
+            Path.Combine(Path.GetDirectoryName(spectrePath)!, "Spectre.Console.Ansi.dll"));
+
+        Assert.True(exitCode == 0, output);
+        Assert.DoesNotContain("GS0157", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("GS0159", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void FullyQualifiedAndImportedExternalType_Unify()
     {
         var source = """
@@ -63,7 +97,7 @@ public class ImportedTypeIdentityTests
         Assert.Equal("hit", value);
     }
 
-    private static (int ExitCode, string Output) Compile(string source)
+    private static (int ExitCode, string Output) Compile(string source, params string[] references)
     {
         var workDir = CreateTestDirectory("gs_identity_test_");
         try
@@ -81,6 +115,11 @@ public class ImportedTypeIdentityTests
             };
 
             foreach (var reference in TrustedPlatformAssemblies())
+            {
+                args.Add("/reference:" + reference);
+            }
+
+            foreach (var reference in references)
             {
                 args.Add("/reference:" + reference);
             }
