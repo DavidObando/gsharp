@@ -3,10 +3,13 @@
 // </copyright>
 
 using System;
+using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
+using Cs2Gs.Pipeline;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using Xunit;
@@ -127,6 +130,169 @@ namespace Demo
         Assert.DoesNotContain("let DownloadDirectory", printed);
     }
 
+    [Fact]
+    public void PropertyBodiedRecords_KeepTheirSynthesizedParameterlessConstruction()
+    {
+        string printed = TranslateUnit(@"
+namespace Oahu.Cli.App
+{
+    public sealed record LibraryFilter
+    {
+        public string? Search { get; init; }
+        public string? Author { get; init; }
+        public string? Series { get; init; }
+        public bool AvailableOnly { get; init; } = true;
+    }
+
+    public sealed record OahuConfig
+    {
+        public int Sequence { get; init; } = Next();
+        public int MaxParallelJobs { get; init; } = 1;
+        public bool KeepEncryptedFiles { get; init; }
+
+        private static int Next() => 42;
+        public static OahuConfig Default => new();
+    }
+
+    public static class Uses
+    {
+        public static LibraryFilter Filter() => new();
+    }
+}");
+
+        Assert.Contains(
+            "data class LibraryFilter(Search string? = default(string?), Author string? = default(string?), Series string? = default(string?), AvailableOnly bool = true)",
+            printed);
+        Assert.Contains("MaxParallelJobs int32 = 1, KeepEncryptedFiles bool = default(bool)", printed);
+        Assert.Contains("public let Sequence int32 =", printed);
+        Assert.Contains("prop Default OahuConfig -> OahuConfig()", printed);
+        Assert.Contains("func Filter() LibraryFilter -> LibraryFilter()", printed);
+    }
+
+    [Fact]
+    public async Task OahuCliAppShapes_ParameterlessConstruction_CompilesAndPreservesRuntimeDefaults()
+    {
+        string compiler = FindSiblingTool("Compiler", "gsc.dll");
+        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
+        if (compiler is null ||
+            repoRoot is null ||
+            GsharpTestProjectRunner.ResolveLocalSdkPackage(repoRoot) is null)
+        {
+            return;
+        }
+
+        string sourceRoot = NewDirectory("scratch-projects");
+        string projectDirectory = Path.Combine(sourceRoot, "Oahu.Cli.App");
+        Directory.CreateDirectory(projectDirectory);
+        string projectPath = Path.Combine(projectDirectory, "Oahu.Cli.App.csproj");
+        File.WriteAllText(projectPath, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <OutputType>Exe</OutputType>
+                <TargetFramework>net10.0</TargetFramework>
+                <Nullable>enable</Nullable>
+              </PropertyGroup>
+            </Project>
+            """);
+        File.WriteAllText(Path.Combine(projectDirectory, "Program.cs"), """
+            using System;
+            using System.Collections.Generic;
+            using System.Text.Json;
+
+            namespace Oahu.Cli.App.Paths
+            {
+                public static class CliPaths
+                {
+                    private static int calls;
+                    public static string DefaultDownloadDir => (++calls).ToString();
+                }
+            }
+
+            namespace Oahu.Cli.App.Models
+            {
+                using Oahu.Cli.App.Paths;
+
+                public enum DownloadQuality { Low, Medium, High }
+
+                public sealed record OahuConfig
+                {
+                    public string DownloadDirectory { get; init; } = CliPaths.DefaultDownloadDir;
+                    public DownloadQuality DefaultQuality { get; init; } = DownloadQuality.High;
+                    public int MaxParallelJobs { get; init; } = 1;
+                    public bool KeepEncryptedFiles { get; init; }
+                    public bool MultiPartDownload { get; init; }
+                    public bool ExportToAax { get; init; }
+                    public string ExportDirectory { get; init; } = "";
+                    public string? DefaultProfileAlias { get; init; }
+                    public string? Theme { get; init; }
+                    public bool AllowEncryptedFileCredentials { get; init; }
+                    public Dictionary<string, JsonElement>? ExtraProperties { get; init; }
+                    public static OahuConfig Default => new();
+                }
+            }
+
+            namespace Oahu.Cli.App.Library
+            {
+                public sealed record LibraryFilter
+                {
+                    public string? Search { get; init; }
+                    public string? Author { get; init; }
+                    public string? Series { get; init; }
+                    public bool AvailableOnly { get; init; } = true;
+                }
+            }
+
+            namespace Oahu.Cli.App
+            {
+                using Oahu.Cli.App.Library;
+                using Oahu.Cli.App.Models;
+
+                public static class Program
+                {
+                    public static void Main()
+                    {
+                        OahuConfig first = new();
+                        OahuConfig second = OahuConfig.Default;
+                        LibraryFilter filter = new();
+
+                        Console.WriteLine(first.DownloadDirectory);
+                        Console.WriteLine(second.DownloadDirectory);
+                        Console.WriteLine(first.DefaultQuality == DownloadQuality.High);
+                        Console.WriteLine(first.MaxParallelJobs);
+                        Console.WriteLine(first.KeepEncryptedFiles);
+                        Console.WriteLine(first.ExtraProperties is null);
+                        Console.WriteLine(filter.Search is null);
+                        Console.WriteLine(filter.AvailableOnly);
+                    }
+                }
+            }
+            """);
+
+        string stdoutGolden = Path.Combine(sourceRoot, "baseline.stdout.golden");
+        File.WriteAllText(stdoutGolden, "1\n2\nTrue\n1\nFalse\nTrue\nTrue\nTrue\n");
+        string outputRoot = NewDirectory("pipeline-tests");
+        var app = new CorpusApp(
+            "Oahu.Cli.App",
+            projectPath,
+            TargetKind.Exe,
+            stdoutGolden: stdoutGolden);
+        var pipeline = new MigrationPipeline(
+            new PipelineOptions
+            {
+                GscPath = compiler,
+                OutputRoot = outputRoot,
+                SourceRoot = sourceRoot,
+            },
+            new IMigrationStage[] { new TranslateStage(), new CompileStage(), new TestParityStage() });
+
+        RunResult result = await pipeline.RunAsync(new[] { app });
+        AppResult appResult = Assert.Single(result.Apps);
+        Assert.True(
+            appResult.Succeeded,
+            "Exact Oahu.Cli.App record shapes should translate, compile, and preserve runtime defaults. Stages: " +
+                string.Join("; ", appResult.Stages.Select(stage => stage.Stage + "=" + stage.Status)));
+    }
+
     // Note: a `data struct` (record struct) counterpart of the non-constant-
     // initializer scenario above is not independently testable — C# itself
     // (CS8983) rejects a struct with ANY auto-property/field initializer that
@@ -157,5 +323,42 @@ namespace Demo
             "Translated G# must round-trip. Errors:\n" +
                 string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
         return printed;
+    }
+
+    private static string NewDirectory(string category)
+    {
+        string root = Path.Combine(
+            AppContext.BaseDirectory,
+            category,
+            "issue2281",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        return root;
+    }
+
+    private static string FindSiblingTool(string projectDirectoryName, string dllName)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            foreach (string configuration in new[] { "Release", "Debug" })
+            {
+                string candidate = Path.Combine(
+                    directory.FullName,
+                    "out",
+                    "bin",
+                    configuration,
+                    projectDirectoryName,
+                    dllName);
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            directory = directory.Parent;
+        }
+
+        return null;
     }
 }
