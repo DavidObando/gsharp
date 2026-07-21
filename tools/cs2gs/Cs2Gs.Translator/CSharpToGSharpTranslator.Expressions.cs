@@ -299,15 +299,27 @@ public sealed partial class CSharpToGSharpTranslator
                 anonymous.GetLocation(),
                 TranslationSeverity.Info));
 
-            GTypeReference syntheticType = this.context.GetTypeInfo(anonymous).Type is INamedTypeSymbol anonymousType
-                ? this.typeMapper.GetOrCreateAnonymousDataClass(anonymousType, this.context, anonymous.GetLocation())
-                : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+            (GTypeReference Type, IReadOnlyList<IPropertySymbol> Properties) shape =
+                this.context.GetTypeInfo(anonymous).Type is INamedTypeSymbol anonymousType
+                    ? this.typeMapper.GetOrCreateAnonymousDataClassShape(
+                        anonymousType,
+                        this.context,
+                        anonymous.GetLocation())
+                    : (new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType), Array.Empty<IPropertySymbol>());
 
-            var arguments = anonymous.Initializers
-                .Select(i => this.TranslateExpression(i.Expression))
-                .ToList();
+            // Roslyn exposes anonymous properties in constructor order. Drive
+            // construction from that same registered order rather than an
+            // independent member enumeration so declaration and call arity/order
+            // cannot diverge across files or projects.
+            var arguments = shape.Properties.Count == anonymous.Initializers.Count
+                ? shape.Properties
+                    .Select((_, index) => this.TranslateExpression(anonymous.Initializers[index].Expression))
+                    .ToList()
+                : anonymous.Initializers
+                    .Select(initializer => this.TranslateExpression(initializer.Expression))
+                    .ToList();
 
-            return BuildConstruction(syntheticType, arguments);
+            return BuildConstruction(shape.Type, arguments);
         }
 
         private GExpression TranslateMemberAccess(MemberAccessExpressionSyntax member)
