@@ -783,6 +783,7 @@ public sealed partial class CSharpToGSharpTranslator
             bool includePromotedValue = false)
         {
             if (translated is NonNullAssertionExpression
+                || IsNullOrSuppressedNull(value)
                 || value is PostfixUnaryExpressionSyntax
                     { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
                 || this.IsWithinExpressionTreeLambda(value)
@@ -907,7 +908,8 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool IndexArgumentValueNeedsNullForgiveness(ExpressionSyntax value)
         {
-            if (value is PostfixUnaryExpressionSyntax
+            if (IsNullOrSuppressedNull(value)
+                || value is PostfixUnaryExpressionSyntax
                     { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
                 || this.IsWithinExpressionTreeLambda(value))
             {
@@ -1798,7 +1800,8 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool IsUnguardedForwardOfTaintedValueAsRuntimeLambdaResult(ExpressionSyntax use)
         {
-            if (!this.IsObliviousCompilation()
+            if (IsNullOrSuppressedNull(use)
+                || !this.IsObliviousCompilation()
                 || this.IsWithinExpressionTreeLambda(use)
                 || this.FindResultLambda(use) is not { } lambda
                 || this.GetLambdaTargetDelegateType(lambda) is not { DelegateInvokeMethod: { } invoke }

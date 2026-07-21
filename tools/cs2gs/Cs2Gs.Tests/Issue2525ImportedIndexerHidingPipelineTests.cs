@@ -144,7 +144,10 @@ public sealed class Issue2525ImportedIndexerHidingPipelineTests
 
             public sealed class Holder
             {
-                public IDerived Values { get; } = null!;
+                public IDerived Values { get; } = CreateValues();
+
+                private static IDerived CreateValues() =>
+                    throw new System.InvalidOperationException();
             }
 
             public static class Repro
