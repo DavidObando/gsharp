@@ -1521,11 +1521,11 @@ public sealed partial class CSharpToGSharpTranslator
                 return translatedValue;
             }
 
-            bool needsForgiveness =
-                (this.IsObliviousCompilation() && this.IsNullablePromotedValue(valueExpression))
-                || this.IsImportedObliviousNullableMember(this.context.GetSymbolInfo(valueExpression).Symbol);
-
-            return needsForgiveness ? new NonNullAssertionExpression(translatedValue) : translatedValue;
+            return (this.NullableReferenceValueMayBeNull(valueExpression)
+                    || (this.IsObliviousCompilation()
+                        && this.IsNullablePromotedValue(valueExpression)))
+                ? new NonNullAssertionExpression(translatedValue)
+                : translatedValue;
         }
 
         // Object-initializer member assignment (`Field = value` inside `T{ ... }`

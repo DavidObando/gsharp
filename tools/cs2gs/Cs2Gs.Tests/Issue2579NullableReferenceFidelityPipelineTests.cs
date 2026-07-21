@@ -54,6 +54,7 @@ public sealed class Issue2579NullableReferenceFidelityPipelineTests
         Assert.Contains("Holder(model.Name!!)", emitted, StringComparison.Ordinal);
         Assert.Contains("model.Children!![0]", emitted, StringComparison.Ordinal);
         Assert.Contains("for child in model.Children!!", emitted, StringComparison.Ordinal);
+        Assert.Contains("ImageSink.Image = image!!", emitted, StringComparison.Ordinal);
         Assert.True(
             app.Succeeded,
             "Expected nullable-oblivious project-reference members to compile at strict G# " +
@@ -98,6 +99,14 @@ public sealed class Issue2579NullableReferenceFidelityPipelineTests
         Assert.Contains("Repro.Required = Factory.GetItem()!!", emitted, StringComparison.Ordinal);
         Assert.Contains("Factory.GetMap()!![Factory.GetKey()!!]", emitted, StringComparison.Ordinal);
         Assert.Contains("for item in Factory.GetItems()!!", emitted, StringComparison.Ordinal);
+        Assert.Contains("yield line!!", emitted, StringComparison.Ordinal);
+        Assert.Contains("return value!!", emitted, StringComparison.Ordinal);
+        Assert.Contains("let RequiredPath string = Factory.GetKey()!!", emitted, StringComparison.Ordinal);
+        Assert.Contains("return (value ?? Factory.GetKey())!!", emitted, StringComparison.Ordinal);
+        Assert.Contains("probe = Path.GetDirectoryName(probe!!)!!", emitted, StringComparison.Ordinal);
+        Assert.Contains("Value: (value ?? Factory.GetKey())!!", emitted, StringComparison.Ordinal);
+        Assert.Contains("return number", emitted, StringComparison.Ordinal);
+        Assert.DoesNotContain("number!!", emitted, StringComparison.Ordinal);
         Assert.True(
             app.Succeeded,
             "Expected nullable-enabled consumers of nullable-disabled producers to compile via gsc. Stages: " +
@@ -261,6 +270,7 @@ public sealed class Issue2579NullableReferenceFidelityPipelineTests
             </Project>
             """);
         File.WriteAllText(Path.Combine(consumerDir, "Consumer.cs"), """
+            using System.IO;
             using ObliviousProducer;
 
             namespace Issue2579Oblivious;
@@ -274,6 +284,7 @@ public sealed class Issue2579NullableReferenceFidelityPipelineTests
             {
                 private static Item Required = new();
                 private static void Consume(Item item) { }
+                public static string RequiredPath { get; } = Factory.GetKey();
 
                 public static int Run()
                 {
@@ -286,6 +297,46 @@ public sealed class Issue2579NullableReferenceFidelityPipelineTests
                         _ = item.Name;
                     return Required.Name.Length;
                 }
+
+                public static IEnumerable<string> ReadLines(string? line)
+                {
+                    yield return line;
+                }
+
+                public static string Require(string? value)
+                {
+                    return value;
+                }
+
+                public static string RequireFallback(string? value)
+                {
+                    return value ?? Factory.GetKey();
+                }
+
+                public static string RewritePath(string path)
+                {
+                    var probe = path;
+                    while (!string.IsNullOrEmpty(probe) && !Directory.Exists(probe))
+                    {
+                        probe = Path.GetDirectoryName(probe);
+                    }
+                    return probe;
+                }
+
+                public static Holder Build(string? value)
+                {
+                    return new Holder { Value = value ?? Factory.GetKey() };
+                }
+
+                public static object Box(int? number)
+                {
+                    return number;
+                }
+            }
+
+            public sealed class Holder
+            {
+                public string Value { get; set; } = "";
             }
             """);
 
@@ -327,6 +378,17 @@ public sealed class Issue2579NullableReferenceFidelityPipelineTests
             {
                 public static string Echo(this string value) => value;
             }
+
+            public sealed class Bitmap
+            {
+            }
+
+            #nullable enable
+            public static class ImageSink
+            {
+                public static Bitmap Image { get; set; } = new();
+            }
+            #nullable restore
             """);
 
         string consumerProject = Path.Combine(consumerDir, "Consumer.csproj");
@@ -371,6 +433,11 @@ public sealed class Issue2579NullableReferenceFidelityPipelineTests
                     foreach (var child in model.Children)
                         _ = child.Name;
                     return local.Length;
+                }
+
+                public static void SetImage(Bitmap image = null)
+                {
+                    ImageSink.Image = image;
                 }
             }
             """);

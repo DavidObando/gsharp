@@ -917,7 +917,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return new[] { (GStatement)new GotoStatement(IteratorExitLabelName(target)) };
             }
 
-            return new[] { (GStatement)new YieldStatement(this.TranslateExpression(node.Expression)) };
+            return new[] { (GStatement)new YieldStatement(this.TranslateValueWithNullForgiveness(node.Expression)) };
         }
 
         private static SyntaxNode GetBreakTarget(YieldStatementSyntax node)
