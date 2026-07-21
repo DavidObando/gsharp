@@ -767,8 +767,9 @@ internal sealed class ConversionClassifier
                     var substituted = TrySubstituteParameterTypeFromReceiver(
                         method, paramIndex, receiverType, symbolicMethodTypeArgs);
 
-                    // Issue #1512: a lambda argument bound to a generic method's
-                    // delegate parameter (e.g. `Func<Task,TResult>`) must convert
+                    // Issue #1512/#2643: a function-typed argument bound to a
+                    // generic method's delegate parameter (e.g.
+                    // `Func<Task,TResult>`) must convert
                     // to the SYMBOLIC delegate target recovered from the method's
                     // inferred type arguments (`Func<Task,T>`), not the closed CLR
                     // erasure (`Func<Task,object>`). Converting to the erased shape
@@ -785,7 +786,7 @@ internal sealed class ConversionClassifier
                     // delegate parameter closes over the method's own (still
                     // open) type argument must see the symbolic shape too.
                     if (substituted == null
-                        && (argument is BoundFunctionLiteralExpression
+                        && (argument.Type is FunctionTypeSymbol
                             || OverloadResolution.IsUnresolvedMethodGroupArgument(argument)))
                     {
                         substituted = TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs);

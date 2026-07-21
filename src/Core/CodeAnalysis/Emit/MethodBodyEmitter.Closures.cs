@@ -47,7 +47,11 @@ internal sealed partial class MethodBodyEmitter
     //  * For any other function-typed value (a func-typed variable, call
     //    result, etc.) the runtime value is already a delegate; adapt it
     //    to the target delegate type via `dup / ldvirtftn Invoke / newobj`.
-    private void EmitFunctionToDelegateConversion(BoundExpression source, FunctionTypeSymbol sourceFn, Type targetDelegateHostType)
+    private void EmitFunctionToDelegateConversion(
+        BoundExpression source,
+        FunctionTypeSymbol sourceFn,
+        Type targetDelegateHostType,
+        EntityHandle? symbolicTargetCtorRef = null)
     {
         // Issue #1502: when the SOURCE function type carries a source-defined
         // user type (Struct/Class/Interface/Enum/Delegate) or a type parameter
@@ -73,6 +77,12 @@ internal sealed partial class MethodBodyEmitter
 
         if (source is BoundFunctionLiteralExpression literal)
         {
+            if (symbolicTargetCtorRef.HasValue)
+            {
+                this.EmitFunctionLiteral(literal, overrideDelegateType: null, symbolicDelegateCtorRef: symbolicTargetCtorRef.Value);
+                return;
+            }
+
             // Issue #1502: an async lambda whose Task-wrapped delegate shape
             // needs symbolic encoding (`Func<...,Task<TOutput>>`) is emitted
             // through the reified TypeSpec ctor ref.
@@ -107,6 +117,12 @@ internal sealed partial class MethodBodyEmitter
         // target delegate type.
         if (source is BoundMethodGroupExpression methodGroup)
         {
+            if (symbolicTargetCtorRef.HasValue)
+            {
+                this.EmitMethodGroupToNamedDelegate(methodGroup, symbolicTargetCtorRef.Value);
+                return;
+            }
+
             this.EmitMethodGroup(methodGroup, overrideDelegateType: sourceNeedsSymbolic ? null : targetDelegateType);
             return;
         }
@@ -130,9 +146,10 @@ internal sealed partial class MethodBodyEmitter
             invokeRef = this.outer.memberRefs.GetMethodReference(sourceInvoke);
         }
 
-        var ctorRef = sourceNeedsSymbolic
+        var ctorRef = symbolicTargetCtorRef
+            ?? (sourceNeedsSymbolic
             ? this.outer.memberRefs.GetFunctionDelegateCtorRef(sourceFn)
-            : (EntityHandle)this.outer.memberRefs.GetDelegateCtorReference(targetDelegateType);
+            : (EntityHandle)this.outer.memberRefs.GetDelegateCtorReference(targetDelegateType));
 
         this.EmitNullGuardedDelegateToDelegateAdaptation(source, invokeRef, ctorRef);
     }

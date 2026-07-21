@@ -57,16 +57,17 @@ internal sealed partial class MethodBodyEmitter
         // Materialise the delegate with a `.ctor` MemberRef parented at the
         // constructed `Comparison<!TResult>` TypeSpec so the runtime instance
         // matches the callee's reified parameter.
-        if (conv.Expression is BoundFunctionLiteralExpression constructedDelegateLiteral
+        if (conv.Expression.Type is FunctionTypeSymbol constructedDelegateSource
             && conv.Type is ImportedTypeSymbol constructedDelegateTarget
             && constructedDelegateTarget.OpenDefinition != null
-            && constructedDelegateTarget.HasTypeParameterArgument
+            && constructedDelegateTarget.HasSubstitutableTypeArgument
             && ClrTypeUtilities.IsDelegateType(constructedDelegateTarget.ClrType))
         {
-            this.EmitFunctionLiteral(
-                constructedDelegateLiteral,
-                overrideDelegateType: null,
-                symbolicDelegateCtorRef: this.outer.memberRefs.GetConstructedDelegateCtorRef(constructedDelegateTarget));
+            this.EmitFunctionToDelegateConversion(
+                conv.Expression,
+                constructedDelegateSource,
+                constructedDelegateTarget.ClrType,
+                this.outer.memberRefs.GetConstructedDelegateCtorRef(constructedDelegateTarget));
             return;
         }
 
