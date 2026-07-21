@@ -44,6 +44,11 @@ describe('language server settings', () => {
     expect(serverOptions).not.toContain("config.get<string>('trace.server'");
   });
 
+  it('only waits for a server debugger when explicitly configured', () => {
+    expect(serverManager).toContain("if (options.waitForDebugger)");
+    expect(serverManager).not.toContain("args: [...args, '--debug']");
+  });
+
   it('does not retain unregistered feature and command modules', () => {
     for (const file of [
       'src/features/formatting.ts',

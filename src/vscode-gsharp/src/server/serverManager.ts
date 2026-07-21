@@ -177,9 +177,9 @@ export class ServerManager {
         run: { command: dotnetPath, args, transport: TransportKind.stdio, options: { env } },
         debug: {
           command: dotnetPath,
-          args: [...args, '--debug'],
+          args,
           transport: TransportKind.stdio,
-          options: { env: { ...env, DOTNET_EnableDiagnostics: '1' } },
+          options: { env },
         },
       };
 
