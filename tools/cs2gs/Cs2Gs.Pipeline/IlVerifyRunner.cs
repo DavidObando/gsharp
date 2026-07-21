@@ -42,6 +42,10 @@ public class IlVerifyRunner
         @"(?:\[(?<location>.*?)\]\s*\[offset[^\]]*\]\s*)?(?<message>.*)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private static readonly Regex AvaloniaXamlClosureBuildPattern = new Regex(
+        @"(?:^|\+)XamlClosure_\d+::Build_\d+\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     private static readonly object ToolRestoreSync = new();
     private static readonly Dictionary<string, bool> ToolAvailabilityByRepoRoot = new(StringComparer.OrdinalIgnoreCase);
     private static readonly TimeSpan DotnetToolTimeout = TimeSpan.FromMinutes(5);
@@ -259,11 +263,19 @@ public class IlVerifyRunner
         return string.IsNullOrEmpty(candidate) ? null : candidate;
     }
 
-    private static bool IsAvaloniaXamlCompilerFalsePositive(IlVerifyError error) =>
-        string.Equals(error.Code, "StackUnexpected", StringComparison.Ordinal)
-        && error.Method?.StartsWith(
-            "CompiledAvaloniaXaml.XamlIlContext+Context`1::",
-            StringComparison.Ordinal) == true;
+    private static bool IsAvaloniaXamlCompilerFalsePositive(IlVerifyError error)
+    {
+        if (!string.Equals(error.Code, "StackUnexpected", StringComparison.Ordinal)
+            || string.IsNullOrEmpty(error.Method))
+        {
+            return false;
+        }
+
+        return error.Method.StartsWith(
+                "CompiledAvaloniaXaml.XamlIlContext+Context`1::",
+                StringComparison.Ordinal)
+            || AvaloniaXamlClosureBuildPattern.IsMatch(error.Method);
+    }
 
     private static IReadOnlyList<string> BuildReferenceSet(
         string assemblyPath,

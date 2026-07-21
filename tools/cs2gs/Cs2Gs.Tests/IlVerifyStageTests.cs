@@ -4,8 +4,12 @@
 
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Reflection.Emit;
+using System.Runtime.Loader;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Cs2Gs.Pipeline;
@@ -136,6 +140,101 @@ public class IlVerifyStageTests
 
         IlVerifyError surviving = Assert.Single(filtered);
         Assert.Equal("StackUnexpected", surviving.Code);
+    }
+
+    /// <summary>
+    /// #2671: Avalonia XamlIl deliberately carries concrete controls in
+    /// object-typed stack slots. Its generated XamlClosure Build methods run
+    /// correctly, but ILVerify reports StackUnexpected just as it does for the
+    /// existing generated XamlIlContext methods.
+    /// </summary>
+    [Fact]
+    public void AvaloniaXamlClosureBuilds_FilterExactUiFingerprints_AndGeneralize()
+    {
+        const string BookLibrary =
+            "Oahu.Core.UI.Avalonia.Views.BookLibraryView+XamlClosure_1::Build_1([System.ComponentModel]System.IServiceProvider)";
+        const string Conversion =
+            "Oahu.Core.UI.Avalonia.Views.ConversionView+XamlClosure_2::Build_1([System.ComponentModel]System.IServiceProvider)";
+        var builder = new TriageBuilder("run_1", "2026-07-21T00:00:00Z", "0.3.0", "corpus/Oahu.UI");
+
+        Assert.Equal(
+            "sha256:9d0322446fc5a1cc4b78e2a66d5d83354b6e527fcd49d9f907fe63ccbb034a53",
+            builder.IlVerifyFailure(new IlVerifyError("StackUnexpected", BookLibrary, BookLibrary)).Fingerprint);
+        Assert.Equal(
+            "sha256:94a053bb50ec2721c8600fe77dd02aa29a401f95bf174b39b459218f5dfea5a7",
+            builder.IlVerifyFailure(new IlVerifyError("StackUnexpected", Conversion, Conversion)).Fingerprint);
+
+        var errors = new[]
+        {
+            new IlVerifyError("StackUnexpected", BookLibrary, BookLibrary),
+            new IlVerifyError("StackUnexpected", Conversion, Conversion),
+            new IlVerifyError(
+                "StackUnexpected",
+                "Demo.View+XamlClosure_17::Build_42([System.ComponentModel]System.IServiceProvider)",
+                "generalized"),
+            new IlVerifyError("StackUnexpected", "Demo.View+XamlClosure_1::CreateContext()", "real create"),
+            new IlVerifyError("StackUnexpected", "Demo.View+Closure_1::Build_1()", "real closure"),
+            new IlVerifyError("ReturnVoid", "Demo.View+XamlClosure_1::Build_1()", "real code"),
+        };
+
+        IReadOnlyList<IlVerifyError> filtered = IlVerifyRunner.FilterIgnored(errors);
+
+        Assert.Equal(3, filtered.Count);
+        Assert.Contains(filtered, e => e.Method!.EndsWith("::CreateContext()", StringComparison.Ordinal));
+        Assert.Contains(filtered, e => e.Method!.Contains("+Closure_1::", StringComparison.Ordinal));
+        Assert.Contains(filtered, e => e.Code == "ReturnVoid");
+    }
+
+    /// <summary>
+    /// Emits the upstream XamlIl stack shape rather than merely feeding mocked
+    /// diagnostics to the filter: an object-typed local contains a concrete
+    /// ISupportInitialize implementation and is called without a cast. Real
+    /// ILVerify reports both exact Oahu Build fingerprints, while the CLR runs
+    /// both methods and observes BeginInit/EndInit.
+    /// </summary>
+    [Fact]
+    public void AvaloniaXamlClosureBuilds_RealIlVerifyAndRuntimeProof()
+    {
+        if (!IlVerifyRunner.IsEnabled || !IlVerifyToolAvailable())
+        {
+            return;
+        }
+
+        string directory = NewOutputRoot("issue2671-xaml-closure");
+        string assemblyPath = Path.Combine(directory, "Oahu.UI.dll");
+        EmitAvaloniaXamlClosureFixture(assemblyPath);
+
+        try
+        {
+            var result = new IlVerifyRunner().Verify(assemblyPath);
+            Assert.True(result.Succeeded, result.Output);
+            Assert.Empty(result.Errors);
+            Assert.Contains("[StackUnexpected]", result.Output, StringComparison.Ordinal);
+            Assert.Contains(
+                "BookLibraryView+XamlClosure_1::Build_1",
+                result.Output,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "ConversionView+XamlClosure_2::Build_1",
+                result.Output,
+                StringComparison.Ordinal);
+
+            var loadContext = new AssemblyLoadContext("issue2671-" + Guid.NewGuid().ToString("N"), isCollectible: true);
+            try
+            {
+                Assembly assembly = loadContext.LoadFromAssemblyPath(assemblyPath);
+                AssertClosureRan(assembly, "BookLibraryView+XamlClosure_1");
+                AssertClosureRan(assembly, "ConversionView+XamlClosure_2");
+            }
+            finally
+            {
+                loadContext.Unload();
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     /// <summary>
@@ -284,6 +383,82 @@ public class IlVerifyStageTests
         string root = Path.Combine(AppContext.BaseDirectory, "pipeline-tests", label, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         return root;
+    }
+
+    private static void EmitAvaloniaXamlClosureFixture(string path)
+    {
+        var assembly = new PersistedAssemblyBuilder(
+            new AssemblyName("Oahu.UI." + Guid.NewGuid().ToString("N")),
+            typeof(object).Assembly);
+        ModuleBuilder module = assembly.DefineDynamicModule("Oahu.UI");
+
+        TypeBuilder control = module.DefineType("Oahu.Core.UI.Avalonia.Views.GeneratedControl", TypeAttributes.Public);
+        control.AddInterfaceImplementation(typeof(ISupportInitialize));
+        FieldBuilder beginCalled = control.DefineField("BeginCalled", typeof(bool), FieldAttributes.Public);
+        FieldBuilder endCalled = control.DefineField("EndCalled", typeof(bool), FieldAttributes.Public);
+        ConstructorBuilder constructor = control.DefineDefaultConstructor(MethodAttributes.Public);
+        DefineInitMethod(control, beginCalled, nameof(ISupportInitialize.BeginInit));
+        DefineInitMethod(control, endCalled, nameof(ISupportInitialize.EndInit));
+
+        DefineClosure(module, control, constructor, "BookLibraryView", "XamlClosure_1");
+        DefineClosure(module, control, constructor, "ConversionView", "XamlClosure_2");
+        control.CreateType();
+        assembly.Save(path);
+    }
+
+    private static void DefineInitMethod(TypeBuilder control, FieldBuilder field, string name)
+    {
+        MethodBuilder method = control.DefineMethod(
+            name,
+            MethodAttributes.Public | MethodAttributes.Virtual,
+            typeof(void),
+            Type.EmptyTypes);
+        ILGenerator il = method.GetILGenerator();
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Ldc_I4_1);
+        il.Emit(OpCodes.Stfld, field);
+        il.Emit(OpCodes.Ret);
+        control.DefineMethodOverride(method, typeof(ISupportInitialize).GetMethod(name)!);
+    }
+
+    private static void DefineClosure(
+        ModuleBuilder module,
+        TypeBuilder control,
+        ConstructorBuilder constructor,
+        string viewName,
+        string closureName)
+    {
+        TypeBuilder view = module.DefineType(
+            "Oahu.Core.UI.Avalonia.Views." + viewName,
+            TypeAttributes.Public);
+        TypeBuilder closure = view.DefineNestedType(
+            closureName,
+            TypeAttributes.NestedPublic | TypeAttributes.Abstract | TypeAttributes.Sealed);
+        MethodBuilder build = closure.DefineMethod(
+            "Build_1",
+            MethodAttributes.Public | MethodAttributes.Static,
+            typeof(object),
+            new[] { typeof(IServiceProvider) });
+        ILGenerator il = build.GetILGenerator();
+        LocalBuilder root = il.DeclareLocal(typeof(object));
+        il.Emit(OpCodes.Newobj, constructor);
+        il.Emit(OpCodes.Stloc, root);
+        il.Emit(OpCodes.Ldloc, root);
+        il.Emit(OpCodes.Callvirt, typeof(ISupportInitialize).GetMethod(nameof(ISupportInitialize.BeginInit))!);
+        il.Emit(OpCodes.Ldloc, root);
+        il.Emit(OpCodes.Callvirt, typeof(ISupportInitialize).GetMethod(nameof(ISupportInitialize.EndInit))!);
+        il.Emit(OpCodes.Ldloc, root);
+        il.Emit(OpCodes.Ret);
+        closure.CreateType();
+        view.CreateType();
+    }
+
+    private static void AssertClosureRan(Assembly assembly, string typeName)
+    {
+        Type closure = assembly.GetType("Oahu.Core.UI.Avalonia.Views." + typeName)!;
+        object result = closure.GetMethod("Build_1")!.Invoke(null, new object[] { null })!;
+        Assert.True((bool)result.GetType().GetField("BeginCalled")!.GetValue(result)!);
+        Assert.True((bool)result.GetType().GetField("EndCalled")!.GetValue(result)!);
     }
 
     private static string FindCompiler()
