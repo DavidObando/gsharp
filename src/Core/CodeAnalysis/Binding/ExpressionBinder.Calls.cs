@@ -855,7 +855,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="typeArgumentList">The call's <c>[T1, T2]</c> list.</param>
     /// <param name="clrArgs">On success, the resolved (mapped) CLR type arguments ready for MakeGenericType.</param>
     /// <param name="symbolicArgs">On success, the symbolic type arguments in source order.</param>
-    /// <param name="hasSymbolicArg">On success, whether any argument is a G# user-defined type or in-scope type parameter.</param>
+    /// <param name="hasSymbolicArg">On success, whether any argument carries information its CLR type cannot represent.</param>
     /// <returns>Whether all type arguments resolved.</returns>
     private bool TryResolveClrConstructionTypeArgs(
         TypeArgumentListSyntax typeArgumentList,
@@ -888,21 +888,11 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            // Issue #671: a nested constructed generic that itself carries
-            // symbolic user-defined arguments (e.g. `List[MyGs]` used as an
-            // argument to `List[...]`) has a (type-erased) ClrType, but the
-            // outer construction must still preserve the symbolic shape so
-            // the emitter can recover the user-defined TypeDef tokens at the
-            // inner position. Flag the outer as symbolic so the symbolic args
-            // are retained, but keep the placeholder CLR type for
-            // MakeGenericType (the closed CLR shape erases to
-            // `Open<...,object,...>` at the outer level, and the emitter
-            // descends through the symbolic args to encode the real shape).
-            if (ta is ImportedTypeSymbol nested
-                && nested.OpenDefinition != null
-                && !nested.TypeArguments.IsDefaultOrEmpty
-                && nested.TypeArguments.Any(static a => a.ClrType == null
-                    || (a is ImportedTypeSymbol n && n.OpenDefinition != null && !n.TypeArguments.IsDefaultOrEmpty)))
+            // Issue #2664: preserve every symbolic argument shape that its CLR
+            // type cannot represent, including nullable references. Indexer and
+            // Add binding can then recover `T?` instead of target-typing `nil`
+            // against the erased non-null `T`.
+            if (TypeSymbol.RequiresSymbolicProjection(ta))
             {
                 hasSymbolicArg = true;
             }

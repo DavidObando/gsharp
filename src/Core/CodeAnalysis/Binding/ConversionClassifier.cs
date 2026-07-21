@@ -1050,7 +1050,7 @@ internal sealed class ConversionClassifier
 
     /// <summary>
     /// ADR-0087 §3 R5 / issue #765: when a method is invoked on a constructed
-    /// generic whose type arguments include user-defined symbolic types,
+    /// generic whose type arguments require symbolic projection,
     /// return the substituted symbolic parameter type for the call site so
     /// the binder does not insert a box conversion to the type-erased
     /// <see cref="object"/> shape. Returns <see langword="null"/> when no
@@ -1081,7 +1081,7 @@ internal sealed class ConversionClassifier
         TypeSymbol receiverType,
         ImmutableArray<TypeSymbol> symbolicMethodTypeArgs = default)
     {
-        // Issue #2385: the receiver type-argument gate below previously only
+        // Issues #2385/#2664: the receiver type-argument gate below previously only
         // matched a same-compilation user type when it was DIRECTLY a
         // StructSymbol/InterfaceSymbol/EnumSymbol/DelegateTypeSymbol (or
         // nested inside another ImportedTypeSymbol). A same-compilation
@@ -1093,7 +1093,7 @@ internal sealed class ConversionClassifier
         // misclassifying the argument as a boxing conversion and emitting an
         // invalid `box`/`ldnull` sequence against a value-type
         // `Nullable<T>` generic parameter slot (InvalidProgramException at
-        // runtime — see #2385). `TypeSymbol.ContainsSameCompilationUserType`
+        // runtime — see #2385). `TypeSymbol.RequiresSymbolicProjection`
         // is the general, already-established predicate for exactly this
         // shape (it recurses through NullableTypeSymbol/SliceTypeSymbol/
         // ArrayTypeSymbol/TupleTypeSymbol/nested ImportedTypeSymbol
@@ -1101,11 +1101,13 @@ internal sealed class ConversionClassifier
         // async-return-erasure bug), and is a structural superset of the old
         // ad hoc list, so replacing it here also generalizes to
         // same-compilation enums and array/tuple-wrapped shapes used as a
-        // generic type argument.
+        // generic type argument, and also retains nullable-reference
+        // annotations whose CLR type is otherwise identical to its underlying
+        // non-null reference.
         if (method == null
             || receiverType is not ImportedTypeSymbol imported
             || imported.TypeArguments.IsDefaultOrEmpty
-            || !imported.TypeArguments.Any(TypeSymbol.ContainsSameCompilationUserType))
+            || !imported.TypeArguments.Any(TypeSymbol.RequiresSymbolicProjection))
         {
             return null;
         }
@@ -1176,7 +1178,7 @@ internal sealed class ConversionClassifier
         var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openParamType, openDef, imported.TypeArguments, openMethod, symbolicMethodTypeArgs);
         return mapped != null
             && mapped != TypeSymbol.Error
-            && (TypeSymbol.ContainsTypeParameter(mapped) || TypeSymbol.ContainsSameCompilationUserType(mapped))
+            && TypeSymbol.RequiresSymbolicProjection(mapped)
             ? mapped
             : null;
     }
