@@ -3450,37 +3450,36 @@ internal sealed class MemberLookup
         if (source == null
             || targetOpenDefinition == null
             || !targetOpenDefinition.IsGenericTypeDefinition
-            || !TryMapThroughImplemented(source, targetOpenDefinition, out var mappedArguments)
-            || mappedArguments.Any(TypeSymbol.RequiresSymbolicProjection))
+            || !TryMapThroughImplemented(source, targetOpenDefinition, out var mappedArguments))
         {
             return false;
         }
 
+        var projectedArguments = new Type[mappedArguments.Length];
         var contextObject = ResolveErasedObjectInContext(targetOpenDefinition);
-        var erasedArguments = Enumerable.Repeat(
-            contextObject,
-            targetOpenDefinition.GetGenericArguments().Length).ToArray();
-        Type erased;
+        for (var i = 0; i < mappedArguments.Length; i++)
+        {
+            if (!TryProjectErasedClrType(mappedArguments[i], out projectedArguments[i]))
+            {
+                return false;
+            }
+
+            if (projectedArguments[i].IsSameAs(typeof(object)))
+            {
+                projectedArguments[i] = contextObject;
+            }
+        }
+
         try
         {
-            erased = targetOpenDefinition.MakeGenericType(erasedArguments);
+            projectedType = targetOpenDefinition.MakeGenericType(projectedArguments);
+            return !projectedType.ContainsGenericParameters;
         }
         catch
         {
+            projectedType = null;
             return false;
         }
-
-        var projected = ImportedTypeSymbol.GetConstructed(
-            erased,
-            targetOpenDefinition,
-            mappedArguments).ReifyClosedClrType();
-        if (projected == null || projected.ContainsGenericParameters)
-        {
-            return false;
-        }
-
-        projectedType = projected;
-        return true;
     }
 
     private static PropertyInfo[] CollectVisibleClrIndexers(TypeSymbol targetType, Type clrTarget)
@@ -4587,6 +4586,12 @@ internal sealed class MemberLookup
         if (incoming == null || ReferenceEquals(existing, incoming))
         {
             return existing;
+        }
+
+        if (existing.ClrType?.IsSameAs(typeof(object)) == true
+            && TypeSymbol.RequiresSymbolicProjection(incoming))
+        {
+            return incoming;
         }
 
         var existingNullable = existing is NullableTypeSymbol en

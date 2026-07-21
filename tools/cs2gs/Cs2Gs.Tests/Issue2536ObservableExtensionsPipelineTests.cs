@@ -63,6 +63,7 @@ public sealed class Issue2536ObservableExtensionsPipelineTests
         File.WriteAllText(contractsProject, ProjectFile(null));
         File.WriteAllText(Path.Combine(contractsDirectory, "Contracts.cs"), """
             using System.Collections.Generic;
+            using System.IO;
 
             namespace Issue2536.Contracts;
 
@@ -74,6 +75,12 @@ public sealed class Issue2536ObservableExtensionsPipelineTests
             public interface IModels : IReadOnlyCollection<Model>
             {
             }
+
+            public static class StreamExtensions
+            {
+                public static long Remaining(this Stream stream) =>
+                    stream.Length - stream.Position;
+            }
             """);
 
         string consumerDirectory = Path.Combine(sourceRoot, "Consumer");
@@ -81,12 +88,28 @@ public sealed class Issue2536ObservableExtensionsPipelineTests
         string consumerProject = Path.Combine(consumerDirectory, "Consumer.csproj");
         File.WriteAllText(consumerProject, ProjectFile("../Contracts/Contracts.csproj"));
         File.WriteAllText(Path.Combine(consumerDirectory, "Repro.cs"), """
+            using System;
             using System.Collections.Generic;
             using System.Collections.ObjectModel;
+            using System.IO;
             using System.Linq;
             using Issue2536.Contracts;
+            using Microsoft.AspNetCore.Builder;
+            using Microsoft.AspNetCore.Http;
+            using Microsoft.Extensions.DependencyInjection;
 
             namespace Issue2536.Consumer;
+
+            public sealed class LocalModel
+            {
+                public int Value { get; set; }
+            }
+
+            public sealed class LocalStream : MemoryStream { }
+            public sealed class Factory
+            {
+                public Func<Model> Create { get; } = () => new Model();
+            }
 
             public static class Repro
             {
@@ -101,6 +124,27 @@ public sealed class Issue2536ObservableExtensionsPipelineTests
 
                 public static Model? FirstOrDefault(IModels items) =>
                     items.FirstOrDefault();
+
+                public static bool LocalAny(ObservableCollection<LocalModel> items) =>
+                    items.Any(item => item.Value > 0);
+
+                public static int LocalCount(ObservableCollection<LocalModel> items) =>
+                    items.Count(item => item.Value > 0);
+
+                public static IEnumerable<LocalModel> LocalWhere(ObservableCollection<LocalModel> items) =>
+                    items.Where(item => item.Value > 0);
+
+                public static LocalModel? LocalFirstOrDefault(ObservableCollection<LocalModel> items) =>
+                    items.FirstOrDefault();
+
+                public static IServiceCollection Register(IServiceCollection services, Factory factory) =>
+                    services.AddSingleton(_ => factory.Create());
+
+                public static IApplicationBuilder Use(IApplicationBuilder app) =>
+                    app.Use(async (context, next) => await next(context));
+
+                public static long StreamBase(LocalStream stream) =>
+                    stream.Remaining();
             }
             """);
 
@@ -122,7 +166,10 @@ public sealed class Issue2536ObservableExtensionsPipelineTests
               <PropertyGroup>
                 <TargetFramework>net10.0</TargetFramework>
                 <Nullable>enable</Nullable>
-              </PropertyGroup>{reference}
+              </PropertyGroup>
+              <ItemGroup>
+                <FrameworkReference Include="Microsoft.AspNetCore.App" />
+              </ItemGroup>{reference}
             </Project>
             """;
     }

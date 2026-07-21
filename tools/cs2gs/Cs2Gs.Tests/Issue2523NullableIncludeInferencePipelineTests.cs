@@ -72,7 +72,7 @@ public sealed class Issue2523NullableIncludeInferencePipelineTests
             public sealed class Book
             {
                 public Conversion? Conversion { get; set; }
-                public List<Component> Components { get; set; } = [];
+                public ICollection<Component> Components { get; set; } = [];
                 public Other? Other { get; set; }
             }
 
