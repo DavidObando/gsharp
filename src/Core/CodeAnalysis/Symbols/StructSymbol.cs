@@ -2201,7 +2201,9 @@ public sealed class StructSymbol : TypeSymbol
                 p.SetterParameterName,
                 p.IsStatic,
                 p.Declaration,
-                p.IsInitOnly)
+                p.IsInitOnly,
+                p.GetterAccessibility,
+                p.SetterAccessibility)
             {
                 IsIndexer = p.IsIndexer,
                 Parameters = newParams,

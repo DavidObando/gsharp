@@ -182,29 +182,6 @@ public sealed partial class CSharpToGSharpTranslator
 
             IReadOnlyList<AccessorDeclarationSyntax> declared = node.AccessorList.Accessors;
 
-            // Issue #1741: an accessor-level accessibility modifier (`{ get; private
-            // set; }`) narrows just that accessor; G# has no per-accessor
-            // accessibility, so it would silently widen back to the property's own
-            // accessibility. Diagnose the loss instead of translating it silently.
-            foreach (AccessorDeclarationSyntax accessor in declared)
-            {
-                SyntaxToken accessibilityModifier = accessor.Modifiers.FirstOrDefault(m =>
-                    m.IsKind(SyntaxKind.PrivateKeyword) ||
-                    m.IsKind(SyntaxKind.ProtectedKeyword) ||
-                    m.IsKind(SyntaxKind.InternalKeyword));
-                if (accessibilityModifier.IsKind(SyntaxKind.None))
-                {
-                    continue;
-                }
-
-                string accessorMods = string.Join(" ", accessor.Modifiers.Select(m => m.ValueText));
-                this.context.Report(new TranslationDiagnostic(
-                    accessor.Kind().ToString(),
-                    $"{displayName} accessor '{accessorMods} {accessor.Keyword.ValueText}' has narrower accessibility than the property; G# has no per-accessor accessibility, so it is widened to the property's own accessibility (ADR-0115 §B.11).",
-                    accessor.GetLocation(),
-                    TranslationSeverity.Warning));
-            }
-
             bool anyBodied = declared.Any(a => a.Body != null || a.ExpressionBody != null);
             bool hasSet = declared.Any(a => a.IsKind(SyntaxKind.SetAccessorDeclaration));
             bool hasGet = declared.Any(a => a.IsKind(SyntaxKind.GetAccessorDeclaration));
@@ -214,7 +191,7 @@ public sealed partial class CSharpToGSharpTranslator
             // maps to the canonical auto form `prop Name T` (ADR-0115 §B.11). An
             // init-only auto-property (get + init) keeps its explicit accessors so
             // the init-only semantics are preserved (issue #946).
-            if (!anyBodied && hasGet && hasSet)
+            if (!anyBodied && hasGet && hasSet && declared.All(a => a.Modifiers.Count == 0))
             {
                 return new List<PropertyAccessor>();
             }
@@ -258,6 +235,11 @@ public sealed partial class CSharpToGSharpTranslator
                     kind = AccessorKind.Set;
                 }
 
+                var accessorSymbol = this.context.GetDeclaredSymbol(accessor) as IMethodSymbol;
+                Visibility visibility = accessor.Modifiers.Count > 0
+                    ? MapVisibility(accessorSymbol, this.context, accessor, preserveStaticClassPrivate: true)
+                    : Visibility.Default;
+
                 bool bodied = accessor.Body != null || accessor.ExpressionBody != null;
                 BlockStatement body = bodied
                     ? this.TranslateBody(
@@ -296,7 +278,11 @@ public sealed partial class CSharpToGSharpTranslator
                     body = null;
                 }
 
-                accessors.Add(new PropertyAccessor(kind, body, expressionBody: arrowBody));
+                accessors.Add(new PropertyAccessor(
+                    kind,
+                    body,
+                    expressionBody: arrowBody,
+                    visibility: visibility));
             }
 
             return accessors;

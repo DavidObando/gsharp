@@ -123,6 +123,41 @@ class Other {
     }
 
     [Fact]
+    public void ExternalCode_WritesPrivateSetter_ReportsGS0472()
+    {
+        var source = @"
+class Foo {
+    prop Value int32 { get; private set; }
+}
+
+class Other {
+    func Poke(f Foo) {
+        f.Value = 3
+    }
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0472");
+    }
+
+    [Fact]
+    public void DeclaringType_WritesPrivateSetter_NoAccessibilityDiagnostic()
+    {
+        var source = @"
+class Foo {
+    prop Value int32 { get; private set; }
+    func Poke() {
+        Value = 3
+    }
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0472");
+    }
+
+    [Fact]
     public void InternalCode_ReadsAndWritesPrivateFieldFromSameType_NoDiagnostics()
     {
         var source = @"

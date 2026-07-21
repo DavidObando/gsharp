@@ -1537,6 +1537,7 @@ public static class GSharpPrinter
     private static string RenderAccessor(PropertyAccessor accessor, int indent)
     {
         var pad = Indent(indent);
+        var visibility = RenderVisibility(accessor.Visibility);
         string head;
         switch (accessor.Kind)
         {
@@ -1556,15 +1557,15 @@ public static class GSharpPrinter
         if (accessor.ExpressionBody != null)
         {
             // Issue #1278 / ADR-0131: expression-bodied accessor `get -> e` / `set -> e`.
-            return $"{pad}{head} -> {RenderArrowInline(accessor.ExpressionBody, indent)}";
+            return $"{pad}{visibility}{head} -> {RenderArrowInline(accessor.ExpressionBody, indent)}";
         }
 
         if (accessor.Body == null)
         {
-            return $"{pad}{head};";
+            return $"{pad}{visibility}{head};";
         }
 
-        return $"{pad}{head} {RenderBlock(accessor.Body, indent)}";
+        return $"{pad}{visibility}{head} {RenderBlock(accessor.Body, indent)}";
     }
 
     private static string RenderMethod(MethodDeclaration method, int indent)

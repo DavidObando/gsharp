@@ -2522,9 +2522,9 @@ internal sealed partial class ExpressionBinder
 
         // Issue #950 / #2044: enforce `protected`/`private` property access
         // against the declaring type.
-        if (!AccessibilityChecker.IsAccessible(prop.Accessibility, declaringType, this.function))
+        if (!AccessibilityChecker.IsAccessible(prop.GetterAccessibility, declaringType, this.function))
         {
-            Diagnostics.ReportMemberInaccessible(member.IdentifierToken.Location, prop.Name, declaringType.Name, prop.Accessibility);
+            Diagnostics.ReportMemberInaccessible(member.IdentifierToken.Location, prop.Name, declaringType.Name, prop.GetterAccessibility);
         }
 
         var receiver = new BoundVariableExpression(null, function.ThisParameter);
@@ -2610,9 +2610,9 @@ internal sealed partial class ExpressionBinder
 
         // Issue #950 / #2044: enforce `protected`/`private` property
         // assignment against the declaring type.
-        if (!AccessibilityChecker.IsAccessible(prop.Accessibility, declaringType, this.function))
+        if (!AccessibilityChecker.IsAccessible(prop.SetterAccessibility, declaringType, this.function))
         {
-            Diagnostics.ReportMemberInaccessible(memberLocation, prop.Name, declaringType.Name, prop.Accessibility);
+            Diagnostics.ReportMemberInaccessible(memberLocation, prop.Name, declaringType.Name, prop.SetterAccessibility);
         }
 
         var converted = conversions.BindConversion(valueLocation, value, prop.Type);

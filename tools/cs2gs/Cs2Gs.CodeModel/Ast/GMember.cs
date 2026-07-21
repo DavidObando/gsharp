@@ -78,12 +78,19 @@ public sealed class PropertyAccessor : GNode
     /// <param name="body">The optional accessor body.</param>
     /// <param name="setterParameterName">The setter value parameter name (e.g. <c>v</c>).</param>
     /// <param name="expressionBody">The optional single-statement arrow body (issue #1278 / ADR-0131); when set the accessor renders as <c>get -&gt; expr</c> / <c>set -&gt; expr</c>.</param>
-    public PropertyAccessor(AccessorKind kind, BlockStatement body = null, string setterParameterName = null, GStatement expressionBody = null)
+    /// <param name="visibility">The optional accessor-specific accessibility.</param>
+    public PropertyAccessor(
+        AccessorKind kind,
+        BlockStatement body = null,
+        string setterParameterName = null,
+        GStatement expressionBody = null,
+        Visibility visibility = Visibility.Default)
     {
         Kind = kind;
         Body = body;
         SetterParameterName = setterParameterName;
         ExpressionBody = expressionBody;
+        Visibility = visibility;
     }
 
     /// <summary>Gets the accessor kind.</summary>
@@ -101,6 +108,9 @@ public sealed class PropertyAccessor : GNode
     /// <c>get -&gt; expr</c> / <c>set -&gt; expr</c> rather than a block body.
     /// </summary>
     public GStatement ExpressionBody { get; }
+
+    /// <summary>Gets the optional accessor-specific accessibility.</summary>
+    public Visibility Visibility { get; }
 }
 
 /// <summary>

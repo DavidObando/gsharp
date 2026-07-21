@@ -13,6 +13,7 @@ public sealed class PropertyAccessorSyntax : SyntaxNode
     /// Initializes a new instance of the <see cref="PropertyAccessorSyntax"/> class.
     /// </summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="accessibilityModifier">The optional accessor accessibility modifier.</param>
     /// <param name="accessorKeyword">The <c>get</c> or <c>set</c> identifier token.</param>
     /// <param name="openParenToken">The optional open parenthesis (for <c>set(value)</c>).</param>
     /// <param name="parameterIdentifier">The optional parameter identifier (for <c>set(value)</c>).</param>
@@ -21,6 +22,7 @@ public sealed class PropertyAccessorSyntax : SyntaxNode
     /// <param name="semicolonToken">The optional semicolon (for shorthand <c>get;</c> / <c>set;</c>).</param>
     public PropertyAccessorSyntax(
         SyntaxTree syntaxTree,
+        SyntaxToken accessibilityModifier,
         SyntaxToken accessorKeyword,
         SyntaxToken openParenToken,
         SyntaxToken parameterIdentifier,
@@ -29,6 +31,7 @@ public sealed class PropertyAccessorSyntax : SyntaxNode
         SyntaxToken semicolonToken)
         : base(syntaxTree)
     {
+        AccessibilityModifier = accessibilityModifier;
         AccessorKeyword = accessorKeyword;
         OpenParenToken = openParenToken;
         ParameterIdentifier = parameterIdentifier;
@@ -36,6 +39,9 @@ public sealed class PropertyAccessorSyntax : SyntaxNode
         Body = body;
         SemicolonToken = semicolonToken;
     }
+
+    /// <summary>Gets the optional accessor accessibility modifier.</summary>
+    public SyntaxToken AccessibilityModifier { get; }
 
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.PropertyAccessor;

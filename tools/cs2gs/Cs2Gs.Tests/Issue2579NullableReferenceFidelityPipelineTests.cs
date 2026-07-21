@@ -101,7 +101,8 @@ public sealed class Issue2579NullableReferenceFidelityPipelineTests
         Assert.Contains("for item in Factory.GetItems()!!", emitted, StringComparison.Ordinal);
         Assert.Contains("yield line!!", emitted, StringComparison.Ordinal);
         Assert.Contains("return value!!", emitted, StringComparison.Ordinal);
-        Assert.Contains("let RequiredPath string = Factory.GetKey()!!", emitted, StringComparison.Ordinal);
+        Assert.Contains("let _requiredPath string = Factory.GetKey()!!", emitted, StringComparison.Ordinal);
+        Assert.Contains("prop RequiredPath string", emitted, StringComparison.Ordinal);
         Assert.Contains("return (value ?? Factory.GetKey())!!", emitted, StringComparison.Ordinal);
         Assert.Contains("probe = Path.GetDirectoryName(probe!!)!!", emitted, StringComparison.Ordinal);
         Assert.Contains("Value: (value ?? Factory.GetKey())!!", emitted, StringComparison.Ordinal);

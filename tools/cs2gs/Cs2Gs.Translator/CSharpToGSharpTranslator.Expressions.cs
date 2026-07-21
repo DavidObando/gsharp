@@ -32,7 +32,7 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateFieldExpression(FieldExpressionSyntax fieldExpression)
         {
             if (this.context.GetSymbolInfo(fieldExpression).Symbol is IFieldSymbol { AssociatedSymbol: IPropertySymbol owner } &&
-                this.state.FieldKeywordBackingFieldNames.TryGetValue(owner, out string backingName))
+                this.state.SynthesizedPropertyBackingFieldNames.TryGetValue(owner, out string backingName))
             {
                 return new IdentifierExpression(backingName);
             }

@@ -127,13 +127,13 @@ public sealed partial class CSharpToGSharpTranslator
                         break;
                     }
 
-                    // Issue #1190: a static auto-property with an inline initializer
-                    // maps to a static backing field in the `shared { }` block, since
-                    // a static G# `prop` cannot carry an `init` accessor (GS0374) and
-                    // there is no instance constructor to receive the initializer.
-                    if (this.TryTranslateStaticAutoPropertyField(property, out FieldDeclaration staticField))
+                    if (this.TryTranslateStaticInitializedAutoProperty(
+                        property,
+                        out FieldDeclaration staticBackingField,
+                        out PropertyDeclaration staticProperty))
                     {
-                        yield return (staticField, true);
+                        yield return (staticBackingField, true);
+                        yield return (staticProperty, true);
                         break;
                     }
 
@@ -1599,24 +1599,17 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         /// <summary>
-        /// Issue #1190: a C# <c>static</c> auto-property with an inline initializer
-        /// (<c>public static Version OSVersion { get; } = GetOsVersion();</c>) has no
-        /// instance constructor to carry the initializer into (the OD-T1 path only
-        /// services instance properties), and a static G# <c>prop</c> cannot declare
-        /// an <c>init</c> accessor (GS0374). Such a property therefore maps to a
-        /// static read-only/mutable backing field inside the <c>shared { }</c> block,
-        /// preserving the initializer expression: a get-only property becomes a
-        /// <c>shared let NAME T = expr</c> field, and a mutable
-        /// (<c>{ get; private set; }</c> / <c>{ get; set; }</c>) property becomes a
-        /// <c>shared var NAME T = expr</c> field. It is accessed identically
-        /// (<c>Type.NAME</c>). A static auto-property without an initializer, or one
-        /// with a getter body, keeps its existing handling.
+        /// Issue #2665: preserves the CLR property ABI of an initialized static
+        /// auto-property by lowering only its storage to an initialized backing
+        /// field and keeping a computed property over that field.
         /// </summary>
-        private bool TryTranslateStaticAutoPropertyField(
+        private bool TryTranslateStaticInitializedAutoProperty(
             PropertyDeclarationSyntax node,
-            out FieldDeclaration field)
+            out FieldDeclaration field,
+            out PropertyDeclaration property)
         {
             field = null;
+            property = null;
 
             if (!node.Modifiers.Any(SyntaxKind.StaticKeyword) || node.Initializer == null)
             {
@@ -1644,9 +1637,12 @@ public sealed partial class CSharpToGSharpTranslator
             bool hasSet = accessors.Any(a => a.IsKind(SyntaxKind.SetAccessorDeclaration));
 
             var symbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
-            GTypeReference type = symbol != null
-                ? this.typeMapper.Map(symbol.Type, this.context, node.GetLocation())
-                : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+            if (symbol == null)
+            {
+                return false;
+            }
+
+            GTypeReference type = this.typeMapper.Map(symbol.Type, this.context, node.GetLocation());
 
             GExpression initializer = this.CoerceConstantToUnsigned(
                 node.Initializer.Value,
@@ -1654,39 +1650,69 @@ public sealed partial class CSharpToGSharpTranslator
             initializer = this.ForgiveNullableReferenceValue(
                 node.Initializer.Value,
                 initializer,
-                symbol?.Type,
+                symbol.Type,
                 symbol);
-
-            if (symbol != null)
-            {
-                initializer = this.ForgiveNullableReferenceValue(
-                    node.Initializer.Value,
-                    initializer,
-                    symbol.Type,
-                    symbol);
-            }
 
             // Issue #1072: a non-nullable reference static auto-property whose
             // initializer is nullable (e.g. `GetAttribute<...>()?.Member`) is
             // rendered `T?` so the initializer assignment type-checks.
-            if (symbol != null)
-            {
-                type = this.PromoteIfInitializerNullable(type, symbol, node.Initializer.Value);
-            }
+            type = this.PromoteIfInitializerNullable(type, symbol, node.Initializer.Value);
 
-            // A mutable static auto-property (`{ get; set; }` / `{ get; private set; }`)
-            // becomes a `var` field; an immutable get-only one becomes a `let` field.
             BindingKind binding = hasSet ? BindingKind.Var : BindingKind.Let;
+            string backingName = this.RegisterSynthesizedPropertyBackingField(symbol, primaryCtorParamNames: null);
 
             field = new FieldDeclaration(
                 binding,
-                SanitizeIdentifier(node.Identifier.Text),
+                backingName,
                 type,
                 initializer: initializer,
+                visibility: Visibility.Private);
+
+            var propertyAccessors = new List<PropertyAccessor>
+            {
+                new PropertyAccessor(
+                    AccessorKind.Get,
+                    new BlockStatement(new List<GStatement>
+                    {
+                        new ReturnStatement(new IdentifierExpression(backingName)),
+                    }),
+                    visibility: AccessorVisibility(accessors.First(a => a.IsKind(SyntaxKind.GetAccessorDeclaration)))),
+            };
+            if (hasSet)
+            {
+                propertyAccessors.Add(new PropertyAccessor(
+                    AccessorKind.Set,
+                    new BlockStatement(new List<GStatement>
+                    {
+                        new AssignmentStatement(
+                            new IdentifierExpression(backingName),
+                            new IdentifierExpression("value")),
+                    }),
+                    visibility: AccessorVisibility(accessors.First(a => a.IsKind(SyntaxKind.SetAccessorDeclaration)))));
+            }
+
+            property = new PropertyDeclaration(
+                SanitizeIdentifier(node.Identifier.Text),
+                type,
+                propertyAccessors,
                 visibility: MapVisibility(symbol, this.context, node),
                 attributes: this.MapAttributes(node.AttributeLists));
 
             return true;
+
+            Visibility AccessorVisibility(AccessorDeclarationSyntax accessor)
+            {
+                if (accessor.Modifiers.Count == 0)
+                {
+                    return Visibility.Default;
+                }
+
+                return MapVisibility(
+                    this.context.GetDeclaredSymbol(accessor),
+                    this.context,
+                    accessor,
+                    preserveStaticClassPrivate: true);
+            }
         }
 
         private (GMember Member, bool IsStatic, GMember BackingField) TranslateProperty(
@@ -1771,6 +1797,10 @@ public sealed partial class CSharpToGSharpTranslator
             if (symbol != null)
             {
                 type = this.PromoteIfUsedAsNullable(type, symbol);
+                if (node.Initializer != null)
+                {
+                    type = this.PromoteIfInitializerNullable(type, symbol, node.Initializer.Value);
+                }
             }
 
             // Issue #1907: register a synthesized backing field BEFORE mapping the
@@ -1880,23 +1910,31 @@ public sealed partial class CSharpToGSharpTranslator
                 return null;
             }
 
+            return this.RegisterSynthesizedPropertyBackingField(symbol, primaryCtorParamNames);
+        }
+
+        private string RegisterSynthesizedPropertyBackingField(
+            IPropertySymbol symbol,
+            IReadOnlyCollection<string> primaryCtorParamNames)
+        {
+            if (this.state.SynthesizedPropertyBackingFieldNames.TryGetValue(symbol, out string existing))
+            {
+                return existing;
+            }
+
             string propName = symbol.Name;
             string baseName = "_" + (propName.Length > 0
                 ? char.ToLowerInvariant(propName[0]) + propName.Substring(1)
                 : propName);
-
-            var taken = new HashSet<string>(StringComparer.Ordinal);
-            foreach (ISymbol member in symbol.ContainingType.GetMembers())
-            {
-                taken.Add(member.Name);
-            }
-
+            var taken = new HashSet<string>(
+                symbol.ContainingType.GetMembers().Select(member => member.Name),
+                StringComparer.Ordinal);
             if (primaryCtorParamNames != null)
             {
                 taken.UnionWith(primaryCtorParamNames);
             }
 
-            taken.UnionWith(this.state.FieldKeywordBackingFieldNames.Values);
+            taken.UnionWith(this.state.SynthesizedPropertyBackingFieldNames.Values);
 
             string candidate = baseName;
             for (int suffix = 2; taken.Contains(candidate); suffix++)
@@ -1904,7 +1942,7 @@ public sealed partial class CSharpToGSharpTranslator
                 candidate = baseName + suffix;
             }
 
-            this.state.FieldKeywordBackingFieldNames[symbol] = candidate;
+            this.state.SynthesizedPropertyBackingFieldNames[symbol] = candidate;
             return candidate;
         }
 

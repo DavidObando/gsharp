@@ -23,12 +23,10 @@ public class Issue1741SilentDivergenceTests
 {
     /// <summary>
     /// An accessor-level accessibility modifier (<c>{ get; private set; }</c>)
-    /// used to collapse to the plain auto form, silently widening a
-    /// private-set property to fully public. G# has no per-accessor
-    /// accessibility, so the loss is now diagnosed instead of silent.
+    /// must remain on the translated accessor.
     /// </summary>
     [Fact]
-    public void PrivateSetAccessor_ReportsAccessibilityLossDiagnostic()
+    public void PrivateSetAccessor_PreservesAccessibility()
     {
         (CompilationUnit unit, TranslationContext context) = Translate(@"
 namespace Demo
@@ -38,22 +36,19 @@ namespace Demo
         public int X { get; private set; }
     }
 }");
-        Assert.Contains(
+        Assert.DoesNotContain(
             context.Diagnostics,
-            d => d.Severity == TranslationSeverity.Warning
-                && d.Message.Contains("narrower accessibility", StringComparison.OrdinalIgnoreCase));
-        Assert.NotNull(unit);
+            d => d.Message.Contains("narrower accessibility", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("private set", GSharpPrinter.Print(unit), StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// A protected get-accessor on a public property must also be diagnosed;
-    /// the fix generalizes to any accessor with a narrowing modifier, not just
-    /// <c>private set</c>.
+    /// A protected get-accessor on a public property is preserved too.
     /// </summary>
     [Fact]
-    public void ProtectedGetAccessor_ReportsAccessibilityLossDiagnostic()
+    public void ProtectedGetAccessor_PreservesAccessibility()
     {
-        (_, TranslationContext context) = Translate(@"
+        (CompilationUnit unit, TranslationContext context) = Translate(@"
 namespace Demo
 {
     public class C
@@ -61,10 +56,10 @@ namespace Demo
         public int X { protected get; set; }
     }
 }");
-        Assert.Contains(
+        Assert.DoesNotContain(
             context.Diagnostics,
-            d => d.Severity == TranslationSeverity.Warning
-                && d.Message.Contains("narrower accessibility", StringComparison.OrdinalIgnoreCase));
+            d => d.Message.Contains("narrower accessibility", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("protected get", GSharpPrinter.Print(unit), StringComparison.Ordinal);
     }
 
     /// <summary>

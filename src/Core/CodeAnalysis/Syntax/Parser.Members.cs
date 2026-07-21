@@ -855,6 +855,17 @@ public partial class Parser
         {
             var startToken = Current;
 
+            SyntaxToken accessibilityModifier = null;
+            if ((Current.Kind == SyntaxKind.PublicKeyword ||
+                 Current.Kind == SyntaxKind.InternalKeyword ||
+                 Current.Kind == SyntaxKind.PrivateKeyword ||
+                 Current.Kind == SyntaxKind.ProtectedKeyword) &&
+                Peek(1).Kind == SyntaxKind.IdentifierToken &&
+                (Peek(1).Text == "get" || Peek(1).Text == "set" || Peek(1).Text == "init"))
+            {
+                accessibilityModifier = NextToken();
+            }
+
             if (Current.Kind == SyntaxKind.IdentifierToken &&
                 (Current.Text == "get" || Current.Text == "set" || Current.Text == "init"))
             {
@@ -911,6 +922,7 @@ public partial class Parser
                 // else: bare accessor (no body, no semicolon) — valid in interfaces
                 accessors.Add(new PropertyAccessorSyntax(
                     syntaxTree,
+                    accessibilityModifier,
                     accessorKeyword,
                     openParen,
                     paramIdentifier,
@@ -1021,7 +1033,8 @@ public partial class Parser
         var getKeyword = new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, arrowPosition, "get", null);
         var getAccessor = new PropertyAccessorSyntax(
             syntaxTree,
-            getKeyword,
+            accessibilityModifier: null,
+            accessorKeyword: getKeyword,
             openParenToken: null,
             parameterIdentifier: null,
             closeParenToken: null,

@@ -366,6 +366,44 @@ public class PropertyEmitTests
         Assert.Equal("Hello, World", result);
     }
 
+    [Fact]
+    public void AccessorAccessibility_EmitsMetadataAndRunsInsideDeclaringType()
+    {
+        var source = """
+            package MyLib
+            import System
+
+            class ApplEnv {
+                shared {
+                    private var _name string? = nil
+                    prop ApplName string? {
+                        get { return _name }
+                        private set { _name = value }
+                    }
+                    func Override(name string?) {
+                        ApplName = name
+                    }
+                }
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var type = assembly.GetTypes().Single(t => t.Name == "ApplEnv");
+        var property = type.GetProperty("ApplName");
+
+        Assert.NotNull(property);
+        Assert.True(property!.GetMethod!.IsPublic);
+        Assert.True(property.GetMethod.IsStatic);
+        Assert.True(property.GetSetMethod(nonPublic: true)!.IsPrivate);
+        Assert.True(property.GetSetMethod(nonPublic: true)!.IsStatic);
+        var nullability = new NullabilityInfoContext().Create(property);
+        Assert.Equal(NullabilityState.Nullable, nullability.ReadState);
+        Assert.Equal(NullabilityState.Nullable, nullability.WriteState);
+
+        type.GetMethod("Override")!.Invoke(null, new object[] { "Foundation" });
+        Assert.Equal("Foundation", property.GetValue(null));
+    }
+
     private static Assembly CompileToAssembly(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_property_emit_").FullName;

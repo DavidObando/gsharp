@@ -104,7 +104,7 @@ internal sealed class DocumentTranslationState
     // every `field` reference/auto-accessor is rewritten to read/write it.
     // Keyed by property symbol so all accessors of the same property (get
     // AND set) resolve to the one synthesized name.
-    public Dictionary<IPropertySymbol, string> FieldKeywordBackingFieldNames { get; } =
+    public Dictionary<IPropertySymbol, string> SynthesizedPropertyBackingFieldNames { get; } =
         new Dictionary<IPropertySymbol, string>(SymbolEqualityComparer.Default);
 
     // Issue #1743: both <see cref="IsSymbolReassigned"/> and

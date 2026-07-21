@@ -147,7 +147,8 @@ public static class Repro
 
         Assert.Contains("prop Source (string?, string)", printed);
         Assert.Contains("var Field string?", printed);
-        Assert.Contains("var Property string?", printed);
+        Assert.Contains("var _property string?", printed);
+        Assert.Contains("prop Property string?", printed);
         Assert.DoesNotContain("prop Source (string?, string?)", printed);
     }
 

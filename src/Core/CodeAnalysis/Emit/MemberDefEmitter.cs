@@ -306,7 +306,9 @@ internal sealed class MemberDefEmitter
         // which always has a computed body and so never reaches this path)
         // is ALWAYS private in CLR metadata — see the matching remark on
         // ReflectionMetadataEmitter.EmitFunction's effectiveAccessibility.
-        var methodAttrs = (prop.HasExplicitInterfaceClause ? MethodAttributes.Private : MethodAttributes.Public)
+        var methodAttrs = (prop.HasExplicitInterfaceClause
+                ? MethodAttributes.Private
+                : AccessibilityMap.ToMethodVisibility(prop.GetterAccessibility))
             | MethodAttributes.SpecialName | MethodAttributes.HideBySig;
         if (prop.IsVirtual)
         {
@@ -395,7 +397,9 @@ internal sealed class MemberDefEmitter
         // ADR-0149: see the matching visibility comment in EmitPropertyGetter
         // — an explicit-interface qualifier clause property is always
         // private in CLR metadata.
-        var methodAttrs = (prop.HasExplicitInterfaceClause ? MethodAttributes.Private : MethodAttributes.Public)
+        var methodAttrs = (prop.HasExplicitInterfaceClause
+                ? MethodAttributes.Private
+                : AccessibilityMap.ToMethodVisibility(prop.SetterAccessibility))
             | MethodAttributes.SpecialName | MethodAttributes.HideBySig;
         if (prop.IsVirtual)
         {
@@ -543,7 +547,8 @@ internal sealed class MemberDefEmitter
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)
             .Parameters(0, r => this.encodeTypeSymbol(r.Type(), prop.Type), _ => { });
 
-        var methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static;
+        var methodAttrs = AccessibilityMap.ToMethodVisibility(prop.GetterAccessibility)
+            | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static;
 
         return this.emitCtx.Metadata.AddMethodDefinition(
             attributes: methodAttrs,
@@ -569,7 +574,8 @@ internal sealed class MemberDefEmitter
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)
             .Parameters(1, r => r.Void(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type));
 
-        var methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static;
+        var methodAttrs = AccessibilityMap.ToMethodVisibility(prop.SetterAccessibility)
+            | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static;
 
         var firstParamHandle = this.nextParameterHandle();
         this.emitCtx.Metadata.AddParameter(

@@ -27,6 +27,8 @@ public sealed class PropertySymbol : Symbol
     /// <param name="isStatic">Whether this property is declared inside a <c>shared</c> block (ADR-0053).</param>
     /// <param name="declaration">The declaring syntax node, or <see langword="null"/> for synthesized properties.</param>
     /// <param name="isInitOnly">Whether the property's setter is an <c>init</c>-only accessor (issue #946).</param>
+    /// <param name="getterAccessibility">The getter accessibility, or the property accessibility when omitted.</param>
+    /// <param name="setterAccessibility">The setter accessibility, or the property accessibility when omitted.</param>
     public PropertySymbol(
         string name,
         TypeSymbol type,
@@ -39,7 +41,9 @@ public sealed class PropertySymbol : Symbol
         string setterParameterName = "value",
         bool isStatic = false,
         PropertyDeclarationSyntax declaration = null,
-        bool isInitOnly = false)
+        bool isInitOnly = false,
+        Accessibility? getterAccessibility = null,
+        Accessibility? setterAccessibility = null)
         : base(name)
     {
         Type = type;
@@ -53,6 +57,8 @@ public sealed class PropertySymbol : Symbol
         IsStatic = isStatic;
         Declaration = declaration;
         IsInitOnly = isInitOnly;
+        GetterAccessibility = getterAccessibility ?? accessibility;
+        SetterAccessibility = setterAccessibility ?? accessibility;
     }
 
     /// <inheritdoc/>
@@ -63,6 +69,12 @@ public sealed class PropertySymbol : Symbol
 
     /// <summary>Gets the property accessibility.</summary>
     public Accessibility Accessibility { get; }
+
+    /// <summary>Gets the getter accessor accessibility.</summary>
+    public Accessibility GetterAccessibility { get; }
+
+    /// <summary>Gets the setter accessor accessibility.</summary>
+    public Accessibility SetterAccessibility { get; }
 
     /// <summary>Gets a value indicating whether this property has a getter accessor.</summary>
     public bool HasGetter { get; }
