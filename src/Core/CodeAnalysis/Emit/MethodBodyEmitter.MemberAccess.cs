@@ -101,15 +101,14 @@ internal sealed partial class MethodBodyEmitter
     private bool TryLoadFromEnclosingClosure(VariableSymbol variable)
     {
         if (this.enclosingClosure == null
-            || !this.enclosingClosure.CaptureFields.TryGetValue(variable, out var capField)
-            || !this.outer.cache.StructFieldDefs.TryGetValue(capField, out var capFieldHandle))
+            || !this.enclosingClosure.CaptureFields.TryGetValue(variable, out var capField))
         {
             return false;
         }
 
         this.il.OpCode(ILOpCode.Ldarg_0);
         this.il.OpCode(ILOpCode.Ldfld);
-        this.il.Token(capFieldHandle);
+        this.il.Token(this.outer.userTokens.ResolveFieldToken(this.enclosingClosure.ConstructedClassSym, capField));
         return true;
     }
 
@@ -432,6 +431,10 @@ internal sealed partial class MethodBodyEmitter
             fa.StructType as StructSymbol,
             fa.Receiver?.Type as StructSymbol,
             fa.Field);
+        if (this.enclosingClosure?.CaptureFields.ContainsValue(fa.Field) == true)
+        {
+            fieldContainer = this.enclosingClosure.ConstructedClassSym;
+        }
 
         EntityHandle fieldHandle;
         if (fa.InterfaceType != null)
@@ -545,6 +548,10 @@ internal sealed partial class MethodBodyEmitter
             fas.StructType as StructSymbol,
             fas.Receiver?.Type as StructSymbol,
             fas.Field);
+        if (this.enclosingClosure?.CaptureFields.ContainsValue(fas.Field) == true)
+        {
+            fieldContainer = this.enclosingClosure.ConstructedClassSym;
+        }
 
         EntityHandle fieldHandle;
         if (fas.InterfaceType != null)

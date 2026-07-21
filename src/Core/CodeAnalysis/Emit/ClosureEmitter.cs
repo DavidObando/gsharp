@@ -419,7 +419,10 @@ internal sealed class ClosureEmitter
             constructedClass = SynthesizedClosureReifier.Reify(closureClass, origTPs, this.emitCtx.References.MapClrTypeToReferences);
         }
 
-        var rewriter = new CaptureRewriter(closureClass, captureFields, invokeMethod.ThisParameter);
+        // Issue #2669: field accesses inside a reified generic closure's Invoke
+        // must be parented at the constructed display-class TypeSpec, including
+        // fields whose own type is non-generic.
+        var rewriter = new CaptureRewriter(constructedClass, captureFields, invokeMethod.ThisParameter);
         var rewrittenBody = (BoundBlockStatement)rewriter.RewriteStatement(body);
         if (rewriter.UnsupportedCapture != null)
         {
