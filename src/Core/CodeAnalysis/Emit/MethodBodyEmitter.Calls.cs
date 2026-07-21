@@ -406,14 +406,14 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        // ADR-0087 §3 R6: a delegate whose parameter or return types
-        // reference open type parameters (e.g. `func(T) U`) is now
+        // ADR-0087 §3 R6: a delegate whose parameter or return types carry
+        // symbolic types (e.g. `func(T) U` or `async () -> T`) is
         // encoded as a reified `GENERICINST<Func`N><…>` shape. Dispatch
         // through a MemberRef parented at that TypeSpec — the runtime
         // delegate (e.g. `Func<int, int>`) resolves the MemberRef to
         // its concrete `Invoke` slot, so no `Delegate.DynamicInvoke`
         // marshalling is needed.
-        if (call.FunctionType.ClrType == null)
+        if (this.outer.userTokens.FunctionTypeNeedsSymbolicDelegate(call.FunctionType))
         {
             this.EmitExpression(call.Target);
             foreach (var arg in call.Arguments)

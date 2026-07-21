@@ -915,8 +915,7 @@ internal sealed class ImportedMemberRefFactory
         handle = default;
         if (method == null
             || !TryNormalizeToSymbolicContainer(containingTypeSymbol, out var openDefinition, out var typeArguments)
-            || typeArguments.IsDefaultOrEmpty
-            || !typeArguments.Any(TypeSymbol.RequiresSymbolicProjection))
+            || typeArguments.IsDefaultOrEmpty)
         {
             return false;
         }
@@ -966,9 +965,8 @@ internal sealed class ImportedMemberRefFactory
         }
 
         // Synthesize an ImportedTypeSymbol view of the receiver so the
-        // parent TypeSpec encoder reaches the existing
-        // `ImportedTypeSymbol with HasTypeParameterArgument` branch in
-        // EncodeTypeSymbol uniformly — regardless of whether the actual
+        // parent TypeSpec encoder retains its constructed arguments uniformly
+        // — regardless of whether the actual
         // receiver was an ImportedTypeSymbol, a SequenceTypeSymbol with
         // null ClrType (issue #774), or an AsyncSequenceTypeSymbol with
         // null ClrType.

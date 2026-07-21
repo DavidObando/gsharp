@@ -307,40 +307,20 @@ internal sealed class SignatureEncoder
                 encoder.GenericTypeParameter(tp.Ordinal);
             }
         }
-        else if (type is ImportedTypeSymbol symbolicImported
-            && !symbolicImported.TypeArguments.IsDefaultOrEmpty
-            && !symbolicImported.HasTypeParameterArgument
-            && symbolicImported.OpenDefinition != null
-            && symbolicImported.TypeArguments.Any(TypeSymbol.RequiresSymbolicProjection))
+        else if (type is ImportedTypeSymbol constructedImported
+            && !constructedImported.TypeArguments.IsDefaultOrEmpty
+            && constructedImported.OpenDefinition != null)
         {
+            // Issue #2666: the cached CLR projection may be object-erased even
+            // when every symbolic argument is concrete (for example the
+            // KeyValuePair[K,V] cell captured by an async foreach body).
             var genericInst = encoder.GenericInstantiation(
-                this.outer.memberRefs.GetTypeReference(symbolicImported.OpenDefinition),
-                symbolicImported.TypeArguments.Length,
-                isValueType: symbolicImported.OpenDefinition.IsValueType);
-            foreach (var arg in symbolicImported.TypeArguments)
+                this.outer.memberRefs.GetTypeReference(constructedImported.OpenDefinition),
+                constructedImported.TypeArguments.Length,
+                isValueType: constructedImported.OpenDefinition.IsValueType);
+            foreach (var arg in constructedImported.TypeArguments)
             {
                 this.EncodeTypeSymbol(genericInst.AddArgument(), arg);
-            }
-        }
-        else if (type is ImportedTypeSymbol erasedGeneric && erasedGeneric.HasTypeParameterArgument)
-        {
-            // ADR-0087 §3 R2: a generic CLR type constructed over an in-scope
-            // type parameter (e.g. `List[T]`) is no longer erased to
-            // `System.Object`. Emit a real `GENERICINST<def><args>` so the
-            // signature carries `Var`/`MVar` slots that match the actual
-            // runtime type. Boxing/unboxing at boundaries is now handled by
-            // explicit `box T`/`unbox.any T` in the body emitter when the
-            // value bridges across an `object` slot.
-            var openDef = erasedGeneric.OpenDefinition
-                ?? throw new InvalidOperationException(
-                    $"Imported generic '{erasedGeneric.Name}' has no OpenDefinition for GENERICINST encoding.");
-            var giOpen = encoder.GenericInstantiation(
-                this.outer.memberRefs.GetTypeReference(openDef),
-                erasedGeneric.TypeArguments.Length,
-                isValueType: openDef.IsValueType);
-            foreach (var arg in erasedGeneric.TypeArguments)
-            {
-                this.EncodeTypeSymbol(giOpen.AddArgument(), arg);
             }
         }
         else if (type is ArrayTypeSymbol arr)
@@ -557,19 +537,18 @@ internal sealed class SignatureEncoder
                 this.EncodeTypeSymbol(fnParamsEnc.AddParameter().Type(), fnPtr.ParameterTypes[i]);
             }
         }
+        else if (type is FunctionTypeSymbol fn)
+        {
+            // ADR-0087 §3 R6 / issue #2666: encode delegates from their symbolic shape.
+            // A nested open slot (for example `async () -> T`) can still have
+            // an object-erased ClrType (`Func<Task<object>>`); preferring that
+            // cached projection corrupts generic async state-machine fields.
+            // The reified signature retains the original nested Var/MVar slots.
+            this.EncodeFunctionTypeSymbol(encoder, fn);
+        }
         else if (type?.ClrType != null)
         {
             this.EncodeClrType(encoder, type.ClrType);
-        }
-        else if (type is FunctionTypeSymbol openFn)
-        {
-            // ADR-0087 §3 R6: encode an open-bearing delegate type as a
-            // reified `GENERICINST<Func`N or Action`N><args>` so the
-            // signature carries `Var`/`MVar` slots that match the
-            // runtime delegate. Previously the encoder fell back to
-            // `Func<object, object>`, and the call site bridged the
-            // value-type boundary through `Delegate.DynamicInvoke`.
-            this.EncodeFunctionTypeSymbol(encoder, openFn);
         }
         else if (type is MapTypeSymbol openMap)
         {
