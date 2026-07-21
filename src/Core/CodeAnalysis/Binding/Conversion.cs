@@ -2082,7 +2082,10 @@ public sealed class Conversion
 
         for (var i = 0; i < from.Arity; i++)
         {
-            if (from.ParameterTypes[i] != to.ParameterTypes[i])
+            // Function parameters are contravariant: every value the target
+            // may supply must be accepted by the source callable.
+            var parameterConversion = ClassifyNonStructural(to.ParameterTypes[i], from.ParameterTypes[i]);
+            if (!parameterConversion.IsImplicit)
             {
                 return false;
             }

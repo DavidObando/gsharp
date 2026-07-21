@@ -552,9 +552,9 @@ internal sealed partial class MethodBodyEmitter
             $"Conversion from '{from.Name}' to '{to.Name}' is not yet supported by the emitter.");
     }
 
-    // Issues #1356/#2542: nullable return widening erases to the same CLR type,
-    // and Func's return slot is CLR-covariant for reference upcasts. Both are
-    // no-ops; parameters must remain exact.
+    // Issues #1356/#2542/#2618: reference nullability erases from parameter and
+    // return slots, and Func's return slot is CLR-covariant for reference
+    // upcasts. These conversions are representation-preserving no-ops.
     private static bool IsRepresentationPreservingFunctionConversion(
         FunctionTypeSymbol from,
         FunctionTypeSymbol to)
@@ -566,10 +566,15 @@ internal sealed partial class MethodBodyEmitter
 
         for (var i = 0; i < from.Arity; i++)
         {
-            if (from.ParameterTypes[i] != to.ParameterTypes[i])
+            if (!HaveSameReferenceRepresentation(from.ParameterTypes[i], to.ParameterTypes[i]))
             {
                 return false;
             }
+        }
+
+        if (from.ReturnType == to.ReturnType)
+        {
+            return true;
         }
 
         if (to.ReturnType is NullableTypeSymbol toNullableReturn
@@ -586,6 +591,44 @@ internal sealed partial class MethodBodyEmitter
 
         var returnConversion = Conversion.ClassifyNonStructural(from.ReturnType, to.ReturnType);
         return returnConversion.Exists && returnConversion.IsImplicit;
+    }
+
+    private static bool HaveSameReferenceRepresentation(TypeSymbol left, TypeSymbol right)
+    {
+        while (left is NullabilityAnnotatedTypeSymbol leftAnnotated)
+        {
+            left = leftAnnotated.BaseType;
+        }
+
+        while (right is NullabilityAnnotatedTypeSymbol rightAnnotated)
+        {
+            right = rightAnnotated.BaseType;
+        }
+
+        if (left is NullableTypeSymbol leftReferenceNullable
+            && Conversion.IsReferenceLikeTarget(leftReferenceNullable.UnderlyingType))
+        {
+            left = leftReferenceNullable.UnderlyingType;
+        }
+
+        if (right is NullableTypeSymbol rightReferenceNullable
+            && Conversion.IsReferenceLikeTarget(rightReferenceNullable.UnderlyingType))
+        {
+            right = rightReferenceNullable.UnderlyingType;
+        }
+
+        if (left == right)
+        {
+            return true;
+        }
+
+        if (!Conversion.IsReferenceLikeTarget(left) || !Conversion.IsReferenceLikeTarget(right))
+        {
+            return false;
+        }
+
+        return Conversion.ClassifyNonStructural(left, right).IsImplicit
+            && Conversion.ClassifyNonStructural(right, left).IsImplicit;
     }
 
     // Issue #1236: emit a lifted numeric widening between two distinct value-type

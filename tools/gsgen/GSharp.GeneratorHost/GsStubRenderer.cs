@@ -460,12 +460,25 @@ public sealed class GsStubRenderer
             }
 
             var isVoid = method.Type == null || method.Type == TypeSymbol.Void;
-            sb.Append(isVoid ? "void" : speller.Spell(method.Type)).Append(' ').Append(method.Name);
+            sb.Append(RenderMethodReturnType(method, isVoid)).Append(' ').Append(method.Name);
             sb.Append(RenderTypeParameters(method.TypeParameters));
             sb.Append('(').Append(RenderParameters(method.Parameters)).Append(')');
             sb.Append(RenderConstraints(method.TypeParameters));
-            sb.AppendLine(isVoid ? " { }" : " => throw null!;");
+            sb.AppendLine(isVoid && !method.IsAsync ? " { }" : " => throw null!;");
         }
+    }
+
+    private string RenderMethodReturnType(FunctionSymbol method, bool isVoid)
+    {
+        if (!method.IsAsync)
+        {
+            return isVoid ? "void" : speller.Spell(method.Type);
+        }
+
+        var wrapper = method.AsyncReturnsValueTask
+            ? "global::System.Threading.Tasks.ValueTask"
+            : "global::System.Threading.Tasks.Task";
+        return isVoid ? wrapper : wrapper + "<" + speller.Spell(method.Type) + ">";
     }
 
     private string RenderParameters(ImmutableArray<ParameterSymbol> parameters)
