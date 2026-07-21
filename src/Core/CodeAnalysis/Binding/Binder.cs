@@ -1935,7 +1935,9 @@ public sealed class Binder
             binder.statements.FinalizeUserLabels();
             var lowered = Lowerer.Lower(body);
 
-            if (requireAllPathsReturn && !ControlFlowGraph.AllPathsReturn(lowered))
+            if (requireAllPathsReturn
+                && !IsIteratorReturnType(accessor.Type)
+                && !ControlFlowGraph.AllPathsReturn(lowered))
             {
                 binder.Diagnostics.ReportAllPathsMustReturn(bodySyntax.OpenBraceToken.Location);
             }
@@ -1984,7 +1986,9 @@ public sealed class Binder
             binder.statements.FinalizeUserLabels();
             var lowered = Lowerer.Lower(body, structSym);
 
-            if (allPathsReturnLocation != null && !ControlFlowGraph.AllPathsReturn(lowered))
+            if (allPathsReturnLocation != null
+                && !IsIteratorReturnType(member.Type)
+                && !ControlFlowGraph.AllPathsReturn(lowered))
             {
                 binder.Diagnostics.ReportAllPathsMustReturn(allPathsReturnLocation.Value);
             }
