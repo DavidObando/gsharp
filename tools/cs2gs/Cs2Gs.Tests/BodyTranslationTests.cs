@@ -415,7 +415,8 @@ public class BodyTranslationTests
         string body = GetMethodBody(@"
             System.Console.WriteLine(n);
             var s = n.ToString();");
-        Assert.Contains("System.Console.WriteLine(n)", body);
+        Assert.Contains("import System", body);
+        Assert.Contains("Console.WriteLine(n)", body);
         Assert.Contains("n.ToString()", body);
     }
 
