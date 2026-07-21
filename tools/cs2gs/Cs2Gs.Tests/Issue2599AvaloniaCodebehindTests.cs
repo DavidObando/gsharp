@@ -87,7 +87,7 @@ public sealed class Issue2599AvaloniaCodebehindTests : IDisposable
             Path.Combine(appDirectory, "obj"),
             "*LibraryView*.g.gs",
             SearchOption.AllDirectories).Single());
-        Assert.Contains("var booksGrid DataGrid", generated, StringComparison.Ordinal);
+        Assert.Contains("var booksGrid DataGrid?", generated, StringComparison.Ordinal);
         Assert.Contains("@System.CodeDom.Compiler.GeneratedCode", generated, StringComparison.Ordinal);
     }
 

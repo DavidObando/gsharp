@@ -523,16 +523,6 @@ public sealed record BoundBinaryOperator
             return true;
         }
 
-        // Imported CLR classes are managed references too. Source-generator
-        // fields are often emitted under nullable-oblivious context, so their
-        // generated G# part can legitimately compare a bare imported class to
-        // nil even though it has no explicit nullable annotation.
-        if (nullableOrUnderlying is ImportedTypeSymbol importedType
-            && importedType.ClrType is { IsValueType: false })
-        {
-            return true;
-        }
-
         // Issue #2354 follow-up: a non-nullable G# `class` (as opposed to a
         // value-kind `struct`) is likewise always a CLR reference type at
         // the IL layer — the exact same rationale as the interface arm

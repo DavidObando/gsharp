@@ -670,6 +670,16 @@ public sealed partial class CSharpToGSharpTranslator
                     ? this.typeMapper.Map(symbol.Type, this.context, declarator.GetLocation())
                     : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
 
+                // Generator-produced fields declared under nullable-oblivious
+                // context (Avalonia x:Name fields are the common case) retain
+                // C#'s ability to hold/test null when translated as a standalone
+                // generated partial part.
+                if (this.preservePartialParts &&
+                    symbol?.Type is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.None })
+                {
+                    type = MakeNullable(type);
+                }
+
                 // Issue #1072: a non-nullable reference/array field that is
                 // null-checked or null-assigned anywhere in the declaring type is
                 // really nullable; render it `T?` so the `== nil` guard type-checks.
