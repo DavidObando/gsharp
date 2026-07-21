@@ -3247,6 +3247,19 @@ internal sealed partial class ExpressionBinder
         }
 
         if (structSym != null
+            && TryBindUserStructDelegateMemberInvocation(
+                receiver: null,
+                structSym,
+                methodName,
+                arguments,
+                ce,
+                isStatic: true,
+                out var delegateMemberCall))
+        {
+            return delegateMemberCall;
+        }
+
+        if (structSym != null
             && TypeMemberModel.GetNearestImportedBase(structSym)?.ClrType is System.Type importedBase)
         {
             var imported = new ImportedClassSymbol(importedBase, ce, references: scope.References);

@@ -109,6 +109,37 @@ internal sealed class SlotPlanner
             collector.Visit(kvp.Value);
         }
 
+        foreach (var type in this.emitCtx.Program.Structs
+            .OrderBy(s => s.Declaration?.Span.Start ?? int.MaxValue)
+            .ThenBy(s => s.Name, StringComparer.Ordinal))
+        {
+            foreach (var field in type.StaticFields)
+            {
+                if (type.StaticFieldInitializers.TryGetValue(field, out var initializer))
+                {
+                    collector.Visit(initializer);
+                }
+            }
+
+            foreach (var statement in type.StaticInitializerStatements)
+            {
+                collector.Visit(statement);
+            }
+        }
+
+        foreach (var type in this.emitCtx.Program.Interfaces
+            .OrderBy(i => i.Declaration?.Span.Start ?? int.MaxValue)
+            .ThenBy(i => i.Name, StringComparer.Ordinal))
+        {
+            foreach (var field in type.StaticFields)
+            {
+                if (type.StaticFieldInitializers.TryGetValue(field, out var initializer))
+                {
+                    collector.Visit(initializer);
+                }
+            }
+        }
+
         return sink;
     }
 

@@ -425,41 +425,72 @@ internal sealed partial class ExpressionBinder
         string methodName,
         ImmutableArray<BoundExpression> arguments,
         CallExpressionSyntax ce,
+        bool isStatic,
         out BoundExpression result)
     {
         result = null;
 
-        // Walk the base chain so an inherited delegate field on a base class
-        // is invokable on a derived instance.
         FieldSymbol matchedField = null;
         StructSymbol declaringType = null;
-        for (var c = receiverStruct; c != null; c = c.BaseClass)
+        if (isStatic)
         {
-            if (c.TryGetField(methodName, out var f))
+            TypeMemberModel.TryGetStaticFieldIncludingInherited(
+                receiverStruct,
+                methodName,
+                out matchedField,
+                out declaringType);
+        }
+        else
+        {
+            // Walk the base chain so an inherited delegate field on a base class
+            // is invokable on a derived instance.
+            for (var c = receiverStruct; c != null; c = c.BaseClass)
             {
-                matchedField = f;
-                declaringType = c;
-                break;
+                if (c.TryGetField(methodName, out var f))
+                {
+                    matchedField = f;
+                    declaringType = c;
+                    break;
+                }
             }
         }
 
         PropertySymbol matchedProperty = null;
-        if (matchedField == null
-            && TypeMemberModel.TryGetProperty(
-                receiverStruct,
-                methodName,
-                out var property,
-                out var propertyDeclaringType)
-            && property.HasGetter)
+        if (matchedField == null)
         {
-            matchedProperty = property;
-            declaringType = propertyDeclaringType;
+            var foundProperty = isStatic
+                ? TypeMemberModel.TryGetStaticPropertyIncludingInherited(
+                    receiverStruct,
+                    methodName,
+                    out var property,
+                    out var propertyDeclaringType)
+                : TypeMemberModel.TryGetProperty(
+                    receiverStruct,
+                    methodName,
+                    out property,
+                    out propertyDeclaringType);
+            if (foundProperty && property.HasGetter)
+            {
+                matchedProperty = property;
+                declaringType = propertyDeclaringType;
+            }
         }
 
-        var memberType = matchedField?.Type ?? matchedProperty?.Type;
+        var memberType = matchedField != null && isStatic
+            ? declaringType.SubstituteMemberType(matchedField.Type)
+            : matchedField?.Type ?? matchedProperty?.Type;
         if (memberType == null)
         {
             return false;
+        }
+
+        if (isStatic)
+        {
+            var accessibility = matchedField?.Accessibility ?? matchedProperty.Accessibility;
+            if (!AccessibilityChecker.IsAccessible(accessibility, declaringType, function))
+            {
+                Diagnostics.ReportMemberInaccessible(ce.Identifier.Location, methodName, declaringType.Name, accessibility);
+            }
         }
 
         FunctionTypeSymbol functionType;
@@ -535,11 +566,20 @@ internal sealed partial class ExpressionBinder
         for (var i = 0; i < permutedArgs.Length; i++)
         {
             var argLoc = i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Location;
-            convertedArgs.Add(conversions.BindConversion(argLoc, permutedArgs[i], functionType.ParameterTypes[i]));
+            var argument = permutedArgs[i];
+            if (argument is BoundErrorExpression { Syntax: LambdaExpressionSyntax lambda }
+                && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(functionType.ParameterTypes[i], out var target))
+            {
+                argument = lambdas.BindLambdaExpression(lambda, target);
+            }
+
+            convertedArgs.Add(conversions.BindConversion(argLoc, argument, functionType.ParameterTypes[i]));
         }
 
         BoundExpression memberLoad = matchedField != null
-            ? new BoundFieldAccessExpression(null, receiver, declaringType, matchedField)
+            ? isStatic
+                ? new BoundFieldAccessExpression(null, receiver, declaringType, matchedField, memberType)
+                : new BoundFieldAccessExpression(null, receiver, declaringType, matchedField)
             : new BoundPropertyAccessExpression(null, receiver, declaringType, matchedProperty);
         result = new BoundIndirectCallExpression(null, memberLoad, functionType, convertedArgs.MoveToImmutable());
         return true;
