@@ -5,8 +5,10 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Security.Cryptography;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Diagnostics;
@@ -78,11 +80,19 @@ public static class GeneratorRunner
 
         var failures = new List<GeneratorFailure>();
         var generators = new List<ISourceGenerator>();
+        var analyzerHashes = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (string path in analyzerAssemblyPaths)
         {
             try
             {
+                using var stream = File.OpenRead(path);
+                string hash = Convert.ToHexString(SHA256.HashData(stream));
+                if (!analyzerHashes.Add(hash))
+                {
+                    continue;
+                }
+
                 var reference = new AnalyzerFileReference(path, AnalyzerAssemblyLoader.Instance);
                 generators.AddRange(reference.GetGenerators(LanguageNames.CSharp));
             }

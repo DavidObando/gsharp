@@ -224,6 +224,10 @@ internal sealed class DocumentTranslationState
     // helpers never leak into its enclosing type.
     public List<MethodDeclaration> PendingSynthHelpers { get; set; }
 
+    // Instance helpers synthesized while translating the current aggregate.
+    // Unlike PendingSynthHelpers, these remain ordinary class members.
+    public List<MethodDeclaration> PendingInstanceSynthHelpers { get; set; }
+
     // Monotonic counter for synthesizing null-seam helper method names
     // (issue #1849), reset per aggregate alongside `PendingSynthHelpers`.
     public int SynthHelperCounter { get; set; }

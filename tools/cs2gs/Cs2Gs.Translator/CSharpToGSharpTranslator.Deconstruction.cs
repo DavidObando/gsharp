@@ -1129,7 +1129,8 @@ public sealed partial class CSharpToGSharpTranslator
                 name = $"__init{this.state.SynthHelperCounter++}";
             }
             while (existingNames.Contains(name) ||
-                this.state.PendingSynthHelpers.Any(h => h.Name == name));
+                this.state.PendingSynthHelpers.Any(h => h.Name == name) ||
+                this.state.PendingInstanceSynthHelpers.Any(h => h.Name == name));
 
             return name;
         }

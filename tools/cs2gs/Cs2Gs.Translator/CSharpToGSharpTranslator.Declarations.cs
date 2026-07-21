@@ -997,8 +997,10 @@ public sealed partial class CSharpToGSharpTranslator
             // via `TranslateMember`) never leaks its helpers into this
             // (enclosing) type, and vice versa.
             List<MethodDeclaration> outerSynthHelpers = this.state.PendingSynthHelpers;
+            List<MethodDeclaration> outerInstanceSynthHelpers = this.state.PendingInstanceSynthHelpers;
             int outerSynthHelperCounter = this.state.SynthHelperCounter;
             this.state.PendingSynthHelpers = new List<MethodDeclaration>();
+            this.state.PendingInstanceSynthHelpers = new List<MethodDeclaration>();
             this.state.SynthHelperCounter = 0;
             try
             {
@@ -1007,6 +1009,7 @@ public sealed partial class CSharpToGSharpTranslator
             finally
             {
                 this.state.PendingSynthHelpers = outerSynthHelpers;
+                this.state.PendingInstanceSynthHelpers = outerInstanceSynthHelpers;
                 this.state.SynthHelperCounter = outerSynthHelperCounter;
             }
         }
@@ -1283,6 +1286,7 @@ public sealed partial class CSharpToGSharpTranslator
             // static, so they join the `shared { }` block alongside the type's
             // other static members.
             sharedMembers.AddRange(this.state.PendingSynthHelpers);
+            instanceMembers.AddRange(this.state.PendingInstanceSynthHelpers);
 
             // OD-T1: if get-only auto-property initializers needed to move into a
             // constructor but the type declares no designated instance constructor,

@@ -36,10 +36,10 @@ public sealed partial class CSharpToGSharpTranslator
         // NON-async, void-returning wrapper with the ORIGINAL name/identity
         // (so method-group `+=`/`-=` subscription and unsubscription keep
         // referring to the SAME symbol/value) whose body:
-        //   1. binds the untouched original body to a nested `async func`
-        //      value (so its own awaits/exception flow are lowered exactly
-        //      like any other G# async function — no new async semantics are
-        //      invented),
+        //   1. binds the untouched original body to a private async instance
+        //      method (or a nested `async func` when no instance is available),
+        //      so its own awaits/exception flow are lowered exactly like any
+        //      other G# async function — no new async semantics are invented,
         //   2. invokes it immediately with the wrapper's own parameters
         //      (kicks off synchronously up to the first incomplete `await`,
         //      matching C#'s async-void semantics: the call returns void as
@@ -77,16 +77,21 @@ public sealed partial class CSharpToGSharpTranslator
         /// returned block is meant to become the ENTIRE (non-async, void)
         /// body of the translated handler — <paramref name="originalAsyncBody"/>
         /// (the handler's own, otherwise-unmodified translated body) becomes
-        /// the block body of a nested <c>async func</c> literal that the
-        /// wrapper invokes and observes.
+        /// the block body of a private async instance method (or a nested
+        /// <c>async func</c> literal when no containing instance is available)
+        /// that the wrapper invokes and observes.
         /// </summary>
         /// <param name="parameters">The handler's own parameter list (reused verbatim for the nested async literal and the forwarding call).</param>
         /// <param name="originalAsyncBody">The handler's untouched translated body.</param>
         /// <param name="location">A source location used to resolve/import the well-known BCL types the wrapper references.</param>
+        /// <param name="instanceBodyName">The synthesized private instance-method name, or <see langword="null"/> to use a nested function.</param>
+        /// <param name="methodTypeParameters">The original method type parameters copied to an instance helper.</param>
         private BlockStatement BuildAsyncVoidHandlerWrapperBody(
             IReadOnlyList<Parameter> parameters,
             BlockStatement originalAsyncBody,
-            Location location)
+            Location location,
+            string instanceBodyName = null,
+            IReadOnlyList<TypeParameter> methodTypeParameters = null)
         {
             const string bodyLocalName = "__gsAsyncVoidBody";
             const string taskParamName = "__gsAsyncVoidTask";
@@ -116,18 +121,38 @@ public sealed partial class CSharpToGSharpTranslator
                 type: new NamedTypeReference(syncContextTypeName) { IsNullable = true },
                 initializer: new MemberAccessExpression(new IdentifierExpression(syncContextTypeName), "Current"));
 
-            // let __gsAsyncVoidBody = async (params) -> { <original body> }
-            var bodyDeclaration = new LocalDeclarationStatement(
-                BindingKind.Let,
-                bodyLocalName,
-                initializer: new LambdaExpression(
+            LocalDeclarationStatement bodyDeclaration = null;
+            string bodyCallableName = bodyLocalName;
+            if (instanceBodyName != null)
+            {
+                bodyCallableName = instanceBodyName;
+                this.state.PendingInstanceSynthHelpers.Add(new MethodDeclaration(
+                    bodyCallableName,
                     parameters,
-                    blockBody: originalAsyncBody,
-                    isAsync: true,
-                    isFunctionLiteral: true));
+                    returnType: null,
+                    body: originalAsyncBody,
+                    typeParameters: methodTypeParameters,
+                    visibility: Visibility.Private,
+                    isAsync: true));
+            }
+            else
+            {
+                // let __gsAsyncVoidBody = async (params) -> { <original body> }
+                bodyDeclaration = new LocalDeclarationStatement(
+                    BindingKind.Let,
+                    bodyLocalName,
+                    initializer: new LambdaExpression(
+                        parameters,
+                        blockBody: originalAsyncBody,
+                        isAsync: true,
+                        isFunctionLiteral: true));
+            }
 
             List<GExpression> forwardedArguments = parameters
                 .Select(p => (GExpression)new IdentifierExpression(p.Name))
+                .ToList();
+            List<GTypeReference> forwardedTypeArguments = methodTypeParameters?
+                .Select(parameter => (GTypeReference)new NamedTypeReference(parameter.Name))
                 .ToList();
 
             // __gsAsyncVoidEx = __gsAsyncVoidTask.Exception!!.InnerException!!
@@ -199,11 +224,21 @@ public sealed partial class CSharpToGSharpTranslator
             // __gsAsyncVoidBody(args).ContinueWith((t) -> { ... }, OnlyOnFaulted | ExecuteSynchronously)
             var continueWithCall = new ExpressionStatement(new InvocationExpression(
                 new MemberAccessExpression(
-                    new InvocationExpression(new IdentifierExpression(bodyLocalName), forwardedArguments),
+                    new InvocationExpression(
+                        new IdentifierExpression(bodyCallableName),
+                        forwardedArguments,
+                        forwardedTypeArguments),
                     "ContinueWith"),
                 new List<GExpression> { continuationLambda, continuationOptions }));
 
-            return new BlockStatement(new GStatement[] { captureContextDeclaration, bodyDeclaration, continueWithCall });
+            var wrapperStatements = new List<GStatement> { captureContextDeclaration };
+            if (bodyDeclaration != null)
+            {
+                wrapperStatements.Add(bodyDeclaration);
+            }
+
+            wrapperStatements.Add(continueWithCall);
+            return new BlockStatement(wrapperStatements);
         }
 
         /// <summary>

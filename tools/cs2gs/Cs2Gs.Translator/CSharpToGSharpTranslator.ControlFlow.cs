@@ -747,7 +747,16 @@ public sealed partial class CSharpToGSharpTranslator
         {
             result = null;
 
-            if (ifStatement.Condition is not IsPatternExpressionSyntax isPattern ||
+            var extraGuards = new Stack<ExpressionSyntax>();
+            ExpressionSyntax condition = ifStatement.Condition;
+            while (condition is BinaryExpressionSyntax binary &&
+                   binary.IsKind(SyntaxKind.LogicalOrExpression))
+            {
+                condition = binary.Left;
+                extraGuards.Push(binary.Right);
+            }
+
+            if (condition is not IsPatternExpressionSyntax isPattern ||
                 isPattern.Pattern is not UnaryPatternSyntax notPattern ||
                 !notPattern.IsKind(SyntaxKind.NotPattern))
             {
@@ -836,6 +845,14 @@ public sealed partial class CSharpToGSharpTranslator
             // fails the local is nil, so the original then-block runs.
             GExpression guard = new BinaryExpression(
                 new IdentifierExpression(localName), "==", LiteralExpression.Null());
+            while (extraGuards.Count > 0)
+            {
+                guard = new BinaryExpression(
+                    guard,
+                    "||",
+                    this.TranslateExpression(extraGuards.Pop()));
+            }
+
             BlockStatement then = this.TranslateStatementAsBlock(ifStatement.Statement);
 
             GStatement elseBranch = null;

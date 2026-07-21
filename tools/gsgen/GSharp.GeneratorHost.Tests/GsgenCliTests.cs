@@ -188,6 +188,31 @@ public class GsgenCliTests : IDisposable
     }
 
     [Fact]
+    public void EndToEnd_SameGeneratorAssemblyFromTwoPackageRoots_RunsOnce()
+    {
+        string generatorDll = GeneratorDllFactory.Value;
+        string copiedGenerator = Path.Combine(this.workDir, "second-package-root", "generator.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(copiedGenerator));
+        File.Copy(generatorDll, copiedGenerator);
+
+        var outDir = Path.Combine(this.workDir, "gen");
+        var gs = this.WriteGs("Foo.gs", "package App\n\n@Obsolete\npartial class Foo {\n}\n");
+        var args = new List<string>
+        {
+            $"/gs:{gs}",
+            $"/analyzer:{generatorDll}",
+            $"/analyzer:{copiedGenerator}",
+            $"/out:{outDir}",
+        };
+        args.AddRange(RuntimeReferencePaths().Select(p => $"/r:{p}"));
+
+        int exit = GsgenProgram.Run(args.ToArray(), new StringWriter());
+
+        Assert.Equal(0, exit);
+        Assert.Single(Directory.EnumerateFiles(outDir, "*.g.gs"));
+    }
+
+    [Fact]
     public void OrphanCleanup_DeletesStalePartNotRegenerated()
     {
         string generatorDll = GeneratorDllFactory.Value;

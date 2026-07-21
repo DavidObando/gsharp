@@ -991,7 +991,22 @@ public sealed partial class CSharpToGSharpTranslator
             bool isAsyncVoidHandler = body != null && IsCSharpAsyncVoidHandler(symbol);
             if (isAsyncVoidHandler)
             {
-                body = this.BuildAsyncVoidHandlerWrapperBody(parameters, body, node.GetLocation());
+                string instanceBodyName = null;
+                if (!symbol.IsStatic && symbol.ContainingType.TypeKind == TypeKind.Class)
+                {
+                    instanceBodyName = "__asyncVoid_" + SanitizeIdentifier(symbol.Name);
+                    while (symbol.ContainingType.GetMembers(instanceBodyName).Length > 0)
+                    {
+                        instanceBodyName += "_";
+                    }
+                }
+
+                body = this.BuildAsyncVoidHandlerWrapperBody(
+                    parameters,
+                    body,
+                    node.GetLocation(),
+                    instanceBodyName,
+                    typeParameters);
             }
 
             bool isOverride = symbol != null && symbol.IsOverride;
