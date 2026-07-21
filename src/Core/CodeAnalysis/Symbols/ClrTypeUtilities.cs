@@ -886,19 +886,53 @@ public static class ClrTypeUtilities
             return Array.Empty<Type>();
         }
 
-        // Issue #1678: Type.GetInterfaces() walks the full transitive interface
-        // graph on every call; memoize it per Type so a receiver used at N call
-        // sites (or matched against N interface methods) pays that walk once.
+        // Some MetadataLoadContext Type implementations return only direct
+        // interfaces. Complete the graph explicitly and include interfaces
+        // inherited through base classes, then cache that canonical result.
         return interfacesCache.GetValue(type, static t =>
         {
-            try
+            var result = new List<Type>();
+            var visited = new HashSet<Type>();
+
+            void Visit(Type current)
             {
-                return t.GetInterfaces();
+                if (current == null || !visited.Add(current))
+                {
+                    return;
+                }
+
+                Type[] direct;
+                try
+                {
+                    direct = current.GetInterfaces();
+                }
+                catch (Exception ex) when (IsMetadataLoadFailure(ex))
+                {
+                    direct = Array.Empty<Type>();
+                }
+
+                foreach (var iface in direct)
+                {
+                    if (!result.Contains(iface))
+                    {
+                        result.Add(iface);
+                    }
+
+                    Visit(iface);
+                }
+
+                try
+                {
+                    Visit(current.BaseType);
+                }
+                catch (Exception ex) when (IsMetadataLoadFailure(ex))
+                {
+                    // A partial graph is still useful to callers.
+                }
             }
-            catch (Exception ex) when (IsMetadataLoadFailure(ex))
-            {
-                return Array.Empty<Type>();
-            }
+
+            Visit(t);
+            return result.ToArray();
         });
     }
 

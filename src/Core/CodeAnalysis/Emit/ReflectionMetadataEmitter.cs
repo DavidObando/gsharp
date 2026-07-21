@@ -2307,6 +2307,14 @@ internal sealed class ReflectionMetadataEmitter
             {
                 foreach (var clrBase in iface.BaseClrInterfaces)
                 {
+                    if (MemberLookup.TryGetSymbolicClrGenericInterface(clrBase, out _, out _))
+                    {
+                        this.emitCtx.Metadata.AddInterfaceImplementation(
+                            ifaceTypeDef,
+                            this.memberRefs.GetElementTypeToken(clrBase));
+                        continue;
+                    }
+
                     if (clrBase?.ClrType is System.Type clrType)
                     {
                         this.emitCtx.Metadata.AddInterfaceImplementation(
