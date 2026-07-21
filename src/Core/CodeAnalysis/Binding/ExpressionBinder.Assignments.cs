@@ -998,7 +998,19 @@ internal sealed partial class ExpressionBinder
         var op = BindBinaryOperatorWithNumericAdaptation(baseOperatorKind, ref left, ref right, rhsLocation, rhsLocation);
         if (op != null)
         {
-            return new BoundBinaryExpression(null, left, op, right);
+            var binary = new BoundBinaryExpression(null, left, op, right, binderCtx.IsCheckedContext);
+            var targetType = leftRead.Type;
+            var targetUnderlying = targetType is NullableTypeSymbol nullableTarget
+                ? nullableTarget.UnderlyingType
+                : targetType;
+
+            // Issue #2616 / ECMA-334 §14.14.2: compound assignment includes
+            // the explicit numeric conversion back to the LHS type. Keep this
+            // narrowly on char so ADR-0044's existing small-integer compound
+            // semantics are unchanged.
+            return targetUnderlying == TypeSymbol.Char && binary.Type != targetType
+                ? conversions.BindConversion(rhsLocation, binary, targetType, allowExplicit: true)
+                : binary;
         }
 
         // Issue #1554: fall back to user-defined / CLR operator resolution,
@@ -1010,6 +1022,7 @@ internal sealed partial class ExpressionBinder
     {
         var name = bareName.IdentifierToken.Text;
         var isAdd = syntax.OperatorToken.Kind == SyntaxKind.PlusEqualsToken;
+        var isEventOperator = isAdd || syntax.OperatorToken.Kind == SyntaxKind.MinusEqualsToken;
 
         // Try implicit `this` event: walk the receiver type's events (including inherited).
         // ADR-0112 A5: intentionally NOT routed through TypeMemberModel.TryGetEvent —
@@ -1017,7 +1030,7 @@ internal sealed partial class ExpressionBinder
         // this bound node must carry the *declaring* type `t` as its owner. Collapsing
         // into TryGetEvent(receiverStruct, …) would change the owner from the declaring
         // base to the derived type, breaking bound-node parity. Left as a manual walk.
-        if (function?.ThisParameter != null && function.ReceiverType is StructSymbol receiverStruct)
+        if (isEventOperator && function?.ThisParameter != null && function.ReceiverType is StructSymbol receiverStruct)
         {
             for (var t = receiverStruct; t != null; t = t.BaseClass)
             {
@@ -1050,8 +1063,9 @@ internal sealed partial class ExpressionBinder
                 && GetInheritedClrBaseType(thisStruct) is System.Type inheritedBaseClr)
             {
                 var inheritedReceiver = new BoundVariableExpression(null, effThis);
+                SyntaxFacts.TryGetCompoundAssignmentBaseOperator(syntax.OperatorToken.Kind, out var inheritedBaseOperator);
                 var inheritedCompound = TryBindChainedClrCompoundAssignment(
-                    inheritedReceiver, inheritedBaseClr, name, bareName, syntax, isAdd ? SyntaxKind.PlusToken : SyntaxKind.MinusToken, includeInherited: true);
+                    inheritedReceiver, inheritedBaseClr, name, bareName, syntax, inheritedBaseOperator, includeInherited: true);
                 if (inheritedCompound != null)
                 {
                     return inheritedCompound;
@@ -1073,7 +1087,7 @@ internal sealed partial class ExpressionBinder
 
         // Synthesize the binary expression: variable op rhs.
         var leftExpr = BindNameExpressionCore(bareName);
-        var baseOpSyntaxKind = isAdd ? SyntaxKind.PlusToken : SyntaxKind.MinusToken;
+        SyntaxFacts.TryGetCompoundAssignmentBaseOperator(syntax.OperatorToken.Kind, out var baseOpSyntaxKind);
         var leftType = leftExpr.Type;
         var binaryResult = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftExpr, boundRhs, syntax.Value.Location);
         if (binaryResult == null)
@@ -1145,7 +1159,11 @@ internal sealed partial class ExpressionBinder
                 convertedResult);
         }
 
-        if (variable.IsReadOnly)
+        if (variable is ParameterSymbol inParameter && inParameter.RefKind == RefKind.In)
+        {
+            Diagnostics.ReportCannotAssignToInParameter(syntax.OperatorToken.Location, inParameter.Name);
+        }
+        else if (variable.IsReadOnly)
         {
             Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name);
         }

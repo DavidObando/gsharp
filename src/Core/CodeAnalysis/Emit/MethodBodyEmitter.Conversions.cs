@@ -644,7 +644,7 @@ internal sealed partial class MethodBodyEmitter
         this.il.LoadLocalAddress(srcSlot);
         this.il.OpCode(ILOpCode.Call);
         this.il.Token(getValueOrDefault);
-        this.TryEmitNumericConversion(fromUnderlying, toUnderlying);
+        this.TryEmitNumericConversion(fromUnderlying, toUnderlying, conv.IsChecked);
         this.il.OpCode(ILOpCode.Newobj);
         this.il.Token(this.outer.memberRefs.GetCtorReference(toCtor));
         this.il.Branch(ILOpCode.Br, end);

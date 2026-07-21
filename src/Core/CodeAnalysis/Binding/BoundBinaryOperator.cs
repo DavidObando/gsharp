@@ -281,10 +281,8 @@ public sealed record BoundBinaryOperator
         // (Mixed `T? op T` is handled in BindBinaryExpression by lifting
         // the non-nullable side to T? via an implicit conversion before
         // re-binding.) Arithmetic / bitwise lift to T?; equality and
-        // ordering lift to bool. Shifts are intentionally excluded —
-        // they take a non-matching int rhs and are rarely used on
-        // nullables; falling through here leaves them as a non-fatal
-        // "operator undefined" diagnostic at user-source level.
+        // ordering lift to bool. Shift operands are normalized to nullable
+        // int32 counts by the binder before reaching this generic lift.
         //
         // Issue #614 audit: intentionally a single arm — this is a generic
         // lifting meta-algorithm that already handles ALL liftable operator
@@ -419,11 +417,9 @@ public sealed record BoundBinaryOperator
     /// <summary>
     /// PR N-4: returns true for operator kinds that have a lifted
     /// counterpart per C# §7.3.7 — arithmetic, bitwise, equality, and
-    /// ordering. Logical short-circuit (&amp;&amp;, ||), null-coalesce, and
-    /// shift operators are excluded; the former two require the user-
-    /// defined `true`/`false` operator surface, null-coalesce is itself
-    /// the way to consume a nullable, and shifts are bound on a non-
-    /// matching int rhs which the simple matching arm cannot lift.
+    /// ordering and shifts. Logical short-circuit (&amp;&amp;, ||) requires the
+    /// user-defined `true`/`false` operator surface, and null-coalesce is itself
+    /// the way to consume a nullable.
     /// </summary>
     private static bool IsLiftableKind(BoundBinaryOperatorKind kind)
     {
@@ -438,6 +434,9 @@ public sealed record BoundBinaryOperator
             case BoundBinaryOperatorKind.BitwiseOr:
             case BoundBinaryOperatorKind.BitwiseXor:
             case BoundBinaryOperatorKind.BitClear:
+            case BoundBinaryOperatorKind.ShiftLeft:
+            case BoundBinaryOperatorKind.ShiftRight:
+            case BoundBinaryOperatorKind.UnsignedShiftRight:
             case BoundBinaryOperatorKind.Equals:
             case BoundBinaryOperatorKind.NotEquals:
             case BoundBinaryOperatorKind.Less:
