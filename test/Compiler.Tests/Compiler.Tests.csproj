@@ -15,6 +15,7 @@
          ADR-0027 is unaffected. -->
     <ProjectReference Include="..\..\tools\gsgen\Gsgen.Cli\Gsgen.Cli.csproj" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.6.0" />
+    <PackageReference Include="Spectre.Console" Version="0.55.2" />
   </ItemGroup>
 
 </Project>

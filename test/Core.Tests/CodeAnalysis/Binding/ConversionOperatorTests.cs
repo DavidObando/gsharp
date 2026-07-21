@@ -236,6 +236,77 @@ var m Meters = 5
         Assert.Contains(result.Diagnostics, d => d.Id == "GS0155");
     }
 
+    [Fact]
+    public void ImplicitConversion_AppliesStandardConversionsBeforeAndAfterOperator()
+    {
+        var source = @"
+struct Meters {
+    var value int64
+    func operator implicit (n int64) Meters {
+        return Meters{value: n}
+    }
+}
+
+struct Count {
+    var value int32
+    func operator implicit (c Count) int32 {
+        return c.value
+    }
+}
+
+func make(n int32) Meters {
+    return n
+}
+
+func takeMeters(m Meters) int64 {
+    return m.value
+}
+
+func takeLong(n int64) int64 {
+    return n
+}
+
+func returnLong(c Count) int64 {
+    return c
+}
+
+let n int32 = 5
+let assigned Meters = n
+let passed = takeMeters(n)
+let returned = make(n).value
+let count = Count{value: 7}
+let widened int64 = count
+let widenedArgument = takeLong(count)
+let widenedReturn = returnLong(count)
+let lifted int64? = count
+var total = assigned.value + passed + returned + widened + widenedArgument + widenedReturn
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(36L, result.Value);
+    }
+
+    [Fact]
+    public void ImplicitConversion_AmbiguousStandardAdaptations_DoNotPickDeclarationOrder()
+    {
+        var source = @"
+struct Target {
+    var selected int32
+    func operator implicit (n int64) Target {
+        return Target{selected: 1}
+    }
+    func operator implicit (n float64) Target {
+        return Target{selected: 2}
+    }
+}
+
+let n int32 = 5
+let target Target = n
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0155");
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
