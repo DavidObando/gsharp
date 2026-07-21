@@ -64,6 +64,43 @@ class C {
     }
 
     [Fact]
+    public void NullableRightSubtypeConvertsToNullableLeftInterface()
+    {
+        const string Source = @"package Issue2540.NullableIface
+
+interface ILogger { }
+class NullLogger : ILogger { }
+class C {
+    func Pick(logger ILogger?, fallback NullLogger?) ILogger? {
+        var selected = logger ?? fallback
+        return selected
+    }
+}
+";
+        var diagnostics = EmitDiagnostics(Source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0129");
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void NullableUnrelatedTypesStillReportError()
+    {
+        const string Source = @"package Issue2540.InvalidNullable
+
+interface ILogger { }
+class Other { }
+class C {
+    func Bad(logger ILogger?, fallback Other?) ILogger? {
+        var selected = logger ?? fallback
+        return selected
+    }
+}
+";
+        var diagnostics = EmitDiagnostics(Source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0129");
+    }
+
+    [Fact]
     public void ImportedRightSubtypeConvertsToNullableLeftInterface()
     {
         const string Source = @"package Issue2540.ImportedIface
