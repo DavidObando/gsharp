@@ -852,7 +852,8 @@ internal sealed partial class ExpressionBinder
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
             structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
-            methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution));
+            methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
+            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
 
         switch (resolution.Outcome)
         {
@@ -1248,7 +1249,8 @@ internal sealed partial class ExpressionBinder
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments, argumentOffset: 1),
             structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments, argumentOffset: 1),
-            methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution, argumentOffset: 1));
+            methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution, argumentOffset: 1),
+            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments, argumentOffset: 1));
 
         switch (resolution.Outcome)
         {
@@ -2755,7 +2757,8 @@ internal sealed partial class ExpressionBinder
             argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
             structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
-            methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution));
+            methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
+            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
         if (resolution.Outcome != OverloadResolution.ResolutionOutcome.Resolved)
         {
             return false;
