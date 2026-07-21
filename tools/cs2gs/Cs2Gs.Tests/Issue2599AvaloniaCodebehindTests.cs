@@ -91,6 +91,62 @@ public sealed class Issue2599AvaloniaCodebehindTests : IDisposable
         Assert.Contains("@System.CodeDom.Compiler.GeneratedCode", generated, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Pipeline_SecondaryPartialPropertyThroughAsCast_Compiles()
+    {
+        string compiler = FindSiblingTool("Compiler", "gsc.dll");
+        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
+        if (compiler is null
+            || repoRoot is null
+            || GsharpTestProjectRunner.ResolveLocalSdkPackage(repoRoot) is null)
+        {
+            return;
+        }
+
+        string sourceRoot = NewDirectory("issue2641-source");
+        string projectPath = WriteIssue2641Project(sourceRoot);
+        AssertProcessSucceeds("dotnet", $"restore \"{projectPath}\" --nologo", sourceRoot);
+
+        string outputRoot = NewDirectory("issue2641-output");
+        var pipeline = new MigrationPipeline(
+            new PipelineOptions
+            {
+                GscPath = compiler,
+                OutputRoot = outputRoot,
+                SourceRoot = sourceRoot,
+            },
+            new IMigrationStage[] { new TranslateStage(), new CompileStage() });
+
+        RunResult result = await pipeline.RunAsync(new[]
+        {
+            new CorpusApp("test/Issue2641", projectPath, TargetKind.Library),
+        });
+
+        AppResult app = Assert.Single(result.Apps);
+        Assert.True(
+            app.Succeeded,
+            string.Join(
+                Environment.NewLine,
+                app.Artifacts.Select(path => File.ReadAllText(Path.Combine(
+                    outputRoot,
+                    result.RunId,
+                    path)))));
+
+        string appDirectory = Path.Combine(
+            outputRoot,
+            result.RunId,
+            MigrationPipeline.SanitizeAppId(app.AppId));
+        string view = File.ReadAllText(Path.Combine(appDirectory, "C.View.gs"));
+        Assert.Contains(
+            "(context as Selection)!!.Asin = (x as BookItemViewModel)!!.Asin",
+            view,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "(context as Selection)!!.Item = (x as BookItemViewModel)!!",
+            view,
+            StringComparison.Ordinal);
+    }
+
     public void Dispose()
     {
         Environment.SetEnvironmentVariable("NUGET_PACKAGES", this.previousNuGetPackages);
@@ -171,6 +227,67 @@ public sealed class Issue2599AvaloniaCodebehindTests : IDisposable
             public sealed class State
             {
                 public int Count { get; set; }
+            }
+            """);
+        return projectPath;
+    }
+
+    private static string WriteIssue2641Project(string sourceRoot)
+    {
+        string projectPath = Path.Combine(sourceRoot, "Issue2641.csproj");
+        File.WriteAllText(projectPath, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <Nullable>enable</Nullable>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+              </ItemGroup>
+            </Project>
+            """);
+        File.WriteAllText(Path.Combine(sourceRoot, "A.GeneratedPart.cs"), """
+            using CommunityToolkit.Mvvm.ComponentModel;
+
+            namespace Issue2641.Models;
+
+            public partial class BookItemViewModel : ObservableObject
+            {
+                [ObservableProperty]
+                private bool isSelected;
+            }
+            """);
+        File.WriteAllText(Path.Combine(sourceRoot, "B.SourcePart.cs"), """
+            namespace Issue2641.Models;
+
+            public partial class BookItemViewModel
+            {
+                private readonly string asin;
+
+                public BookItemViewModel(string asin) => this.asin = asin;
+
+                public string Asin => asin;
+            }
+            """);
+        File.WriteAllText(Path.Combine(sourceRoot, "C.View.cs"), """
+            using Issue2641.Models;
+
+            namespace Issue2641.Views;
+
+            public sealed class Selection
+            {
+                public string Asin { get; set; } = string.Empty;
+
+                public BookItemViewModel Item { get; set; } = null!;
+            }
+
+            public sealed class View
+            {
+                public void Copy(object context, object x)
+                {
+                    (context as Selection)!.Asin = (x as BookItemViewModel)!.Asin;
+                    (context as Selection)!.Item = (x as BookItemViewModel)!;
+                }
             }
             """);
         return projectPath;

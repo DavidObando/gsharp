@@ -708,6 +708,9 @@ public partial class Parser
     /// <param name="node">The expression parsed so far on the current line.</param>
     /// <returns><c>true</c> when the current token is on a new line.</returns>
     private bool IsCurrentOnNewLineAfter(SyntaxNode node)
+        => IsTokenOnNewLineAfter(Current, node);
+
+    private bool IsTokenOnNewLineAfter(SyntaxToken token, SyntaxNode node)
     {
         if (node == null)
         {
@@ -716,7 +719,7 @@ public partial class Parser
 
         var text = syntaxTree.Text;
         var previousLine = text.GetLineIndex(System.Math.Max(0, node.Span.End - 1));
-        var currentLine = text.GetLineIndex(Current.Position);
+        var currentLine = text.GetLineIndex(token.Position);
         return currentLine > previousLine;
     }
 
