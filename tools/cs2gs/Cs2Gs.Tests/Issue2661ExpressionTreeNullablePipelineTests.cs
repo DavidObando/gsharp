@@ -53,6 +53,7 @@ public sealed class Issue2661ExpressionTreeNullablePipelineTests
 
         Assert.DoesNotContain("b.Conversion!!", emitted, StringComparison.Ordinal);
         Assert.DoesNotContain("b.PurchaseDate!!", emitted, StringComparison.Ordinal);
+        Assert.Contains(".Select((b Book) -> b.PurchaseDate.Value)", emitted, StringComparison.Ordinal);
         Assert.Contains("book.Conversion!!.AccountId", emitted, StringComparison.Ordinal);
         Assert.Contains("book.PurchaseDate!!", emitted, StringComparison.Ordinal);
         Assert.True(
@@ -79,7 +80,7 @@ public sealed class Issue2661ExpressionTreeNullablePipelineTests
         process.WaitForExit();
 
         Assert.True(process.ExitCode == 0, error);
-        Assert.Equal("account\n2026\n", output.Replace("\r\n", "\n"));
+        Assert.Equal("2026\naccount\n2026\n2026\nnullable\n", output.Replace("\r\n", "\n"));
     }
 
     private static (string ApiProject, string AppProject) WriteFixture(string sourceRoot)
@@ -143,19 +144,23 @@ public sealed class Issue2661ExpressionTreeNullablePipelineTests
         File.WriteAllText(Path.Combine(projectDirectory, "BookLibrary.cs"), """
             using System;
             using System.Linq;
+            using System.Linq.Expressions;
             using BookApi;
 
             public static class BookLibrary
             {
-                public static void SinceLatestPurchaseDate(
+                public static DateTime SinceLatestPurchaseDate(
                     IQueryable<Book> books,
                     Conversion profileId)
                 {
-                    var query = books
+                    var latest = books
                         .Where(b => b.PurchaseDate.HasValue &&
                             b.Conversion.AccountId == profileId.AccountId &&
                             b.Conversion.Region == profileId.Region)
-                        .Select(b => b.PurchaseDate.Value);
+                        .Select(b => b.PurchaseDate.Value)
+                        .OrderBy(b => b)
+                        .LastOrDefault();
+                    return latest + TimeSpan.FromMilliseconds(1);
                 }
 
                 public static void Main()
@@ -163,10 +168,27 @@ public sealed class Issue2661ExpressionTreeNullablePipelineTests
                     var book = new Book(
                         new Conversion("account", "region"),
                         new DateTime(2026, 7, 21));
+                    Console.WriteLine(
+                        SinceLatestPurchaseDate(
+                            new[] { book }.AsQueryable(),
+                            new Conversion("account", "region")).Year);
                     Func<Book, string> account = book => book.Conversion.AccountId;
                     Func<Book, DateTime> purchased = book => book.PurchaseDate.Value;
                     Console.WriteLine(account(book));
                     Console.WriteLine(purchased(book).Year);
+
+                    Expression<Func<Book, DateTime>> selected =
+                        value => value.PurchaseDate.Value;
+                    var compiled = selected.Compile();
+                    Console.WriteLine(compiled(book).Year);
+                    try
+                    {
+                        compiled(new Book(new Conversion("account", "region"), null));
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        Console.WriteLine("nullable");
+                    }
                 }
             }
             """);
