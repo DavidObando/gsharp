@@ -31,6 +31,8 @@
                       ReferenceOutputAssembly="false">
       <IncludeOutputGroupsInVSIX>BuiltProjectOutputGroup</IncludeOutputGroupsInVSIX>
     </ProjectReference>
+    <Compile Include="..\VsGsharp.CodeLens\GSharpReferenceCodeLensPayload.cs"
+             Link="GSharpReferenceCodeLensPayload.cs" />
   </ItemGroup>
 
   <ItemGroup>

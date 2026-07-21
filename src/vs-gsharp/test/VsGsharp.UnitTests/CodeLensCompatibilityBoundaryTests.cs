@@ -20,25 +20,22 @@ public sealed class CodeLensCompatibilityBoundaryTests
             root, "src", "vs-gsharp", "src", "VsGsharp.CodeLens", "GSharpReferenceCodeLensDataPointProvider.cs"));
         string tagger = File.ReadAllText(Path.Combine(
             root, "src", "vs-gsharp", "src", "VsGsharp", "GSharpCodeLensTagger.cs"));
-        string listener = File.ReadAllText(Path.Combine(
-            root, "src", "vs-gsharp", "src", "VsGsharp", "GSharpCodeLensCallbackListener.cs"));
 
         Assert.Contains("<TargetFramework>net472</TargetFramework>", project);
         Assert.Contains("<TargetFramework>net472</TargetFramework>", codeLensProject);
         Assert.DoesNotContain("Microsoft.VisualStudio.Extensibility.Sdk", project);
         Assert.Contains("Microsoft.VisualStudio.CodeLensComponent", manifest);
         Assert.Contains("IAsyncCodeLensDataPointProvider", provider);
-        Assert.Contains("ICodeLensCallbackService", provider);
+        Assert.Contains("[DetailsTemplateName(\"references\")]", provider);
+        Assert.Contains("ReferenceEntryFieldNames.FilePath", provider);
+        Assert.DoesNotContain("return null!", provider);
         Assert.Contains("GetReferenceCodeLensesAsync", tagger);
         Assert.Contains("CurrentSnapshot.Version.VersionNumber != requestedVersion", tagger);
         Assert.Contains("FileActionOccurred", tagger);
         Assert.Contains("refreshAll", tagger);
         Assert.Contains("GSharpCodeLensAnchor.Find", tagger);
-        Assert.Contains(
-            "ElementDescription = $\"{referenceCount}|{navigationLine}|{navigationCharacter}\"",
-            tagger);
+        Assert.Contains("GSharpReferenceCodeLensPayload.Serialize", tagger);
         Assert.DoesNotContain("GSharp.Core", tagger);
-        Assert.Contains("VSStd97CmdID.FindReferences", listener);
     }
 
     [Fact]

@@ -168,6 +168,10 @@ public class SdkLayoutTests
             .Single();
 
         Assert.Contains("**/*.gsproj.lscache", excludes.Value, System.StringComparison.Ordinal);
+
+        var hiddenCache = doc.Descendants(MsbuildNs + "None")
+            .Single(item => (string)item.Attribute("Include") == "**/*.gsproj.lscache");
+        Assert.Equal("false", (string)hiddenCache.Attribute("Visible"));
     }
 
     [Fact]

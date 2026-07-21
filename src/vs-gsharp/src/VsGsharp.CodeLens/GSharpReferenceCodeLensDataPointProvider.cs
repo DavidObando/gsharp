@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel.Composition;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Language.CodeLens;
@@ -14,13 +16,11 @@ namespace GSharp.VisualStudio.CodeLens;
 [Name(Id)]
 [ContentType("gsharp")]
 [Priority(100)]
+[DetailsTemplateName("references")]
 internal sealed class GSharpReferenceCodeLensDataPointProvider : IAsyncCodeLensDataPointProvider
 {
     internal const string Id = "GSharpReferenceCodeLens";
     private const int GSharpReferenceKind = 1 << 24;
-
-    [Import]
-    public ICodeLensCallbackService CallbackService { get; set; } = null!;
 
     public Task<bool> CanCreateDataPointAsync(
         CodeLensDescriptor descriptor,
@@ -33,25 +33,32 @@ internal sealed class GSharpReferenceCodeLensDataPointProvider : IAsyncCodeLensD
         CodeLensDescriptorContext context,
         CancellationToken token)
         => Task.FromResult<IAsyncCodeLensDataPoint>(
-            new GSharpReferenceCodeLensDataPoint(descriptor, CallbackService));
+            new GSharpReferenceCodeLensDataPoint(descriptor));
 
     private sealed class GSharpReferenceCodeLensDataPoint : IAsyncCodeLensDataPoint
     {
-        private readonly ICodeLensCallbackService callbackService;
-        private readonly int referenceCount;
-        private readonly int line;
-        private readonly int character;
+        private static readonly List<CodeLensDetailHeaderDescriptor> Headers = new List<CodeLensDetailHeaderDescriptor>
+        {
+            new CodeLensDetailHeaderDescriptor { UniqueName = ReferenceEntryFieldNames.FilePath },
+            new CodeLensDetailHeaderDescriptor { UniqueName = ReferenceEntryFieldNames.LineNumber },
+            new CodeLensDetailHeaderDescriptor { UniqueName = ReferenceEntryFieldNames.ColumnNumber },
+            new CodeLensDetailHeaderDescriptor { UniqueName = ReferenceEntryFieldNames.ReferenceText },
+            new CodeLensDetailHeaderDescriptor { UniqueName = ReferenceEntryFieldNames.ReferenceStart },
+            new CodeLensDetailHeaderDescriptor { UniqueName = ReferenceEntryFieldNames.ReferenceEnd },
+            new CodeLensDetailHeaderDescriptor { UniqueName = ReferenceEntryFieldNames.ReferenceLongDescription },
+            new CodeLensDetailHeaderDescriptor { UniqueName = ReferenceEntryFieldNames.ReferenceImageId },
+            new CodeLensDetailHeaderDescriptor { UniqueName = ReferenceEntryFieldNames.TextBeforeReference2 },
+            new CodeLensDetailHeaderDescriptor { UniqueName = ReferenceEntryFieldNames.TextBeforeReference1 },
+            new CodeLensDetailHeaderDescriptor { UniqueName = ReferenceEntryFieldNames.TextAfterReference1 },
+            new CodeLensDetailHeaderDescriptor { UniqueName = ReferenceEntryFieldNames.TextAfterReference2 },
+        };
 
-        public GSharpReferenceCodeLensDataPoint(
-            CodeLensDescriptor descriptor,
-            ICodeLensCallbackService callbackService)
+        private readonly GSharpReferenceCodeLensPayload payload;
+
+        public GSharpReferenceCodeLensDataPoint(CodeLensDescriptor descriptor)
         {
             Descriptor = descriptor;
-            this.callbackService = callbackService;
-            string[] parts = descriptor.ElementDescription.Split('|');
-            _ = int.TryParse(parts.Length > 0 ? parts[0] : null, out referenceCount);
-            _ = int.TryParse(parts.Length > 1 ? parts[1] : null, out line);
-            _ = int.TryParse(parts.Length > 2 ? parts[2] : null, out character);
+            payload = GSharpReferenceCodeLensPayload.Parse(descriptor.ElementDescription);
         }
 
         public CodeLensDescriptor Descriptor { get; }
@@ -67,21 +74,69 @@ internal sealed class GSharpReferenceCodeLensDataPointProvider : IAsyncCodeLensD
             CancellationToken token)
             => Task.FromResult(new CodeLensDataPointDescriptor
             {
-                Description = referenceCount == 1 ? "1 reference" : $"{referenceCount} references",
+                Description = payload.References.Count == 1
+                    ? "1 reference"
+                    : $"{payload.References.Count} references",
                 TooltipText = "Find all references",
-                IntValue = referenceCount,
+                IntValue = payload.References.Count,
             });
 
-        public async Task<CodeLensDetailsDescriptor> GetDetailsAsync(
+        public Task<CodeLensDetailsDescriptor> GetDetailsAsync(
             CodeLensDescriptorContext context,
             CancellationToken token)
         {
-            await callbackService.InvokeAsync(
-                this,
-                "GSharp.CodeLens.ShowReferences",
-                new object[] { Descriptor.FilePath, line, character },
-                token);
-            return null!;
+            var entries = new List<CodeLensDetailEntryDescriptor>(payload.References.Count);
+            var sources = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+            foreach (GSharpReferenceCodeLensLocation reference in payload.References)
+            {
+                token.ThrowIfCancellationRequested();
+                var uri = new Uri(reference.Uri, UriKind.Absolute);
+                if (!uri.IsFile)
+                {
+                    throw new InvalidOperationException($"CodeLens cannot navigate the non-file URI '{reference.Uri}'.");
+                }
+
+                string filePath = uri.LocalPath;
+                if (!sources.TryGetValue(filePath, out string[]? lines))
+                {
+                    lines = File.ReadAllLines(filePath);
+                    sources.Add(filePath, lines);
+                }
+
+                if (reference.Line >= lines.Length)
+                {
+                    throw new InvalidOperationException(
+                        $"CodeLens reference line {reference.Line} is outside '{filePath}'.");
+                }
+
+                string lineText = lines[reference.Line];
+                int start = Math.Min(reference.Character, lineText.Length);
+                int end = Math.Min(reference.EndCharacter, lineText.Length);
+                entries.Add(new CodeLensDetailEntryDescriptor
+                {
+                    Fields = new List<CodeLensDetailEntryField>
+                    {
+                        new CodeLensDetailEntryField { Text = filePath },
+                        new CodeLensDetailEntryField { Text = reference.Line.ToString() },
+                        new CodeLensDetailEntryField { Text = reference.Character.ToString() },
+                        new CodeLensDetailEntryField { Text = lineText },
+                        new CodeLensDetailEntryField { Text = start.ToString() },
+                        new CodeLensDetailEntryField { Text = end.ToString() },
+                        new CodeLensDetailEntryField { Text = $"{filePath} ({reference.Line + 1},{reference.Character + 1})" },
+                        new CodeLensDetailEntryField(),
+                        new CodeLensDetailEntryField { Text = string.Empty },
+                        new CodeLensDetailEntryField { Text = string.Empty },
+                        new CodeLensDetailEntryField { Text = string.Empty },
+                        new CodeLensDetailEntryField { Text = string.Empty },
+                    },
+                });
+            }
+
+            return Task.FromResult(new CodeLensDetailsDescriptor
+            {
+                Headers = Headers,
+                Entries = entries,
+            });
         }
     }
 }

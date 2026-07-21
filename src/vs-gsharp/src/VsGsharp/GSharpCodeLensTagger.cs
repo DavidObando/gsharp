@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Language.CodeLens;
@@ -143,9 +144,17 @@ internal sealed class GSharpCodeLensTagger : ITagger<ICodeLensTag>
                 new GSharpCodeLensTag(
                     document.FilePath,
                     span,
-                    lens.ReferenceCount,
-                    lens.DeclarationRange!.Start!.Line,
-                    lens.DeclarationRange.Start.Character));
+                    lens.References
+                        .Where(reference =>
+                            reference.Uri != null
+                            && reference.Range?.Start != null
+                            && reference.Range.End != null
+                            && reference.Range.Start.Line == reference.Range.End.Line)
+                        .Select(reference => new GSharpReferenceCodeLensLocation(
+                            reference.Uri!,
+                            reference.Range!.Start!.Line,
+                            reference.Range.Start.Character,
+                            reference.Range.End!.Character))));
         }
     }
 
@@ -295,15 +304,13 @@ internal sealed class GSharpCodeLensTag : ICodeLensTag3, ICodeLensDescriptorCont
     public GSharpCodeLensTag(
         string filePath,
         SnapshotSpan span,
-        int referenceCount,
-        int navigationLine,
-        int navigationCharacter)
+        IEnumerable<GSharpReferenceCodeLensLocation> references)
     {
         Descriptor = new GSharpCodeLensDescriptor
         {
             FilePath = filePath,
             ProjectGuid = Guid.Empty,
-            ElementDescription = $"{referenceCount}|{navigationLine}|{navigationCharacter}",
+            ElementDescription = GSharpReferenceCodeLensPayload.Serialize(references),
             ApplicableSpan = span,
             Kind = (CodeElementKinds)(1 << 24),
         };

@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <MSBuildAllProjects>$(MSBuildAllProjects);$(MSBuildThisFileFullPath)</MSBuildAllProjects>
-    <DefaultItemExcludes>$(DefaultItemExcludes);$(MSBuildProjectDirectory)/**/*.gsproj.lscache</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);**/*.gsproj.lscache</DefaultItemExcludes>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -34,5 +34,9 @@
 
   <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
   <Import Project="$(MSBuildThisFileDirectory)..\build\Gsharp.NET.Sdk.props" />
+
+  <ItemGroup>
+    <None Include="**/*.gsproj.lscache" Visible="false" />
+  </ItemGroup>
 
 </Project>

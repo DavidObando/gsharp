@@ -22,5 +22,7 @@
              Link="GSharpLanguageServerRpc.cs" />
     <Compile Include="..\..\src\VsGsharp\GSharpCodeLensAnchor.cs"
              Link="GSharpCodeLensAnchor.cs" />
+    <Compile Include="..\..\src\VsGsharp.CodeLens\GSharpReferenceCodeLensPayload.cs"
+             Link="GSharpReferenceCodeLensPayload.cs" />
   </ItemGroup>
 </Project>

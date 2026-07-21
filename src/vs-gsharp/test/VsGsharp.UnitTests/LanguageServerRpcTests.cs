@@ -9,6 +9,25 @@ namespace GSharp.VisualStudio;
 
 public sealed class LanguageServerRpcTests
 {
+    [Fact]
+    public void CodeLensPayload_RoundTripsReferenceLocations()
+    {
+        var expected = new GSharpReferenceCodeLensLocation(
+            "file:///C:/source/folder%20with%20spaces/a%7Cb.gs",
+            12,
+            4,
+            7);
+
+        var payload = GSharpReferenceCodeLensPayload.Parse(
+            GSharpReferenceCodeLensPayload.Serialize(new[] { expected }));
+
+        var actual = Assert.Single(payload.References);
+        Assert.Equal(expected.Uri, actual.Uri);
+        Assert.Equal(expected.Line, actual.Line);
+        Assert.Equal(expected.Character, actual.Character);
+        Assert.Equal(expected.EndCharacter, actual.EndCharacter);
+    }
+
     [Theory]
     [InlineData("func foo()", 5, 0)]
     [InlineData("    class Greeter", 10, 4)]
