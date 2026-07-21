@@ -2301,7 +2301,7 @@ internal sealed partial class ExpressionBinder
                 // dispatch used for the imported-CLR path below; here the
                 // receiver's ClrType is null (the user type has not yet been
                 // emitted) so we have to handle the symbol-only shape too.
-                if (TryBindUserStructDelegateMemberInvocation(receiver, userClass, methodName, arguments, ce, out var userDelegateFieldCall))
+                if (TryBindUserStructDelegateMemberInvocation(receiver, userClass, methodName, arguments, ce, isStatic: false, out var userDelegateFieldCall))
                 {
                     return userDelegateFieldCall;
                 }
@@ -2443,7 +2443,7 @@ internal sealed partial class ExpressionBinder
             // function (or named delegate) is invokable through the same
             // call syntax as a bare function-typed variable. Lower to a load
             // of the member value followed by an indirect call.
-            if (TryBindUserStructDelegateMemberInvocation(receiver, userClassPriority, methodName, arguments, ce, out var userDelegateCall))
+            if (TryBindUserStructDelegateMemberInvocation(receiver, userClassPriority, methodName, arguments, ce, isStatic: false, out var userDelegateCall))
             {
                 return userDelegateCall;
             }
