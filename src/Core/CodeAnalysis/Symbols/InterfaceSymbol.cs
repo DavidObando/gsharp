@@ -32,6 +32,8 @@ public sealed class InterfaceSymbol : TypeSymbol
     private ImmutableArray<FunctionSymbol> staticMethods = ImmutableArray<FunctionSymbol>.Empty;
     private ImmutableArray<FunctionSymbol> privateMethods = ImmutableArray<FunctionSymbol>.Empty;
     private ImmutableArray<FunctionSymbol> staticPrivateMethods = ImmutableArray<FunctionSymbol>.Empty;
+    private ImmutableArray<InterfaceSymbol> baseInterfaces = ImmutableArray<InterfaceSymbol>.Empty;
+    private ImmutableArray<TypeSymbol> baseClrInterfaces = ImmutableArray<TypeSymbol>.Empty;
 
     // ADR-0087 R5 / issue #765: constructed instances of a generic interface
     // may be created (e.g. as a base type on a class declaration) BEFORE the
@@ -188,7 +190,10 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// members to this interface's member-lookup surface and is emitted as an
     /// InterfaceImpl row on this interface's TypeDef.
     /// </summary>
-    public ImmutableArray<InterfaceSymbol> BaseInterfaces { get; private set; } = ImmutableArray<InterfaceSymbol>.Empty;
+    public ImmutableArray<InterfaceSymbol> BaseInterfaces
+        => Definition != null && !ReferenceEquals(Definition, this)
+            ? SubstituteBaseInterfaces(Definition.BaseInterfaces)
+            : baseInterfaces;
 
     /// <summary>
     /// Gets the directly-declared base interfaces imported from metadata
@@ -196,7 +201,10 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// <c>interface B : System.IDisposable</c>. These are CLR interface types
     /// surfaced through their <see cref="TypeSymbol.ClrType"/>.
     /// </summary>
-    public ImmutableArray<TypeSymbol> BaseClrInterfaces { get; private set; } = ImmutableArray<TypeSymbol>.Empty;
+    public ImmutableArray<TypeSymbol> BaseClrInterfaces
+        => Definition != null && !ReferenceEquals(Definition, this)
+            ? SubstituteBaseClrInterfaces(Definition.BaseClrInterfaces)
+            : baseClrInterfaces;
 
     /// <summary>
     /// Gets the enclosing user-defined type when this interface is a nested
@@ -234,14 +242,14 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// <param name="baseInterfaces">The directly-declared user base interfaces.</param>
     public void SetBaseInterfaces(ImmutableArray<InterfaceSymbol> baseInterfaces)
     {
-        BaseInterfaces = baseInterfaces;
+        this.baseInterfaces = baseInterfaces;
     }
 
     /// <summary>Sets <see cref="BaseClrInterfaces"/> (issue #1006). Intended to be called once by the binder.</summary>
     /// <param name="baseClrInterfaces">The directly-declared imported CLR base interfaces.</param>
     public void SetBaseClrInterfaces(ImmutableArray<TypeSymbol> baseClrInterfaces)
     {
-        BaseClrInterfaces = baseClrInterfaces;
+        this.baseClrInterfaces = baseClrInterfaces;
     }
 
     /// <summary>
@@ -627,6 +635,51 @@ public sealed class InterfaceSymbol : TypeSymbol
         return instance;
     }
 
+    private ImmutableArray<InterfaceSymbol> SubstituteBaseInterfaces(ImmutableArray<InterfaceSymbol> source)
+    {
+        if (source.IsDefaultOrEmpty)
+        {
+            return source;
+        }
+
+        var subst = GetTypeSubstitution();
+        var builder = ImmutableArray.CreateBuilder<InterfaceSymbol>(source.Length);
+        foreach (var baseInterface in source)
+        {
+            builder.Add((InterfaceSymbol)SubstituteType(baseInterface, subst, mapClrType));
+        }
+
+        return builder.MoveToImmutable();
+    }
+
+    private ImmutableArray<TypeSymbol> SubstituteBaseClrInterfaces(ImmutableArray<TypeSymbol> source)
+    {
+        if (source.IsDefaultOrEmpty)
+        {
+            return source;
+        }
+
+        var subst = GetTypeSubstitution();
+        var builder = ImmutableArray.CreateBuilder<TypeSymbol>(source.Length);
+        foreach (var baseInterface in source)
+        {
+            builder.Add(SubstituteType(baseInterface, subst, mapClrType));
+        }
+
+        return builder.MoveToImmutable();
+    }
+
+    private Dictionary<TypeParameterSymbol, TypeSymbol> GetTypeSubstitution()
+    {
+        var subst = new Dictionary<TypeParameterSymbol, TypeSymbol>(Definition.TypeParameters.Length);
+        for (var i = 0; i < Definition.TypeParameters.Length; i++)
+        {
+            subst[Definition.TypeParameters[i]] = TypeArguments[i];
+        }
+
+        return subst;
+    }
+
     private static FunctionSymbol SubstituteMethod(
         FunctionSymbol m,
         Dictionary<TypeParameterSymbol, TypeSymbol> subst,
@@ -708,11 +761,7 @@ public sealed class InterfaceSymbol : TypeSymbol
             return;
         }
 
-        var subst = new Dictionary<TypeParameterSymbol, TypeSymbol>(Definition.TypeParameters.Length);
-        for (var i = 0; i < Definition.TypeParameters.Length; i++)
-        {
-            subst[Definition.TypeParameters[i]] = TypeArguments[i];
-        }
+        var subst = GetTypeSubstitution();
 
         if (!defMethods.IsDefaultOrEmpty)
         {
