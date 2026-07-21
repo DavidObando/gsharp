@@ -313,6 +313,9 @@ public sealed class InterpolatedStringHandlerInfo
         var wantAlign = part.Alignment.HasValue;
         var wantFormat = part.Format != null;
         var extra = (wantAlign ? 1 : 0) + (wantFormat ? 1 : 0);
+        var contextType = FindCoreContextType(handlerType);
+        var intType = ClrTypeUtilities.RemapHostCoreTypeToContext(typeof(int), contextType);
+        var stringType = ClrTypeUtilities.RemapHostCoreTypeToContext(typeof(string), contextType);
         var candidates = ImmutableArray.CreateBuilder<MethodInfo>();
 
         foreach (var candidate in handlerType.GetMethods(BindingFlags.Public | BindingFlags.Instance))
@@ -329,12 +332,12 @@ public sealed class InterpolatedStringHandlerInfo
             }
 
             var index = 1;
-            if (wantAlign && !parameters[index++].ParameterType.IsSameAs(typeof(int)))
+            if (wantAlign && !parameters[index++].ParameterType.IsSameAs(intType))
             {
                 continue;
             }
 
-            if (wantFormat && !parameters[index].ParameterType.IsSameAs(typeof(string)))
+            if (wantFormat && !parameters[index].ParameterType.IsSameAs(stringType))
             {
                 continue;
             }
@@ -347,7 +350,9 @@ public sealed class InterpolatedStringHandlerInfo
             return false;
         }
 
-        var valueClrType = NullableTypeSymbol.GetEffectiveClrType(holeType);
+        var valueClrType = ClrTypeUtilities.RemapHostCoreTypeToContext(
+            NullableTypeSymbol.GetEffectiveClrType(holeType),
+            contextType);
         if (valueClrType != null)
         {
             var argumentTypes = new System.Type[1 + extra];
@@ -355,12 +360,12 @@ public sealed class InterpolatedStringHandlerInfo
             var index = 1;
             if (wantAlign)
             {
-                argumentTypes[index++] = typeof(int);
+                argumentTypes[index++] = intType;
             }
 
             if (wantFormat)
             {
-                argumentTypes[index] = typeof(string);
+                argumentTypes[index] = stringType;
             }
 
             var resolution = OverloadResolution.Resolve<MethodInfo>(candidates, argumentTypes);
@@ -409,9 +414,45 @@ public sealed class InterpolatedStringHandlerInfo
             return true;
         }
 
-        method = method.MakeGenericMethod(typeof(object));
+        method = method.MakeGenericMethod(
+            ClrTypeUtilities.RemapHostCoreTypeToContext(typeof(object), contextType));
         typeArguments = ImmutableArray.Create(holeType);
         return true;
+    }
+
+    internal static bool TryResolveAppendLiteral(System.Type handlerType, out MethodInfo method)
+    {
+        method = handlerType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .FirstOrDefault(candidate =>
+            {
+                if (candidate.Name != "AppendLiteral")
+                {
+                    return false;
+                }
+
+                var parameters = candidate.GetParameters();
+                return parameters.Length == 1 && parameters[0].ParameterType.IsSameAs(typeof(string));
+            });
+        return method != null;
+    }
+
+    private static System.Type FindCoreContextType(System.Type handlerType)
+    {
+        foreach (var constructor in handlerType.GetConstructors(BindingFlags.Public | BindingFlags.Instance))
+        {
+            foreach (var parameter in constructor.GetParameters())
+            {
+                var parameterType = parameter.ParameterType.IsByRef
+                    ? parameter.ParameterType.GetElementType()
+                    : parameter.ParameterType;
+                if (parameterType.IsSameAs(typeof(int)))
+                {
+                    return parameterType;
+                }
+            }
+        }
+
+        return handlerType;
     }
 
     private static bool ValidateAppendMethods(
@@ -421,7 +462,7 @@ public sealed class InterpolatedStringHandlerInfo
     {
         failure = null;
         if (parts.Any(part => part.IsLiteral && part.Literal.Length > 0)
-            && handlerType.GetMethod("AppendLiteral", new[] { typeof(string) }) == null)
+            && !TryResolveAppendLiteral(handlerType, out _))
         {
             failure = $"'{handlerType.Name}' has no AppendLiteral(string) method";
             return false;

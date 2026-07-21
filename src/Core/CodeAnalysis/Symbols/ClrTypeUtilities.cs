@@ -6,6 +6,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
@@ -942,6 +943,56 @@ public static class ClrTypeUtilities
             Visit(t);
             return result.ToArray();
         });
+    }
+
+    internal static Type RemapHostCoreTypeToContext(Type type, Type contextObject)
+    {
+        if (type == null
+            || contextObject == null
+            || ReferenceEquals(contextObject.Assembly, typeof(object).Assembly))
+        {
+            return type;
+        }
+
+        if (type.IsByRef)
+        {
+            return RemapHostCoreTypeToContext(type.GetElementType(), contextObject).MakeByRefType();
+        }
+
+        if (type.IsPointer)
+        {
+            return RemapHostCoreTypeToContext(type.GetElementType(), contextObject).MakePointerType();
+        }
+
+        if (type.IsArray)
+        {
+            var element = RemapHostCoreTypeToContext(type.GetElementType(), contextObject);
+            return type.IsSZArray
+                ? element.MakeArrayType()
+                : element.MakeArrayType(type.GetArrayRank());
+        }
+
+        if (type.IsConstructedGenericType
+            && ReferenceEquals(type.GetGenericTypeDefinition().Assembly, typeof(object).Assembly))
+        {
+            var open = contextObject.Assembly.GetType(
+                type.GetGenericTypeDefinition().FullName,
+                throwOnError: false);
+            if (open != null)
+            {
+                return open.MakeGenericType(
+                    type.GetGenericArguments()
+                        .Select(argument => RemapHostCoreTypeToContext(argument, contextObject))
+                        .ToArray());
+            }
+        }
+
+        if (ReferenceEquals(type.Assembly, typeof(object).Assembly))
+        {
+            return contextObject.Assembly.GetType(type.FullName, throwOnError: false) ?? type;
+        }
+
+        return type;
     }
 
     /// <summary>

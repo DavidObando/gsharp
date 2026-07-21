@@ -603,8 +603,9 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
     }
 
     private static MethodInfo FindAppendLiteral(System.Type handlerType)
-        => handlerType.GetMethod("AppendLiteral", new[] { typeof(string) })
-            ?? throw new System.InvalidOperationException(
+        => InterpolatedStringHandlerInfo.TryResolveAppendLiteral(handlerType, out var method)
+            ? method
+            : throw new System.InvalidOperationException(
                 $"Interpolated-string handler '{handlerType.Name}' has no AppendLiteral(string) method.");
 
     private static bool AppendsReturnBool(System.Type handlerType, MethodInfo appendLiteral)

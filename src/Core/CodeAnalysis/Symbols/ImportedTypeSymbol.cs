@@ -197,7 +197,7 @@ public sealed class ImportedTypeSymbol : TypeSymbol
                 return ClrType;
             }
 
-            args[i] = RemapHostCoreTypeToContext(argClr, contextObject);
+            args[i] = ClrTypeUtilities.RemapHostCoreTypeToContext(argClr, contextObject);
         }
 
         try
@@ -428,56 +428,6 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         var baseName = StripGenericArity(type.Name);
         var args = type.GetGenericArguments().Select(BuildAggregateDisplayName);
         return $"{baseName}[{string.Join(", ", args)}]";
-    }
-
-    private static Type RemapHostCoreTypeToContext(Type type, Type contextObject)
-    {
-        if (type == null
-            || contextObject == null
-            || ReferenceEquals(contextObject.Assembly, typeof(object).Assembly))
-        {
-            return type;
-        }
-
-        if (type.IsByRef)
-        {
-            return RemapHostCoreTypeToContext(type.GetElementType(), contextObject).MakeByRefType();
-        }
-
-        if (type.IsPointer)
-        {
-            return RemapHostCoreTypeToContext(type.GetElementType(), contextObject).MakePointerType();
-        }
-
-        if (type.IsArray)
-        {
-            var element = RemapHostCoreTypeToContext(type.GetElementType(), contextObject);
-            return type.IsSZArray
-                ? element.MakeArrayType()
-                : element.MakeArrayType(type.GetArrayRank());
-        }
-
-        if (type.IsConstructedGenericType
-            && ReferenceEquals(type.GetGenericTypeDefinition().Assembly, typeof(object).Assembly))
-        {
-            var open = contextObject.Assembly.GetType(
-                type.GetGenericTypeDefinition().FullName,
-                throwOnError: false);
-            if (open != null)
-            {
-                return open.MakeGenericType(
-                    type.GetGenericArguments()
-                        .Select(argument => RemapHostCoreTypeToContext(argument, contextObject))
-                        .ToArray());
-            }
-        }
-
-        if (ReferenceEquals(type.Assembly, typeof(object).Assembly))
-        {
-            return contextObject.Assembly.GetType(type.FullName, throwOnError: false) ?? type;
-        }
-
-        return type;
     }
 
     private static string StripGenericArity(string name)

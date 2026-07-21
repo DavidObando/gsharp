@@ -7,6 +7,10 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -15,18 +19,50 @@ namespace GSharp.Compiler.Tests.Emit;
 public class Issue2640ImportedInterpolatedStringHandlerEmitTests
 {
     [Fact]
-    public void OahuStringCreate_InvariantCulture_EmitsVerifiesAndRuns()
+    public void MetadataCompilation_AlignedStringCreate_DoesNotMixRuntimeTypes()
     {
         const string Source = """
-            package Oahu
+            package Oahu.Cli.Tui
             import System
             import System.Globalization
 
-            func formatPercent(value float64) string {
-                return string.Create(CultureInfo.InvariantCulture, "${int(Math.Round(value * 100.0)),3}%")
+            func FormatPercent(value float64) string {
+                return String.Create(CultureInfo.InvariantCulture, "${int(Math.Round(value * 100.0)),3}%")
+            }
+            """;
+
+        using var resolver = ReferenceResolver.WithReferences(BclReferences.Value);
+        Assert.True(
+            resolver.TryResolveType(
+                "System.Runtime.CompilerServices.DefaultInterpolatedStringHandler",
+                out var handlerType));
+        Assert.Throws<ArgumentException>(
+            () => handlerType.GetMethod("AppendLiteral", new[] { typeof(string) }));
+
+        var compilation = new Compilation(resolver, SyntaxTree.Parse(SourceText.From(Source)))
+        {
+            IsLibrary = true,
+        };
+        using var peStream = new MemoryStream();
+
+        var result = compilation.Emit(peStream);
+
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
+    }
+
+    [Fact]
+    public void OahuStringCreate_InvariantCulture_EmitsVerifiesAndRuns()
+    {
+        const string Source = """
+            package Oahu.Cli.Tui
+            import System
+            import System.Globalization
+
+            func FormatPercent(value float64) string {
+                return String.Create(CultureInfo.InvariantCulture, "${int(Math.Round(value * 100.0)),3}%")
             }
 
-            Console.Write(formatPercent(0.42))
+            Console.Write(FormatPercent(0.42))
             """;
 
         var (exitCode, diagnostics, outputPath, directory) = Compile(Source);
@@ -51,7 +87,7 @@ public class Issue2640ImportedInterpolatedStringHandlerEmitTests
             import System.Globalization
 
             let value = 42
-            Console.Write(string.Create(CultureInfo.InvariantCulture, "${value,6:0000}"))
+            Console.Write(String.Create(CultureInfo.InvariantCulture, "${value,6:0000}"))
             """;
 
         var (exitCode, diagnostics, outputPath, directory) = Compile(Source);
@@ -72,9 +108,10 @@ public class Issue2640ImportedInterpolatedStringHandlerEmitTests
     {
         const string Source = """
             package Negative
+            import System
             import System.Globalization
 
-            let value = string.Create(CultureInfo.InvariantCulture, "Oahu")
+            let value = String.Create(CultureInfo.InvariantCulture, "Oahu")
             """;
 
         var (exitCode, diagnostics, _, directory) = Compile(Source);
