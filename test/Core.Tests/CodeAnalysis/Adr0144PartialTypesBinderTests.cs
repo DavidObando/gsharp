@@ -132,6 +132,52 @@ Console.WriteLine(c.Abs())
     }
 
     [Fact]
+    public void CrossPackage_SecondaryPartialPropertyThroughAsCast_MergesAndRuns()
+    {
+        var generatedPart = SyntaxTree.Parse(SourceText.From(
+            """
+            package Models
+
+            partial class BookItemViewModel {
+                prop IsSelected bool
+            }
+            """,
+            "A.Generated.gs"));
+        var sourcePart = SyntaxTree.Parse(SourceText.From(
+            """
+            package Models
+
+            partial class BookItemViewModel(asin string) {
+                prop Asin string -> asin
+            }
+            """,
+            "B.Source.gs"));
+        var consumer = SyntaxTree.Parse(SourceText.From(
+            """
+            package Views
+            import Models
+            import System
+
+            class Selection {
+                prop Asin string
+                prop Item BookItemViewModel
+            }
+
+            let item object = BookItemViewModel("B001")
+            let selection object = Selection()
+            (selection as Selection)!!.Asin = (item as BookItemViewModel)!!.Asin
+            (selection as Selection)!!.Item = (item as BookItemViewModel)!!
+            Console.WriteLine((selection as Selection)!!.Asin)
+            """,
+            "C.View.gs"));
+
+        var output = CompileLoadInvokeCaptureStdout(
+            new[] { generatedPart, sourcePart, consumer },
+            "Issue2641-PartialCastReceiver");
+        Assert.Contains("B001", output);
+    }
+
+    [Fact]
     public void TwoPartialStructParts_Merge()
     {
         var source = @"package App

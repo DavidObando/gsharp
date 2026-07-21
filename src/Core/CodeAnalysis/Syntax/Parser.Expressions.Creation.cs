@@ -623,7 +623,9 @@ public partial class Parser
             // Issue #143: contextual `nameof(expr)` — argument is a name reference.
             current = ParseNameOfExpression();
         }
-        else if (Current.Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
+        else if (Current.Kind == SyntaxKind.IdentifierToken
+            && Peek(1).Kind == SyntaxKind.OpenParenthesisToken
+            && !IsTokenOnNewLineAfter(Peek(1), Current))
         {
             current = ParseCallExpression();
             current = MaybeWrapWithObjectInitializer(current);
