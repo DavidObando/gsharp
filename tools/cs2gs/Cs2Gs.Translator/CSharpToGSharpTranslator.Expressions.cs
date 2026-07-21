@@ -49,6 +49,7 @@ public sealed partial class CSharpToGSharpTranslator
             // has no G# equivalent; references to the bound local are rewritten to a
             // member access on the arm's type-pattern designator (`circle.Radius`).
             if (this.state.PatternBindings.Count > 0 &&
+                !IsDirectWrite(identifier) &&
                 this.context.GetSymbolInfo(identifier).Symbol is { } boundSymbol &&
                 this.state.PatternBindings.TryGetValue(boundSymbol, out GExpression replacement))
             {
@@ -103,6 +104,22 @@ public sealed partial class CSharpToGSharpTranslator
 
             return new IdentifierExpression(SanitizeIdentifier(identifier.Identifier.Text));
         }
+
+        private static bool IsDirectWrite(IdentifierNameSyntax identifier) =>
+            identifier.Parent switch
+            {
+                AssignmentExpressionSyntax assignment when assignment.Left == identifier => true,
+                PrefixUnaryExpressionSyntax prefix
+                    when prefix.Operand == identifier &&
+                         prefix.Kind() is SyntaxKind.PreIncrementExpression or SyntaxKind.PreDecrementExpression => true,
+                PostfixUnaryExpressionSyntax postfix
+                    when postfix.Operand == identifier &&
+                         postfix.Kind() is SyntaxKind.PostIncrementExpression or SyntaxKind.PostDecrementExpression => true,
+                ArgumentSyntax argument
+                    when argument.Expression == identifier &&
+                         argument.RefKindKeyword.Kind() is SyntaxKind.RefKeyword or SyntaxKind.OutKeyword => true,
+                _ => false,
+            };
 
         // Builds the receiver expression used to qualify a bare sibling static
         // member reference through its owning type. For a non-generic owner this is

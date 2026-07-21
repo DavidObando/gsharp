@@ -149,8 +149,8 @@ namespace Demo
 
     /// <summary>
     /// ADR-0115 §B: `x is null` / `x is not null` map to G# `== nil` / `!= nil`,
-    /// and a type-test with a binder (`x is T t`) becomes a smart-cast `is T`
-    /// test that drops the binder (the receiver is narrowed inside the block).
+    /// and a type-test with a binder (`x is T t`) preserves the binder as a
+    /// nullable local narrowed by a nil test.
     /// </summary>
     [Fact]
     public void IsPattern_MapsToNilTestsAndSmartCast()
@@ -176,7 +176,7 @@ namespace Demo
 
         Assert.Contains("== nil", printed);
         Assert.Contains("!= nil", printed);
-        Assert.Contains("is string", printed);
+        Assert.Contains("let s string? = o as string", printed);
     }
 
     /// <summary>
