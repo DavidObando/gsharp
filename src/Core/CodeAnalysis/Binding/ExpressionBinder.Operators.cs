@@ -750,10 +750,15 @@ internal sealed partial class ExpressionBinder
     /// are lowered to <see cref="BoundBlockExpression"/> wrapping the final value.
     /// </summary>
     private BoundExpression BindIfExpression(IfExpressionSyntax syntax)
-        => BindIfExpression(syntax, targetType: null);
+        => BindIfExpression(syntax, targetType: null, canBeVoid: false);
 
-    private BoundExpression BindIfExpression(IfExpressionSyntax syntax, TypeSymbol targetType)
+    private BoundExpression BindIfExpression(
+        IfExpressionSyntax syntax,
+        TypeSymbol targetType,
+        bool canBeVoid = false)
     {
+        // A tail if/else in a discarded lambda/statement position may have
+        // void call or await arms; value-producing contexts keep the default.
         // Issue #1238: defer a no-common-type unification failure when this
         // if-expression is a bare argument awaiting its parameter target type
         // (see BindConditionalExpression for the full rationale). Consume the
@@ -771,8 +776,8 @@ internal sealed partial class ExpressionBinder
 
         var condition = BindExpression(syntax.Condition, TypeSymbol.Bool);
 
-        var whenTrue = BindBlockExpressionValue(syntax.ThenBlock);
-        var whenFalse = BindIfExpressionElseBranch(syntax.ElseExpression);
+        var whenTrue = BindBlockExpressionValue(syntax.ThenBlock, canBeVoid);
+        var whenFalse = BindIfExpressionElseBranch(syntax.ElseExpression, canBeVoid);
 
         if (condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression)
         {
@@ -817,16 +822,16 @@ internal sealed partial class ExpressionBinder
     /// Binds the else branch of an if-expression: either a nested if-expression
     /// (<c>else if</c> chain) or a block expression.
     /// </summary>
-    private BoundExpression BindIfExpressionElseBranch(ExpressionSyntax elseSyntax)
+    private BoundExpression BindIfExpressionElseBranch(ExpressionSyntax elseSyntax, bool canBeVoid = false)
     {
         if (elseSyntax is IfExpressionSyntax nestedIf)
         {
-            return BindIfExpression(nestedIf);
+            return BindIfExpression(nestedIf, targetType: null, canBeVoid: canBeVoid);
         }
 
         if (elseSyntax is BlockExpressionSyntax block)
         {
-            return BindBlockExpressionValue(block);
+            return BindBlockExpressionValue(block, canBeVoid);
         }
 
         // Should not happen from well-formed parse trees.
@@ -840,7 +845,7 @@ internal sealed partial class ExpressionBinder
     /// a <see cref="BoundBlockExpression"/> wrapping the prefix statements and
     /// the trailing value.
     /// </summary>
-    private BoundExpression BindBlockExpressionValue(BlockExpressionSyntax syntax)
+    private BoundExpression BindBlockExpressionValue(BlockExpressionSyntax syntax, bool canBeVoid = false)
     {
         if (syntax.Expression == null)
         {
@@ -851,7 +856,7 @@ internal sealed partial class ExpressionBinder
         // If there are no prefix statements, just bind the expression directly.
         if (syntax.Statements.IsDefaultOrEmpty)
         {
-            return BindExpression(syntax.Expression);
+            return BindExpression(syntax.Expression, canBeVoid);
         }
 
         // Bind prefix statements.
@@ -862,7 +867,7 @@ internal sealed partial class ExpressionBinder
             boundStatements.Add(boundStmt);
         }
 
-        var boundExpression = BindExpression(syntax.Expression);
+        var boundExpression = BindExpression(syntax.Expression, canBeVoid);
         if (boundExpression is BoundErrorExpression)
         {
             return boundExpression;

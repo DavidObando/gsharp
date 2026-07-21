@@ -286,7 +286,9 @@ internal sealed partial class ExpressionBinder
 
     internal BoundExpression BindExpression(ExpressionSyntax syntax, bool canBeVoid = false)
     {
-        var result = BindExpressionpublic(syntax);
+        // Issue #2620: discard context must reach wrappers and tail-if arms,
+        // not merely suppress the final void-result check.
+        var result = BindExpressionpublic(syntax, canBeVoid);
         if (!canBeVoid && result.Type == TypeSymbol.Void)
         {
             Diagnostics.ReportExpressionMustHaveValue(syntax.Location);
@@ -296,15 +298,15 @@ internal sealed partial class ExpressionBinder
         return result;
     }
 
-    private BoundExpression BindExpressionpublic(ExpressionSyntax syntax)
+    private BoundExpression BindExpressionpublic(ExpressionSyntax syntax, bool canBeVoid = false)
     {
         switch (syntax.Kind)
         {
             case SyntaxKind.ParenthesizedExpression:
-                return BindParenthesizedExpression((ParenthesizedExpressionSyntax)syntax);
+                return BindParenthesizedExpression((ParenthesizedExpressionSyntax)syntax, canBeVoid);
             case SyntaxKind.CheckedExpression:
             case SyntaxKind.UncheckedExpression:
-                return BindCheckedExpression((CheckedExpressionSyntax)syntax);
+                return BindCheckedExpression((CheckedExpressionSyntax)syntax, canBeVoid);
             case SyntaxKind.LiteralExpression:
                 return BindLiteralExpression((LiteralExpressionSyntax)syntax);
             case SyntaxKind.InterpolatedStringExpression:
@@ -402,7 +404,7 @@ internal sealed partial class ExpressionBinder
                 // before reaching this dispatch.
                 return BindConditionalExpression((ConditionalExpressionSyntax)syntax);
             case SyntaxKind.IfExpression:
-                return BindIfExpression((IfExpressionSyntax)syntax);
+                return BindIfExpression((IfExpressionSyntax)syntax, targetType: null, canBeVoid: canBeVoid);
             case SyntaxKind.ThrowExpression:
                 return BindThrowExpression((ThrowExpressionSyntax)syntax);
             case SyntaxKind.IndirectAssignmentExpression:
@@ -439,9 +441,9 @@ internal sealed partial class ExpressionBinder
         }
     }
 
-    private BoundExpression BindParenthesizedExpression(ParenthesizedExpressionSyntax syntax)
+    private BoundExpression BindParenthesizedExpression(ParenthesizedExpressionSyntax syntax, bool canBeVoid)
     {
-        return BindExpression(syntax.Expression);
+        return BindExpression(syntax.Expression, canBeVoid);
     }
 
     // Issue #1881: `checked(expr)` / `unchecked(expr)` binds the inner
@@ -449,10 +451,10 @@ internal sealed partial class ExpressionBinder
     // is needed (mirrors Roslyn: the context only steers which opcodes the
     // arithmetic/conversions inside pick). Innermost nesting wins via the
     // save/restore scope.
-    private BoundExpression BindCheckedExpression(CheckedExpressionSyntax syntax)
+    private BoundExpression BindCheckedExpression(CheckedExpressionSyntax syntax, bool canBeVoid)
     {
         using var scope = binderCtx.PushCheckedContext(syntax.IsChecked);
-        return BindExpression(syntax.Expression);
+        return BindExpression(syntax.Expression, canBeVoid);
     }
 
     private BoundExpression BindNameExpression(NameExpressionSyntax syntax)
