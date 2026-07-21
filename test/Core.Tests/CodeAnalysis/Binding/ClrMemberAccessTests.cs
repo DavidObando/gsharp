@@ -172,6 +172,49 @@ var m = int.MaxValue
     }
 
     [Fact]
+    public void ObjectReferenceEquals_LowercaseAlias_Binds()
+    {
+        var result = Evaluate("""
+            class Item { }
+            let item = Item{}
+            object.ReferenceEquals(item, item)
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.True((bool)result.Value);
+    }
+
+    [Fact]
+    public void ShadowedClrAlias_UsesStaticTypeOrInstanceValueByMemberKind()
+    {
+        var result = Evaluate("""
+            func Same(object string, left object, right object) bool -> object.ReferenceEquals(left, right)
+            func Length(object string) int32 -> object.Length
+            let value object = "same"
+            Same("shadow", value, value) && Length("shadow") == 6
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.True((bool)result.Value);
+    }
+
+    [Fact]
+    public void ClrTypeReceiver_RejectsInstanceMethod()
+    {
+        var result = Evaluate("func Bad() string? -> object.ToString()");
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0159");
+    }
+
+    [Fact]
+    public void ClrInstanceReceiver_RejectsStaticMethod()
+    {
+        var result = Evaluate("func Bad(value object) bool -> value.ReferenceEquals(value, value)");
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0159");
+    }
+
+    [Fact]
     public void StringEmpty_LowercaseAlias_UnknownMember_Diagnoses()
     {
         // The lowercase alias receiver still reports unknown members rather than

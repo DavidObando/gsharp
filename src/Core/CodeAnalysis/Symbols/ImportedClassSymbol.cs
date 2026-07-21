@@ -186,7 +186,7 @@ public sealed class ImportedClassSymbol : Symbol
         isAmbiguous = false;
         ambiguousMethods = ImmutableArray<MethodInfo>.Empty;
         isExpanded = false;
-        var methods = ClrTypeUtilities.SafeGetMethods(ClassType, GetImportedMemberBindingFlags(includeInstance: true))
+        var methods = ClrTypeUtilities.SafeGetMethods(ClassType, GetImportedMemberBindingFlags())
             .Where(IsVisibleToCurrentCompilation)
             .ToArray();
         var nameMatches = methods.Where(m => m.Name == text).ToList();

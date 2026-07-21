@@ -22,6 +22,24 @@ namespace GSharp.Compiler.Tests.Emit;
 public class Issue1136ObjectMemberEmitTests
 {
     [Fact]
+    public void ObjectAlias_ReferenceEquals_ExactOahuShape_EmitsAndRuns()
+    {
+        var source = """
+            package Oahu.Cli.Tui.Screens
+            import System
+
+            class Modal { }
+
+            let activeModal = Modal{}
+            let pendingModal = activeModal
+            Console.WriteLine(object.ReferenceEquals(activeModal, pendingModal))
+            Console.WriteLine(object.ReferenceEquals(activeModal, Modal{}))
+            """;
+
+        Assert.Equal("True\nFalse\n", CompileAndRun(source));
+    }
+
+    [Fact]
     public void ClassReceiver_ObjectMembers_EmitAndRun()
     {
         var source = """
