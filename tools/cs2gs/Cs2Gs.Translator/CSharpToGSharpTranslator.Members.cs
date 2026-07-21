@@ -1646,6 +1646,15 @@ public sealed partial class CSharpToGSharpTranslator
                 node.Initializer.Value,
                 this.TranslateNullSeamExpression(node.Initializer.Value, symbol?.ContainingType));
 
+            if (symbol != null)
+            {
+                initializer = this.ForgiveNullableReferenceValue(
+                    node.Initializer.Value,
+                    initializer,
+                    symbol.Type,
+                    symbol);
+            }
+
             // Issue #1072: a non-nullable reference static auto-property whose
             // initializer is nullable (e.g. `GetAttribute<...>()?.Member`) is
             // rendered `T?` so the initializer assignment type-checks.

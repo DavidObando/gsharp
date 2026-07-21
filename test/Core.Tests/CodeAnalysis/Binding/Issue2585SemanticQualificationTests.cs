@@ -79,6 +79,76 @@ public sealed class Issue2585SemanticQualificationTests
     }
 
     [Fact]
+    public void FullyQualifiedImportedStaticMember_SelectsTypeDespiteSourceHomonym()
+    {
+        Assert.Empty(Bind(
+            """
+            package Oahu.Core.Ex
+
+            class JsonExtensions {
+            }
+            """,
+            """
+            package Oahu.Audible.Json
+            import Oahu.Aux.Extensions
+
+            func Read() int32 {
+                return Oahu.Aux.Extensions.JsonExtensions.Options
+            }
+            """));
+    }
+
+    [Fact]
+    public void FullyQualifiedSourceStaticMember_SelectsMatchingPackage()
+    {
+        Assert.Empty(Bind(
+            """
+            package Target
+
+            class JsonExtensions {
+                shared {
+                    let Options int32 = 1
+                }
+            }
+            """,
+            """
+            package Other
+
+            class JsonExtensions {
+            }
+            """,
+            """
+            package Consumer
+
+            func Read() int32 {
+                return Target.JsonExtensions.Options
+            }
+            """));
+    }
+
+    [Fact]
+    public void FullyQualifiedImportedStaticMember_UnknownMemberRemainsDiagnosed()
+    {
+        Assert.Contains(
+            Bind(
+                """
+                package Oahu.Core.Ex
+
+                class JsonExtensions {
+                }
+                """,
+                """
+                package Consumer
+                import Oahu.Aux.Extensions
+
+                func Read() int32 {
+                    return Oahu.Aux.Extensions.JsonExtensions.Missing
+                }
+                """),
+            diagnostic => diagnostic.Id == "GS0158");
+    }
+
+    [Fact]
     public void ImportedGenericCompositeLiteral_ResolvesClosedType()
     {
         Assert.Empty(Bind("""
@@ -215,6 +285,14 @@ public sealed class Issue2585SemanticQualificationTests
                 public sealed class SelectList<T>
                 {
                     public T Value { get; set; }
+                }
+            }
+
+            namespace Oahu.Aux.Extensions
+            {
+                public static class JsonExtensions
+                {
+                    public static int Options => 1;
                 }
             }
             """;

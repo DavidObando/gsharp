@@ -61,6 +61,21 @@ internal sealed partial class ExpressionBinder
             return qualifiedClrLiteral;
         }
 
+        // Resolve an exact CLR namespace/type path before the flat source-type
+        // fallback below can select an unrelated same-simple-name source type.
+        if (!syntax.IsNullConditional
+            && !QualifiedAccessStartsWithValue(syntax)
+            && syntax.LeftPart is NameExpressionSyntax qualifiedClrRoot
+            && syntax.RightPart is not NameExpressionSyntax)
+        {
+            ExpressionSyntax qualifiedClrMember = syntax.RightPart;
+            if (TryBindFullyQualifiedClrStaticAccess(
+                qualifiedClrRoot, ref qualifiedClrMember, out var qualifiedClrType))
+            {
+                return BindAccessorStep(null, qualifiedClrType, qualifiedClrMember);
+            }
+        }
+
         // A same-compilation SOURCE type constructed/referenced through a
         // package-qualified name — `Oahu.Decrypt.Mp4Operation(...)`,
         // `Oahu.Decrypt.Mp4Operation[TResult](...)`. Source types are visible by
