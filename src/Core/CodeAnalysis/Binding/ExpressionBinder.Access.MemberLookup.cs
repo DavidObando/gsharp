@@ -136,9 +136,15 @@ internal sealed partial class ExpressionBinder
                         // delegate-conversion context it materializes as a
                         // delegate over the selected overload; the conversion
                         // classifier decides which overload (if any) applies.
-                        if (TryBindClrMethodGroup(receiver: null, classSymbol.ClassType, wantStatic: true, ne.IdentifierToken.Text, out var staticGroup))
+                        var staticMethods = classSymbol.GetStaticMethodGroup(ne.IdentifierToken.Text);
+                        if (!staticMethods.IsEmpty)
                         {
-                            return staticGroup;
+                            return new BoundClrMethodGroupExpression(
+                                null,
+                                receiver: null,
+                                classSymbol.ClassType,
+                                ne.IdentifierToken.Text,
+                                staticMethods);
                         }
 
                         return BindExtensionMethodGroupOrError(receiver, ne);
@@ -680,7 +686,7 @@ internal sealed partial class ExpressionBinder
                 return false;
             }
 
-            if (TryBindClrMethodGroup(receiver: null, classSymbol.ClassType, wantStatic: true, name, out _))
+            if (!classSymbol.GetStaticMethodGroup(name).IsEmpty)
             {
                 return false;
             }
