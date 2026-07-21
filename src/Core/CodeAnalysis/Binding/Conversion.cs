@@ -111,6 +111,19 @@ public sealed class Conversion
     /// <returns>The classified conversion.</returns>
     internal static Conversion ClassifyCore(TypeSymbol from, TypeSymbol to, bool allowStructuralProjection)
     {
+        // Inner generic nullability metadata does not change the outer CLR type's
+        // conversion rules. Expose the symbolic generic/interface shape beneath
+        // it before applying identity, hierarchy, and variance classification.
+        while (from is NullabilityAnnotatedTypeSymbol fromAnnotated)
+        {
+            from = fromAnnotated.BaseType;
+        }
+
+        while (to is NullabilityAnnotatedTypeSymbol toAnnotated)
+        {
+            to = toAnnotated.BaseType;
+        }
+
         if (from == to)
         {
             return Conversion.Identity;
