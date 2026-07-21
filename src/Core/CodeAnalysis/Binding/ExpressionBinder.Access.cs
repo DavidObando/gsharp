@@ -54,7 +54,7 @@ internal sealed partial class ExpressionBinder
 
     private BoundMethodGroupExpression BuildInstanceMethodGroup(BoundExpression receiver, ImmutableArray<FunctionSymbol> methods)
     {
-        if (methods.Length == 1)
+        if (methods.Length == 1 && !methods[0].IsGeneric)
         {
             var only = methods[0];
             var paramTypes = ImmutableArray.CreateBuilder<TypeSymbol>(only.Parameters.Length);
@@ -90,9 +90,8 @@ internal sealed partial class ExpressionBinder
     /// ADR-0112 §"method-group semantics": builds a <see cref="BoundMethodGroupExpression"/>
     /// for a user-defined type's method(s). A <paramref name="receiver"/> of
     /// <see langword="null"/> yields a static (null-target) group; a non-null
-    /// receiver yields an instance group captured against it. Candidates that
-    /// cannot participate in a method-group→delegate conversion (generic or
-    /// variadic) are filtered out; the group is only produced when at least one
+    /// receiver yields an instance group captured against it. Variadic
+    /// candidates are filtered out; the group is only produced when at least one
     /// usable candidate remains.
     /// </summary>
     private bool TryBuildUserMethodGroup(
@@ -111,11 +110,6 @@ internal sealed partial class ExpressionBinder
         var usable = ImmutableArray.CreateBuilder<FunctionSymbol>(methods.Length);
         foreach (var m in methods)
         {
-            if (m.IsGeneric)
-            {
-                continue;
-            }
-
             var hasVariadic = false;
             foreach (var parameter in m.Parameters)
             {

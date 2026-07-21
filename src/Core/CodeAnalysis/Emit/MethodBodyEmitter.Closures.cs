@@ -446,6 +446,17 @@ internal sealed partial class MethodBodyEmitter
             ftnToken = this.outer.userTokens.ResolveUserInstanceMethodToken(receiverStruct, methodGroup.Function);
         }
 
+        if (methodGroup.Function.IsGeneric)
+        {
+            if (methodGroup.MethodTypeArguments.Length != methodGroup.Function.TypeParameters.Length)
+            {
+                throw new InvalidOperationException(
+                    $"Generic method group '{methodGroup.Function.Name}' has no inferred type arguments.");
+            }
+
+            ftnToken = this.outer.userTokens.BuildMethodSpecForGenericMethodGroup(ftnToken, methodGroup);
+        }
+
         if (methodGroup.Receiver == null)
         {
             this.il.OpCode(ILOpCode.Ldnull);

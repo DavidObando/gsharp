@@ -226,6 +226,9 @@ internal sealed class UserTokenResolver
         return this.BuildMethodSpec(openMethod, args);
     }
 
+    internal EntityHandle BuildMethodSpecForGenericMethodGroup(EntityHandle openMethod, BoundMethodGroupExpression methodGroup)
+        => this.BuildMethodSpec(openMethod, methodGroup.MethodTypeArguments.ToArray());
+
     /// <summary>
     /// ADR-0087 §3 R3+R4: builds a MethodSpec for a generic G# user
     /// instance method call (`h.Box[int32](42)`). Same inference rules

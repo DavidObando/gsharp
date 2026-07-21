@@ -2138,7 +2138,13 @@ public abstract class BoundTreeRewriter
         }
 
         return node.FunctionType != null
-            ? new BoundMethodGroupExpression(node.Syntax, receiver, node.Function, node.FunctionType, node.StaticOwnerType)
+            ? new BoundMethodGroupExpression(
+                node.Syntax,
+                receiver,
+                node.Function,
+                node.FunctionType,
+                node.StaticOwnerType,
+                node.MethodTypeArguments)
             : new BoundMethodGroupExpression(node.Syntax, receiver, node.Candidates, node.StaticOwnerType);
     }
 
