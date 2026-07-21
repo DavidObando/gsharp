@@ -686,6 +686,7 @@ public sealed partial class CSharpToGSharpTranslator
                 if (symbol != null)
                 {
                     type = this.PromoteIfUsedAsNullable(type, symbol);
+                    type = this.PromoteIfGeneratedPropertyTargetNullable(type, symbol);
                 }
 
                 // T2: a field initializer (ADR-0115 §B.3) comes either from a
