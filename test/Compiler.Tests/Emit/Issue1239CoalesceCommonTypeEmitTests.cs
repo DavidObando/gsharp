@@ -87,6 +87,31 @@ public class Issue1239CoalesceCommonTypeEmitTests
     }
 
     [Fact]
+    public void NullableRightSubtype_ConvertsToNullableLeftInterface()
+    {
+        var source = """
+            package P
+
+            import System
+
+            interface ILogger { func Name() string; }
+            class NullLogger : ILogger { func Name() string -> "null" }
+
+            func Pick(logger ILogger?, fallback NullLogger?) ILogger? {
+                var selected = logger ?? fallback
+                return selected
+            }
+
+            Console.WriteLine(Pick(nil, NullLogger())!!.Name())
+            Console.WriteLine(Pick(nil, nil) == nil)
+            """;
+
+        var output = CompileAndRun(source);
+
+        Assert.Equal("null\nTrue\n", output);
+    }
+
+    [Fact]
     public void RightIsBaseClass_ResultIsBaseClass()
     {
         var source = """

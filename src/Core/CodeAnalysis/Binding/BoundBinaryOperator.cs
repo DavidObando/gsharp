@@ -238,14 +238,12 @@ public sealed record BoundBinaryOperator
             //     type, the result is the right type (reference upcast / interface
             //     implementation, e.g. `Foo? ?? IFoo` → `IFoo`, or numeric
             //     widening, e.g. `int32? ?? int64` → `int64`).
-            // Restricted to a non-nullable right operand so the result is a plain
-            // (non-nullable) type; ExpressionBinder.BindBinaryExpression inserts
-            // the operand conversions required for correct emit/evaluation. A
-            // mismatched nullable right operand still falls through to GS0129
-            // (unchanged behaviour) because lifted nullable numeric conversions
-            // are not part of the implicit-conversion lattice.
-            if (rightType is not NullableTypeSymbol
-                && leftUnderlying != null
+            // When the right operand is nullable, classify its underlying type
+            // by the same rules and lift the common result. This keeps imported
+            // generic implementations and ordinary subtype/interface pairs on
+            // the same conversion path instead of requiring exact nullable
+            // wrapper identity.
+            if (leftUnderlying != null
                 && rightUnderlying != null
                 && leftType != TypeSymbol.Error
                 && rightType != TypeSymbol.Error)
@@ -267,6 +265,11 @@ public sealed record BoundBinaryOperator
 
                 if (common != null)
                 {
+                    if (rightType is NullableTypeSymbol)
+                    {
+                        common = NullableTypeSymbol.Get(common);
+                    }
+
                     return new BoundBinaryOperator(syntaxKind, BoundBinaryOperatorKind.NullCoalesce, leftType, rightType, common);
                 }
             }
