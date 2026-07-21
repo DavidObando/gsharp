@@ -296,6 +296,72 @@ public class CaptureMatrixEmitTests
                 }
             }
             """, "42\n");
+
+        yield return Row("Issue2662_ExactOahuCliAppAudibleJobExecutor", """
+            package Oahu.Cli.App
+            import System
+            import System.Collections.Generic
+            import System.Threading.Tasks
+            import System.Threading.Channels
+
+            class JobUpdate {
+                var Value int32 = 0
+            }
+
+            class AudibleJobExecutor {
+                async func ExecuteAsync() IAsyncEnumerable[JobUpdate] {
+                    let channel = Channel.CreateUnbounded[JobUpdate]()
+                    let first = JobUpdate()
+                    first.Value = 42
+                    channel.Writer.TryWrite(first)
+                    channel.Writer.TryComplete()
+                    let runTask = Task.CompletedTask
+                    try {
+                        while await channel.Reader.WaitToReadAsync() {
+                            while channel.Reader.TryRead(out var update) {
+                                yield update
+                            }
+                        }
+                    } finally {
+                        try {
+                            await runTask
+                        } catch (Exception) {
+                        }
+                    }
+                }
+            }
+
+            func Main() {
+                let e = AudibleJobExecutor().ExecuteAsync().GetAsyncEnumerator()
+                var total = 0
+                if e.MoveNextAsync().AsTask().Result {
+                    total = total + e.Current.Value
+                }
+                Console.WriteLine(total)
+            }
+            """, "42\n");
+
+        yield return Row("Issue2662_AudibleJobExecutor_YieldsOnlyTry", """
+            package Oahu.Cli.App
+            import System
+            import System.Collections.Generic
+
+            class AudibleJobExecutor {
+                async func ExecuteAsync() IAsyncEnumerable[int32] {
+                    try {
+                        yield 42
+                    } finally {
+                    }
+                }
+            }
+
+            func Main() {
+                let e = AudibleJobExecutor().ExecuteAsync().GetAsyncEnumerator()
+                if e.MoveNextAsync().AsTask().Result {
+                    Console.WriteLine(e.Current)
+                }
+            }
+            """, "42\n");
     }
 
     [Theory]
