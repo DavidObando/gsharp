@@ -14,6 +14,48 @@ namespace Cs2Gs.Tests;
 public sealed class Issue2585SemanticQualificationPipelineTests
 {
     [Fact]
+    public async Task Pipeline_OahuCoreQualifiedJsonOptions_WithTypeHomonymCompiles()
+    {
+        string compiler = FindSiblingTool("Compiler", "gsc.dll");
+        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
+        if (compiler is null
+            || repoRoot is null
+            || GsharpTestProjectRunner.ResolveLocalSdkPackage(repoRoot) is null)
+        {
+            return;
+        }
+
+        string sourceRoot = NewDirectory("oahu-core-projects");
+        string coreProject = WriteOahuCoreFixture(sourceRoot);
+        string outputRoot = NewDirectory("oahu-core-pipeline");
+        var pipeline = new MigrationPipeline(
+            new PipelineOptions
+            {
+                GscPath = compiler,
+                OutputRoot = outputRoot,
+                SourceRoot = sourceRoot,
+            },
+            new IMigrationStage[] { new TranslateStage(), new CompileStage() });
+
+        RunResult result = await pipeline.RunAsync(new[]
+        {
+            new CorpusApp("corpus/Oahu.Core", coreProject, TargetKind.Library),
+        });
+
+        var app = Assert.Single(result.Apps);
+        Assert.True(
+            app.Succeeded,
+            app.AppId + " should compile. Stages: " +
+                string.Join("; ", app.Stages.Select(stage => stage.Stage + "=" + stage.Status)));
+
+        string output = ReadOutput(outputRoot, result.RunId, "corpus/Oahu.Core");
+        Assert.Contains(
+            "Oahu.Aux.Extensions.JsonExtensions.Options",
+            output,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Pipeline_NestedNamespacesAndEventLambda_PreserveSemanticRootsAndCompile()
     {
         string compiler = FindSiblingTool("Compiler", "gsc.dll");
@@ -231,6 +273,49 @@ public sealed class Issue2585SemanticQualificationPipelineTests
             """);
 
         return (appProject, tuiProject);
+    }
+
+    private static string WriteOahuCoreFixture(string sourceRoot)
+    {
+        File.WriteAllText(Path.Combine(sourceRoot, "Directory.Build.props"), "<Project></Project>");
+
+        string foundationDirectory = Path.Combine(sourceRoot, "Oahu.Foundation");
+        Directory.CreateDirectory(foundationDirectory);
+        string foundationProject = Path.Combine(foundationDirectory, "Oahu.Foundation.csproj");
+        File.WriteAllText(foundationProject, ProjectFile(null));
+        File.WriteAllText(Path.Combine(foundationDirectory, "JsonExtensions.cs"), """
+            namespace Oahu.Aux.Extensions;
+
+            public static class JsonExtensions
+            {
+                public static object Options => new();
+            }
+            """);
+
+        string coreDirectory = Path.Combine(sourceRoot, "Oahu.Core");
+        Directory.CreateDirectory(coreDirectory);
+        string coreProject = Path.Combine(coreDirectory, "Oahu.Core.csproj");
+        File.WriteAllText(coreProject, ProjectFile("../Oahu.Foundation/Oahu.Foundation.csproj"));
+        File.WriteAllText(Path.Combine(coreDirectory, "ExtensionsVarious.cs"), """
+            namespace Oahu.Core.Ex;
+
+            public static class JsonExtensions
+            {
+                public static bool ValidateJson(string json) => json is not null;
+            }
+            """);
+        File.WriteAllText(Path.Combine(coreDirectory, "Serialization.cs"), """
+            using Oahu.Aux.Extensions;
+
+            namespace Oahu.Audible.Json;
+
+            public abstract class Serialization<T>
+            {
+                private static object Options { get; } = JsonExtensions.Options;
+            }
+            """);
+
+        return coreProject;
     }
 
     private static string ProjectFile(string projectReference)
