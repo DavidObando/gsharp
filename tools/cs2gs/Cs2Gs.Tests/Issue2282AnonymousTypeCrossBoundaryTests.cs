@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Text.RegularExpressions;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
@@ -86,10 +87,13 @@ namespace Demo
         // lambda's parameter type) all reference the SAME synthesized type —
         // proving the type is nameable across the boundary, not just usable
         // as a same-scope value.
-        Assert.Contains("AnonymousType0(table.Column", printed);
-        Assert.Contains("CreateTableBuilder[AnonymousType0]", printed);
-        Assert.Contains("(x AnonymousType0)", printed);
-        Assert.Contains("data class AnonymousType0(Id int32, Title string)", printed);
+        string name = Regex.Match(
+            printed,
+            @"data class (AnonymousType\d+_[0-9A-F]{16})\(").Groups[1].Value;
+        Assert.Contains($"{name}(table.Column", printed);
+        Assert.Contains($"CreateTableBuilder[{name}]", printed);
+        Assert.Contains($"(x {name})", printed);
+        Assert.Contains($"data class {name}(Id int32, Title string)", printed);
 
         // Named-member access resolves directly (no GS0159 "Cannot find
         // function Id" — the original bug's symptom of falling back to an

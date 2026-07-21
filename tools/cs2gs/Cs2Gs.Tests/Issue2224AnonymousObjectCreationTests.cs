@@ -26,7 +26,7 @@ namespace Cs2Gs.Tests;
 /// anonymous type is inferred as a generic type argument in one lambda and
 /// then spelled as another lambda's parameter type. #2282 therefore
 /// supersedes the <c>object { }</c> lowering with a synthesized,
-/// shape-deduplicated <c>data class</c> (<c>AnonymousType0(1)</c>), which
+/// shape-deduplicated <c>data class</c> (<c>AnonymousType1_hash(1)</c>), which
 /// is nameable at both the construction site and any type-position use, and
 /// still preserves member names and legality inside expression trees (named
 /// class construction is permitted there, unlike a tuple literal).
@@ -48,8 +48,9 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("return AnonymousType0(1)", printed);
-        Assert.Contains("data class AnonymousType0(A int32)", printed);
+    string name = AnonymousTypeName(printed);
+    Assert.Contains($"return {name}(1)", printed);
+    Assert.Contains($"data class {name}(A int32)", printed);
     }
 
     [Fact]
@@ -69,8 +70,9 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("AnonymousType0(1, \"two\")", printed);
-        Assert.Contains("data class AnonymousType0(A int32, B string)", printed);
+        string name = AnonymousTypeName(printed);
+        Assert.Contains($"{name}(1, \"two\")", printed);
+        Assert.Contains($"data class {name}(A int32, B string)", printed);
         Assert.Contains("pair.A", printed);
         Assert.Contains("pair.B", printed);
         Assert.DoesNotContain("Item1", printed);
@@ -101,7 +103,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("AnonymousType0(1, \"two\")", printed);
+        Assert.Contains($"{AnonymousTypeName(printed)}(1, \"two\")", printed);
         Assert.Contains("pair.A", printed);
         Assert.Contains("pair.B", printed);
         Assert.DoesNotContain("pair!!", printed);
@@ -133,8 +135,9 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("AnonymousType0(id, row.Id)", printed);
-        Assert.Contains("data class AnonymousType0(id int32, Id int32)", printed);
+        string name = AnonymousTypeName(printed);
+        Assert.Contains($"{name}(id, row.Id)", printed);
+        Assert.Contains($"data class {name}(id int32, Id int32)", printed);
     }
 
     [Fact]
@@ -162,12 +165,13 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("AnonymousType0(1, \"x\")", printed);
-        Assert.Contains("AnonymousType0(2, \"y\")", printed);
+        string name = AnonymousTypeName(printed);
+        Assert.Contains($"{name}(1, \"x\")", printed);
+        Assert.Contains($"{name}(2, \"y\")", printed);
 
         int declarationCount = 0;
         int index = 0;
-        while ((index = printed.IndexOf("data class AnonymousType0(", index, System.StringComparison.Ordinal)) >= 0)
+        while ((index = printed.IndexOf($"data class {name}(", index, System.StringComparison.Ordinal)) >= 0)
         {
             declarationCount++;
             index++;
@@ -175,6 +179,11 @@ namespace Demo
 
         Assert.Equal(1, declarationCount);
     }
+
+    private static string AnonymousTypeName(string printed) =>
+        System.Text.RegularExpressions.Regex.Match(
+            printed,
+            @"data class (AnonymousType\d+_[0-9A-F]{16})\(").Groups[1].Value;
 
     private static string TranslateUnit(string source)
     {

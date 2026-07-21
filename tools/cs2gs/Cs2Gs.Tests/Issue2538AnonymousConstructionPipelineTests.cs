@@ -5,6 +5,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
@@ -62,14 +63,20 @@ public sealed class Issue2538AnonymousConstructionPipelineTests
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
         string printed = GSharpPrinter.Print(unit);
+        MatchCollection names = Regex.Matches(
+            printed,
+            @"data class (AnonymousType\d+_[0-9A-F]{16})\(");
+        Assert.Equal(2, names.Count);
+        string envelopeType = names[0].Groups[1].Value;
+        string apiType = names[1].Groups[1].Value;
 
         Assert.Contains(
-            "convenience init() {\n        init(AnonymousType0(2538, \"anonymous\"))",
+            $"convenience init() {{\n        init({envelopeType}(2538, \"anonymous\"))",
             printed,
             StringComparison.Ordinal);
-        Assert.Contains("Echo(AnonymousType1(true, 2))", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("AnonymousType0{", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("AnonymousType1{", printed, StringComparison.Ordinal);
+        Assert.Contains($"Echo({apiType}(true, 2))", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(envelopeType + "{", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(apiType + "{", printed, StringComparison.Ordinal);
 
         RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
         Assert.True(

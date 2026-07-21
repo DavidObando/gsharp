@@ -5,7 +5,9 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
@@ -16,29 +18,14 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Regression tests for issue #2292: cs2gs's per-anonymous-shape data-class
-/// synthesis (issue #2282) reused a shape->name dictionary that lived on a
-/// FRESH <see cref="CSharpTypeMapper"/> created for every single document
-/// (<c>CSharpToGSharpTranslator.TranslateDocument</c>), so two DIFFERENT
-/// files sharing the same G# package (e.g. every migration in an EF
-/// <c>Migrations</c> folder — one file per migration, all in the same
-/// namespace) each started counting from <c>AnonymousType0</c>. A distinct
-/// shape in file B could therefore mint the exact synthetic name already used
-/// by an unrelated shape in file A, and the two <c>data class AnonymousType0</c>
-/// declarations collided (GS0102 "already declared") once both files were
-/// compiled together as the same package.
+/// Regression tests for issue #2292: anonymous shape declarations are
+/// deduplicated across every document in one G# package. Issue #2598 further
+/// makes each synthetic name a stable function of the complete ordered shape,
+/// so the same rules remain consistent across packages and projects.
 /// <para>
-/// Note: WITHIN a single file/method boundary the shape dictionary and
-/// counter were already correctly scoped to the whole document (one
-/// <see cref="CSharpTypeMapper"/> per <c>TranslateDocument</c> call covers
-/// every method of every type in that file) — the collision only manifests
-/// ACROSS files of the same package, which is what the corpus evidence in
-/// #2292 (multiple Oahu.Data migration files) actually hit. The fix threads
-/// one <see cref="AnonymousTypeRegistry"/> per resolved package name through
-/// every mapper the translator creates, keyed on
-/// <c>CSharpToGSharpTranslator.anonymousTypeRegistriesByPackage</c>, so the
-/// synthetic-name counter and the shape-&gt;type dictionary are shared by
-/// every file in the package, not just every method in a file.
+/// One <see cref="AnonymousTypeRegistry"/> per resolved package is threaded
+/// through every mapper the translator creates, so an identical shape is
+/// emitted once and reused by later documents.
 /// </para>
 /// </summary>
 public class Issue2292AnonymousTypePackageScopeTests
@@ -69,14 +56,13 @@ namespace Demo
     }
 }";
         (string printedA, string printedB) = TranslateTwoFiles("MigrationA.cs", SourceA, "MigrationB.cs", SourceB);
+        string nameA = AnonymousTypeNames(printedA).Single();
+        string nameB = AnonymousTypeNames(printedB).Single();
 
-        // Each file mints a DISTINCT synthetic name for its DISTINCT shape —
-        // no two files in the same package emit the same 'AnonymousTypeN' for
-        // different shapes.
-        Assert.Contains("data class AnonymousType0(Id int32, Name string)", printedA);
-        Assert.Contains("data class AnonymousType1(Count int32, Flag bool, Extra float64)", printedB);
-        Assert.DoesNotContain("AnonymousType1", printedA);
-        Assert.DoesNotContain("data class AnonymousType0(Count", printedB);
+        // Distinct ordered shapes get distinct stable names.
+        Assert.NotEqual(nameA, nameB);
+        Assert.Contains($"data class {nameA}(Id int32, Name string)", printedA);
+        Assert.Contains($"data class {nameB}(Count int32, Flag bool, Extra float64)", printedB);
 
         // The proof that matters: gsc must compile BOTH files together (as one
         // package) with no GS0102 "already declared" collision.
@@ -109,14 +95,15 @@ namespace Demo
     }
 }";
         (string printedA, string printedB) = TranslateTwoFiles("MigrationA.cs", SourceA, "MigrationB.cs", SourceB);
+        string name = AnonymousTypeNames(printedA).Single();
 
         // The FIRST file to need the shape declares it...
-        Assert.Contains("data class AnonymousType0(Id int32, Name string)", printedA);
+        Assert.Contains($"data class {name}(Id int32, Name string)", printedA);
 
         // ...and the SECOND file reuses that same synthesized type by name
         // rather than re-declaring its own copy (a re-declaration would ALSO
         // be a GS0102 collision, even for an identical shape).
-        Assert.Contains("AnonymousType0(2, \"y\")", printedB);
+        Assert.Contains($"{name}(2, \"y\")", printedB);
         Assert.DoesNotContain("data class AnonymousType", printedB);
 
         CompileFilesTogether(("MigrationA.gs", printedA), ("MigrationB.gs", printedB));
@@ -142,8 +129,10 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("data class AnonymousType0(Id int32, Name string)", printed);
-        Assert.Contains("data class AnonymousType1(Count int32, Flag bool)", printed);
+        string[] names = AnonymousTypeNames(printed);
+        Assert.Equal(2, names.Length);
+        Assert.Contains($"data class {names[0]}(Id int32, Name string)", printed);
+        Assert.Contains($"data class {names[1]}(Count int32, Flag bool)", printed);
 
         CompileFilesTogether(("Migration.gs", printed));
     }
@@ -208,9 +197,10 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("data class AnonymousType0(Id int32, Title string)", printed);
-        Assert.Contains("CreateTableBuilder[AnonymousType0]", printed);
-        Assert.Contains("(x AnonymousType0) -> x.Id", printed);
+        string name = AnonymousTypeNames(printed).Single();
+        Assert.Contains($"data class {name}(Id int32, Title string)", printed);
+        Assert.Contains($"CreateTableBuilder[{name}]", printed);
+        Assert.Contains($"(x {name}) -> x.Id", printed);
 
         // The real proof (not just round-trip parse): gsc must actually BIND
         // the generic CreateTable/PrimaryKey calls and the x.Id member access
@@ -238,6 +228,11 @@ namespace Demo
                 string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
         return printed;
     }
+
+    private static string[] AnonymousTypeNames(string printed) =>
+        Regex.Matches(printed, @"data class (AnonymousType\d+_[0-9A-F]{16})\(")
+            .Select(match => match.Groups[1].Value)
+            .ToArray();
 
     /// <summary>
     /// Translates two files loaded into the SAME in-memory C# project with
