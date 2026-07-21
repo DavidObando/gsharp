@@ -1562,7 +1562,7 @@ internal sealed partial class StatementBinder
             var result = ImmutableArray.CreateBuilder<BoundStatement>(identifiers.Count + 1);
             result.Add(new BoundExpressionStatement(null, call));
             result.AddRange(declarations);
-            statements = result.MoveToImmutable();
+            statements = result.ToImmutable();
             return true;
         }
 
