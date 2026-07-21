@@ -3164,6 +3164,37 @@ internal sealed class MemberLookup
         return TypeSymbol.FromClrType(closedMethod.ReturnType);
     }
 
+    /// <summary>Resolves an imported method parameter through a symbolic receiver.</summary>
+    /// <param name="targetType">The symbolic imported receiver type.</param>
+    /// <param name="closedMethod">The reflected method selected from the erased receiver.</param>
+    /// <param name="parameterIndex">The zero-based parameter index.</param>
+    /// <returns>The parameter type after symbolic receiver substitution.</returns>
+    internal static TypeSymbol GetClrMethodParameterTypeSymbol(
+        TypeSymbol targetType,
+        MethodInfo closedMethod,
+        int parameterIndex)
+    {
+        if (GetImportedTypeSymbol(targetType) is ImportedTypeSymbol imported
+            && TryGetSymbolicDeclaringContext(
+                imported,
+                closedMethod?.DeclaringType,
+                out var openDefinition,
+                out var declaringTypeArguments))
+        {
+            var openMethod = TryGetOpenMethodOnDeclaringType(openDefinition, closedMethod);
+            var openParameters = openMethod?.GetParameters();
+            if (openParameters != null && (uint)parameterIndex < (uint)openParameters.Length)
+            {
+                return MapOpenClrTypeToSymbolic(
+                    openParameters[parameterIndex].ParameterType,
+                    openDefinition,
+                    declaringTypeArguments);
+            }
+        }
+
+        return TypeSymbol.FromClrType(closedMethod.GetParameters()[parameterIndex].ParameterType);
+    }
+
     /// <summary>Finds the symbolic generic context for a reflected declaring type.</summary>
     /// <param name="imported">The symbolic imported receiver.</param>
     /// <param name="declaringType">The reflected member's declaring type.</param>

@@ -99,6 +99,38 @@ namespace Demo
     }
 
     [Fact]
+    public void ConcurrentDictionaryDeconstruction_TranslatesToCompilerSupportedForTupleIn()
+    {
+        string printed = TranslateUnit(@"
+using System;
+using System.Collections.Concurrent;
+
+namespace Demo
+{
+    public interface IValue
+    {
+        int Number { get; }
+    }
+
+    public sealed class C
+    {
+        public void M(ConcurrentDictionary<string, IValue> values)
+        {
+            foreach (var (key, value) in values)
+            {
+                Console.WriteLine(value.Number);
+            }
+        }
+    }
+}");
+
+        Assert.Contains("import System.Collections.Concurrent", printed);
+        Assert.Contains("for (key, value) in values {", printed);
+        Assert.Contains("value.Number", printed);
+        Assert.DoesNotContain("import System.Collections.Generic", printed);
+    }
+
+    [Fact]
     public void AwaitForEachTupleDeconstruction_KeepsTempPlusLetLowering()
     {
         // G# has no first-class `await for (a, b) in` header, so the async
