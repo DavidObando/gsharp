@@ -1796,12 +1796,48 @@ public sealed partial class CSharpToGSharpTranslator
                     // lowers to G#'s async-iteration form `await for x in seq`
                     // (spec AwaitForRangeStmt). Without it, iterating an
                     // `IAsyncEnumerable<T>` with a plain `for` is rejected (GS0116).
+                    string loopIdentifier = SanitizeIdentifier(forEach.Identifier.Text);
+                    BlockStatement loopBody = this.TranslateStatementAsBlock(forEach.Statement);
+                    Conversion elementConversion = this.context.SemanticModel
+                        .GetForEachStatementInfo(forEach)
+                        .ElementConversion;
+                    if (!forEach.Type.IsVar && !elementConversion.IsImplicit)
+                    {
+                        string itemIdentifier = $"__foreach{this.state.DeconCounter++}";
+                        ITypeSymbol targetSymbol = this.context.GetTypeInfo(forEach.Type).Type;
+                        GTypeReference targetType = targetSymbol != null
+                            ? this.typeMapper.Map(targetSymbol, this.context, forEach.Type.GetLocation())
+                            : new NamedTypeReference(forEach.Type.ToString());
+                        GExpression converted = targetSymbol is { IsReferenceType: true }
+                            ? new BinaryExpression(
+                                new IdentifierExpression(itemIdentifier),
+                                "as",
+                                new TypeExpression(targetType))
+                            : new ConversionExpression(targetType, new IdentifierExpression(itemIdentifier));
+                        if (targetSymbol is { IsReferenceType: true, NullableAnnotation: not NullableAnnotation.Annotated })
+                        {
+                            converted = new NonNullAssertionExpression(converted);
+                        }
+
+                        var statements = new List<GStatement>(loopBody.Statements.Count + 1)
+                        {
+                            new LocalDeclarationStatement(
+                                BindingKind.Let,
+                                loopIdentifier,
+                                targetType,
+                                converted),
+                        };
+                        statements.AddRange(loopBody.Statements);
+                        loopBody = new BlockStatement(statements);
+                        loopIdentifier = itemIdentifier;
+                    }
+
                     return new[]
                     {
                         (GStatement)new ForInStatement(
-                            SanitizeIdentifier(forEach.Identifier.Text),
+                            loopIdentifier,
                             this.TranslateReceiverWithNullForgiveness(forEach.Expression),
-                            this.TranslateStatementAsBlock(forEach.Statement),
+                            loopBody,
                             isAwait: !forEach.AwaitKeyword.IsKind(SyntaxKind.None)),
                     };
 
