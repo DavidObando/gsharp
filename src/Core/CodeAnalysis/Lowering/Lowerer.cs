@@ -697,9 +697,9 @@ public sealed class Lowerer : BoundTreeRewriter
         // `valueVariable` (Shape) — even though the runtime tolerates the
         // reference. Synthesize a symbolic `IAsyncEnumerator[Shape]` so
         // the BoundClrPropertyAccessExpression carries the user's `Shape`,
-        // mirroring the synchronous symbolic-open path. This symbolic
-        // recovery only applies to the interface fast path — the pattern
-        // fallback's `enumeratorClr` always carries a concrete CLR type.
+        // mirroring the synchronous symbolic-open path. Pattern-based
+        // wrappers can be erased too, so recover their open enumerator and
+        // Current shapes through the stream's symbolic arguments.
         TypeSymbol enumeratorType;
         TypeSymbol currentType;
         if (stream.Type is ImportedTypeSymbol streamImp
@@ -714,6 +714,26 @@ public sealed class Lowerer : BoundTreeRewriter
                 typeof(System.Collections.Generic.IAsyncEnumerator<>),
                 ImmutableArray.Create<TypeSymbol>(elementSym));
             currentType = elementSym;
+        }
+        else if (stream.Type is ImportedTypeSymbol patternImp
+            && patternImp.OpenDefinition != null
+            && !patternImp.TypeArguments.IsDefaultOrEmpty
+            && MemberLookup.TryResolveClrPatternAsyncEnumerator(
+                patternImp.OpenDefinition,
+                out var openGetAsyncEnumerator,
+                out _,
+                out var openCurrentMember))
+        {
+            enumeratorType = MemberLookup.MapOpenClrTypeToSymbolic(openGetAsyncEnumerator.ReturnType, patternImp);
+            var openCurrentType = openCurrentMember switch
+            {
+                System.Reflection.PropertyInfo property => property.PropertyType,
+                System.Reflection.FieldInfo field => field.FieldType,
+                _ => null,
+            };
+            currentType = openCurrentType == null
+                ? valueVariable.Type
+                : MemberLookup.MapOpenClrTypeToSymbolic(openCurrentType, patternImp);
         }
         else
         {
