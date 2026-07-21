@@ -148,8 +148,9 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
-    /// Enumerates every public instance method on <paramref name="clrType"/>
-    /// and its transitive implemented interfaces with the given <paramref name="name"/>.
+    /// Enumerates every public instance method on <paramref name="clrType"/>,
+    /// its base chain, and its transitive implemented interfaces with the given
+    /// <paramref name="name"/>.
     /// The overload-resolution-facing variant, used by call sites that need to
     /// pass a candidate set into <see cref="OverloadResolution.Resolve"/>.
     /// Hides base-method-with-same-signature shadowing the same way C# does
@@ -160,6 +161,18 @@ internal sealed class MemberLookup
     /// <returns>The candidate list with self-slot methods first.</returns>
     public static IReadOnlyList<MethodInfo> SafeGetMethodsIncludingSelfAndInterfaces(Type clrType, string name)
     {
+        static Type GetBaseTypeSafe(Type type)
+        {
+            try
+            {
+                return type.BaseType;
+            }
+            catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+            {
+                return null;
+            }
+        }
+
         if (clrType == null)
         {
             return Array.Empty<MethodInfo>();
@@ -186,6 +199,27 @@ internal sealed class MemberLookup
                 if (string.Equals(m.Name, n, StringComparison.Ordinal))
                 {
                     result.Add(m);
+                }
+            }
+
+            // Issue #2614: MetadataLoadContext can reject an aggregate
+            // GetMethods call when one derived signature has a missing
+            // dependency. Probe each declaration level independently so that
+            // usable methods on an otherwise loadable base are not hidden.
+            if (selfMethods.Length == 0)
+            {
+                for (var current = clrType; current != null; current = GetBaseTypeSafe(current))
+                {
+                    foreach (var m in ClrTypeUtilities.SafeGetMethods(
+                        current,
+                        BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                    {
+                        if (string.Equals(m.Name, n, StringComparison.Ordinal)
+                            && !IsMethodHiddenByExisting(result, m))
+                        {
+                            result.Add(m);
+                        }
+                    }
                 }
             }
 
