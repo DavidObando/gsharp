@@ -50,6 +50,7 @@ public sealed class Issue2661ExpressionTreeNullableTranslationTests
             """);
 
         Assert.Contains("b.PurchaseDate != nil", printed, StringComparison.Ordinal);
+        Assert.Contains(".Select((b Book) -> b.PurchaseDate.Value)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("b.PurchaseDate!!", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("b.Conversion!!", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("GS0473", printed, StringComparison.Ordinal);

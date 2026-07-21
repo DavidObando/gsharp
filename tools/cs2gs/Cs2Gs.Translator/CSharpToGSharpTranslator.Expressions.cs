@@ -439,14 +439,10 @@ public sealed partial class CSharpToGSharpTranslator
             // does not match against the `Ac4DsiV1?` `this` slot (GS0159). Keep the
             // declared-nullable receiver so the extension resolves.
             // A C# nullable *value* type (`T?` lowering to `System.Nullable<T>`)
-            // exposes `.Value` and `.HasValue`, but G# models a value-type `T?`
-            // directly (no `Nullable<T>` member surface) and relies on Kotlin-style
-            // smart-casts, so those members do not exist on the G# side. Rewrite
-            // them to the idiomatic G# equivalents (#914):
-            //   * `x.Value`    -> `x!!`      (assert non-null, matching C#'s throw-
-            //                                 if-null semantics; harmless once the
-            //                                 local is already smart-cast-narrowed).
-            //   * `x.HasValue` -> `x != nil` (a plain null test on the raw receiver).
+            // exposes `.Value` and `.HasValue`. Runtime lambdas use G#'s idiomatic
+            // `x!!` unwrap, but `!!` is forbidden in expression trees: retain
+            // `.Value` there so lowering produces the CLR Nullable<T>.Value
+            // property node. `HasValue` remains the plain `x != nil` null test.
             // Guard on the receiver's *declared* type being `System.Nullable<T>` so
             // a user type with a member literally named `Value`/`HasValue` is
             // unaffected. Nullable *reference* types (`string?`) have a non-
@@ -459,7 +455,7 @@ public sealed partial class CSharpToGSharpTranslator
                     case "Value":
                         GExpression nullableValue = this.TranslateExpression(member.Expression);
                         return this.IsWithinExpressionTreeLambda(member.Expression)
-                            ? nullableValue
+                            ? new MemberAccessExpression(nullableValue, "Value")
                             : new NonNullAssertionExpression(nullableValue);
                     case "HasValue":
                         // Parenthesize the null test so it composes correctly
