@@ -2263,9 +2263,10 @@ internal sealed partial class ExpressionBinder
                 return false;
             }
 
-            return StructuralProjectionPlanner.CanProject(
-                boundArguments[argIndex].Type,
-                TypeSymbol.FromClrType(clrParameterType));
+            var sourceType = boundArguments[argIndex].Type;
+            var targetType = TypeSymbol.FromClrType(clrParameterType);
+            return Conversion.ClassifyNonStructural(sourceType, targetType).IsImplicit
+                || StructuralProjectionPlanner.CanProject(sourceType, targetType);
         };
     }
 }

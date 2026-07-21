@@ -2296,12 +2296,12 @@ internal sealed partial class ExpressionBinder
                     return overloads.BindUserInstanceCall(receiver, defaultIfaceMethod, arguments, ce, argumentNames);
                 }
 
-                // Issue #527: fall back to a delegate/function-typed field on
+                // Issue #527: fall back to a delegate/function-typed member on
                 // the user struct/class. This is the same delegate-as-callable
                 // dispatch used for the imported-CLR path below; here the
                 // receiver's ClrType is null (the user type has not yet been
                 // emitted) so we have to handle the symbol-only shape too.
-                if (TryBindUserStructDelegateFieldInvocation(receiver, userClass, methodName, arguments, ce, out var userDelegateFieldCall))
+                if (TryBindUserStructDelegateMemberInvocation(receiver, userClass, methodName, arguments, ce, out var userDelegateFieldCall))
                 {
                     return userDelegateFieldCall;
                 }
@@ -2439,13 +2439,11 @@ internal sealed partial class ExpressionBinder
                 return overloads.BindUserInstanceCall(receiver, defaultIfaceMethodPriority, arguments, ce, argumentNames);
             }
 
-            // Issue #527: a G#-defined struct/class field whose type is a
+            // Issue #527: a G#-defined struct/class field or property whose type is a
             // function (or named delegate) is invokable through the same
             // call syntax as a bare function-typed variable. Lower to a load
-            // of the field value followed by an indirect call. Field lookup
-            // walks the inheritance chain (a class can inherit a delegate
-            // field from a base class).
-            if (TryBindUserStructDelegateFieldInvocation(receiver, userClassPriority, methodName, arguments, ce, out var userDelegateCall))
+            // of the member value followed by an indirect call.
+            if (TryBindUserStructDelegateMemberInvocation(receiver, userClassPriority, methodName, arguments, ce, out var userDelegateCall))
             {
                 return userDelegateCall;
             }

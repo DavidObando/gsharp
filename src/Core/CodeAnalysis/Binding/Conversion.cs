@@ -2120,6 +2120,12 @@ public sealed class Conversion
 
         for (var i = 0; i < invokeParamTypes.Length; i++)
         {
+            if (fn.ParameterTypes[i] is FunctionTypeSymbol nestedFunction
+                && IsFunctionToDelegateConvertible(nestedFunction, invokeParamTypes[i]))
+            {
+                continue;
+            }
+
             var fnParamClr = fn.ParameterTypes[i]?.ClrType;
             if (fnParamClr == null || !ClrTypeUtilities.IsAssignableByName(invokeParamTypes[i], fnParamClr))
             {

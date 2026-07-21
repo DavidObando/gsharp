@@ -259,6 +259,14 @@ public static class ClrTypeUtilities
             return true;
         }
 
+        if (target.IsGenericType
+            && source.IsGenericType
+            && AreSame(target.GetGenericTypeDefinition(), source.GetGenericTypeDefinition())
+            && GenericArgumentsAreAssignable(target, source))
+        {
+            return true;
+        }
+
         // Same-context fast path covers inheritance / interfaces.
         if (ReferenceEquals(target.Assembly, source.Assembly) || target.GetType() == source.GetType())
         {
@@ -953,6 +961,42 @@ public static class ClrTypeUtilities
         MemberCache<FieldInfo>.Cache.Clear();
         MemberCache<EventInfo>.Cache.Clear();
         MemberCache<ConstructorInfo>.Cache.Clear();
+    }
+
+    private static bool GenericArgumentsAreAssignable(Type target, Type source)
+    {
+        var parameters = target.GetGenericTypeDefinition().GetGenericArguments();
+        var targetArguments = target.GetGenericArguments();
+        var sourceArguments = source.GetGenericArguments();
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            if (AreSame(targetArguments[i], sourceArguments[i]))
+            {
+                continue;
+            }
+
+            if (targetArguments[i].IsValueType || sourceArguments[i].IsValueType)
+            {
+                return false;
+            }
+
+            var variance = parameters[i].GenericParameterAttributes & GenericParameterAttributes.VarianceMask;
+            if (variance == GenericParameterAttributes.Covariant
+                && IsAssignableByName(targetArguments[i], sourceArguments[i]))
+            {
+                continue;
+            }
+
+            if (variance == GenericParameterAttributes.Contravariant
+                && IsAssignableByName(sourceArguments[i], targetArguments[i]))
+            {
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
     }
 
     private static bool IsConstructedGenericWithTypeBuilderArgument(Type type)
