@@ -1271,7 +1271,9 @@ internal sealed partial class ExpressionBinder
 
         if (enclosing != null)
         {
-            var enclosingType = (enclosing.ReceiverType as StructSymbol) ?? (enclosing.StaticOwnerType as StructSymbol);
+            var enclosingType = (enclosing.ReceiverType as StructSymbol)
+                ?? (enclosing.StaticOwnerType as StructSymbol)
+                ?? (enclosing.LexicalEnclosingType as StructSymbol);
             if (enclosingType != null)
             {
                 var sharedMethods = TypeMemberModel.GetMethods(enclosingType, name, MemberQuery.Static(MemberKinds.Method));
@@ -1512,6 +1514,24 @@ internal sealed partial class ExpressionBinder
             }
 
             return ResolveMethodGroupInferenceSignature(arguments[sourceIndex], delegateParameterTypes, projectType);
+        };
+    }
+
+    internal static Func<int, bool> MakeMethodGroupArgumentCheck(
+        IReadOnlyList<BoundExpression> arguments,
+        int argumentOffset = 0)
+    {
+        if (arguments == null || !arguments.Any(OverloadResolution.IsUnresolvedMethodGroupArgument))
+        {
+            return null;
+        }
+
+        return argumentIndex =>
+        {
+            var sourceIndex = argumentIndex - argumentOffset;
+            return sourceIndex >= 0
+                && sourceIndex < arguments.Count
+                && OverloadResolution.IsUnresolvedMethodGroupArgument(arguments[sourceIndex]);
         };
     }
 

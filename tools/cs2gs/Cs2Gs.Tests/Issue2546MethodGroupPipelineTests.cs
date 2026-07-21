@@ -14,7 +14,7 @@ namespace Cs2Gs.Tests;
 public sealed class Issue2546MethodGroupPipelineTests
 {
     [Fact]
-    public async Task Pipeline_ViaSdk_LinqSourceMethodGroup_TranslatesAndCompiles()
+    public async Task Pipeline_ViaSdk_Cycle4MethodGroups_TranslateAndCompile()
     {
         string compiler = FindSiblingTool("Compiler", "gsc.dll");
         string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
@@ -43,9 +43,12 @@ public sealed class Issue2546MethodGroupPipelineTests
         string emitted = ReadAppOutput(outputRoot, result.RunId, app.AppId);
 
         Assert.Contains("records.Select(ToDictionary)", emitted, StringComparison.Ordinal);
+        Assert.Contains("selected.Where(byAsin", emitted, StringComparison.Ordinal);
+        Assert.Contains("sessions", emitted, StringComparison.Ordinal);
+        Assert.Contains(".Count)", emitted, StringComparison.Ordinal);
         Assert.True(
             app.Succeeded,
-            "Expected imported LINQ Select to accept the source method group. Stages: " +
+            "Expected the cycle-4 Oahu method-group call sites to compile. Stages: " +
                 string.Join("; ", app.Stages.Select(stage => stage.Stage + "=" + stage.Status)));
     }
 
@@ -73,11 +76,21 @@ public sealed class Issue2546MethodGroupPipelineTests
 
             public static class Repro
             {
-                public static Dictionary<string, string> ToDictionary<T>(T record) =>
-                    new() { ["value"] = "present" };
+                public static Dictionary<string, string> ToDictionary(Record record) =>
+                    new() { ["value"] = record.Value };
 
-                public static int Run(IEnumerable<Record> records) =>
-                    records.Select(ToDictionary).Single().Count;
+                public static int Run(IEnumerable<Record> records)
+                {
+                    var selected = new List<string> { "present", "missing" };
+                    var byAsin = new Dictionary<string, Record>
+                    {
+                        ["present"] = records.Single(),
+                    };
+                    var sessions = records.ToList();
+                    var rows = new List<IReadOnlyDictionary<string, object?>>(sessions.Count);
+                    System.Func<int> nested = () => records.Select(ToDictionary).Single().Count;
+                    return nested() + selected.Where(byAsin.ContainsKey).Count() + rows.Capacity;
+                }
             }
             """);
         return projectPath;

@@ -107,6 +107,104 @@ func main() int32 {
     }
 
     [Fact]
+    public void SourceMethodGroup_Select_InsideLambda_UsesLexicalOwnerAndRuns()
+    {
+        const string Source = @"
+package NestedDictionaryMethodGroup
+import System
+import System.Collections.Generic
+import System.Linq
+
+data class Record(Value string) {}
+
+class Repro {
+    shared {
+        func ToDictionary(record Record) Dictionary[string, string] {
+            var result = Dictionary[string, string]()
+            result.Add(""value"", record.Value)
+            return result
+        }
+
+        func Run(records IEnumerable[Record]) int32 {
+            var nested Func[int32] = () -> records.Select(ToDictionary).Single().Count
+            return nested()
+        }
+    }
+}
+
+func main() int32 {
+    var records = List[Record]()
+    records.Add(Record(""42""))
+    return Repro.Run(records)
+}
+";
+        Assert.Equal(1, CompileAndRun(Source, nameof(SourceMethodGroup_Select_InsideLambda_UsesLexicalOwnerAndRuns)));
+    }
+
+    [Fact]
+    public void InstanceMethodGroup_Where_RejectsIndexedOverloadAndRuns()
+    {
+        const string Source = @"
+package InstancePredicateMethodGroup
+import System.Collections.Generic
+import System.Linq
+
+func main() int32 {
+    var selected = List[string]()
+    selected.Add(""present"")
+    selected.Add(""missing"")
+    var byKey = Dictionary[string, int32]()
+    byKey.Add(""present"", 42)
+    return selected.Where(byKey.ContainsKey).Select((key string) -> byKey[key]).Single()
+}
+";
+        Assert.Equal(42, CompileAndRun(Source, nameof(InstanceMethodGroup_Where_RejectsIndexedOverloadAndRuns)));
+    }
+
+    [Fact]
+    public void ConstructedList_CapacityFromUserElementReadOnlyListCount_Runs()
+    {
+        const string Source = @"
+package UserElementCollectionCount
+import System.Collections.Generic
+
+data class Session(Name string) {}
+
+func Capacity(sessions IReadOnlyList[Session]) int32 {
+    var rows = List[string](sessions!!.Count)
+    return rows.Capacity
+}
+
+func main() int32 {
+    var sessions = List[Session]()
+    sessions.Add(Session(""one""))
+    return Capacity(sessions)
+}
+";
+        Assert.Equal(1, CompileAndRun(Source, nameof(ConstructedList_CapacityFromUserElementReadOnlyListCount_Runs)));
+    }
+
+    [Fact]
+    public void ErroneousReceiver_Count_DoesNotProduceMethodGroupDiagnostic()
+    {
+        const string Source = @"
+package ErrorRecovery
+import System.Collections.Generic
+
+func main() {
+    var rows = List[string](missing!!.Count)
+}
+";
+        using var peStream = new MemoryStream();
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(Source)));
+        var result = compilation.Emit(peStream);
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0125");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS0218");
+    }
+
+    [Fact]
     public void AmbiguousGenericSourceMethodGroup_DoesNotInferArbitraryResult()
     {
         const string Source = @"

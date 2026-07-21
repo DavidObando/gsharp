@@ -2554,7 +2554,8 @@ internal sealed partial class ExpressionBinder
                     supplementaryInterfaceCheck: supplementaryInterfaceCheck,
                     constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
                     structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
-                    methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution));
+                    methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
+                    methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
                 switch (resolution.Outcome)
                 {
                     case OverloadResolution.ResolutionOutcome.Resolved:
