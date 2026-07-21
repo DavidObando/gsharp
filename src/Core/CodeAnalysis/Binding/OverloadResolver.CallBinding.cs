@@ -45,6 +45,39 @@ internal sealed partial class OverloadResolver
         return false;
     }
 
+    private bool TryResolveImplicitInheritedTypeArguments(
+        TypeArgumentListSyntax typeArgumentList,
+        out Type[] clrTypeArguments,
+        out ImmutableArray<TypeSymbol> typeArgumentSymbols)
+    {
+        clrTypeArguments = null;
+        typeArgumentSymbols = default;
+        if (typeArgumentList == null)
+        {
+            return true;
+        }
+
+        clrTypeArguments = new Type[typeArgumentList.Arguments.Count];
+        var symbols = ImmutableArray.CreateBuilder<TypeSymbol>(typeArgumentList.Arguments.Count);
+        for (var i = 0; i < typeArgumentList.Arguments.Count; i++)
+        {
+            var symbol = bindTypeClause(typeArgumentList.Arguments[i]);
+            if (symbol == null)
+            {
+                return false;
+            }
+
+            symbols.Add(symbol);
+            var clrType = NullableLifting.GetEffectiveClrType(symbol);
+            clrTypeArguments[i] = clrType != null
+                ? binderCtx.References.MapClrTypeToReferences(clrType)
+                : binderCtx.References.GetCoreType("System.Object");
+        }
+
+        typeArgumentSymbols = symbols.MoveToImmutable();
+        return true;
+    }
+
     /// <summary>
     /// Issue #1159: returns the implicit-<c>this</c> parameter that an
     /// unqualified instance-member reference should bind against. For a direct
@@ -556,9 +589,17 @@ internal sealed partial class OverloadResolver
                 // inherited from a metadata base reached through one or more
                 // G#-defined base classes resolves — matching the qualified
                 // `this.Method(...)` path and G#-defined-base behavior.
+                if (!TryResolveImplicitInheritedTypeArguments(
+                    syntax.TypeArgumentList,
+                    out var inheritedClrTypeArgs,
+                    out var inheritedTypeArgSymbols))
+                {
+                    return new BoundErrorExpression(null);
+                }
+
                 var implicitBaseClr = ExpressionBinder.GetInheritedClrBaseType(implicitReceiverStruct) ?? typeof(object);
                 var implicitReceiverExpr = new BoundVariableExpression(null, effThis);
-                if (tryBindInheritedClrInstanceCall(implicitReceiverExpr, implicitBaseClr, syntax.Identifier.Text, boundArguments.ToImmutable(), syntax, out var implicitInheritedCall, null, default, argumentNames, allowProtectedInherited: true))
+                if (tryBindInheritedClrInstanceCall(implicitReceiverExpr, implicitBaseClr, syntax.Identifier.Text, boundArguments.ToImmutable(), syntax, out var implicitInheritedCall, inheritedClrTypeArgs, inheritedTypeArgSymbols, argumentNames, allowProtectedInherited: true))
                 {
                     return implicitInheritedCall;
                 }

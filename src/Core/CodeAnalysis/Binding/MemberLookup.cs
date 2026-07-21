@@ -402,7 +402,7 @@ internal sealed class MemberLookup
         // recovers the member-bearing user `Shape` symbol.
         if (type is ImportedTypeSymbol importedSym
             && importedSym.OpenDefinition != null
-            && importedSym.HasSubstitutableTypeArgument)
+            && !importedSym.TypeArguments.IsDefaultOrEmpty)
         {
             if (importedSym.OpenDefinition.FullName == "System.Collections.Generic.IAsyncEnumerable`1"
                 && importedSym.TypeArguments.Length == 1)
@@ -423,6 +423,12 @@ internal sealed class MemberLookup
                     elementType = MapOpenClrTypeToSymbolic(iface.GetGenericArguments()[0], importedSym);
                     return true;
                 }
+            }
+
+            if (TryResolveClrPatternAsyncEnumerator(importedSym.OpenDefinition, out _, out _, out var openCurrentMember))
+            {
+                elementType = MapOpenClrTypeToSymbolic(GetClrMemberValueType(openCurrentMember), importedSym);
+                return true;
             }
         }
 
@@ -1160,15 +1166,39 @@ internal sealed class MemberLookup
             return null;
         }
 
+        if (openReturn.IsGenericType && !openReturn.IsGenericTypeDefinition)
+        {
+            var openReturnDefinition = openReturn.GetGenericTypeDefinition();
+            var fullName = openReturnDefinition.FullName;
+            if (fullName is "System.Threading.Tasks.Task`1"
+                or "System.Threading.Tasks.ValueTask`1"
+                or "System.Collections.Generic.IAsyncEnumerable`1")
+            {
+                var openArguments = openReturn.GetGenericArguments();
+                var projectedArguments = ImmutableArray.CreateBuilder<TypeSymbol>(openArguments.Length);
+                foreach (var argument in openArguments)
+                {
+                    projectedArguments.Add(MapOpenClrTypeToSymbolic(
+                        argument,
+                        receiverOpenDef,
+                        receiverTypeArgs,
+                        openMethod,
+                        symbolicMethodTypeArgs));
+                }
+
+                var symbolicArguments = projectedArguments.MoveToImmutable();
+                var erasedObject = ResolveErasedObjectInContext(openReturnDefinition);
+                var closedReturn = TryBuildErasedClosedGeneric(
+                    openReturnDefinition,
+                    openReturnDefinition.GetGenericArguments(),
+                    symbolicArguments,
+                    erasedObject) ?? openReturn;
+                return ImportedTypeSymbol.GetConstructed(closedReturn, openReturnDefinition, symbolicArguments);
+            }
+        }
+
         var mapped = MapOpenClrTypeToSymbolic(openReturn, receiverOpenDef, receiverTypeArgs, openMethod, symbolicMethodTypeArgs);
 
-        // Issue #833 surfaces the override when the projection still contains an
-        // in-scope type parameter. Issue #903 extends this to same-compilation
-        // user element types: when the receiver is e.g. `List[Check]` and
-        // `Check` is a struct/class still being compiled, the closed CLR method
-        // erased `TSource` to `object`, so a generic return like `Single() →
-        // TSource` would otherwise surface as `object` and lose the `Check`
-        // identity (breaking `net.Id`). The symbolic projection recovers it.
         return TypeSymbol.RequiresSymbolicProjection(mapped)
             ? mapped
             : null;
