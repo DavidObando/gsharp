@@ -143,8 +143,9 @@ internal sealed partial class ExpressionBinder
     /// <summary>
     /// Binds a fully-qualified imported-type constructor written in expression
     /// position, e.g. <c>System.Text.StringBuilder()</c> or
-    /// <c>System.Collections.Generic.List[int]()</c>. Such an expression parses
-    /// as an accessor chain whose terminal segment is the constructor call, so
+    /// <c>System.Collections.Generic.List[int]()</c>, including an object
+    /// initializer suffix. Such an expression parses as an accessor chain whose
+    /// terminal segment is the constructor call (or its initializer wrapper), so
     /// it never reaches <see cref="TryBindClrConstructorCall"/> (which only sees
     /// simple-name calls). This walks the dotted name, resolves the closed CLR
     /// type via the active references/imports, and reuses the shared
@@ -164,10 +165,12 @@ internal sealed partial class ExpressionBinder
 
         // Flatten the accessor chain into the leading namespace/type segments
         // and the terminal constructor call. Anything that isn't a pure
-        // dotted-name chain ending in a call is not a qualified constructor.
+        // dotted-name chain ending in a call (optionally wrapped by an object
+        // initializer) is not a qualified constructor.
         var segments = new List<string>();
         ExpressionSyntax current = syntax;
         CallExpressionSyntax terminalCall = null;
+        ObjectCreationExpressionSyntax terminalObjectCreation = null;
         while (true)
         {
             if (current is AccessorExpressionSyntax accessor)
@@ -185,6 +188,13 @@ internal sealed partial class ExpressionBinder
             if (current is CallExpressionSyntax call)
             {
                 terminalCall = call;
+                break;
+            }
+
+            if (current is ObjectCreationExpressionSyntax { Target: CallExpressionSyntax objectCall } objectCreation)
+            {
+                terminalCall = objectCall;
+                terminalObjectCreation = objectCreation;
                 break;
             }
 
@@ -206,15 +216,21 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var bound = TryBindClrConstructorFromType(
+        var handled = TryBindClrConstructorFromType(
             clrType,
             terminalCall,
             out result,
             out var noApplicableOverload,
             openGenericDef,
-            symbolicArgs);
-        return bound || FinishClrConstructorBindingFailure(
-            terminalCall, typeSimpleName, noApplicableOverload, ref result);
+            symbolicArgs)
+            || FinishClrConstructorBindingFailure(
+                terminalCall, typeSimpleName, noApplicableOverload, ref result);
+        if (handled && terminalObjectCreation != null)
+        {
+            result = BindObjectInitializerSuffix(terminalObjectCreation, result);
+        }
+
+        return handled;
     }
 
     /// <summary>
