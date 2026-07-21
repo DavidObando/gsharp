@@ -83,6 +83,7 @@ internal sealed partial class ExpressionBinder
         // own compilation's source type for a static event/field compound
         // assignment, mirroring the BindAccessorExpression read-path bug.
         if (accessor.LeftPart is NameExpressionSyntax staticLeftName
+            && EventReceiverNameCanBindAsType(staticLeftName, eventNameSyntax)
             && scope.TryLookupTypeAlias(staticLeftName.IdentifierToken.Text, out var staticTypeAlias)
             && staticTypeAlias is StructSymbol staticStruct)
         {
@@ -139,6 +140,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
         else if (accessor.LeftPart is NameExpressionSyntax leftName
+            && EventReceiverNameCanBindAsType(leftName, eventNameSyntax)
             && scope.TryLookupImportedClass(leftName.IdentifierToken.Text, leftName, out var importedClass))
         {
             receiverClrType = importedClass.ClassType;
@@ -387,6 +389,29 @@ internal sealed partial class ExpressionBinder
         }
 
         return new BoundClrEventSubscriptionExpression(null, boundReceiver, eventInfo, convertedHandler, isAdd);
+    }
+
+    private bool EventReceiverNameCanBindAsType(
+        NameExpressionSyntax receiver,
+        ExpressionSyntax rightPart)
+    {
+        string name = receiver.IdentifierToken.Text;
+        if (scope.TryLookupSymbol(name) is not VariableSymbol)
+        {
+            return true;
+        }
+
+        return TryResolveColorColorType(
+                name,
+                receiver,
+                out var importedType,
+                out var sourceType,
+                out var enumType)
+            && RightPartLooksLikeStaticMember(
+                importedType,
+                sourceType,
+                enumType,
+                rightPart);
     }
 
     /// <summary>
