@@ -532,7 +532,11 @@ public sealed class Conversion
                 return Conversion.None;
             }
 
-            if (from == toNullable.UnderlyingType)
+            // Issue #1283 cycle 5: imports in separate source files can mint
+            // distinct symbols for the same referenced CLR type. Compare the
+            // bare source with the nullable underlying through the ordinary
+            // identity classifier instead of reference equality.
+            if (ClassifyNonStructural(from, toNullable.UnderlyingType).IsIdentity)
             {
                 return Conversion.Implicit;
             }

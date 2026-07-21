@@ -22,6 +22,68 @@ namespace GSharp.Compiler.Tests.Emit;
 public class Issue1283ImplicitConversionEmitTests
 {
     [Fact]
+    public void ExactOahuCliTui_StyleNullableAndSemanticColorSites_CompileWithoutGS0155()
+    {
+        var semanticColor = """
+            package Oahu.Cli.Tui.Tokens
+            import Spectre.Console
+
+            data struct SemanticColor(Value Color) {
+                func operator implicit(c SemanticColor) Color {
+                    return c.Value
+                }
+                func operator implicit(c SemanticColor) Style {
+                    return Style(c.Value)
+                }
+            }
+            """;
+        var sites = """
+            package Oahu.Cli.Tui.Widgets
+            import Spectre.Console
+            import Oahu.Cli.Tui.Tokens
+
+            class ConversionSites {
+                var fill Style?
+
+                func TakeNullable(fill Style?) {}
+                func TakeStyle(fill Style) {}
+
+                func ReturnNullable(fill Style) Style? {
+                    return fill
+                }
+
+                func PreserveNullable(fill Style?) Style? {
+                    let copy Style? = fill
+                    this.fill = fill
+                    this.TakeNullable(fill)
+                    return copy
+                }
+
+                func ReturnStyle(color SemanticColor) Style {
+                    return color
+                }
+
+                func Apply(fill Style, color SemanticColor) {
+                    let nullable Style? = fill
+                    this.fill = fill
+                    this.TakeNullable(fill)
+                    let style Style = color
+                    this.TakeStyle(color)
+                }
+            }
+            """;
+
+        var spectrePath = typeof(Spectre.Console.Style).Assembly.Location;
+        CompileAndVerify(
+            new[] { semanticColor, sites },
+            new[]
+            {
+                spectrePath,
+                Path.Combine(Path.GetDirectoryName(spectrePath)!, "Spectre.Console.Ansi.dll"),
+            });
+    }
+
+    [Fact]
     public void InBodyImplicit_AppliedAtEveryTargetTypedPosition_EmitsAndRuns()
     {
         var source = """
@@ -111,7 +173,7 @@ public class Issue1283ImplicitConversionEmitTests
 
     private static string CompileAndRun(string source)
     {
-        var tempDir = Directory.CreateTempSubdirectory("gs_issue1283_emit_").FullName;
+        var tempDir = CreateTestDirectory();
         try
         {
             var srcPath = Path.Combine(tempDir, "test.gs");
@@ -181,5 +243,68 @@ public class Issue1283ImplicitConversionEmitTests
         {
             try { Directory.Delete(tempDir, recursive: true); } catch { }
         }
+    }
+
+    private static void CompileAndVerify(string[] sources, string[] references)
+    {
+        var workDir = CreateTestDirectory();
+        try
+        {
+            var outPath = Path.Combine(workDir, "test.dll");
+            var args = new System.Collections.Generic.List<string>
+            {
+                "/out:" + outPath,
+                "/target:library",
+                "/targetframework:net10.0",
+                "/nowarn:GS9100",
+            };
+
+            foreach (var reference in references)
+            {
+                args.Add("/reference:" + reference);
+            }
+
+            for (var i = 0; i < sources.Length; i++)
+            {
+                var sourcePath = Path.Combine(workDir, $"source{i}.gs");
+                File.WriteAllText(sourcePath, sources[i]);
+                args.Add(sourcePath);
+            }
+
+            using var compileOut = new StringWriter();
+            using var compileErr = new StringWriter();
+            var prevOut = Console.Out;
+            var prevErr = Console.Error;
+            Console.SetOut(compileOut);
+            Console.SetError(compileErr);
+            int exitCode;
+            try
+            {
+                exitCode = Program.Main(args.ToArray());
+            }
+            finally
+            {
+                Console.SetOut(prevOut);
+                Console.SetError(prevErr);
+            }
+
+            var diagnostics = compileOut.ToString() + compileErr;
+            Assert.True(exitCode == 0, diagnostics);
+            Assert.DoesNotContain("GS0155", diagnostics, StringComparison.Ordinal);
+            IlVerifier.Verify(outPath, references);
+        }
+        finally
+        {
+            try { Directory.Delete(workDir, recursive: true); } catch { }
+        }
+    }
+
+    private static string CreateTestDirectory()
+    {
+        var root = Path.Combine(Environment.CurrentDirectory, "TestArtifacts");
+        Directory.CreateDirectory(root);
+        var path = Path.Combine(root, "gs_issue1283_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(path);
+        return path;
     }
 }
