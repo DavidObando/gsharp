@@ -955,8 +955,9 @@ internal sealed class ConversionClassifier
                     }
                     else if (substituted != null
                         && argument.Type != targetType
-                        && argument is not BoundFunctionLiteralExpression
-                        && !OverloadResolution.IsUnresolvedMethodGroupArgument(argument))
+                        && (!(argument is BoundFunctionLiteralExpression
+                                || OverloadResolution.IsUnresolvedMethodGroupArgument(argument))
+                            || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(targetType, out _)))
                     {
                         // Issue #2391: overload resolution necessarily sees the
                         // receiver's erased CLR signature, but conversion must
