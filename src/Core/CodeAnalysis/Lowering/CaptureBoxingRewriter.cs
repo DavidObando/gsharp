@@ -868,6 +868,31 @@ internal static class CaptureBoxingRewriter
         }
 
         /// <inheritdoc/>
+        protected override BoundStatement RewriteAwaitForRangeStatement(BoundAwaitForRangeStatement node)
+        {
+            var stream = this.RewriteExpression(node.Stream);
+            var body = this.RewriteStatement(node.Body);
+            if (this.boxInfo.TryGetValue(node.ValueVariable, out var bi))
+            {
+                // Lambda bodies can reach boxing before await-for lowering.
+                body = PrependSeedStatements(body, this.BuildBoxSeedStatements(bi));
+            }
+
+            if (ReferenceEquals(stream, node.Stream) && ReferenceEquals(body, node.Body))
+            {
+                return node;
+            }
+
+            return new BoundAwaitForRangeStatement(
+                node.Syntax,
+                node.ValueVariable,
+                stream,
+                body,
+                node.BreakLabel,
+                node.ContinueLabel);
+        }
+
+        /// <inheritdoc/>
         protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
         {
             if (this.boxInfo.TryGetValue(node.Variable, out var bi) && bi.Original == node.Variable)
