@@ -6,7 +6,9 @@ using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using GSharp.Core.CodeAnalysis;
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
@@ -98,6 +100,66 @@ class C {
 ";
         var diagnostics = EmitDiagnostics(Source);
         Assert.Contains(diagnostics, d => d.Id == "GS0129");
+    }
+
+    [Fact]
+    public void NullabilityAnnotatedNullableInterface_UsesUnderlyingConversion()
+    {
+        var contract = new InterfaceSymbol(
+            "ILogger",
+            Accessibility.Public,
+            declaration: null,
+            packageName: "Issue2540");
+        var implementation = new StructSymbol(
+            "NullLogger",
+            ImmutableArray<FieldSymbol>.Empty,
+            Accessibility.Public,
+            declaration: null,
+            packageName: "Issue2540",
+            isData: false,
+            isInline: false,
+            isClass: true);
+        implementation.SetInterfaces(ImmutableArray.Create(contract));
+        var annotatedContract = new NullabilityAnnotatedTypeSymbol(
+            contract,
+            ImmutableArray.Create<byte>(1, 1));
+
+        var op = BoundBinaryOperator.Bind(
+            SyntaxKind.QuestionQuestionToken,
+            NullableTypeSymbol.Get(annotatedContract),
+            implementation);
+
+        Assert.NotNull(op);
+        Assert.Same(annotatedContract, op.Type);
+    }
+
+    [Fact]
+    public void NullabilityAnnotatedNullableInterface_PreservesUnrelatedNegative()
+    {
+        var contract = new InterfaceSymbol(
+            "ILogger",
+            Accessibility.Public,
+            declaration: null,
+            packageName: "Issue2540");
+        var other = new StructSymbol(
+            "Other",
+            ImmutableArray<FieldSymbol>.Empty,
+            Accessibility.Public,
+            declaration: null,
+            packageName: "Issue2540",
+            isData: false,
+            isInline: false,
+            isClass: true);
+        var annotatedContract = new NullabilityAnnotatedTypeSymbol(
+            contract,
+            ImmutableArray.Create<byte>(1, 1));
+
+        var op = BoundBinaryOperator.Bind(
+            SyntaxKind.QuestionQuestionToken,
+            NullableTypeSymbol.Get(annotatedContract),
+            other);
+
+        Assert.Null(op);
     }
 
     [Fact]

@@ -43,6 +43,7 @@ public sealed class Issue2540ImportedGenericCoalescePipelineTests
             </Project>
             """);
         File.WriteAllText(Path.Combine(projectDir, "Service.cs"), """
+            using System.Collections.ObjectModel;
             using Microsoft.Extensions.Logging;
             using Microsoft.Extensions.Logging.Abstractions;
 
@@ -54,8 +55,16 @@ public sealed class Issue2540ImportedGenericCoalescePipelineTests
 
                 public Service(ILogger<Service>? logger = null)
                 {
-                    this.logger = logger ?? NullLogger<Service>.Instance;
+                    this.logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Service>.Instance;
                 }
+            }
+
+            public sealed class Book { }
+
+            public static class Selection
+            {
+                public static Book Pick(Book? sel, ObservableCollection<Book> Books)
+                    => sel ?? Books[0];
             }
             """);
         RunDotnetBuild(projectPath);
@@ -75,6 +84,7 @@ public sealed class Issue2540ImportedGenericCoalescePipelineTests
         string emitted = ReadAppOutput(outputRoot, result.RunId, app.AppId);
 
         Assert.Contains("logger ?? NullLogger[Service].Instance", emitted, StringComparison.Ordinal);
+        Assert.Contains("sel ?? Books[0]", emitted, StringComparison.Ordinal);
         Assert.True(
             app.Succeeded,
             "Expected imported generic logger coalescing to compile via gsc. Stages: " +

@@ -439,9 +439,22 @@ public sealed partial class CSharpToGSharpTranslator
             bool receiverIsAnonymousType =
                 this.context.GetTypeInfo(member.Expression).Type is { IsAnonymousType: true };
 
-            GExpression target = this.MemberBindsToNullableThisExtension(member) || receiverIsAnonymousType
-                ? this.TranslateExpression(member.Expression)
-                : this.TranslateReceiverWithNullForgiveness(member.Expression);
+            GExpression target;
+            if (this.context.GetSymbolInfo(member.Expression).Symbol is INamedTypeSymbol
+                { IsGenericType: true } receiverNamedType)
+            {
+                // A qualified generic type is a MemberAccessExpressionSyntax;
+                // translate its bound type so its type arguments are retained.
+                target = new TypeExpression(
+                    this.typeMapper.Map(receiverNamedType, this.context, member.Expression.GetLocation()));
+            }
+            else
+            {
+                target = this.MemberBindsToNullableThisExtension(member) || receiverIsAnonymousType
+                    ? this.TranslateExpression(member.Expression)
+                    : this.TranslateReceiverWithNullForgiveness(member.Expression);
+            }
+
             string memberName = member.Name.Identifier.Text;
 
             // Issue #1905: C# pointer member access (`p->X`) and plain member
