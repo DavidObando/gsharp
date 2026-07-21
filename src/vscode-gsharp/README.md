@@ -29,7 +29,6 @@ Rich language support for the [G# programming language](https://github.com/David
 | Setting | Default | Description |
 | --- | --- | --- |
 | `gsharp.server.path` | `""` | Path to the GSharp Language Server executable |
-| `gsharp.server.startTimeout` | `30000` | Timeout in ms for the language server to start |
 | `gsharp.server.waitForDebugger` | `false` | Wait for a debugger to attach to the language server |
 | `gsharp.trace.server` | `"off"` | Trace LSP communication (`off`, `messages`, `verbose`) |
 | `gsharp.formatting.indentSize` | `4` | Spaces per indentation level |
@@ -39,6 +38,9 @@ Rich language support for the [G# programming language](https://github.com/David
 | `gsharp.codeLens.enableReferences` | `true` | Show reference counts |
 | `gsharp.inlayHints.enableParameterNames` | `true` | Show parameter name hints |
 | `gsharp.inlayHints.enableTypeHints` | `true` | Show inferred type hints |
+| `gsharp.coldStartCache.enable` | `true` | Persist language-service project metadata |
+
+Language feature settings take effect after running **GSharp: Restart Language Server**.
 
 ## Commands
 

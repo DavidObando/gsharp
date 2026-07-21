@@ -4,7 +4,6 @@
 
 using System.IO;
 using System.Linq;
-using System.Text.Json;
 using System.Threading.Tasks;
 using GSharp.LanguageServer.Protocol;
 using GSharp.LanguageServer.Server;
@@ -140,6 +139,29 @@ public class LspServerFormattingTests
         }
     }
 
+    [Fact]
+    public async Task InitializeAsync_FormattingSetting_TakesPrecedenceOverEditorWideOptions()
+    {
+        var (server, uri, gsPath) = await OpenDocumentAsync(
+            "func foo() {\nvar x = 1\n}\n",
+            indentSize: 4,
+            useTabs: false);
+        try
+        {
+            var edits = await server.FormattingAsync(new DocumentFormattingParams
+            {
+                TextDocument = new TextDocumentIdentifier { Uri = uri },
+                Options = new FormattingOptions { TabSize = 2, InsertSpaces = true },
+            });
+
+            Assert.Contains("    var x = 1", Assert.Single(edits).NewText);
+        }
+        finally
+        {
+            Directory.Delete(Path.GetDirectoryName(Path.GetDirectoryName(gsPath))!, recursive: true);
+        }
+    }
+
     private static async Task<(LspServer Server, DocumentUri Uri, string GsPath)> OpenDocumentAsync(
         string text, int? indentSize = null, bool? useTabs = null)
     {
@@ -160,13 +182,14 @@ public class LspServerFormattingTests
 
         if (indentSize.HasValue || useTabs.HasValue)
         {
-            var initOptionsJson = JsonSerializer.Serialize(new
+            await server.InitializeAsync(new InitializeParams
             {
-                formattingIndentSize = indentSize ?? 2,
-                formattingUseTabs = useTabs ?? false,
+                InitializationOptions = new LanguageServerInitializationOptions
+                {
+                    FormattingIndentSize = indentSize ?? 2,
+                    FormattingUseTabs = useTabs ?? false,
+                },
             });
-            using var doc = JsonDocument.Parse(initOptionsJson);
-            await server.InitializeAsync(new InitializeParams { InitializationOptions = doc.RootElement.Clone() });
         }
 
         var uri = DocumentUri.FromFileSystemPath(gsPath);

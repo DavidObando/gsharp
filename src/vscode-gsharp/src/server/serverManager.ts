@@ -169,7 +169,7 @@ export class ServerManager {
       // gsharp.coldStartCache.enable setting (with the C# Dev Kit fallback,
       // resolved in getServerOptions) onto it so the toggle takes effect on the
       // next server start.
-      if (!options.coldStartCacheEnabled) {
+      if (!options.initializationOptions.coldStartCache) {
         env.GSHARP_DISABLE_COLD_START_CACHE = '1';
       }
 
@@ -185,6 +185,8 @@ export class ServerManager {
 
       const traceChannel = vscode.window.createOutputChannel('GSharp LSP Trace');
       this.context.subscriptions.push(traceChannel);
+      // vscode-languageclient reads gsharp.trace.server using this client's id and writes
+      // protocol traces to traceOutputChannel; no parallel extension setting bridge is needed.
 
       // Watch .gs, .gsproj, and .resx files so the server's workspace model
       // (owning-project lookup, symbol/diagnostic caches) stays in sync with
@@ -200,7 +202,7 @@ export class ServerManager {
         documentSelector: [{ scheme: 'file', language: 'gsharp' }],
         traceOutputChannel: traceChannel,
         diagnosticPullOptions: {
-          onChange: true,
+          onChange: options.initializationOptions.diagnosticsOnType,
           onSave: true,
         },
         synchronize: {
@@ -217,14 +219,7 @@ export class ServerManager {
           error: () => ({ action: ErrorAction.Continue, handled: true }),
           closed: () => ({ action: CloseAction.DoNotRestart, handled: true }),
         },
-        initializationOptions: {
-          formattingIndentSize: vscode.workspace
-            .getConfiguration('gsharp')
-            .get<number>('formatting.indentSize', 4),
-          formattingUseTabs: vscode.workspace
-            .getConfiguration('gsharp')
-            .get<boolean>('formatting.useTabs', false),
-        }
+        initializationOptions: options.initializationOptions,
       };
 
       client = new GSharpLanguageClient('gsharp', 'GSharp Language Server', serverOptions, clientOptions);

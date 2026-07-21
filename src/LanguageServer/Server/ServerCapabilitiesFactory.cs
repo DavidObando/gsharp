@@ -12,8 +12,9 @@ namespace GSharp.LanguageServer.Server;
 /// </summary>
 public static class ServerCapabilitiesFactory
 {
-    public static ServerCapabilities Create()
+    public static ServerCapabilities Create(LanguageServerInitializationOptions options = null)
     {
+        options ??= new LanguageServerInitializationOptions();
         return new ServerCapabilities
         {
             TextDocumentSync = new TextDocumentSyncOptions
@@ -36,7 +37,7 @@ public static class ServerCapabilitiesFactory
             LinkedEditingRangeProvider = true,
             CompletionProvider = new CompletionOptions
             {
-                TriggerCharacters = new[] { "." },
+                TriggerCharacters = options.CompletionTriggerOnDot ? new[] { "." } : System.Array.Empty<string>(),
                 ResolveProvider = false,
             },
             SignatureHelpProvider = new SignatureHelpOptions
@@ -47,9 +48,11 @@ public static class ServerCapabilitiesFactory
             RenameProvider = new RenameOptions { PrepareProvider = true },
             CodeActionProvider = new CodeActionOptions
             {
-                CodeActionKinds = new[] { CodeActionKind.RefactorRewrite },
+                CodeActionKinds = new[] { CodeActionKind.QuickFix, CodeActionKind.RefactorRewrite },
             },
-            CodeLensProvider = new CodeLensOptions { ResolveProvider = false },
+            CodeLensProvider = options.ReferenceCodeLens
+                ? new CodeLensOptions { ResolveProvider = false }
+                : null,
 
             // Range formatting and on-type formatting are intentionally not advertised (see
             // issue #1660): FormattingEngine only produces a correct whole-document result, and
@@ -62,7 +65,9 @@ public static class ServerCapabilitiesFactory
                 Full = new SemanticTokensServerFull { Delta = false },
                 Range = true,
             },
-            InlayHintProvider = new InlayHintOptions { ResolveProvider = false },
+            InlayHintProvider = options.ParameterNameInlayHints || options.TypeInlayHints
+                ? new InlayHintOptions { ResolveProvider = false }
+                : null,
             DiagnosticProvider = new DiagnosticOptions
             {
                 Identifier = Constants.LanguageId,

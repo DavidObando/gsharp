@@ -27,6 +27,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\VsGsharp.CodeLens\VsGsharp.CodeLens.csproj"
+                      ReferenceOutputAssembly="false">
+      <IncludeOutputGroupsInVSIX>BuiltProjectOutputGroup</IncludeOutputGroupsInVSIX>
+    </ProjectReference>
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Include="source.extension.vsixmanifest">
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>

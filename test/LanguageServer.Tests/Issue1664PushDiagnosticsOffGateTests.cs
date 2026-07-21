@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -20,8 +21,8 @@ namespace GSharp.LanguageServer.Tests;
 /// twice (once in <c>UpdateDocument</c>, once again in the old push-publish path) and (2) run the
 /// full binding pass + <c>DocumentationValidator</c> inline, under the single write
 /// <c>gate</c> every other request must acquire — freezing the whole server for the duration of
-/// a full project bind on every didSave. These tests lock in the fix: the parse result is reused
-/// (no second parse), the didSave bind runs off the gate on the thread pool, a newer edit
+/// a full project bind on every synchronization event. These tests lock in the fix: the parse
+/// result is reused (no second parse), the full bind runs off the gate on the thread pool, a newer edit
 /// supersedes (and its publish is dropped for) any still-running older bind, and push clients
 /// still receive correct, full diagnostics once the bind completes.
 ///
@@ -49,11 +50,6 @@ public class Issue1664PushDiagnosticsOffGateTests
         server.TestOnParseResult = (_, result) => parsedTree = result.Content.SyntaxTree;
         server.TestOnBindResult = (_, result) => boundTree = result.Content.SyntaxTree;
 
-        await server.DidOpenAsync(new DidOpenTextDocumentParams
-        {
-            TextDocument = new TextDocumentItem { Uri = uri, Text = BindingErrorSource },
-        });
-
         await server.DidSaveAsync(new DidSaveTextDocumentParams
         {
             TextDocument = new TextDocumentIdentifier { Uri = uri },
@@ -67,7 +63,7 @@ public class Issue1664PushDiagnosticsOffGateTests
     }
 
     [Fact]
-    public async Task DidSave_PushMode_PublishesFullBindingDiagnostics()
+    public async Task OpenChangeAndSave_PushMode_PublishFullBindingDiagnostics()
     {
         var server = new LspServer(new DocumentContentService(), new WorkspaceState());
         var uri = DocumentUri.From("file:///offgate-correctness.gs");
@@ -79,19 +75,26 @@ public class Issue1664PushDiagnosticsOffGateTests
         {
             TextDocument = new TextDocumentItem { Uri = uri, Text = BindingErrorSource },
         });
+        await WaitForAsync(() => HasBindingError(published));
 
-        // didOpen's push publish is parse-only (skipBinding:true) and must not include the
-        // binding-level "not all code paths return a value" diagnostic yet.
-        Assert.NotNull(published);
-        Assert.DoesNotContain(published, d => d.Message.Contains("Not all code paths", StringComparison.Ordinal));
+        published = null;
+        await server.DidChangeAsync(new DidChangeTextDocumentParams
+        {
+            TextDocument = new VersionedTextDocumentIdentifier { Uri = uri },
+            ContentChanges = new List<TextDocumentContentChangeEvent>
+            {
+                new TextDocumentContentChangeEvent { Text = BindingErrorSource },
+            },
+        });
+        await WaitForAsync(() => HasBindingError(published));
 
+        published = null;
         await server.DidSaveAsync(new DidSaveTextDocumentParams
         {
             TextDocument = new TextDocumentIdentifier { Uri = uri },
             Text = BindingErrorSource,
         });
-
-        await WaitForAsync(() => published.Any(d => d.Message.Contains("Not all code paths", StringComparison.Ordinal)));
+        await WaitForAsync(() => HasBindingError(published));
     }
 
     [Fact]
@@ -155,6 +158,15 @@ public class Issue1664PushDiagnosticsOffGateTests
         var firstBindStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var publishes = new List<(string Uri, IReadOnlyList<Diagnostic> Diagnostics)>();
         var delayCallCount = 0;
+        var initialBindCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.TestOnBindResult = (_, _) => initialBindCompleted.TrySetResult(true);
+
+        await server.DidOpenAsync(new DidOpenTextDocumentParams
+        {
+            TextDocument = new TextDocumentItem { Uri = uri, Text = secondText },
+        });
+        await initialBindCompleted.Task;
+        server.TestOnBindResult = null;
 
         server.TestPushBindDelay = async ct =>
         {
@@ -180,28 +192,27 @@ public class Issue1664PushDiagnosticsOffGateTests
             }
         };
 
-        await server.DidOpenAsync(new DidOpenTextDocumentParams
+        await server.DidChangeAsync(new DidChangeTextDocumentParams
         {
-            TextDocument = new TextDocumentItem { Uri = uri, Text = firstText },
+            TextDocument = new VersionedTextDocumentIdentifier { Uri = uri },
+            ContentChanges = new List<TextDocumentContentChangeEvent>
+            {
+                new TextDocumentContentChangeEvent { Text = firstText },
+            },
         });
-
-        var firstSave = server.DidSaveAsync(new DidSaveTextDocumentParams
-        {
-            TextDocument = new TextDocumentIdentifier { Uri = uri },
-            Text = firstText,
-        });
-        await firstSave;
         await firstBindStarted.Task;
 
-        // Supersede: a newer save for the same file while the first bind is still stalled.
+        // Supersede: a newer edit for the same file while the first bind is still stalled.
         // This must cancel the first bind's token so its (stale) diagnostics for firstText are
         // never published, even though it "completes" (via cancellation) after the second.
-        var secondSave = server.DidSaveAsync(new DidSaveTextDocumentParams
+        await server.DidChangeAsync(new DidChangeTextDocumentParams
         {
-            TextDocument = new TextDocumentIdentifier { Uri = uri },
-            Text = secondText,
+            TextDocument = new VersionedTextDocumentIdentifier { Uri = uri },
+            ContentChanges = new List<TextDocumentContentChangeEvent>
+            {
+                new TextDocumentContentChangeEvent { Text = secondText },
+            },
         });
-        await secondSave;
 
         await WaitForAsync(() =>
         {
@@ -223,6 +234,77 @@ public class Issue1664PushDiagnosticsOffGateTests
             Assert.DoesNotContain(
                 forThisFile,
                 p => p.Diagnostics.Any(d => d.Message.Contains("Not all code paths", StringComparison.Ordinal)));
+        }
+    }
+
+    [Fact]
+    public async Task DidChange_PushMode_RefreshesOtherOpenProjectDocuments()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "gsharp-push-refresh-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(root, "Demo.gsproj"),
+                "<Project Sdk=\"Gsharp.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
+            var firstPath = Path.Combine(root, "First.gs");
+            var secondPath = Path.Combine(root, "Second.gs");
+            File.WriteAllText(firstPath, "func First() { }\n");
+            File.WriteAllText(secondPath, "func Second() { }\n");
+
+            var workspace = new WorkspaceState();
+            WorkspaceInitializer.Initialize(workspace, root);
+            var server = new LspServer(new DocumentContentService(), workspace);
+            var firstUri = DocumentUri.From(firstPath);
+            var secondUri = DocumentUri.From(secondPath);
+            var boundUris = new List<string>();
+            server.TestOnBindResult = (uri, _) =>
+            {
+                lock (boundUris)
+                {
+                    boundUris.Add(uri.ToString());
+                }
+            };
+
+            await server.DidOpenAsync(new DidOpenTextDocumentParams
+            {
+                TextDocument = new TextDocumentItem { Uri = firstUri, Text = File.ReadAllText(firstPath) },
+            });
+            await server.DidOpenAsync(new DidOpenTextDocumentParams
+            {
+                TextDocument = new TextDocumentItem { Uri = secondUri, Text = File.ReadAllText(secondPath) },
+            });
+            await WaitForAsync(() => ContainsBoth(boundUris, firstUri, secondUri));
+            lock (boundUris)
+            {
+                boundUris.Clear();
+            }
+
+            await server.DidChangeAsync(new DidChangeTextDocumentParams
+            {
+                TextDocument = new VersionedTextDocumentIdentifier { Uri = firstUri },
+                ContentChanges = new List<TextDocumentContentChangeEvent>
+                {
+                    new TextDocumentContentChangeEvent { Text = "func First() { var x = 1 }\n" },
+                },
+            });
+
+            await WaitForAsync(() => ContainsBoth(boundUris, firstUri, secondUri));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static bool HasBindingError(IReadOnlyList<Diagnostic> diagnostics)
+        => diagnostics?.Any(d => d.Message.Contains("Not all code paths", StringComparison.Ordinal)) == true;
+
+    private static bool ContainsBoth(List<string> uris, DocumentUri first, DocumentUri second)
+    {
+        lock (uris)
+        {
+            return uris.Contains(first.ToString()) && uris.Contains(second.ToString());
         }
     }
 

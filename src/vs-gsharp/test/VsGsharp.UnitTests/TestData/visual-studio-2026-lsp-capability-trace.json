@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "capturedAtUtc": "2026-07-20T23:49:47Z",
+  "client": {
+    "product": "Visual Studio Enterprise 2026",
+    "installationVersion": "18.8.12009.203"
+  },
+  "initializeClientCapabilities": {
+    "textDocument.semanticTokens": true,
+    "textDocument.inlayHint": true,
+    "textDocument.implementation": true,
+    "textDocument.typeDefinition": true,
+    "textDocument.linkedEditingRange": true,
+    "textDocument.selectionRange": false,
+    "textDocument.diagnostic": true
+  },
+  "observedRequests": [
+    "textDocument/semanticTokens/full",
+    "textDocument/semanticTokens/range",
+    "textDocument/linkedEditingRange",
+    "textDocument/diagnostic"
+  ],
+  "notes": [
+    "The fixture is a sanitized projection of the real initialize payload and requests; trace IDs and local paths are omitted.",
+    "Implementation, type-definition, and inlay-hint support is established by the corresponding initialize client capabilities; their interactive commands were not invoked during this capture."
+  ]
+}

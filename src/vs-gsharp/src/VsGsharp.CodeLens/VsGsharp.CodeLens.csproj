@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <RootNamespace>GSharp.VisualStudio.CodeLens</RootNamespace>
+    <AssemblyName>GSharp.VisualStudio.CodeLens</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.VisualStudio.Language" Version="17.14.249" ExcludeAssets="runtime" />
+    <Reference Include="System.ComponentModel.Composition" />
+  </ItemGroup>
+</Project>

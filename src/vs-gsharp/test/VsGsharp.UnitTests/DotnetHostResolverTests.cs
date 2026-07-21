@@ -4,6 +4,14 @@ namespace GSharp.VisualStudio;
 
 public sealed class DotnetHostResolverTests
 {
+    [Fact]
+    public void MissingRuntimeMessage_ProvidesInstallAction()
+    {
+        Assert.Contains("Microsoft.NETCore.App 10.0", DotnetHostResolver.MissingRuntimeMessage);
+        Assert.Contains("https://dotnet.microsoft.com/download/dotnet/10.0", DotnetHostResolver.MissingRuntimeMessage);
+        Assert.Contains("DOTNET_ROOT", DotnetHostResolver.MissingRuntimeMessage);
+    }
+
     [Theory]
     [InlineData("Microsoft.NETCore.App 10.0.10 [C:\\dotnet\\shared]", true)]
     [InlineData("Microsoft.NETCore.App 11.0.0 [C:\\dotnet\\shared]", true)]

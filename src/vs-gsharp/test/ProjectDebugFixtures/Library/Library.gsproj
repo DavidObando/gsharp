@@ -1,0 +1,9 @@
+<Project Sdk="Gsharp.NET.Sdk/0.3.159">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>VsAcceptance.Library</RootNamespace>
+    <DebugType>portable</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+  </PropertyGroup>
+</Project>

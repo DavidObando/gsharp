@@ -1,15 +1,35 @@
 import * as vscode from 'vscode';
 
+export interface GSharpInitializationOptions {
+  formattingIndentSize: number;
+  formattingUseTabs: boolean;
+  diagnosticsOnType: boolean;
+  completionTriggerOnDot: boolean;
+  referenceCodeLens: boolean;
+  parameterNameInlayHints: boolean;
+  typeInlayHints: boolean;
+  coldStartCache: boolean;
+}
+
 export function getServerOptions() {
   const config = vscode.workspace.getConfiguration('gsharp');
+  const initializationOptions: GSharpInitializationOptions = {
+    formattingIndentSize: Math.max(1, config.get<number>('formatting.indentSize', 4)),
+    formattingUseTabs: config.get<boolean>('formatting.useTabs', false),
+    diagnosticsOnType: config.get<boolean>('diagnostics.enableOnType', true),
+    completionTriggerOnDot: config.get<boolean>('completion.triggerOnDot', true),
+    referenceCodeLens: config.get<boolean>('codeLens.enableReferences', true),
+    parameterNameInlayHints: config.get<boolean>('inlayHints.enableParameterNames', true),
+    typeInlayHints: config.get<boolean>('inlayHints.enableTypeHints', true),
+    coldStartCache: isColdStartCacheEnabled(config),
+  };
+
   return {
     path: config.get<string>('server.path', ''),
-    startTimeout: config.get<number>('server.startTimeout', 30000),
     waitForDebugger: config.get<boolean>('server.waitForDebugger', false),
     log: config.get<boolean>('server.log', false),
     logPath: config.get<string>('server.logPath', ''),
-    trace: config.get<string>('trace.server', 'off'),
-    coldStartCacheEnabled: isColdStartCacheEnabled(config),
+    initializationOptions,
   };
 }
 

@@ -507,6 +507,18 @@ public sealed class CodeLens
     public Command Command { get; set; }
 }
 
+public sealed class ReferenceCodeLens
+{
+    [JsonPropertyName("declarationRange")]
+    public Range DeclarationRange { get; set; }
+
+    [JsonPropertyName("referenceCount")]
+    public int ReferenceCount { get; set; }
+
+    [JsonPropertyName("references")]
+    public Location[] References { get; set; } = Array.Empty<Location>();
+}
+
 public readonly struct FoldingRangeKind : IEquatable<FoldingRangeKind>
 {
     public FoldingRangeKind(string value) => this.Value = value;

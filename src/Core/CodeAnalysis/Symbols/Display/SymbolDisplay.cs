@@ -63,6 +63,16 @@ public static class SymbolDisplay
     }
 
     /// <summary>
+    /// Renders a G# <paramref name="type"/> without a declaration descriptor.
+    /// </summary>
+    /// <param name="type">The type to render.</param>
+    /// <returns>The source-compatible G# type name.</returns>
+    public static string ToTypeDisplayString(TypeSymbol type)
+    {
+        return FormatType(type);
+    }
+
+    /// <summary>
     /// Renders <paramref name="symbol"/> to classified display parts under <paramref name="format"/>.
     /// </summary>
     /// <param name="symbol">The symbol to render.</param>

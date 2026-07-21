@@ -1,0 +1,704 @@
+{
+  "schemaVersion": 1,
+  "target": "Visual Studio 2026",
+  "capabilityEvidence": [
+    {
+      "id": "VS18.8-GENERIC-LSP-SEMANTIC-TOKENS",
+      "featureId": "editor.semantic-tokens",
+      "source": "%VSINSTALLDIR%\\Common7\\IDE\\CommonExtensions\\Microsoft\\LanguageServer\\Microsoft.VisualStudio.LanguageServer.Client.Implementation.dll",
+      "sourceVersion": "18.8.0.0 (file 18.8.21.48421, SHA-256 09894b48b1ee8142ceb9fbb1908d8f5fa2ee045b2254938b482cd13cc0d90578)",
+      "observations": ["SemanticTokensFullCapability", "SemanticTokensRangeCapability", "SemanticTokensFullRequestFactory", "SemanticTokensRangeRequestFactory", "textDocument/semanticTokens/full", "textDocument/semanticTokens/range"],
+      "conclusion": "generic-lsp-supported"
+    },
+    {
+      "id": "VS18.8-REAL-LSP-SEMANTIC-TOKENS",
+      "featureId": "editor.semantic-tokens",
+      "source": "src/vs-gsharp/test/VsGsharp.UnitTests/TestData/visual-studio-2026-lsp-capability-trace.json",
+      "sourceVersion": "Visual Studio Enterprise 2026 18.8.12009.203",
+      "observations": ["initialize advertises textDocument.semanticTokens", "Observed textDocument/semanticTokens/full", "Observed textDocument/semanticTokens/range"],
+      "conclusion": "generic-lsp-supported"
+    },
+    {
+      "id": "VS18.8-GENERIC-LSP-INLAY-HINTS",
+      "featureId": "editor.inlay-hints",
+      "source": "%VSINSTALLDIR%\\Common7\\IDE\\CommonExtensions\\Microsoft\\LanguageServer\\Microsoft.VisualStudio.LanguageServer.Client.Implementation.dll",
+      "sourceVersion": "18.8.0.0 (file 18.8.21.48421, SHA-256 09894b48b1ee8142ceb9fbb1908d8f5fa2ee045b2254938b482cd13cc0d90578)",
+      "observations": ["InlayHintsCapability", "InlayHintsRequestFactory", "InlayHintsTagger", "textDocument/inlayHint"],
+      "conclusion": "generic-lsp-supported"
+    },
+    {
+      "id": "VS18.8-REAL-LSP-INLAY-HINTS",
+      "featureId": "editor.inlay-hints",
+      "source": "src/vs-gsharp/test/VsGsharp.UnitTests/TestData/visual-studio-2026-lsp-capability-trace.json",
+      "sourceVersion": "Visual Studio Enterprise 2026 18.8.12009.203",
+      "observations": ["initialize advertises textDocument.inlayHint with dynamic registration"],
+      "conclusion": "generic-lsp-supported"
+    },
+    {
+      "id": "VS18.8-GENERIC-LSP-IMPLEMENTATION",
+      "featureId": "navigation.implementation",
+      "source": "%VSINSTALLDIR%\\Common7\\IDE\\CommonExtensions\\Microsoft\\LanguageServer\\Microsoft.VisualStudio.LanguageServer.Client.Implementation.dll",
+      "sourceVersion": "18.8.0.0 (file 18.8.21.48421, SHA-256 09894b48b1ee8142ceb9fbb1908d8f5fa2ee045b2254938b482cd13cc0d90578)",
+      "observations": ["GoToImplementationCapability", "GoToImplementationRequestFactory", "GotoImplementationCommandHandler", "textDocument/implementation"],
+      "conclusion": "generic-lsp-supported"
+    },
+    {
+      "id": "VS18.8-REAL-LSP-IMPLEMENTATION",
+      "featureId": "navigation.implementation",
+      "source": "src/vs-gsharp/test/VsGsharp.UnitTests/TestData/visual-studio-2026-lsp-capability-trace.json",
+      "sourceVersion": "Visual Studio Enterprise 2026 18.8.12009.203",
+      "observations": ["initialize advertises textDocument.implementation with dynamic registration"],
+      "conclusion": "generic-lsp-supported"
+    },
+    {
+      "id": "VS18.8-GENERIC-LSP-TYPE-DEFINITION",
+      "featureId": "navigation.type-definition",
+      "source": "%VSINSTALLDIR%\\Common7\\IDE\\CommonExtensions\\Microsoft\\LanguageServer\\Microsoft.VisualStudio.LanguageServer.Client.Implementation.dll",
+      "sourceVersion": "18.8.0.0 (file 18.8.21.48421, SHA-256 09894b48b1ee8142ceb9fbb1908d8f5fa2ee045b2254938b482cd13cc0d90578)",
+      "observations": ["GoToTypeDefinitionCapability", "GotoTypeDefinitionRequestFactory", "GotoTypeDefinitionCommandHandler", "textDocument/typeDefinition"],
+      "conclusion": "generic-lsp-supported"
+    },
+    {
+      "id": "VS18.8-REAL-LSP-TYPE-DEFINITION",
+      "featureId": "navigation.type-definition",
+      "source": "src/vs-gsharp/test/VsGsharp.UnitTests/TestData/visual-studio-2026-lsp-capability-trace.json",
+      "sourceVersion": "Visual Studio Enterprise 2026 18.8.12009.203",
+      "observations": ["initialize advertises textDocument.typeDefinition with dynamic registration"],
+      "conclusion": "generic-lsp-supported"
+    },
+    {
+      "id": "VS18.8-GENERIC-LSP-LINKED-EDITING",
+      "featureId": "editor.linked-editing",
+      "source": "%VSINSTALLDIR%\\Common7\\IDE\\CommonExtensions\\Microsoft\\LanguageServer\\Microsoft.VisualStudio.LanguageServer.Client.Implementation.dll",
+      "sourceVersion": "18.8.0.0 (file 18.8.21.48421, SHA-256 09894b48b1ee8142ceb9fbb1908d8f5fa2ee045b2254938b482cd13cc0d90578)",
+      "observations": ["LinkedEditingRangeCapability", "LinkedEditingRangeRequestFactory", "LinkedEditingRangeHandler", "textDocument/linkedEditingRange"],
+      "conclusion": "generic-lsp-supported"
+    },
+    {
+      "id": "VS18.8-REAL-LSP-LINKED-EDITING",
+      "featureId": "editor.linked-editing",
+      "source": "src/vs-gsharp/test/VsGsharp.UnitTests/TestData/visual-studio-2026-lsp-capability-trace.json",
+      "sourceVersion": "Visual Studio Enterprise 2026 18.8.12009.203",
+      "observations": ["initialize advertises textDocument.linkedEditingRange", "Observed textDocument/linkedEditingRange"],
+      "conclusion": "generic-lsp-supported"
+    },
+    {
+      "id": "VS18.8-GENERIC-LSP-PULL-DIAGNOSTICS",
+      "featureId": "editor.diagnostics",
+      "source": "%VSINSTALLDIR%\\Common7\\IDE\\CommonExtensions\\Microsoft\\LanguageServer\\Microsoft.VisualStudio.LanguageServer.Client.Implementation.dll",
+      "sourceVersion": "18.8.0.0 (file 18.8.21.48421, SHA-256 09894b48b1ee8142ceb9fbb1908d8f5fa2ee045b2254938b482cd13cc0d90578)",
+      "observations": ["DocumentDiagnosticsCapability is an exported ICapabilityDefinition for DiagnosticOptions", "DocumentDiagnosticsRequestFactory constructs standard DocumentDiagnosticParams", "textDocument/diagnostic"],
+      "conclusion": "generic-lsp-supported"
+    },
+    {
+      "id": "VS18.8-REAL-LSP-PULL-DIAGNOSTICS",
+      "featureId": "editor.diagnostics",
+      "source": "src/vs-gsharp/test/VsGsharp.UnitTests/TestData/visual-studio-2026-lsp-capability-trace.json",
+      "sourceVersion": "Visual Studio Enterprise 2026 18.8.12009.203",
+      "observations": ["initialize advertises textDocument.diagnostic", "Observed textDocument/diagnostic"],
+      "conclusion": "generic-lsp-supported"
+    },
+    {
+      "id": "VS18.8-GENERIC-LSP-SELECTION-RANGES",
+      "featureId": "editor.selection-ranges",
+      "source": "%VSINSTALLDIR%\\Common7\\IDE\\CommonExtensions\\Microsoft\\LanguageServer\\Microsoft.VisualStudio.LanguageServer.Client.Implementation.dll",
+      "sourceVersion": "18.8.0.0 (file 18.8.21.48421, SHA-256 09894b48b1ee8142ceb9fbb1908d8f5fa2ee045b2254938b482cd13cc0d90578)",
+      "observations": ["No SelectionRangeCapability", "No SelectionRangeRequestFactory", "No textDocument/selectionRange method string; selectionRangeSpan and GetPrimarySelectionRange belong to code-action selection handling"],
+      "conclusion": "static-generic-lsp-unsupported"
+    },
+    {
+      "id": "VS18.8-CLASSIC-EDITOR-SELECTION-API",
+      "featureId": "editor.selection-ranges",
+      "source": "%VSINSTALLDIR%\\Common7\\IDE\\CommonExtensions\\Microsoft\\Editor\\Microsoft.VisualStudio.Text.Logic.dll",
+      "sourceVersion": "file 18.8.71.32910, SHA-256 842ba2a12bf88aa4c99d6636544d0abdc77921ef20ac0f7a67c95ee9232fc450",
+      "observations": ["The public ITextStructureNavigatorProvider creates a synchronous ITextStructureNavigator", "GetSpanOfEnclosing, GetSpanOfFirstChild, GetSpanOfNextSibling, and GetSpanOfPreviousSibling are synchronous SnapshotSpan methods", "The API cannot issue the existing asynchronous textDocument/selectionRange request without blocking the editor thread or introducing speculative cached semantics"],
+      "conclusion": "no-translation-only-adapter-contract"
+    },
+    {
+      "id": "VS18.8-REAL-LSP-SELECTION-RANGES",
+      "featureId": "editor.selection-ranges",
+      "source": "src/vs-gsharp/test/VsGsharp.UnitTests/TestData/visual-studio-2026-lsp-capability-trace.json",
+      "sourceVersion": "Visual Studio Enterprise 2026 18.8.12009.203",
+      "observations": ["initialize omits textDocument.selectionRange"],
+      "conclusion": "generic-lsp-unsupported"
+    }
+  ],
+  "features": [
+    {
+      "id": "editor.document-sync",
+      "area": "editor",
+      "title": "Open, change, save, and close document synchronization",
+      "vsPath": "standard-lsp",
+      "implementationIds": ["server:ServerCapabilitiesFactory.TextDocumentSync", "vs:GSharpLanguageClient"],
+      "acceptanceCoverageIds": ["VS26-LSP-DOCUMENT-SYNC"],
+      "serverCapabilities": ["TextDocumentSync"],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "editor.completion",
+      "area": "editor",
+      "title": "Completion",
+      "vsPath": "standard-lsp",
+      "implementationIds": ["server:textDocument/completion"],
+      "acceptanceCoverageIds": ["VS26-LSP-COMPLETION"],
+      "serverCapabilities": ["CompletionProvider"],
+      "vscodeContributions": ["configuration:gsharp.completion.triggerOnDot"],
+      "vscodeCommands": []
+    },
+    {
+      "id": "editor.signature-help",
+      "area": "editor",
+      "title": "Signature help",
+      "vsPath": "standard-lsp",
+      "implementationIds": ["server:textDocument/signatureHelp"],
+      "acceptanceCoverageIds": ["VS26-LSP-SIGNATURE-HELP"],
+      "serverCapabilities": ["SignatureHelpProvider"],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "editor.diagnostics",
+      "area": "editor",
+      "title": "Live diagnostics",
+      "vsPath": "standard-lsp",
+      "implementationIds": ["server:textDocument/diagnostic", "server:textDocument/publishDiagnostics"],
+      "acceptanceCoverageIds": ["VS26-LSP-PULL-DIAGNOSTICS"],
+      "evidenceIds": ["VS18.8-GENERIC-LSP-PULL-DIAGNOSTICS", "VS18.8-REAL-LSP-PULL-DIAGNOSTICS"],
+      "serverCapabilities": ["DiagnosticProvider"],
+      "vscodeContributions": ["configuration:gsharp.diagnostics.enableOnType"],
+      "vscodeCommands": []
+    },
+    {
+      "id": "editor.formatting",
+      "area": "editor",
+      "title": "Whole-document formatting",
+      "vsPath": "standard-lsp",
+      "implementationIds": ["server:textDocument/formatting"],
+      "acceptanceCoverageIds": ["VS26-LSP-FORMATTING"],
+      "serverCapabilities": ["DocumentFormattingProvider"],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "editor.code-actions",
+      "area": "editor",
+      "title": "Quick fixes and refactorings",
+      "vsPath": "standard-lsp",
+      "implementationIds": ["server:textDocument/codeAction"],
+      "acceptanceCoverageIds": ["VS26-LSP-CODE-ACTIONS"],
+      "serverCapabilities": ["CodeActionProvider"],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "editor.folding",
+      "area": "editor",
+      "title": "Folding ranges",
+      "vsPath": "standard-lsp",
+      "implementationIds": ["server:textDocument/foldingRange"],
+      "acceptanceCoverageIds": ["VS26-LSP-FOLDING"],
+      "serverCapabilities": ["FoldingRangeProvider"],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "editor.selection-ranges",
+      "area": "editor",
+      "title": "Expand and shrink selection",
+      "vsPath": "native-adapter-required",
+      "implementationIds": ["server:textDocument/selectionRange"],
+      "acceptanceCoverageIds": ["VS26-BLOCKED-SELECTION-RANGE-ADAPTER-API"],
+      "evidenceIds": ["VS18.8-GENERIC-LSP-SELECTION-RANGES", "VS18.8-CLASSIC-EDITOR-SELECTION-API", "VS18.8-REAL-LSP-SELECTION-RANGES"],
+      "serverCapabilities": ["SelectionRangeProvider"],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "editor.linked-editing",
+      "area": "editor",
+      "title": "Linked editing ranges",
+      "vsPath": "standard-lsp",
+      "implementationIds": ["server:textDocument/linkedEditingRange"],
+      "acceptanceCoverageIds": ["VS26-LSP-LINKED-EDITING"],
+      "evidenceIds": ["VS18.8-GENERIC-LSP-LINKED-EDITING", "VS18.8-REAL-LSP-LINKED-EDITING"],
+      "serverCapabilities": ["LinkedEditingRangeProvider"],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "editor.semantic-tokens",
+      "area": "editor",
+      "title": "Semantic highlighting",
+      "vsPath": "standard-lsp",
+      "implementationIds": ["server:textDocument/semanticTokens/full", "server:textDocument/semanticTokens/range"],
+      "acceptanceCoverageIds": ["VS26-LSP-SEMANTIC-TOKENS"],
+      "evidenceIds": ["VS18.8-GENERIC-LSP-SEMANTIC-TOKENS", "VS18.8-REAL-LSP-SEMANTIC-TOKENS"],
+      "serverCapabilities": ["SemanticTokensProvider"],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "editor.inlay-hints",
+      "area": "editor",
+      "title": "Parameter and inferred type hints",
+      "vsPath": "standard-lsp",
+      "implementationIds": ["server:textDocument/inlayHint"],
+      "acceptanceCoverageIds": ["VS26-LSP-INLAY-HINTS"],
+      "evidenceIds": ["VS18.8-GENERIC-LSP-INLAY-HINTS", "VS18.8-REAL-LSP-INLAY-HINTS"],
+      "serverCapabilities": ["InlayHintProvider"],
+      "vscodeContributions": ["configuration:gsharp.inlayHints.enableParameterNames", "configuration:gsharp.inlayHints.enableTypeHints"],
+      "vscodeCommands": []
+    },
+    {
+      "id": "editor.reference-codelens",
+      "area": "editor",
+      "title": "Reference count CodeLens and references UI",
+      "vsPath": "native-adapter-required",
+      "implementationIds": ["server:textDocument/codeLens", "server:gsharp/referenceCodeLens", "vs:GSharpCodeLensTagger", "vs:GSharpReferenceCodeLensDataPointProvider", "vscode:registerReferenceFeatures"],
+      "acceptanceCoverageIds": ["VS26-ADAPTER-REFERENCE-CODELENS"],
+      "serverCapabilities": ["CodeLensProvider"],
+      "vscodeContributions": ["configuration:gsharp.codeLens.enableReferences"],
+      "vscodeCommands": ["gsharp.showReferences"]
+    },
+    {
+      "id": "navigation.hover",
+      "area": "navigation",
+      "title": "Hover information",
+      "vsPath": "standard-lsp",
+      "implementationIds": ["server:textDocument/hover"],
+      "acceptanceCoverageIds": ["VS26-LSP-HOVER"],
+      "serverCapabilities": ["HoverProvider"],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "navigation.definition",
+      "area": "navigation",
+      "title": "Go to definition",
+      "vsPath": "standard-lsp",
+      "implementationIds": ["server:textDocument/definition"],
+      "acceptanceCoverageIds": ["VS26-LSP-DEFINITION"],
+      "serverCapabilities": ["DefinitionProvider"],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "navigation.type-definition",
+      "area": "navigation",
+      "title": "Go to type definition",
+      "vsPath": "standard-lsp",
+      "implementationIds": ["server:textDocument/typeDefinition"],
+      "acceptanceCoverageIds": ["VS26-LSP-TYPE-DEFINITION"],
+      "evidenceIds": ["VS18.8-GENERIC-LSP-TYPE-DEFINITION", "VS18.8-REAL-LSP-TYPE-DEFINITION"],
+      "serverCapabilities": ["TypeDefinitionProvider"],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "navigation.implementation",
+      "area": "navigation",
+      "title": "Go to implementation",
+      "vsPath": "standard-lsp",
+      "implementationIds": ["server:textDocument/implementation"],
+      "acceptanceCoverageIds": ["VS26-LSP-IMPLEMENTATION"],
+      "evidenceIds": ["VS18.8-GENERIC-LSP-IMPLEMENTATION", "VS18.8-REAL-LSP-IMPLEMENTATION"],
+      "serverCapabilities": ["ImplementationProvider"],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "navigation.references",
+      "area": "navigation",
+      "title": "Find references",
+      "vsPath": "standard-lsp",
+      "implementationIds": ["server:textDocument/references"],
+      "acceptanceCoverageIds": ["VS26-LSP-REFERENCES"],
+      "serverCapabilities": ["ReferencesProvider"],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "navigation.document-highlights",
+      "area": "navigation",
+      "title": "Document symbol highlights",
+      "vsPath": "standard-lsp",
+      "implementationIds": ["server:textDocument/documentHighlight"],
+      "acceptanceCoverageIds": ["VS26-LSP-DOCUMENT-HIGHLIGHTS"],
+      "serverCapabilities": ["DocumentHighlightProvider"],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "navigation.document-symbols",
+      "area": "navigation",
+      "title": "Document symbols",
+      "vsPath": "standard-lsp",
+      "implementationIds": ["server:textDocument/documentSymbol"],
+      "acceptanceCoverageIds": ["VS26-LSP-DOCUMENT-SYMBOLS"],
+      "serverCapabilities": ["DocumentSymbolProvider"],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "navigation.workspace-symbols",
+      "area": "navigation",
+      "title": "Workspace symbols",
+      "vsPath": "standard-lsp",
+      "implementationIds": ["server:workspace/symbol"],
+      "acceptanceCoverageIds": ["VS26-LSP-WORKSPACE-SYMBOLS"],
+      "serverCapabilities": ["WorkspaceSymbolProvider"],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "navigation.rename",
+      "area": "navigation",
+      "title": "Prepare and apply rename",
+      "vsPath": "standard-lsp",
+      "implementationIds": ["server:textDocument/prepareRename", "server:textDocument/rename"],
+      "acceptanceCoverageIds": ["VS26-LSP-RENAME"],
+      "serverCapabilities": ["RenameProvider"],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "testing.discovery",
+      "area": "testing",
+      "title": "Test discovery and source navigation",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:gsharp/discoverTests", "vs:TestExplorer"],
+      "acceptanceCoverageIds": ["VS26-NATIVE-TEST-DISCOVERY"],
+      "serverCapabilities": [],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "testing.run",
+      "area": "testing",
+      "title": "Run selected tests and report results",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:TestingFeatures.Run", "vs:TestExplorer.Run"],
+      "acceptanceCoverageIds": ["VS26-NATIVE-TEST-RUN"],
+      "serverCapabilities": [],
+      "vscodeContributions": ["command:gsharp.test.runInContext"],
+      "vscodeCommands": ["gsharp.test.runInContext"]
+    },
+    {
+      "id": "testing.debug",
+      "area": "testing",
+      "title": "Debug selected tests",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:TestingFeatures.Debug", "vs:TestExplorer.Debug"],
+      "acceptanceCoverageIds": ["VS26-NATIVE-TEST-DEBUG"],
+      "serverCapabilities": [],
+      "vscodeContributions": ["command:gsharp.test.debugInContext"],
+      "vscodeCommands": ["gsharp.test.debugInContext"]
+    },
+    {
+      "id": "testing.cancellation",
+      "area": "testing",
+      "title": "Cancel test runs",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:TestingFeatures.CancellationToken", "vs:TestExplorer.Cancel"],
+      "acceptanceCoverageIds": ["VS26-NATIVE-TEST-CANCEL"],
+      "serverCapabilities": [],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "debugging.launch",
+      "area": "debugging",
+      "title": "Launch and F5 debugging through the managed debugger",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:GSharpDebugConfigurationProvider", "vs:CPS.Managed.LaunchProfiles"],
+      "acceptanceCoverageIds": ["VS26-NATIVE-DEBUG-LAUNCH"],
+      "serverCapabilities": [],
+      "vscodeContributions": ["debugger:gsharp"],
+      "vscodeCommands": []
+    },
+    {
+      "id": "debugging.attach",
+      "area": "debugging",
+      "title": "Attach to a managed process",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:coreclr.attach", "vs:ManagedDebugger.Attach"],
+      "acceptanceCoverageIds": ["VS26-NATIVE-DEBUG-ATTACH"],
+      "serverCapabilities": [],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "debugging.breakpoints",
+      "area": "debugging",
+      "title": "G# source breakpoints, stepping, and locals",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["sdk:portable-pdb", "vs:ManagedDebugger"],
+      "acceptanceCoverageIds": ["VS26-NATIVE-DEBUG-BREAKPOINTS"],
+      "serverCapabilities": [],
+      "vscodeContributions": ["breakpoints:gsharp"],
+      "vscodeCommands": []
+    },
+    {
+      "id": "project.project-system",
+      "area": "project",
+      "title": "Load .gsproj projects, restore, references, and NuGet",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:languages.xml.gsproj", "vs:GSharpProjectType.CPS"],
+      "acceptanceCoverageIds": ["VS26-NATIVE-PROJECT-SYSTEM"],
+      "serverCapabilities": [],
+      "vscodeContributions": ["language:xml"],
+      "vscodeCommands": []
+    },
+    {
+      "id": "project.build",
+      "area": "project",
+      "title": "Build, rebuild, and clean",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:registerBuildCommands", "vs:CPS.Build"],
+      "acceptanceCoverageIds": ["VS26-NATIVE-BUILD"],
+      "serverCapabilities": [],
+      "vscodeContributions": ["command:gsharp.buildProject", "keybinding:gsharp.buildProject"],
+      "vscodeCommands": ["gsharp.buildProject"]
+    },
+    {
+      "id": "project.run",
+      "area": "project",
+      "title": "Run without debugging",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:gsharp.runProject", "vs:CPS.StartWithoutDebugging"],
+      "acceptanceCoverageIds": ["VS26-NATIVE-RUN"],
+      "serverCapabilities": [],
+      "vscodeContributions": ["command:gsharp.runProject"],
+      "vscodeCommands": ["gsharp.runProject"]
+    },
+    {
+      "id": "project.generate-assets",
+      "area": "project",
+      "title": "Generate build and debug assets",
+      "vsPath": "intentionally-not-applicable",
+      "implementationIds": ["vscode:gsharp.generateAssets", "vs:CPS.NativeProjectConfiguration"],
+      "acceptanceCoverageIds": ["VS26-NA-GENERATE-VSCODE-ASSETS"],
+      "serverCapabilities": [],
+      "vscodeContributions": ["command:gsharp.generateAssets"],
+      "vscodeCommands": ["gsharp.generateAssets"]
+    },
+    {
+      "id": "project.file-watching",
+      "area": "project",
+      "title": "Synchronize .gs, .gsproj, and .resx changes",
+      "vsPath": "standard-lsp",
+      "implementationIds": ["vscode:ServerManager.fileWatcher", "vs:GSharpLanguageClient.FilesToWatch"],
+      "acceptanceCoverageIds": ["VS26-LSP-WATCHED-FILES"],
+      "serverCapabilities": [],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "project.status",
+      "area": "project",
+      "title": "Active project and language-server status",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:ProjectContext", "vs:GSharpPackage.ShowStatusAsync"],
+      "acceptanceCoverageIds": ["VS26-NATIVE-PROJECT-STATUS"],
+      "serverCapabilities": [],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "assets.syntax",
+      "area": "assets",
+      "title": "G# language registration and TextMate syntax",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:syntaxes/gsharp.tmLanguage.json", "vs:GSharp.TextMate.pkgdef"],
+      "acceptanceCoverageIds": ["VS26-ASSET-SYNTAX"],
+      "serverCapabilities": [],
+      "vscodeContributions": ["language:gsharp", "grammar:source.gsharp"],
+      "vscodeCommands": []
+    },
+    {
+      "id": "assets.language-configuration",
+      "area": "assets",
+      "title": "Comments, brackets, auto-closing pairs, and indentation",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:language-configuration.json", "vs:LanguageConfiguration/gsharp"],
+      "acceptanceCoverageIds": ["VS26-ASSET-LANGUAGE-CONFIG"],
+      "serverCapabilities": [],
+      "vscodeContributions": ["configurationDefaults:[gsharp]"],
+      "vscodeCommands": []
+    },
+    {
+      "id": "assets.markdown",
+      "area": "assets",
+      "title": "G# Markdown fenced-code highlighting",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:syntaxes/gsharp-markdown-injection.json", "vs:TextMateInjection"],
+      "acceptanceCoverageIds": ["VS26-ASSET-MARKDOWN"],
+      "serverCapabilities": [],
+      "vscodeContributions": ["language:gsharp-markdown-injection", "grammar:markdown.gsharp.codeblock"],
+      "vscodeCommands": []
+    },
+    {
+      "id": "assets.snippets",
+      "area": "assets",
+      "title": "G# snippets",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:snippets/gsharp.json", "vs:Snippets/*.snippet"],
+      "acceptanceCoverageIds": ["VS26-ASSET-SNIPPETS"],
+      "serverCapabilities": [],
+      "vscodeContributions": ["snippets:gsharp"],
+      "vscodeCommands": []
+    },
+    {
+      "id": "assets.themes",
+      "area": "assets",
+      "title": "Six G# light and dark themes",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:themes/*.json", "vs:themes/*.vstheme"],
+      "acceptanceCoverageIds": ["VS26-ASSET-THEMES"],
+      "serverCapabilities": [],
+      "vscodeContributions": [
+        "theme:GSharp Ember Dark",
+        "theme:GSharp Ember Light",
+        "theme:GSharp Magma Dark",
+        "theme:GSharp Magma Light",
+        "theme:GSharp Synthwave Dark",
+        "theme:GSharp Synthwave Light"
+      ],
+      "vscodeCommands": []
+    },
+    {
+      "id": "config.server-path",
+      "area": "config",
+      "title": "Language-server path",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:getServerOptions.path", "vs:GSharpOptions.ServerPath"],
+      "acceptanceCoverageIds": ["VS26-CONFIG-SERVER-PATH"],
+      "serverCapabilities": [],
+      "vscodeContributions": ["configuration:gsharp.server.path"],
+      "vscodeCommands": []
+    },
+    {
+      "id": "config.debug-wait",
+      "area": "config",
+      "title": "Wait for debugger on language-server start",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:getServerOptions.waitForDebugger", "vs:GSharpOptions.WaitForDebugger"],
+      "acceptanceCoverageIds": ["VS26-CONFIG-WAIT-FOR-DEBUGGER"],
+      "serverCapabilities": [],
+      "vscodeContributions": ["configuration:gsharp.server.waitForDebugger"],
+      "vscodeCommands": []
+    },
+    {
+      "id": "config.server-log",
+      "area": "config",
+      "title": "Language-server logging and log path",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:getServerOptions.log", "vs:GSharpOptions.EnableServerLog"],
+      "acceptanceCoverageIds": ["VS26-CONFIG-SERVER-LOG"],
+      "serverCapabilities": [],
+      "vscodeContributions": ["configuration:gsharp.server.log", "configuration:gsharp.server.logPath", "configuration:gsharp.trace.server"],
+      "vscodeCommands": []
+    },
+    {
+      "id": "config.formatting",
+      "area": "config",
+      "title": "Indent size and tabs",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:ServerManager.initializationOptions", "vs:LanguageClientPolicy.CreateInitializationOptions"],
+      "acceptanceCoverageIds": ["VS26-CONFIG-FORMATTING"],
+      "serverCapabilities": [],
+      "vscodeContributions": ["configuration:gsharp.formatting.indentSize", "configuration:gsharp.formatting.useTabs"],
+      "vscodeCommands": []
+    },
+    {
+      "id": "config.cold-start-cache",
+      "area": "config",
+      "title": "Cold-start language-service cache",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:GSHARP_DISABLE_COLD_START_CACHE", "vs:LanguageClientPolicy.CreateEnvironment"],
+      "acceptanceCoverageIds": ["VS26-CONFIG-COLD-START-CACHE"],
+      "serverCapabilities": [],
+      "vscodeContributions": ["configuration:gsharp.coldStartCache.enable"],
+      "vscodeCommands": []
+    },
+    {
+      "id": "lifecycle.restart",
+      "area": "lifecycle",
+      "title": "Restart language server",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:gsharp.restartServer", "vs:GSharpCommands.0x0100"],
+      "acceptanceCoverageIds": ["VS26-LIFECYCLE-RESTART"],
+      "serverCapabilities": [],
+      "vscodeContributions": ["command:gsharp.restartServer"],
+      "vscodeCommands": ["gsharp.restartServer"]
+    },
+    {
+      "id": "lifecycle.output",
+      "area": "lifecycle",
+      "title": "Show G# output",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:gsharp.openOutput", "vs:GSharpCommands.0x0101"],
+      "acceptanceCoverageIds": ["VS26-LIFECYCLE-OUTPUT"],
+      "serverCapabilities": [],
+      "vscodeContributions": ["command:gsharp.openOutput"],
+      "vscodeCommands": ["gsharp.openOutput"]
+    },
+    {
+      "id": "lifecycle.report-issue",
+      "area": "lifecycle",
+      "title": "Report an issue",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:gsharp.reportIssue", "vs:GSharpCommands.0x0102"],
+      "acceptanceCoverageIds": ["VS26-LIFECYCLE-REPORT-ISSUE"],
+      "serverCapabilities": [],
+      "vscodeContributions": ["command:gsharp.reportIssue"],
+      "vscodeCommands": ["gsharp.reportIssue"]
+    },
+    {
+      "id": "lifecycle.activation",
+      "area": "lifecycle",
+      "title": "Workspace activation and server startup",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:activationEvents", "vs:GSharpPackage.ProvideAutoLoad"],
+      "acceptanceCoverageIds": ["VS26-LIFECYCLE-ACTIVATION"],
+      "serverCapabilities": [],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "lifecycle.runtime-acquisition",
+      "area": "lifecycle",
+      "title": "Acquire a compatible .NET runtime",
+      "vsPath": "intentionally-not-applicable",
+      "implementationIds": ["vscode:ms-dotnettools.vscode-dotnet-runtime", "vs:VisualStudioManagedDesktopPrerequisite"],
+      "acceptanceCoverageIds": ["VS26-NA-RUNTIME-ACQUISITION"],
+      "serverCapabilities": [],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    },
+    {
+      "id": "lifecycle.bundled-server",
+      "area": "lifecycle",
+      "title": "Launch the bundled language server",
+      "vsPath": "native-vs-equivalent",
+      "implementationIds": ["vscode:ServerManager", "vs:GSharpLanguageClient.ActivateAsync"],
+      "acceptanceCoverageIds": ["VS26-LIFECYCLE-BUNDLED-SERVER"],
+      "serverCapabilities": [],
+      "vscodeContributions": [],
+      "vscodeCommands": []
+    }
+  ],
+  "deadContributions": [
+    {
+      "id": "taskDefinition:gsharp",
+      "reason": "The package declares a task schema, but the extension never registers a gsharp task provider.",
+      "evidence": [
+        {
+          "file": "src/vscode-gsharp/src/commands/buildCommands.ts",
+          "contains": "new vscode.Task("
+        }
+      ]
+    }
+  ]
+}

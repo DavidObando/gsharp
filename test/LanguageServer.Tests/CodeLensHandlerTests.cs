@@ -77,6 +77,23 @@ public class CodeLensHandlerTests
     }
 
     [Fact]
+    public void ComputeReferenceLenses_ReturnsClientNeutralLocations()
+    {
+        const string source = "func add(a int32, b int32) int32 { return a + b }\nvar x = add(1, 2)\nvar y = add(3, 4)\n";
+        const string uri = "file:///test.gs";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var lenses = CodeLensComputer.ComputeReferenceLenses(content, uri);
+
+        Assert.Equal(3, lenses.Count);
+        Assert.Equal(0, lenses[0].DeclarationRange.Start.Line);
+        Assert.Equal(2, lenses[0].ReferenceCount);
+        Assert.Equal(2, lenses[0].References.Length);
+        Assert.All(lenses[0].References, location => Assert.Equal(uri, location.Uri.ToString()));
+        Assert.Equal(new[] { 1, 2 }, lenses[0].References.Select(location => location.Range.Start.Line));
+    }
+
+    [Fact]
     public void ComputeLenses_StructFields()
     {
         const string source = "struct Point {\n    var X int32\n    var Y int32\n}\nvar p = Point{X: 1, Y: 2}\nvar q = p.X\n";

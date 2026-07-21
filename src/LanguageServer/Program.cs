@@ -40,7 +40,9 @@ public class Program
         }
 
         ILogger logger = NullLogger.Instance;
-        var logFile = GetLogPath(args);
+        var logFile = GetLogPath(
+            args,
+            Environment.GetEnvironmentVariable("GSHARP_LSP_TRACE_PATH"));
         if (logFile != null)
         {
             logger = new FileLogger(logFile);
@@ -99,6 +101,36 @@ public class Program
     internal static bool ShouldWaitForDebugger(string[] args)
         => args.Any(arg => string.Equals(arg, "--debug", StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>
+    /// Resolves the debug log file path from the command line or protocol trace environment.
+    /// </summary>
+    /// <param name="args">The language-server command-line arguments.</param>
+    /// <param name="tracePath">The optional trace path supplied by the host environment.</param>
+    /// <returns>The requested log path, or <see langword="null"/> when logging is disabled.</returns>
+    internal static string GetLogPath(string[] args, string tracePath = null)
+    {
+        var logArg = args.FirstOrDefault(a =>
+            string.Equals(a, "--log", StringComparison.OrdinalIgnoreCase) ||
+            a.StartsWith("--log=", StringComparison.OrdinalIgnoreCase));
+
+        if (logArg == null)
+        {
+            return string.IsNullOrWhiteSpace(tracePath) ? null : tracePath.Trim();
+        }
+
+        var separatorIndex = logArg.IndexOf('=');
+        if (separatorIndex >= 0)
+        {
+            var path = logArg.Substring(separatorIndex + 1).Trim();
+            if (!string.IsNullOrEmpty(path))
+            {
+                return path;
+            }
+        }
+
+        return DiagnosticLogPaths.GetDefaultFilePath("gsharp-lsp-debug.log");
+    }
+
     private static async Task RunAsync(Stream sending, Stream receiving, ILogger logger)
     {
         var documentContentService = new DocumentContentService();
@@ -139,36 +171,6 @@ public class Program
     {
         var pipeArg = args.FirstOrDefault(a => a.StartsWith("--pipe=", StringComparison.OrdinalIgnoreCase));
         return pipeArg != null ? pipeArg.Substring("--pipe=".Length) : null;
-    }
-
-    /// <summary>
-    /// Resolves the debug log file path from the command line. Logging is opt-in via the
-    /// <c>--log</c> argument: pass <c>--log</c> to write to the default location, or
-    /// <c>--log=&lt;path&gt;</c> to write to a specific file. Returns <see langword="null"/>
-    /// when <c>--log</c> is absent, in which case no log file is created.
-    /// </summary>
-    private static string GetLogPath(string[] args)
-    {
-        var logArg = args.FirstOrDefault(a =>
-            string.Equals(a, "--log", StringComparison.OrdinalIgnoreCase) ||
-            a.StartsWith("--log=", StringComparison.OrdinalIgnoreCase));
-
-        if (logArg == null)
-        {
-            return null;
-        }
-
-        var separatorIndex = logArg.IndexOf('=');
-        if (separatorIndex >= 0)
-        {
-            var path = logArg.Substring(separatorIndex + 1).Trim();
-            if (!string.IsNullOrEmpty(path))
-            {
-                return path;
-            }
-        }
-
-        return DiagnosticLogPaths.GetDefaultFilePath("gsharp-lsp-debug.log");
     }
 
     private sealed class LoggingStream : Stream

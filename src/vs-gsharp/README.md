@@ -9,9 +9,8 @@ The G# Visual Studio extension provides:
 - the six G# Ember, Magma, and Synthwave light/dark themes
 - snippets generated from the VS Code extension
 
-Visual Studio 2022 17.8 or later is supported. Visual Studio 2026 is the
-primary tested host. The .NET 10 runtime is required by the bundled language
-server and G# SDK projects.
+Visual Studio 2026 or later is supported. The .NET 10 runtime is required by
+the bundled language server and G# SDK projects.
 
 ## Build
 
@@ -39,8 +38,9 @@ before a solution is opened.
 
 ## Settings and commands
 
-`Tools > Options > G# > Language Server` controls the server path, logging,
-debugger wait, cold-start cache, and formatting defaults.
+`Tools > Options > G#` controls the server lifecycle, formatting, on-type
+diagnostics, completion-on-dot, reference CodeLens, and parameter/type inlay
+hints. Language feature changes take effect after **Restart Language Server**.
 
 `Tools > G#` contains **Restart Language Server**, **Show Output**, and
 **Report Issue**. Build, restore, run, debug, and tests use Visual Studio's

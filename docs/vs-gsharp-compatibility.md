@@ -1,13 +1,13 @@
 # G# Visual Studio compatibility
 
 Validated on Visual Studio Enterprise 2026 `18.8.12009.203` ARM64 with
-.NET SDK `10.0.302`, runtime `10.0.10`, and VSIX `0.3.159`. The final
-normal-profile acceptance run used source revision `7e7fd013` plus the
-working-tree extension changes.
+.NET SDK `10.0.302`, runtime `10.0.10`, and VSIX `0.3.198.40000`. The
+automated parity run used source revision `9c40a3a3` plus the working-tree
+extension changes.
 
 | Surface | Result |
 | --- | --- |
-| VSIX load | Package and MEF components load in an isolated root suffix and the normal per-user profile |
+| VSIX load | Package and MEF components load in an isolated root suffix |
 | Editor | `.gs` opens as G# and starts the bundled LSP server |
 | LSP | Completion, hover, signature help, navigation, references, symbols, actions, formatting, rename, folding, semantic tokens, diagnostics, and inlay hints are advertised by dev18 |
 | Status | Native status bar reports server transitions and the active G# project |
@@ -15,7 +15,7 @@ working-tree extension changes.
 | Generated files | `<AssemblyName>.gsproj.lscache` remains on disk but is excluded from Solution Explorer |
 | Restore/build | Native solution restore and build succeed |
 | Debugging | Native managed F5 builds and launches the console sample |
-| Test Explorer | xUnit adapter discovers 3 tests, runs 3/3, and supports Debug All under .NET 10; NUnit and MSTest adapter smoke tests pass |
+| Test Explorer | Visual Studio's VSTest runner discovers all 16 xUnit, NUnit, and MSTest fixture cases; selected runs, skips, failures, refresh, cancellation, and portable PDBs pass. Interactive source navigation and Debug Selected remain manual UI gates |
 | Templates | Console, library, web, and xUnit projects plus four item templates are indexed; New Project and Add New Item outputs rebuild |
 | Themes | Six generated light/dark themes are packaged |
 | Snippets | Generated Visual Studio snippets match the VS Code source |
@@ -36,9 +36,31 @@ assemblies, so tooling can identify the target outside Visual Studio.
 Dev18 does not advertise `codeLens` or `selectionRange`. Their operations
 remain available through Visual Studio's native **Find All References**
 (`Shift+F12`), **Expand Selection**, and **Contract Selection** commands.
-The extension deliberately does not ship a second, lexically approximated
-reference or syntax engine solely to reproduce the missing inline count
-adornment or LSP selection hierarchy.
+
+The language server exposes `gsharp/referenceCodeLens`. It returns declaration
+ranges, reference counts, and reference locations from the same
+`CodeLensComputer` used by `textDocument/codeLens`; the in-process
+`GSharpLanguageServerRpc` facade has a typed request for that method. The
+in-process tagger requests one document result after edits, suppresses stale
+responses, and creates native `ICodeLensTag3` tags without compiler or binder
+logic.
+
+Visual Studio 18.8's modern `ICodeLensProvider` remains a preview,
+out-of-process `VisualStudio.Extensibility` API and cannot import the classic
+`net472` VSIX's MEF RPC facade. G# therefore uses the stable classic API:
+`GSharp.VisualStudio.CodeLens.dll` is packaged as a
+`Microsoft.VisualStudio.CodeLensComponent`, and its
+`IAsyncCodeLensDataPointProvider` consumes the descriptors emitted by the
+in-process tagger. The platform-provided `ICodeLensCallbackService` routes a
+lens click back to the VSIX, which places the caret on the declaration and
+executes Visual Studio's native **Find All References** command. No second
+language server or custom IPC transport is used.
+
+SDK references:
+
+- [VisualStudio.Extensibility CodeLens walkthrough](https://learn.microsoft.com/visualstudio/extensibility/visualstudio.extensibility/editor/walkthroughs/codelens)
+- [Official modern CodeLens sample](https://github.com/microsoft/VSExtensibility/tree/main/New_Extensibility_Model/Samples/CodeLensSample)
+- [Official classic out-of-process CodeLens sample](https://github.com/microsoft/VSSDK-Extensibility-Samples/tree/master/CodeLensOopSample)
 
 ## Experimental profile cache
 

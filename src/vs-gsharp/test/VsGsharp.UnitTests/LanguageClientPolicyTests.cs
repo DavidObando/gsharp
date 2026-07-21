@@ -27,6 +27,29 @@ public sealed class LanguageClientPolicyTests
     }
 
     [Fact]
+    public void CreateInitializationOptions_UsesSharedFeatureContract()
+    {
+        IReadOnlyDictionary<string, object> options =
+            LanguageClientPolicy.CreateInitializationOptions(
+                indentSize: 2,
+                useTabs: false,
+                diagnosticsOnType: false,
+                completionTriggerOnDot: false,
+                referenceCodeLens: false,
+                parameterNameInlayHints: false,
+                typeInlayHints: false,
+                coldStartCache: false);
+
+        Assert.Equal(8, options.Count);
+        Assert.Equal(false, options["diagnosticsOnType"]);
+        Assert.Equal(false, options["completionTriggerOnDot"]);
+        Assert.Equal(false, options["referenceCodeLens"]);
+        Assert.Equal(false, options["parameterNameInlayHints"]);
+        Assert.Equal(false, options["typeInlayHints"]);
+        Assert.Equal(false, options["coldStartCache"]);
+    }
+
+    [Fact]
     public void CreateEnvironment_OnlyDisablesCacheWhenRequested()
     {
         Assert.DoesNotContain(

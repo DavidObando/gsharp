@@ -37,6 +37,7 @@ public sealed class LspServer
     private readonly WorkspaceState workspaceState;
     private readonly ILogger logger;
     private readonly SemaphoreSlim gate = new SemaphoreSlim(1, 1);
+    private readonly SemaphoreSlim pushBindGate = new SemaphoreSlim(1, 1);
     private readonly ConcurrentDictionary<string, CancellationTokenSource> pushBindCts = new ConcurrentDictionary<string, CancellationTokenSource>();
 
     // Test-only seams (issue #1664): letting tests observe/control the off-gate push-diagnostics
@@ -56,6 +57,8 @@ public sealed class LspServer
     private bool clientSupportsDiagnosticRefresh;
     private Timer refreshTimer;
     private string defaultFormattingIndent = "  ";
+    private bool hasConfiguredFormatting;
+    private LanguageServerInitializationOptions initializationOptions = new LanguageServerInitializationOptions();
     private string pendingWorkspaceRootPath;
     private CancellationTokenSource backgroundLoadCts;
 
@@ -82,11 +85,13 @@ public sealed class LspServer
     {
         this.pendingWorkspaceRootPath = request?.RootPath ?? request?.RootUri?.GetFileSystemPath();
         this.DetectClientDiagnosticCapabilities(request?.Capabilities ?? default);
-        this.defaultFormattingIndent = ResolveDefaultFormattingIndent(request?.InitializationOptions ?? default);
+        this.hasConfiguredFormatting = request?.InitializationOptions != null;
+        this.initializationOptions = request?.InitializationOptions ?? new LanguageServerInitializationOptions();
+        this.defaultFormattingIndent = ResolveDefaultFormattingIndent(this.initializationOptions);
 
         return Task.FromResult(new InitializeResult
         {
-            Capabilities = ServerCapabilitiesFactory.Create(),
+            Capabilities = ServerCapabilitiesFactory.Create(this.initializationOptions),
             ServerInfo = new ServerInfo { Name = "GSharp Language Server", Version = "1.0.0" },
         });
     }
@@ -152,7 +157,15 @@ public sealed class LspServer
                 // file to trigger a re-bind (issue: persistent import squiggles after scaffolding
                 // a multi-project workspace).
                 cts.Token.ThrowIfCancellationRequested();
-                this.RefreshOpenDocumentDiagnosticsAfterDiscovery();
+                this.gate.Wait(cts.Token);
+                try
+                {
+                    this.RefreshOpenDocumentDiagnosticsAfterDiscovery();
+                }
+                finally
+                {
+                    this.gate.Release();
+                }
             }
             catch (OperationCanceledException)
             {
@@ -191,17 +204,21 @@ public sealed class LspServer
     {
         var text = request.TextDocument?.Text;
         var uri = request.TextDocument?.Uri;
-        if (uri == null || string.IsNullOrEmpty(text))
+        if (uri == null || text == null)
         {
             return Task.CompletedTask;
         }
 
         return this.GuardAsync(() =>
         {
+            this.CancelPendingPushDiagnosticsBind(uri);
+
             // Issue #1664: UpdateDocument already parses text and computes skipBinding:true
             // diagnostics; reuse that result instead of re-parsing the same text a second time.
             var result = this.UpdateDocument(uri, text);
             this.PublishDiagnosticsIfPushMode(uri, result);
+            this.SchedulePushDiagnosticsBind(uri, result);
+            this.RefreshRelatedDiagnostics(uri);
             return 0;
         });
     }
@@ -218,12 +235,18 @@ public sealed class LspServer
 
         return this.GuardAsync(() =>
         {
+            this.CancelPendingPushDiagnosticsBind(uri);
             var result = this.UpdateDocument(uri, text);
-            this.PublishDiagnosticsIfPushMode(uri, result);
+            if (this.initializationOptions.DiagnosticsOnType)
+            {
+                this.PublishDiagnosticsIfPushMode(uri, result);
+                this.SchedulePushDiagnosticsBind(uri, result);
 
-            // Inter-file edits can change diagnostics in other open documents; ask the
-            // client to re-pull them. Debounced so a burst of keystrokes coalesces.
-            this.RequestDiagnosticRefresh(uri);
+                // Inter-file edits can change diagnostics in other open documents; ask the
+                // client to re-pull them. Debounced so a burst of keystrokes coalesces.
+                this.RefreshRelatedDiagnostics(uri);
+            }
+
             return 0;
         });
     }
@@ -233,13 +256,14 @@ public sealed class LspServer
     {
         var text = request.Text;
         var uri = request.TextDocument?.Uri;
-        if (uri == null || string.IsNullOrEmpty(text))
+        if (uri == null || text == null)
         {
             return Task.CompletedTask;
         }
 
         return this.GuardAsync(() =>
         {
+            this.CancelPendingPushDiagnosticsBind(uri);
             var result = this.UpdateDocument(uri, text);
 
             // Pull clients already receive live binding diagnostics via textDocument/diagnostic;
@@ -251,6 +275,7 @@ public sealed class LspServer
             // forget task below does not block GuardAsync's body, so the gate is released
             // immediately.
             this.SchedulePushDiagnosticsBind(uri, result);
+            this.RefreshRelatedDiagnostics(uri);
             return 0;
         });
     }
@@ -273,8 +298,8 @@ public sealed class LspServer
                 this.workspaceState.ClearOpenBuffer(filePath);
             }
 
-            // Issue #1664: a still-running push-mode didSave bind for this file would otherwise
-            // publish diagnostics for a document the client no longer has open.
+            // Issue #1664: a still-running push-mode synchronization bind for this file would
+            // otherwise publish diagnostics for a document the client no longer has open.
             if (this.pushBindCts.TryRemove(uri.ToString(), out var cts))
             {
                 cts.Cancel();
@@ -398,7 +423,7 @@ public sealed class LspServer
             }
 
             // External file/project changes can alter diagnostics in open documents.
-            this.RequestDiagnosticRefresh();
+            this.RefreshOpenDocumentDiagnostics();
             return 0;
         });
     }
@@ -511,11 +536,23 @@ public sealed class LspServer
 
     [JsonRpcMethod("textDocument/codeLens", UseSingleObjectParameterDeserialization = true)]
     public Task<CodeLens[]> CodeLensAsync(CodeLensParams request, CancellationToken cancellationToken = default)
-        => this.ReadDocumentAsync(
+        => !this.initializationOptions.ReferenceCodeLens
+            ? Task.FromResult(Array.Empty<CodeLens>())
+            : this.ReadDocumentAsync(
             request.TextDocument,
             (content, ct) => CodeLensComputer.ComputeLenses(content, request.TextDocument.Uri?.ToString(), ct).ToArray(),
             Array.Empty<CodeLens>(),
             cancellationToken);
+
+    [JsonRpcMethod("gsharp/referenceCodeLens", UseSingleObjectParameterDeserialization = true)]
+    public Task<ReferenceCodeLens[]> ReferenceCodeLensAsync(CodeLensParams request, CancellationToken cancellationToken = default)
+        => !this.initializationOptions.ReferenceCodeLens
+            ? Task.FromResult(Array.Empty<ReferenceCodeLens>())
+            : this.ReadDocumentAsync(
+                request.TextDocument,
+                (content, ct) => CodeLensComputer.ComputeReferenceLenses(content, request.TextDocument.Uri?.ToString(), ct).ToArray(),
+                Array.Empty<ReferenceCodeLens>(),
+                cancellationToken);
 
     [JsonRpcMethod("gsharp/discoverTests")]
     public Task<TestDiscoveryItem[]> DiscoverTestsAsync(CancellationToken cancellationToken = default)
@@ -580,7 +617,11 @@ public sealed class LspServer
     public Task<InlayHint[]> InlayHintAsync(InlayHintParams request, CancellationToken cancellationToken = default)
         => this.ReadDocumentAsync(
             request.TextDocument,
-            (content, ct) => InlayHintComputer.ComputeHints(content, ct).ToArray(),
+            (content, ct) => InlayHintComputer.ComputeHints(
+                content,
+                this.initializationOptions.ParameterNameInlayHints,
+                this.initializationOptions.TypeInlayHints,
+                ct).ToArray(),
             Array.Empty<InlayHint>(),
             cancellationToken);
 
@@ -1049,9 +1090,9 @@ public sealed class LspServer
     }
 
     /// <summary>
-    /// Publishes the already-computed (parse-only) diagnostics for push-mode clients. Used by
-    /// didOpen/didChange, where <see cref="UpdateDocument"/>'s skipBinding:true result is exactly
-    /// what push clients should see, so no recomputation is needed (issue #1664).
+    /// Publishes the already-computed parse diagnostics immediately for push-mode clients.
+    /// The off-gate full bind scheduled after this replaces them with semantic/binding diagnostics
+    /// without delaying document synchronization (issue #1664).
     /// </summary>
     private void PublishDiagnosticsIfPushMode(DocumentUri uri, DiagnosticComputationResult result)
     {
@@ -1068,10 +1109,19 @@ public sealed class LspServer
             new PublishDiagnosticsParams { Uri = uri, Diagnostics = result.Diagnostics });
     }
 
+    private void CancelPendingPushDiagnosticsBind(DocumentUri uri)
+    {
+        if (uri != null && this.pushBindCts.TryGetValue(uri.ToString(), out var cts))
+        {
+            cts.Cancel();
+        }
+    }
+
     /// <summary>
-    /// Schedules the full (binding + <c>DocumentationValidator</c>) diagnostics pass a push-mode
-    /// didSave needs, off the write gate. Mirrors <see cref="DocumentDiagnosticAsync"/>: the
-    /// already-parsed <paramref name="parseResult"/>'s <see cref="SyntaxTree"/> and owning
+    /// Schedules the full (binding + <c>DocumentationValidator</c>) diagnostics pass push-mode
+    /// document synchronization needs, off the write gate. Mirrors
+    /// <see cref="DocumentDiagnosticAsync"/>: the already-parsed
+    /// <paramref name="parseResult"/>'s <see cref="SyntaxTree"/> and owning
     /// project were captured under the gate by <see cref="UpdateDocument"/> (brief, parse-only);
     /// the (potentially ~seconds-long, cold-workspace) bind itself runs on the thread pool via
     /// <see cref="DocumentSyncHandler.ComputeDiagnosticsForSnapshot"/>, which never calls
@@ -1122,10 +1172,24 @@ public sealed class LspServer
                         return;
                     }
                 }
+                else
+                {
+                    try
+                    {
+                        await Task.Delay(150, token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return;
+                    }
+                }
 
                 DiagnosticComputationResult bound;
+                var enteredBindGate = false;
                 try
                 {
+                    await this.pushBindGate.WaitAsync(token).ConfigureAwait(false);
+                    enteredBindGate = true;
                     token.ThrowIfCancellationRequested();
                     bound = DocumentSyncHandler.ComputeDiagnosticsForSnapshot(syntaxTree, skipBinding: false, project, filePath, this.workspaceState);
                 }
@@ -1138,22 +1202,45 @@ public sealed class LspServer
                     LogHandlerException(nameof(this.SchedulePushDiagnosticsBind), ex);
                     return;
                 }
+                finally
+                {
+                    if (enteredBindGate)
+                    {
+                        this.pushBindGate.Release();
+                    }
+                }
 
                 this.TestOnBindResult?.Invoke(uri, bound);
 
-                // A newer edit superseded this bind while it ran; its diagnostics are stale, so
-                // drop them instead of clobbering whatever the newer edit publishes.
-                if (token.IsCancellationRequested)
+                try
+                {
+                    await this.gate.WaitAsync(token).ConfigureAwait(false);
+                    try
+                    {
+                        // Mutations cancel/replace push binds while holding this same gate. Keep
+                        // the final freshness check and notification enqueue atomic with them.
+                        if (token.IsCancellationRequested
+                            || !this.pushBindCts.TryGetValue(key, out var current)
+                            || !ReferenceEquals(current, cts))
+                        {
+                            return;
+                        }
+
+                        this.TestOnPublish?.Invoke(uri, bound.Diagnostics);
+                        this.rpc?.NotifyWithParameterObjectAsync(
+                            "textDocument/publishDiagnostics",
+                            new PublishDiagnosticsParams { Uri = uri, Diagnostics = bound.Diagnostics });
+                    }
+                    finally
+                    {
+                        this.gate.Release();
+                    }
+                }
+                catch (OperationCanceledException)
                 {
                     return;
                 }
-
-                this.TestOnPublish?.Invoke(uri, bound.Diagnostics);
-                this.rpc?.NotifyWithParameterObjectAsync(
-                    "textDocument/publishDiagnostics",
-                    new PublishDiagnosticsParams { Uri = uri, Diagnostics = bound.Diagnostics });
-            },
-            token);
+            });
     }
 
     private void DetectClientDiagnosticCapabilities(JsonElement capabilities)
@@ -1188,58 +1275,70 @@ public sealed class LspServer
     }
 
     /// <summary>
-    /// Reads the extension's <c>formattingIndentSize</c>/<c>formattingUseTabs</c> initialization
-    /// options (see serverManager.ts) to compute the indent unit used when a formatting request
-    /// does not itself supply <see cref="FormattingOptions"/>.
+    /// Reads the typed initialization options to compute the indent unit used when a formatting
+    /// request does not itself supply <see cref="FormattingOptions"/>.
     /// </summary>
-    private static string ResolveDefaultFormattingIndent(JsonElement initializationOptions)
+    private static string ResolveDefaultFormattingIndent(LanguageServerInitializationOptions initializationOptions)
     {
         const string fallback = "  ";
-        try
+        if (initializationOptions == null)
         {
-            if (initializationOptions.ValueKind != JsonValueKind.Object)
-            {
-                return fallback;
-            }
-
-            var useTabs = initializationOptions.TryGetProperty("formattingUseTabs", out var useTabsElement)
-                && useTabsElement.ValueKind == JsonValueKind.True;
-
-            if (useTabs)
-            {
-                return "\t";
-            }
-
-            if (initializationOptions.TryGetProperty("formattingIndentSize", out var sizeElement)
-                && sizeElement.ValueKind == JsonValueKind.Number
-                && sizeElement.TryGetInt32(out var size)
-                && size > 0)
-            {
-                return new string(' ', size);
-            }
-
             return fallback;
         }
-        catch
+
+        if (initializationOptions.FormattingUseTabs)
         {
-            // Initialization option parsing is best-effort; fall back to the two-space default.
-            return fallback;
+            return "\t";
         }
+
+        return initializationOptions.FormattingIndentSize > 0
+            ? new string(' ', initializationOptions.FormattingIndentSize)
+            : fallback;
     }
 
     // Re-evaluates diagnostics for open documents once background workspace discovery has
-    // finished. Pull clients (e.g. VS Code) request diagnostics per document via
-    // textDocument/diagnostic; a file opened before discovery completed was bound without its
-    // project's references (see the call site in Initialized) and reported every imported symbol
-    // as "could not be found". Nothing re-pulls those diagnostics on its own, so the spurious
-    // squiggles persisted until the user edited the file. Asking the client to refresh makes it
-    // re-pull, and the fresh pull binds each file against its now-known project. (Push clients do
-    // not pull binding diagnostics on open — only on save — so they never showed the stale
-    // squiggles and need no refresh here.)
+    // finished. A file opened before discovery completed was initially bound without its
+    // project's references. Pull clients are asked to re-pull; push-only clients get a new
+    // full bind against the now-discovered project.
     private void RefreshOpenDocumentDiagnosticsAfterDiscovery()
     {
         this.TestOnDiagnosticRefreshAfterDiscovery?.Invoke();
-        this.RequestDiagnosticRefresh();
+        this.RefreshOpenDocumentDiagnostics();
+    }
+
+    // Must be called while holding the write gate. This keeps each refreshed content snapshot
+    // coherent with project discovery/watched-file mutations and lets SchedulePushDiagnosticsBind
+    // retain its existing per-document cancellation ordering.
+    private void RefreshOpenDocumentDiagnostics()
+    {
+        if (this.clientSupportsPullDiagnostics)
+        {
+            this.RequestDiagnosticRefresh();
+            return;
+        }
+
+        foreach (var document in this.documentContentService.AllDocuments.ToList())
+        {
+            var uri = DocumentUri.From(document.Key);
+            var filePath = uri?.GetFileSystemPath();
+            if (uri == null)
+            {
+                continue;
+            }
+
+            var project = !string.IsNullOrEmpty(filePath)
+                ? this.workspaceState.GetProjectForFile(filePath)
+                : null;
+            var content = new DocumentContent(
+                document.Value.SyntaxTree,
+                document.Value.Lines,
+                project,
+                this.workspaceState);
+            this.documentContentService.AddOrUpdate(document.Key, content);
+            this.SchedulePushDiagnosticsBind(
+                uri,
+                new DiagnosticComputationResult(content, Array.Empty<Diagnostic>()));
+        }
     }
 
     private void RequestDiagnosticRefresh(DocumentUri changedUri)
@@ -1259,6 +1358,45 @@ public sealed class LspServer
         }
 
         this.RequestDiagnosticRefresh();
+    }
+
+    private void RefreshRelatedDiagnostics(DocumentUri changedUri)
+    {
+        if (this.clientSupportsPullDiagnostics)
+        {
+            this.RequestDiagnosticRefresh(changedUri);
+            return;
+        }
+
+        var changedPath = changedUri.GetFileSystemPath();
+        var changedProject = !string.IsNullOrEmpty(changedPath)
+            ? this.workspaceState.GetProjectForFile(changedPath)
+            : null;
+        if (changedProject == null || changedProject.SourceFiles.Count <= 1)
+        {
+            return;
+        }
+
+        foreach (var document in this.documentContentService.AllDocuments.ToList())
+        {
+            if (string.Equals(document.Key, changedUri.ToString(), StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var uri = DocumentUri.From(document.Key);
+            var filePath = uri?.GetFileSystemPath();
+            if (uri == null
+                || string.IsNullOrEmpty(filePath)
+                || !ReferenceEquals(this.workspaceState.GetProjectForFile(filePath), changedProject))
+            {
+                continue;
+            }
+
+            this.SchedulePushDiagnosticsBind(
+                uri,
+                new DiagnosticComputationResult(document.Value, Array.Empty<Diagnostic>()));
+        }
     }
 
     private void RequestDiagnosticRefresh()
@@ -1320,7 +1458,9 @@ public sealed class LspServer
     {
         var sourceText = content.SyntaxTree.Text;
         var originalText = sourceText.ToString();
-        var indent = ResolveIndent(options, this.defaultFormattingIndent);
+        var indent = this.hasConfiguredFormatting
+            ? this.defaultFormattingIndent
+            : ResolveIndent(options, this.defaultFormattingIndent);
         var formatted = FormattingEngine.Format(originalText, indent);
         if (formatted == originalText)
         {
@@ -1340,10 +1480,9 @@ public sealed class LspServer
     }
 
     /// <summary>
-    /// Resolves the indent unit for a formatting request: the request's own
-    /// <see cref="FormattingOptions"/> (tabSize/insertSpaces, as sent by the editor per the LSP
-    /// spec) take precedence, falling back to the server-wide default derived from the
-    /// extension's initialization options when the request supplies none.
+    /// Resolves the indent unit for clients that do not supply the shared initialization
+    /// contract. Clients that do configure G# formatting use <see cref="defaultFormattingIndent"/>
+    /// directly so their G#-specific setting is not silently replaced by the editor-wide value.
     /// </summary>
     private static string ResolveIndent(FormattingOptions options, string fallback)
     {
@@ -1497,37 +1636,31 @@ public sealed class LspServer
         switch (changeType)
         {
             case FileChangeType.Created:
-                var discovered = ProjectDiscovery.DiscoverProject(filePath);
-                if (discovered != null)
-                {
-                    var project = this.workspaceState.AddProject(discovered.ProjectFilePath);
-                    project.ProjectReferences = discovered.ProjectReferences;
-                    project.ReferenceSourcePath = discovered.ReferenceSourcePath;
-                    project.References = discovered.References;
-                    project.RootNamespace = discovered.RootNamespace;
-                    foreach (var source in discovered.SourceFiles)
-                    {
-                        project.AddFileFromDisk(source);
-                        this.workspaceState.RegisterFile(source, project);
-                    }
-                }
-
-                break;
-
             case FileChangeType.Changed:
                 var existing = this.workspaceState.GetProject(filePath);
-                var rediscovered = existing != null ? ProjectDiscovery.DiscoverProject(filePath) : null;
+                var rediscovered = ProjectDiscovery.DiscoverProject(filePath);
                 if (rediscovered != null)
                 {
+                    existing ??= this.workspaceState.AddProject(rediscovered.ProjectFilePath);
+                    existing.AssemblyName = rediscovered.AssemblyName;
+                    existing.TargetFramework = rediscovered.TargetFramework;
+                    existing.RootNamespace = rediscovered.RootNamespace;
                     existing.ProjectReferences = rediscovered.ProjectReferences;
                     existing.ReferenceSourcePath = rediscovered.ReferenceSourcePath;
                     existing.References = rediscovered.References;
-                    existing.RootNamespace = rediscovered.RootNamespace;
                     foreach (var source in rediscovered.SourceFiles)
                     {
                         if (!existing.ContainsFile(source))
                         {
-                            existing.AddFileFromDisk(source);
+                            if (this.workspaceState.TryGetOpenBuffer(source, out var text))
+                            {
+                                existing.UpdateFile(source, text);
+                            }
+                            else
+                            {
+                                existing.AddFileFromDisk(source);
+                            }
+
                             this.workspaceState.RegisterFile(source, existing);
                         }
                     }
@@ -1555,10 +1688,19 @@ public sealed class LspServer
         switch (changeType)
         {
             case FileChangeType.Created:
-                var project = this.FindOwningProject(filePath);
+            case FileChangeType.Changed:
+                var project = this.workspaceState.GetProjectForFile(filePath) ?? this.FindOwningProject(filePath);
                 if (project != null)
                 {
-                    project.AddFileFromDisk(filePath);
+                    if (this.workspaceState.TryGetOpenBuffer(filePath, out var text))
+                    {
+                        project.UpdateFile(filePath, text);
+                    }
+                    else
+                    {
+                        project.AddFileFromDisk(filePath);
+                    }
+
                     this.workspaceState.RegisterFile(filePath, project);
                 }
 
