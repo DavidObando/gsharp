@@ -104,6 +104,75 @@ triage artifact; later stages are reported as `skip`.
    `Gsharp.NET.Sdk`) and compares the passing/failing test set against the C#
    xUnit oracle. Failures → `test-parity-failure`.
 
+### ILVerify exception policy
+
+Stage 3 does not treat green CI or an application that happens to run as proof
+that invalid non-unsafe IL is acceptable. An exception is method- and
+diagnostic-scoped and requires a matching C#-built baseline. Issue #2671 adds
+one such upstream exception for Avalonia 11.2.7 XamlIl-generated
+`XamlClosure_N::Build_N(IServiceProvider)` methods. The filter requires all of:
+
+- `StackUnexpected`;
+- the exact generated closure/method/signature convention; and
+- XamlIl's exact object-slot mismatch, `found ref 'object'` to an expected
+  reference type.
+
+Other errors in the same assembly and other errors in a matching method remain
+gating failures.
+
+The proof used Oahu commit
+`200e3b4c26c781368f74bbef098caea89bac8754` and its C# release artifact
+`8365085850`. Both the original C# build and migrated G# build contain these
+six identical diagnostics (paths normalized), hash
+`d467dfc517fa448a1cff59f934afc11bbcebf5901910629db36ad63e8264bf50`:
+
+| Method | Offsets | Triage fingerprint |
+| --- | --- | --- |
+| `BookLibraryView+XamlClosure_1::Build_1` | `0x1B`, `0x20`, `0xB1` | `sha256:9d0322446fc5a1cc4b78e2a66d5d83354b6e527fcd49d9f907fe63ccbb034a53` |
+| `ConversionView+XamlClosure_2::Build_1` | `0x1B`, `0x20`, `0xD7` | `sha256:94a053bb50ec2721c8600fe77dd02aa29a401f95bf174b39b459218f5dfea5a7` |
+
+Token-resolved ILSpy method disassemblies are identical after removing only
+the RVA comment: BookLibrary
+`d79a21c01d54baa12c9c7f689d1beba1b1dcd814160cfecf7048100f3f90cae4`;
+Conversion
+`66d3ea09ffba550e5d034135c085d9010c9ee85a6e003a2417132697e25ceeba`.
+The raw IL streams have the same sizes/maxstack (183/9 and 221/9) but different
+hashes because metadata row tokens differ between csc and gsc assemblies:
+
+| Method | Original raw IL SHA-256 | Migrated raw IL SHA-256 |
+| --- | --- | --- |
+| BookLibrary `Build_1` | `9af2771d7ae3e81889e17959afe409fc31bd8bbb33a827ddc156e6ffd43bbfdc` | `91db5378181a2bbcc720ad9d5018034cb960df3ef04cf827b73aba885d05b679` |
+| Conversion `Build_1` | `ef14249dfeb99e2455b14a06459735e5312fdfad05402724c69185234ffe6e1d` | `d81df7df85024b9ff4c5e5dd36fc3303d541687e75abcc57ba8917a0b723bfa7` |
+
+Ownership is also observable before verification. Neither compiler's
+`obj/Release/net10.0/Oahu.UI.dll` contains `XamlClosure` types. Avalonia's
+`CompileAvaloniaXamlTask` writes
+`obj/Release/net10.0/Avalonia/Oahu.UI.dll`; only that post-processed assembly
+contains them, and it is byte-identical to the copied `bin` assembly. The
+original pre/post hashes are `0f0d5e80…`/`f26eeb88…`; the migrated hashes are
+`86f7e159…`/`f534dc90…`. The relevant checks are:
+
+```sh
+sha256sum obj/Release/net10.0/{,Avalonia/}Oahu.UI.dll \
+  bin/Release/net10.0/Oahu.UI.dll
+ilspycmd -l c obj/Release/net10.0/Oahu.UI.dll | grep XamlClosure
+ilspycmd -l c obj/Release/net10.0/Avalonia/Oahu.UI.dll | grep XamlClosure
+runtime=$(dotnet --list-runtimes | awk \
+  '$1=="Microsoft.NETCore.App" && $2~/^10[.]/{gsub(/[][]/,"",$3); p=$3"/"$2} END{print p}')
+ilverify bin/Release/net10.0/Oahu.UI.dll -s System.Private.CoreLib \
+  $(find "$runtime" -maxdepth 1 -name '*.dll' -exec printf -- '-r %s ' {} \;) \
+  $(find bin/Release/net10.0 -maxdepth 1 -name '*.dll' \
+    ! -name Oahu.UI.dll -exec printf -- '-r %s ' {} \;)
+ilspycmd -il bin/Release/net10.0/Oahu.UI.dll > proof.il
+```
+
+Invoking both exact methods from each assembly returns `TextBlock` and
+`ProgressBar`, respectively. This establishes an upstream, runtime-valid
+verifier exception; it does not excuse unrelated Avalonia or gsc diagnostics.
+Applying the narrowed filter to either complete nine-error Oahu log leaves the
+same `AboutView.!XamlIlPopulate` `DelegateCtor` error gating. That separate
+diagnostic remains unsuppressed and is tracked by #2672.
+
 ## Construct coverage (ADR-0138)
 
 The authoritative statement of C# 14 coverage is
