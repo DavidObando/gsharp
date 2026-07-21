@@ -4121,6 +4121,24 @@ internal static class OverloadResolution
                     continue;
                 }
 
+                // Issue #2617: a same-compilation type argument is represented by
+                // `object` while imported generic methods are resolved. Check CLR
+                // interface constraints against the symbol's declared interfaces
+                // instead of the placeholder. This is the Oahu
+                // SettingsManager.GetUserSettings[UserSettings]() shape.
+                if (constraint.IsInterface
+                    && !typeArgSymbols.IsDefaultOrEmpty
+                    && i < typeArgSymbols.Length
+                    && typeArgSymbols[i]?.ClrType == null)
+                {
+                    if (ErasedSymbolSatisfiesInterfaceConstraint(typeArgSymbols[i], constraint))
+                    {
+                        continue;
+                    }
+
+                    return false;
+                }
+
                 // Issue #1325: a `where T : struct` parameter carries an implicit
                 // `System.ValueType` base constraint in metadata (and an enum a
                 // `System.Enum` one). A same-compilation user value type is erased
@@ -4181,6 +4199,69 @@ internal static class OverloadResolution
 
         return true;
     }
+
+    private static bool ErasedSymbolSatisfiesInterfaceConstraint(TypeSymbol symbol, Type constraint)
+    {
+        if (symbol is StructSymbol aggregate)
+        {
+            for (var current = aggregate; current != null; current = current.BaseClass)
+            {
+                foreach (var implemented in current.ImplementedClrInterfaces)
+                {
+                    if (ClrInterfaceSatisfies(implemented?.ClrType, constraint))
+                    {
+                        return true;
+                    }
+                }
+
+                foreach (var implemented in current.Interfaces)
+                {
+                    if (UserInterfaceSatisfies(implemented, constraint))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return aggregate.ImportedBaseType?.ClrType is Type importedBase
+                && ClrTypeUtilities.IsAssignableByName(constraint, importedBase);
+        }
+
+        if (symbol is InterfaceSymbol userInterface)
+        {
+            return UserInterfaceSatisfies(userInterface, constraint);
+        }
+
+        return symbol is TypeParameterSymbol typeParameter
+            && (ClrInterfaceSatisfies(typeParameter.ClrInterfaceConstraint?.ClrType, constraint)
+                || UserInterfaceSatisfies(typeParameter.InterfaceConstraint, constraint));
+    }
+
+    private static bool UserInterfaceSatisfies(InterfaceSymbol userInterface, Type constraint)
+    {
+        if (userInterface == null)
+        {
+            return false;
+        }
+
+        foreach (var candidate in userInterface.SelfAndAllBaseInterfaces())
+        {
+            foreach (var importedBase in candidate.BaseClrInterfaces)
+            {
+                if (ClrInterfaceSatisfies(importedBase?.ClrType, constraint))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ClrInterfaceSatisfies(Type candidate, Type constraint)
+        => candidate != null
+            && (ClrTypeUtilities.AreSame(candidate, constraint)
+                || ClrTypeUtilities.ImplementsInterfaceByName(candidate, constraint));
 
     /// <summary>
     /// Issue #1325: recognizes a type-argument symbol that is a same-compilation
