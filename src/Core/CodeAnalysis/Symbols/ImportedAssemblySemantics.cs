@@ -95,7 +95,8 @@ internal static class ImportedAssemblySemantics
             && m.ReturnType.FullName == "System.Boolean"
             && m.GetParameters() is [{ ParameterType.FullName: "System.Text.StringBuilder" }]);
 
-        if (!hasPrintMembers)
+        var hasReferenceAssemblyShape = !hasPrintMembers && HasCSharpRecordReferenceShape(type);
+        if (!hasPrintMembers && !hasReferenceAssemblyShape)
         {
             return false;
         }
@@ -112,7 +113,7 @@ internal static class ImportedAssemblySemantics
         // fail detection, so `PrintMembers` alone — a marker unique to
         // compiler-synthesized records — is the correct, sufficient
         // signature for the value-type case.
-        if (!type.IsValueType)
+        if (!type.IsValueType && !hasReferenceAssemblyShape)
         {
             var hasCopyConstructor = ClrTypeUtilities.SafeGetConstructors(type, InstanceAny).Any(c =>
                 c.GetParameters() is [{ } onlyParameter] && ClrTypeUtilities.AreSame(onlyParameter.ParameterType, type));
@@ -173,6 +174,70 @@ internal static class ImportedAssemblySemantics
         {
             return false;
         }
+    }
+
+    // Reference assemblies omit the private/protected markers of a sealed
+    // record. Its compiler-generated public equality surface remains intact.
+    private static bool HasCSharpRecordReferenceShape(Type type)
+    {
+        const BindingFlags PublicInstance = BindingFlags.Public | BindingFlags.Instance;
+        const BindingFlags PublicStatic = BindingFlags.Public | BindingFlags.Static;
+
+        if (!type.IsSealed)
+        {
+            return false;
+        }
+
+        bool IsCompilerGenerated(MemberInfo member) => member.GetCustomAttributesData().Any(attribute =>
+            attribute.AttributeType.FullName == "System.Runtime.CompilerServices.CompilerGeneratedAttribute");
+
+        var implementsSelfEquatable = type.GetInterfaces().Any(iface =>
+            iface.IsGenericType
+            && iface.GetGenericTypeDefinition().FullName == "System.IEquatable`1"
+            && iface.GetGenericArguments() is [{ } argument]
+            && argument.FullName == type.FullName);
+        if (!implementsSelfEquatable)
+        {
+            return false;
+        }
+
+        var methods = ClrTypeUtilities.SafeGetMethods(type, PublicInstance | PublicStatic);
+        var hasTypedEquals = methods.Any(method =>
+            method.Name == "Equals"
+            && !method.IsStatic
+            && method.ReturnType.FullName == "System.Boolean"
+            && method.GetParameters() is [{ } parameter]
+            && parameter.ParameterType.FullName == type.FullName
+            && IsCompilerGenerated(method));
+        var hasEquality = methods.Any(method =>
+            method.Name == "op_Equality"
+            && method.IsStatic
+            && method.ReturnType.FullName == "System.Boolean"
+            && method.GetParameters() is [{ } left, { } right]
+            && left.ParameterType.FullName == type.FullName
+            && right.ParameterType.FullName == type.FullName
+            && IsCompilerGenerated(method));
+        var hasInequality = methods.Any(method =>
+            method.Name == "op_Inequality"
+            && method.IsStatic
+            && method.ReturnType.FullName == "System.Boolean"
+            && method.GetParameters() is [{ } left, { } right]
+            && left.ParameterType.FullName == type.FullName
+            && right.ParameterType.FullName == type.FullName
+            && IsCompilerGenerated(method));
+        var hasToString = methods.Any(method =>
+            method.Name == "ToString"
+            && !method.IsStatic
+            && method.ReturnType.FullName == "System.String"
+            && method.GetParameters().Length == 0
+            && IsCompilerGenerated(method));
+        var hasGetHashCode = methods.Any(method =>
+            method.Name == "GetHashCode"
+            && !method.IsStatic
+            && method.ReturnType.FullName == "System.Int32"
+            && method.GetParameters().Length == 0
+            && IsCompilerGenerated(method));
+        return hasTypedEquals && hasEquality && hasInequality && hasToString && hasGetHashCode;
     }
 
     // Issue #2291: the record's POSITIONAL primary constructor is the public

@@ -3024,7 +3024,7 @@ public sealed class Binder
                 // array — the exact shape the metadata importer produces for
                 // imported members (see ClrNullability) — so the emitter re-stamps
                 // a `[NullableAttribute]` and the inner nullability round-trips.
-                var concrete = ResolveClosedGenericTypeClauseSymbol(closed);
+                var concrete = ResolveClrTypeClauseSymbol(closed);
                 if (!closed.IsValueType)
                 {
                     var symArgs = symbolicArgs.ToImmutable();
@@ -3768,7 +3768,7 @@ public sealed class Binder
     {
         if (targetArity == 0)
         {
-            return TypeSymbol.FromClrType(clrType);
+            return ResolveClrTypeClauseSymbol(clrType);
         }
 
         if (!clrType.IsGenericTypeDefinition)
@@ -3828,7 +3828,7 @@ public sealed class Binder
                 return ImportedTypeSymbol.GetConstructed(closed, clrType, symbolicArgs.MoveToImmutable());
             }
 
-            return ResolveClosedGenericTypeClauseSymbol(closed);
+            return ResolveClrTypeClauseSymbol(closed);
         }
         catch (System.ArgumentException)
         {
@@ -4012,7 +4012,7 @@ public sealed class Binder
         {
             if (argSyntaxes.Count == 0)
             {
-                return TypeSymbol.FromClrType(nestedDef);
+                return ResolveClrTypeClauseSymbol(nestedDef);
             }
 
             Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.DottedName);
@@ -4071,7 +4071,7 @@ public sealed class Binder
                 return ImportedTypeSymbol.GetConstructed(closed, nestedDef, symbolicArgs.MoveToImmutable());
             }
 
-            return ResolveClosedGenericTypeClauseSymbol(closed);
+            return ResolveClrTypeClauseSymbol(closed);
         }
         catch (System.ArgumentException)
         {
@@ -5822,23 +5822,17 @@ public sealed class Binder
         => NullableLifting.ResolveClrTypeForGenericArg(this.scope.References, typeSymbol);
 
     /// <summary>
-    /// Issue #2278: resolves a CLOSED generic CLR type (constructed from a
-    /// type-clause position — a parameter/return/local type-annotation, e.g.
-    /// <c>Box[int32]</c>, as opposed to a primary-constructor CALL) to its
-    /// semantic-aggregate <see cref="StructSymbol"/> when it is an imported
-    /// generic <c>data class</c>/<c>data struct</c>, so a type-clause use
-    /// resolves to the SAME aggregate identity that construction and member
-    /// access already do — matching the non-generic behavior wired up by
-    /// issue #2263. Falls back to the ordinary <see cref="TypeSymbol.FromClrType(Type)"/>
-    /// projection for every other closed generic type.
+    /// Resolves a CLR type used in a type clause to its semantic aggregate when
+    /// it is an imported data class/data struct. This keeps simple, qualified,
+    /// nested, and closed-generic spellings on the same symbol identity.
     /// </summary>
-    /// <param name="closed">The closed (fully constructed) generic CLR type.</param>
-    /// <returns>The semantic aggregate when <paramref name="closed"/> is a marked data type; otherwise the ordinary imported-type projection.</returns>
-    private TypeSymbol ResolveClosedGenericTypeClauseSymbol(Type closed)
+    /// <param name="type">The resolved CLR type.</param>
+    /// <returns>The semantic aggregate when <paramref name="type"/> is a marked data type; otherwise the ordinary imported-type projection.</returns>
+    private TypeSymbol ResolveClrTypeClauseSymbol(Type type)
     {
-        return ImportedTypeSymbol.TryCreateSemanticAggregate(closed, this.scope.References, out var aggregate)
+        return ImportedTypeSymbol.TryCreateSemanticAggregate(type, this.scope.References, out var aggregate)
             ? aggregate
-            : TypeSymbol.FromClrType(closed);
+            : TypeSymbol.FromClrType(type);
     }
 
     // Issue #337: build an (unresolved) CLR member method-group expression for a

@@ -91,6 +91,9 @@ public sealed class Issue2551TranslatedRecordProjectReferencePipelineTests
                 public int Retries { get; init; } = 3;
 
                 public static Settings Default => new();
+
+                public static Models.Settings Copy(Models.Settings value)
+                    => value with { Label = "producer" };
             }
             """);
 
@@ -100,22 +103,26 @@ public sealed class Issue2551TranslatedRecordProjectReferencePipelineTests
         File.WriteAllText(consumerProject, ProjectFile("../Models/Models.csproj", outputType: "Exe"));
         File.WriteAllText(Path.Combine(consumerDirectory, "Program.cs"), """
             using System;
-            using Models;
-
-            var original = Settings.Default;
-            var changed = original with { Retries = 8 };
+            var original = Models.Settings.Default;
+            var produced = Models.Settings.Copy(original);
+            var changed = Change(produced);
             var copied = changed with { Label = "copied" };
 
             Console.WriteLine(original.Label);
             Console.WriteLine(original.Retries);
+            Console.WriteLine(produced.Label);
+            Console.WriteLine(produced.Retries);
             Console.WriteLine(changed.Label);
             Console.WriteLine(changed.Retries);
             Console.WriteLine(copied.Label);
             Console.WriteLine(copied.Retries);
+
+            static Models.Settings Change(Models.Settings value)
+                => value with { Retries = 8 };
             """);
 
         string stdoutGolden = Path.Combine(sourceRoot, "baseline.stdout.golden");
-        File.WriteAllText(stdoutGolden, "ready\n3\nready\n8\ncopied\n8\n");
+        File.WriteAllText(stdoutGolden, "ready\n3\nproducer\n3\nproducer\n8\ncopied\n8\n");
         return new Fixture(modelsProject, consumerProject, stdoutGolden);
     }
 
