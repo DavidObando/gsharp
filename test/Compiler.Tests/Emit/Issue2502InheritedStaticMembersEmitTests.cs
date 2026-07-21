@@ -161,6 +161,68 @@ public sealed class Issue2502InheritedStaticMembersEmitTests
         }
     }
 
+    [Fact]
+    public void Issue2636_ImportedDerivedType_InheritedStaticMethodRunsAcrossAssemblies()
+    {
+        var directory = CreateTestDirectory();
+        try
+        {
+            var baseLibrary = Path.Combine(directory, "Issue2636.Base.dll");
+            EmitCSharpAssembly(
+                baseLibrary,
+                "Issue2636.Base",
+                """
+                using System.Threading.Tasks;
+
+                namespace Issue2636.Base;
+
+                public class BookDbContext
+                {
+                    public static Task<bool> StartupAsync() => Task.FromResult(true);
+                }
+                """,
+                OutputKind.DynamicallyLinkedLibrary);
+
+            var derivedLibrary = Path.Combine(directory, "Issue2636.Derived.dll");
+            EmitCSharpAssembly(
+                derivedLibrary,
+                "Issue2636.Derived",
+                """
+                using Issue2636.Base;
+
+                namespace Issue2636.Derived;
+
+                public sealed class BookDbContextLazyLoad : BookDbContext;
+                """,
+                OutputKind.DynamicallyLinkedLibrary,
+                baseLibrary);
+
+            const string Source = """
+                package Issue2636.Consumer
+                import System
+                import Issue2636.Derived
+
+                func Main() {
+                    Console.WriteLine(BookDbContextLazyLoad.StartupAsync()!!.GetAwaiter().GetResult())
+                }
+                """;
+
+            var executable = CompileGSharp(
+                directory,
+                "Issue2636.Consumer",
+                Source,
+                "exe",
+                baseLibrary,
+                derivedLibrary);
+            IlVerifier.Verify(executable, additionalReferences: new[] { baseLibrary, derivedLibrary });
+            Assert.Equal("True\n", Run(executable));
+        }
+        finally
+        {
+            TryDelete(directory);
+        }
+    }
+
     private static string CompileGSharp(
         string directory,
         string assemblyName,

@@ -84,16 +84,19 @@ public sealed class ImportedClassSymbol : Symbol
     public bool TryLookupMember(string text, NameExpressionSyntax ne, out MemberInfo member)
     {
         _ = ne;
-        var bindingFlags = GetImportedMemberBindingFlags();
-        var property = ClrTypeUtilities.SafeGetProperty(ClassType, text, bindingFlags);
-        if (property != null && property.GetIndexParameters().Length == 0 && IsVisibleToCurrentCompilation(property))
+        var level = FindNearestNamedMemberLevel(text);
+        var property = level.Properties.FirstOrDefault(p =>
+            p.GetIndexParameters().Length == 0
+            && IsStatic(p)
+            && IsVisibleToCurrentCompilation(p));
+        if (property != null)
         {
             member = property;
             return true;
         }
 
-        var field = ClrTypeUtilities.SafeGetField(ClassType, text, bindingFlags);
-        if (field != null && IsVisibleToCurrentCompilation(field))
+        var field = level.Fields.FirstOrDefault(f => f.IsStatic && IsVisibleToCurrentCompilation(f));
+        if (field != null)
         {
             member = field;
             return true;
@@ -186,10 +189,9 @@ public sealed class ImportedClassSymbol : Symbol
         isAmbiguous = false;
         ambiguousMethods = ImmutableArray<MethodInfo>.Empty;
         isExpanded = false;
-        var methods = ClrTypeUtilities.SafeGetMethods(ClassType, GetImportedMemberBindingFlags())
-            .Where(IsVisibleToCurrentCompilation)
-            .ToArray();
-        var nameMatches = methods.Where(m => m.Name == text).ToList();
+        var nameMatches = FindNearestNamedMemberLevel(text).Methods
+            .Where(m => m.IsStatic && IsVisibleToCurrentCompilation(m))
+            .ToList();
         if (nameMatches.Count == 0)
         {
             return false;
@@ -423,6 +425,23 @@ public sealed class ImportedClassSymbol : Symbol
     public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function)
         => TryLookupFunction(text, callExpression, arguments, out function, out _);
 
+    /// <summary>
+    /// Gets the visible static methods from the nearest declaration level that
+    /// contains <paramref name="text"/>. A declaration on a derived type hides
+    /// every same-named base member when it is accessible, including when it is
+    /// not a static method.
+    /// </summary>
+    /// <param name="text">The method-group name.</param>
+    /// <returns>The visible, non-special static methods at the winning level.</returns>
+    internal ImmutableArray<MethodInfo> GetStaticMethodGroup(string text)
+        => FindNearestNamedMemberLevel(text).Methods
+            .Where(m =>
+                m.IsStatic
+                && !m.IsGenericMethodDefinition
+                && !m.IsSpecialName
+                && IsVisibleToCurrentCompilation(m))
+            .ToImmutableArray();
+
     private static Type ProjectMethodGroupType(TypeSymbol type)
     {
         var clrType = NullableTypeSymbol.GetEffectiveClrType(type);
@@ -478,21 +497,74 @@ public sealed class ImportedClassSymbol : Symbol
         return flags;
     }
 
-    private BindingFlags GetImportedMemberBindingFlags(bool includeInstance = false)
+    private NamedMemberLevel FindNearestNamedMemberLevel(string name)
     {
-        var flags = BindingFlags.Public | BindingFlags.Static;
-        if (includeInstance)
+        const BindingFlags Flags = BindingFlags.Public
+            | BindingFlags.NonPublic
+            | BindingFlags.Static
+            | BindingFlags.Instance
+            | BindingFlags.DeclaredOnly;
+
+        for (var current = ClassType; current != null; current = GetBaseTypeSafe(current))
         {
-            flags |= BindingFlags.Instance;
+            var methods = ClrTypeUtilities.SafeGetMethods(current, Flags)
+                .Where(m =>
+                    string.Equals(m.Name, name, StringComparison.Ordinal)
+                    && IsVisibleToCurrentCompilation(m))
+                .ToImmutableArray();
+            var properties = ClrTypeUtilities.SafeGetProperties(current, Flags)
+                .Where(p =>
+                    string.Equals(p.Name, name, StringComparison.Ordinal)
+                    && IsVisibleToCurrentCompilation(p))
+                .ToImmutableArray();
+            var fields = ClrTypeUtilities.SafeGetFields(current, Flags)
+                .Where(f =>
+                    string.Equals(f.Name, name, StringComparison.Ordinal)
+                    && IsVisibleToCurrentCompilation(f))
+                .ToImmutableArray();
+            var events = ClrTypeUtilities.SafeGetEvents(current, Flags)
+                .Any(e =>
+                    string.Equals(e.Name, name, StringComparison.Ordinal)
+                    && IsVisibleToCurrentCompilation(e));
+
+            if (!methods.IsEmpty || !properties.IsEmpty || !fields.IsEmpty || events || DeclaresVisibleNestedType(current, name))
+            {
+                return new NamedMemberLevel(methods, properties, fields);
+            }
         }
 
-        if (References?.CanAccessInternalMembers(ClassType.Assembly) == true)
-        {
-            flags |= BindingFlags.NonPublic;
-        }
-
-        return flags;
+        return NamedMemberLevel.Empty;
     }
+
+    private static Type GetBaseTypeSafe(Type type)
+    {
+        try
+        {
+            return type.BaseType;
+        }
+        catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+        {
+            return null;
+        }
+    }
+
+    private bool DeclaresVisibleNestedType(Type type, string name)
+    {
+        try
+        {
+            var nested = type.GetNestedType(name, BindingFlags.Public | BindingFlags.NonPublic);
+            return nested != null
+                && (nested.IsNestedPublic
+                    || (nested.IsNestedAssembly && References?.CanAccessInternalMembers(nested.Assembly) == true));
+        }
+        catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+        {
+            return false;
+        }
+    }
+
+    private static bool IsStatic(PropertyInfo property)
+        => property.GetMethod?.IsStatic == true || property.SetMethod?.IsStatic == true;
 
     private bool IsVisibleToCurrentCompilation(MethodBase method)
         => method.IsPublic || (method.IsAssembly && References?.CanAccessInternalMembers(method.DeclaringType?.Assembly) == true);
@@ -506,6 +578,14 @@ public sealed class ImportedClassSymbol : Symbol
         var setter = property.SetMethod;
         return (getter != null && IsVisibleToCurrentCompilation(getter))
             || (setter != null && IsVisibleToCurrentCompilation(setter));
+    }
+
+    private bool IsVisibleToCurrentCompilation(EventInfo eventInfo)
+    {
+        var add = eventInfo.AddMethod;
+        var remove = eventInfo.RemoveMethod;
+        return (add != null && IsVisibleToCurrentCompilation(add))
+            || (remove != null && IsVisibleToCurrentCompilation(remove));
     }
 
     /// <summary>
@@ -549,5 +629,16 @@ public sealed class ImportedClassSymbol : Symbol
         }
 
         return false;
+    }
+
+    private readonly record struct NamedMemberLevel(
+        ImmutableArray<MethodInfo> Methods,
+        ImmutableArray<PropertyInfo> Properties,
+        ImmutableArray<FieldInfo> Fields)
+    {
+        public static NamedMemberLevel Empty { get; } = new(
+            ImmutableArray<MethodInfo>.Empty,
+            ImmutableArray<PropertyInfo>.Empty,
+            ImmutableArray<FieldInfo>.Empty);
     }
 }
