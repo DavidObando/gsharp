@@ -3769,21 +3769,13 @@ internal sealed class MemberLookup
     /// arguments it was constructed with (<see cref="ImportedTypeSymbol.OpenDefinition"/>
     /// / <see cref="ImportedTypeSymbol.TypeArguments"/>), instead of
     /// reflecting over the (possibly type-erased) closed
-    /// <see cref="TypeSymbol.ClrType"/>. A delegate's <c>Invoke</c> method
-    /// parameters/return map 1:1 onto the delegate type's own open generic
-    /// parameters by position (verified: <c>typeof(Func&lt;,&gt;).GetMethod("Invoke")</c>'s
-    /// parameter/return <see cref="Type"/> instances are reference-equal to
-    /// <c>typeof(Func&lt;,&gt;).GetGenericArguments()</c>), so this only needs to
-    /// substitute each such open-parameter slot with the corresponding entry
-    /// in <paramref name="typeArguments"/>. Returns <see langword="false"/>
-    /// (letting the caller fall back to the reflection-based
-    /// <see cref="TryGetDelegateFunctionType(Type, out FunctionTypeSymbol)"/>)
-    /// for any Invoke slot that is NOT directly one of the delegate's own
-    /// generic parameters (e.g. a named delegate whose Invoke signature nests
-    /// a type parameter inside another generic, such as <c>List&lt;T&gt;</c>) —
-    /// an intentionally conservative scope covering the overwhelmingly common
-    /// <c>Func</c>/<c>Action</c>/simple-named-delegate shape without
-    /// attempting general type substitution.
+    /// <see cref="TypeSymbol.ClrType"/>. The delegate's complete <c>Invoke</c>
+    /// signature is projected through
+    /// <see cref="MapOpenClrTypeToSymbolic(Type, Type, ImmutableArray{TypeSymbol}, MethodInfo, ImmutableArray{TypeSymbol})"/>.
+    /// This preserves fixed parameters and recursively substitutes nested
+    /// generic shapes such as the <c>Action&lt;Conversion&gt;</c> callback in
+    /// <c>ConvertDelegate&lt;T&gt;</c>, instead of falling back to the
+    /// delegate's object-erased closed CLR type.
     /// </summary>
     /// <param name="openDefinition">The delegate's open CLR generic definition (e.g. <c>typeof(Func&lt;,&gt;)</c>).</param>
     /// <param name="typeArguments">The symbolic type arguments the delegate was constructed with.</param>
@@ -3824,28 +3816,19 @@ internal sealed class MemberLookup
             return false;
         }
 
-        static bool TryMapSlot(Type invokeSlotType, Type openDefinitionForSlot, ImmutableArray<TypeSymbol> args, out TypeSymbol mapped)
-        {
-            if (invokeSlotType.IsGenericParameter
-                && ClrTypeUtilities.IsSameAs(invokeSlotType.DeclaringType, openDefinitionForSlot)
-                && invokeSlotType.GenericParameterPosition >= 0
-                && invokeSlotType.GenericParameterPosition < args.Length)
-            {
-                mapped = args[invokeSlotType.GenericParameterPosition];
-                return mapped != null;
-            }
-
-            mapped = null;
-            return false;
-        }
-
         var parameters = invoke.GetParameters();
         var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(parameters.Length);
         var variadicBuilder = ImmutableArray.CreateBuilder<bool>(parameters.Length);
         var anyVariadic = false;
         foreach (var parameter in parameters)
         {
-            if (!TryMapSlot(parameter.ParameterType, openDefinition, typeArguments, out var mappedParam))
+            var mappedParam = MapOpenClrTypeToSymbolic(
+                parameter.ParameterType,
+                openDefinition,
+                typeArguments,
+                openMethodDefinition: null,
+                methodTypeArguments: default);
+            if (mappedParam == null || mappedParam == TypeSymbol.Error || TypeSymbol.ContainsTypeParameter(mappedParam))
             {
                 return false;
             }
@@ -3866,9 +3849,18 @@ internal sealed class MemberLookup
         {
             returnType = TypeSymbol.Void;
         }
-        else if (!TryMapSlot(invoke.ReturnType, openDefinition, typeArguments, out returnType))
+        else
         {
-            return false;
+            returnType = MapOpenClrTypeToSymbolic(
+                invoke.ReturnType,
+                openDefinition,
+                typeArguments,
+                openMethodDefinition: null,
+                methodTypeArguments: default);
+            if (returnType == null || returnType == TypeSymbol.Error || TypeSymbol.ContainsTypeParameter(returnType))
+            {
+                return false;
+            }
         }
 
         var variadicFlags = anyVariadic ? variadicBuilder.ToImmutable() : default;
@@ -4546,6 +4538,37 @@ internal sealed class MemberLookup
                 && string.Equals(openDef.FullName, "System.Linq.Expressions.Expression`1", StringComparison.Ordinal))
             {
                 UnifyForMethodTypeArgs(openArgs[0], actual, openMethod, result);
+                return;
+            }
+
+            // Issue #2643: infer through the Invoke signature rather than
+            // assuming a delegate's generic arguments are its parameters plus
+            // return. Named delegates such as ConvertDelegate<T> can mix fixed,
+            // nested-generic, and type-parameter slots in an unrelated order.
+            if (actual is FunctionTypeSymbol namedDelegateFunction
+                && ClrTypeUtilities.IsDelegateType(openClr))
+            {
+                var invoke = openClr.GetMethodSafe("Invoke");
+                var invokeParameters = invoke?.GetParameters();
+                if (invokeParameters != null
+                    && invokeParameters.Length == namedDelegateFunction.ParameterTypes.Length)
+                {
+                    for (var j = 0; j < invokeParameters.Length; j++)
+                    {
+                        UnifyForMethodTypeArgs(
+                            invokeParameters[j].ParameterType,
+                            namedDelegateFunction.ParameterTypes[j],
+                            openMethod,
+                            result);
+                    }
+
+                    if (!FunctionTypeSymbol.IsVoidReturn(namedDelegateFunction.ReturnType)
+                        && !invoke.ReturnType.IsSameAs(typeof(void)))
+                    {
+                        UnifyForMethodTypeArgs(invoke.ReturnType, namedDelegateFunction.ReturnType, openMethod, result);
+                    }
+                }
+
                 return;
             }
 
