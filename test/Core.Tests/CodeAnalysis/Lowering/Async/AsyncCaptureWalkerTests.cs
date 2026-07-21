@@ -52,6 +52,22 @@ ImmutableArray.Create<BoundStatement>(
     }
 
     [Fact]
+    public void Analyze_AssignmentOnlyLocal_IsHoisted()
+    {
+        var local = new LocalVariableSymbol("u", isReadOnly: false, TypeSymbol.Int32);
+        var body = new BoundBlockStatement(null,
+ImmutableArray.Create<BoundStatement>(
+            new BoundExpressionStatement(
+                null,
+                new BoundAssignmentExpression(null, local, new BoundLiteralExpression(null, 42)))));
+
+        var result = AsyncCaptureWalker.Analyze(body, ImmutableArray<ParameterSymbol>.Empty);
+
+        Assert.Single(result.Locals);
+        Assert.Same(local, result.Locals[0]);
+    }
+
+    [Fact]
     public void Analyze_SameLocalReferencedTwice_AppearsOnce()
     {
         var local = new LocalVariableSymbol("x", isReadOnly: false, TypeSymbol.Int32);
@@ -263,6 +279,35 @@ ImmutableArray.Create<BoundStatement>(
             new BoundExpressionStatement(null, new BoundVariableExpression(null, ownLocal))));
         var literal = MakeLiteral(literalBody);
 
+        var body = new BoundBlockStatement(null,
+ImmutableArray.Create<BoundStatement>(
+            new BoundExpressionStatement(null, literal)));
+
+        var result = AsyncCaptureWalker.Analyze(body, ImmutableArray<ParameterSymbol>.Empty);
+
+        Assert.Empty(result.Locals);
+    }
+
+    [Fact]
+    public void Analyze_LambdaOwnParameter_IsNotHoisted_WhenNotCaptured()
+    {
+        var parameter = new ParameterSymbol("u", TypeSymbol.Int32);
+        var literalBody = new BoundBlockStatement(null,
+ImmutableArray.Create<BoundStatement>(
+            new BoundExpressionStatement(null, new BoundVariableExpression(null, parameter))));
+        var function = new FunctionSymbol(
+            "<>lambda",
+            ImmutableArray.Create(parameter),
+            TypeSymbol.Void);
+        var functionType = FunctionTypeSymbol.Get(
+            ImmutableArray.Create<TypeSymbol>(TypeSymbol.Int32),
+            TypeSymbol.Void);
+        var literal = new BoundFunctionLiteralExpression(
+            null,
+            function,
+            functionType,
+            literalBody,
+            ImmutableArray<VariableSymbol>.Empty);
         var body = new BoundBlockStatement(null,
 ImmutableArray.Create<BoundStatement>(
             new BoundExpressionStatement(null, literal)));

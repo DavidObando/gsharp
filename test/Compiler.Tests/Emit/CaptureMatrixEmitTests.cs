@@ -259,6 +259,43 @@ public class CaptureMatrixEmitTests
                 Console.WriteLine(inner().Result)
             }
             """, "42\n");
+
+        yield return Row("Issue2662_ExactOahuCliApp", """
+            package Oahu.Cli.App
+            import System
+            import System.Collections.Generic
+
+            class JobUpdate {
+                var JobId string = ""
+                var Value int32 = 0
+            }
+
+            class JobScheduler {
+                init() {}
+
+                async func Drain(predicate Func[JobUpdate, bool]) IAsyncEnumerable[JobUpdate] {
+                    let update = JobUpdate()
+                    update.JobId = "job-42"
+                    update.Value = 42
+                    if predicate(update) {
+                        yield update
+                    }
+                }
+
+                async func ObserveAsync(jobId string) IAsyncEnumerable[JobUpdate] {
+                    await for u in this.Drain(u -> u.JobId == jobId) {
+                        yield u
+                    }
+                }
+            }
+
+            func Main() {
+                let e = JobScheduler().ObserveAsync("job-42").GetAsyncEnumerator()
+                if e.MoveNextAsync().AsTask().Result {
+                    Console.WriteLine(e.Current.Value)
+                }
+            }
+            """, "42\n");
     }
 
     [Theory]

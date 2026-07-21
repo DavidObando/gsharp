@@ -60,6 +60,8 @@ public static class AsyncIteratorMoveNextBodyBuilder
         private readonly FieldSymbol builderField;
         private readonly Dictionary<VariableSymbol, FieldSymbol> fieldMap;
         private readonly Dictionary<Type, FieldSymbol> awaiterPoolFields;
+        private readonly TryDispatchPlan awaitTryDispatch;
+        private readonly IteratorTryDispatchPlan yieldTryDispatch;
 
         // Labels for yield resume points
         private readonly Dictionary<int, BoundLabel> yieldResumeLabels = new();
@@ -94,17 +96,26 @@ public static class AsyncIteratorMoveNextBodyBuilder
             this.fieldMap = fieldMap;
             this.awaiterPoolFields = awaiterPoolFields;
 
-            // Create resume labels for yields (negative states).
-            foreach (var kvp in plan.YieldStates.OrderBy(p => p.Value))
-            {
-                yieldResumeLabels[kvp.Value] = new BoundLabel($"<>ai_yieldResume_{kvp.Value}");
-            }
-
             // Create resume labels for awaits (non-negative states).
+            var awaitResumeMap = new Dictionary<BoundAwaitExpression, AwaitResumePoint>();
             foreach (var kvp in plan.AwaitStates.OrderBy(p => p.Value))
             {
                 awaitResumeLabels[kvp.Value] = new BoundLabel($"<>ai_awaitResume_{kvp.Value}");
                 awaitResumeAfterLabels[kvp.Value] = new BoundLabel($"<>ai_awaitAfter_{kvp.Value}");
+                awaitResumeMap[kvp.Key] = new AwaitResumePoint(
+                    kvp.Key,
+                    kvp.Value,
+                    awaitResumeLabels[kvp.Value],
+                    awaitResumeAfterLabels[kvp.Value]);
+            }
+
+            awaitTryDispatch = TryDispatchPlanner.Plan(plan.LoweredBody, awaitResumeMap);
+            yieldTryDispatch = IteratorTryDispatchPlanner.Plan(plan.LoweredBody, plan.YieldStates);
+
+            foreach (var kvp in plan.YieldStates.OrderBy(p => p.Value))
+            {
+                yieldResumeLabels[kvp.Value] = yieldTryDispatch.GetResumeLabel(kvp.Value)
+                    ?? new BoundLabel($"<>ai_yieldResume_{kvp.Value}");
             }
         }
 
@@ -174,7 +185,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 var state = kvp.Value;
                 stmts.Add(new BoundConditionalGotoStatement(
                     null,
-                    yieldResumeLabels[state],
+                    yieldTryDispatch.GetOuterDispatchTarget(state) ?? yieldResumeLabels[state],
                     new BoundBinaryExpression(
                         null,
                         stateRead,
@@ -189,7 +200,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 var state = kvp.Value;
                 stmts.Add(new BoundConditionalGotoStatement(
                     null,
-                    awaitResumeLabels[state],
+                    awaitTryDispatch.GetOuterDispatchTarget(state) ?? awaitResumeLabels[state],
                     new BoundBinaryExpression(
                         null,
                         ReadField(stateField),
@@ -370,6 +381,72 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 return base.RewriteExpressionStatement(node);
             }
 
+            protected override BoundStatement RewriteTryStatement(BoundTryStatement node)
+            {
+                // Issue #2662: the newly exposed await-for awaits and yields
+                // can resume inside protected regions. Route them through the
+                // same outside-entry/inside-dispatch topology as ordinary
+                // async methods and synchronous iterators.
+                var result = (BoundTryStatement)base.RewriteTryStatement(node);
+                var awaitEntries = ctx.awaitTryDispatch.GetInternalDispatchEntries(node);
+                var yieldEntries = ctx.yieldTryDispatch.GetInternalDispatchEntries(node);
+                var awaitEntryLabel = ctx.awaitTryDispatch.GetEntryLabel(node);
+                var yieldEntryLabel = ctx.yieldTryDispatch.GetEntryLabel(node);
+
+                if (awaitEntries.IsDefaultOrEmpty
+                    && yieldEntries.IsDefaultOrEmpty
+                    && awaitEntryLabel == null
+                    && yieldEntryLabel == null)
+                {
+                    return result;
+                }
+
+                var tryStatements = ImmutableArray.CreateBuilder<BoundStatement>();
+                foreach (var entry in awaitEntries)
+                {
+                    tryStatements.Add(DispatchTo(entry.State, entry.Target));
+                }
+
+                foreach (var entry in yieldEntries)
+                {
+                    tryStatements.Add(DispatchTo(entry.State, entry.Target));
+                }
+
+                if (result.TryBlock is BoundBlockStatement block)
+                {
+                    tryStatements.AddRange(block.Statements);
+                }
+                else
+                {
+                    tryStatements.Add(result.TryBlock);
+                }
+
+                var rebuilt = new BoundTryStatement(
+                    null,
+                    new BoundBlockStatement(null, tryStatements.ToImmutable()),
+                    result.CatchClauses,
+                    result.FinallyBlock);
+
+                if (awaitEntryLabel == null && yieldEntryLabel == null)
+                {
+                    return rebuilt;
+                }
+
+                var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+                if (awaitEntryLabel != null)
+                {
+                    statements.Add(new BoundLabelStatement(null, awaitEntryLabel));
+                }
+
+                if (yieldEntryLabel != null && !ReferenceEquals(yieldEntryLabel, awaitEntryLabel))
+                {
+                    statements.Add(new BoundLabelStatement(null, yieldEntryLabel));
+                }
+
+                statements.Add(rebuilt);
+                return new BoundBlockStatement(null, statements.ToImmutable());
+            }
+
             protected override BoundExpression RewriteAwaitExpression(BoundAwaitExpression node)
             {
                 // If we reach here, await is nested. Should have been lifted by spiller.
@@ -380,6 +457,16 @@ public static class AsyncIteratorMoveNextBodyBuilder
             {
                 // In an async iterator, `return` means end iteration.
                 return new BoundGotoStatement(null, ctx.endOfBodyLabel);
+            }
+
+            private BoundConditionalGotoStatement DispatchTo(int state, BoundLabel target)
+            {
+                var condition = new BoundBinaryExpression(
+                    null,
+                    ctx.ReadField(ctx.stateField),
+                    BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                    Literal(state));
+                return new BoundConditionalGotoStatement(null, target, condition, jumpIfTrue: true);
             }
 
             private BoundBlockStatement EmitPerAwaitSequence(BoundAwaitExpression awaitExpr, VariableSymbol resultTarget)
