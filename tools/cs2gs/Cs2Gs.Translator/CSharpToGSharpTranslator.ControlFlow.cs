@@ -537,13 +537,13 @@ public sealed partial class CSharpToGSharpTranslator
         /// let t T? = receiver as T   // reference target
         /// if t != nil { … }
         ///
-        /// let t = receiver           // value target
-        /// if t is T { … }
+        /// let __spill0 = receiver    // value target
+        /// var t T
+        /// if __spill0 is T { t = T(__spill0); … }
         /// </code>
-        /// Testing the named local, rather than rewriting <c>t</c> back to the
-        /// scrutinee, lets gsc carry the same variable's narrowing through nested
-        /// and following scopes. Value targets keep the receiver's inferred type
-        /// because G# has no value-type <c>as</c> conversion.
+        /// Value-pattern binders use a separate typed local so their reads do not
+        /// rely on flow narrowing through an enclosing try/block. Reference targets
+        /// retain the nullable-local lowering used for G# nil narrowing.
         /// </summary>
         private bool TryBuildPositiveGuardHoist(
             IfStatementSyntax ifStatement, out IReadOnlyList<GStatement> result)
@@ -571,6 +571,12 @@ public sealed partial class CSharpToGSharpTranslator
             GTypeReference targetType = this.MapTypeSyntax(typeSyntax);
             string localName = SanitizeIdentifier(single.Identifier.Text);
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
+
+            if (targetSymbol.IsValueType)
+            {
+                result = this.BuildPositiveValueGuardHoist(ifStatement, localName, targetType, receiver);
+                return true;
+            }
 
             // Record that this pattern variable is now a nullable G# local so an
             // assignment-LHS use inside the guard is null-forgiven (gsc narrows
@@ -625,6 +631,48 @@ public sealed partial class CSharpToGSharpTranslator
 
             result = new GStatement[] { hoist, new IfStatement(guard, then, elseBranch) };
             return true;
+        }
+
+        private IReadOnlyList<GStatement> BuildPositiveValueGuardHoist(
+            IfStatementSyntax ifStatement,
+            string localName,
+            GTypeReference targetType,
+            GExpression receiver)
+        {
+            string spillName = $"__spill{this.state.SpillCounter++}";
+            var spill = new IdentifierExpression(spillName);
+            var hoist = new LocalDeclarationStatement(
+                BindingKind.Let,
+                spillName,
+                type: null,
+                initializer: receiver);
+            var binder = new LocalDeclarationStatement(BindingKind.Var, localName, targetType);
+            var guard = new BinaryExpression(spill, "is", new TypeExpression(targetType));
+
+            GExpression narrowed = targetType is NamedTypeReference namedTarget
+                ? new InvocationExpression(
+                    new IdentifierExpression(namedTarget.Name),
+                    new[] { spill },
+                    namedTarget.TypeArguments)
+                : new NonNullAssertionExpression(spill);
+            var thenStatements = new List<GStatement>
+            {
+                new AssignmentStatement(new IdentifierExpression(localName), narrowed),
+            };
+            thenStatements.AddRange(this.TranslateStatementAsBlock(ifStatement.Statement).Statements);
+
+            GStatement elseBranch = ifStatement.Else == null
+                ? null
+                : ifStatement.Else.Statement is IfStatementSyntax elseIf
+                    ? this.TranslateIf(elseIf)
+                    : this.TranslateStatementAsBlock(ifStatement.Else.Statement);
+
+            return new GStatement[]
+            {
+                hoist,
+                binder,
+                new IfStatement(guard, new BlockStatement(thenStatements), elseBranch),
+            };
         }
 
         /// <summary>

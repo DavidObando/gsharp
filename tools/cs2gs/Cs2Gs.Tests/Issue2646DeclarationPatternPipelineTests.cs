@@ -40,11 +40,18 @@ public sealed class Issue2646DeclarationPatternPipelineTests
 
             public static class Program
             {
-                public static int Run(int? rewriteCode)
+                public static int Run(int? rewriteResult)
                 {
-                    if (rewriteCode is int code)
+                    try
                     {
-                        return code;
+                        var rewriteCode = rewriteResult;
+                        if (rewriteCode is int code)
+                        {
+                            return code;
+                        }
+                    }
+                    catch
+                    {
                     }
 
                     return -1;
@@ -81,8 +88,9 @@ public sealed class Issue2646DeclarationPatternPipelineTests
             result.RunId,
             MigrationPipeline.SanitizeAppId(app.AppId),
             "Program.gs"));
-        Assert.Contains("let code = rewriteCode", translated, StringComparison.Ordinal);
-        Assert.Contains("if code is int32", translated, StringComparison.Ordinal);
+        Assert.Contains("var code int32", translated, StringComparison.Ordinal);
+        Assert.Contains("code = int32(__spill0)", translated, StringComparison.Ordinal);
+        Assert.DoesNotContain("let code = rewriteCode", translated, StringComparison.Ordinal);
         Assert.DoesNotContain("return rewriteCode", translated, StringComparison.Ordinal);
     }
 
