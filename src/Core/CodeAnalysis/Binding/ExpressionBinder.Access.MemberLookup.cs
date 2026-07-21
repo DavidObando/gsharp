@@ -155,10 +155,11 @@ internal sealed partial class ExpressionBinder
 
                     var staticType = staticMember switch
                     {
-                        PropertyInfo sp => TypeSymbol.FromClrType(sp.PropertyType),
-                        FieldInfo sf => TypeSymbol.FromClrType(sf.FieldType),
+                        PropertyInfo sp => ClrNullability.GetPropertyTypeSymbol(sp),
+                        FieldInfo sf => ClrNullability.GetFieldTypeSymbol(sf),
                         _ => TypeSymbol.Error,
                     };
+                    staticType = NormalizeImportedSemanticAggregate(staticType, staticMember);
 
                     // Issue #1330: when the receiver is a generic type
                     // constructed over an in-scope generic type parameter
@@ -515,13 +516,15 @@ internal sealed partial class ExpressionBinder
                             ?? (prop.PropertyType.IsByRef
                                 ? MapClrMemberType(prop.PropertyType)
                                 : ClrNullability.GetPropertyTypeSymbol(prop));
+                        propType = NormalizeImportedSemanticAggregate(propType, prop);
                         return ConversionClassifier.AutoDereferenceRefReturn(new BoundClrPropertyAccessExpression(null, receiver, prop, propType));
                     }
 
                     var fld = ClrTypeUtilities.SafeGetFieldIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
                     if (fld != null)
                     {
-                        return new BoundClrPropertyAccessExpression(null, receiver, fld, ClrNullability.GetFieldTypeSymbol(fld));
+                        var fieldType = NormalizeImportedSemanticAggregate(ClrNullability.GetFieldTypeSymbol(fld), fld);
+                        return new BoundClrPropertyAccessExpression(null, receiver, fld, fieldType);
                     }
 
                     // Issue #337: an instance member name that resolves to a
@@ -1933,7 +1936,7 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     /// <param name="method">The imported method whose return type to map.</param>
     /// <returns>The nullability-aware return type symbol.</returns>
-    private static TypeSymbol MapClrMethodReturnType(System.Reflection.MethodInfo method)
+    private TypeSymbol MapClrMethodReturnType(System.Reflection.MethodInfo method)
     {
         if (method == null)
         {
@@ -1947,7 +1950,21 @@ internal sealed partial class ExpressionBinder
             return ByRefTypeSymbol.Get(TypeSymbol.FromClrType(returnClrType.GetElementType()!));
         }
 
-        return ClrNullability.GetReturnTypeSymbol(method);
+        return ImportedTypeSymbol.NormalizeSemanticAggregate(
+            ClrNullability.GetReturnTypeSymbol(method),
+            method.ReturnType,
+            scope.References);
+    }
+
+    private TypeSymbol NormalizeImportedSemanticAggregate(TypeSymbol type, MemberInfo member)
+    {
+        var clrType = member switch
+        {
+            PropertyInfo property => property.PropertyType,
+            FieldInfo field => field.FieldType,
+            _ => null,
+        };
+        return ImportedTypeSymbol.NormalizeSemanticAggregate(type, clrType, scope.References);
     }
 
     // ADR-0118 / issue #944: locate a user-declared indexer member on a (possibly

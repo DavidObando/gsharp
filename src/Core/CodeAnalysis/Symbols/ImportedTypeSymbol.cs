@@ -295,6 +295,24 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         return aggregate != null;
     }
 
+    internal static TypeSymbol NormalizeSemanticAggregate(TypeSymbol type, Type clrType, ReferenceResolver references)
+    {
+        var nullable = type is NullableTypeSymbol;
+        var unwrapped = nullable ? ((NullableTypeSymbol)type).UnderlyingType : type;
+        var annotated = unwrapped as NullabilityAnnotatedTypeSymbol;
+        var baseType = annotated?.BaseType ?? unwrapped;
+        if (baseType is not ImportedTypeSymbol
+            || !TryCreateSemanticAggregate(clrType, references, out var aggregate))
+        {
+            return type;
+        }
+
+        TypeSymbol normalized = annotated == null
+            ? aggregate
+            : new NullabilityAnnotatedTypeSymbol(aggregate, annotated.NullableFlags);
+        return nullable ? NullableTypeSymbol.Get(normalized) : normalized;
+    }
+
     /// <summary>
     /// Legacy dispose hook. The cache is weakly keyed by assembly and each
     /// per-assembly dictionary uses metadata identity for CLR types, so disposed
