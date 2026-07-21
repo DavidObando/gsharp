@@ -122,6 +122,70 @@ public class DefaultInterfaceMethodsEmitTests
     }
 
     [Fact]
+    public void ImplicitObjectMembers_InDefaultMethod_CompileInInterpolatedAndOrdinaryExpressions()
+    {
+        var source = """
+            package Probe
+            import System
+
+            interface IProbe {
+                func Describe() string { return "${GetType().Name}" }
+                func RuntimeType() Type { return GetType() }
+                func Hash() int32 { return GetHashCode() }
+                func Same() bool { return Equals(this) }
+                func Text() string? { return ToString() }
+            }
+            """;
+
+        var dllPath = CompileLibrary(source);
+        TryCleanup(dllPath);
+    }
+
+    [Fact]
+    public void ImplicitObjectMembers_InDefaultMethod_Run()
+    {
+        var gsource = """
+            package Probe
+
+            public interface IProbe {
+                func Describe() string { return "${GetType().Name}" }
+                func HashStable() bool { return GetHashCode() == GetHashCode() }
+                func Same() bool { return Equals(this) }
+            }
+
+            public class ProbeImpl : IProbe {
+            }
+            """;
+
+        var consumerCs = """
+            using System;
+            using Probe;
+
+            IProbe probe = new ProbeImpl();
+            Console.WriteLine(probe.Describe());
+            Console.WriteLine(probe.HashStable());
+            Console.WriteLine(probe.Same());
+            """;
+
+        Assert.Equal("ProbeImpl\nTrue\nTrue\n", CompileGsharpLibAndRunCsharpConsumer(gsource, consumerCs));
+    }
+
+    [Fact]
+    public void ImplicitObjectLookup_UnknownMethod_StillReportsGS0130()
+    {
+        var source = """
+            package Probe
+
+            interface IProbe {
+                func Broken() string { return MissingObjectMember() }
+            }
+            """;
+
+        var diagnostics = CompileExpectingErrors(source);
+        Assert.Contains(diagnostics, d => d.Contains("GS0130") && d.Contains("MissingObjectMember"));
+    }
+
+    [Fact]
     public void DefaultInterfaceMethod_ConflictingDefaults_ReportsGS0318()
     {
         // Diamond-conflict diagnostic surfaces from gsc when two unrelated
