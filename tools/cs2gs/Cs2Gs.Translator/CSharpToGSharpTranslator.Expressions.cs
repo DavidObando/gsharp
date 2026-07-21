@@ -785,6 +785,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (translated is NonNullAssertionExpression
                 || value is PostfixUnaryExpressionSyntax
                     { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
+                || targetSymbol is IFieldSymbol { IsConst: true } or ILocalSymbol { IsConst: true }
                 || this.IsWithinExpressionTreeLambda(value)
                 || !this.TargetWillRemainNonNullableReference(targetType, targetSymbol)
                 || (!this.NullableReferenceValueMayBeNull(value)
