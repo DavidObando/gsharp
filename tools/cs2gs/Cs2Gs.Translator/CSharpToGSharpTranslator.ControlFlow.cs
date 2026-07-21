@@ -531,19 +531,19 @@ public sealed partial class CSharpToGSharpTranslator
 
         /// <summary>
         /// Lowers a C# positive type-pattern guard <c>if (receiver is T t) { … }</c>
-        /// to the smart-cast-friendly G# form below, but only when the pattern
-        /// variable <c>t</c> is referenced *outside* the then-block (C# leaks a
-        /// positive declaration-pattern variable into the enclosing scope under
-        /// definite-assignment rules, so later code reads or reassigns it).
+        /// to a smart-cast-friendly G# local that preserves the declaration
+        /// variable's identity.
         /// <code>
-        /// var t T? = receiver as T   // 'let' when t is never reassigned
-        /// if t != nil { … }          // t smart-casts to T inside the guard
-        /// … later statements using t …
+        /// let t T? = receiver as T   // reference target
+        /// if t != nil { … }
+        ///
+        /// let t = receiver           // value target
+        /// if t is T { … }
         /// </code>
-        /// When <c>t</c> is used only inside the then-block the existing
-        /// smart-cast binding (no hoist) is kept, so currently passing tests do not
-        /// regress. Only applies over a reference (non-value) target type, where the
-        /// <c>as T</c> + nil-guard form is valid.
+        /// Testing the named local, rather than rewriting <c>t</c> back to the
+        /// scrutinee, lets gsc carry the same variable's narrowing through nested
+        /// and following scopes. Value targets keep the receiver's inferred type
+        /// because G# has no value-type <c>as</c> conversion.
         /// </summary>
         private bool TryBuildPositiveGuardHoist(
             IfStatementSyntax ifStatement, out IReadOnlyList<GStatement> result)
@@ -557,46 +557,18 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            // The hoisted `as T` + `!= nil` guard is only valid when T is a
-            // reference type (or nullable value type); a non-nullable value-type
-            // target keeps the existing then-block smart-cast binding.
             ITypeSymbol targetSymbol = this.context.GetTypeInfo(typeSyntax).Type;
-            if (targetSymbol == null || targetSymbol.IsValueType)
+            if (targetSymbol == null)
             {
                 return false;
             }
 
-            // Hoist when EITHER the pattern variable escapes the then-block, OR the
-            // scrutinee is a non-trivial expression that gsc cannot smart-cast. gsc
-            // narrows only a bare local/parameter (ADR-0069); a method-call result,
-            // member-access chain or field reference re-emitted at each use of `t`
-            // would not smart-cast (→ GS0158) and, for a side-effecting scrutinee
-            // such as `M(out var x)`, would be re-evaluated (→ GS0102). When the
-            // scrutinee IS a smart-castable local and `t` is used solely inside the
-            // guarded block, the existing smart cast (rewriting `t` to the receiver)
-            // is correct and avoids an unnecessary local.
             if (this.context.GetDeclaredSymbol(single) is not ILocalSymbol patternSymbol)
             {
                 return false;
             }
 
             GTypeReference targetType = this.MapTypeSyntax(typeSyntax);
-            bool escapesThenBlock =
-                this.IsSymbolReferencedOutside(patternSymbol, ifStatement.Statement);
-
-            // The broadened "non-smart-castable scrutinee" hoist requires a
-            // well-formed nullable local annotation. NamedTypeReference (`T?`) and
-            // ArrayTypeReference (`[]?T`, incl. nullable jagged arrays `[]?[]T`,
-            // issue #1351) both nullable-annotate and round-trip-parse in gsc; a
-            // pointer/tuple target's nullable form does not yet, so for those keep
-            // the existing smart cast when the binder does not escape.
-            if (!escapesThenBlock &&
-                (this.IsSmartCastableScrutinee(isPattern.Expression) ||
-                 targetType is not (NamedTypeReference or ArrayTypeReference)))
-            {
-                return false;
-            }
-
             string localName = SanitizeIdentifier(single.Identifier.Text);
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
 
@@ -611,17 +583,20 @@ public sealed partial class CSharpToGSharpTranslator
                 ? BindingKind.Var
                 : BindingKind.Let;
 
+            var local = new IdentifierExpression(localName);
+            GTypeReference localType = targetSymbol.IsValueType ? null : MakeNullable(targetType);
+            GExpression initializer = targetSymbol.IsValueType
+                ? receiver
+                : new BinaryExpression(receiver, "as", new TypeExpression(targetType));
             var hoist = new LocalDeclarationStatement(
                 binding,
                 localName,
-                MakeNullable(targetType),
-                new BinaryExpression(receiver, "as", new TypeExpression(targetType)));
+                localType,
+                initializer);
 
-            // `if t != nil { <then> }` — the positive guard; the then-block runs on a
-            // successful cast and `t` smart-casts to non-null T inside it. References
-            // to `t` print as the hoisted local (no patternBindings entry registered).
-            GExpression guard = new BinaryExpression(
-                new IdentifierExpression(localName), "!=", LiteralExpression.Null());
+            GExpression guard = targetSymbol.IsValueType
+                ? new BinaryExpression(local, "is", new TypeExpression(targetType))
+                : new BinaryExpression(local, "!=", LiteralExpression.Null());
             BlockStatement then = this.TranslateStatementAsBlock(ifStatement.Statement);
 
             GStatement elseBranch = null;
@@ -630,6 +605,22 @@ public sealed partial class CSharpToGSharpTranslator
                 elseBranch = ifStatement.Else.Statement is IfStatementSyntax elseIf
                     ? this.TranslateIf(elseIf)
                     : this.TranslateStatementAsBlock(ifStatement.Else.Statement);
+            }
+
+            // gsc narrows `local` throughout the guarded block, but does not carry
+            // that fact past the `if` when an exiting `else` makes C#'s pattern
+            // variable definitely assigned afterward. Keep later reads tied to
+            // the named local and materialize the already-proven target view.
+            if (targetSymbol.IsValueType && targetType is NamedTypeReference namedTarget)
+            {
+                this.state.PatternBindings[patternSymbol] = new InvocationExpression(
+                    new IdentifierExpression(namedTarget.Name),
+                    new[] { local },
+                    namedTarget.TypeArguments);
+            }
+            else
+            {
+                this.state.PatternBindings[patternSymbol] = new NonNullAssertionExpression(local);
             }
 
             result = new GStatement[] { hoist, new IfStatement(guard, then, elseBranch) };
@@ -687,40 +678,6 @@ public sealed partial class CSharpToGSharpTranslator
 
             single = designation as SingleVariableDesignationSyntax;
             return single != null;
-        }
-
-        // Returns true when <paramref name="symbol"/> is referenced anywhere in the
-        // current body scope outside <paramref name="excludedSubtree"/> (e.g. a
-        // pattern variable read or written after/around its `if`). Mirrors the
-        // body-walk in <see cref="IsLocalReassigned"/>.
-        private bool IsSymbolReferencedOutside(ISymbol symbol, SyntaxNode excludedSubtree)
-        {
-            SyntaxNode scope = this.state.CurrentBodyScope;
-            if (scope == null)
-            {
-                return false;
-            }
-
-            foreach (SyntaxNode node in scope.DescendantNodes())
-            {
-                if (node is not IdentifierNameSyntax identifier)
-                {
-                    continue;
-                }
-
-                if (excludedSubtree != null && excludedSubtree.Contains(identifier))
-                {
-                    continue;
-                }
-
-                ISymbol referenced = this.context.GetSymbolInfo(identifier).Symbol;
-                if (referenced != null && SymbolEqualityComparer.Default.Equals(referenced, symbol))
-                {
-                    return true;
-                }
-            }
-
-            return false;
         }
 
         /// <summary>

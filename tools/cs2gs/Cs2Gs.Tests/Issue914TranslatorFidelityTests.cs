@@ -51,7 +51,7 @@ namespace Demo
     }
 
     [Fact]
-    public void PositivePattern_LocalScrutinee_UsedOnlyInsideThen_KeepsSmartCastNoHoist()
+    public void PositivePattern_LocalScrutinee_PreservesBinderIdentity()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -68,10 +68,8 @@ namespace Demo
     }
 }");
 
-        // A bare local scrutinee smart-casts in gsc, so no hoist: the existing
-        // smart-cast `is` test is kept and `esds` rewrites to the local.
-        Assert.Contains("local is E", printed);
-        Assert.DoesNotContain("as E", printed);
+        Assert.Contains("let esds E? = local as E", printed);
+        Assert.Contains("if esds != nil", printed);
     }
 
     [Fact]
