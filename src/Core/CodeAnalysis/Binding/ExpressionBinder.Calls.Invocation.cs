@@ -1301,7 +1301,7 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// Issue #903: symbol-based deferred arrow-lambda target inference. The
+    /// Issue #903 / #2673: symbol-based deferred arrow-lambda target inference. The
     /// CLR-driven <see cref="ResolveDeferredArrowLambdaArguments"/> paths infer
     /// the lambda's parameter type from the receiver's <em>CLR</em> type, which
     /// for a same-compilation generic element type (e.g. <c>List[Check]</c>
@@ -1315,12 +1315,10 @@ internal sealed partial class ExpressionBinder
     /// inferred symbolic arguments (reusing
     /// <see cref="MemberLookup.MapOpenClrTypeToSymbolic(Type, Type, ImmutableArray{TypeSymbol}, MethodInfo, ImmutableArray{TypeSymbol})"/>).
     /// A per-slot <see cref="FunctionTypeSymbol"/> carrying those parameter
-    /// types is produced (its return type is a placeholder — callers bind with
-    /// <c>inferReturnTypeFromBody</c>). Candidates must agree on the recovered
-    /// parameter types. The method succeeds <em>only</em> when at least one
-    /// recovered parameter type is a same-compilation user type, so the
-    /// referenced-element and primitive cases continue through the existing
-    /// CLR paths unchanged.
+    /// types is produced. Non-generic methods on constructed generic receivers
+    /// are recovered from the open declaring type too, including delegates
+    /// whose only symbolic slot is their return type. Candidates must agree on
+    /// the recovered shape.
     ///
     /// Issue #2345: also recovers the delegate's <em>return</em> shape when it
     /// is fully closed by the same unification (including the common case of a
@@ -1381,6 +1379,9 @@ internal sealed partial class ExpressionBinder
         }
 
         var symbolicArgVector = ImmutableArray.Create(symbolicArgs);
+        var receiverOpenDefinition = (receiverType as ImportedTypeSymbol)?.OpenDefinition;
+        var receiverTypeArguments = (receiverType as ImportedTypeSymbol)?.TypeArguments
+            ?? ImmutableArray<TypeSymbol>.Empty;
 
         // Record the expected delegate arity for each deferred lambda slot.
         var arityByIndex = new Dictionary<int, int>();
@@ -1401,7 +1402,7 @@ internal sealed partial class ExpressionBinder
 
         foreach (var method in methods)
         {
-            if (method == null || (!method.IsGenericMethodDefinition && !method.IsGenericMethod))
+            if (method == null)
             {
                 continue;
             }
@@ -1410,8 +1411,17 @@ internal sealed partial class ExpressionBinder
             ParameterInfo[] openParameters;
             try
             {
-                openMethod = method.IsGenericMethodDefinition ? method : method.GetGenericMethodDefinition();
-                if (!openMethod.IsGenericMethodDefinition)
+                if (method.IsGenericMethod)
+                {
+                    openMethod = method.IsGenericMethodDefinition ? method : method.GetGenericMethodDefinition();
+                }
+                else if (receiverOpenDefinition != null
+                    && !method.IsStatic
+                    && TryResolveOpenInstanceMethod(receiverOpenDefinition, method, out var resolvedOpenMethod))
+                {
+                    openMethod = resolvedOpenMethod;
+                }
+                else
                 {
                     continue;
                 }
@@ -1496,7 +1506,12 @@ internal sealed partial class ExpressionBinder
                 var slotUsable = true;
                 foreach (var invokeParameter in invokeParameters)
                 {
-                    var mapped = MemberLookup.MapOpenClrTypeToSymbolic(invokeParameter.ParameterType, openDefinition: null, typeArguments: default, openMethodDefinition: openMethod, methodTypeArguments: methodTypeArgs);
+                    var mapped = MemberLookup.MapOpenClrTypeToSymbolic(
+                        invokeParameter.ParameterType,
+                        receiverOpenDefinition,
+                        receiverTypeArguments,
+                        openMethod,
+                        methodTypeArgs);
                     if (mapped == null || mapped == TypeSymbol.Error || TypeSymbol.ContainsTypeParameter(mapped))
                     {
                         slotUsable = false;
@@ -1528,10 +1543,19 @@ internal sealed partial class ExpressionBinder
                 var returnClrType = invoke.ReturnType;
                 var mappedReturn = returnClrType != null && returnClrType.IsSameAs(typeof(void))
                     ? TypeSymbol.Void
-                    : MemberLookup.MapOpenClrTypeToSymbolic(returnClrType, openDefinition: null, typeArguments: default, openMethodDefinition: openMethod, methodTypeArguments: methodTypeArgs);
+                    : MemberLookup.MapOpenClrTypeToSymbolic(
+                        returnClrType,
+                        receiverOpenDefinition,
+                        receiverTypeArguments,
+                        openMethod,
+                        methodTypeArgs);
                 if (mappedReturn != null && mappedReturn != TypeSymbol.Error && !TypeSymbol.ContainsTypeParameter(mappedReturn))
                 {
                     slotReturnTypes[idx] = mappedReturn;
+                    if (TypeSymbol.ContainsSameCompilationUserType(mappedReturn))
+                    {
+                        candidateHasSameCompilationType = true;
+                    }
                 }
             }
 
@@ -1900,7 +1924,19 @@ internal sealed partial class ExpressionBinder
                 // (delegate-reshaping conversions still make it applicable to a
                 // concrete CLR delegate parameter when that path is chosen).
                 var argName = argumentNames.IsDefault ? null : argumentNames[argSlot];
-                if (UserExtensionHasFunctionTypedParameterAt(receiver, methodName, argSlot))
+                if (argumentNames.IsDefault
+                    && receiver?.Type is ImportedTypeSymbol symbolicReceiver
+                    && !symbolicReceiver.TypeArguments.IsDefaultOrEmpty
+                    && symbolicReceiver.TypeArguments.Any(TypeSymbol.RequiresSymbolicProjection))
+                {
+                    // Issue #2673: a constructed imported receiver can erase a
+                    // same-compilation type argument to object in reflection.
+                    // Defer the lambda so the existing symbolic-target pass
+                    // recovers the open method's reified delegate signature.
+                    deferredArrowLambdaIndices.Add(argSlot);
+                    boundArguments.Add(new BoundErrorExpression(inner));
+                }
+                else if (UserExtensionHasFunctionTypedParameterAt(receiver, methodName, argSlot))
                 {
                     boundArguments.Add(BindExpression(inner));
                 }
