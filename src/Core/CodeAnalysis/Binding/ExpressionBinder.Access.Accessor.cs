@@ -1808,6 +1808,11 @@ internal sealed partial class ExpressionBinder
                     return head;
                 }
 
+                if (nested.IsNullConditional)
+                {
+                    return BindNullConditionalAccessExpressionCore(head, nested.RightPart);
+                }
+
                 return BindAccessorStep(head, null, nested.RightPart);
 
             case CallExpressionSyntax ce:
