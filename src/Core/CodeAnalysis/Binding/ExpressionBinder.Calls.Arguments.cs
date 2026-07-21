@@ -1433,19 +1433,19 @@ internal sealed partial class ExpressionBinder
         // (it has no source syntax and, per the extension-call ADR, no
         // separate BoundExpression that needs updating outside `bound`).
         //
-        // Issue #1150: the delegate-rebind step deliberately narrows to
-        // ONLY numeric-return-widening (rather than the full erasing
-        // rebind used by ctor/static/instance/inherited dispatch): a full
-        // erasing rebind of a non-numeric-widening func/arrow literal
-        // would erase the produced delegate to the generic LINQ method's
-        // type-erased shape (e.g. `Func<object,object>`) while the call
-        // site re-closes the generic method over the real (symbolic) type
-        // argument — see Issue #1334 for the ilverify StackUnexpected
-        // mismatch this narrowing avoids.
+        // Issue #1150: generic extension methods keep ONLY numeric-return
+        // widening: full rebinding could erase a LINQ delegate to
+        // `Func<object,object>` while the call is re-closed over symbolic type
+        // arguments (#1334). Non-generic extensions have no such re-closing
+        // hazard and use full rebinding so nested named-delegate slots retain
+        // their exact CLR ABI (#2672).
         //
         // Issue #506 follow-up: still routes through BindClrParameterConversions
         // so value-type → object boxing fires for fixed-arity imported
         // extension calls too.
+        var extensionDelegateRebindMode = best.IsGenericMethod
+            ? ClrCallDelegateRebindMode.NumericWideningOnly
+            : ClrCallDelegateRebindMode.Full;
         bound = BuildResolvedClrCallArguments(
             bound,
             ce.Arguments,
@@ -1454,7 +1454,7 @@ internal sealed partial class ExpressionBinder
             receiver,
             ce.Location,
             ce,
-            ClrCallDelegateRebindMode.NumericWideningOnly,
+            extensionDelegateRebindMode,
             out var extensionHandlerPrelude,
             out var extensionUpdatedReceiver,
             receiverArgCount: 1);

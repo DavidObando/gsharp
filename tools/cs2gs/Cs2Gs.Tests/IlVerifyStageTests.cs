@@ -133,6 +133,10 @@ public class IlVerifyStageTests
                 "StackUnexpected",
                 "CompiledAvaloniaXaml.XamlIlContext+Context`1::get_ParentProvider()",
                 "fp 4"),
+            new IlVerifyError(
+                "DelegateCtor",
+                "Oahu.Core.UI.Avalonia.Views.AboutView::!XamlIlPopulate(System.IServiceProvider, AboutView)",
+                "csc emits the same Avalonia-generated delegate construction"),
             new IlVerifyError("StackUnexpected", "P::Main(string[])", "real"),
         };
 

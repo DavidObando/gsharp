@@ -871,10 +871,10 @@ internal sealed class LambdaBinder
 
         // Issue #2180: an async literal carries a DUAL return shape — the
         // FunctionSymbol's result type is the UNWRAPPED value (`T`), while its
-        // observable delegate return is the `Task[T]` wrapper. The erasure
-        // above collapses that to a single slot and, for a type-parameter
-        // result, erases it to `object` (the target delegate return `Task[T]`
-        // contains `T`). That erasure produces an async state machine whose
+        // observable delegate return is the `Task[T]` wrapper. Treating the
+        // target's observable Task as the FunctionSymbol result would wrap it
+        // again as Task<Task> during async lowering. For a type-parameter
+        // result, erasure also produces an async state machine whose
         // builder / SetResult are `AsyncTaskMethodBuilder[object]` and forces a
         // bogus `(Task[T])(object)` reference-cast at the call site — correct
         // for reference `T` but a silent miscompile for a value-type `T`
@@ -882,13 +882,12 @@ internal sealed class LambdaBinder
         // reifies per instantiation exactly like the SYNC generic-lambda path,
         // so keep the async result symbolic: the FunctionSymbol result stays
         // the unwrapped `T` (threaded into the SM as `Var(idx)`), while the
-        // delegate observable return keeps the `Task[T]` wrapper.
+        // delegate observable return keeps the target `Task`/`Task[T]` wrapper.
         var adapterResultType = adapterReturnType;
         var adapterDelegateReturnType = adapterReturnType;
         if (literal.Function.IsAsync
             && targetFunctionType.ReturnType != TypeSymbol.Void
-            && literal.Function.Type != null
-            && TypeSymbol.ContainsTypeParameter(targetFunctionType.ReturnType))
+            && literal.Function.Type != null)
         {
             adapterResultType = literal.Function.Type;
             adapterDelegateReturnType = targetFunctionType.ReturnType;
