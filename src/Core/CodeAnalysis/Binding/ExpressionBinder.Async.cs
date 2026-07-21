@@ -73,6 +73,7 @@ internal sealed partial class ExpressionBinder
         // any value-producing expression with a CLR-backed type (instance event).
         BoundExpression boundReceiver = null;
         Type receiverClrType = null;
+        TypeSymbol importedEventTarget = null;
         BindingFlags flags;
 
         // Issue #2394: check the same-compilation SOURCE type (struct/
@@ -305,7 +306,16 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
-            receiverClrType = boundReceiver.Type?.ClrType;
+            importedEventTarget = boundReceiver.Type;
+            receiverClrType = importedEventTarget?.ClrType;
+            if (receiverClrType == null
+                && boundReceiver.Type is StructSymbol sourceReceiver
+                && TypeMemberModel.GetNearestImportedBase(sourceReceiver) is TypeSymbol importedBase)
+            {
+                importedEventTarget = importedBase;
+                receiverClrType = importedBase.ClrType;
+            }
+
             if (receiverClrType == null)
             {
                 // Issue #648 (generalized by #2154): compound assignment fallback for
@@ -343,7 +353,11 @@ internal sealed partial class ExpressionBinder
             flags = BindingFlags.Public | BindingFlags.Instance;
         }
 
-        var eventInfo = isEventCapableOperator ? ClrTypeUtilities.SafeGetEvent(receiverClrType, eventName, flags) : null;
+        var eventInfo = isEventCapableOperator
+            ? boundReceiver != null
+                ? MemberLookup.SafeGetEventIncludingSelfAndInterfaces(receiverClrType, eventName)
+                : ClrTypeUtilities.SafeGetEvent(receiverClrType, eventName, flags)
+            : null;
         if (eventInfo == null)
         {
             // Issue #648 (generalized by #2154): compound assignment fallback for
@@ -364,7 +378,9 @@ internal sealed partial class ExpressionBinder
         }
 
         var handlerType = eventInfo.EventHandlerType;
-        var handlerTypeSymbol = TypeSymbol.FromClrType(handlerType);
+        var handlerTypeSymbol = importedEventTarget != null
+            ? MemberLookup.GetClrEventHandlerTypeSymbol(importedEventTarget, eventInfo)
+            : TypeSymbol.FromClrType(handlerType);
         var boundHandler = BindEventSubscriptionHandler(syntax.Value, handlerTypeSymbol);
 
         // The handler is most useful when expressed as a function literal of
@@ -388,7 +404,16 @@ internal sealed partial class ExpressionBinder
             convertedHandler = conversions.BindConversion(syntax.Value.Location, boundHandler, handlerTypeSymbol);
         }
 
-        return new BoundClrEventSubscriptionExpression(null, boundReceiver, eventInfo, convertedHandler, isAdd);
+        var eventContainingType = importedEventTarget == null
+            ? null
+            : MemberLookup.GetClrMemberDeclaringTypeSymbol(importedEventTarget, eventInfo);
+        return new BoundClrEventSubscriptionExpression(
+            null,
+            boundReceiver,
+            eventInfo,
+            convertedHandler,
+            isAdd,
+            eventContainingType: eventContainingType);
     }
 
     private bool EventReceiverNameCanBindAsType(

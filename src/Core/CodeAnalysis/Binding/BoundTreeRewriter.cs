@@ -1701,7 +1701,8 @@ public abstract class BoundTreeRewriter
             handler,
             node.IsAdd,
             node.ConstrainedReceiverTypeParameter,
-            node.ConstrainedInterfaceType);
+            node.ConstrainedInterfaceType,
+            node.EventContainingType);
     }
 
     /// <summary>Rewrites a user-defined event subscription expression (ADR-0052).</summary>

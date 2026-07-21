@@ -26,7 +26,8 @@ public sealed class BoundClrEventSubscriptionExpression : BoundExpression
         BoundExpression handler,
         bool isAdd,
         TypeParameterSymbol constrainedReceiverTypeParameter = null,
-        TypeSymbol constrainedInterfaceType = null)
+        TypeSymbol constrainedInterfaceType = null,
+        TypeSymbol eventContainingType = null)
         : base(syntax)
     {
         Receiver = receiver;
@@ -35,6 +36,7 @@ public sealed class BoundClrEventSubscriptionExpression : BoundExpression
         IsAdd = isAdd;
         ConstrainedReceiverTypeParameter = constrainedReceiverTypeParameter;
         ConstrainedInterfaceType = constrainedInterfaceType;
+        EventContainingType = eventContainingType;
     }
 
     public BoundExpression Receiver { get; }
@@ -48,6 +50,8 @@ public sealed class BoundClrEventSubscriptionExpression : BoundExpression
     public TypeParameterSymbol ConstrainedReceiverTypeParameter { get; }
 
     public TypeSymbol ConstrainedInterfaceType { get; }
+
+    public TypeSymbol EventContainingType { get; }
 
     public bool IsConstrainedTypeParameterAccess => ConstrainedReceiverTypeParameter != null;
 
