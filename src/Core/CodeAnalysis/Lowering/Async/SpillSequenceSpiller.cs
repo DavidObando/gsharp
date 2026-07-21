@@ -705,10 +705,7 @@ public static class SpillSequenceSpiller
                 innerExpr = innerSpill.Value;
             }
 
-            // Create a spill temp for the await result.
-            var spillLocal = MakeSpillTemp(awaitExpr.Type);
             var awaitNode = new BoundAwaitExpression(null, innerExpr, awaitExpr.Type, awaitExpr.AwaiterTypeSymbol);
-            var assignStmt = new BoundVariableDeclaration(null, spillLocal, awaitNode);
 
             var locals = ImmutableArray.CreateBuilder<LocalVariableSymbol>();
             var sideEffects = ImmutableArray.CreateBuilder<BoundStatement>();
@@ -719,8 +716,20 @@ public static class SpillSequenceSpiller
                 sideEffects.AddRange(innerSpill.SideEffects);
             }
 
+            if (awaitExpr.Type == TypeSymbol.Void)
+            {
+                sideEffects.Add(new BoundExpressionStatement(null, awaitNode));
+                return new BoundSpillSequenceExpression(
+                    null,
+                    locals.ToImmutable(),
+                    sideEffects.ToImmutable(),
+                    new BoundLiteralExpression(null, 0, TypeSymbol.Void));
+            }
+
+            // Create a spill temp for a value-producing await result.
+            var spillLocal = MakeSpillTemp(awaitExpr.Type);
             locals.Add(spillLocal);
-            sideEffects.Add(assignStmt);
+            sideEffects.Add(new BoundVariableDeclaration(null, spillLocal, awaitNode));
 
             return new BoundSpillSequenceExpression(
                 null,
@@ -1218,7 +1227,8 @@ public static class SpillSequenceSpiller
                 condition = spilledCondition.Value;
             }
 
-            var resultLocal = MakeSpillTemp(conditional.Type);
+            var isVoid = conditional.Type == TypeSymbol.Void;
+            var resultLocal = isVoid ? null : MakeSpillTemp(conditional.Type);
             var elseLabel = MakeLabel();
             var endLabel = MakeLabel();
 
@@ -1229,9 +1239,17 @@ public static class SpillSequenceSpiller
             var spilledTrue = SpillExpression(conditional.WhenTrue);
             locals.AddRange(spilledTrue.Locals);
             sideEffects.AddRange(spilledTrue.SideEffects);
-            sideEffects.Add(new BoundExpressionStatement(
-                null,
-                new BoundAssignmentExpression(null, resultLocal, spilledTrue.Value)));
+            if (!isVoid)
+            {
+                sideEffects.Add(new BoundExpressionStatement(
+                    null,
+                    new BoundAssignmentExpression(null, resultLocal, spilledTrue.Value)));
+            }
+            else if (spilledTrue.Value is not BoundLiteralExpression)
+            {
+                sideEffects.Add(new BoundExpressionStatement(null, spilledTrue.Value));
+            }
+
             sideEffects.Add(new BoundGotoStatement(null, endLabel));
 
             // else: result = whenFalse (spilled — only runs if condition was false)
@@ -1239,12 +1257,28 @@ public static class SpillSequenceSpiller
             var spilledFalse = SpillExpression(conditional.WhenFalse);
             locals.AddRange(spilledFalse.Locals);
             sideEffects.AddRange(spilledFalse.SideEffects);
-            sideEffects.Add(new BoundExpressionStatement(
-                null,
-                new BoundAssignmentExpression(null, resultLocal, spilledFalse.Value)));
+            if (!isVoid)
+            {
+                sideEffects.Add(new BoundExpressionStatement(
+                    null,
+                    new BoundAssignmentExpression(null, resultLocal, spilledFalse.Value)));
+            }
+            else if (spilledFalse.Value is not BoundLiteralExpression)
+            {
+                sideEffects.Add(new BoundExpressionStatement(null, spilledFalse.Value));
+            }
 
             // end:
             sideEffects.Add(new BoundLabelStatement(null, endLabel));
+
+            if (isVoid)
+            {
+                return new BoundSpillSequenceExpression(
+                    null,
+                    locals.ToImmutable(),
+                    sideEffects.ToImmutable(),
+                    new BoundLiteralExpression(null, 0, TypeSymbol.Void));
+            }
 
             locals.Add(resultLocal);
 
