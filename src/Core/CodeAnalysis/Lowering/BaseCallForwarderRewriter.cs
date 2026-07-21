@@ -10,9 +10,9 @@ using GSharp.Core.CodeAnalysis.Symbols;
 namespace GSharp.Core.CodeAnalysis.Lowering;
 
 /// <summary>
-/// Issue #1467: routes <c>base.M(args)</c> calls that appear inside async /
-/// iterator method bodies through a synthesized non-virtual forwarder method on
-/// the containing class.
+/// Issues #1467 and #2667: routes <c>base.M(args)</c> calls that appear inside
+/// async / iterator method bodies through a synthesized non-virtual forwarder
+/// method on the containing class.
 /// </summary>
 /// <remarks>
 /// A base-class call lowers to a non-virtual <c>call instance R Base::M(...)</c>.
@@ -82,22 +82,23 @@ public static class BaseCallForwarderRewriter
             }
         }
 
-        if (forwarders.Count == 0)
+        if (forwarderBodies.Count == 0)
         {
             return program;
         }
 
         // Attach forwarders to their containing class definitions.
         var methodsByClass = new Dictionary<StructSymbol, ImmutableArray<FunctionSymbol>.Builder>();
-        foreach (var entry in forwarders)
+        foreach (var forwarder in forwarderBodies.Keys)
         {
-            if (!methodsByClass.TryGetValue(entry.Key.Class, out var builder))
+            var owner = (StructSymbol)forwarder.ReceiverType;
+            if (!methodsByClass.TryGetValue(owner, out var builder))
             {
                 builder = ImmutableArray.CreateBuilder<FunctionSymbol>();
-                methodsByClass[entry.Key.Class] = builder;
+                methodsByClass[owner] = builder;
             }
 
-            builder.Add(entry.Value);
+            builder.Add(forwarder);
         }
 
         foreach (var entry in methodsByClass)
@@ -198,6 +199,23 @@ public static class BaseCallForwarderRewriter
                 rewritten.Type);
         }
 
+        protected override BoundExpression RewriteImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
+        {
+            var rewritten = (BoundImportedInstanceCallExpression)base.RewriteImportedInstanceCallExpression(node);
+            if (!rewritten.IsNonVirtualBaseCall)
+            {
+                return rewritten;
+            }
+
+            var forwarder = this.CreateImportedForwarder(rewritten);
+            return new BoundUserInstanceCallExpression(
+                rewritten.Syntax,
+                rewritten.Receiver,
+                forwarder,
+                rewritten.Arguments,
+                rewritten.Type);
+        }
+
         private FunctionSymbol GetOrCreateForwarder(BoundBaseClassCallExpression node)
         {
             var key = (this.classDef, node.Method);
@@ -255,6 +273,67 @@ public static class BaseCallForwarderRewriter
             }
 
             this.forwarders[key] = forwarder;
+            this.forwarderBodies[forwarder] = new BoundBlockStatement(null, statements.ToImmutable());
+            return forwarder;
+        }
+
+        private FunctionSymbol CreateImportedForwarder(BoundImportedInstanceCallExpression node)
+        {
+            this.ordinalByClass.TryGetValue(this.classDef, out var ordinal);
+            this.ordinalByClass[this.classDef] = ordinal + 1;
+
+            var methodParameters = node.Method.GetParameters();
+            var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>(node.Arguments.Length);
+            for (var i = 0; i < node.Arguments.Length; i++)
+            {
+                var refKind = node.ArgumentRefKinds.IsDefault ? RefKind.None : node.ArgumentRefKinds[i];
+                parameters.Add(new ParameterSymbol(
+                    i < methodParameters.Length ? methodParameters[i].Name : "arg" + i,
+                    node.Arguments[i].Type,
+                    refKind: refKind));
+            }
+
+            var parameterArray = parameters.ToImmutable();
+            var forwarder = new FunctionSymbol(
+                "<>n__" + ordinal,
+                parameterArray,
+                node.Type,
+                declaration: null,
+                this.containingFunction.Package,
+                Accessibility.Private,
+                receiverType: this.classDef,
+                explicitReceiverParameter: null)
+            {
+                ReturnRefKind = node.Method.ReturnType.IsByRef ? RefKind.Ref : RefKind.None,
+            };
+
+            var arguments = ImmutableArray.CreateBuilder<BoundExpression>(parameterArray.Length);
+            foreach (var parameter in parameterArray)
+            {
+                arguments.Add(new BoundVariableExpression(null, parameter));
+            }
+
+            var innerCall = new BoundImportedInstanceCallExpression(
+                null,
+                new BoundVariableExpression(null, forwarder.ThisParameter),
+                node.Method,
+                node.Type,
+                arguments.ToImmutable(),
+                node.ArgumentRefKinds,
+                node.TypeArgumentSymbols,
+                isNonVirtualBaseCall: true);
+
+            var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+            if (node.Type == null || node.Type == TypeSymbol.Void)
+            {
+                statements.Add(new BoundExpressionStatement(null, innerCall));
+                statements.Add(new BoundReturnStatement(null, null));
+            }
+            else
+            {
+                statements.Add(new BoundReturnStatement(null, innerCall));
+            }
+
             this.forwarderBodies[forwarder] = new BoundBlockStatement(null, statements.ToImmutable());
             return forwarder;
         }
