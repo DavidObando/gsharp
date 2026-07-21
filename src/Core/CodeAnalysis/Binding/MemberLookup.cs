@@ -202,23 +202,19 @@ internal sealed class MemberLookup
                 }
             }
 
-            // Issue #2614: MetadataLoadContext can reject an aggregate
-            // GetMethods call when one derived signature has a missing
-            // dependency. Probe each declaration level independently so that
-            // usable methods on an otherwise loadable base are not hidden.
-            if (selfMethods.Length == 0)
+            // Issues #2614 / #2638: an aggregate metadata walk may return a
+            // usable but incomplete set. Always probe each declaration level
+            // and union accessible methods without duplicating inherited slots.
+            for (var current = clrType; current != null; current = GetBaseTypeSafe(current))
             {
-                for (var current = clrType; current != null; current = GetBaseTypeSafe(current))
+                foreach (var m in ClrTypeUtilities.SafeGetMethods(
+                    current,
+                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
                 {
-                    foreach (var m in ClrTypeUtilities.SafeGetMethods(
-                        current,
-                        BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                    if (string.Equals(m.Name, n, StringComparison.Ordinal)
+                        && !IsMethodHiddenByExisting(result, m))
                     {
-                        if (string.Equals(m.Name, n, StringComparison.Ordinal)
-                            && !IsMethodHiddenByExisting(result, m))
-                        {
-                            result.Add(m);
-                        }
+                        result.Add(m);
                     }
                 }
             }
@@ -358,6 +354,11 @@ internal sealed class MemberLookup
         foreach (var m in existing)
         {
             if (!string.Equals(m.Name, candidate.Name, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (m.GetGenericArguments().Length != candidate.GetGenericArguments().Length)
             {
                 continue;
             }
@@ -4334,6 +4335,11 @@ internal sealed class MemberLookup
         foreach (var m in existing)
         {
             if (!string.Equals(m.Name, candidate.Name, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (m.GetGenericArguments().Length != candidate.GetGenericArguments().Length)
             {
                 continue;
             }
