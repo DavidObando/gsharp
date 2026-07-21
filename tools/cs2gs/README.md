@@ -157,7 +157,12 @@ sha256sum obj/Release/net10.0/{,Avalonia/}Oahu.UI.dll \
   bin/Release/net10.0/Oahu.UI.dll
 ilspycmd -l c obj/Release/net10.0/Oahu.UI.dll | grep XamlClosure
 ilspycmd -l c obj/Release/net10.0/Avalonia/Oahu.UI.dll | grep XamlClosure
-ilverify bin/Release/net10.0/Oahu.UI.dll -s System.Private.CoreLib <reference flags>
+runtime=$(dotnet --list-runtimes | awk \
+  '$1=="Microsoft.NETCore.App" && $2~/^10[.]/{gsub(/[][]/,"",$3); p=$3"/"$2} END{print p}')
+ilverify bin/Release/net10.0/Oahu.UI.dll -s System.Private.CoreLib \
+  $(find "$runtime" -maxdepth 1 -name '*.dll' -exec printf -- '-r %s ' {} \;) \
+  $(find bin/Release/net10.0 -maxdepth 1 -name '*.dll' \
+    ! -name Oahu.UI.dll -exec printf -- '-r %s ' {} \;)
 ilspycmd -il bin/Release/net10.0/Oahu.UI.dll > proof.il
 ```
 
