@@ -22,13 +22,11 @@ public class Issue2640ImportedInterpolatedStringHandlerEmitTests
             import System
             import System.Globalization
 
-            func getTerminalProgressSequence() string {
-                let state = 1
-                let pct = 42
-                return string.Create(CultureInfo.InvariantCulture, "\u001b]9;4;${state};${pct}\u001b\\")
+            func formatPercent(value float64) string {
+                return string.Create(CultureInfo.InvariantCulture, "${int(Math.Round(value * 100.0)),3}%")
             }
 
-            Console.Write(getTerminalProgressSequence())
+            Console.Write(formatPercent(0.42))
             """;
 
         var (exitCode, diagnostics, outputPath, directory) = Compile(Source);
@@ -36,7 +34,32 @@ public class Issue2640ImportedInterpolatedStringHandlerEmitTests
         {
             Assert.True(exitCode == 0, diagnostics);
             IlVerifier.Verify(outputPath);
-            Assert.Equal("\u001b]9;4;1;42\u001b\\", Run(outputPath, directory));
+            Assert.Equal(" 42%", Run(outputPath, directory));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void StringCreate_AlignmentAndFormat_EmitsVerifiesAndRuns()
+    {
+        const string Source = """
+            package Formatted
+            import System
+            import System.Globalization
+
+            let value = 42
+            Console.Write(string.Create(CultureInfo.InvariantCulture, "${value,6:0000}"))
+            """;
+
+        var (exitCode, diagnostics, outputPath, directory) = Compile(Source);
+        try
+        {
+            Assert.True(exitCode == 0, diagnostics);
+            IlVerifier.Verify(outputPath);
+            Assert.Equal("  0042", Run(outputPath, directory));
         }
         finally
         {
