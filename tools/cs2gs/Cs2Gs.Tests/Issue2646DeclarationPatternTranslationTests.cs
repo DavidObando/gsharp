@@ -24,11 +24,18 @@ public sealed class Issue2646DeclarationPatternTranslationTests
             {
                 public sealed class Program
                 {
-                    public int Run(int? rewriteCode)
+                    public int Run(int? rewriteResult)
                     {
-                        if (rewriteCode is int code)
+                        try
                         {
-                            return code;
+                            var rewriteCode = rewriteResult;
+                            if (rewriteCode is int code)
+                            {
+                                return code;
+                            }
+                        }
+                        catch
+                        {
                         }
 
                         return -1;
@@ -37,9 +44,12 @@ public sealed class Issue2646DeclarationPatternTranslationTests
             }
             """);
 
-        Assert.Contains("let code = rewriteCode", printed, StringComparison.Ordinal);
-        Assert.Contains("if code is int32", printed, StringComparison.Ordinal);
+        Assert.Contains("let __spill0 = rewriteCode", printed, StringComparison.Ordinal);
+        Assert.Contains("var code int32", printed, StringComparison.Ordinal);
+        Assert.Contains("if __spill0 is int32", printed, StringComparison.Ordinal);
+        Assert.Contains("code = int32(__spill0)", printed, StringComparison.Ordinal);
         Assert.Contains("return code", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("let code = rewriteCode", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("if rewriteCode is int32", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("return rewriteCode", printed, StringComparison.Ordinal);
     }
@@ -62,17 +72,18 @@ public sealed class Issue2646DeclarationPatternTranslationTests
                             return -1;
                         }
 
+                        code = code + 1;
                         return code;
                     }
                 }
             }
             """);
 
-        Assert.Contains("let code = value", printed, StringComparison.Ordinal);
-        Assert.Contains("if code is int32", printed, StringComparison.Ordinal);
+        Assert.Contains("var code int32", printed, StringComparison.Ordinal);
+        Assert.Contains("code = int32(__spill0)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("return value", printed, StringComparison.Ordinal);
         Assert.Equal(
-            "42\n-1",
+            "43\n-1",
             CompileAndRun(
                 printed,
                 "System.Console.WriteLine(C().Read(42))\nSystem.Console.WriteLine(C().Read(\"no\"))").Trim());
