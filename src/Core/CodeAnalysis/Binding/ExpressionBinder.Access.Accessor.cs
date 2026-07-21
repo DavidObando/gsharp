@@ -1452,10 +1452,10 @@ internal sealed partial class ExpressionBinder
 
     /// <summary>
     /// Issue #687 (Option A): when a name resolves to a value but also matches an
-    /// in-scope type with the same simple name (an imported CLR class, user-defined
-    /// struct/class, or enum), surface that type so the caller can apply the
-    /// C#-style "color color" preference when the right-hand side of the accessor
-    /// is a static member of the type.
+    /// in-scope type with the same simple name (an imported/aliased CLR type,
+    /// user-defined struct/class, or enum), surface that type so the caller can
+    /// apply the C#-style "color color" preference when the right-hand side of
+    /// the accessor is a static member of the type.
     /// </summary>
     private bool TryResolveColorColorType(
         string name,
@@ -1485,6 +1485,13 @@ internal sealed partial class ExpressionBinder
                 enumSymbol = foundEnum;
                 return true;
             }
+        }
+
+        var clrType = lookupType(name);
+        if (clrType?.ClrType != null && !ReferenceEquals(clrType, TypeSymbol.Void))
+        {
+            importedClassSymbol = new ImportedClassSymbol(clrType.ClrType, leftName, references: scope.References);
+            return true;
         }
 
         if (scope.TryLookupImportedClass(name, leftName, out var importedClass))
