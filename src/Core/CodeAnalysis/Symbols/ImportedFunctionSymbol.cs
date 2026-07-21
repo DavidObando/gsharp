@@ -74,11 +74,6 @@ public sealed class ImportedFunctionSymbol : Symbol
     private TypeSymbol GetMethodType(MethodInfo method)
     {
         var returnType = ClrNullability.GetReturnTypeSymbol(method);
-        if (returnType is ImportedTypeSymbol && ImportedTypeSymbol.TryCreateSemanticAggregate(method.ReturnType, ImportedClass?.References, out var aggregate))
-        {
-            return aggregate;
-        }
-
-        return returnType;
+        return ImportedTypeSymbol.NormalizeSemanticAggregate(returnType, method.ReturnType, ImportedClass?.References);
     }
 }

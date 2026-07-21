@@ -121,6 +121,44 @@ public class Issue2291ImportedRecordWithCopyTests
     }
 
     [Fact]
+    public void Imported_CSharpRecordClass_FromStaticProperty_With_Compiles()
+    {
+        var libraryPath = EmitCSharpLibrary(
+            nameof(this.Imported_CSharpRecordClass_FromStaticProperty_With_Compiles),
+            """
+            #nullable enable
+            namespace Records
+            {
+                public record Person(string Name, int Age)
+                {
+                    public static Person Default => new("Ada", 30);
+                }
+            }
+            """);
+
+        using var resolver = ReferenceResolver.WithReferences(new[] { libraryPath });
+        resolver.CurrentAssemblyName = "Consumer";
+
+        var consumer = new GsCompilation(
+            resolver,
+            GsSyntaxTree.Parse(SourceText.From(
+                """
+                package Consumer
+                import Records
+
+                func Run() int32 {
+                    let p = Person.Default
+                    let p2 = p with { Age = 5 }
+                    return p2.Age
+                }
+                """)));
+
+        using var peStream = new MemoryStream();
+        var result = consumer.Emit(peStream, pdbStream: null, refStream: null, assemblyName: "Consumer");
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
+    }
+
+    [Fact]
     public void Imported_PlainCSharpClass_With_StillReportsGs0161()
     {
         var libraryPath = EmitCSharpLibrary(
