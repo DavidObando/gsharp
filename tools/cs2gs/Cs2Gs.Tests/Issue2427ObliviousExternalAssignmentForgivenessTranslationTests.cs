@@ -392,12 +392,11 @@ namespace Demo
     }
 
     /// <summary>
-    /// Negative test: a nullable-ENABLED compilation calling the same oblivious
-    /// external method — the fix is gated to oblivious compilations only (its
-    /// own nullable flow analysis is authoritative), so no `!!` is inserted.
+    /// A nullable-enabled consumer still sees a nullable-oblivious producer's
+    /// unannotated reference return as T? in G#, so assignment needs the bridge.
     /// </summary>
     [Fact]
-    public void NullableEnabledCompilation_IsNotForgiven()
+    public void NullableEnabledCompilation_IsForgiven()
     {
         string printed = TranslateEnabledWithObliviousLibrary(@"
 namespace Demo
@@ -413,8 +412,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("result = ext.Combine(\"hello\")", printed);
-        Assert.DoesNotContain("ext.Combine(\"hello\")!!", printed);
+        Assert.Contains("result = ext.Combine(\"hello\")!!", printed);
     }
 
     /// <summary>

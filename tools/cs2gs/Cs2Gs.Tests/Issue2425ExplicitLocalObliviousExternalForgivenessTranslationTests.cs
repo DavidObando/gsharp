@@ -267,15 +267,11 @@ namespace Demo
     }
 
     /// <summary>
-    /// Negative/scope control: a `var` local reads the SAME oblivious external
-    /// member and is later returned, but the fix is intentionally scoped to
-    /// EXPLICIT-typed locals (issue #2425's title) — a `var` local never had an
-    /// explicit type to retain/drop in the first place, and gets no
-    /// initializer-forgiveness from this change. (Tracked as a related, but
-    /// distinct, gap — not fixed here.)
+    /// A `var` local also needs forgiveness at its oblivious external initializer
+    /// so G# infers the same non-null type that C# does.
     /// </summary>
     [Fact]
-    public void VarLocal_IsNotForgiven_ScopeControl()
+    public void VarLocal_IsForgivenAtInitializer()
     {
         string printed = TranslateObliviousWithObliviousLibrary(@"
 namespace Demo
@@ -290,8 +286,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let result = ext.Combine(\"hello\")", printed);
-        Assert.DoesNotContain("ext.Combine(\"hello\")!!", printed);
+        Assert.Contains("let result = ext.Combine(\"hello\")!!", printed);
     }
 
     /// <summary>
@@ -354,12 +349,11 @@ namespace Demo
     }
 
     /// <summary>
-    /// Negative test: a nullable-ENABLED compilation calling the same oblivious
-    /// external method — the fix is gated to oblivious compilations only (its
-    /// own nullable flow analysis is authoritative), so no `!!` is inserted.
+    /// A nullable-enabled consumer still sees a nullable-oblivious producer's
+    /// unannotated reference return as T? in G#, so it needs the same bridge.
     /// </summary>
     [Fact]
-    public void NullableEnabledCompilation_IsNotForgiven()
+    public void NullableEnabledCompilation_IsForgiven()
     {
         string printed = TranslateEnabledWithObliviousLibrary(@"
 namespace Demo
@@ -374,8 +368,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let result = ext.Combine(\"hello\")", printed);
-        Assert.DoesNotContain("ext.Combine(\"hello\")!!", printed);
+        Assert.Contains("let result = ext.Combine(\"hello\")!!", printed);
     }
 
     /// <summary>

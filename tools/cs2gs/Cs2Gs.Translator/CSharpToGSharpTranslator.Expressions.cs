@@ -777,8 +777,21 @@ public sealed partial class CSharpToGSharpTranslator
 
             TypeInfo typeInfo = this.context.GetTypeInfo(value);
             ITypeSymbol type = typeInfo.Type ?? typeInfo.ConvertedType;
-            return type is { IsReferenceType: true }
-                && typeInfo.Nullability.FlowState == NullableFlowState.MaybeNull
+            if (type is not { IsReferenceType: true })
+            {
+                return false;
+            }
+
+            // An oblivious producer's unannotated reference return is imported by
+            // gsc as T? regardless of the consumer's nullable context. Roslyn
+            // reports that metadata as Annotation.None, so its flow state cannot
+            // drive the target-aware receiver/value bridges below.
+            if (IsObliviousExternalNullableMember(this.context.GetSymbolInfo(value).Symbol))
+            {
+                return true;
+            }
+
+            return typeInfo.Nullability.FlowState == NullableFlowState.MaybeNull
                 && (type.NullableAnnotation == NullableAnnotation.Annotated
                     || typeInfo.Nullability.Annotation == NullableAnnotation.Annotated);
         }
@@ -814,7 +827,8 @@ public sealed partial class CSharpToGSharpTranslator
         // argument to a non-null reference parameter that cs2gs will keep
         // non-null. Arrays and numeric/string/span indices therefore stay on
         // their existing paths, explicitly nullable indexer contracts remain
-        // untouched, and nullable-enabled projects receive no new assertions.
+        // untouched, and nullable-enabled projects receive new assertions only
+        // for values imported from nullable-oblivious assemblies.
         // A genuinely null oblivious key follows the existing `!!` bridge
         // policy and fails at runtime before the index operation.
         private GExpression TranslateIndexArgumentWithNullForgiveness(ArgumentSyntax argument)
