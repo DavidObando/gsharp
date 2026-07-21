@@ -48,10 +48,25 @@ internal sealed partial class ExpressionBinder
         // unchanged, aliasing/identity preserved for untouched members) fall out
         // for free once cs2gs actually emits a `data class` instead of downgrading
         // to a plain `class` (the cs2gs-side half of #2228).
-        if (!(receiver.Type is StructSymbol structType) || !structType.IsData)
+        var normalizedReceiverType = ImportedTypeSymbol.NormalizeSemanticAggregate(
+            receiver.Type,
+            receiver.Type.ClrType,
+            scope.References);
+        var structType = normalizedReceiverType switch
+        {
+            StructSymbol aggregate => aggregate,
+            NullabilityAnnotatedTypeSymbol { BaseType: StructSymbol aggregate } => aggregate,
+            _ => null,
+        };
+        if (structType == null || !structType.IsData)
         {
             Diagnostics.ReportCopyOrWithNotDataStruct(diagnosticLocation, receiver.Type);
             return new BoundErrorExpression(null);
+        }
+
+        if (!ReferenceEquals(receiver.Type, structType))
+        {
+            receiver = new BoundConversionExpression(null, structType, receiver);
         }
 
         var tempName = "$copy" + System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -124,39 +139,23 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        // Issue #2291: an imported C# record's positional members that are
-        // NOT backed by a visible field (property-only, e.g. auto-properties
-        // whose mangled backing field is intentionally hidden from the
-        // aggregate's field list) still need to participate in `with`/`copy`.
-        // `PrimaryConstructorParameters` names the record's full positional
-        // shape regardless of whether each member resolved to a field or a
-        // property (see ImportedTypeSymbol.BuildPrimaryConstructorParameters),
-        // so walking it here — skipping names already handled as a real
-        // field above — surfaces exactly the property-only positional
-        // members, for every kind of data class (gsc-native or imported).
-        if (!structType.PrimaryConstructorParameters.IsDefaultOrEmpty)
+        // Imported records may be positional or property-only. Copy every
+        // writable property that is not already represented by a visible field.
+        foreach (var property in structType.Properties)
         {
-            foreach (var parameter in structType.PrimaryConstructorParameters)
+            if (!property.HasSetter || !handledMembers.Add(property.Name))
             {
-                if (!handledMembers.Add(parameter.Name))
-                {
-                    continue;
-                }
+                continue;
+            }
 
-                if (!TypeMemberModel.TryGetProperty(structType, parameter.Name, out var property, out _) || !property.HasSetter)
-                {
-                    continue;
-                }
-
-                if (explicitValues.TryGetValue(parameter.Name, out var explicitValue))
-                {
-                    initializers.Add(new BoundFieldInitializer(property, explicitValue.Value));
-                }
-                else
-                {
-                    var access = new BoundPropertyAccessExpression(null, new BoundVariableExpression(null, tempVar), structType, property);
-                    initializers.Add(new BoundFieldInitializer(property, access));
-                }
+            if (explicitValues.TryGetValue(property.Name, out var explicitValue))
+            {
+                initializers.Add(new BoundFieldInitializer(property, explicitValue.Value));
+            }
+            else
+            {
+                var access = new BoundPropertyAccessExpression(null, new BoundVariableExpression(null, tempVar), structType, property);
+                initializers.Add(new BoundFieldInitializer(property, access));
             }
         }
 
