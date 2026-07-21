@@ -218,12 +218,12 @@ internal sealed class ClosureEmitter
                 // type, sharing its accessibility domain. Mirror that here by
                 // routing the non-capturing lambda through a (fieldless) display
                 // class nested in the enclosing user type, exactly as the
-                // capture-bearing #1335 path does. Only non-async lambdas whose
-                // enclosing type is a non-generic user type are nested; async
-                // lambdas are owned by the async state-machine synthesis (which
-                // keys off the absence of a ClosureInfo), and generic enclosers
-                // are skipped because a nested type would have to re-declare the
-                // encloser's type parameters, which this synthesis does not model.
+                // capture-bearing #1335 path does. Issue #2668 extends the same
+                // placement to async lambdas so their MoveNext methods retain
+                // access to private static members of the lexical encloser.
+                // Generic enclosers are skipped because a nested type would have
+                // to re-declare the encloser's type parameters, which this
+                // synthesis does not model.
                 // All other non-capturing lambdas keep the existing top-level
                 // `<Program>` static placement.
                 //
@@ -240,7 +240,6 @@ internal sealed class ClosureEmitter
                 // exists for), always keep them on the top-level `<Program>`
                 // static placement.
                 if (literal.Function == null
-                    || literal.Function.IsAsync
                     || literal.Function.IsGeneric
                     || literal.Function.LexicalEnclosingType is not StructSymbol zeroCaptureEnclosing
                     || !zeroCaptureEnclosing.TypeParameters.IsDefaultOrEmpty)
