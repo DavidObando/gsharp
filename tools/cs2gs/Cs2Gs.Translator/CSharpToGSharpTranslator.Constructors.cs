@@ -775,6 +775,29 @@ public sealed partial class CSharpToGSharpTranslator
                 ? this.MapAttributes(parameterSyntax.AttributeLists)
                 : null;
 
+            // C# emits no FieldMarshal row for the default P/Invoke bool
+            // contract, but the CLR marshaler still treats bool as a four-byte
+            // Win32 BOOL. G# intentionally requires that ABI to be explicit for
+            // byref bool, so materialize C#'s effective default during migration.
+            if (symbol.RefKind != RefKind.None
+                && symbol.Type.SpecialType == SpecialType.System_Boolean
+                && symbol.ContainingSymbol is IMethodSymbol method
+                && method.GetDllImportData() != null
+                && !symbol.GetAttributes().Any(attribute =>
+                    attribute.AttributeClass?.ToDisplayString() == "System.Runtime.InteropServices.MarshalAsAttribute"))
+            {
+                attributes ??= new List<AttributeUse>();
+                attributes.Add(new AttributeUse(
+                    "System.Runtime.InteropServices.MarshalAs",
+                    new[]
+                    {
+                        new AttributeArgument(
+                            new MemberAccessExpression(
+                                new IdentifierExpression("System.Runtime.InteropServices.UnmanagedType"),
+                                "Bool")),
+                    }));
+            }
+
             return new Parameter(SanitizeIdentifier(symbol.Name), type, variadic, refKind, defaultValue, attributes);
         }
 
