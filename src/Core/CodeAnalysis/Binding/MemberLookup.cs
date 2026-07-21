@@ -1065,10 +1065,9 @@ internal sealed class MemberLookup
             // Recurse through each symbolic argument's own open definition so
             // the erased closed shape becomes `IEnumerable<IEnumerator<object>>`
             // — matching the (identically erased) selector parameter type — and
-            // generic inference recovers the right `TSource`. Leaf type
-            // parameters and concrete arguments still erase to `object`, which
-            // mirrors how the selector's parameter type is erased, keeping the
-            // two shapes structurally aligned.
+            // generic inference recovers the right `TSource`. Symbolic leaves
+            // erase to `object`; concrete leaves keep their CLR identity, matching
+            // the selector parameter's erasure and keeping both shapes aligned.
             var symbolicArgs = symbolic.ToImmutable();
             Type erasedClosed =
                 TryBuildErasedClosedGeneric(openDef, openParams, symbolicArgs, contextObject)
@@ -1706,6 +1705,22 @@ internal sealed class MemberLookup
             return false;
         }
 
+        if (t is ImportedTypeSymbol imported
+            && imported.OpenDefinition is { } openDefinition
+            && !imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            var contextObject = ResolveErasedObjectInContext(openDefinition);
+            erased = TryBuildErasedClosedGeneric(
+                openDefinition,
+                openDefinition.GetGenericArguments(),
+                imported.TypeArguments,
+                contextObject);
+            if (erased != null)
+            {
+                return true;
+            }
+        }
+
         if (t.ClrType != null)
         {
             erased = t.ClrType;
@@ -1808,6 +1823,9 @@ internal sealed class MemberLookup
                 // component eraser); the symbolic-argument recovery downstream
                 // re-derives the real element type for inference.
                 erased = userClass.ImportedBaseType?.ClrType ?? typeof(object);
+                return true;
+            case InterfaceSymbol:
+                erased = typeof(object);
                 return true;
             case TupleTypeSymbol tuple:
                 // Issue #1902: a query's transparent-identifier tuple
@@ -3918,10 +3936,10 @@ internal sealed class MemberLookup
     /// generic whose symbolic arguments may themselves be constructed generics
     /// (e.g. <c>IEnumerable&lt;IEnumerator&lt;T&gt;&gt;</c>). Each top-level
     /// argument's <em>nested</em> generic structure is preserved by recursing
-    /// through its open definition, while leaf type parameters and concrete
-    /// leaves collapse to the context's <c>object</c> placeholder — matching the
-    /// erasure applied to selector/lambda parameter types, so generic inference
-    /// recovers the right element type for a chained extension call. Falls back
+    /// through its open definition. Symbolic leaves collapse to the context's
+    /// <c>object</c> placeholder while concrete leaves retain their CLR identity,
+    /// matching selector/lambda erasure so generic inference recovers the right
+    /// element type for a chained extension call. Falls back
     /// to a flat all-<c>object</c> erasure, then to <see langword="null"/>, when
     /// the richer construction is rejected (e.g. cross-context or constraint
     /// violations).
@@ -3983,8 +4001,9 @@ internal sealed class MemberLookup
     /// Issue #1422: projects a single symbolic type argument onto an erased CLR
     /// type in <paramref name="contextObject"/>'s load context. Nested
     /// constructed generics (carrying an <see cref="ImportedTypeSymbol.OpenDefinition"/>)
-    /// are rebuilt recursively so their generic shape survives; leaf type
-    /// parameters and other leaves collapse to <paramref name="contextObject"/>.
+    /// are rebuilt recursively so their generic shape survives; symbolic leaves
+    /// collapse to <paramref name="contextObject"/>, while concrete leaves retain
+    /// their CLR identity.
     /// Returns <see langword="null"/> when no useful erasure could be formed.
     /// </summary>
     /// <param name="symbolicArg">The symbolic type argument.</param>
@@ -4036,10 +4055,16 @@ internal sealed class MemberLookup
                 // case above.
                 return BuildErasedTupleInContext(tuple, contextObject);
             default:
-                // Concrete leaf (e.g. a fully-closed imported type): erase to the
-                // context placeholder so the shape stays in a single load context
-                // and mirrors how the same leaf is erased on the selector side.
-                return contextObject;
+                var concrete = symbolicArg.ClrType;
+                if (concrete == null)
+                {
+                    return contextObject;
+                }
+
+                return concrete.Assembly == typeof(object).Assembly
+                    && concrete.FullName is { } fullName
+                    ? contextObject.Assembly.GetType(fullName, throwOnError: false) ?? concrete
+                    : concrete;
         }
     }
 
