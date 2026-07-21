@@ -1674,6 +1674,9 @@ internal sealed class SlotPlanner
                 case BoundBinaryOperatorKind.BitwiseOr:
                 case BoundBinaryOperatorKind.BitwiseXor:
                 case BoundBinaryOperatorKind.BitClear:
+                case BoundBinaryOperatorKind.ShiftLeft:
+                case BoundBinaryOperatorKind.ShiftRight:
+                case BoundBinaryOperatorKind.UnsignedShiftRight:
                 case BoundBinaryOperatorKind.Equals:
                 case BoundBinaryOperatorKind.NotEquals:
                 case BoundBinaryOperatorKind.Less:

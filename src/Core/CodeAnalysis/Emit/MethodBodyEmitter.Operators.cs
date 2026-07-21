@@ -1753,6 +1753,15 @@ internal sealed partial class MethodBodyEmitter
                 this.il.OpCode(ILOpCode.Not);
                 this.il.OpCode(ILOpCode.And);
                 break;
+            case BoundBinaryOperatorKind.ShiftLeft:
+                this.il.OpCode(ILOpCode.Shl);
+                break;
+            case BoundBinaryOperatorKind.ShiftRight:
+                this.il.OpCode(isUnsigned ? ILOpCode.Shr_un : ILOpCode.Shr);
+                break;
+            case BoundBinaryOperatorKind.UnsignedShiftRight:
+                this.il.OpCode(ILOpCode.Shr_un);
+                break;
             default:
                 throw new NotSupportedException($"EmitUnderlyingArithmetic: unexpected kind '{kind}'.");
         }

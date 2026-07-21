@@ -88,31 +88,13 @@ public partial class Parser
         }
 
         if (Peek(0).Kind == SyntaxKind.IdentifierToken &&
-            SyntaxFacts.TryGetCompoundAssignmentBaseOperator(Peek(1).Kind, out var baseOpKind))
+            SyntaxFacts.TryGetCompoundAssignmentBaseOperator(Peek(1).Kind, out _))
         {
-            // For `+=` and `-=` on a bare identifier, emit an
-            // EventSubscriptionExpressionSyntax so the binder can distinguish
-            // event subscription (`EventName += handler`) from compound
-            // arithmetic assignment (`x += 1`). The binder falls back to
-            // compound assignment if the name is not an event.
-            if (Peek(1).Kind == SyntaxKind.PlusEqualsToken || Peek(1).Kind == SyntaxKind.MinusEqualsToken)
-            {
-                var identifierToken = NextToken();
-                var opToken = NextToken();
-                var rhs = ParseAssignmentExpression();
-                var leftName = new NameExpressionSyntax(syntaxTree, identifierToken);
-                return new EventSubscriptionExpressionSyntax(syntaxTree, leftName, opToken, rhs);
-            }
-
-            var identifierToken2 = NextToken();
-            var compoundToken = NextToken();
-            var right = ParseAssignmentExpression();
-
-            var leftName2 = new NameExpressionSyntax(syntaxTree, identifierToken2);
-            var baseOpToken = new SyntaxToken(syntaxTree, baseOpKind, compoundToken.Position, SyntaxFacts.GetText(baseOpKind), null);
-            var binary = new BinaryExpressionSyntax(syntaxTree, leftName2, baseOpToken, right);
-            var equalsToken = new SyntaxToken(syntaxTree, SyntaxKind.EqualsToken, compoundToken.Position, SyntaxFacts.GetText(SyntaxKind.EqualsToken), null);
-            return new AssignmentExpressionSyntax(syntaxTree, identifierToken2, equalsToken, binary);
+            var identifierToken = NextToken();
+            var opToken = NextToken();
+            var rhs = ParseAssignmentExpression();
+            var leftName = new NameExpressionSyntax(syntaxTree, identifierToken);
+            return new EventSubscriptionExpressionSyntax(syntaxTree, leftName, opToken, rhs);
         }
 
         var expression = ParseRangeExpression();

@@ -455,24 +455,19 @@ public sealed class Conversion
                     return Conversion.Identity;
                 }
 
-                // Issue #1236: lifted numeric widening — `T1? → T2?` is an
-                // implicit conversion whenever the underlying `T1 → T2` is an
-                // implicit (lossless) numeric widening (e.g. `uint8? → int32?`,
-                // `int32? → int64?`). This mirrors C# §10.2.6 lifted conversions
-                // and lets nullable numeric operands participate in the same
-                // widening lattice as their non-nullable forms, so a lifted
-                // binary operator can bind at a common underlying type. The
-                // emitter / evaluator unwrap the source, convert the underlying
-                // value, and re-wrap, propagating null. Restricted to value-type
-                // numeric underlyings so reference-typed nullable wrappers (which
-                // share a CLR representation) keep their identity-only rule.
-                if (fromNullable.UnderlyingType?.ClrType is { IsValueType: true }
-                    && toNullable.UnderlyingType?.ClrType is { IsValueType: true })
+                // Issues #1236/#2616: lift both implicit and explicit numeric
+                // conversions through Nullable<T>. Compound char assignment
+                // uses the explicit int32? -> char? direction; ordinary
+                // widening remains implicit.
+                if (fromNullable.UnderlyingType?.ClrType is { IsValueType: true } fromNullableClr
+                    && toNullable.UnderlyingType?.ClrType is { IsValueType: true } toNullableClr
+                    && NumericWideningLattice.IsNumericPrimitive(fromNullableClr.FullName)
+                    && NumericWideningLattice.IsNumericPrimitive(toNullableClr.FullName))
                 {
                     var liftedUnderlying = Classify(fromNullable.UnderlyingType, toNullable.UnderlyingType);
-                    if (liftedUnderlying.Exists && liftedUnderlying.IsImplicit && !liftedUnderlying.IsIdentity)
+                    if (liftedUnderlying.Exists && !liftedUnderlying.IsIdentity)
                     {
-                        return Conversion.Implicit;
+                        return liftedUnderlying.IsImplicit ? Conversion.Implicit : Conversion.Explicit;
                     }
                 }
 

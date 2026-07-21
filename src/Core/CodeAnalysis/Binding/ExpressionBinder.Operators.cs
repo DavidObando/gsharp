@@ -54,6 +54,16 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        // Issue #2616 / ECMA-334 §14.2.6.1: char participates in unary numeric
+        // promotion as int32. Promote before operator lookup so the bound
+        // operand, operator signature, evaluator value, and emitted stack type
+        // all agree; recording a char operand with an int32 result would leave
+        // the interpreter operating on a boxed Char.
+        if (TryGetPromotedCharUnaryType(syntax.OperatorToken.Kind, boundOperand.Type, out var promotedUnaryType))
+        {
+            boundOperand = conversions.BindConversion(syntax.Operand.Location, boundOperand, promotedUnaryType);
+        }
+
         var boundOperator = BoundUnaryOperator.Bind(syntax.OperatorToken.Kind, boundOperand.Type);
 
         if (boundOperator == null)
@@ -1748,6 +1758,45 @@ internal sealed partial class ExpressionBinder
     {
         var boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
 
+        if (operatorKind is SyntaxKind.ShiftLeftToken or SyntaxKind.ShiftRightToken or SyntaxKind.UnsignedShiftRightToken
+            && (GetNullableUnderlying(boundLeft.Type) == TypeSymbol.Char
+                || GetNullableUnderlying(boundRight.Type) == TypeSymbol.Char))
+        {
+            if (GetNullableUnderlying(boundLeft.Type) == TypeSymbol.Char)
+            {
+                var promotedLeftType = boundLeft.Type is NullableTypeSymbol
+                    ? NullableTypeSymbol.Get(TypeSymbol.Int32)
+                    : TypeSymbol.Int32;
+                boundLeft = conversions.BindConversion(leftLocation, boundLeft, promotedLeftType);
+            }
+
+            if (GetNullableUnderlying(boundRight.Type) == TypeSymbol.Char)
+            {
+                var promotedRightType = boundRight.Type is NullableTypeSymbol
+                    ? NullableTypeSymbol.Get(TypeSymbol.Int32)
+                    : TypeSymbol.Int32;
+                boundRight = conversions.BindConversion(rightLocation, boundRight, promotedRightType);
+            }
+
+            boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
+        }
+
+        // Issue #2616 / ECMA-334 §14.2.6.2: char is promoted by the standard
+        // binary numeric-promotion rules, not closed under char arithmetic.
+        // Insert real numeric conversions before binding so all downstream
+        // consumers observe the promoted operand types.
+        if ((boundOperator == null || IsPromotedCharOperator(operatorKind))
+            && TryGetPromotedCharBinaryType(operatorKind, boundLeft.Type, boundRight.Type, out var promotedBinaryType))
+        {
+            var promotedOperator = BoundBinaryOperator.Bind(operatorKind, promotedBinaryType, promotedBinaryType);
+            if (promotedOperator != null)
+            {
+                boundLeft = conversions.BindConversion(leftLocation, boundLeft, promotedBinaryType);
+                boundRight = conversions.BindConversion(rightLocation, boundRight, promotedBinaryType);
+                boundOperator = promotedOperator;
+            }
+        }
+
         // Issue #1923: boxed-constant equality (`answer == 42` where `answer`
         // is typed `object`). The operator table only registers the
         // homogeneous `object == object -> bool` arm, so a non-`object`
@@ -2003,6 +2052,102 @@ internal sealed partial class ExpressionBinder
 
         return boundOperator;
     }
+
+    private static bool TryGetPromotedCharUnaryType(SyntaxKind operatorKind, TypeSymbol operandType, out TypeSymbol promotedType)
+    {
+        var nullable = operandType as NullableTypeSymbol;
+        if ((nullable?.UnderlyingType ?? operandType) == TypeSymbol.Char
+            && operatorKind is SyntaxKind.PlusToken or SyntaxKind.MinusToken or SyntaxKind.HatToken)
+        {
+            promotedType = nullable == null ? TypeSymbol.Int32 : NullableTypeSymbol.Get(TypeSymbol.Int32);
+            return true;
+        }
+
+        promotedType = null;
+        return false;
+    }
+
+    private static bool TryGetPromotedCharBinaryType(
+        SyntaxKind operatorKind,
+        TypeSymbol leftType,
+        TypeSymbol rightType,
+        out TypeSymbol promotedType)
+    {
+        promotedType = null;
+        if (!IsPromotedCharOperator(operatorKind))
+        {
+            return false;
+        }
+
+        var leftNullable = leftType as NullableTypeSymbol;
+        var rightNullable = rightType as NullableTypeSymbol;
+        var left = leftNullable?.UnderlyingType ?? leftType;
+        var right = rightNullable?.UnderlyingType ?? rightType;
+        if (left != TypeSymbol.Char && right != TypeSymbol.Char)
+        {
+            return false;
+        }
+
+        var other = left == TypeSymbol.Char ? right : left;
+        TypeSymbol target;
+        if (other == TypeSymbol.Decimal)
+        {
+            target = TypeSymbol.Decimal;
+        }
+        else if (other == TypeSymbol.Float64)
+        {
+            target = TypeSymbol.Float64;
+        }
+        else if (other == TypeSymbol.Float32)
+        {
+            target = TypeSymbol.Float32;
+        }
+        else if (other == TypeSymbol.UInt64)
+        {
+            target = TypeSymbol.UInt64;
+        }
+        else if (other == TypeSymbol.Int64)
+        {
+            target = TypeSymbol.Int64;
+        }
+        else if (other == TypeSymbol.UInt32)
+        {
+            target = TypeSymbol.UInt32;
+        }
+        else if (other == TypeSymbol.NInt)
+        {
+            target = TypeSymbol.NInt;
+        }
+        else if (other == TypeSymbol.NUInt)
+        {
+            target = TypeSymbol.NUInt;
+        }
+        else if (other == TypeSymbol.Char || IsIntegerType(other))
+        {
+            target = TypeSymbol.Int32;
+        }
+        else
+        {
+            return false;
+        }
+
+        promotedType = leftNullable != null || rightNullable != null
+            ? NullableTypeSymbol.Get(target)
+            : target;
+        return true;
+    }
+
+    private static bool IsPromotedCharOperator(SyntaxKind operatorKind) =>
+        operatorKind is SyntaxKind.PlusToken or SyntaxKind.MinusToken
+            or SyntaxKind.StarToken or SyntaxKind.SlashToken or SyntaxKind.PercentToken
+            or SyntaxKind.AmpersandToken or SyntaxKind.PipeToken or SyntaxKind.HatToken
+            or SyntaxKind.AmpersandHatToken
+            or SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken
+            or SyntaxKind.LessToken or SyntaxKind.LessOrEqualsToken
+            or SyntaxKind.GreaterToken or SyntaxKind.GreaterOrEqualsToken;
+
+    private static TypeSymbol GetNullableUnderlying(TypeSymbol type) =>
+        type is NullableTypeSymbol nullable ? nullable.UnderlyingType : type;
 
     // issue #1144: the ten G# integer primitive types (signed + unsigned,
     // including the native-int pair). Membership mirrors the integral sets in

@@ -588,7 +588,9 @@ public sealed partial class Evaluator
                 && IsSupportedNumericClrType(targetUnderlyingClr)
                 && value.GetType() != targetUnderlyingClr)
             {
-                return UncheckedNumericConvert(value, targetUnderlyingClr);
+                return node.IsChecked
+                    ? CheckedNumericConvert(value, targetUnderlyingClr)
+                    : UncheckedNumericConvert(value, targetUnderlyingClr);
             }
 
             return value;
@@ -644,24 +646,20 @@ public sealed partial class Evaluator
         // Convert.ChangeType is checked and throws OverflowException instead.
         if (value is decimal dv)
         {
-            // decimal → primitive is checked at the BCL level even for
-            // unchecked casts; route through (long) first when applicable.
-            if (to.IsSameAs(typeof(float)))
-            {
-                return (float)dv;
-            }
-
-            if (to.IsSameAs(typeof(double)))
-            {
-                return (double)dv;
-            }
-
-            return UncheckedNumericConvert((long)dv, to);
+            // Decimal explicit operators always range-check, even in an
+            // unchecked context. Match the emitter's Decimal op_Explicit call.
+            return ConvertDecimal(dv, to);
         }
 
         if (to.IsSameAs(typeof(decimal)))
         {
-            return Convert.ToDecimal(value, System.Globalization.CultureInfo.InvariantCulture);
+            return value switch
+            {
+                char c => (decimal)c,
+                nint i => (decimal)i,
+                nuint i => (decimal)i,
+                _ => Convert.ToDecimal(value, System.Globalization.CultureInfo.InvariantCulture),
+            };
         }
 
         // For everything else, go through long / double, then unchecked cast.
@@ -731,12 +729,16 @@ public sealed partial class Evaluator
     // unlike a `long` intermediate which would misread the top bit of an
     // unsigned 64-bit value — then a single checked narrowing switch below
     // range-checks against the true value regardless of the source's
-    // signedness. decimal is unaffected by checked/unchecked in C# (decimal
-    // arithmetic/conversions always overflow-check), so it reuses the
-    // unchecked path's decimal handling.
+    // signedness. Decimal conversions always overflow-check and use their
+    // target-specific explicit operators in both contexts.
     private static object CheckedNumericConvert(object value, Type to)
     {
-        if (value is decimal || to.IsSameAs(typeof(decimal)))
+        if (value is decimal decimalValue)
+        {
+            return ConvertDecimal(decimalValue, to);
+        }
+
+        if (to.IsSameAs(typeof(decimal)))
         {
             return UncheckedNumericConvert(value, to);
         }
@@ -770,6 +772,25 @@ public sealed partial class Evaluator
 
         return CheckedNarrowFromInt128(asInt128, to);
     }
+
+    private static object ConvertDecimal(decimal value, Type to) => to switch
+    {
+        Type t when t.IsSameAs(typeof(sbyte)) => (sbyte)value,
+        Type t when t.IsSameAs(typeof(byte)) => (byte)value,
+        Type t when t.IsSameAs(typeof(short)) => (short)value,
+        Type t when t.IsSameAs(typeof(ushort)) => (ushort)value,
+        Type t when t.IsSameAs(typeof(int)) => (int)value,
+        Type t when t.IsSameAs(typeof(uint)) => (uint)value,
+        Type t when t.IsSameAs(typeof(long)) => (long)value,
+        Type t when t.IsSameAs(typeof(ulong)) => (ulong)value,
+        Type t when t.IsSameAs(typeof(nint)) => (nint)value,
+        Type t when t.IsSameAs(typeof(nuint)) => (nuint)value,
+        Type t when t.IsSameAs(typeof(char)) => (char)value,
+        Type t when t.IsSameAs(typeof(float)) => (float)value,
+        Type t when t.IsSameAs(typeof(double)) => (double)value,
+        Type t when t.IsSameAs(typeof(decimal)) => value,
+        _ => throw new InvalidOperationException($"Unsupported decimal conversion target {to}"),
+    };
 
     private static object CheckedNarrowFromInt128(Int128 v, Type to) => checked(to switch
     {
