@@ -1425,8 +1425,10 @@ public sealed partial class CSharpToGSharpTranslator
         /// no positional primary-constructor parameters and no explicit instance
         /// constructor to conflict with (checked by the caller) — every eligible
         /// auto-property becomes one primary-constructor parameter, in
-        /// declaration order, with the property's inline initializer (if any)
-        /// carried over as the parameter's default value. Bails (returns
+        /// declaration order, with the property's inline initializer carried
+        /// over as the parameter's default value. A property without an
+        /// initializer receives <c>default(T)</c>, matching the value assigned
+        /// by C#'s synthesized parameterless record constructor. Bails (returns
         /// <see cref="ConstructorLift.None"/>) if any auto-property participates
         /// in an interface/override contract (OD-T1): a G# primary-constructor
         /// parameter is not a property, so lifting it would break the contract
@@ -1510,7 +1512,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 GExpression defaultValue = prop.Initializer != null
                     ? this.TranslateExpression(prop.Initializer.Value)
-                    : null;
+                    : new DefaultValueExpression(type);
 
                 primaryParameters.Add(new Parameter(SanitizeIdentifier(prop.Identifier.Text), type, defaultValue: defaultValue));
                 propertiesAsParams.Add(propSymbol);
