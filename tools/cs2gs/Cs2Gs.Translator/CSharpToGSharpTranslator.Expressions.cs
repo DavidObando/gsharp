@@ -457,7 +457,10 @@ public sealed partial class CSharpToGSharpTranslator
                 switch (member.Name.Identifier.Text)
                 {
                     case "Value":
-                        return new NonNullAssertionExpression(this.TranslateExpression(member.Expression));
+                        GExpression nullableValue = this.TranslateExpression(member.Expression);
+                        return this.IsWithinExpressionTreeLambda(member.Expression)
+                            ? nullableValue
+                            : new NonNullAssertionExpression(nullableValue);
                     case "HasValue":
                         // Parenthesize the null test so it composes correctly
                         // under any surrounding operator. C# `!x.HasValue` would
@@ -563,9 +566,10 @@ public sealed partial class CSharpToGSharpTranslator
         {
             GExpression translated = this.TranslateExpression(recv);
 
-            if (this.ReceiverNeedsNullForgiveness(recv, isDereferenceReceiver: true)
-                || this.ReceiverIsNullableReferenceFieldOrProperty(recv)
-                || this.NullableReferenceValueMayBeNull(recv))
+            if (!this.IsWithinExpressionTreeLambda(recv)
+                && (this.ReceiverNeedsNullForgiveness(recv, isDereferenceReceiver: true)
+                    || this.ReceiverIsNullableReferenceFieldOrProperty(recv)
+                    || this.NullableReferenceValueMayBeNull(recv)))
             {
                 translated = new NonNullAssertionExpression(translated);
             }
