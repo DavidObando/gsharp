@@ -206,7 +206,8 @@ public class IlVerifyRunner
         var ignored = new HashSet<string>(KnownIlVerifyFalsePositives, StringComparer.OrdinalIgnoreCase);
         return errors.Where(e =>
             (e.Code is null || !ignored.Contains(e.Code))
-            && !IsAvaloniaXamlCompilerFalsePositive(e)).ToList();
+            && !IsAvaloniaXamlCompilerFalsePositive(e)
+            && !IsAvaloniaXamlDelegateCtorFalsePositive(e)).ToList();
     }
 
     /// <summary>
@@ -264,6 +265,12 @@ public class IlVerifyRunner
         && error.Method?.StartsWith(
             "CompiledAvaloniaXaml.XamlIlContext+Context`1::",
             StringComparison.Ordinal) == true;
+
+    // Avalonia's XAML compiler binds static event handlers to RootObject. The
+    // byte-identical C# output fails ilverify's DelegateCtor check as well.
+    private static bool IsAvaloniaXamlDelegateCtorFalsePositive(IlVerifyError error) =>
+        string.Equals(error.Code, "DelegateCtor", StringComparison.Ordinal)
+        && error.Method?.Contains("::!XamlIlPopulate(", StringComparison.Ordinal) == true;
 
     private static IReadOnlyList<string> BuildReferenceSet(
         string assemblyPath,

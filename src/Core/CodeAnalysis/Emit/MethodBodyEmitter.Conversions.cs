@@ -85,6 +85,28 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #2672: an erased-lambda adapter can receive an imported named
+        // delegate while its original body expects the equivalent structural
+        // function. Rebuild the value over the named delegate's Invoke target
+        // so the adapter body and its outer delegate constructor both verify.
+        if (conv.Type is FunctionTypeSymbol delegateTargetFn
+            && conv.Expression.Type is ImportedTypeSymbol { ClrType: Type importedDelegateSource }
+            && ClrTypeUtilities.IsDelegateType(importedDelegateSource))
+        {
+            var invoke = importedDelegateSource.GetMethod("Invoke")
+                ?? throw new InvalidOperationException(
+                    $"Delegate type '{importedDelegateSource.FullName}' has no Invoke method.");
+            var ctor = this.outer.userTokens.FunctionTypeNeedsSymbolicDelegate(delegateTargetFn)
+                ? this.outer.memberRefs.GetFunctionDelegateCtorRef(delegateTargetFn)
+                : (EntityHandle)this.outer.memberRefs.GetDelegateCtorReference(
+                    this.outer.signatures.ResolveDelegateClrType(delegateTargetFn));
+            this.EmitNullGuardedDelegateToDelegateAdaptation(
+                conv.Expression,
+                this.outer.memberRefs.GetMethodReference(invoke),
+                ctor);
+            return;
+        }
+
         // Issue #295: GSharp function value → CLR delegate. This is the
         // general materialization that previously only happened in
         // argument position; routing it through EmitConversion makes
