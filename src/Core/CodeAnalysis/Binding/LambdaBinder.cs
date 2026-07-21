@@ -931,6 +931,120 @@ internal sealed class LambdaBinder
     }
 
     /// <summary>
+    /// Builds a thunk when a CLR method group's exact parameter types differ
+    /// from its structural function target. This commonly occurs when an
+    /// imported named delegate is nested in the method signature: direct
+    /// <c>ldftn/newobj</c> would pair incompatible signatures, while the thunk
+    /// lets ordinary conversion emission adapt each slot.
+    /// </summary>
+    /// <param name="group">The resolved CLR method group.</param>
+    /// <param name="targetFunctionType">The structural target function type.</param>
+    /// <returns>The original group for an exact signature; otherwise a synthesized adapter literal.</returns>
+    public BoundExpression CreateClrMethodGroupAdapter(
+        BoundClrMethodGroupExpression group,
+        FunctionTypeSymbol targetFunctionType)
+    {
+        var method = group.ResolvedMethod;
+        var methodParameters = method.GetParameters();
+        var closesStaticReceiver = method.IsStatic && group.Receiver != null;
+        var parameterOffset = closesStaticReceiver ? 1 : 0;
+        var invoke = targetFunctionType.ClrType?.GetMethodSafe("Invoke");
+        if (invoke == null
+            || methodParameters.Length != targetFunctionType.ParameterTypes.Length + parameterOffset
+            || methodParameters.Any(p => p.ParameterType.IsByRef))
+        {
+            return group;
+        }
+
+        var invokeParameters = invoke.GetParameters();
+        var exactSignature = invoke.ReturnType.IsSameAs(method.ReturnType);
+        for (var i = 0; exactSignature && i < invokeParameters.Length; i++)
+        {
+            exactSignature = invokeParameters[i].ParameterType.IsSameAs(methodParameters[i + parameterOffset].ParameterType);
+        }
+
+        if (exactSignature)
+        {
+            return group;
+        }
+
+        var adapterParameters = ImmutableArray.CreateBuilder<ParameterSymbol>(targetFunctionType.ParameterTypes.Length);
+        var arguments = ImmutableArray.CreateBuilder<BoundExpression>(methodParameters.Length);
+        LocalVariableSymbol receiverTemp = null;
+        BoundExpression adapterReceiver = group.Receiver;
+        if (group.Receiver != null)
+        {
+            receiverTemp = new LocalVariableSymbol(
+                $"<method_group_receiver{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
+                isReadOnly: true,
+                group.Receiver.Type);
+            adapterReceiver = new BoundVariableExpression(null, receiverTemp);
+        }
+
+        if (closesStaticReceiver)
+        {
+            arguments.Add(new BoundConversionExpression(
+                null,
+                ClrNullability.GetParameterTypeSymbol(methodParameters[0]),
+                adapterReceiver));
+        }
+
+        for (var i = 0; i < targetFunctionType.ParameterTypes.Length; i++)
+        {
+            var parameter = new ParameterSymbol(
+                $"arg{i}",
+                targetFunctionType.ParameterTypes[i],
+                declaringSyntax: group.Syntax);
+            adapterParameters.Add(parameter);
+            arguments.Add(new BoundConversionExpression(
+                null,
+                ClrNullability.GetParameterTypeSymbol(methodParameters[i + parameterOffset]),
+                new BoundVariableExpression(null, parameter)));
+        }
+
+        var methodReturnType = method.ReturnType.IsSameAs(typeof(void))
+            ? TypeSymbol.Void
+            : ClrNullability.GetReturnTypeSymbol(method);
+        BoundExpression call = method.IsStatic
+            ? new BoundClrStaticCallExpression(null, method, methodReturnType, arguments.MoveToImmutable())
+            : new BoundImportedInstanceCallExpression(
+                null,
+                adapterReceiver,
+                method,
+                methodReturnType,
+                arguments.MoveToImmutable());
+
+        BoundStatement statement = methodReturnType == TypeSymbol.Void
+            ? new BoundBlockStatement(
+                null,
+                ImmutableArray.Create<BoundStatement>(
+                    new BoundExpressionStatement(null, call),
+                    new BoundReturnStatement(null, null)))
+            : new BoundReturnStatement(
+                null,
+                new BoundConversionExpression(null, targetFunctionType.ReturnType, call));
+        var body = statement as BoundBlockStatement
+            ?? new BoundBlockStatement(null, ImmutableArray.Create(statement));
+        var function = new FunctionSymbol(
+            $"<method_group_adapter{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
+            adapterParameters.MoveToImmutable(),
+            targetFunctionType.ReturnType,
+            package: getCurrentFunction()?.Package)
+        {
+            LexicalEnclosingType = getCurrentFunction()?.LexicalEnclosingType,
+        };
+        var captured = CollectCapturedVariables(body, function.Parameters);
+        BoundExpression adapter = new BoundFunctionLiteralExpression(group.Syntax, function, targetFunctionType, body, captured);
+        return receiverTemp == null
+            ? adapter
+            : new BoundBlockExpression(
+                group.Syntax,
+                ImmutableArray.Create<BoundStatement>(
+                    new BoundVariableDeclaration(group.Syntax, receiverTemp, group.Receiver)),
+                adapter);
+    }
+
+    /// <summary>
     /// For an async lambda's declared return type, computes the
     /// observable return type the synthesized
     /// <see cref="FunctionTypeSymbol"/> must present to the delegate

@@ -65,6 +65,7 @@ internal sealed class ConversionClassifier
     private readonly Func<TypeSymbol, bool> isFormattableStringTargetType;
     private readonly Func<InterpolatedStringExpressionSyntax, TypeSymbol, BoundExpression> bindInterpolatedStringAsFormattable;
     private readonly Func<BoundFunctionLiteralExpression, FunctionTypeSymbol, BoundFunctionLiteralExpression> createErasedFunctionLiteralAdapter;
+    private readonly Func<BoundClrMethodGroupExpression, FunctionTypeSymbol, BoundExpression> createClrMethodGroupAdapter;
     private readonly Func<BoundExpression, bool> isLvalue;
     private readonly Func<SyntaxToken, RefKind> getRefKindFromModifier;
     private readonly Func<RefKind, string> refKindToString;
@@ -96,6 +97,9 @@ internal sealed class ConversionClassifier
     /// wraps a function-literal expression in an erased-signature adapter
     /// for the target generic function type. Owned by the lambda binder
     /// (which holds the nested rewriter), surfaced here as a callback.</param>
+    /// <param name="createClrMethodGroupAdapter">Callback that wraps a
+    /// resolved CLR method group when its exact signature differs from the
+    /// structural function target.</param>
     /// <param name="isLvalue">Callback that classifies a bound expression
     /// as an l-value (addressable). Used by the conditional-ref-argument
     /// validator.</param>
@@ -113,6 +117,7 @@ internal sealed class ConversionClassifier
         Func<TypeSymbol, bool> isFormattableStringTargetType,
         Func<InterpolatedStringExpressionSyntax, TypeSymbol, BoundExpression> bindInterpolatedStringAsFormattable,
         Func<BoundFunctionLiteralExpression, FunctionTypeSymbol, BoundFunctionLiteralExpression> createErasedFunctionLiteralAdapter,
+        Func<BoundClrMethodGroupExpression, FunctionTypeSymbol, BoundExpression> createClrMethodGroupAdapter,
         Func<BoundExpression, bool> isLvalue,
         Func<SyntaxToken, RefKind> getRefKindFromModifier,
         Func<RefKind, string> refKindToString)
@@ -124,6 +129,7 @@ internal sealed class ConversionClassifier
         this.isFormattableStringTargetType = isFormattableStringTargetType ?? throw new ArgumentNullException(nameof(isFormattableStringTargetType));
         this.bindInterpolatedStringAsFormattable = bindInterpolatedStringAsFormattable ?? throw new ArgumentNullException(nameof(bindInterpolatedStringAsFormattable));
         this.createErasedFunctionLiteralAdapter = createErasedFunctionLiteralAdapter ?? throw new ArgumentNullException(nameof(createErasedFunctionLiteralAdapter));
+        this.createClrMethodGroupAdapter = createClrMethodGroupAdapter ?? throw new ArgumentNullException(nameof(createClrMethodGroupAdapter));
         this.isLvalue = isLvalue ?? throw new ArgumentNullException(nameof(isLvalue));
         this.getRefKindFromModifier = getRefKindFromModifier ?? throw new ArgumentNullException(nameof(getRefKindFromModifier));
         this.refKindToString = refKindToString ?? throw new ArgumentNullException(nameof(refKindToString));
@@ -1401,7 +1407,10 @@ internal sealed class ConversionClassifier
             var resolution = OverloadResolution.Resolve(applicable, argTypes);
             if (resolution.Outcome == OverloadResolution.ResolutionOutcome.Resolved)
             {
-                return new BoundClrMethodGroupExpression(group.Syntax, group.Receiver, resolution.Best, targetType);
+                var resolved = new BoundClrMethodGroupExpression(group.Syntax, group.Receiver, resolution.Best, targetType);
+                return targetType is FunctionTypeSymbol functionTarget
+                    ? this.createClrMethodGroupAdapter(resolved, functionTarget)
+                    : resolved;
             }
         }
 
