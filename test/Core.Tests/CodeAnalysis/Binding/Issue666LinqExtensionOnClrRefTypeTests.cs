@@ -136,6 +136,25 @@ var q = xs.AsEnumerable().Where(func(i Issue666ItemCls) bool { return true })
         AssertBindsWithoutErrors(source);
     }
 
+    [Fact]
+    public void Linq_OnObservableCollection_UserRefElement_InstanceSyntax_Binds()
+    {
+        var source = @"
+package Probe
+import System.Collections.ObjectModel
+import System.Linq
+
+class Item { }
+var xs = ObservableCollection[Item]()
+xs.Add(Item())
+var filtered = xs.Where(func(i Item) bool { return true })
+var any = xs.Any(func(i Item) bool { return true })
+var count = xs.Count(func(i Item) bool { return true })
+var first = xs.FirstOrDefault()
+";
+        AssertBindsWithoutErrors(source);
+    }
+
     // --- Regression guards: BCL types (should already pass) ---
 
     [Fact]

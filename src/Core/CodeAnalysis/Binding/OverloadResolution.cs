@@ -4819,34 +4819,7 @@ internal static class OverloadResolution
             // throw on BaseType traversal; fall through to interface walk.
         }
 
-        Type[] ifaces;
-        try
-        {
-            ifaces = type.GetInterfaces();
-        }
-        catch (InvalidOperationException)
-        {
-            return null;
-        }
-        catch (NotSupportedException)
-        {
-            // Issue #666: TypeBuilderInstantiation (produced when
-            // FunctionTypeSymbol.BuildClrType constructs a host-runtime Func<>
-            // with MetadataLoadContext type arguments) throws
-            // NotSupportedException from GetInterfaces(). Treat as "no match"
-            // and let inference continue from other parameters.
-
-            // Fallback: if the type itself is a closed generic whose open
-            // definition matches by name, return it directly. This handles
-            // Func<T,bool> / Action<T> shapes from BuildClrType.
-            if (type.IsGenericType && !type.IsGenericTypeDefinition
-                && MatchesOpenDefinition(type.GetGenericTypeDefinition(), openDefinition, openDefName))
-            {
-                return type;
-            }
-
-            return null;
-        }
+        var ifaces = ClrTypeUtilities.SafeGetInterfaces(type);
 
         foreach (var iface in ifaces)
         {
