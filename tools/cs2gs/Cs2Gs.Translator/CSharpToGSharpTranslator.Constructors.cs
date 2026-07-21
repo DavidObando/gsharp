@@ -975,6 +975,11 @@ public sealed partial class CSharpToGSharpTranslator
                 .Any();
         }
 
+        private static bool HasYieldBreak(SyntaxNode bodyOwner)
+            => bodyOwner.DescendantNodes(n => n is not LocalFunctionStatementSyntax)
+                .OfType<YieldStatementSyntax>()
+                .Any(y => y.Expression == null);
+
         private List<AttributeUse> MapAttributes(IEnumerable<AttributeListSyntax> attributeLists)
         {
             var attributes = new List<AttributeUse>();
@@ -1129,7 +1134,17 @@ public sealed partial class CSharpToGSharpTranslator
             try
             {
                 BlockStatement body = this.TranslateBodyCore(bodyOwner, description);
-                return this.WithParameterShadows(bodyOwner, body);
+                body = this.WithParameterShadows(bodyOwner, body);
+                if (HasYieldBreak(bodyOwner))
+                {
+                    var statements = body.Statements.ToList();
+                    statements.Add(new LabeledStatement(
+                        IteratorExitLabelName(bodyOwner),
+                        new BlockStatement(new List<GStatement>())));
+                    body = new BlockStatement(statements, body.IsUnsafe);
+                }
+
+                return body;
             }
             finally
             {

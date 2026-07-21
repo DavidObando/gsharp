@@ -235,11 +235,11 @@ namespace Demo
     }
 
     /// <summary>
-    /// <c>yield break</c> maps to a plain G# <c>break</c> (settled fact: G# has
-    /// no <c>yield break</c>; ADR-0115 §B).
+    /// <c>yield break</c> maps to the nearest iterator exit label because G#
+    /// has no <c>yield break</c> (ADR-0115 §B).
     /// </summary>
     [Fact]
-    public void YieldBreak_MappedToBreak()
+    public void YieldBreak_MappedToIteratorExit()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -258,7 +258,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("break", printed);
+        Assert.Contains("goto __iteratorExit", printed);
+        Assert.Contains("__iteratorExit", printed);
         Assert.DoesNotContain("yield break", printed);
         Assert.DoesNotContain("unsupported", printed);
     }

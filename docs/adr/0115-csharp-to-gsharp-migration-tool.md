@@ -562,8 +562,9 @@ empirically (gsc **0.2.137+31ced6cfb7**) before adoption.
   fresh temporaries (`var __decon0 = x; var __decon1 = y; a = __decon0; b =
   __decon1`), preserving C#'s evaluate-all-then-assign order (and aliasing such as
   `(a, b) = (b, a)`).
-- **`yield break` → `break`.** Settled fact: G# has no `yield break`; it maps to
-  a plain loop-control `break` (supersedes the former §G #994 unsupported note).
+- **`yield break` → iterator-exit jump.** G# has no `yield break`; cs2gs jumps
+  to a synthesized label at the end of the nearest iterator body so termination
+  is independent of surrounding loop/switch topology.
 - **`foreach ((a, b) in xs)` tuple deconstruction → `for a, b in xs`.** A
   `ForEachVariableStatement` maps to the G# two-name iteration form; element
   names are collected from the tuple/declaration designation.
@@ -784,7 +785,7 @@ re-greening earlier stages and surfacing the next layer of gaps:
 | #991 | a `when` guard on a `switch` statement/expression arm won't parse | GS0005 | **resolved** (issue #991 — `case <pattern> when <bool>:` / `case <pattern> when <bool> { … }` parse a contextual `when` guard; an arm matches only when the pattern matches AND the guard is true; guarded arms never satisfy exhaustiveness; cs2gs now translates C# `when` guards to the new form) |
 | #992 | `and`/`or` binary patterns (`> 0 and < 10`) won't parse | GS0005 | **resolved** (issue #992 — `and`/`or`/`not` pattern combinators with C# precedence (`not` > `and` > `or`) and parentheses; compose with all pattern kinds; binding type patterns under `or`/`not` rejected with GS0390; smart-cast narrows under `and`, soundly under `or`, never under `not`; combined patterns never satisfy exhaustiveness; cs2gs now translates C# `and`/`or`/`not` patterns to the new form) |
 | #993 | an `is`/`case` type pattern **with** a binder (`x is T t`) leaves the binder unbound | GS0125 | open (L5 uses the no-binder form `x is T`) |
-| #994 | `yield break` has no canonical G# form | GS0005 | **resolved by design** (settled fact: G# has no `yield break`; the translator maps it to a plain `break` — §B.36, Oahu.Decrypt round) |
+| #994 | `yield break` has no canonical G# form | GS0005 | **resolved by design** (G# has no `yield break`; the translator jumps to the end of the nearest iterator body — §B.36) |
 | #1002 | a user reference-type async iterator (`IAsyncEnumerable[UserClass]`) → IL erases to `IAsyncEnumerable<object>` | ilverify `StackUnexpected` | **resolved** (user reference- and value-type element async iterators emit, ilverify, and run; `await for s in seq` recovers the user element type) |
 | #1006 | interface inheritance `interface B : A { … }` won't parse | GS0005 | **resolved** (parser/binder accept an interface base-interface clause; cs2gs now emits `interface B : A, C { … }` — Oahu.Foundation `Types/Interfaces.cs`) |
 | #1007 | a generic interface method signature `func F[T](…) R;` won't parse | GS0005 | **resolved** (parser/binder accept generic methods in interfaces; cs2gs now emits the `[T]` clause on interface methods — Oahu.Foundation `Diagnostics/Interfaces.cs`) |
