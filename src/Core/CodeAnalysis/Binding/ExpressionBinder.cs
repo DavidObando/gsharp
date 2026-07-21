@@ -1387,6 +1387,13 @@ internal sealed partial class ExpressionBinder
             return typeof(object);
         }
 
+        // Issue #2614: a by-ref source type with no CLR identity still rides
+        // through the same erased CLR type as its pointee.
+        if (typeSymbol is ByRefTypeSymbol byRef)
+        {
+            return GetEffectiveArgumentClrTypeForOverloadResolution(byRef.PointeeType)?.MakeByRefType();
+        }
+
         // Issue #2182: a G# slice `[]T` whose element type has no CLR backing
         // (a generic type parameter, or another same-compilation user type)
         // has a null `ClrType`, so `GetEffectiveArgumentClrType` returned null
