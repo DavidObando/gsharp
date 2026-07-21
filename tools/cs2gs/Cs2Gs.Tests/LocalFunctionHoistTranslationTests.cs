@@ -110,6 +110,26 @@ namespace Demo
     }
 
     [Fact]
+    public void ExpressionBodiedLocalFunction_ReturnsConditionalValue()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        public string M(bool first)
+        {
+            string Pick() => first ? ""first"" : ""second"";
+            return Pick();
+        }
+    }
+}");
+
+        Assert.Contains("return if first", printed, StringComparison.Ordinal);
+        CompileAndRun(printed, "C().M(true)");
+    }
+
+    [Fact]
     public void MinimalRepro_LetActionBeforeLetHandler_Issue2231()
     {
         // Issue #2231's exact minimal repro: a delegate-typed local function

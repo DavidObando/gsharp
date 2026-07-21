@@ -234,9 +234,9 @@ internal sealed partial class ExpressionBinder
 
                         // Issue #950 / #2044: enforce `protected`/`private`
                         // property access.
-                        if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propDeclaringType, this.function))
+                        if (!AccessibilityChecker.IsAccessible(prop.GetterAccessibility, propDeclaringType, this.function))
                         {
-                            Diagnostics.ReportMemberInaccessible(ne.IdentifierToken.Location, prop.Name, propDeclaringType.Name, prop.Accessibility);
+                            Diagnostics.ReportMemberInaccessible(ne.IdentifierToken.Location, prop.Name, propDeclaringType.Name, prop.GetterAccessibility);
                         }
 
                         return ApplyMemberNarrowing(new BoundPropertyAccessExpression(null, receiver, structSym, prop));
@@ -3200,9 +3200,9 @@ internal sealed partial class ExpressionBinder
                     return new BoundErrorExpression(null);
                 }
 
-                if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propDeclaringType, this.function))
+                if (!AccessibilityChecker.IsAccessible(prop.GetterAccessibility, propDeclaringType, this.function))
                 {
-                    Diagnostics.ReportMemberInaccessible(ne.IdentifierToken.Location, prop.Name, propDeclaringType.Name, prop.Accessibility);
+                    Diagnostics.ReportMemberInaccessible(ne.IdentifierToken.Location, prop.Name, propDeclaringType.Name, prop.GetterAccessibility);
                 }
 
                 return ApplyMemberNarrowing(new BoundPropertyAccessExpression(null, receiver, propDeclaringType, prop));

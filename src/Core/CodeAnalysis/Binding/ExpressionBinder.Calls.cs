@@ -109,9 +109,9 @@ internal sealed partial class ExpressionBinder
             // accessor instead of failing to find a field at all.
             if (TypeMemberModel.TryGetProperty(structType, memberName, out var property, out var propertyDeclaringType) && property.HasSetter)
             {
-                if (!AccessibilityChecker.IsAccessible(property.Accessibility, propertyDeclaringType, this.function))
+                if (!AccessibilityChecker.IsAccessible(property.SetterAccessibility, propertyDeclaringType, this.function))
                 {
-                    Diagnostics.ReportMemberInaccessible(initSyntax.FieldIdentifier.Location, property.Name, propertyDeclaringType.Name, property.Accessibility);
+                    Diagnostics.ReportMemberInaccessible(initSyntax.FieldIdentifier.Location, property.Name, propertyDeclaringType.Name, property.SetterAccessibility);
                 }
 
                 var propertyValueExpr = BindExpression(initSyntax.Value);

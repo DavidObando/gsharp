@@ -449,9 +449,9 @@ internal sealed partial class ExpressionBinder
 
                 // Issue #2059: object-initializer-suffix property write —
                 // mirrors the field check above.
-                if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propDeclaringType, this.function))
+                if (!AccessibilityChecker.IsAccessible(prop.SetterAccessibility, propDeclaringType, this.function))
                 {
-                    Diagnostics.ReportMemberInaccessible(initSyntax.PropertyIdentifier.Location, prop.Name, propDeclaringType.Name, prop.Accessibility);
+                    Diagnostics.ReportMemberInaccessible(initSyntax.PropertyIdentifier.Location, prop.Name, propDeclaringType.Name, prop.SetterAccessibility);
                 }
 
                 var value = BindExpression(initSyntax.Value);
@@ -548,9 +548,9 @@ internal sealed partial class ExpressionBinder
             // Issue #263: static property assignment.
             if (TypeMemberModel.TryGetStaticPropertyIncludingInherited(userStruct, fieldName, out var prop, out var propertyOwner))
             {
-                if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propertyOwner, function))
+                if (!AccessibilityChecker.IsAccessible(prop.SetterAccessibility, propertyOwner, function))
                 {
-                    Diagnostics.ReportMemberInaccessible(syntax.FieldIdentifier.Location, prop.Name, propertyOwner.Name, prop.Accessibility);
+                    Diagnostics.ReportMemberInaccessible(syntax.FieldIdentifier.Location, prop.Name, propertyOwner.Name, prop.SetterAccessibility);
                 }
 
                 if (!prop.HasSetter)
@@ -850,9 +850,9 @@ internal sealed partial class ExpressionBinder
 
                 // Issue #950 / #2044: enforce `protected`/`private` property
                 // assignment.
-                if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propDeclaringType, this.function))
+                if (!AccessibilityChecker.IsAccessible(prop.SetterAccessibility, propDeclaringType, this.function))
                 {
-                    Diagnostics.ReportMemberInaccessible(syntax.FieldIdentifier.Location, prop.Name, propDeclaringType.Name, prop.Accessibility);
+                    Diagnostics.ReportMemberInaccessible(syntax.FieldIdentifier.Location, prop.Name, propDeclaringType.Name, prop.SetterAccessibility);
                 }
 
                 // Issue #1132: writing a property of a read-only value-type
@@ -1220,9 +1220,9 @@ internal sealed partial class ExpressionBinder
 
         if (TypeMemberModel.TryGetStaticPropertyIncludingInherited(staticStruct, memberName, out var prop, out var propertyOwner))
         {
-            if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propertyOwner, function))
+            if (!AccessibilityChecker.IsAccessible(prop.SetterAccessibility, propertyOwner, function))
             {
-                Diagnostics.ReportMemberInaccessible(memberNameSyntax.Location, prop.Name, propertyOwner.Name, prop.Accessibility);
+                Diagnostics.ReportMemberInaccessible(memberNameSyntax.Location, prop.Name, propertyOwner.Name, prop.SetterAccessibility);
             }
 
             if (!prop.HasGetter || !prop.HasSetter)
@@ -1367,9 +1367,9 @@ internal sealed partial class ExpressionBinder
 
             // Issue #950 / #2044: enforce `protected`/`private` property
             // compound-assignment.
-            if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propDeclaringType, this.function))
+            if (!AccessibilityChecker.IsAccessible(prop.SetterAccessibility, propDeclaringType, this.function))
             {
-                Diagnostics.ReportMemberInaccessible(memberNameSyntax.IdentifierToken.Location, prop.Name, propDeclaringType.Name, prop.Accessibility);
+                Diagnostics.ReportMemberInaccessible(memberNameSyntax.IdentifierToken.Location, prop.Name, propDeclaringType.Name, prop.SetterAccessibility);
             }
 
             // Issue #1132: compound-mutating a property of a read-only value-type
@@ -1989,9 +1989,9 @@ internal sealed partial class ExpressionBinder
 
                 // Issue #950 / #2044: enforce `protected`/`private` property
                 // assignment through a chained/expression receiver.
-                if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propDeclaringType, this.function))
+                if (!AccessibilityChecker.IsAccessible(prop.SetterAccessibility, propDeclaringType, this.function))
                 {
-                    Diagnostics.ReportMemberInaccessible(syntax.FieldIdentifier.Location, prop.Name, propDeclaringType.Name, prop.Accessibility);
+                    Diagnostics.ReportMemberInaccessible(syntax.FieldIdentifier.Location, prop.Name, propDeclaringType.Name, prop.SetterAccessibility);
                 }
 
                 var propConverted = conversions.BindConversion(syntax.Value.Location, BindValue(prop.Type), prop.Type);
@@ -2164,9 +2164,9 @@ internal sealed partial class ExpressionBinder
 
             if (TypeMemberModel.TryGetStaticPropertyIncludingInherited(constructedStruct, fieldName, out var prop, out var propertyOwner))
             {
-                if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propertyOwner, function))
+                if (!AccessibilityChecker.IsAccessible(prop.SetterAccessibility, propertyOwner, function))
                 {
-                    Diagnostics.ReportMemberInaccessible(syntax.FieldIdentifier.Location, prop.Name, propertyOwner.Name, prop.Accessibility);
+                    Diagnostics.ReportMemberInaccessible(syntax.FieldIdentifier.Location, prop.Name, propertyOwner.Name, prop.SetterAccessibility);
                 }
 
                 if (!prop.HasSetter)

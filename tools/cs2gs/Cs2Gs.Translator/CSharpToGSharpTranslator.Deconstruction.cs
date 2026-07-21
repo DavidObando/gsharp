@@ -1318,8 +1318,15 @@ public sealed partial class CSharpToGSharpTranslator
                     // <see cref="WithSpillSeam"/> — evaluated per call, inside this
                     // very body, rather than being silently dropped by the
                     // enclosing null seam above.
-                    BlockStatement innerBody = new BlockStatement(this.WithSpillSeam(
-                        () => this.TranslateExpressionStatements(localFunction.ExpressionBody.Expression).ToList()).ToList());
+                    BlockStatement innerBody = localSymbol?.ReturnsVoid == false
+                        ? new BlockStatement(this.WithSpillSeam(
+                            () => new List<GStatement>
+                            {
+                                new ReturnStatement(
+                                    this.TranslateValueWithNullForgiveness(localFunction.ExpressionBody.Expression)),
+                            }).ToList())
+                        : new BlockStatement(this.WithSpillSeam(
+                            () => this.TranslateExpressionStatements(localFunction.ExpressionBody.Expression).ToList()).ToList());
                     lambda = isAsyncVoidHandler
                         ? new LambdaExpression(parameters, blockBody: this.BuildAsyncVoidHandlerWrapperBody(parameters, innerBody, localFunction.GetLocation()), isAsync: false, returnType: null, isFunctionLiteral: true)
                         : new LambdaExpression(parameters, blockBody: innerBody, isAsync: isAsync, returnType: returnType, isFunctionLiteral: true);

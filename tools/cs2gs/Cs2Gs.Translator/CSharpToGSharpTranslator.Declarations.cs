@@ -426,7 +426,11 @@ public sealed partial class CSharpToGSharpTranslator
         private bool IsStaticUsingTarget(INamedTypeSymbol owner)
             => owner != null && this.staticUsingTargets.Contains(owner.OriginalDefinition);
 
-        private static Visibility MapVisibility(ISymbol symbol, TranslationContext context, SyntaxNode node)
+        private static Visibility MapVisibility(
+            ISymbol symbol,
+            TranslationContext context,
+            SyntaxNode node,
+            bool preserveStaticClassPrivate = false)
         {
             if (symbol is null)
             {
@@ -449,7 +453,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // to the position default so the qualified reference still binds
                     // (a private helper of a static utility class is an internal
                     // implementation detail with no external callers to over-expose).
-                    if (IsMemberOfExtensionBearingStaticClass(symbol))
+                    if (!preserveStaticClassPrivate && IsMemberOfExtensionBearingStaticClass(symbol))
                     {
                         return Visibility.Default;
                     }

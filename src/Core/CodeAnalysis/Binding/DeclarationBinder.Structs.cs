@@ -1401,6 +1401,8 @@ internal sealed partial class DeclarationBinder
                 bool isAutoProperty;
                 bool isInitOnly = false;
                 string setterParamName = "value";
+                var getterAccessibility = propAccessibility;
+                var setterAccessibility = propAccessibility;
 
                 if (propSyntax.OpenBraceToken == null)
                 {
@@ -1423,6 +1425,16 @@ internal sealed partial class DeclarationBinder
                     }
 
                     var writeAccessor = setAccessor ?? initAccessor;
+                    if (getAccessor?.AccessibilityModifier != null)
+                    {
+                        getterAccessibility = resolveAccessibility(getAccessor.AccessibilityModifier);
+                    }
+
+                    if (writeAccessor?.AccessibilityModifier != null)
+                    {
+                        setterAccessibility = resolveAccessibility(writeAccessor.AccessibilityModifier);
+                    }
+
                     hasGetter = getAccessor != null || propSyntax.Accessors.IsDefaultOrEmpty;
                     hasSetter = writeAccessor != null;
                     isInitOnly = setAccessor == null && initAccessor != null;
@@ -1514,7 +1526,9 @@ internal sealed partial class DeclarationBinder
                     isOverride,
                     setterParamName,
                     declaration: propSyntax,
-                    isInitOnly: isInitOnly)
+                    isInitOnly: isInitOnly,
+                    getterAccessibility: getterAccessibility,
+                    setterAccessibility: setterAccessibility)
                 {
                     IsIndexer = isIndexer,
                     Parameters = indexerParameters,
@@ -1554,7 +1568,7 @@ internal sealed partial class DeclarationBinder
                             propType,
                             declaration: null,
                             package,
-                            propAccessibility,
+                            getterAccessibility,
                             receiverType: structSymbol,
                             isOpen: isVirtual,
                             isOverride: isOverride);
@@ -1579,7 +1593,7 @@ internal sealed partial class DeclarationBinder
                             TypeSymbol.Void,
                             declaration: null,
                             package,
-                            propAccessibility,
+                            setterAccessibility,
                             receiverType: structSymbol,
                             isOpen: isVirtual,
                             isOverride: isOverride);
@@ -2252,6 +2266,8 @@ internal sealed partial class DeclarationBinder
                 bool hasSetter;
                 bool isAutoProperty;
                 string setterParamName = "value";
+                var getterAccessibility = propAccessibility;
+                var setterAccessibility = propAccessibility;
 
                 if (propSyntax.OpenBraceToken == null)
                 {
@@ -2263,6 +2279,16 @@ internal sealed partial class DeclarationBinder
                     var getAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsGetter);
                     var setAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsSetter);
                     var initAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsInit);
+                    var writeAccessor = setAccessor ?? initAccessor;
+                    if (getAccessor?.AccessibilityModifier != null)
+                    {
+                        getterAccessibility = resolveAccessibility(getAccessor.AccessibilityModifier);
+                    }
+
+                    if (writeAccessor?.AccessibilityModifier != null)
+                    {
+                        setterAccessibility = resolveAccessibility(writeAccessor.AccessibilityModifier);
+                    }
 
                     // Issue #946: `init` is instance-only; reject it on a static
                     // property declared inside a `shared` block (ADR-0053).
@@ -2295,7 +2321,9 @@ internal sealed partial class DeclarationBinder
                     isOverride: false,
                     setterParamName,
                     isStatic: true,
-                    declaration: propSyntax);
+                    declaration: propSyntax,
+                    getterAccessibility: getterAccessibility,
+                    setterAccessibility: setterAccessibility);
 
                 if (isAutoProperty)
                 {
@@ -2322,7 +2350,7 @@ internal sealed partial class DeclarationBinder
                             propType,
                             declaration: null,
                             package,
-                            propAccessibility,
+                            getterAccessibility,
                             receiverType: null);
                         getterSymbol.IsStatic = true;
                         getterSymbol.StaticOwnerType = structSymbol;
@@ -2339,7 +2367,7 @@ internal sealed partial class DeclarationBinder
                             TypeSymbol.Void,
                             declaration: null,
                             package,
-                            propAccessibility,
+                            setterAccessibility,
                             receiverType: null);
                         setterSymbol.IsStatic = true;
                         setterSymbol.StaticOwnerType = structSymbol;

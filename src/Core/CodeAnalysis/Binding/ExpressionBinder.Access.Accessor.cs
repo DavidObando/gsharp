@@ -2764,9 +2764,9 @@ internal sealed partial class ExpressionBinder
 
         if (TypeMemberModel.TryGetStaticPropertyIncludingInherited(structSym, memberName, out var prop, out var propertyOwner))
         {
-            if (!AccessibilityChecker.IsAccessible(prop.Accessibility, propertyOwner, function))
+            if (!AccessibilityChecker.IsAccessible(prop.GetterAccessibility, propertyOwner, function))
             {
-                Diagnostics.ReportMemberInaccessible(ne.Location, prop.Name, propertyOwner.Name, prop.Accessibility);
+                Diagnostics.ReportMemberInaccessible(ne.Location, prop.Name, propertyOwner.Name, prop.GetterAccessibility);
             }
 
             return new BoundPropertyAccessExpression(null, receiver: null, propertyOwner, prop);

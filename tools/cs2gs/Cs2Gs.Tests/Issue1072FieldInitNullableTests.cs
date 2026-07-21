@@ -37,7 +37,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let Name string? =", printed);
+        Assert.Contains("let _name string? =", printed);
+        Assert.Contains("prop Name string?", printed);
     }
 
     [Fact]
@@ -52,8 +53,9 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let Name string =", printed);
-        Assert.DoesNotContain("let Name string? =", printed);
+        Assert.Contains("let _name string =", printed);
+        Assert.Contains("prop Name string", printed);
+        Assert.DoesNotContain("let _name string? =", printed);
     }
 
     [Fact]
@@ -69,8 +71,9 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let Name string =", printed);
-        Assert.DoesNotContain("let Name string? =", printed);
+        Assert.Contains("let _name string =", printed);
+        Assert.Contains("prop Name string", printed);
+        Assert.DoesNotContain("let _name string? =", printed);
     }
 
     [Fact]
@@ -87,7 +90,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let Name string? =", printed);
+        Assert.Contains("let _name string? =", printed);
+        Assert.Contains("prop Name string?", printed);
     }
 
     [Fact]
@@ -121,7 +125,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let Title string? =", printed);
+        Assert.Contains("let _title string? =", printed);
+        Assert.Contains("prop Title string?", printed);
     }
 
     private static string TranslateUnit(string source)
