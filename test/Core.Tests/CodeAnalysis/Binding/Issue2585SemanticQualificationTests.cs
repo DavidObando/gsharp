@@ -79,6 +79,34 @@ public sealed class Issue2585SemanticQualificationTests
     }
 
     [Fact]
+    public void ImportedGenericCompositeLiteral_ResolvesClosedType()
+    {
+        Assert.Empty(Bind("""
+            package Consumer
+            import Oahu.Widgets
+
+            func Run() {
+                let list = SelectList[string]{ Value: "ok" }
+            }
+            """));
+    }
+
+    [Fact]
+    public void ImportedGenericCompositeLiteral_WrongArity_RemainsDiagnosed()
+    {
+        Assert.Contains(
+            Bind("""
+                package Consumer
+                import Oahu.Widgets
+
+                func Run() {
+                    SelectList[string, int32]{ Value: "bad" }
+                }
+                """),
+            diagnostic => diagnostic.Message.Contains("Cannot find type SelectList", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void SourceQualifiedTypeAndValueReceiver_RemainDistinct()
     {
         Assert.Empty(Bind(
@@ -179,6 +207,14 @@ public sealed class Issue2585SemanticQualificationTests
             {
                 public sealed class Make
                 {
+                }
+            }
+
+            namespace Oahu.Widgets
+            {
+                public sealed class SelectList<T>
+                {
+                    public T Value { get; set; }
                 }
             }
             """;

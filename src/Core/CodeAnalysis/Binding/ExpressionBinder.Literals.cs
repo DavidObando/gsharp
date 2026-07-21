@@ -962,6 +962,33 @@ internal sealed partial class ExpressionBinder
                         return BindImportedTypeLiteralExpression(syntax, importedClass.ClassType);
                     }
                 }
+                else if (!typeNameAmbiguous
+                    && syntax.TypeArgumentList != null
+                    && scope.TryLookupImportedGenericClass(
+                        typeName, syntax.TypeArgumentList.Arguments.Count, out var openImportedType)
+                    && TryResolveClrConstructionTypeArgs(
+                        syntax.TypeArgumentList, out var clrTypeArguments, out _, out var hasSymbolicArgument)
+                    && !hasSymbolicArgument)
+                {
+                    Type closedImportedType;
+                    try
+                    {
+                        closedImportedType = openImportedType.MakeGenericType(clrTypeArguments);
+                    }
+                    catch (ArgumentException)
+                    {
+                        Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, typeName);
+                        return new BoundErrorExpression(null);
+                    }
+
+                    if (ImportedTypeSymbol.TryCreateSemanticAggregate(
+                        closedImportedType, scope.References, out var importedAggregate))
+                    {
+                        return BindStructLiteralExpression(syntax, importedAggregate);
+                    }
+
+                    return BindImportedTypeLiteralExpression(syntax, closedImportedType);
+                }
                 else if (!typeNameAmbiguous && syntax.TypeArgumentList == null && lookupType(typeName) is TypeParameterSymbol tpLiteral)
                 {
                     // Issue #988 / #1235 (object-initializer follow-up): `T{Field: value,

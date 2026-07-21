@@ -324,6 +324,18 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GExpression TranslateMemberAccess(MemberAccessExpressionSyntax member)
         {
+            // C# permits namespace-qualified type expressions without importing
+            // their namespace, including relative qualification from the current
+            // namespace. G# resolves expression receivers as values/types, not as
+            // C# namespace paths. Collapse the whole bound type expression through
+            // the type mapper so it emits the canonical type name and records the
+            // namespace import needed by the generated file.
+            if (this.context.GetSymbolInfo(member).Symbol is INamedTypeSymbol qualifiedType)
+            {
+                return new TypeExpression(
+                    this.typeMapper.Map(qualifiedType, this.context, member.GetLocation()));
+            }
+
             // Issue #2351: a bare (non-invoked) reference to an extension
             // method's method group (e.g. assigned to a delegate) never goes
             // through TranslateInvocation, so track its declaring namespace

@@ -59,6 +59,24 @@ public sealed class Issue2585SemanticQualificationPipelineTests
         Assert.Contains("package Oahu.Tui", tuiOutput, StringComparison.Ordinal);
         Assert.Contains("import AppTypes = Oahu.App", tuiOutput, StringComparison.Ordinal);
         Assert.Contains("vm.Changed += () ->", tuiOutput, StringComparison.Ordinal);
+        Assert.Contains("import Oahu.Cli.App.Core", tuiOutput, StringComparison.Ordinal);
+        Assert.Contains("import Oahu.Cli.Commands", tuiOutput, StringComparison.Ordinal);
+        Assert.Contains("import Oahu.Cli.Tui.Icons", tuiOutput, StringComparison.Ordinal);
+        Assert.Contains("import Oahu.Cli.Tui.Widgets", tuiOutput, StringComparison.Ordinal);
+        Assert.Contains("import Spectre.Console", tuiOutput, StringComparison.Ordinal);
+        Assert.Contains("import System", tuiOutput, StringComparison.Ordinal);
+        Assert.Contains("CoreEnvironment.Initialize()", tuiOutput, StringComparison.Ordinal);
+        Assert.Contains("TuiCommand.Reset()", tuiOutput, StringComparison.Ordinal);
+        Assert.Contains("Rule.Default", tuiOutput, StringComparison.Ordinal);
+        Assert.Contains("SelectList[string]", tuiOutput, StringComparison.Ordinal);
+        Assert.Contains("Icons.Success", tuiOutput, StringComparison.Ordinal);
+        Assert.Contains("DateTime.UtcNow", tuiOutput, StringComparison.Ordinal);
+        Assert.Contains("let vm ViewModel? = value as ViewModel", tuiOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain("App.Core.CoreEnvironment", tuiOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain("Commands.TuiCommand", tuiOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain("Spectre.Console.Rule", tuiOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain("Tui.Icons.Icons", tuiOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain("System.DateTime", tuiOutput, StringComparison.Ordinal);
     }
 
     private static (string AppProject, string TuiProject) WriteFixture(string sourceRoot)
@@ -115,6 +133,47 @@ public sealed class Issue2585SemanticQualificationPipelineTests
                 }
             }
             """);
+        File.WriteAllText(Path.Combine(appDirectory, "Cycle4Types.cs"), """
+            namespace Oahu.Cli.App.Core
+            {
+                public static class CoreEnvironment
+                {
+                    public static void Initialize() { }
+                }
+            }
+
+            namespace Oahu.Cli.Commands
+            {
+                public static class TuiCommand
+                {
+                    public static void Reset() { }
+                }
+            }
+
+            namespace Oahu.Cli.Tui.Icons
+            {
+                public static class Icons
+                {
+                    public static string Success => "ok";
+                }
+            }
+
+            namespace Oahu.Cli.Tui.Widgets
+            {
+                public sealed class SelectList<T>
+                {
+                    public T Value { get; set; }
+                }
+            }
+
+            namespace Spectre.Console
+            {
+                public sealed class Rule
+                {
+                    public static string Default => "rule";
+                }
+            }
+            """);
 
         string tuiDirectory = Path.Combine(sourceRoot, "Tui");
         Directory.CreateDirectory(tuiDirectory);
@@ -122,6 +181,7 @@ public sealed class Issue2585SemanticQualificationPipelineTests
         File.WriteAllText(tuiProject, ProjectFile("../App/App.csproj"));
         File.WriteAllText(Path.Combine(tuiDirectory, "Wiring.cs"), """
             using AppTypes = Oahu.App;
+            using Oahu.Cli.Tui.Widgets;
             using Oahu.Tui;
 
             namespace Oahu
@@ -138,7 +198,34 @@ public sealed class Issue2585SemanticQualificationPipelineTests
                                 vm.Refresh();
                             };
                         }
+
                     }
+                }
+            }
+            """);
+        File.WriteAllText(Path.Combine(tuiDirectory, "Cycle4.cs"), """
+            using AppTypes = Oahu.App;
+            using Oahu.Cli.Tui.Widgets;
+
+            namespace Oahu.Cli;
+
+            public static class Cycle4
+            {
+                public static void Run(object value, bool blocked)
+                {
+                    App.Core.CoreEnvironment.Initialize();
+                    Commands.TuiCommand.Reset();
+                    var rule = Spectre.Console.Rule.Default;
+                    var list = new SelectList<string> { Value = "ok" };
+                    var icon = Tui.Icons.Icons.Success;
+                    var year = System.DateTime.UtcNow.Year;
+
+                    if (value is not AppTypes.ViewModel vm || blocked)
+                    {
+                        return;
+                    }
+
+                    vm.Refresh();
                 }
             }
             """);
