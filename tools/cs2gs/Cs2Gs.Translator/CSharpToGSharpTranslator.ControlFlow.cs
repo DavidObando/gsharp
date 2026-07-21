@@ -747,25 +747,17 @@ public sealed partial class CSharpToGSharpTranslator
         {
             result = null;
 
-            IsPatternExpressionSyntax isPattern;
-            ExpressionSyntax remainingCondition = null;
-            if (ifStatement.Condition is IsPatternExpressionSyntax directPattern)
+            var extraGuards = new Stack<ExpressionSyntax>();
+            ExpressionSyntax condition = ifStatement.Condition;
+            while (condition is BinaryExpressionSyntax binary &&
+                   binary.IsKind(SyntaxKind.LogicalOrExpression))
             {
-                isPattern = directPattern;
-            }
-            else if (ifStatement.Condition is BinaryExpressionSyntax logicalOr
-                && logicalOr.IsKind(SyntaxKind.LogicalOrExpression)
-                && logicalOr.Left is IsPatternExpressionSyntax leftPattern)
-            {
-                isPattern = leftPattern;
-                remainingCondition = logicalOr.Right;
-            }
-            else
-            {
-                return false;
+                condition = binary.Left;
+                extraGuards.Push(binary.Right);
             }
 
-            if (isPattern.Pattern is not UnaryPatternSyntax notPattern ||
+            if (condition is not IsPatternExpressionSyntax isPattern ||
+                isPattern.Pattern is not UnaryPatternSyntax notPattern ||
                 !notPattern.IsKind(SyntaxKind.NotPattern))
             {
                 return false;
@@ -853,12 +845,12 @@ public sealed partial class CSharpToGSharpTranslator
             // fails the local is nil, so the original then-block runs.
             GExpression guard = new BinaryExpression(
                 new IdentifierExpression(localName), "==", LiteralExpression.Null());
-            if (remainingCondition != null)
+            while (extraGuards.Count > 0)
             {
                 guard = new BinaryExpression(
                     guard,
                     "||",
-                    this.TranslateExpression(remainingCondition));
+                    this.TranslateExpression(extraGuards.Pop()));
             }
 
             BlockStatement then = this.TranslateStatementAsBlock(ifStatement.Statement);

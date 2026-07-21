@@ -104,6 +104,28 @@ namespace Demo
         Assert.Contains("SettingsChanged += SettingsChangedSettings", printed, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void GenericInstanceMethod_CopiesTypeParametersToAsyncBodyHelper()
+    {
+        string printed = TranslateAndValidate(@"
+using System.Threading.Tasks;
+
+namespace Demo
+{
+    public sealed class Handler
+    {
+        public async void Handle<T>(T value)
+        {
+            await Task.Yield();
+        }
+    }
+}");
+
+        Assert.Contains("func Handle[T](value T)", printed, StringComparison.Ordinal);
+        Assert.Contains("__asyncVoid_Handle[T](value)", printed, StringComparison.Ordinal);
+        Assert.Contains("private async func __asyncVoid_Handle[T](value T)", printed, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// The exact Oahu <c>AudibleApi.AaxFileConversionProgressUpdate</c> shape: a
     /// block-bodied <c>async void</c> LOCAL FUNCTION subscribed to a generic

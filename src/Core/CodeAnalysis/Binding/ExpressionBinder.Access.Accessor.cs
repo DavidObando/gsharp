@@ -2409,7 +2409,7 @@ internal sealed partial class ExpressionBinder
     private bool IsNamespacePrefixSegment(string segment, bool isLeadingSegment = true) =>
         (!isLeadingSegment || scope.TryLookupSymbol(segment) is not VariableSymbol)
         && !scope.TryLookupTypeAlias(segment, out _)
-        && !scope.TryLookupImport(segment, out _)
+        && !(scope.TryLookupImport(segment, out var import) && import.IsAlias)
         && !scope.TryLookupImportedClass(segment, declaration: null, out _);
 
     /// <summary>
