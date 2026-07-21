@@ -20,6 +20,77 @@ namespace GSharp.Compiler.Tests.Emit;
 public sealed class Issue2672DelegateCtorEmitTests
 {
     [Fact]
+    public void ClrMethodGroup_NestedNamedDelegateSlot_VerifiesAndRunsBesideReturnIfLocal()
+    {
+        var directory = Path.Combine(AppContext.BaseDirectory, "Issue2672MethodGroup");
+        Directory.CreateDirectory(directory);
+        var fixturePath = Path.Combine(directory, "Issue2672Fixture.dll");
+        var outputPath = Path.Combine(directory, "Issue2672MethodGroup.dll");
+        EmitFixture(fixturePath);
+
+        const string source = """
+            package Issue2672
+            import System
+            import System.Threading
+            import Issue2672Fixture
+
+            class Forwarder {
+                shared {
+                    func Forward(sendOrPost ((object?) -> void, object?) -> void, action () -> void) {
+                        Console.WriteLine(ContextFactory.Created)
+                        sendOrPost((state object?) -> action(), nil)
+                    }
+                }
+            }
+
+            func ForwardPost(sync SynchronizationContext, action () -> void) {
+                Forwarder.Forward(sync.Post, action)
+            }
+
+            func ForwardSend(sync SynchronizationContext, action () -> void) {
+                Forwarder.Forward(sync.Send, action)
+            }
+
+            func Sibling(type_ Type, fullName bool) string? {
+                let TypeName = func () string? {
+                    return if fullName { type_.FullName } else { type_.Name }
+                }
+                return TypeName()
+            }
+
+            func Main() {
+                let context = ImmediateSynchronizationContext()
+                Forwarder.Forward(ContextFactory.Current.Post, () -> Console.WriteLine("post"))
+                ForwardSend(context, () -> Console.WriteLine("send"))
+                Console.WriteLine(Sibling(typeof(string), false))
+            }
+            """;
+
+        Emit(source, outputPath, fixturePath);
+        IlVerifier.Verify(outputPath, additionalReferences: new[] { fixturePath });
+        Assert.Equal("1\npost\n1\nsend\nString\n", Run(outputPath, fixturePath));
+    }
+
+    [Fact]
+    public void ClrMethodGroup_IncompatibleArity_RemainsRejected()
+    {
+        const string source = """
+            package Issue2672
+            import System.Threading
+
+            func Bad(sync SynchronizationContext) {
+                let callback (string) -> void = sync.Post
+            }
+            """;
+        using var resolver = ReferenceResolver.WithReferences(Array.Empty<string>());
+        var compilation = new GsCompilation(resolver, GsSyntaxTree.Parse(SourceText.From(source)));
+        using var stream = new MemoryStream();
+        var result = compilation.Emit(stream, pdbStream: null, refStream: null, assemblyName: "Issue2672Negative");
+        Assert.False(result.Success);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0218");
+    }
+
+    [Fact]
     public void ImportedExtension_AsyncLambdaWithNamedDelegateParameter_VerifiesAndRuns()
     {
         var directory = Path.Combine(AppContext.BaseDirectory, "Issue2672DelegateCtor");
@@ -94,6 +165,29 @@ public sealed class Issue2672DelegateCtorEmitTests
 
             public sealed class Host { }
 
+            public sealed class ImmediateSynchronizationContext : System.Threading.SynchronizationContext
+            {
+                public override void Post(System.Threading.SendOrPostCallback callback, object? state)
+                    => callback(state);
+
+                public override void Send(System.Threading.SendOrPostCallback callback, object? state)
+                    => callback(state);
+            }
+
+            public static class ContextFactory
+            {
+                public static int Created { get; private set; }
+
+                public static System.Threading.SynchronizationContext Current
+                {
+                    get
+                    {
+                        Created++;
+                        return new ImmediateSynchronizationContext();
+                    }
+                }
+            }
+
             public delegate Task Next(Context context);
 
             public static class MiddlewareExtensions
@@ -124,5 +218,42 @@ public sealed class Issue2672DelegateCtorEmitTests
         using var stream = File.Create(path);
         var result = compilation.Emit(stream);
         Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
+    }
+
+    private static void Emit(string source, string outputPath, string fixturePath)
+    {
+        using var resolver = ReferenceResolver.WithReferences(new[] { fixturePath });
+        var compilation = new GsCompilation(resolver, GsSyntaxTree.Parse(SourceText.From(source)));
+        using var stream = File.Create(outputPath);
+        var result = compilation.Emit(stream, pdbStream: null, refStream: null, assemblyName: Path.GetFileNameWithoutExtension(outputPath));
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
+    }
+
+    private static string Run(string outputPath, string fixturePath)
+    {
+        var context = new AssemblyLoadContext(Path.GetFileNameWithoutExtension(outputPath), isCollectible: true);
+        try
+        {
+            context.Resolving += (_, name) =>
+                name.Name == "Issue2672Fixture" ? context.LoadFromAssemblyPath(fixturePath) : null;
+            var assembly = context.LoadFromAssemblyPath(outputPath);
+            var previous = Console.Out;
+            using var output = new StringWriter();
+            Console.SetOut(output);
+            try
+            {
+                assembly.EntryPoint!.Invoke(null, null);
+            }
+            finally
+            {
+                Console.SetOut(previous);
+            }
+
+            return output.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
+        }
+        finally
+        {
+            context.Unload();
+        }
     }
 }

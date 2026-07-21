@@ -204,6 +204,7 @@ public sealed class Binder
             isFormattableStringTargetType: ExpressionBinder.IsFormattableStringTargetType,
             bindInterpolatedStringAsFormattable: (syntax, targetType) => expressions.BindInterpolatedStringAsFormattable(syntax, targetType),
             createErasedFunctionLiteralAdapter: (literal, targetFunctionType) => lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType),
+            createClrMethodGroupAdapter: (group, targetFunctionType) => lambdas.CreateClrMethodGroupAdapter(group, targetFunctionType),
             isLvalue: ExpressionBinder.IsLvalue,
             getRefKindFromModifier: GetRefKindFromModifier,
             refKindToString: RefKindToString);
