@@ -280,7 +280,13 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GExpression TranslateStaticExtensionReceiver(IArgumentOperation receiverArgument)
         {
-            var translated = this.TranslateExpression(((ArgumentSyntax)receiverArgument.Syntax).Expression);
+            ExpressionSyntax expression = ((ArgumentSyntax)receiverArgument.Syntax).Expression;
+            var translated = this.TranslateExpression(expression);
+            translated = this.ForgiveNullableReferenceValue(
+                expression,
+                translated,
+                receiverArgument.Parameter?.Type,
+                receiverArgument.Parameter);
             IOperation value = receiverArgument.Value;
 
             while (value is IConversionOperation { IsImplicit: true } implicitConversion)
@@ -1075,11 +1081,23 @@ public sealed partial class CSharpToGSharpTranslator
             // CoerceNumericArgumentToConverted (issue #1281) emits the bare operand
             // when gsc accepts the conversion on its own and keeps the explicit
             // `T(x)` wrap only where gsc still needs it.
-            return this.CoercePointerConversion(
+            GExpression translated = this.CoercePointerConversion(
                 argument.Expression,
                 this.CoerceNumericArgumentToConverted(
                     argument,
                     this.TranslateExpression(argument.Expression)));
+            if (!IsNameOfArgument(argument)
+                && this.context.SemanticModel.GetOperation(argument) is IArgumentOperation
+                    { Parameter: { } parameter })
+            {
+                translated = this.ForgiveNullableReferenceValue(
+                    argument.Expression,
+                    translated,
+                    parameter.Type,
+                    parameter);
+            }
+
+            return translated;
         }
 
         // Coerce an argument expression to the numeric type C# implicitly converted

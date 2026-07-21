@@ -617,14 +617,17 @@ public sealed partial class CSharpToGSharpTranslator
             // `null` for every existing single-compilation caller, so this
             // overload reduces to the exact prior single-compilation check —
             // a pure additive fix for the cross-project case.
-            if (ObliviousNullabilityAnalyzer.IsTainted(this.context.Compilation, symbol, this.context.SiblingCompilations))
+            if (declared.NullableAnnotation == NullableAnnotation.None
+                && ObliviousNullabilityAnalyzer.IsTainted(
+                    this.context.Compilation,
+                    symbol,
+                    this.context.SiblingCompilations))
             {
                 return true;
             }
 
-            return symbol is IMethodSymbol
-                ? false
-                : this.IsUsedAsNullable(symbol, this.GetNullabilityScope(symbol));
+            return symbol is not IMethodSymbol
+                && this.IsUsedAsNullable(symbol, this.GetNullabilityScope(symbol));
         }
 
         // Issue #2521: sink lowering must use the target contract that G# will
