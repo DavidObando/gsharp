@@ -140,7 +140,12 @@ internal sealed class GSharpCodeLensTagger : ITagger<ICodeLensTag>
 
             yield return new TagSpan<ICodeLensTag>(
                 span,
-                new GSharpCodeLensTag(document.FilePath, span, lens.ReferenceCount));
+                new GSharpCodeLensTag(
+                    document.FilePath,
+                    span,
+                    lens.ReferenceCount,
+                    lens.DeclarationRange!.Start!.Line,
+                    lens.DeclarationRange.Start.Character));
         }
     }
 
@@ -159,7 +164,8 @@ internal sealed class GSharpCodeLensTagger : ITagger<ICodeLensTag>
 
         ITextSnapshotLine startLine = snapshot.GetLineFromLineNumber(range.Start.Line);
         ITextSnapshotLine endLine = snapshot.GetLineFromLineNumber(range.End.Line);
-        int start = Math.Min(startLine.Start.Position + range.Start.Character, startLine.End.Position);
+        int anchor = GSharpCodeLensAnchor.Find(startLine.GetText(), range.Start.Character);
+        int start = startLine.Start.Position + anchor;
         int end = Math.Min(endLine.Start.Position + range.End.Character, endLine.End.Position);
         if (end <= start)
         {
@@ -286,13 +292,18 @@ internal sealed class GSharpCodeLensTagger : ITagger<ICodeLensTag>
 
 internal sealed class GSharpCodeLensTag : ICodeLensTag3, ICodeLensDescriptorContextProvider
 {
-    public GSharpCodeLensTag(string filePath, SnapshotSpan span, int referenceCount)
+    public GSharpCodeLensTag(
+        string filePath,
+        SnapshotSpan span,
+        int referenceCount,
+        int navigationLine,
+        int navigationCharacter)
     {
         Descriptor = new GSharpCodeLensDescriptor
         {
             FilePath = filePath,
             ProjectGuid = Guid.Empty,
-            ElementDescription = $"{referenceCount}|{span.Start.GetContainingLine().LineNumber}|{span.Start.Position - span.Start.GetContainingLine().Start.Position}",
+            ElementDescription = $"{referenceCount}|{navigationLine}|{navigationCharacter}",
             ApplicableSpan = span,
             Kind = (CodeElementKinds)(1 << 24),
         };

@@ -33,6 +33,10 @@ public sealed class CodeLensCompatibilityBoundaryTests
         Assert.Contains("CurrentSnapshot.Version.VersionNumber != requestedVersion", tagger);
         Assert.Contains("FileActionOccurred", tagger);
         Assert.Contains("refreshAll", tagger);
+        Assert.Contains("GSharpCodeLensAnchor.Find", tagger);
+        Assert.Contains(
+            "ElementDescription = $\"{referenceCount}|{navigationLine}|{navigationCharacter}\"",
+            tagger);
         Assert.DoesNotContain("GSharp.Core", tagger);
         Assert.Contains("VSStd97CmdID.FindReferences", listener);
     }

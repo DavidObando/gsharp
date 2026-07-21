@@ -20,5 +20,7 @@
              Link="LanguageClientPolicy.cs" />
     <Compile Include="..\..\src\VsGsharp\GSharpLanguageServerRpc.cs"
              Link="GSharpLanguageServerRpc.cs" />
+    <Compile Include="..\..\src\VsGsharp\GSharpCodeLensAnchor.cs"
+             Link="GSharpCodeLensAnchor.cs" />
   </ItemGroup>
 </Project>

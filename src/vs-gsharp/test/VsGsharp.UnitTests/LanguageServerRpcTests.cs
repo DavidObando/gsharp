@@ -9,6 +9,19 @@ namespace GSharp.VisualStudio;
 
 public sealed class LanguageServerRpcTests
 {
+    [Theory]
+    [InlineData("func foo()", 5, 0)]
+    [InlineData("    class Greeter", 10, 4)]
+    [InlineData("        var value = 1", 12, 8)]
+    [InlineData("    Red,", 4, 4)]
+    public void CodeLensAnchor_UsesFirstDeclarationCharacter(
+        string line,
+        int identifierCharacter,
+        int expected)
+    {
+        Assert.Equal(expected, GSharpCodeLensAnchor.Find(line, identifierCharacter));
+    }
+
     [Fact]
     public async Task InvokeAsync_RequiresInitializedConnection()
     {
