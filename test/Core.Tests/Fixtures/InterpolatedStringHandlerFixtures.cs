@@ -38,6 +38,17 @@ public struct PrefixedInterpolatedStringHandler
         this.builder.Append(alignment < 0 ? text.PadRight(-alignment) : text.PadLeft(alignment));
     }
 
+    public void AppendFormatted<T>(T value, string format)
+        => this.AppendFormatted(value, alignment: 0, format);
+
+    public void AppendFormatted<T>(T value, int alignment, string format)
+    {
+        var text = value is System.IFormattable formattable
+            ? formattable.ToString(format, System.Globalization.CultureInfo.InvariantCulture)
+            : value?.ToString() ?? string.Empty;
+        this.builder.Append(alignment < 0 ? text.PadRight(-alignment) : text.PadLeft(alignment));
+    }
+
     public override string ToString() => this.builder.ToString();
 }
 

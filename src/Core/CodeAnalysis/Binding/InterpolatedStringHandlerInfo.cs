@@ -202,6 +202,23 @@ public sealed class InterpolatedStringHandlerInfo
         ImmutableArray<BoundExpression> arguments,
         BoundExpression receiver,
         out string failure)
+        => TryCreate(
+            handlerClrType,
+            parameter,
+            parameters,
+            arguments,
+            receiver,
+            ImmutableArray<BoundInterpolatedStringPart>.Empty,
+            out failure);
+
+    internal static InterpolatedStringHandlerInfo TryCreate(
+        System.Type handlerClrType,
+        ParameterInfo parameter,
+        ParameterInfo[] parameters,
+        ImmutableArray<BoundExpression> arguments,
+        BoundExpression receiver,
+        ImmutableArray<BoundInterpolatedStringPart> parts,
+        out string failure)
     {
         failure = null;
 
@@ -250,6 +267,11 @@ public sealed class InterpolatedStringHandlerInfo
             return null;
         }
 
+        if (!ValidateAppendMethods(peeled, parts, out failure))
+        {
+            return null;
+        }
+
         // Issue #377 sub-item 1: capture the parameter's RefKind so the call
         // binder/lowerer can feed the constructed handler local by-ref.
         var handlerRefKind = RefKind.None;
@@ -277,6 +299,152 @@ public sealed class InterpolatedStringHandlerInfo
             hasOutBool,
             sources.ToImmutable(),
             handlerRefKind);
+    }
+
+    internal static bool TryResolveAppendFormatted(
+        System.Type handlerType,
+        BoundInterpolatedStringPart part,
+        TypeSymbol holeType,
+        out MethodInfo method,
+        out ImmutableArray<TypeSymbol> typeArguments)
+    {
+        method = null;
+        typeArguments = default;
+        var wantAlign = part.Alignment.HasValue;
+        var wantFormat = part.Format != null;
+        var extra = (wantAlign ? 1 : 0) + (wantFormat ? 1 : 0);
+        var candidates = ImmutableArray.CreateBuilder<MethodInfo>();
+
+        foreach (var candidate in handlerType.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (candidate.Name != "AppendFormatted")
+            {
+                continue;
+            }
+
+            var parameters = candidate.GetParameters();
+            if (parameters.Length != 1 + extra)
+            {
+                continue;
+            }
+
+            var index = 1;
+            if (wantAlign && !parameters[index++].ParameterType.IsSameAs(typeof(int)))
+            {
+                continue;
+            }
+
+            if (wantFormat && !parameters[index].ParameterType.IsSameAs(typeof(string)))
+            {
+                continue;
+            }
+
+            candidates.Add(candidate);
+        }
+
+        if (candidates.Count == 0)
+        {
+            return false;
+        }
+
+        var valueClrType = NullableTypeSymbol.GetEffectiveClrType(holeType);
+        if (valueClrType != null)
+        {
+            var argumentTypes = new System.Type[1 + extra];
+            argumentTypes[0] = valueClrType;
+            var index = 1;
+            if (wantAlign)
+            {
+                argumentTypes[index++] = typeof(int);
+            }
+
+            if (wantFormat)
+            {
+                argumentTypes[index] = typeof(string);
+            }
+
+            var resolution = OverloadResolution.Resolve<MethodInfo>(candidates, argumentTypes);
+            if (resolution.Outcome == OverloadResolution.ResolutionOutcome.Resolved)
+            {
+                method = resolution.Best;
+            }
+            else if (resolution.Outcome == OverloadResolution.ResolutionOutcome.Ambiguous)
+            {
+                foreach (var candidate in resolution.Ambiguous)
+                {
+                    if (candidate.IsGenericMethod)
+                    {
+                        continue;
+                    }
+
+                    if (method != null)
+                    {
+                        method = null;
+                        break;
+                    }
+
+                    method = candidate;
+                }
+            }
+
+            if (method == null)
+            {
+                return false;
+            }
+        }
+        else
+        {
+            method = candidates.FirstOrDefault(candidate => candidate.IsGenericMethodDefinition)
+                ?? candidates[0];
+        }
+
+        if (!method.IsGenericMethodDefinition)
+        {
+            return true;
+        }
+
+        if (valueClrType != null)
+        {
+            method = method.MakeGenericMethod(valueClrType);
+            return true;
+        }
+
+        method = method.MakeGenericMethod(typeof(object));
+        typeArguments = ImmutableArray.Create(holeType);
+        return true;
+    }
+
+    private static bool ValidateAppendMethods(
+        System.Type handlerType,
+        ImmutableArray<BoundInterpolatedStringPart> parts,
+        out string failure)
+    {
+        failure = null;
+        if (parts.Any(part => part.IsLiteral && part.Literal.Length > 0)
+            && handlerType.GetMethod("AppendLiteral", new[] { typeof(string) }) == null)
+        {
+            failure = $"'{handlerType.Name}' has no AppendLiteral(string) method";
+            return false;
+        }
+
+        foreach (var part in parts)
+        {
+            if (part.IsHole
+                && !TryResolveAppendFormatted(handlerType, part, part.Value.Type, out _, out _))
+            {
+                var shape = part.Alignment.HasValue && part.Format != null
+                    ? "(value, int, string)"
+                    : part.Alignment.HasValue
+                        ? "(value, int)"
+                        : part.Format != null
+                            ? "(value, string)"
+                            : "(value)";
+                failure = $"'{handlerType.Name}' has no applicable AppendFormatted{shape} method";
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static ConstructorInfo SelectConstructor(

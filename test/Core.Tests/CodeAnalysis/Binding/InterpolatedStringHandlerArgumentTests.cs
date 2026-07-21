@@ -71,6 +71,41 @@ Console.WriteLine(msg)
         Assert.Contains("PFX:x=42", output);
     }
 
+    [Theory]
+    [InlineData("\"v=${42,6}\"", "P: v=    42")]
+    [InlineData("\"v=${42:0000}\"", "P: v=0042")]
+    [InlineData("\"v=${42,6:0000}\"", "P: v=  0042")]
+    public void Alignment_And_Format_Select_Matching_AppendFormatted(string interpolation, string expected)
+    {
+        var source = $@"package HandlerShape
+import System
+import GSharp.Core.Tests.Fixtures
+
+let msg = InterpolationHarness.Format(""P: "", {interpolation})
+Console.WriteLine(msg)
+";
+        Assert.Contains(expected, CompileAndRun(source, "HandlerShapeTest"));
+    }
+
+    [Theory]
+    [InlineData("\"v=${9,3}\"", "(value, int)")]
+    [InlineData("\"v=${9:000}\"", "(value, string)")]
+    public void Missing_AppendFormatted_Shape_Reports_Diagnostic(string interpolation, string expectedShape)
+    {
+        var source = $@"package HandlerShapeNegative
+import GSharp.Core.Tests.Fixtures
+
+let msg = InterpolationHarness.Gated(true, {interpolation})
+";
+        using var peStream = new MemoryStream();
+        var result = new Compilation(SyntaxTree.Parse(SourceText.From(source))).Emit(peStream);
+
+        Assert.False(result.Success);
+        var diagnostic = Assert.Single(result.Diagnostics.Where(d => d.IsError));
+        Assert.Equal("GS0221", diagnostic.Id);
+        Assert.Contains(expectedShape, diagnostic.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void OutBool_Gated_Handler_Enabled_Emits_And_Runs()
     {

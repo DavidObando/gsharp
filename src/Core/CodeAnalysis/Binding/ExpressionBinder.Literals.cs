@@ -1829,6 +1829,7 @@ internal sealed partial class ExpressionBinder
                 parameters,
                 arguments,
                 receiver,
+                interp.Parts,
                 out var failure);
             if (handler == null)
             {
