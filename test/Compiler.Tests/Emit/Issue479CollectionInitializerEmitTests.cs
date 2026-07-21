@@ -138,6 +138,40 @@ public class Issue479CollectionInitializerEmitTests
     }
 
     [Fact]
+    public void NullableReferenceElements_AreTargetTyped()
+    {
+        var source = """
+            package App
+            import System
+            import System.Collections.Generic
+
+            let items = List[string?]{ nil, "value" }
+            let added = Dictionary[string, object?]{ "error": nil }
+            let indexed = Dictionary[string, object?]{ ["error"] = nil }
+            Console.WriteLine(items[0] == nil)
+            Console.WriteLine(added["error"] == nil)
+            Console.WriteLine(indexed["error"] == nil)
+            """;
+
+        Assert.Equal("True\nTrue\nTrue\n", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void NonNullableReferenceElements_RejectNil()
+    {
+        var source = """
+            package App
+            import System.Collections.Generic
+
+            let indexed = Dictionary[string, object]{ ["error"] = nil }
+            """;
+
+        var (exit, diagnostics) = CompileExpectingFailure(source);
+        Assert.NotEqual(0, exit);
+        Assert.Contains("GS0155", diagnostics);
+    }
+
+    [Fact]
     public void DictionaryInitializer_WithConstructorArgs_UsesComparer()
     {
         // The explicit-ctor-args form matching the C# new(StringComparer
