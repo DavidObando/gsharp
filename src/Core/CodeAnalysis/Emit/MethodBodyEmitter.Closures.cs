@@ -999,12 +999,14 @@ internal sealed partial class MethodBodyEmitter
         this.il.Token(delegateTypeHandle);
     }
 
-    // Phase 4 emit parity: load a captured variable. In a MoveNext body,
-    // the variable may be hoisted to a state-machine field; emit the field
-    // load instead of a local/parameter load in that case.
+    // Phase 4 emit parity: load a captured variable. In an async or async-
+    // iterator MoveNext body, the variable may be hoisted to a state-machine
+    // field; emit the field load instead of a local/parameter load.
     private void EmitCapturedVariableLoad(VariableSymbol captured)
     {
-        if (this.asyncFieldMap != null && this.asyncFieldMap.TryGetHoistedField(captured, out var hoistedField))
+        FieldSymbol hoistedField = null;
+        if ((this.asyncFieldMap != null && this.asyncFieldMap.TryGetHoistedField(captured, out hoistedField))
+            || (this.asyncIteratorEmitCtx != null && this.asyncIteratorEmitCtx.FieldMap.TryGetValue(captured, out hoistedField)))
         {
             // Load from the state machine: ldarg.0; ldfld <smStruct>::<hoistedField>
             if (!this.outer.cache.StructFieldDefs.TryGetValue(hoistedField, out var hoistedHandle))

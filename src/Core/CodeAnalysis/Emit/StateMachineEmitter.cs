@@ -373,16 +373,21 @@ internal sealed class StateMachineEmitter
 
     /// <summary>
     /// Lightweight emit-time context for async iterator MoveNext methods.
-    /// Carries the builder field, SM class, and builder info needed by
-    /// <see cref="EmitAwaitOnCompletedCall"/>.
+    /// Carries the builder field, SM class, builder info, and hoisted-variable
+    /// map needed by async-iterator body emission.
     /// </summary>
     public sealed class AsyncIteratorEmitContext
     {
-        public AsyncIteratorEmitContext(StructSymbol smClass, FieldSymbol builderField, AsyncMethodBuilderInfo builderInfo)
+        public AsyncIteratorEmitContext(
+            StructSymbol smClass,
+            FieldSymbol builderField,
+            AsyncMethodBuilderInfo builderInfo,
+            Dictionary<VariableSymbol, FieldSymbol> fieldMap)
         {
             this.SmClass = smClass;
             this.BuilderField = builderField;
             this.BuilderInfo = builderInfo;
+            this.FieldMap = fieldMap;
         }
 
         public StructSymbol SmClass { get; }
@@ -390,6 +395,8 @@ internal sealed class StateMachineEmitter
         public FieldSymbol BuilderField { get; }
 
         public AsyncMethodBuilderInfo BuilderInfo { get; }
+
+        public Dictionary<VariableSymbol, FieldSymbol> FieldMap { get; }
     }
 
     /// <summary>
@@ -992,7 +999,7 @@ internal sealed class StateMachineEmitter
             var returnClrType = plan.Function.Type?.ClrType
                 ?? typeof(System.Collections.Generic.IAsyncEnumerable<object>);
             var aiBuilderInfo = AsyncMethodBuilderInfo.Resolve(returnClrType, this.emitCtx.References);
-            this.AsyncIteratorEmitContexts[smClass] = new AsyncIteratorEmitContext(smClass, builderField, aiBuilderInfo);
+            this.AsyncIteratorEmitContexts[smClass] = new AsyncIteratorEmitContext(smClass, builderField, aiBuilderInfo, fieldMap);
         }
     }
 

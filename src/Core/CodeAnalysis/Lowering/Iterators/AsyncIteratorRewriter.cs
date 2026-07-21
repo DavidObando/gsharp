@@ -60,9 +60,13 @@ public static class AsyncIteratorRewriter
                 continue;
             }
 
+            // Issue #2662: lower loops first so synthesized await-for locals
+            // and awaits participate in state-machine slot/state allocation.
+            var loweredBody = Lowerer.Lower(body);
+
             // Run async lowering pipeline on the body: exception handler rewrite,
             // spill, ref-hoist. This lifts awaits to statement level.
-            var exhRewritten = AsyncExceptionHandlerRewriter.Rewrite(body);
+            var exhRewritten = AsyncExceptionHandlerRewriter.Rewrite(loweredBody);
             var spilledBody = SpillSequenceSpiller.Rewrite(exhRewritten);
             var refHoisted = RefInitializationHoister.Rewrite(spilledBody);
 
@@ -73,8 +77,13 @@ public static class AsyncIteratorRewriter
             var awaitCollector = new AwaitStateCollector();
             awaitCollector.Visit(refHoisted);
 
-            // Collect hoisted locals (all locals — they may live across yield or await).
-            var hoistedLocals = CollectHoistedLocals(refHoisted);
+            // Reuse the ordinary async capture analysis so assignment-only
+            // loop variables and nested-lambda captures are both hoisted.
+            var hoistedLocals = AsyncCaptureWalker
+                .Analyze(refHoisted, function.Parameters)
+                .Locals
+                .Cast<VariableSymbol>()
+                .ToImmutableArray();
 
             // Collect awaiter types for pooled awaiter fields.
             var awaiterTypes = CollectAwaiterTypes(refHoisted);
@@ -105,13 +114,6 @@ public static class AsyncIteratorRewriter
 
     private static TypeSymbol GetAsyncIteratorElementType(TypeSymbol type)
         => AsyncIteratorDetection.GetElementType(type);
-
-    private static ImmutableArray<VariableSymbol> CollectHoistedLocals(BoundStatement body)
-    {
-        var collector = new LocalCollector();
-        collector.Visit(body);
-        return collector.Locals.ToImmutableArray();
-    }
 
     private static ImmutableArray<(Type PoolKey, TypeSymbol FieldType)> CollectAwaiterTypes(BoundStatement body)
     {
@@ -187,36 +189,6 @@ public static class AsyncIteratorRewriter
         {
             states.Add(node, allocator.AllocateAwaitState());
             base.VisitAwaitExpression(node);
-        }
-    }
-
-    private sealed class LocalCollector : BoundTreeWalker
-    {
-        public List<VariableSymbol> Locals { get; } = [];
-
-        protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
-        {
-            // Skip ref-struct (ByRef-like) locals — e.g. the synthesized
-            // DefaultInterpolatedStringHandler emitted for interpolated strings
-            // (ADR-0055 / issue #368). A ByRef-like type cannot be an instance
-            // field, so it must stay a MoveNext local rather than be hoisted.
-            // Issue #1919: use the metadata-load-safe TypeSymbol.IsByRefLike
-            // helper — a raw Type.IsByRefLike read throws NotSupportedException
-            // for a cross-context TypeBuilderInstantiation (e.g. a delegate
-            // local closed over a MetadataLoadContext type under gsc's
-            // `/reference:` mode).
-            if (TypeSymbol.IsByRefLike(node.Variable.Type))
-            {
-                base.VisitVariableDeclaration(node);
-                return;
-            }
-
-            if (!Locals.Contains(node.Variable))
-            {
-                Locals.Add(node.Variable);
-            }
-
-            base.VisitVariableDeclaration(node);
         }
     }
 
