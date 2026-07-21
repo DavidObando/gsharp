@@ -779,14 +779,23 @@ internal sealed partial class ExpressionBinder
                 return true;
             }
 
-            return TryBindClrConstructorFromType(
+            var bound = TryBindClrConstructorFromType(
                 clrType,
                 syntax,
                 out result,
+                out var noApplicableOverload,
                 resultTypeOverride: dataClassAggregate);
+            return bound || FinishClrConstructorBindingFailure(
+                syntax, name, noApplicableOverload, ref result);
         }
 
-        if (TryBindClrConstructorFromType(clrType, syntax, out result, openGenericDefinition, symbolicTypeArgs))
+        if (TryBindClrConstructorFromType(
+                clrType,
+                syntax,
+                out result,
+                out var clrNoApplicableOverload,
+                openGenericDefinition,
+                symbolicTypeArgs))
         {
             return true;
         }
@@ -799,7 +808,35 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
-        return false;
+        return FinishClrConstructorBindingFailure(
+            syntax, name, clrNoApplicableOverload, ref result);
+    }
+
+    private bool FinishClrConstructorBindingFailure(
+        CallExpressionSyntax syntax,
+        string typeName,
+        bool noApplicableOverload,
+        ref BoundExpression result)
+    {
+        if (syntax.TypeArgumentList == null)
+        {
+            result = null;
+            return false;
+        }
+
+        if (result != null)
+        {
+            return true;
+        }
+
+        if (!noApplicableOverload)
+        {
+            return false;
+        }
+
+        Diagnostics.ReportNoApplicableOverload(syntax.Identifier.Location, typeName);
+        result = new BoundErrorExpression(syntax);
+        return true;
     }
 
     /// <summary>
@@ -894,6 +931,11 @@ internal sealed partial class ExpressionBinder
     /// <param name="clrType">The closed CLR type to construct.</param>
     /// <param name="syntax">The call syntax carrying the arguments and location.</param>
     /// <param name="result">The bound constructor call on success.</param>
+    /// <param name="noApplicableOverload">
+    /// Whether the type and its constructors resolved but none accepted the
+    /// supplied arguments. The caller reports this only after semantic-
+    /// aggregate constructor fallback has also failed.
+    /// </param>
     /// <param name="openGenericDefinition">
     /// Issue #671: when <paramref name="clrType"/> was closed with a
     /// <see cref="object"/> placeholder for one or more G# user-defined type
@@ -919,11 +961,13 @@ internal sealed partial class ExpressionBinder
         System.Type clrType,
         CallExpressionSyntax syntax,
         out BoundExpression result,
+        out bool noApplicableOverload,
         System.Type openGenericDefinition = null,
         ImmutableArray<TypeSymbol> symbolicTypeArgs = default,
         TypeSymbol resultTypeOverride = null)
     {
         result = null;
+        noApplicableOverload = false;
 
         if (clrType.IsAbstract || clrType.IsInterface)
         {
@@ -1077,6 +1121,12 @@ internal sealed partial class ExpressionBinder
 
         if (bestCtor == null)
         {
+            if (boundArguments.Any(static argument => argument.Type == TypeSymbol.Error))
+            {
+                result = new BoundErrorExpression(syntax);
+                return false;
+            }
+
             // Issue #524: CLR value types always have an implicit zero-init
             // default "constructor" — at the IL level that's `initobj T`, not
             // a `newobj` against any `.ctor`. Reflection's
@@ -1108,6 +1158,7 @@ internal sealed partial class ExpressionBinder
                 return true;
             }
 
+            noApplicableOverload = true;
             return false;
         }
 
@@ -1470,6 +1521,12 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        return TryBindClrConstructorFromType(nestedType, syntax, out result);
+        var bound = TryBindClrConstructorFromType(
+            nestedType,
+            syntax,
+            out result,
+            out var noApplicableOverload);
+        return bound || FinishClrConstructorBindingFailure(
+            syntax, nestedType.Name, noApplicableOverload, ref result);
     }
 }
