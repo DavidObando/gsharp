@@ -1055,17 +1055,20 @@ public sealed class Conversion
 
             if (to?.ClrType is { IsInterface: true } toClrInterface)
             {
-                foreach (var baseClrInterface in fromInterface.BaseClrInterfaces)
+                foreach (var iface in fromInterface.SelfAndAllBaseInterfaces())
                 {
-                    var clr = baseClrInterface?.ClrType;
-
-                    // Issue #2135: `toClrInterface` may be a
-                    // TypeBuilderInstantiation whose IsAssignableFrom throws
-                    // NotSupportedException at emit; use the guarded by-name
-                    // helper instead of calling IsAssignableFrom directly.
-                    if (clr != null && (clr.IsSameAs(toClrInterface) || ClrTypeUtilities.IsAssignableByName(toClrInterface, clr)))
+                    foreach (var baseClrInterface in iface.BaseClrInterfaces)
                     {
-                        return Conversion.Implicit;
+                        var clr = baseClrInterface?.ClrType;
+
+                        // Issue #2135: `toClrInterface` may be a
+                        // TypeBuilderInstantiation whose IsAssignableFrom throws
+                        // NotSupportedException at emit; use the guarded by-name
+                        // helper instead of calling IsAssignableFrom directly.
+                        if (clr != null && (clr.IsSameAs(toClrInterface) || ClrTypeUtilities.IsAssignableByName(toClrInterface, clr)))
+                        {
+                            return Conversion.Implicit;
+                        }
                     }
                 }
             }
