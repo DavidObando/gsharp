@@ -2,10 +2,13 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
+using System.Threading.Channels;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Compilation;
@@ -57,31 +60,38 @@ total
     }
 
     [Fact]
-    public void ConcurrentDictionary_ForTupleIn_UsesImportedKeyValuePairDeconstructPattern()
+    public void ConcurrentDictionaryOfNestedUserGeneric_ForTupleIn_UsesImportedKeyValuePairDeconstructPattern()
     {
         var source = @"
+import System
 import System.Collections.Concurrent
+import System.Threading.Channels
 
-interface IValue {
+class JobUpdate {
     prop Number int32 {
-        get;
+        get -> 42;
     }
 }
 
-class Value : IValue {
-    prop Number int32 -> 42
-}
-
-var values = ConcurrentDictionary[string, IValue]()
-values.TryAdd(""answer"", Value())
+var subscribers = ConcurrentDictionary[Guid, Channel[JobUpdate]]()
+subscribers.TryAdd(Guid.Empty, Channel.CreateUnbounded[JobUpdate]())
 
 var total = 0
-for (key, value) in values {
-    total = total + value.Number
+for (key, ch) in subscribers {
+    total = total + ch.Reader.Count
 }
 total
 ";
-    AssertCompilesWithoutErrors(source);
+        AssertCompilesWithoutErrors(
+            source,
+            ReferenceResolver.WithReferences(new[]
+            {
+                typeof(object).Assembly.Location,
+                typeof(Console).Assembly.Location,
+                typeof(ConcurrentDictionary<,>).Assembly.Location,
+                typeof(Channel).Assembly.Location,
+                typeof(List<>).Assembly.Location,
+            }.Distinct(StringComparer.OrdinalIgnoreCase)));
     }
 
     [Fact]

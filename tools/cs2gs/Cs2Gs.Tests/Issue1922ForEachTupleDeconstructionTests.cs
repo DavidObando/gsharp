@@ -99,34 +99,36 @@ namespace Demo
     }
 
     [Fact]
-    public void ConcurrentDictionaryDeconstruction_TranslatesToCompilerSupportedForTupleIn()
+    public void ConcurrentDictionaryOfNestedUserGenericDeconstruction_TranslatesToCompilerSupportedForTupleIn()
     {
         string printed = TranslateUnit(@"
 using System;
 using System.Collections.Concurrent;
+using System.Threading.Channels;
 
 namespace Demo
 {
-    public interface IValue
+    public sealed class JobUpdate
     {
         int Number { get; }
     }
 
     public sealed class C
     {
-        public void M(ConcurrentDictionary<string, IValue> values)
+        public void M(ConcurrentDictionary<Guid, Channel<JobUpdate>> subscribers)
         {
-            foreach (var (key, value) in values)
+            foreach (var (key, ch) in subscribers)
             {
-                Console.WriteLine(value.Number);
+                Console.WriteLine(ch.Reader.Count);
             }
         }
     }
 }");
 
         Assert.Contains("import System.Collections.Concurrent", printed);
-        Assert.Contains("for (key, value) in values {", printed);
-        Assert.Contains("value.Number", printed);
+        Assert.Contains("import System.Threading.Channels", printed);
+        Assert.Contains("for (key, ch) in subscribers {", printed);
+        Assert.Contains("ch.Reader.Count", printed);
         Assert.DoesNotContain("import System.Collections.Generic", printed);
     }
 

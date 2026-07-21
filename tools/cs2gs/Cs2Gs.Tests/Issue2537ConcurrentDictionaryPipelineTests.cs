@@ -16,7 +16,7 @@ namespace Cs2Gs.Tests;
 public sealed class Issue2537ConcurrentDictionaryPipelineTests
 {
     [Fact]
-    public async Task Pipeline_ViaSdk_ConcurrentDictionaryOfInterface_DeconstructsAndRuns()
+    public async Task Pipeline_ViaSdk_ConcurrentDictionaryOfNestedUserGeneric_DeconstructsAndRuns()
     {
         string compiler = FindSiblingTool("Compiler", "gsc.dll");
         string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
@@ -46,7 +46,7 @@ public sealed class Issue2537ConcurrentDictionaryPipelineTests
 
         Assert.True(
             app.Succeeded,
-            "Expected ConcurrentDictionary deconstruction to compile via gsc. Stages: " +
+            "Expected ConcurrentDictionary<Guid, Channel<JobUpdate>> deconstruction to compile via gsc. Stages: " +
                 string.Join("; ", app.Stages.Select(stage => stage.Stage + "=" + stage.Status)));
 
         string runDirectory = Path.Combine(
@@ -63,7 +63,7 @@ public sealed class Issue2537ConcurrentDictionaryPipelineTests
         (int exitCode, string output) = RunDotnet($"\"{assembly}\"");
 
         Assert.Equal(0, exitCode);
-        Assert.Equal("42" + Environment.NewLine, output);
+        Assert.Equal("0" + Environment.NewLine, output);
     }
 
     private static string WriteFixture(string sourceRoot)
@@ -82,26 +82,40 @@ public sealed class Issue2537ConcurrentDictionaryPipelineTests
               </PropertyGroup>
             </Project>
             """);
-        File.WriteAllText(Path.Combine(projectDir, "Program.cs"), """
+        File.WriteAllText(Path.Combine(projectDir, "JobUpdate.cs"), """
+            namespace Oahu.Cli.App.Models;
+
+            public sealed record JobUpdate
+            {
+                public required string JobId { get; init; }
+            }
+            """);
+        File.WriteAllText(Path.Combine(projectDir, "JobScheduler.cs"), """
             using System;
             using System.Collections.Concurrent;
+            using System.Threading.Channels;
+            using Oahu.Cli.App.Models;
 
-            var values = new ConcurrentDictionary<string, IValue>();
-            values.TryAdd("answer", new Value());
-            foreach (var (key, value) in values)
-            {
-                Console.WriteLine(value.Number);
-            }
+            namespace Oahu.Cli.App.Jobs;
 
-            public interface IValue
+            public sealed class JobScheduler
             {
-                int Number { get; }
-            }
+                private readonly ConcurrentDictionary<Guid, Channel<JobUpdate>> subscribers = new();
 
-            public sealed class Value : IValue
-            {
-                public int Number => 42;
+                public void Run()
+                {
+                    subscribers.TryAdd(Guid.Empty, Channel.CreateUnbounded<JobUpdate>());
+                    foreach (var (key, ch) in subscribers)
+                    {
+                        Console.WriteLine(ch.Reader.Count);
+                    }
+                }
             }
+            """);
+        File.WriteAllText(Path.Combine(projectDir, "Program.cs"), """
+            using Oahu.Cli.App.Jobs;
+
+            new JobScheduler().Run();
             """);
         return projectPath;
     }
