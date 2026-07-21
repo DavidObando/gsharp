@@ -2509,9 +2509,9 @@ internal sealed partial class ExpressionBinder
         {
             var closed = openClrType.MakeGenericType(clrArgs);
 
-            // Issue #1330: when any type argument is symbolic (an in-scope
-            // generic type parameter, or a user type with no CLR type yet), the
-            // closed CLR shape above is type-erased to `object`. Carry the
+            // Issues #1330/#2670: when any type argument is symbolic (including
+            // a nested imported generic over a same-compilation user type), the
+            // closed CLR shape above contains an object-erased slot. Carry the
             // symbolic constructed view alongside it so static-member access and
             // static calls recover symbolic member/return types
             // (`Comparer[TResult].Default : Comparer[TResult]`) and the emitter
@@ -2519,7 +2519,7 @@ internal sealed partial class ExpressionBinder
             // `Comparer<!TResult>` TypeSpec instead of the erased
             // `Comparer<object>` — yielding verifiable IL exactly as the
             // concrete-argument receiver does.
-            var symbolicReceiver = typeArgs.Any(static a => TypeSymbol.ContainsTypeParameter(a) || a.ClrType == null)
+            var symbolicReceiver = typeArgs.Any(TypeSymbol.RequiresSymbolicProjection)
                 ? ImportedTypeSymbol.GetConstructed(closed, openClrType, typeArgs)
                 : null;
             constructedImported = new ImportedClassSymbol(closed, receiverSyntax, symbolicReceiver, scope.References);
