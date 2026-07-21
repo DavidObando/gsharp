@@ -527,7 +527,15 @@ public static class SpillSequenceSpiller
                         clrEventSub,
                         clrEventSub.Receiver,
                         clrEventSub.Handler,
-                        (recv, handler) => new BoundClrEventSubscriptionExpression(null, recv, clrEventSub.Event, handler, clrEventSub.IsAdd));
+                        (recv, handler) => new BoundClrEventSubscriptionExpression(
+                            null,
+                            recv,
+                            clrEventSub.Event,
+                            handler,
+                            clrEventSub.IsAdd,
+                            clrEventSub.ConstrainedReceiverTypeParameter,
+                            clrEventSub.ConstrainedInterfaceType,
+                            clrEventSub.EventContainingType));
                 case BoundEventSubscriptionExpression eventSub:
                     return SpillTwoOperand(
                         eventSub,

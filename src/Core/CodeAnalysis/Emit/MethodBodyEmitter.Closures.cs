@@ -545,7 +545,9 @@ internal sealed partial class MethodBodyEmitter
         else
         {
             this.il.OpCode(isStatic || receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
-            this.il.Token(this.outer.memberRefs.GetMethodReference(accessor));
+            this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(
+                accessor,
+                subscription.EventContainingType));
         }
     }
 

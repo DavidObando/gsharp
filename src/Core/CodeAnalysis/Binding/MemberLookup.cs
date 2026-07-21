@@ -271,6 +271,32 @@ internal sealed class MemberLookup
         return null;
     }
 
+    /// <summary>Finds a public instance event on a CLR type or any implemented interface.</summary>
+    /// <param name="clrType">The CLR type to probe.</param>
+    /// <param name="name">The event name to match.</param>
+    /// <returns>The matching <see cref="EventInfo"/>, or <c>null</c>.</returns>
+    public static EventInfo SafeGetEventIncludingSelfAndInterfaces(Type clrType, string name)
+    {
+        if (clrType == null)
+        {
+            return null;
+        }
+
+        foreach (var type in EnumerateSelfAndInterfaces(clrType))
+        {
+            var eventInfo = ClrTypeUtilities.SafeGetEvent(
+                type,
+                name,
+                BindingFlags.Public | BindingFlags.Instance);
+            if (eventInfo != null)
+            {
+                return eventInfo;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// Issue #1181: collects the transitive closure of imported/BCL base
     /// interfaces declared on <paramref name="interfaceSymbol"/>. Delegates
