@@ -769,9 +769,9 @@ public sealed class Lowerer : BoundTreeRewriter
         var moreDecl = new BoundVariableDeclaration(null, moreSymbol, moveNextAwait);
 
         var currentAccess = new BoundClrPropertyAccessExpression(null, enumeratorExpr, currentMember, currentType);
-        var assignValue = new BoundExpressionStatement(
-            null,
-            new BoundAssignmentExpression(null, valueVariable, currentAccess));
+
+        // The iteration binding is a fresh lexical local on every pass.
+        var assignValue = new BoundVariableDeclaration(null, valueVariable, currentAccess);
 
         var tryStatements = ImmutableArray.CreateBuilder<BoundStatement>();
         tryStatements.Add(new BoundLabelStatement(null, startLabel));

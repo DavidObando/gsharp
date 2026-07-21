@@ -1992,6 +1992,17 @@ internal sealed class LambdaBinder
             return base.RewriteForRangeStatement(node);
         }
 
+        /// <inheritdoc/>
+        protected override BoundStatement RewriteAwaitForRangeStatement(BoundAwaitForRangeStatement node)
+        {
+            if (node.ValueVariable != null)
+            {
+                this.declared.Add(node.ValueVariable);
+            }
+
+            return base.RewriteAwaitForRangeStatement(node);
+        }
+
         protected override BoundStatement RewriteForEllipsisStatement(BoundForEllipsisStatement node)
         {
             if (node.Variable != null)
