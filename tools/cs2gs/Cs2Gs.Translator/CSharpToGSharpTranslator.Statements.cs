@@ -1781,11 +1781,23 @@ public sealed partial class CSharpToGSharpTranslator
                             IPropertySymbol property => property.Type,
                             _ => this.context.GetTypeInfo(assignment.Left).Type,
                         };
+                        ISymbol promotionTarget = assignmentTarget;
+                        if (assignmentTarget is ILocalSymbol inferredAssignmentLocal
+                            && inferredAssignmentLocal.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                                is VariableDeclaratorSyntax { Initializer.Value: { } initializer } declarator
+                            && declarator.Ancestors().OfType<VariableDeclarationSyntax>()
+                                .FirstOrDefault()?.Type.IsVar == true)
+                        {
+                            assignmentTargetType = this.context.GetTypeInfo(initializer).Type;
+                            promotionTarget = null;
+                        }
+
                         assignRhs = this.ForgiveNullableReferenceValue(
                             assignment.Right,
                             assignRhs,
                             assignmentTargetType,
-                            assignmentTarget);
+                            promotionTarget,
+                            includePromotedValue: true);
                     }
 
                     return new AssignmentStatement(

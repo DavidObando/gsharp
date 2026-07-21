@@ -729,6 +729,11 @@ public sealed partial class CSharpToGSharpTranslator
                     initializer = this.CoerceConstantToUnsigned(
                         declarator.Initializer.Value,
                         this.TranslateNullSeamExpression(declarator.Initializer.Value, symbol?.ContainingType));
+                    initializer = this.ForgiveNullableReferenceValue(
+                        declarator.Initializer.Value,
+                        initializer,
+                        symbol?.Type,
+                        symbol);
 
                     // Issue #1072: a non-nullable reference field whose initializer
                     // is nullable (e.g. `?.`-access) is rendered `T?`.
@@ -1645,6 +1650,11 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression initializer = this.CoerceConstantToUnsigned(
                 node.Initializer.Value,
                 this.TranslateNullSeamExpression(node.Initializer.Value, symbol?.ContainingType));
+            initializer = this.ForgiveNullableReferenceValue(
+                node.Initializer.Value,
+                initializer,
+                symbol?.Type,
+                symbol);
 
             // Issue #1072: a non-nullable reference static auto-property whose
             // initializer is nullable (e.g. `GetAttribute<...>()?.Member`) is

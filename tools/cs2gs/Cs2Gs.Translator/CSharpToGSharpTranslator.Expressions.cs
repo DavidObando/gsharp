@@ -779,14 +779,18 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax value,
             GExpression translated,
             ITypeSymbol targetType,
-            ISymbol targetSymbol)
+            ISymbol targetSymbol,
+            bool includePromotedValue = false)
         {
             if (translated is NonNullAssertionExpression
                 || value is PostfixUnaryExpressionSyntax
                     { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
                 || this.IsWithinExpressionTreeLambda(value)
                 || !this.TargetWillRemainNonNullableReference(targetType, targetSymbol)
-                || !this.NullableReferenceValueMayBeNull(value))
+                || (!this.NullableReferenceValueMayBeNull(value)
+                    && !(includePromotedValue
+                        && this.IsObliviousCompilation()
+                        && this.IsNullablePromotedValue(value))))
             {
                 return translated;
             }
@@ -826,9 +830,27 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
-            return typeInfo.Nullability.FlowState == NullableFlowState.MaybeNull
+            bool nullableByShape = value switch
+            {
+                ParenthesizedExpressionSyntax parenthesized =>
+                    this.NullableReferenceValueMayBeNull(parenthesized.Expression),
+                CastExpressionSyntax cast =>
+                    this.NullableReferenceValueMayBeNull(cast.Expression),
+                ConditionalExpressionSyntax conditional =>
+                    this.NullableReferenceValueMayBeNull(conditional.WhenTrue)
+                        || this.NullableReferenceValueMayBeNull(conditional.WhenFalse),
+                SwitchExpressionSyntax switchExpression => switchExpression.Arms.Any(arm =>
+                    this.NullableReferenceValueMayBeNull(arm.Expression)),
+                BinaryExpressionSyntax coalesce
+                    when coalesce.IsKind(SyntaxKind.CoalesceExpression) =>
+                        this.NullableReferenceValueMayBeNull(coalesce.Right),
+                _ => false,
+            };
+
+            return nullableByShape
+                || (typeInfo.Nullability.FlowState == NullableFlowState.MaybeNull
                 && (type.NullableAnnotation == NullableAnnotation.Annotated
-                    || typeInfo.Nullability.Annotation == NullableAnnotation.Annotated);
+                    || typeInfo.Nullability.Annotation == NullableAnnotation.Annotated));
         }
 
         private (ITypeSymbol Type, ISymbol Symbol) FindContextualValueTarget(ExpressionSyntax value)

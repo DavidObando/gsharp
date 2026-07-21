@@ -281,7 +281,7 @@ public sealed partial class CSharpToGSharpTranslator
             // captured or its mutation of `b` is silently dropped (issue #1723). The
             // walk is parenthesis-transparent (`a = (b = c)`) since a link's RHS may
             // be a parenthesized nested assignment.
-            var lefts = new List<(GExpression Target, string Op)>();
+            var lefts = new List<(GExpression Target, string Op, ExpressionSyntax Syntax)>();
             ExpressionSyntax current = assignment;
             TupleExpressionSyntax tupleLink = null;
             ExpressionSyntax tupleLinkRight = null;
@@ -310,7 +310,7 @@ public sealed partial class CSharpToGSharpTranslator
                     break;
                 }
 
-                lefts.Add((this.TranslateExpression(link.Left), link.OperatorToken.Text));
+                lefts.Add((this.TranslateExpression(link.Left), link.OperatorToken.Text, link.Left));
                 current = link.Right;
             }
 
@@ -370,6 +370,36 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 bool hasOuterLink = i > 0;
                 GExpression assignedValue = value;
+                if (lefts[i].Op == "=")
+                {
+                    ISymbol target = this.context.GetSymbolInfo(lefts[i].Syntax).Symbol;
+                    ITypeSymbol targetType = target switch
+                    {
+                        ILocalSymbol local => local.Type,
+                        IParameterSymbol parameter => parameter.Type,
+                        IFieldSymbol field => field.Type,
+                        IPropertySymbol property => property.Type,
+                        _ => this.context.GetTypeInfo(lefts[i].Syntax).Type,
+                    };
+                    ISymbol promotionTarget = target;
+                    if (target is ILocalSymbol inferredLocal
+                        && inferredLocal.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                            is VariableDeclaratorSyntax { Initializer.Value: { } initializer } declarator
+                        && declarator.Ancestors().OfType<VariableDeclarationSyntax>()
+                            .FirstOrDefault()?.Type.IsVar == true)
+                    {
+                        targetType = this.context.GetTypeInfo(initializer).Type;
+                        promotionTarget = null;
+                    }
+
+                    assignedValue = this.ForgiveNullableReferenceValue(
+                        current,
+                        assignedValue,
+                        targetType,
+                        promotionTarget,
+                        includePromotedValue: true);
+                }
+
                 if (hasOuterLink && lefts[i].Op == "=" && !valueIsShared)
                 {
                     // About to be assigned to more than one target — spill once
