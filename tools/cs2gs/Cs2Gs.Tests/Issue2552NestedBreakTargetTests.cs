@@ -88,6 +88,52 @@ namespace Demo
     }
 }";
 
+    private const string IteratorSource = @"
+using System;
+using System.Collections.Generic;
+
+namespace Demo
+{
+    public sealed class C
+    {
+        public static IEnumerable<int> Values(int stop)
+        {
+            yield return 1;
+            while (true)
+            {
+                switch (stop)
+                {
+                    case 0:
+                        yield break;
+                    default:
+                        break;
+                }
+
+                yield return 2;
+                break;
+            }
+
+            if (stop == 2)
+            {
+                yield break;
+            }
+
+            yield return 3;
+        }
+
+        public static string Trace(int stop)
+        {
+            string trace = """";
+            foreach (int value in Values(stop))
+            {
+                trace += value.ToString();
+            }
+
+            return trace;
+        }
+    }
+}";
+
     [Fact]
     public void Translator_PreservesLoopBreaksAndLowersSwitchBreaks()
     {
@@ -115,6 +161,36 @@ namespace Demo
                 "Console.WriteLine(C.LoopInsideSwitch(0))");
 
         Assert.Equal("SLSxL" + Environment.NewLine + "LS", output.Trim());
+    }
+
+    [Fact]
+    public void Translator_LowersYieldBreakToNearestIteratorExit()
+    {
+        string printed = TranslateAndValidate(IteratorSource);
+
+        Assert.Equal(2, CountOccurrences(printed, "goto __iteratorExit"));
+        Assert.Equal(1, CountOccurrences(printed, "break"));
+    }
+
+    [Fact]
+    public void Compiler_AcceptsIteratorExitInsideAndOutsideNestedLoop()
+    {
+        string output = Compile(TranslateAndValidate(IteratorSource), out _);
+
+        Assert.DoesNotContain("GS0120", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Runtime_YieldBreakExitsIteratorAcrossNestedLoopAndSwitch()
+    {
+        string printed = TranslateAndValidate(IteratorSource);
+        string output = CompileAndRun(
+            printed,
+            "Console.WriteLine(C.Trace(0))" + Environment.NewLine +
+                "Console.WriteLine(C.Trace(1))" + Environment.NewLine +
+                "Console.WriteLine(C.Trace(2))");
+
+        Assert.Equal("1" + Environment.NewLine + "123" + Environment.NewLine + "12", output.Trim());
     }
 
     private static int CountOccurrences(string text, string value)
