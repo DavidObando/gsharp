@@ -623,20 +623,18 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
-            // Issue #2113 follow-up: a value produced by an EXTERNAL (metadata)
-            // member compiled WITHOUT a nullable context is oblivious — Roslyn
+            // A value produced by a member imported from a project or metadata
+            // assembly compiled WITHOUT a nullable context is oblivious — Roslyn
             // reports its reference-type return/type as `NullableAnnotation.None`
-            // — and gsc maps every such oblivious external reference type to `T?`.
+            // — and gsc maps every such imported reference type to `T?`.
             // A method-call/property/field receiver like `searcher.Get()` (from an
             // unannotated package, e.g. System.Management) is therefore rejected on
             // `recv.Member` / `recv[i]` / `for … in recv` (GS0158/GS0116) even
             // though C# accepts it (it would `NullReferenceException` on null just
             // the same). Assert `recv!!` to compile and preserve that throw-on-null
-            // behavior. Gated to oblivious so nullable-enabled projects — whose
-            // external refs carry real annotations — are untouched.
-            if (this.IsObliviousCompilation()
-                && (IsObliviousExternalNullableMember(symbol)
-                    || this.LocalInitializedFromObliviousExternalNullable(symbol)))
+            // behavior.
+            if (this.IsImportedObliviousNullableMember(symbol)
+                || this.LocalInitializedFromImportedObliviousNullable(symbol))
             {
                 return true;
             }
@@ -665,19 +663,14 @@ public sealed partial class CSharpToGSharpTranslator
         private bool IsObliviousCompilation() =>
             this.context.Compilation.Options.NullableContextOptions == NullableContextOptions.Disable;
 
-        // Issue #2113 follow-up: true when <paramref name="symbol"/> is an EXTERNAL
-        // (metadata) method/property/field whose reference-type return/type is
-        // oblivious (<c>NullableAnnotation.None</c>, i.e. the declaring assembly was
-        // compiled without a nullable context, e.g. System.Management). gsc maps
-        // every such oblivious external reference type to <c>T?</c>, so a value
-        // read from one is nullable from gsc's point of view. Restricted to
-        // external symbols because a SOURCE symbol in an oblivious compilation is
-        // also <c>None</c> but its nullability is decided by the whole-program
-        // taint analysis instead, not treated as unconditionally nullable.
-        private static bool IsObliviousExternalNullableMember(ISymbol symbol)
+        // True when <paramref name="symbol"/> is a method/property/field imported
+        // from another project or metadata assembly and its concrete reference
+        // return/type is oblivious. Same-compilation source symbols stay on the
+        // whole-program taint path; imported source and metadata contracts are
+        // already fixed and gsc maps their oblivious references to <c>T?</c>.
+        private bool IsImportedObliviousNullableMember(ISymbol symbol)
         {
-            if (symbol is not (IMethodSymbol or IPropertySymbol or IFieldSymbol)
-                || !symbol.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+            if (symbol is not (IMethodSymbol or IPropertySymbol or IFieldSymbol))
             {
                 return false;
             }
@@ -700,19 +693,22 @@ public sealed partial class CSharpToGSharpTranslator
                 _ => null,
             };
 
-            return type is { IsReferenceType: true }
+            return !SymbolEqualityComparer.Default.Equals(
+                    original.ContainingAssembly,
+                    this.context.Compilation.Assembly)
+                && type is { IsReferenceType: true }
                 and not ITypeParameterSymbol
                 && type.NullableAnnotation == NullableAnnotation.None;
         }
 
         // Issue #2113 follow-up: true when <paramref name="symbol"/> is a `let`
-        // local whose type is inferred from an initializer that reads an oblivious
-        // external nullable member (e.g. `let coll = searcher.Get()`). gsc infers
+        // local whose type is inferred from an initializer that reads an imported
+        // oblivious member (e.g. `let coll = searcher.Get()`). gsc infers
         // such a local as `T?`, so a `coll.Member` / `for … in coll` use needs a
         // `!!` — but promoting the local's DECLARATION to `T?` cascades
         // nullable-conversion errors at its other (non-null) uses, so the
         // assertion is applied only here at the receiver/foreach-source use site.
-        private bool LocalInitializedFromObliviousExternalNullable(ISymbol symbol)
+        private bool LocalInitializedFromImportedObliviousNullable(ISymbol symbol)
         {
             if (symbol is not ILocalSymbol local)
             {
@@ -722,7 +718,7 @@ public sealed partial class CSharpToGSharpTranslator
             foreach (SyntaxReference reference in local.DeclaringSyntaxReferences)
             {
                 if (reference.GetSyntax() is VariableDeclaratorSyntax { Initializer.Value: { } initializer }
-                    && IsObliviousExternalNullableMember(
+                    && this.IsImportedObliviousNullableMember(
                         this.context.GetSymbolInfo(initializer).Symbol))
                 {
                     return true;
@@ -807,7 +803,8 @@ public sealed partial class CSharpToGSharpTranslator
         {
             if (value is PostfixUnaryExpressionSyntax
                     { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
-                || this.IsWithinExpressionTreeLambda(value))
+                || this.IsWithinExpressionTreeLambda(value)
+                || this.IsCallableValueExpression(value))
             {
                 return false;
             }
@@ -823,7 +820,8 @@ public sealed partial class CSharpToGSharpTranslator
             // gsc as T? regardless of the consumer's nullable context. Roslyn
             // reports that metadata as Annotation.None, so its flow state cannot
             // drive the target-aware receiver/value bridges below.
-            if (IsObliviousExternalNullableMember(this.context.GetSymbolInfo(value).Symbol))
+            ISymbol valueSymbol = this.context.GetSymbolInfo(value).Symbol;
+            if (this.IsImportedObliviousNullableMember(valueSymbol))
             {
                 return true;
             }
@@ -1114,7 +1112,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             // Issue #2202: a call (or property/field read) whose result comes from
-            // an EXTERNAL (metadata) member compiled without a nullable context is
+            // an imported member compiled without a nullable context is
             // oblivious — Roslyn reports its reference-type return/type as
             // `NullableAnnotation.None` — and gsc maps every such oblivious
             // external reference type to `T?` (see ClrNullability.cs). When such a
@@ -1123,10 +1121,9 @@ public sealed partial class CSharpToGSharpTranslator
             // nullability (oblivious); assert `!!` to bridge the gap. This mirrors
             // the RECEIVER-position handling in ReceiverIsNullableReferenceFieldOrProperty
             // (issue #2113) but for VALUE positions (return statements, expression
-            // bodies). Restricted to oblivious compilations so nullable-enabled
-            // projects — whose external refs carry real annotations — are untouched.
-            if (this.IsObliviousCompilation()
-                && IsObliviousExternalNullableMember(this.context.GetSymbolInfo(recv).Symbol))
+            // bodies). The declaring contract, not the consumer's nullable mode,
+            // determines how gsc imports the value.
+            if (this.IsImportedObliviousNullableMember(this.context.GetSymbolInfo(recv).Symbol))
             {
                 return true;
             }
@@ -1798,7 +1795,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return this.IsNullablePromotedValue(use)
-                || IsObliviousExternalNullableMember(this.context.GetSymbolInfo(use).Symbol);
+                || this.IsImportedObliviousNullableMember(this.context.GetSymbolInfo(use).Symbol);
         }
 
         private AnonymousFunctionExpressionSyntax FindResultLambda(ExpressionSyntax use)

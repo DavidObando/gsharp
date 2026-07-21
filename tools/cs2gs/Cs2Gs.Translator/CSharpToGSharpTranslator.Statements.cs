@@ -589,7 +589,7 @@ public sealed partial class CSharpToGSharpTranslator
         // is consumed. Neither of those fixes reaches a subsequent bare assignment
         // STATEMENT: `TranslateExpressionStatement`'s assignment case translates
         // the RHS via plain `TranslateExpression` with no external-oblivious
-        // forgiveness of its own. This reuses the SAME `IsObliviousExternalNullableMember`
+        // forgiveness of its own. This reuses the SAME `IsImportedObliviousNullableMember`
         // detection those two fixes already use, applied at the assignment RHS use
         // site instead. Gated to a target whose OWN type is a non-annotated,
         // non-promoted reference type — i.e., one that genuinely expects
@@ -605,7 +605,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (!this.IsObliviousCompilation()
                 || !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
                 || translatedRhs is NonNullAssertionExpression
-                || !IsObliviousExternalNullableMember(this.context.GetSymbolInfo(assignment.Right).Symbol))
+                || !this.IsImportedObliviousNullableMember(this.context.GetSymbolInfo(assignment.Right).Symbol))
             {
                 return translatedRhs;
             }

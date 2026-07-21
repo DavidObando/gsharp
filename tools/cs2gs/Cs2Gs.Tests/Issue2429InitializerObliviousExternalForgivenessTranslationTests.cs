@@ -542,13 +542,12 @@ namespace Demo
     }
 
     /// <summary>
-    /// Negative test: a nullable-ENABLED compilation constructing the same
-    /// object initializer from the same oblivious external member — the fix
-    /// is gated to oblivious compilations only (its own nullable flow analysis
-    /// is authoritative), so no <c>!!</c> is inserted.
+    /// A nullable-enabled consumer still needs the bridge because gsc maps the
+    /// imported producer's oblivious contract to <c>T?</c> independently of the
+    /// consumer's nullable context.
     /// </summary>
     [Fact]
-    public void ObjectInitializerLiteral_NullableEnabledCompilation_IsNotForgiven()
+    public void ObjectInitializerLiteral_NullableEnabledConsumer_IsForgiven()
     {
         string printed = TranslateEnabledWithObliviousLibrary(@"
 namespace Demo
@@ -564,17 +563,15 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Target{Name: ext.Combine(\"hello\")}", Compact(printed));
-        Assert.DoesNotContain("ext.Combine(\"hello\")!!", printed);
+        Assert.Contains("Target{Name: ext.Combine(\"hello\")!!}", Compact(printed));
     }
 
     /// <summary>
-    /// Negative/scope control: same nullable-enabled gate, applied to a
-    /// collection-initializer element instead of an object-initializer
-    /// member.
+    /// The same producer-driven rule applies to a collection-initializer
+    /// element.
     /// </summary>
     [Fact]
-    public void CollectionInitializer_NullableEnabledCompilation_IsNotForgiven()
+    public void CollectionInitializer_NullableEnabledConsumer_IsForgiven()
     {
         string printed = TranslateEnabledWithObliviousLibrary(@"
 using System.Collections.Generic;
@@ -587,8 +584,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("List[string]{ ext.Combine(\"hello\") }", Compact(printed));
-        Assert.DoesNotContain("ext.Combine(\"hello\")!!", printed);
+        Assert.Contains("List[string]{ ext.Combine(\"hello\")!! }", Compact(printed));
     }
 
     /// <summary>

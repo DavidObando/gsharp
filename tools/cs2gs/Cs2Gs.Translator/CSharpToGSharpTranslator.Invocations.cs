@@ -1473,7 +1473,7 @@ public sealed partial class CSharpToGSharpTranslator
         //    elsewhere), and
         //  - a value READ from a GENUINELY EXTERNAL oblivious (metadata, no
         //    nullable context, no source ANYWHERE we can analyze) member the
-        //    fixpoint can't see at all (`IsObliviousExternalNullableMember`,
+        //    fixpoint can't see at all (`IsImportedObliviousNullableMember`,
         //    issue #2113 follow-up, e.g. `Asin: author.Asin` where `author` is
         //    an external oblivious type).
         // Both are forgiven identically here: the TARGET position (member/
@@ -1487,7 +1487,7 @@ public sealed partial class CSharpToGSharpTranslator
         //
         // Deliberately NOT narrowed to exclude PREBUILT SIBLING projects (an
         // earlier version of this bridge tried exactly that, gating
-        // `IsObliviousExternalNullableMember` on the value symbol's assembly
+        // `IsImportedObliviousNullableMember` on the value symbol's assembly
         // not matching one of `this.context.SiblingCompilations`): empirically,
         // against the real Oahu.Core corpus, that guard silently un-fixed the
         // exact two diagnostics this issue targets
@@ -1499,7 +1499,7 @@ public sealed partial class CSharpToGSharpTranslator
         // "oblivious external reference-returning member is `T?`" rule. This
         // mirrors the identical, already-documented precedent on the
         // RECEIVER-position rule (`ReceiverNeedsNullForgiveness`'s own
-        // `IsObliviousExternalNullableMember` check): a prior attempt to
+        // `IsImportedObliviousNullableMember` check): a prior attempt to
         // exclude sibling-project members from THAT blind rule was proven,
         // against the same real corpus, to regress 47 -> 90 compile errors.
         // Accepting the same harmless over-forgiveness here (a sibling member
@@ -1513,8 +1513,7 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol targetType,
             ISymbol targetSymbolForPromotionCheck)
         {
-            if (!this.IsObliviousCompilation()
-                || translatedValue is NonNullAssertionExpression
+            if (translatedValue is NonNullAssertionExpression
                 || !this.TargetWillRemainNonNullableReference(
                     targetType,
                     targetSymbolForPromotionCheck))
@@ -1522,8 +1521,9 @@ public sealed partial class CSharpToGSharpTranslator
                 return translatedValue;
             }
 
-            bool needsForgiveness = this.IsNullablePromotedValue(valueExpression)
-                || IsObliviousExternalNullableMember(this.context.GetSymbolInfo(valueExpression).Symbol);
+            bool needsForgiveness =
+                (this.IsObliviousCompilation() && this.IsNullablePromotedValue(valueExpression))
+                || this.IsImportedObliviousNullableMember(this.context.GetSymbolInfo(valueExpression).Symbol);
 
             return needsForgiveness ? new NonNullAssertionExpression(translatedValue) : translatedValue;
         }

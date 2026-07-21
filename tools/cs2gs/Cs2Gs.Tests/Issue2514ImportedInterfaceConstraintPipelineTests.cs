@@ -65,7 +65,7 @@ public sealed class Issue2514ImportedInterfaceConstraintPipelineTests
 
         Assert.Contains("func Read[T IPerson](value T) string -> value.Name", emitted, StringComparison.Ordinal);
         Assert.Contains("value.Name = name", emitted, StringComparison.Ordinal);
-        Assert.Contains("value.Books.Add(book)", emitted, StringComparison.Ordinal);
+        Assert.Contains("value.Books!!.Add(book)", emitted, StringComparison.Ordinal);
     }
 
     private static (string ContractsProject, string ConsumerProject) WriteFixture(string sourceRoot)
