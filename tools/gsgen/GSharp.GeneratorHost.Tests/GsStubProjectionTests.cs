@@ -128,6 +128,21 @@ class Seqs {
     }
 
     [Fact]
+    public void AsyncMethods_RenderObservableTaskReturnTypes()
+    {
+        var stub = Project(@"
+class Commands {
+    async func Run() {}
+    async func GetCount() int32 { return 1 }
+}
+");
+
+        Assert.Contains("global::System.Threading.Tasks.Task Run()", stub);
+        Assert.Contains("global::System.Threading.Tasks.Task<int> GetCount()", stub);
+        Assert.DoesNotContain("void Run()", stub);
+    }
+
+    [Fact]
     public void NonPartialClass_RendersWithoutPartial()
     {
         var stub = Project(@"
