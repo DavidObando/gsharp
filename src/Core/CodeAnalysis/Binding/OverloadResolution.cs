@@ -509,18 +509,6 @@ internal static class OverloadResolution
             return ImplicitConversionKind.UserDefinedImplicit;
         }
 
-        // Issue #368: a `string`-typed argument (which is how an interpolated
-        // string statically types) is applicable to a parameter whose type is
-        // attributed `[InterpolatedStringHandler]`. The binder only ever
-        // rewrites an actual BoundInterpolatedStringExpression argument into the
-        // handler pattern, so this conversion is harmless for plain strings in
-        // practice and is ranked lowest (so a `string` overload always wins).
-        if (string.Equals(source.FullName, "System.String", StringComparison.Ordinal)
-            && InterpolatedStringHandlerInfo.IsHandlerType(target))
-        {
-            return ImplicitConversionKind.InterpolatedStringHandler;
-        }
-
         // Issue #889: a value-returning func/arrow literal (whose natural CLR
         // type is a Func<...>) is applicable to a void-returning delegate
         // parameter (System.Action / Action<...> / a named void delegate) by
@@ -2533,6 +2521,21 @@ internal static class OverloadResolution
                 var conv = ClassifyImplicit(paramTypes[i], argTypes[i], supplementaryInterfaceCheck);
                 if (conv == ImplicitConversionKind.None)
                 {
+                    // Issue #2640: handler conversion is contextual: only an
+                    // actual interpolated-string expression can target an
+                    // imported [InterpolatedStringHandler] parameter. Keeping
+                    // this beside the FormattableString fallback lets every CLR
+                    // Resolve caller share the rule, while a plain string no
+                    // longer reaches handler lowering and fails later as a
+                    // misleading by-ref argument error.
+                    if (interpolatedStringArgs != null
+                        && i < interpolatedStringArgs.Count
+                        && interpolatedStringArgs[i]
+                        && InterpolatedStringHandlerInfo.IsHandlerType(paramTypes[i]))
+                    {
+                        conv = ImplicitConversionKind.InterpolatedStringHandler;
+                    }
+
                     // ADR-0055 Tier 4 (#369): an interpolated-string argument
                     // (natural type `string`) additionally converts to an
                     // `IFormattable`/`FormattableString` parameter. This is the
@@ -2540,7 +2543,7 @@ internal static class OverloadResolution
                     // directly convert yet the candidate still applies; the
                     // binder re-lowers the interpolation against the chosen
                     // parameter once this candidate wins.
-                    if (interpolatedStringArgs != null
+                    else if (interpolatedStringArgs != null
                         && i < interpolatedStringArgs.Count
                         && interpolatedStringArgs[i]
                         && IsFormattableStringTarget(paramTypes[i]))
