@@ -15,6 +15,53 @@ namespace Cs2Gs.Tests;
 public sealed class Issue2579NullableReferenceFidelityPipelineTests
 {
     [Fact]
+    public async Task Pipeline_ViaSdk_ObliviousProjectReferenceMembers_AreForgivenAtStrictReferenceBoundaries()
+    {
+        string compiler = FindSiblingTool("Compiler", "gsc.dll");
+        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
+        if (compiler is null
+            || repoRoot is null
+            || GsharpTestProjectRunner.ResolveLocalSdkPackage(repoRoot) is null)
+        {
+            return;
+        }
+
+        string sourceRoot = NewDirectory("cycle4-projects");
+        (string producerProject, string consumerProject) = WriteCycle4Fixture(sourceRoot);
+        RunDotnetBuild(producerProject);
+        string outputRoot = NewDirectory("cycle4-pipeline-tests");
+        var options = new PipelineOptions
+        {
+            GscPath = compiler,
+            OutputRoot = outputRoot,
+            SourceRoot = sourceRoot,
+        };
+
+        var pipeline = new MigrationPipeline(
+            options,
+            new IMigrationStage[] { new TranslateStage(), new CompileStage() });
+        RunResult result = await pipeline.RunAsync(
+            new[] { new CorpusApp("test/Issue2579Cycle4", consumerProject, TargetKind.Library) });
+        AppResult app = Assert.Single(result.Apps);
+        string emitted = ReadAppOutput(outputRoot, result.RunId, app.AppId);
+
+        Assert.Contains("model.Child!!.Name", emitted, StringComparison.Ordinal);
+        Assert.Contains("model.GetChild()!!.Name", emitted, StringComparison.Ordinal);
+        Assert.Contains("model.Name!!.Echo()", emitted, StringComparison.Ordinal);
+        Assert.Contains("let local = model.Name!!", emitted, StringComparison.Ordinal);
+        Assert.Contains("Repro.Required = model.Name!!", emitted, StringComparison.Ordinal);
+        Assert.Contains("Repro.Consume(model.Name!!)", emitted, StringComparison.Ordinal);
+        Assert.Contains("Holder(model.Name!!)", emitted, StringComparison.Ordinal);
+        Assert.Contains("model.Children!![0]", emitted, StringComparison.Ordinal);
+        Assert.Contains("for child in model.Children!!", emitted, StringComparison.Ordinal);
+        Assert.True(
+            app.Succeeded,
+            "Expected nullable-oblivious project-reference members to compile at strict G# " +
+                "reference boundaries. Stages: " +
+                string.Join("; ", app.Stages.Select(stage => stage.Stage + "=" + stage.Status)));
+    }
+
+    [Fact]
     public async Task Pipeline_ViaSdk_ObliviousProducerReturns_AreForgivenAtConsumerUses()
     {
         string compiler = FindSiblingTool("Compiler", "gsc.dll");
@@ -238,6 +285,92 @@ public sealed class Issue2579NullableReferenceFidelityPipelineTests
                     foreach (var item in Factory.GetItems())
                         _ = item.Name;
                     return Required.Name.Length;
+                }
+            }
+            """);
+
+        return (producerProject, consumerProject);
+    }
+
+    private static (string ProducerProject, string ConsumerProject) WriteCycle4Fixture(
+        string sourceRoot)
+    {
+        File.WriteAllText(Path.Combine(sourceRoot, "Directory.Build.props"), "<Project></Project>");
+        string producerDir = Path.Combine(sourceRoot, "Producer");
+        string consumerDir = Path.Combine(sourceRoot, "Consumer");
+        Directory.CreateDirectory(producerDir);
+        Directory.CreateDirectory(consumerDir);
+
+        string producerProject = Path.Combine(producerDir, "Producer.csproj");
+        File.WriteAllText(producerProject, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <Nullable>disable</Nullable>
+              </PropertyGroup>
+            </Project>
+            """);
+        File.WriteAllText(Path.Combine(producerDir, "Producer.cs"), """
+            using System.Collections.Generic;
+
+            namespace Cycle4Producer;
+
+            public sealed class Item
+            {
+                public string Name { get; set; } = "item";
+                public Item Child { get; set; }
+                public List<Item> Children { get; } = new();
+                public Item GetChild() => Child;
+            }
+
+            public static class ImportedExtensions
+            {
+                public static string Echo(this string value) => value;
+            }
+            """);
+
+        string consumerProject = Path.Combine(consumerDir, "Consumer.csproj");
+        File.WriteAllText(consumerProject, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <Nullable>disable</Nullable>
+              </PropertyGroup>
+              <ItemGroup>
+                <ProjectReference Include="../Producer/Producer.csproj" />
+              </ItemGroup>
+            </Project>
+            """);
+        File.WriteAllText(Path.Combine(consumerDir, "Consumer.cs"), """
+            using Cycle4Producer;
+
+            namespace Issue2579Cycle4;
+
+            public sealed class Holder
+            {
+                public Holder(string value) => Value = value;
+                public string Value { get; }
+            }
+
+            public static class Repro
+            {
+                private static string Required = "";
+                private static void Consume(string value) { }
+
+                public static int Run(Item model)
+                {
+                    _ = model.Child.Name;
+                    _ = model.GetChild().Name;
+                    _ = model.Name.Echo();
+                    string local = model.Name;
+                    Required = model.Name;
+                    Consume(model.Name);
+                    _ = new Holder(model.Name);
+                    model.Child.Name = local;
+                    _ = model.Children[0].Name;
+                    foreach (var child in model.Children)
+                        _ = child.Name;
+                    return local.Length;
                 }
             }
             """);

@@ -197,11 +197,10 @@ namespace LibA
     // ---- Negative controls --------------------------------------------------
 
     [Fact]
-    public void CrossProject_UnrelatedUntaintedSiblingMember_StaysNonNullable_NoSpuriousForgiveness()
+    public void CrossProject_UnrelatedUntaintedSiblingMember_IsForgivenAtImportedBoundary()
     {
-        // `Plain.Label` has NO direct or transitive taint evidence anywhere in
-        // LibB — the fix must not over-promote every cross-project symbol, only
-        // ones the sibling's own analysis actually proved tainted.
+        // `Plain.Label` has no taint evidence, but its imported oblivious
+        // reference contract is still T? to gsc and needs a target-aware bridge.
         const string libB = @"
 namespace LibB
 {
@@ -242,8 +241,7 @@ namespace LibA
 
         Assert.Contains("prop Label string -> \"fixed\"", printedB);
         Assert.DoesNotContain("prop Label string? ", printedB);
-        Assert.Contains("Target{Name: plain.Label}", Compact(printedA));
-        Assert.DoesNotContain("plain.Label!!", printedA);
+        Assert.Contains("Target{Name: plain.Label!!}", Compact(printedA));
     }
 
     [Fact]
@@ -296,14 +294,10 @@ namespace LibA
     }
 
     [Fact]
-    public void CrossProject_SameSimpleMemberNameInTwoSiblings_DoesNotCrossContaminate()
+    public void CrossProject_SameSimpleMemberNameInTwoSiblings_UsesImportedContracts()
     {
-        // Issue requirement: "multiple projects declaring same simple symbol
-        // names". LibC's `Impl.Name`/`IFoo.Name` shape mirrors LibB's exactly
-        // (same simple names, same shape) but carries NO tainting evidence, so
-        // it must stay non-nullable even though the CONSUMER references both
-        // siblings' same-named symbol side by side. Assembly/symbol identity
-        // (not name) must disambiguate the two.
+        // Both siblings emit non-null source contracts, while the consumer sees
+        // their independently imported oblivious reference contracts as T?.
         const string libC = @"
 namespace LibC
 {
@@ -358,8 +352,7 @@ namespace LibA
         Assert.DoesNotContain("prop Name string? {", printedC);
 
         Assert.Contains("TargetB{Name: foo.Name!!}", Compact(printedA));
-        Assert.Contains("TargetC{Name: foo.Name}", Compact(printedA));
-        Assert.DoesNotContain("TargetC{Name: foo.Name!!}", Compact(printedA));
+        Assert.Contains("TargetC{Name: foo.Name!!}", Compact(printedA));
     }
 
     // ---- Transitive (three-project) chain: the real Oahu shape -------------
