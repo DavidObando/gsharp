@@ -137,11 +137,6 @@
             "default": "",
             "description": "Path to the GSharp Language Server executable. If empty, uses the bundled server."
           },
-          "gsharp.server.startTimeout": {
-            "type": "number",
-            "default": 30000,
-            "description": "Timeout in ms for the language server to start."
-          },
           "gsharp.server.waitForDebugger": {
             "type": "boolean",
             "default": false,
@@ -170,37 +165,38 @@
           "gsharp.formatting.indentSize": {
             "type": "number",
             "default": 4,
-            "description": "Number of spaces per indentation level."
+            "minimum": 1,
+            "description": "Number of spaces per indentation level. Takes effect after restarting the language server."
           },
           "gsharp.formatting.useTabs": {
             "type": "boolean",
             "default": false,
-            "description": "Use tabs instead of spaces for indentation."
+            "description": "Use tabs instead of spaces for indentation. Takes effect after restarting the language server."
           },
           "gsharp.diagnostics.enableOnType": {
             "type": "boolean",
             "default": true,
-            "description": "Run diagnostics as you type (on every keystroke)."
+            "description": "Run diagnostics as you type. When disabled, diagnostics update on open and save. Takes effect after restarting the language server."
           },
           "gsharp.completion.triggerOnDot": {
             "type": "boolean",
             "default": true,
-            "description": "Trigger auto-completion after typing a dot."
+            "description": "Trigger auto-completion after typing a dot. Manual completion remains available. Takes effect after restarting the language server."
           },
           "gsharp.codeLens.enableReferences": {
             "type": "boolean",
             "default": true,
-            "description": "Show reference counts above functions and types."
+            "description": "Show reference counts above declarations. Takes effect after restarting the language server."
           },
           "gsharp.inlayHints.enableParameterNames": {
             "type": "boolean",
             "default": true,
-            "description": "Show inlay hints for parameter names at call sites."
+            "description": "Show parameter names at call sites. Takes effect after restarting the language server."
           },
           "gsharp.inlayHints.enableTypeHints": {
             "type": "boolean",
             "default": true,
-            "description": "Show inlay hints for inferred variable types."
+            "description": "Show inferred types for variables without explicit type clauses. Takes effect after restarting the language server."
           },
           "gsharp.coldStartCache.enable": {
             "type": "boolean",

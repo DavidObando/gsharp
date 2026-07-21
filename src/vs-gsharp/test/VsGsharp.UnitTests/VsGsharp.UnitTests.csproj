@@ -7,6 +7,8 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="MessagePack" Version="2.5.301" />
+    <PackageReference Include="StreamJsonRpc" Version="2.22.11" />
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
   </ItemGroup>
@@ -16,5 +18,11 @@
              Link="DotnetHostResolver.cs" />
     <Compile Include="..\..\src\VsGsharp\LanguageClientPolicy.cs"
              Link="LanguageClientPolicy.cs" />
+    <Compile Include="..\..\src\VsGsharp\GSharpLanguageServerRpc.cs"
+             Link="GSharpLanguageServerRpc.cs" />
+    <Compile Include="..\..\src\VsGsharp\GSharpCodeLensAnchor.cs"
+             Link="GSharpCodeLensAnchor.cs" />
+    <Compile Include="..\..\src\VsGsharp.CodeLens\GSharpReferenceCodeLensPayload.cs"
+             Link="GSharpReferenceCodeLensPayload.cs" />
   </ItemGroup>
 </Project>

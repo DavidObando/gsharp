@@ -14,15 +14,19 @@ namespace GSharp.VisualStudio;
 
 [ContentType(GSharpContentTypeDefinitions.ContentTypeName)]
 [Export(typeof(ILanguageClient))]
-public sealed class GSharpLanguageClient : ILanguageClient
+public sealed class GSharpLanguageClient : ILanguageClient, ILanguageClientCustomMessage2
 {
+    private readonly GSharpLanguageServerRpc rpcBridge;
+    private readonly object serverProcessLock = new();
     private Process? serverProcess;
     private AsyncEventHandler<EventArgs>? stopAsync;
 
     internal static GSharpLanguageClient? Current { get; private set; }
 
-    public GSharpLanguageClient()
+    [ImportingConstructor]
+    public GSharpLanguageClient(GSharpLanguageServerRpc rpcBridge)
     {
+        this.rpcBridge = rpcBridge;
         Current = this;
     }
 
@@ -32,6 +36,10 @@ public sealed class GSharpLanguageClient : ILanguageClient
 
     public IEnumerable<string>? ConfigurationSections => null;
 
+    public object? MiddleLayer => null;
+
+    public object? CustomMessageTarget => null;
+
     public object InitializationOptions
     {
         get
@@ -39,7 +47,13 @@ public sealed class GSharpLanguageClient : ILanguageClient
             GSharpOptions options = GSharpPackage.Options;
             return LanguageClientPolicy.CreateInitializationOptions(
                 options.IndentSize,
-                options.UseTabs);
+                options.UseTabs,
+                options.EnableDiagnosticsOnType,
+                options.TriggerCompletionOnDot,
+                options.EnableReferenceCodeLens,
+                options.EnableParameterNameInlayHints,
+                options.EnableTypeInlayHints,
+                options.EnableColdStartCache);
         }
     }
 
@@ -56,6 +70,13 @@ public sealed class GSharpLanguageClient : ILanguageClient
     {
         add => stopAsync += value;
         remove => stopAsync -= value;
+    }
+
+    public Task AttachForCustomMessageAsync(StreamJsonRpc.JsonRpc rpc)
+    {
+        rpcBridge.Attach(rpc);
+        GSharpLog.Write("Attached custom language-server RPC connection.");
+        return Task.CompletedTask;
     }
 
     public async Task<Connection?> ActivateAsync(CancellationToken token)
@@ -124,7 +145,11 @@ public sealed class GSharpLanguageClient : ILanguageClient
 
         process.BeginErrorReadLine();
         GSharpLog.Write($"Started {dotnetPath} with process id {process.Id}.");
-        serverProcess = process;
+        lock (serverProcessLock)
+        {
+            serverProcess = process;
+        }
+
         token.Register(() => StopServer(process));
 
         await Task.Yield();
@@ -144,6 +169,7 @@ public sealed class GSharpLanguageClient : ILanguageClient
     public async Task<InitializationFailureContext?> OnServerInitializeFailedAsync(
         ILanguageClientInitializationInfo initializationState)
     {
+        rpcBridge.Detach();
         GSharpLog.Write($"Initialization failed: {initializationState}");
         Trace.WriteLine($"[G# LSP] Initialization failed: {initializationState}");
         await GSharpPackage.ShowStatusAsync(
@@ -155,6 +181,7 @@ public sealed class GSharpLanguageClient : ILanguageClient
 
     public async Task OnServerInitializedAsync()
     {
+        rpcBridge.MarkInitialized();
         GSharpLog.Write("Language server initialized.");
         Trace.WriteLine("[G# LSP] Initialized.");
         await GSharpPackage.ShowStatusAsync(
@@ -167,6 +194,7 @@ public sealed class GSharpLanguageClient : ILanguageClient
     {
         AsyncEventHandler<EventArgs>? stop = stopAsync;
         AsyncEventHandler<EventArgs>? start = StartAsync;
+        rpcBridge.Detach();
         await GSharpPackage.ShowStatusAsync(
             "restarting",
             includeActiveProject: true,
@@ -180,12 +208,17 @@ public sealed class GSharpLanguageClient : ILanguageClient
 
     private void StopServer(Process process)
     {
-        if (!ReferenceEquals(serverProcess, process))
+        lock (serverProcessLock)
         {
-            return;
+            if (!ReferenceEquals(serverProcess, process))
+            {
+                return;
+            }
+
+            serverProcess = null;
+            rpcBridge.Detach();
         }
 
-        serverProcess = null;
         try
         {
             if (!process.HasExited)

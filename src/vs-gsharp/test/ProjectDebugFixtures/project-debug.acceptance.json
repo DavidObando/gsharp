@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "solution": "ProjectDebugFixtures.sln",
+  "driver": "Validate-Debugger.ps1",
+  "projects": [
+    {
+      "id": "console",
+      "kind": "console",
+      "path": "Console/Console.gsproj",
+      "startup": true,
+      "launch": {"expectedOutput": "42"},
+      "operations": ["restore", "build", "rebuild", "clean", "run", "debug"]
+    },
+    {
+      "id": "library",
+      "kind": "library",
+      "path": "Library/Library.gsproj",
+      "startup": false,
+      "operations": ["restore", "build", "rebuild", "clean"]
+    },
+    {
+      "id": "web",
+      "kind": "web",
+      "path": "Web/Web.gsproj",
+      "startup": true,
+      "launch": {
+        "healthUrl": "http://127.0.0.1:5118/",
+        "expectedResponse": "gsharp-vs-acceptance"
+      },
+      "operations": ["restore", "build", "rebuild", "clean", "run", "debug", "attach"]
+    },
+    {
+      "id": "avalonia",
+      "kind": "avalonia",
+      "path": "Avalonia/AvaloniaFixture.gsproj",
+      "startup": true,
+      "launch": {"expectedOutput": "Avalonia G# acceptance fixture"},
+      "operations": ["restore", "build", "rebuild", "clean", "run", "debug"]
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "VS26-NATIVE-PROJECT-SYSTEM",
+      "projects": ["console", "library", "web", "avalonia"],
+      "assert": ["restore-succeeds", "nuget-visible", "project-reference-visible", "generated-source-produced"]
+    },
+    {
+      "id": "VS26-NATIVE-BUILD",
+      "projects": ["console", "library", "web", "avalonia"],
+      "actions": ["clean", "build", "rebuild"],
+      "assert": ["portable-pdb-produced", "clean-removes-output"]
+    },
+    {
+      "id": "VS26-NATIVE-RUN",
+      "projects": ["console", "web", "avalonia"],
+      "action": "start-without-debugging"
+    },
+    {
+      "id": "VS26-NATIVE-DEBUG-LAUNCH",
+      "projects": ["console", "web", "avalonia"],
+      "action": "f5"
+    },
+    {
+      "id": "VS26-NATIVE-DEBUG-ATTACH",
+      "projects": ["web"],
+      "action": "attach-managed",
+      "process": "Web"
+    },
+    {
+      "id": "VS26-NATIVE-DEBUG-BREAKPOINTS",
+      "projects": ["console"],
+      "action": "f5",
+      "debugChecks": [
+        "breakpoint-bind",
+        "step-into",
+        "step-over",
+        "inspect-locals",
+        "handled-exception-step",
+        "verify-portable-pdb-documents"
+      ],
+      "breakpoints": [
+        {
+          "source": "Console/Program.gs",
+          "marker": "BREAKPOINT:console-locals",
+          "locals": {"input": "20", "result": "42"}
+        },
+        {
+          "source": "Library/Greeter.gs",
+          "marker": "BREAKPOINT:library-step",
+          "locals": {"Name": "debugger"}
+        },
+        {
+          "source": "Console/Program.gs",
+          "marker": "BREAKPOINT:step-into"
+        },
+        {
+          "source": "Console/Program.gs",
+          "marker": "BREAKPOINT:exception",
+          "exception": "System.FormatException"
+        },
+        {
+          "source": "Console/Program.gs",
+          "marker": "BREAKPOINT:catch-handler",
+          "exception": "System.FormatException"
+        }
+      ],
+      "pdbDocuments": [
+        "Console/Program.gs",
+        "Library/Greeter.gs",
+        "Web/Program.gs",
+        "Avalonia/Program.gs",
+        "Avalonia/MainView.gs"
+      ]
+    }
+  ]
+}

@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Symbols.Display;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.LanguageServer.Protocol;
 
@@ -16,7 +17,11 @@ namespace GSharp.LanguageServer;
 /// </summary>
 public static class InlayHintComputer
 {
-    public static IReadOnlyList<InlayHint> ComputeHints(DocumentContent content, CancellationToken ct = default)
+    public static IReadOnlyList<InlayHint> ComputeHints(
+        DocumentContent content,
+        bool includeParameterNames = true,
+        bool includeTypes = true,
+        CancellationToken ct = default)
     {
         var tree = content.SyntaxTree;
         var text = tree.Text;
@@ -33,15 +38,53 @@ public static class InlayHintComputer
             return hints;
         }
 
-        foreach (var call in FindNodes<CallExpressionSyntax>(tree.Root))
+        if (includeParameterNames)
         {
-            // Each call resolves a symbol (a potentially expensive cold-cache lookup);
-            // check between calls so a superseded request aborts mid-walk (issue #1662).
-            ct.ThrowIfCancellationRequested();
-            AddParameterHints(hints, call, compilation, text, ct);
+            foreach (var call in FindNodes<CallExpressionSyntax>(tree.Root))
+            {
+                // Each call resolves a symbol (a potentially expensive cold-cache lookup);
+                // check between calls so a superseded request aborts mid-walk (issue #1662).
+                ct.ThrowIfCancellationRequested();
+                AddParameterHints(hints, call, compilation, text, ct);
+            }
+        }
+
+        if (includeTypes)
+        {
+            foreach (var declaration in FindNodes<VariableDeclarationSyntax>(tree.Root))
+            {
+                ct.ThrowIfCancellationRequested();
+                AddTypeHint(hints, declaration, compilation, text, ct);
+            }
         }
 
         return hints;
+    }
+
+    private static void AddTypeHint(
+        List<InlayHint> hints,
+        VariableDeclarationSyntax declaration,
+        GSharp.Core.CodeAnalysis.Compilation.Compilation compilation,
+        GSharp.Core.CodeAnalysis.Text.SourceText text,
+        CancellationToken ct)
+    {
+        if (declaration.TypeClause != null
+            || SemanticLookup.ResolveSymbol(compilation, declaration.Identifier, ct) is not VariableSymbol variable
+            || variable.Type == null
+            || ReferenceEquals(variable.Type, TypeSymbol.Error))
+        {
+            return;
+        }
+
+        var offset = declaration.Identifier.Span.End;
+        var line = text.GetLineIndex(offset);
+        hints.Add(new InlayHint
+        {
+            Position = new Position(line, offset - text.Lines[line].Start),
+            Label = new StringOrInlayHintLabelParts($": {SymbolDisplay.ToTypeDisplayString(variable.Type)}"),
+            Kind = InlayHintKind.Type,
+            PaddingLeft = true,
+        });
     }
 
     private static void AddParameterHints(

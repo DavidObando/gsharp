@@ -15,10 +15,10 @@
     <Tags>GSharp, G#, language, compiler, LSP</Tags>
   </Metadata>
   <Installation>
-    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.8,)">
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[18.0,)">
       <ProductArchitecture>amd64</ProductArchitecture>
     </InstallationTarget>
-    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.8,)">
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[18.0,)">
       <ProductArchitecture>arm64</ProductArchitecture>
     </InstallationTarget>
   </Installation>
@@ -38,6 +38,10 @@
            d:Source="Project"
            d:ProjectName="%CurrentProject%"
            Path="|%CurrentProject%|" />
+    <Asset Type="Microsoft.VisualStudio.CodeLensComponent"
+           d:Source="Project"
+           d:ProjectName="VsGsharp.CodeLens"
+           Path="|VsGsharp.CodeLens|" />
     <Asset Type="Microsoft.VisualStudio.VsPackage"
            d:Source="Project"
            d:ProjectName="%CurrentProject%"

@@ -14,11 +14,23 @@ internal static class LanguageClientPolicy
 
     public static IReadOnlyDictionary<string, object> CreateInitializationOptions(
         int indentSize,
-        bool useTabs)
+        bool useTabs,
+        bool diagnosticsOnType = true,
+        bool completionTriggerOnDot = true,
+        bool referenceCodeLens = true,
+        bool parameterNameInlayHints = true,
+        bool typeInlayHints = true,
+        bool coldStartCache = true)
         => new Dictionary<string, object>
         {
             ["formattingIndentSize"] = Math.Max(1, indentSize),
             ["formattingUseTabs"] = useTabs,
+            ["diagnosticsOnType"] = diagnosticsOnType,
+            ["completionTriggerOnDot"] = completionTriggerOnDot,
+            ["referenceCodeLens"] = referenceCodeLens,
+            ["parameterNameInlayHints"] = parameterNameInlayHints,
+            ["typeInlayHints"] = typeInlayHints,
+            ["coldStartCache"] = coldStartCache,
         };
 
     public static IReadOnlyDictionary<string, string> CreateEnvironment(

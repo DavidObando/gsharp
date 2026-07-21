@@ -267,7 +267,34 @@ public sealed class InitializeParams
     public JsonElement Capabilities { get; set; }
 
     [JsonPropertyName("initializationOptions")]
-    public JsonElement InitializationOptions { get; set; }
+    public LanguageServerInitializationOptions InitializationOptions { get; set; }
+}
+
+public sealed class LanguageServerInitializationOptions
+{
+    [JsonPropertyName("formattingIndentSize")]
+    public int FormattingIndentSize { get; set; } = 4;
+
+    [JsonPropertyName("formattingUseTabs")]
+    public bool FormattingUseTabs { get; set; }
+
+    [JsonPropertyName("diagnosticsOnType")]
+    public bool DiagnosticsOnType { get; set; } = true;
+
+    [JsonPropertyName("completionTriggerOnDot")]
+    public bool CompletionTriggerOnDot { get; set; } = true;
+
+    [JsonPropertyName("referenceCodeLens")]
+    public bool ReferenceCodeLens { get; set; } = true;
+
+    [JsonPropertyName("parameterNameInlayHints")]
+    public bool ParameterNameInlayHints { get; set; } = true;
+
+    [JsonPropertyName("typeInlayHints")]
+    public bool TypeInlayHints { get; set; } = true;
+
+    [JsonPropertyName("coldStartCache")]
+    public bool ColdStartCache { get; set; } = true;
 }
 
 public sealed class ServerInfo

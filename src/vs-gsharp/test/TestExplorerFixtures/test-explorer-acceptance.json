@@ -1,0 +1,238 @@
+{
+  "schemaVersion": 1,
+  "target": "Visual Studio 2026 Test Explorer",
+  "executionStatus": "validated-with-manual-ui-gates",
+  "validationSummary": [
+    "All three fixture projects restore and build.",
+    "dotnet test and Visual Studio 2026 vstest.console discover 16 total cases.",
+    "Selected passing, parameterized, skipped, expected-failure, refresh, cancellation, and portable-PDB checks pass.",
+    "Interactive Test Explorer source navigation and Debug Selected remain manual UI gates."
+  ],
+  "frameworks": [
+    {
+      "id": "xunit",
+      "project": "XUnit\\GSharp.XunitParity.Tests.gsproj",
+      "testFramework": {
+        "package": "xunit",
+        "version": "2.9.2"
+      },
+      "adapter": {
+        "package": "xunit.runner.visualstudio",
+        "version": "2.8.2"
+      },
+      "expectedDiscovery": {
+        "total": 6,
+        "passedOnRunAll": 4,
+        "failedOnRunAll": 1,
+        "skippedOnRunAll": 1,
+        "parameterizedCases": 2
+      },
+      "sourceMappings": [
+        {
+          "caseId": "Passing_Case",
+          "file": "TestExplorerCases.gs",
+          "line": 9,
+          "anchor": "Assert.True(true)"
+        },
+        {
+          "caseId": "Failing_Case",
+          "file": "TestExplorerCases.gs",
+          "line": 14,
+          "anchor": "GSHARP_XUNIT_EXPECTED_FAILURE"
+        },
+        {
+          "caseId": "Skipped_Case",
+          "file": "TestExplorerCases.gs",
+          "line": 19,
+          "anchor": "Assert.True(false)"
+        },
+        {
+          "caseId": "Parameterized_Case(1,2,3)",
+          "file": "TestExplorerCases.gs",
+          "line": 26,
+          "anchor": "Assert.Equal(expected, left + right)"
+        },
+        {
+          "caseId": "Parameterized_Case(2,3,5)",
+          "file": "TestExplorerCases.gs",
+          "line": 26,
+          "anchor": "Assert.Equal(expected, left + right)"
+        },
+        {
+          "caseId": "Cancellation_Case",
+          "file": "TestExplorerCases.gs",
+          "line": 31,
+          "anchor": "Thread.Sleep(30000)"
+        }
+      ]
+    },
+    {
+      "id": "nunit",
+      "project": "NUnit\\GSharp.NUnitParity.Tests.gsproj",
+      "testFramework": {
+        "package": "NUnit",
+        "version": "3.14.0"
+      },
+      "adapter": {
+        "package": "NUnit3TestAdapter",
+        "version": "4.6.0"
+      },
+      "expectedDiscovery": {
+        "total": 5,
+        "passedOnRunAll": 3,
+        "failedOnRunAll": 1,
+        "skippedOnRunAll": 1,
+        "parameterizedCases": 2
+      },
+      "sourceMappings": [
+        {
+          "caseId": "Passing_Case",
+          "file": "TestExplorerCases.gs",
+          "line": 8,
+          "anchor": "Assert.That(1, Is.EqualTo(1))"
+        },
+        {
+          "caseId": "Failing_Case",
+          "file": "TestExplorerCases.gs",
+          "line": 13,
+          "anchor": "GSHARP_NUNIT_EXPECTED_FAILURE"
+        },
+        {
+          "caseId": "Skipped_Case",
+          "file": "TestExplorerCases.gs",
+          "line": 19,
+          "anchor": "GSHARP_NUNIT_EXPECTED_SKIP"
+        },
+        {
+          "caseId": "Parameterized_Case(1,2,3)",
+          "file": "TestExplorerCases.gs",
+          "line": 25,
+          "anchor": "Assert.That(left + right, Is.EqualTo(expected))"
+        },
+        {
+          "caseId": "Parameterized_Case(2,3,5)",
+          "file": "TestExplorerCases.gs",
+          "line": 25,
+          "anchor": "Assert.That(left + right, Is.EqualTo(expected))"
+        }
+      ]
+    },
+    {
+      "id": "mstest",
+      "project": "MSTest\\GSharp.MSTestParity.Tests.gsproj",
+      "testFramework": {
+        "package": "MSTest.TestFramework",
+        "version": "3.6.4"
+      },
+      "adapter": {
+        "package": "MSTest.TestAdapter",
+        "version": "3.6.4"
+      },
+      "expectedDiscovery": {
+        "total": 5,
+        "passedOnRunAll": 3,
+        "failedOnRunAll": 1,
+        "skippedOnRunAll": 1,
+        "parameterizedCases": 2
+      },
+      "sourceMappings": [
+        {
+          "caseId": "Passing_Case",
+          "file": "TestExplorerCases.gs",
+          "line": 9,
+          "anchor": "Assert.IsTrue(true)"
+        },
+        {
+          "caseId": "Failing_Case",
+          "file": "TestExplorerCases.gs",
+          "line": 14,
+          "anchor": "GSHARP_MSTEST_EXPECTED_FAILURE"
+        },
+        {
+          "caseId": "Skipped_Case",
+          "file": "TestExplorerCases.gs",
+          "line": 20,
+          "anchor": "GSHARP_MSTEST_EXPECTED_SKIP"
+        },
+        {
+          "caseId": "Parameterized_Case(1,2,3)",
+          "file": "TestExplorerCases.gs",
+          "line": 27,
+          "anchor": "Assert.AreEqual(expected, left + right)"
+        },
+        {
+          "caseId": "Parameterized_Case(2,3,5)",
+          "file": "TestExplorerCases.gs",
+          "line": 27,
+          "anchor": "Assert.AreEqual(expected, left + right)"
+        }
+      ]
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "discovery-and-source-mapping",
+      "validation": "automated-discovery; manual-source-navigation",
+      "action": "Open all three projects, build, then refresh Test Explorer.",
+      "expected": "Each adapter reports its expectedDiscovery counts; opening every case navigates to its pinned .gs source mapping."
+    },
+    {
+      "id": "run-selected",
+      "validation": "automated-vstest",
+      "selection": "GSharp.XunitParity.Tests.TestExplorerCases.Passing_Case",
+      "action": "Run the selected test only.",
+      "expected": "Passing_Case passes and no unselected case changes outcome."
+    },
+    {
+      "id": "debug-selected",
+      "validation": "manual-required",
+      "selection": "GSharp.XunitParity.Tests.TestExplorerCases.Passing_Case",
+      "breakpoint": {
+        "file": "XUnit\\TestExplorerCases.gs",
+        "line": 9
+      },
+      "action": "Debug the selected test.",
+      "expected": "The breakpoint binds and execution stops at Assert.True(true) in the original .gs file."
+    },
+    {
+      "id": "cancellation",
+      "validation": "automated-process-cancellation; manual-test-explorer-ui",
+      "selection": "GSharp.XunitParity.Tests.TestExplorerCases.Cancellation_Case",
+      "action": "Run selected, cancel while Thread.Sleep is active, then run Passing_Case.",
+      "expected": "Cancellation_Case is aborted or canceled promptly; Test Explorer remains responsive and Passing_Case can run."
+    },
+    {
+      "id": "failure-output",
+      "validation": "automated-vstest",
+      "selections": [
+        "GSharp.XunitParity.Tests.TestExplorerCases.Failing_Case",
+        "GSharp.NUnitParity.Tests.TestExplorerCases.Failing_Case",
+        "GSharp.MSTestParity.Tests.TestExplorerCases.Failing_Case"
+      ],
+      "expectedOutputMarkers": [
+        "GSHARP_XUNIT_EXPECTED_FAILURE",
+        "GSHARP_NUNIT_EXPECTED_FAILURE",
+        "GSHARP_MSTEST_EXPECTED_FAILURE"
+      ],
+      "action": "Run each selected failure.",
+      "expected": "Each failure is attributed to its .gs source line and shows its framework-specific marker in Test Detail Summary or test output."
+    },
+    {
+      "id": "refresh-after-build",
+      "validation": "automated-build-and-rediscovery",
+      "action": "Append XUnit\\RefreshAfterBuild.snippet to TestExplorerCases.gs and build the xUnit project; restore TestExplorerCases.gs afterward.",
+      "expected": "Test Explorer refreshes from 6 to 7 xUnit cases and Added_After_Build_Passes navigates to TestExplorerCases.gs line 39."
+    },
+    {
+      "id": "portable-pdb-stepping",
+      "validation": "automated-portable-pdb; manual-test-host-stepping",
+      "selection": "GSharp.XunitParity.Tests.TestExplorerCases.Parameterized_Case",
+      "breakpoint": {
+        "file": "XUnit\\TestExplorerCases.gs",
+        "line": 26
+      },
+      "action": "Confirm DebugType=portable, debug one parameterized row, then Step Over.",
+      "expected": "The breakpoint is bound from the portable PDB, the active statement is the original .gs line, and Step Over remains in G# source rather than generated code."
+    }
+  ]
+}

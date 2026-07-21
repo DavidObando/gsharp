@@ -8,6 +8,10 @@ namespace GSharp.VisualStudio;
 internal static class DotnetHostResolver
 {
     private const int RequiredMajorVersion = 10;
+    internal const string MissingRuntimeMessage =
+        "The G# language server requires Microsoft.NETCore.App 10.0 or newer. " +
+        "Install the .NET 10 Runtime from https://dotnet.microsoft.com/download/dotnet/10.0 " +
+        "or set DOTNET_ROOT to a compatible installation.";
 
     public static string Resolve()
     {
@@ -29,8 +33,7 @@ internal static class DotnetHostResolver
             return installed;
         }
 
-        throw new InvalidOperationException(
-            $"The G# language server requires Microsoft.NETCore.App {RequiredMajorVersion}.0 or newer.");
+        throw new InvalidOperationException(MissingRuntimeMessage);
     }
 
     internal static bool HasRequiredRuntime(string output)

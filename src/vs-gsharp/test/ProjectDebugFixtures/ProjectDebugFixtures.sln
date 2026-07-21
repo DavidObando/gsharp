@@ -1,0 +1,36 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.0.0.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{F1526B4D-C1A8-4B42-B2F7-48DA6F9CA033}") = "Console", "Console\Console.gsproj", "{17A9BA01-18DD-4404-97ED-3EA294399E4E}"
+EndProject
+Project("{F1526B4D-C1A8-4B42-B2F7-48DA6F9CA033}") = "Library", "Library\Library.gsproj", "{4B516CE3-CA50-4288-AC28-EFC52411B3C7}"
+EndProject
+Project("{F1526B4D-C1A8-4B42-B2F7-48DA6F9CA033}") = "Web", "Web\Web.gsproj", "{6ED1F5C5-FC42-471B-8B56-1D2290D6A47F}"
+EndProject
+Project("{F1526B4D-C1A8-4B42-B2F7-48DA6F9CA033}") = "Avalonia", "Avalonia\AvaloniaFixture.gsproj", "{ACCBBC89-EF58-4E71-894C-41D8017CB71D}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{17A9BA01-18DD-4404-97ED-3EA294399E4E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{17A9BA01-18DD-4404-97ED-3EA294399E4E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{17A9BA01-18DD-4404-97ED-3EA294399E4E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{17A9BA01-18DD-4404-97ED-3EA294399E4E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4B516CE3-CA50-4288-AC28-EFC52411B3C7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4B516CE3-CA50-4288-AC28-EFC52411B3C7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4B516CE3-CA50-4288-AC28-EFC52411B3C7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4B516CE3-CA50-4288-AC28-EFC52411B3C7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6ED1F5C5-FC42-471B-8B56-1D2290D6A47F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6ED1F5C5-FC42-471B-8B56-1D2290D6A47F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6ED1F5C5-FC42-471B-8B56-1D2290D6A47F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6ED1F5C5-FC42-471B-8B56-1D2290D6A47F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{ACCBBC89-EF58-4E71-894C-41D8017CB71D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{ACCBBC89-EF58-4E71-894C-41D8017CB71D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{ACCBBC89-EF58-4E71-894C-41D8017CB71D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{ACCBBC89-EF58-4E71-894C-41D8017CB71D}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

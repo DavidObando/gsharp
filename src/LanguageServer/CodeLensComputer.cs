@@ -17,8 +17,13 @@ namespace GSharp.LanguageServer;
 public static class CodeLensComputer
 {
     public static IReadOnlyList<CodeLens> ComputeLenses(DocumentContent content, string uri = null, CancellationToken ct = default)
+        => ComputeReferenceLenses(content, uri, ct)
+            .Select(lens => CreateReferenceLens(lens.DeclarationRange, lens.ReferenceCount, uri))
+            .ToList();
+
+    public static IReadOnlyList<ReferenceCodeLens> ComputeReferenceLenses(DocumentContent content, string uri = null, CancellationToken ct = default)
     {
-        var lenses = new List<CodeLens>();
+        var lenses = new List<ReferenceCodeLens>();
 
         GSharp.Core.CodeAnalysis.Compilation.Compilation compilation;
         try
@@ -48,24 +53,10 @@ public static class CodeLensComputer
             switch (member)
             {
                 case FunctionDeclarationSyntax func:
-                    var funcSymbol = SemanticLookup.ResolveSymbol(compilation, func.Identifier, ct);
-                    if (funcSymbol != null)
-                    {
-                        var refCount = SemanticLookup.FindReferences(compilation, funcSymbol, ct).Count() - 1; // exclude declaration
-                        var range = SemanticLookup.ToRange(func.Identifier);
-                        lenses.Add(CreateReferenceLens(range, refCount, uri));
-                    }
-
+                    AddReferenceLens(compilation, lenses, func.Identifier, uri, ct);
                     break;
                 case StructDeclarationSyntax structDecl:
-                    var structSymbol = SemanticLookup.ResolveSymbol(compilation, structDecl.Identifier, ct);
-                    if (structSymbol != null)
-                    {
-                        var refCount = SemanticLookup.FindReferences(compilation, structSymbol, ct).Count() - 1;
-                        var range = SemanticLookup.ToRange(structDecl.Identifier);
-                        lenses.Add(CreateReferenceLens(range, refCount, uri));
-                    }
-
+                    AddReferenceLens(compilation, lenses, structDecl.Identifier, uri, ct);
                     AddMemberLenses(compilation, lenses, structDecl.Fields.Select(f => f.Identifier), uri, ct);
                     AddMemberLenses(compilation, lenses, structDecl.Properties.Select(p => p.Identifier), uri, ct);
                     AddMemberLenses(compilation, lenses, structDecl.Events.Select(e => e.Identifier), uri, ct);
@@ -81,49 +72,22 @@ public static class CodeLensComputer
 
                     break;
                 case EnumDeclarationSyntax enumDecl:
-                    var enumSymbol = SemanticLookup.ResolveSymbol(compilation, enumDecl.Identifier, ct);
-                    if (enumSymbol != null)
-                    {
-                        var refCount = SemanticLookup.FindReferences(compilation, enumSymbol, ct).Count() - 1;
-                        var range = SemanticLookup.ToRange(enumDecl.Identifier);
-                        lenses.Add(CreateReferenceLens(range, refCount, uri));
-                    }
-
+                    AddReferenceLens(compilation, lenses, enumDecl.Identifier, uri, ct);
                     AddMemberLenses(compilation, lenses, enumDecl.Members.Select(m => m.Identifier), uri, ct);
                     break;
                 case InterfaceDeclarationSyntax ifaceDecl:
-                    var ifaceSymbol = SemanticLookup.ResolveSymbol(compilation, ifaceDecl.Identifier, ct);
-                    if (ifaceSymbol != null)
-                    {
-                        var refCount = SemanticLookup.FindReferences(compilation, ifaceSymbol, ct).Count() - 1;
-                        var range = SemanticLookup.ToRange(ifaceDecl.Identifier);
-                        lenses.Add(CreateReferenceLens(range, refCount, uri));
-                    }
-
+                    AddReferenceLens(compilation, lenses, ifaceDecl.Identifier, uri, ct);
                     AddMemberLenses(compilation, lenses, ifaceDecl.Methods.Select(m => m.Identifier), uri, ct);
                     AddMemberLenses(compilation, lenses, ifaceDecl.Properties.Select(p => p.Identifier), uri, ct);
                     AddMemberLenses(compilation, lenses, ifaceDecl.Events.Select(e => e.Identifier), uri, ct);
                     break;
                 case TypeAliasDeclarationSyntax typeAlias:
-                    var aliasSymbol = SemanticLookup.ResolveSymbol(compilation, typeAlias.Identifier, ct);
-                    if (aliasSymbol != null)
-                    {
-                        var refCount = SemanticLookup.FindReferences(compilation, aliasSymbol, ct).Count() - 1;
-                        var range = SemanticLookup.ToRange(typeAlias.Identifier);
-                        lenses.Add(CreateReferenceLens(range, refCount, uri));
-                    }
-
+                    AddReferenceLens(compilation, lenses, typeAlias.Identifier, uri, ct);
                     break;
                 case GlobalStatementSyntax globalStatement:
                     if (globalStatement.Statement is VariableDeclarationSyntax varDecl)
                     {
-                        var varSymbol = SemanticLookup.ResolveSymbol(compilation, varDecl.Identifier, ct);
-                        if (varSymbol != null)
-                        {
-                            var refCount = SemanticLookup.FindReferences(compilation, varSymbol, ct).Count() - 1;
-                            var range = SemanticLookup.ToRange(varDecl.Identifier);
-                            lenses.Add(CreateReferenceLens(range, refCount, uri));
-                        }
+                        AddReferenceLens(compilation, lenses, varDecl.Identifier, uri, ct);
                     }
 
                     break;
@@ -135,7 +99,7 @@ public static class CodeLensComputer
 
     private static void AddMemberLenses(
         GSharp.Core.CodeAnalysis.Compilation.Compilation compilation,
-        List<CodeLens> lenses,
+        List<ReferenceCodeLens> lenses,
         IEnumerable<SyntaxToken> identifiers,
         string uri,
         CancellationToken ct)
@@ -148,14 +112,53 @@ public static class CodeLensComputer
                 continue;
             }
 
-            var symbol = SemanticLookup.ResolveSymbol(compilation, identifier, ct);
-            if (symbol != null)
-            {
-                var refCount = SemanticLookup.FindReferences(compilation, symbol, ct).Count() - 1;
-                var range = SemanticLookup.ToRange(identifier);
-                lenses.Add(CreateReferenceLens(range, refCount, uri));
-            }
+            AddReferenceLens(compilation, lenses, identifier, uri, ct);
         }
+    }
+
+    private static void AddReferenceLens(
+        GSharp.Core.CodeAnalysis.Compilation.Compilation compilation,
+        List<ReferenceCodeLens> lenses,
+        SyntaxToken identifier,
+        string uri,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (identifier == null || identifier.IsMissing)
+        {
+            return;
+        }
+
+        var symbol = SemanticLookup.ResolveSymbol(compilation, identifier, ct);
+        if (symbol == null)
+        {
+            return;
+        }
+
+        var locations = SemanticLookup.FindReferences(compilation, symbol, ct)
+            .Where(token => !ReferenceEquals(token, identifier))
+            .Select(token => new Location
+            {
+                Uri = GetDocumentUri(token, uri),
+                Range = SemanticLookup.ToRange(token),
+            })
+            .ToArray();
+        lenses.Add(new ReferenceCodeLens
+        {
+            DeclarationRange = SemanticLookup.ToRange(identifier),
+            ReferenceCount = locations.Length,
+            References = locations,
+        });
+    }
+
+    private static DocumentUri GetDocumentUri(SyntaxToken token, string fallback)
+    {
+        if (!string.IsNullOrEmpty(token.SyntaxTree?.Text?.FileName))
+        {
+            return DocumentUri.FromFileSystemPath(token.SyntaxTree.Text.FileName);
+        }
+
+        return DocumentUri.From(fallback);
     }
 
     private static CodeLens CreateReferenceLens(Range range, int refCount, string uri)
