@@ -216,6 +216,6 @@ internal sealed class TryDispatchPlan
     /// <returns>The dispatch entries; empty if this try has no awaits inside.</returns>
     public ImmutableArray<TryDispatchEntry> GetInternalDispatchEntries(BoundTryStatement tryStmt)
     {
-        return internalDispatch.TryGetValue(tryStmt, out var entries) ? entries : default;
+        return internalDispatch.TryGetValue(tryStmt, out var entries) ? entries : ImmutableArray<TryDispatchEntry>.Empty;
     }
 }

@@ -283,7 +283,7 @@ internal sealed class IteratorTryDispatchPlan
     /// <returns>The dispatch entries; empty if this try has no yields inside.</returns>
     public ImmutableArray<IteratorTryDispatchEntry> GetInternalDispatchEntries(BoundTryStatement tryStmt)
     {
-        return internalDispatch.TryGetValue(tryStmt, out var entries) ? entries : default;
+        return internalDispatch.TryGetValue(tryStmt, out var entries) ? entries : ImmutableArray<IteratorTryDispatchEntry>.Empty;
     }
 
     /// <summary>Gets the yield states transitively inside the given user try.</summary>
