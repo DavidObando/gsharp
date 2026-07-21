@@ -182,15 +182,72 @@ namespace Demo
     }
 
     /// <summary>
-    /// The C# null-forgiving <em>null literal</em> <c>null!</c> (passing null where
-    /// a non-nullable reference is expected) maps to <c>default(T)</c> for the
-    /// expected type — not <c>nil!!</c>, which G#'s Kotlin-style nullability
-    /// rejects (the assertion keeps the operand type <c>nil</c>, issue #1072).
-    /// <c>default(T)</c> is null at runtime — faithful to <c>null!</c> — and is a
-    /// native non-nullable G# value (#914).
+    /// A null literal remains <c>nil</c> at nullable sinks, including the exact
+    /// Oahu DownloadCommand dictionary assignment from issue #2647.
     /// </summary>
     [Fact]
-    public void SuppressNullableWarning_OnNullLiteralArgument_MapsToDefaultOfExpectedType()
+    public void NullLiteral_AtNullableSinks_NeverGetsNonNullAssertion()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public sealed class Box
+    {
+        public object? Value { get; set; }
+    }
+
+    public static class DownloadCommand
+    {
+        private static event System.Action Changed;
+
+        private static void Accept(object? value) { }
+
+        public static object? Record(
+            System.Collections.Generic.Dictionary<string, object?> response,
+            Box box)
+        {
+            var rows = new System.Collections.Generic.List<
+                System.Collections.Generic.IReadOnlyDictionary<string, object?>>();
+            rows.Add(new System.Collections.Generic.Dictionary<string, object?>
+            {
+                [""error""] = null,
+            });
+            var strict = new System.Collections.Generic.Dictionary<string, object>
+            {
+                [""bare""] = null,
+                [""suppressed""] = (null)!,
+            };
+            object? local = null;
+            local = null;
+            box.Value = null;
+            response[""error""] = null;
+            Accept((null)!);
+            Changed += null;
+            var strictKeys = new System.Collections.Generic.Dictionary<string, string>();
+            var missing = strictKeys[null];
+            var cast = (string)null;
+            System.Func<object> factory = () => null;
+            System.Console.WriteLine("""".StartsWith(null));
+            return null;
+        }
+    }
+}");
+
+        Assert.Contains("[\"error\"] = nil", printed);
+        Assert.Contains("response[\"error\"] = nil", printed);
+        Assert.Contains("strictKeys[nil]", printed);
+        Assert.Contains("StartsWith(nil)", printed);
+        Assert.DoesNotContain("default(object)", printed);
+        Assert.DoesNotContain("nil!!", printed);
+    }
+
+    /// <summary>
+    /// C#'s suppression on a null literal must not manufacture a non-null G#
+    /// value. Keeping <c>nil</c> lets the target type accept nullable sinks and
+    /// reject genuinely non-null sinks.
+    /// </summary>
+    [Fact]
+    public void SuppressNullableWarning_OnNullLiteral_PreservesTargetChecking()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -206,7 +263,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("base(default(Node))", printed);
+        Assert.Contains("base(nil)", printed);
+        Assert.DoesNotContain("default(Node)", printed);
         Assert.DoesNotContain("nil!!", printed);
     }
 

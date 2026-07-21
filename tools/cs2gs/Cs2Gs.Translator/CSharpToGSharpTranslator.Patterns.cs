@@ -373,20 +373,11 @@ public sealed partial class CSharpToGSharpTranslator
                     // The C# null-forgiving operator `expr!` maps to G#'s postfix
                     // non-null assertion `expr!!` (spec: "Postfix `!!` asserts
                     // non-null"), preserving the assertion (ADR-0115 §B).
-                    //
-                    // Exception: the C# null-forgiving null literal `null!` (used to
-                    // pass null where a non-nullable reference is expected, e.g.
-                    // `: base(header, null!)`). G# follows Kotlin-style nullability
-                    // and rejects `nil!!` — the assertion keeps the operand's type
-                    // `nil`, so it cannot satisfy a non-nullable target (GS0154 /
-                    // GS0155 / a misleading GS0214 in base-initializer position,
-                    // issue #1072). Emit `default(T)` for the expected (converted)
-                    // type instead: this is null at runtime — behaviourally
-                    // identical to C#'s `null!` — and is a native, non-nullable G#
-                    // value (#914, #1072).
-                    if (suppressNullable.Operand.IsKind(SyntaxKind.NullLiteralExpression))
+                    // A null literal is never forgivable: preserve `nil` so its
+                    // target type accepts nullable sinks and rejects non-null ones.
+                    if (IsNullOrSuppressedNull(suppressNullable.Operand))
                     {
-                        return new DefaultValueExpression(this.ResolveExpressionType(suppressNullable));
+                        return this.TranslateExpression(suppressNullable.Operand);
                     }
 
                     return new NonNullAssertionExpression(

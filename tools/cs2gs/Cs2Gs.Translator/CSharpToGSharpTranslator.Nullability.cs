@@ -741,16 +741,16 @@ public sealed partial class CSharpToGSharpTranslator
             expression is LiteralExpressionSyntax literal
                 && literal.IsKind(SyntaxKind.NullLiteralExpression);
 
-        // `null` or `null!` (a SuppressNullableWarning over a null literal).
-        private static bool IsNullOrSuppressedNull(ExpressionSyntax expression)
-        {
-            if (expression is PostfixUnaryExpressionSyntax suppress
-                && suppress.IsKind(SyntaxKind.SuppressNullableWarningExpression))
+        // `null`, parenthesized null, or either form under C# null suppression.
+        private static bool IsNullOrSuppressedNull(ExpressionSyntax expression) =>
+            expression switch
             {
-                expression = suppress.Operand;
-            }
-
-            return IsNullLiteral(expression);
-        }
+                ParenthesizedExpressionSyntax parenthesized =>
+                    IsNullOrSuppressedNull(parenthesized.Expression),
+                PostfixUnaryExpressionSyntax suppress
+                    when suppress.IsKind(SyntaxKind.SuppressNullableWarningExpression) =>
+                        IsNullOrSuppressedNull(suppress.Operand),
+                _ => IsNullLiteral(expression),
+            };
     }
 }

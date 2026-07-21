@@ -520,6 +520,7 @@ public sealed partial class CSharpToGSharpTranslator
             if ((!assignment.IsKind(SyntaxKind.AddAssignmentExpression)
                     && !assignment.IsKind(SyntaxKind.SubtractAssignmentExpression))
                 || translatedRhs is NonNullAssertionExpression
+                || IsNullOrSuppressedNull(assignment.Right)
                 || this.context.GetSymbolInfo(assignment.Left).Symbol is not IEventSymbol eventSymbol
                 || eventSymbol.Type is not { IsReferenceType: true })
             {
@@ -554,6 +555,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (!this.IsObliviousCompilation()
                 || !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
                 || translatedRhs is NonNullAssertionExpression
+                || IsNullOrSuppressedNull(assignment.Right)
                 || assignment.Left is not ElementAccessExpressionSyntax
                 || !this.IsNullablePromotedValue(assignment.Right))
             {

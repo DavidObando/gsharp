@@ -1514,6 +1514,7 @@ public sealed partial class CSharpToGSharpTranslator
             ISymbol targetSymbolForPromotionCheck)
         {
             if (translatedValue is NonNullAssertionExpression
+                || IsNullOrSuppressedNull(valueExpression)
                 || !this.TargetWillRemainNonNullableReference(
                     targetType,
                     targetSymbolForPromotionCheck))
@@ -2238,6 +2239,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (this.IsObliviousCompilation()
                 && targetSymbol is { IsReferenceType: true }
                 && targetSymbol.NullableAnnotation != NullableAnnotation.Annotated
+                && !IsNullOrSuppressedNull(cast.Expression)
                 && cast.Expression is not PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
                 && this.IsNullablePromotedValue(cast.Expression))
             {
