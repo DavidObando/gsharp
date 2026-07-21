@@ -255,7 +255,8 @@ public sealed partial class CSharpToGSharpTranslator
                 && (this.ReceiverNeedsNullForgiveness(
                         invocation.Expression,
                         isDereferenceReceiver: true)
-                    || this.ReceiverIsNullableReferenceFieldOrProperty(invocation.Expression)))
+                    || this.ReceiverIsNullableReferenceFieldOrProperty(invocation.Expression))
+                && !this.IsWithinExpressionTreeLambda(invocation.Expression))
             {
                 target = new NonNullAssertionExpression(target);
             }
