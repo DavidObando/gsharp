@@ -530,8 +530,14 @@ public sealed partial class CSharpToGSharpTranslator
 
     private string ResolvePackage(CompilationUnitSyntax root, TranslationContext context)
     {
-        List<BaseNamespaceDeclarationSyntax> namespaces = root.DescendantNodes()
-            .OfType<BaseNamespaceDeclarationSyntax>()
+        List<(string Name, Location Location)> namespaces = EnumerateTopLevelDeclarations(root)
+            .Select(member => (
+                Symbol: context.GetDeclaredSymbol(member),
+                Location: member.GetLocation()))
+            .Where(item => item.Symbol?.ContainingNamespace is { IsGlobalNamespace: false })
+            .Select(item => (
+                item.Symbol.ContainingNamespace.ToDisplayString(),
+                item.Location))
             .ToList();
 
         if (namespaces.Count == 0)
@@ -539,14 +545,14 @@ public sealed partial class CSharpToGSharpTranslator
             return null;
         }
 
-        string dominant = namespaces[0].Name.ToString();
-        IEnumerable<string> distinct = namespaces.Select(n => n.Name.ToString()).Distinct();
+        string dominant = namespaces[0].Name;
+        IEnumerable<string> distinct = namespaces.Select(n => n.Name).Distinct();
         if (distinct.Count() > 1)
         {
             context.Report(new TranslationDiagnostic(
                 nameof(SyntaxKind.NamespaceDeclaration),
                 $"Multiple namespaces in one file; hoisting to the dominant namespace '{dominant}' (ADR-0115 §B.1).",
-                namespaces[0].Name.GetLocation(),
+                namespaces[0].Location,
                 TranslationSeverity.Warning));
         }
 

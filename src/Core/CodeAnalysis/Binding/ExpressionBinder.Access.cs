@@ -157,7 +157,7 @@ internal sealed partial class ExpressionBinder
     {
         result = null;
 
-        if (syntax.IsNullConditional)
+        if (syntax.IsNullConditional || QualifiedAccessStartsWithValue(syntax))
         {
             return false;
         }
@@ -228,7 +228,7 @@ internal sealed partial class ExpressionBinder
     {
         result = null;
 
-        if (syntax.IsNullConditional)
+        if (syntax.IsNullConditional || QualifiedAccessStartsWithValue(syntax))
         {
             return false;
         }
@@ -280,6 +280,10 @@ internal sealed partial class ExpressionBinder
         result = BindImportedTypeLiteralExpression(terminalLiteral, clrType);
         return true;
     }
+
+    private bool QualifiedAccessStartsWithValue(AccessorExpressionSyntax syntax) =>
+        syntax.LeftPart is NameExpressionSyntax name
+        && scope.TryLookupSymbol(name.IdentifierToken.Text) is VariableSymbol;
 
     /// <summary>
     /// Binds a same-compilation SOURCE type constructed or referenced through a
