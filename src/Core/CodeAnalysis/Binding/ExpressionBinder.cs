@@ -1293,7 +1293,6 @@ internal sealed partial class ExpressionBinder
     private static bool IsMethodGroupCandidateUsable(FunctionSymbol function)
     {
         if (function.IsInstanceMethod
-            || function.IsGeneric
             || function.IsExtension
             || function.IsStatic
             || function.StaticOwnerType != null
@@ -1320,6 +1319,12 @@ internal sealed partial class ExpressionBinder
         if (!IsMethodGroupCandidateUsable(function))
         {
             return false;
+        }
+
+        if (function.IsGeneric)
+        {
+            methodGroup = new BoundMethodGroupExpression(null, ImmutableArray.Create(function));
+            return true;
         }
 
         var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(function.Parameters.Length);
@@ -1565,8 +1570,15 @@ internal sealed partial class ExpressionBinder
             var candidateOwner = userGroup.StaticOwnerType != null && candidate.StaticOwnerType is StructSymbol declaredOwner
                 ? TypeMemberModel.ResolveStaticMemberOwner(userGroup.StaticOwnerType, declaredOwner)
                 : null;
-            var parameterOffset = candidate.IsExtension && userGroup.Receiver != null ? 1 : 0;
-            if (candidate.Parameters.Length - parameterOffset != delegateParameterTypes.Count)
+            var targetParameterTypes = delegateParameterTypes.Select(TypeSymbol.FromClrType).ToArray();
+            if (!TryCloseMethodGroupCandidate(
+                candidate,
+                userGroup.Receiver,
+                candidateOwner,
+                targetParameterTypes,
+                out var closedParameters,
+                out var closedReturn,
+                out _))
             {
                 continue;
             }
@@ -1576,9 +1588,7 @@ internal sealed partial class ExpressionBinder
             var compatible = true;
             for (var i = 0; i < parameterTypes.Length; i++)
             {
-                var parameterSymbol = candidateOwner?.SubstituteMemberType(candidate.Parameters[i + parameterOffset].Type)
-                    ?? candidate.Parameters[i + parameterOffset].Type;
-                parameterTypes[i] = projectType(parameterSymbol);
+                parameterTypes[i] = projectType(closedParameters[i]);
                 conversions[i] = parameterTypes[i] == null
                     ? OverloadResolution.ImplicitConversionKind.None
                     : OverloadResolution.ClassifyImplicit(parameterTypes[i], delegateParameterTypes[i]);
@@ -1594,8 +1604,7 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            var returnSymbol = candidateOwner?.SubstituteMemberType(candidate.Type) ?? candidate.Type ?? TypeSymbol.Void;
-            var returnType = projectType(returnSymbol);
+            var returnType = projectType(closedReturn);
             if (returnType == null)
             {
                 continue;
@@ -1609,6 +1618,71 @@ internal sealed partial class ExpressionBinder
                 !ReferenceEquals(candidate.Signature, other.Signature)
                 && IsBetterMethodGroupConversion(other.Conversions, candidate.Conversions))).ToList();
         return best.Count == 1 ? best[0].Signature : null;
+    }
+
+    internal static bool TryCloseMethodGroupCandidate(
+        FunctionSymbol candidate,
+        BoundExpression receiver,
+        StructSymbol candidateOwner,
+        IReadOnlyList<TypeSymbol> targetParameterTypes,
+        out TypeSymbol[] closedParameters,
+        out TypeSymbol closedReturn,
+        out ImmutableArray<TypeSymbol> methodTypeArguments)
+    {
+        closedParameters = null;
+        closedReturn = null;
+        methodTypeArguments = default;
+
+        var parameterOffset = candidate.IsExtension && receiver != null ? 1 : 0;
+        if (candidate.Parameters.Length - parameterOffset != targetParameterTypes.Count)
+        {
+            return false;
+        }
+
+        Dictionary<TypeParameterSymbol, TypeSymbol> substitution = null;
+        if (candidate.IsGeneric)
+        {
+            substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+            if (parameterOffset == 1)
+            {
+                var receiverParameter = candidateOwner?.SubstituteMemberType(candidate.Parameters[0].Type)
+                    ?? candidate.Parameters[0].Type;
+                Binder.InferTypeArguments(receiverParameter, receiver.Type, substitution);
+            }
+
+            for (var i = 0; i < targetParameterTypes.Count; i++)
+            {
+                var parameter = candidateOwner?.SubstituteMemberType(candidate.Parameters[i + parameterOffset].Type)
+                    ?? candidate.Parameters[i + parameterOffset].Type;
+                Binder.InferTypeArguments(parameter, targetParameterTypes[i], substitution);
+            }
+
+            var typeArguments = ImmutableArray.CreateBuilder<TypeSymbol>(candidate.TypeParameters.Length);
+            foreach (var typeParameter in candidate.TypeParameters)
+            {
+                if (!substitution.TryGetValue(typeParameter, out var typeArgument)
+                    || !Binder.SatisfiesConstraint(typeArgument, typeParameter))
+                {
+                    return false;
+                }
+
+                typeArguments.Add(typeArgument);
+            }
+
+            methodTypeArguments = typeArguments.MoveToImmutable();
+        }
+
+        closedParameters = new TypeSymbol[targetParameterTypes.Count];
+        for (var i = 0; i < closedParameters.Length; i++)
+        {
+            var parameter = candidateOwner?.SubstituteMemberType(candidate.Parameters[i + parameterOffset].Type)
+                ?? candidate.Parameters[i + parameterOffset].Type;
+            closedParameters[i] = substitution == null ? parameter : Binder.SubstituteType(parameter, substitution);
+        }
+
+        var returnType = candidateOwner?.SubstituteMemberType(candidate.Type) ?? candidate.Type ?? TypeSymbol.Void;
+        closedReturn = substitution == null ? returnType : Binder.SubstituteType(returnType, substitution);
+        return true;
     }
 
     private static bool IsBetterMethodGroupConversion(

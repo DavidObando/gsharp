@@ -73,6 +73,64 @@ func main() int32 {
     }
 
     [Fact]
+    public void GenericSourceMethodGroup_Select_UserElementToDictionary_InfersResultAndRuns()
+    {
+        const string Source = @"
+package DictionaryMethodGroup
+import System
+import System.Collections.Generic
+import System.Linq
+
+data class Record(Value string) {}
+
+class Repro {
+    shared {
+        func ToDictionary[T any](record T) Dictionary[string, string] {
+            var result = Dictionary[string, string]()
+            result.Add(""value"", ""present"")
+            return result
+        }
+
+        func Run(records IEnumerable[Record]) int32 {
+            return records.Select(ToDictionary).Single().Count
+        }
+    }
+}
+
+func main() int32 {
+    var records = List[Record]()
+    records.Add(Record(""42""))
+    return Repro.Run(records)
+}
+";
+        Assert.Equal(1, CompileAndRun(Source, nameof(GenericSourceMethodGroup_Select_UserElementToDictionary_InfersResultAndRuns)));
+    }
+
+    [Fact]
+    public void AmbiguousGenericSourceMethodGroup_DoesNotInferArbitraryResult()
+    {
+        const string Source = @"
+package AmbiguousGenericMethodGroup
+import System.Collections.Generic
+import System.Linq
+
+func Project[T any](value T) int32 { return 1 }
+func Project[T any](value List[T]) string { return ""x"" }
+
+func main() {
+    var values = List[List[string]]()
+    values.Select(Project)
+}
+";
+        using var peStream = new MemoryStream();
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(Source)));
+        var result = compilation.Emit(peStream);
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.IsError);
+    }
+
+    [Fact]
     public void AmbiguousSourceMethodGroup_DoesNotInferArbitraryResult()
     {
         const string Source = @"

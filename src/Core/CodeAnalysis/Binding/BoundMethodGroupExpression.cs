@@ -13,12 +13,10 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 
 /// <summary>
 /// Issue #324 / ADR-0063 §9: a bare reference to a named function used in a
-/// value context (C#/F# "method group"). When the name resolves to a single
-/// candidate, <see cref="Function"/> is bound eagerly and <see cref="FunctionType"/>
-/// is its signature. When the name resolves to multiple overloads,
-/// <see cref="Candidates"/> contains every overload and final overload
-/// selection is deferred to <c>BindConversion</c>, where the target delegate
-/// signature drives the pick.
+/// value context (C#/F# "method group"). A single non-generic candidate is
+/// bound eagerly. Overloaded and generic candidates defer selection and generic
+/// inference to <c>BindConversion</c>, where the target delegate signature is
+/// available.
 /// </summary>
 public sealed class BoundMethodGroupExpression : BoundExpression
 {
@@ -42,7 +40,8 @@ public sealed class BoundMethodGroupExpression : BoundExpression
         BoundExpression receiver,
         FunctionSymbol function,
         FunctionTypeSymbol type,
-        StructSymbol staticOwnerType)
+        StructSymbol staticOwnerType,
+        ImmutableArray<TypeSymbol> methodTypeArguments = default)
         : base(syntax)
     {
         Receiver = receiver;
@@ -50,6 +49,7 @@ public sealed class BoundMethodGroupExpression : BoundExpression
         FunctionType = type;
         Candidates = ImmutableArray.Create(function);
         StaticOwnerType = staticOwnerType;
+        MethodTypeArguments = methodTypeArguments;
     }
 
     public BoundMethodGroupExpression(SyntaxNode syntax, BoundExpression receiver, ImmutableArray<FunctionSymbol> candidates)
@@ -91,6 +91,9 @@ public sealed class BoundMethodGroupExpression : BoundExpression
 
     /// <summary>Gets the type used to qualify a static method group.</summary>
     public StructSymbol StaticOwnerType { get; }
+
+    /// <summary>Gets the inferred type arguments for a generic source method.</summary>
+    public ImmutableArray<TypeSymbol> MethodTypeArguments { get; }
 
     public override TypeSymbol Type => FunctionType ?? (TypeSymbol)TypeSymbol.Error;
 
