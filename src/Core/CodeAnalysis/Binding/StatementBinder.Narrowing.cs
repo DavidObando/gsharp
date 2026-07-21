@@ -1525,7 +1525,12 @@ internal sealed partial class StatementBinder
 
             for (var i = 0; i < identifiers.Count; i++)
             {
-                var elementType = TypeSymbol.FromClrType(parameters[i + receiverOffset].ParameterType.GetElementType());
+                var parameterType = receiverOffset == 0
+                    ? MemberLookup.GetClrMethodParameterTypeSymbol(receiver.Type, method, i)
+                    : TypeSymbol.FromClrType(parameters[i + receiverOffset].ParameterType);
+                var elementType = parameterType is ByRefTypeSymbol byRef
+                    ? byRef.PointeeType
+                    : TypeSymbol.FromClrType(parameters[i + receiverOffset].ParameterType.GetElementType());
                 var temp = new LocalVariableSymbol(
                     $"<deconstruct{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
                     isReadOnly: false,

@@ -48,12 +48,40 @@ for (key, value) in values {
 }
 total
 ";
-        AssertCompilesWithoutErrors(source);
+            AssertCompilesWithoutErrors(source);
         var result = new Compilation(SyntaxTree.Parse(SourceText.From(source)))
             .Evaluate(new Dictionary<VariableSymbol, object>());
 
         Assert.Empty(result.Diagnostics);
         Assert.Equal(3, result.Value);
+    }
+
+    [Fact]
+    public void ConcurrentDictionary_ForTupleIn_UsesImportedKeyValuePairDeconstructPattern()
+    {
+        var source = @"
+import System.Collections.Concurrent
+
+interface IValue {
+    prop Number int32 {
+        get;
+    }
+}
+
+class Value : IValue {
+    prop Number int32 -> 42
+}
+
+var values = ConcurrentDictionary[string, IValue]()
+values.TryAdd(""answer"", Value())
+
+var total = 0
+for (key, value) in values {
+    total = total + value.Number
+}
+total
+";
+    AssertCompilesWithoutErrors(source);
     }
 
     [Fact]
