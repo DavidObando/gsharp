@@ -4680,16 +4680,10 @@ internal sealed class ReflectionMetadataEmitter
     // ClrType.IsValueType, which is null for in-flight user types — so the
     // kickoff method's real Task<T?> return type is closed over the emitted
     // Nullable<UserT> instead of falling back to the erased Task<object>.
-    // Issue #2381: generalized to reuse ArgIsSymbolicUserDefined so an
-    // imported generic collection closed over a same-compilation argument
-    // (`List[DiagnosticCheck]`, `Dictionary[string, DiagnosticCheck]`,
-    // `List[List[DiagnosticCheck]]`, arrays/slices of a user type, a
-    // nullable-wrapped user value type held as a type argument, …) routes
-    // through the same symbolic Task<T> construction as the bare
-    // struct/interface/enum/type-parameter case, instead of trusting the
-    // erased CLR type cached on the constructed ImportedTypeSymbol.
+    // Issues #2381/#2713: use the same symbolic projection predicate as
+    // WrapAsTask and async state-machine construction.
     private static bool IsAsyncUserDefinedResultType(TypeSymbol type)
-        => ArgIsSymbolicUserDefined(type);
+        => TypeSymbol.RequiresSymbolicProjection(type);
 
     private static bool TryCreateSymbolicAsyncTaskType(SynthesizedStateMachineType stateMachine, out TypeSymbol taskType)
     {
