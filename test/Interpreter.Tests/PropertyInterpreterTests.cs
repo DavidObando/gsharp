@@ -107,11 +107,12 @@ public class PropertyInterpreterTests
     }
 
     [Fact]
-    public void AutoPropertyInDataStruct_ReportsGS0419()
+    public void AutoPropertyInDataStruct_RoundTrips()
     {
-        var source = "data struct P {\n  var X int32\n  prop Y int32\n}\n";
+        var source = "data struct P {\n  var X int32\n  prop Y int32\n}\nlet p = P{Y: 7}\np.Y";
         var output = RunSubmission(source);
-        Assert.Contains("GS0419", output);
+        Assert.Contains("7", output);
+        Assert.DoesNotContain("error GS", output);
     }
 
     [Fact]

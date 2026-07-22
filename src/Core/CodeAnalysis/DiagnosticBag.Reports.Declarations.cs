@@ -365,12 +365,6 @@ public sealed partial class DiagnosticBag
     public void ReportSealedInterfaceImplementorOutsidePackage(TextLocation location, string className, string interfaceName, string interfacePackage)
     => Report(location, DiagnosticDescriptors.SealedInterfaceImplementorOutsidePackage, className, interfaceName, interfacePackage);
 
-    /// <summary>ADR-0051: reports an auto-property declared inside a <c>data struct</c>, which is not allowed.</summary>
-    /// <param name="location">The text location of the property identifier.</param>
-    /// <param name="propertyName">The property name.</param>
-    public void ReportAutoPropertyInDataStruct(TextLocation location, string propertyName)
-    => Report(location, DiagnosticDescriptors.AutoPropertyInDataStruct, propertyName);
-
     /// <summary>ADR-0051: reports an <c>open</c> member declared on a class that is not itself <c>open</c>.</summary>
     /// <param name="location">The text location of the <c>open</c> modifier.</param>
     /// <param name="memberName">The member name.</param>

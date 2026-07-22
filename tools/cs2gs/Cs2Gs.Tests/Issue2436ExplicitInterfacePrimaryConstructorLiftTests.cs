@@ -118,12 +118,14 @@ namespace Demo
 }");
 
         TypeDeclaration holder = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Holder");
-        Parameter parameter = Assert.Single(holder.PrimaryConstructorParameters);
-        Assert.Equal("Value", parameter.Name);
+        Assert.True(holder.PrimaryConstructorParameters == null || holder.PrimaryConstructorParameters.Count == 0);
+        Assert.Contains(
+            holder.Members.OfType<PropertyDeclaration>(),
+            property => property.Name == "Value" && property.ExplicitInterfaceType == null);
 
         PropertyDeclaration forwarder = Assert.Single(
             holder.Members.OfType<PropertyDeclaration>(),
-            p => p.Name == "Value");
+            p => p.Name == "Value" && p.ExplicitInterfaceType != null);
         Assert.True(forwarder.ExplicitInterfaceType is NamedTypeReference { Name: "IValue" });
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
         AssertRoundTripParses(GSharpPrinter.Print(unit));

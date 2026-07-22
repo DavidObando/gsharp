@@ -23,19 +23,14 @@ namespace Cs2Gs.Tests;
 /// G# primary-constructor parameter DEFAULT (issue #2228's lift), which is
 /// invalid — G# optional-parameter defaults must be compile-time constants
 /// (GS0265) — and cascaded into GS0144/GS0161 at every construction and
-/// <c>with</c> call site. The fix distinguishes the initializer shape via the
-/// Roslyn semantic model (<c>GetConstantValue</c>, not a syntactic guess):
-/// a constant initializer stays a primary-constructor parameter default
-/// (unchanged, issue #2228 behavior); a non-constant one is instead lifted to
-/// a plain body <c>let</c> field carrying the initializer, which the data
-/// class's always-emitted parameterless constructor runs on every
-/// construction — mirroring the C# record's own per-instance initializer
-/// semantics without requiring a compile-time constant anywhere.
+/// <c>with</c> call site. Initialized init-only properties now use private
+/// initialized backing fields plus computed init accessors, so constant and
+/// non-constant values preserve both construction defaults and property ABI.
 /// </summary>
 public class Issue2281NonConstantRecordInitializerTests
 {
     [Fact]
-    public void RecordWithNonConstantStaticPropertyInitializer_LiftsToBodyLetField_NotParameterDefault()
+    public void RecordWithNonConstantStaticPropertyInitializer_UsesPropertyBackingField()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -52,13 +47,14 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("data class OahuConfig(MaxParallelJobs int32 = 1)", printed);
-        Assert.DoesNotContain("(DownloadDirectory string = CliPaths.DefaultDownloadDir", printed);
-        Assert.Contains("public let DownloadDirectory string = CliPaths.DefaultDownloadDir", printed);
+        Assert.Contains("data class OahuConfig {", printed);
+        Assert.Contains("private var _downloadDirectory string = CliPaths.DefaultDownloadDir", printed);
+        Assert.Contains("prop DownloadDirectory string {", printed);
+        Assert.Contains("private var _maxParallelJobs int32 = 1", printed);
     }
 
     [Fact]
-    public void RecordWithNonConstantMethodCallInitializer_LiftsToBodyLetField()
+    public void RecordWithNonConstantMethodCallInitializer_UsesPropertyBackingField()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -75,18 +71,17 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("data class Holder(Count int32 = 1)", printed);
-        Assert.Contains("public let Item Widget = Widget()", printed);
+        Assert.Contains("data class Holder {", printed);
+        Assert.Contains("private var _item Widget = Widget()", printed);
+        Assert.Contains("prop Item Widget {", printed);
+        Assert.Contains("private var _count int32 = 1", printed);
     }
 
     [Fact]
     public void RecordWithOnlyNonConstantInitializers_TranslatesToDataClassWithEmptyPrimaryCtor()
     {
-        // Every property has a non-constant initializer: the primary
-        // constructor's positional parameter list ends up EMPTY, and every
-        // property becomes a body 'let' field — still a valid 'data class'
-        // (at least one field, via the body fields), never downgraded to a
-        // plain class.
+        // Every property remains an init-only property on a fieldless data
+        // class; its backing field carries the per-instance initializer.
         string printed = TranslateUnit(@"
 namespace Demo
 {
@@ -101,17 +96,16 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("data class OahuConfig()", printed);
-        Assert.DoesNotContain("class OahuConfig {", printed);
-        Assert.Contains("public let DownloadDirectory string = CliPaths.DefaultDownloadDir", printed);
+        Assert.Contains("data class OahuConfig {", printed);
+        Assert.DoesNotContain("\nclass OahuConfig {", printed);
+        Assert.Contains("private var _downloadDirectory string = CliPaths.DefaultDownloadDir", printed);
+        Assert.Contains("prop DownloadDirectory string {", printed);
     }
 
     [Fact]
-    public void RecordWithConstantInitializer_StillUsesParameterDefault()
+    public void RecordWithConstantInitializer_UsesPropertyBackingField()
     {
-        // Baseline/regression from issue #2228: a genuinely constant
-        // initializer (a `const` field reference) is unaffected and keeps
-        // the primary-constructor-parameter-default form.
+        // A constant initializer follows the same property-preserving path.
         string printed = TranslateUnit(@"
 namespace Demo
 {
@@ -126,8 +120,9 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("data class OahuConfig(DownloadDirectory string = CliPaths.DefaultDownloadDir)", printed);
-        Assert.DoesNotContain("let DownloadDirectory", printed);
+        Assert.Contains("data class OahuConfig {", printed);
+        Assert.Contains("private var _downloadDirectory string = CliPaths.DefaultDownloadDir", printed);
+        Assert.Contains("prop DownloadDirectory string {", printed);
     }
 
     [Fact]
@@ -160,11 +155,13 @@ namespace Oahu.Cli.App
     }
 }");
 
-        Assert.Contains(
-            "data class LibraryFilter(Search string? = default(string?), Author string? = default(string?), Series string? = default(string?), AvailableOnly bool = true)",
-            printed);
-        Assert.Contains("MaxParallelJobs int32 = 1, KeepEncryptedFiles bool = default(bool)", printed);
-        Assert.Contains("public let Sequence int32 =", printed);
+        Assert.Contains("data class LibraryFilter {", printed);
+        Assert.Contains("prop Search string? {", printed);
+        Assert.Contains("prop Author string? {", printed);
+        Assert.Contains("private var _availableOnly bool = true", printed);
+        Assert.Contains("private var _maxParallelJobs int32 = 1", printed);
+        Assert.Contains("prop KeepEncryptedFiles bool {", printed);
+        Assert.Contains("private var _sequence int32 =", printed);
         Assert.Contains("prop Default OahuConfig -> OahuConfig()", printed);
         Assert.Contains("func Filter() LibraryFilter -> LibraryFilter()", printed);
     }
@@ -292,17 +289,6 @@ namespace Oahu.Cli.App
             "Exact Oahu.Cli.App record shapes should translate, compile, and preserve runtime defaults. Stages: " +
                 string.Join("; ", appResult.Stages.Select(stage => stage.Stage + "=" + stage.Status)));
     }
-
-    // Note: a `data struct` (record struct) counterpart of the non-constant-
-    // initializer scenario above is not independently testable — C# itself
-    // (CS8983) rejects a struct with ANY auto-property/field initializer that
-    // lacks an explicitly declared instance constructor, and
-    // AnalyzeAutoPropertyLift only ever runs when there is no explicit
-    // instance constructor. So a record struct can never reach this
-    // translator path with a non-constant initializer in the first place —
-    // the defensive `kind == TypeDeclarationKind.DataStruct` bail in
-    // AnalyzeAutoPropertyLift exists purely as a "never guess" safety net
-    // (ADR-0115) in case that C# restriction is ever relaxed.
 
     private static string TranslateUnit(string source)
     {

@@ -22,8 +22,9 @@ namespace Cs2Gs.Tests;
 /// record semantics (equality, <c>with</c>-copy, <c>ToString</c>) even
 /// though gsc now supports a zero-field <c>data class</c>/<c>data
 /// struct</c> (see the companion gsc-side fix for #2363). Only a record
-/// with NO parameter list at all should still downgrade. These tests
-/// exercise both shapes for record class AND record struct, plus the exact
+/// Issue #2704 later generalized zero-field data records, so both shapes now
+/// preserve record semantics. These tests exercise record class and record
+/// struct, plus the exact
 /// Oahu <c>CallbackChallenge</c>/<c>MfaChallenge</c>/<c>CvfChallenge</c>/
 /// <c>ApprovalChallenge</c> hierarchy shape (from
 /// <c>Oahu.Cli.App/Auth/CallbackBroker.cs</c>) where the empty-positional
@@ -32,19 +33,15 @@ namespace Cs2Gs.Tests;
 public class Issue2363EmptyPositionalRecordTranslationTests
 {
     [Fact]
-    public void RecordClass_NoParens_StillDowngradesToPlainClass()
+    public void RecordClass_NoParens_PreservesDataClass()
     {
-        // Regression control: a record with NO positional parameter list at
-        // all remains fieldless and correctly downgrades — unaffected by
-        // the #2363 fix.
         string printed = TranslateUnit(@"
 namespace Demo
 {
     public abstract record Issue2363NoParens;
 }");
 
-        Assert.Contains("open class Issue2363NoParens {", printed);
-        Assert.DoesNotContain("data class Issue2363NoParens", printed);
+        Assert.Contains("open data class Issue2363NoParens {", printed);
     }
 
     [Fact]
@@ -81,8 +78,8 @@ namespace Demo
     public void RecordClass_EmptyPositional_WithPropertyOverride_PreservesDataClass()
     {
         // Exact Oahu CallbackBroker.cs shape: an abstract base record with
-        // only an abstract computed property (no positional data of its
-        // own — this legitimately downgrades, unrelated to #2363) plus
+        // only an abstract computed property (no positional data of its own)
+        // plus
         // sealed derived records with an EMPTY positional parameter list
         // that each override the property. The derived records must keep
         // `data class` status.
@@ -115,10 +112,7 @@ namespace Oahu.Cli.App.Auth
     }
 }");
 
-        // The abstract base has no positional data of its own (only an
-        // abstract computed property) — pre-existing, deliberate downgrade,
-        // unrelated to #2363's scope.
-        Assert.Contains("open class CallbackChallenge {", printed);
+        Assert.Contains("open data class CallbackChallenge {", printed);
 
         // The three zero-field derived records are the #2363 scenario —
         // must be preserved as `data class`, not downgraded.

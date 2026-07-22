@@ -182,7 +182,9 @@ data struct Rect {
 }
 ```
 
-Auto-properties inside `data struct` are diagnosed as an error — data struct construction is via struct literals that target fields directly; a backing-field auto-property would be unreachable.
+Auto-properties are supported inside `data class` and `data struct`. Composite
+literals target their setters/init accessors, while synthesized value equality,
+hashing, formatting, and deconstruction use their backing fields.
 
 ### 6. Attribute targeting
 

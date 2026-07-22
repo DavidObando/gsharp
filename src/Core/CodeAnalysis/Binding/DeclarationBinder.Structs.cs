@@ -1458,12 +1458,6 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                // Validate: auto-property not allowed on data struct
-                if (isAutoProperty && syntax.IsData)
-                {
-                    Diagnostics.ReportAutoPropertyInDataStruct(propSyntax.Identifier.Location, propName);
-                }
-
                 // Validate: open only on open class
                 bool isVirtual = propSyntax.OpenModifier != null;
                 bool isOverride = propSyntax.OverrideModifier != null;
@@ -1542,7 +1536,7 @@ internal sealed partial class DeclarationBinder
                 }
 
                 // Create backing field for auto-properties
-                if (isAutoProperty && !syntax.IsData)
+                if (isAutoProperty)
                 {
                     var backingField = new FieldSymbol(
                         $"<{propName}>k__BackingField",
