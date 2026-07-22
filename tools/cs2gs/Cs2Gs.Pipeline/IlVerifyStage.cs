@@ -20,13 +20,14 @@ namespace Cs2Gs.Pipeline;
 /// more allowance: unsafe C# (pointer writes, <c>fixed</c>, <c>stackalloc</c>)
 /// lowers to IL that is unverifiable BY DESIGN — not a gsc defect, the
 /// csc-compiled baseline of the same C# fails ilverify identically — so a
-/// failure with at least one parsed error is treated as expected and does not
-/// gate. A tool crash (non-zero exit, zero parsed errors) still gates for
-/// those apps too: that signals a broken verifier run, not unsafe IL.
+/// complete verifier failure with at least one parsed error is treated as
+/// expected and does not gate. An incomplete run still gates for those apps
+/// too: that signals a broken verifier run, not unsafe IL.
 /// On a real error the category is <c>ilverify-failure</c>, one triage artifact
-/// per distinct error code + failing-method skeleton, and the app
-/// short-circuits. Runs only after stage 2 publishes the emitted assembly path;
-/// honors the <c>GSHARP_SKIP_ILVERIFY=1</c> bypass (then no-ops to PASS).
+/// per distinct error code + failing-method skeleton; incomplete runs also get
+/// a distinct <c>IlVerifyIncomplete</c> artifact. The app then short-circuits.
+/// Runs only after stage 2 publishes the emitted assembly path; honors the
+/// <c>GSHARP_SKIP_ILVERIFY=1</c> bypass (then no-ops to PASS).
 /// </summary>
 public sealed class IlVerifyStage : IMigrationStage
 {
@@ -89,7 +90,9 @@ public sealed class IlVerifyStage : IMigrationStage
         // unsafe-IL regression outside the allow-listed fixture(s) is not
         // masked by the app-wide marker.
         IReadOnlyList<IlVerifyError> gatingErrors = result.Errors;
-        if (context.App.AllowUnsafeIl && result.Errors.Count > 0)
+        if (result.Status == IlVerifyStatus.Failed
+            && context.App.AllowUnsafeIl
+            && result.Errors.Count > 0)
         {
             if (context.App.AllowUnsafeIlTypes.Count == 0)
             {
@@ -119,14 +122,27 @@ public sealed class IlVerifyStage : IMigrationStage
             artifacts.Add(context.Triage.IlVerifyFailure(error, gsFile));
         }
 
-        // Non-zero exit with no parseable error line (e.g. a tool crash): capture
-        // a synthetic ilverify-failure so the gate failure is not lost.
-        if (artifacts.Count == 0)
+        // A crash is not an ordinary verifier finding. Always add a distinct
+        // incompleteness artifact, alongside any findings recovered by retries.
+        if (result.Status == IlVerifyStatus.Incomplete)
+        {
+            string excluded = result.IncompleteMembers.Count == 0
+                ? "none identified"
+                : string.Join(", ", result.IncompleteMembers);
+            string message = "Verification incomplete: ilverify exited abnormally with code " +
+                result.ExitCode + ". Excluded crashing members: " + excluded +
+                ". Findings from non-crashing members are reported separately. Output: " +
+                Truncate(result.Output);
+            var synthetic = new IlVerifyError("IlVerifyIncomplete", null, message);
+            artifacts.Add(context.Triage.IlVerifyFailure(synthetic, gsFile));
+        }
+        else if (artifacts.Count == 0)
         {
             string message = "ilverify exited with code " + result.ExitCode +
-                " and no parseable error. Output: " + Truncate(result.Output);
-            var synthetic = new IlVerifyError("IlVerifyError", null, message);
-            artifacts.Add(context.Triage.IlVerifyFailure(synthetic, gsFile));
+                " without a parseable verifier finding. Output: " + Truncate(result.Output);
+            artifacts.Add(context.Triage.IlVerifyFailure(
+                new IlVerifyError("IlVerifyError", null, message),
+                gsFile));
         }
 
         return Task.FromResult(StageOutcome.Failed(artifacts));

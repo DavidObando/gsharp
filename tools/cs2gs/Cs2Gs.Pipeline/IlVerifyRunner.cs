@@ -30,6 +30,7 @@ public class IlVerifyRunner
     /// Mirrors <c>IlVerifier</c>'s <c>GSHARP_SKIP_ILVERIFY</c> switch.
     /// </summary>
     public const string SkipEnvVar = "GSHARP_SKIP_ILVERIFY";
+    private const string VerifyingPrefix = "Verifying ";
 
     // Matches a single ilverify error line, e.g.
     //   [IL]: Error [StackUnexpected]: [/abs/App.dll : Program::Main(string[])][offset 0x00000001] Unexpected type on the stack.
@@ -151,7 +152,7 @@ public class IlVerifyRunner
     /// </summary>
     /// <param name="assemblyPath">The absolute path of the .dll to verify.</param>
     /// <param name="additionalReferences">The app's extra references, or null.</param>
-    /// <returns>The verification result (skipped/passed/failed + parsed errors).</returns>
+    /// <returns>The verification result and parsed/recovered errors.</returns>
     public virtual IlVerifyResult Verify(string assemblyPath, IReadOnlyList<string> additionalReferences = null)
     {
         if (!IsEnabled)
@@ -168,7 +169,16 @@ public class IlVerifyRunner
 
         IReadOnlyList<string> references = BuildReferenceSet(assemblyPath, additionalReferences);
 
-        var args = new List<string> { "tool", "run", "ilverify", assemblyPath, "-s", "System.Private.CoreLib" };
+        var args = new List<string>
+        {
+            "tool",
+            "run",
+            "ilverify",
+            assemblyPath,
+            "-s",
+            "System.Private.CoreLib",
+            "--verbose",
+        };
         foreach (string reference in references)
         {
             args.Add("-r");
@@ -183,15 +193,59 @@ public class IlVerifyRunner
         }
 
         (int exit, string output) = this.RunDotnet(args);
+        int initialExit = exit;
+        var outputs = new List<string> { output };
+        var errors = new List<IlVerifyError>(FilterIgnored(ParseErrors(output)));
+        var excludedMembers = new List<string>();
 
-        IReadOnlyList<IlVerifyError> parsedErrors = ParseErrors(output);
-        IReadOnlyList<IlVerifyError> errors = FilterIgnored(parsedErrors);
-        if (exit == 2 && parsedErrors.Count > 0 && errors.Count == 0)
+        // An unhandled ilverify exception exits with neither 0 (verified) nor
+        // 2 (ordinary verification errors). Verbose mode identifies the member
+        // being verified when it crashed. Exclude that member and retry until
+        // the remaining assembly receives a complete pass/fail result.
+        while (exit != 0 && exit != 2)
         {
-            return IlVerifyResult.Passed(output, errors);
+            string crashingMember = FindLastVerifyingMember(output);
+            if (string.IsNullOrEmpty(crashingMember)
+                || excludedMembers.Contains(crashingMember, StringComparer.Ordinal))
+            {
+                break;
+            }
+
+            excludedMembers.Add(crashingMember);
+            var retryArgs = new List<string>(args);
+            foreach (string member in excludedMembers)
+            {
+                retryArgs.Add("--exclude");
+                retryArgs.Add("^" + Regex.Escape(member) + "$");
+            }
+
+            (exit, output) = this.RunDotnet(retryArgs);
+            outputs.Add(output);
+            errors.AddRange(FilterIgnored(ParseErrors(output)));
         }
 
-        return IlVerifyResult.FromRun(exit, output, errors);
+        string combinedOutput = CombineOutputs(outputs, excludedMembers);
+        IReadOnlyList<IlVerifyError> distinctErrors = errors
+            .GroupBy(e => (e.Code, e.Method, e.RawLine))
+            .Select(group => group.First())
+            .ToList();
+        IReadOnlyList<IlVerifyError> initialParsedErrors = ParseErrors(outputs[0]);
+        IReadOnlyList<IlVerifyError> initialErrors = FilterIgnored(initialParsedErrors);
+        if (initialExit == 2 && initialParsedErrors.Count > 0 && initialErrors.Count == 0)
+        {
+            return IlVerifyResult.Passed(combinedOutput, distinctErrors);
+        }
+
+        if (initialExit != 0 && initialExit != 2)
+        {
+            return IlVerifyResult.Incomplete(
+                initialExit,
+                combinedOutput,
+                distinctErrors,
+                excludedMembers);
+        }
+
+        return IlVerifyResult.FromRun(initialExit, combinedOutput, distinctErrors);
     }
 
     /// <summary>
@@ -224,7 +278,7 @@ public class IlVerifyRunner
     /// racing on the same local tool manifest.
     /// </summary>
     /// <returns><see langword="true"/> when the tool is available after the probe/restore attempt.</returns>
-    public bool EnsureToolAvailable()
+    public virtual bool EnsureToolAvailable()
     {
         if (!IsEnabled)
         {
@@ -254,6 +308,17 @@ public class IlVerifyRunner
         }
     }
 
+    /// <summary>Runs the repo-local dotnet tool command.</summary>
+    /// <param name="arguments">The dotnet arguments.</param>
+    /// <returns>The process exit code and combined output.</returns>
+    protected virtual (int Exit, string Output) RunDotnet(IReadOnlyList<string> arguments)
+    {
+        // The local tool manifest is discovered relative to the working
+        // directory; anchor at the repo root. All paths are passed absolute.
+        ProcessRunResult result = ProcessRunner.Run("dotnet", arguments, this.RepoRoot, DotnetToolTimeout);
+        return (result.ExitCode, result.Output);
+    }
+
     private static string ExtractMethod(string location)
     {
         if (string.IsNullOrWhiteSpace(location))
@@ -266,6 +331,47 @@ public class IlVerifyRunner
         int sep = location.LastIndexOf(" : ", StringComparison.Ordinal);
         string candidate = sep >= 0 ? location.Substring(sep + 3).Trim() : location.Trim();
         return string.IsNullOrEmpty(candidate) ? null : candidate;
+    }
+
+    private static string FindLastVerifyingMember(string output)
+    {
+        string member = null;
+        foreach (string rawLine in (output ?? string.Empty).Replace("\r\n", "\n").Split('\n'))
+        {
+            string line = rawLine.Trim();
+            if (line.StartsWith(VerifyingPrefix, StringComparison.Ordinal))
+            {
+                member = line.Substring(VerifyingPrefix.Length).Trim();
+            }
+        }
+
+        return member;
+    }
+
+    private static string CombineOutputs(
+        IReadOnlyList<string> outputs,
+        IReadOnlyList<string> excludedMembers)
+    {
+        if (outputs.Count == 1)
+        {
+            return outputs[0] ?? string.Empty;
+        }
+
+        var sections = new List<string>
+        {
+            "[IlVerifyRunner] Verification incomplete: ilverify crashed; recovering findings from non-crashing members.",
+        };
+        for (int i = 0; i < outputs.Count; i++)
+        {
+            string excluded = i == 0
+                ? "<none>"
+                : string.Join(", ", excludedMembers.Take(i));
+            sections.Add(
+                "[IlVerifyRunner] Attempt " + (i + 1) + "; excluded: " + excluded +
+                Environment.NewLine + (outputs[i] ?? string.Empty));
+        }
+
+        return string.Join(Environment.NewLine, sections);
     }
 
     private static bool IsAvaloniaXamlCompilerFalsePositive(IlVerifyError error)
@@ -405,14 +511,6 @@ public class IlVerifyRunner
 
         return Environment.CurrentDirectory;
     }
-
-    private (int Exit, string Output) RunDotnet(IReadOnlyList<string> arguments)
-    {
-        // The local tool manifest is discovered relative to the working
-        // directory; anchor at the repo root. All paths are passed absolute.
-        ProcessRunResult result = ProcessRunner.Run("dotnet", arguments, this.RepoRoot, DotnetToolTimeout);
-        return (result.ExitCode, result.Output);
-    }
 }
 
 /// <summary>
@@ -453,12 +551,14 @@ public sealed class IlVerifyResult
         IlVerifyStatus status,
         int exitCode,
         string output,
-        IReadOnlyList<IlVerifyError> errors)
+        IReadOnlyList<IlVerifyError> errors,
+        IReadOnlyList<string> incompleteMembers = null)
     {
         this.Status = status;
         this.ExitCode = exitCode;
         this.Output = output;
         this.Errors = errors ?? Array.Empty<IlVerifyError>();
+        this.IncompleteMembers = incompleteMembers ?? Array.Empty<string>();
     }
 
     /// <summary>Gets the verification status.</summary>
@@ -473,8 +573,12 @@ public sealed class IlVerifyResult
     /// <summary>Gets the parsed, false-positive-filtered errors (empty on pass).</summary>
     public IReadOnlyList<IlVerifyError> Errors { get; }
 
+    /// <summary>Gets members excluded after they crashed ilverify.</summary>
+    public IReadOnlyList<string> IncompleteMembers { get; }
+
     /// <summary>Gets a value indicating whether the stage-3 gate held.</summary>
-    public bool Succeeded => this.Status != IlVerifyStatus.Failed;
+    public bool Succeeded =>
+        this.Status == IlVerifyStatus.Passed || this.Status == IlVerifyStatus.Skipped;
 
     /// <summary>Creates a skipped result (verification bypassed or no assembly).</summary>
     /// <returns>A skipped <see cref="IlVerifyResult"/>.</returns>
@@ -496,20 +600,42 @@ public sealed class IlVerifyResult
     public static IlVerifyResult Failed(int exitCode, string output, IReadOnlyList<IlVerifyError> errors) =>
         new IlVerifyResult(IlVerifyStatus.Failed, exitCode, output, errors);
 
+    /// <summary>Creates an incomplete result after an abnormal tool exit.</summary>
+    /// <param name="exitCode">The abnormal ilverify exit code.</param>
+    /// <param name="output">The combined original and recovery output.</param>
+    /// <param name="errors">Findings recovered from non-crashing members.</param>
+    /// <param name="incompleteMembers">Members excluded because they crashed ilverify.</param>
+    /// <returns>An incomplete <see cref="IlVerifyResult"/>.</returns>
+    public static IlVerifyResult Incomplete(
+        int exitCode,
+        string output,
+        IReadOnlyList<IlVerifyError> errors,
+        IReadOnlyList<string> incompleteMembers = null) =>
+        new IlVerifyResult(IlVerifyStatus.Incomplete, exitCode, output, errors, incompleteMembers);
+
     /// <summary>
-    /// Decides pass/fail from a completed ilverify run (#1747): exit 0 is the
+    /// Classifies a completed ilverify run (#1747/#2748): exit 0 is the
     /// only signal ilverify gives for "verified clean" — the <c>-g</c> ignore
     /// flags plus <see cref="IlVerifyRunner.FilterIgnored"/> already strip known
-    /// false positives before this runs, so a zero exit is trusted as-is. Any
-    /// non-zero exit is a failure, whether or not error lines parsed: a
-    /// tool crash / offline restore / a future ilverify output-format change
-    /// must never be silently swallowed as a pass just because
-    /// <see cref="IlVerifyRunner.ParseErrors"/> found nothing to report.
+    /// false positives before this runs, so a zero exit is trusted as-is. Exit
+    /// 2 with parsed findings is an ordinary verifier failure. Every other
+    /// non-zero result is incomplete: a tool crash / offline restore / future
+    /// output-format change must never look like either a complete failure set
+    /// or a pass.
     /// </summary>
     /// <param name="exitCode">The ilverify process exit code.</param>
     /// <param name="output">The tool's combined stdout+stderr.</param>
     /// <param name="errors">The parsed, false-positive-filtered errors.</param>
-    /// <returns>A passing or failing <see cref="IlVerifyResult"/>.</returns>
-    public static IlVerifyResult FromRun(int exitCode, string output, IReadOnlyList<IlVerifyError> errors) =>
-        exitCode == 0 ? Passed(output, errors) : Failed(exitCode, output, errors);
+    /// <returns>A passed, failed, or incomplete <see cref="IlVerifyResult"/>.</returns>
+    public static IlVerifyResult FromRun(int exitCode, string output, IReadOnlyList<IlVerifyError> errors)
+    {
+        if (exitCode == 0)
+        {
+            return Passed(output, errors);
+        }
+
+        return exitCode == 2 && errors is { Count: > 0 }
+            ? Failed(exitCode, output, errors)
+            : Incomplete(exitCode, output, errors);
+    }
 }

@@ -268,41 +268,133 @@ public class IlVerifyStageTests
     public void FromRun_NonZeroExitWithErrors_IsFailed()
     {
         var errors = new[] { new IlVerifyError("StackUnexpected", "P::Main(string[])", SampleErrorLine) };
-        IlVerifyResult result = IlVerifyResult.FromRun(1, SampleErrorLine, errors);
+        IlVerifyResult result = IlVerifyResult.FromRun(2, SampleErrorLine, errors);
         Assert.Equal(IlVerifyStatus.Failed, result.Status);
         Assert.False(result.Succeeded);
     }
 
     /// <summary>
-    /// #1747: this is the bug's core case — ilverify crashes (or its output
-    /// format no longer matches <see cref="IlVerifyRunner.ParseErrors"/>) and
-    /// exits non-zero with zero parseable error lines. Before the fix this
-    /// silently returned Passed, permanently defeating the gate; it must now
-    /// return Failed so <see cref="IlVerifyStage"/>'s synthetic-artifact
-    /// fallback is reachable.
+    /// #1747/#2748: a non-verifier exit is explicitly incomplete, never passed
+    /// or treated as an ordinary verifier failure.
     /// </summary>
     [Fact]
-    public void FromRun_NonZeroExitWithNoParseableErrors_IsFailed_NotSilentlyPassed()
+    public void FromRun_NonZeroExitWithNoParseableErrors_IsIncomplete()
     {
         IlVerifyResult result = IlVerifyResult.FromRun(134, "Segmentation fault (core dumped)", Array.Empty<IlVerifyError>());
-        Assert.Equal(IlVerifyStatus.Failed, result.Status);
+        Assert.Equal(IlVerifyStatus.Incomplete, result.Status);
         Assert.False(result.Succeeded);
         Assert.Equal(134, result.ExitCode);
     }
 
     /// <summary>
-    /// #1747: when <see cref="IlVerifyRunner.Verify"/> reports a tool-crash
-    /// Failed result (non-zero exit, no parseable errors), the stage must not
-    /// pass silently — it hits the synthetic-artifact fallback in
-    /// <c>IlVerifyStage</c> (ExecuteAsync's <c>artifacts.Count == 0</c> branch)
-    /// and reports <see cref="StageOutcome"/> failed with one synthetic
-    /// <c>ilverify-failure</c> artifact.
+    /// #2748: a crash before any finding is retried with the crashing member
+    /// excluded, recovering findings from methods that follow it.
     /// </summary>
     [Fact]
-    public async Task ExecuteAsync_ToolCrash_FailsStage_WithSyntheticArtifact()
+    public void Verify_CrashBeforeFindings_RecoversPostCrashFinding()
+    {
+        var runner = new ScriptedIlVerifyRunner((attempt, arguments) =>
+        {
+            if (attempt == 1)
+            {
+                return (1, "Verifying [App]Program.Crash\nSystem.IndexOutOfRangeException");
+            }
+
+            Assert.Contains("--exclude", arguments);
+            return (2, ErrorLine("PostCrash"));
+        });
+        string assembly = FakeAssembly("crash-before-findings");
+
+        IlVerifyResult result = runner.Verify(assembly);
+
+        Assert.Equal(IlVerifyStatus.Incomplete, result.Status);
+        Assert.Equal("Program::PostCrash()", Assert.Single(result.Errors).Method);
+        Assert.Equal("[App]Program.Crash", Assert.Single(result.IncompleteMembers));
+        Assert.Equal(2, runner.Attempts);
+        File.Delete(assembly);
+    }
+
+    /// <summary>
+    /// #2748: findings printed before a crash and findings recovered after it
+    /// are both retained without duplicating pre-crash output from the retry.
+    /// </summary>
+    [Fact]
+    public void Verify_CrashAfterFinding_ReportsPreAndPostCrashFindings()
+    {
+        var runner = new ScriptedIlVerifyRunner((attempt, _) =>
+        {
+            string pre = ErrorLine("PreCrash");
+            return attempt == 1
+                ? (1, pre + "\nVerifying [App]Program.Crash\nSystem.IndexOutOfRangeException")
+                : (2, pre + "\n" + ErrorLine("PostCrash"));
+        });
+        string assembly = FakeAssembly("crash-after-finding");
+
+        IlVerifyResult result = runner.Verify(assembly);
+
+        Assert.Equal(IlVerifyStatus.Incomplete, result.Status);
+        Assert.Equal(
+            new[] { "Program::PostCrash()", "Program::PreCrash()" },
+            result.Errors.Select(e => e.Method).OrderBy(method => method).ToArray());
+        Assert.Contains("Verification incomplete", result.Output, StringComparison.Ordinal);
+        File.Delete(assembly);
+    }
+
+    /// <summary>A zero-output abnormal exit remains explicitly incomplete.</summary>
+    [Fact]
+    public void Verify_ZeroOutputCrash_IsIncompleteWithoutInventedFinding()
+    {
+        var runner = new ScriptedIlVerifyRunner((_, _) => (134, string.Empty));
+        string assembly = FakeAssembly("zero-output-crash");
+
+        IlVerifyResult result = runner.Verify(assembly);
+
+        Assert.Equal(IlVerifyStatus.Incomplete, result.Status);
+        Assert.Empty(result.Errors);
+        Assert.Empty(result.IncompleteMembers);
+        Assert.Equal(1, runner.Attempts);
+        File.Delete(assembly);
+    }
+
+    /// <summary>An ordinary ilverify error exit remains a normal failure.</summary>
+    [Fact]
+    public void Verify_NormalVerifierFailure_IsFailedWithoutRecovery()
+    {
+        var runner = new ScriptedIlVerifyRunner((_, _) => (2, ErrorLine("Bad")));
+        string assembly = FakeAssembly("normal-failure");
+
+        IlVerifyResult result = runner.Verify(assembly);
+
+        Assert.Equal(IlVerifyStatus.Failed, result.Status);
+        Assert.Single(result.Errors);
+        Assert.Equal(1, runner.Attempts);
+        File.Delete(assembly);
+    }
+
+    /// <summary>A clean ilverify exit remains passed.</summary>
+    [Fact]
+    public void Verify_NormalVerifierPass_IsPassedWithoutRecovery()
+    {
+        var runner = new ScriptedIlVerifyRunner((_, _) => (0, "All Classes and Methods Verified."));
+        string assembly = FakeAssembly("normal-pass");
+
+        IlVerifyResult result = runner.Verify(assembly);
+
+        Assert.Equal(IlVerifyStatus.Passed, result.Status);
+        Assert.True(result.Succeeded);
+        Assert.Equal(1, runner.Attempts);
+        File.Delete(assembly);
+    }
+
+    /// <summary>
+    /// The stage emits recovered findings and a separate incompleteness
+    /// artifact, so neither signal can hide the other.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_ToolCrash_FailsStage_WithRecoveredAndIncompleteArtifacts()
     {
         string outRoot = NewOutputRoot("ilverify-tool-crash");
-        var runner = new CrashingIlVerifyRunner();
+        var runner = new IncompleteIlVerifyRunner();
         var stage = new IlVerifyStage(runner);
 
         string fakeAssembly = Path.Combine(outRoot, "App.dll");
@@ -323,14 +415,44 @@ public class IlVerifyStageTests
         StageOutcome outcome = await stage.ExecuteAsync(context);
 
         Assert.Equal(StageStatus.Failed, outcome.Status);
-        TriageArtifact artifact = Assert.Single(outcome.Artifacts);
-        Assert.Equal("ilverify-failure", artifact.Category);
+        Assert.Equal(2, outcome.Artifacts.Count);
+        Assert.Contains(outcome.Artifacts, artifact => artifact.Diagnostic.Id == "StackUnexpected");
+        TriageArtifact incomplete = Assert.Single(
+            outcome.Artifacts,
+            artifact => artifact.Diagnostic.Id == "IlVerifyIncomplete");
+        Assert.Contains("Verification incomplete", incomplete.Diagnostic.Message, StringComparison.Ordinal);
+        Assert.Contains("[App]Program.Crash", incomplete.Diagnostic.Message, StringComparison.Ordinal);
     }
 
-    private sealed class CrashingIlVerifyRunner : IlVerifyRunner
+    private sealed class IncompleteIlVerifyRunner : IlVerifyRunner
     {
         public override IlVerifyResult Verify(string assemblyPath, IReadOnlyList<string> additionalReferences = null) =>
-            IlVerifyResult.FromRun(134, "Segmentation fault (core dumped)", Array.Empty<IlVerifyError>());
+            IlVerifyResult.Incomplete(
+                1,
+                "System.IndexOutOfRangeException",
+                new[] { new IlVerifyError("StackUnexpected", "Program::Recovered()", ErrorLine("Recovered")) },
+                new[] { "[App]Program.Crash" });
+    }
+
+    private sealed class ScriptedIlVerifyRunner : IlVerifyRunner
+    {
+        private readonly Func<int, IReadOnlyList<string>, (int Exit, string Output)> run;
+
+        public ScriptedIlVerifyRunner(
+            Func<int, IReadOnlyList<string>, (int Exit, string Output)> run)
+        {
+            this.run = run;
+        }
+
+        public int Attempts { get; private set; }
+
+        public override bool EnsureToolAvailable() => true;
+
+        protected override (int Exit, string Output) RunDotnet(IReadOnlyList<string> arguments)
+        {
+            this.Attempts++;
+            return this.run(this.Attempts, arguments);
+        }
     }
 
     /// <summary>
@@ -394,6 +516,19 @@ public class IlVerifyStageTests
         Directory.CreateDirectory(root);
         return root;
     }
+
+    private static string FakeAssembly(string label)
+    {
+        string path = Path.Combine(
+            NewOutputRoot(label),
+            "App.dll");
+        File.WriteAllBytes(path, Array.Empty<byte>());
+        return path;
+    }
+
+    private static string ErrorLine(string method) =>
+        "[IL]: Error [StackUnexpected]: [/abs/App.dll : Program::" + method +
+        "()][offset 0x00000001] Unexpected type on the stack.";
 
     private static void EmitAvaloniaXamlClosureFixture(string path)
     {

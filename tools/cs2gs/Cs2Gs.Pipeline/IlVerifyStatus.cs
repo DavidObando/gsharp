@@ -17,4 +17,10 @@ public enum IlVerifyStatus
 
     /// <summary>Verification ran and reported real errors.</summary>
     Failed,
+
+    /// <summary>
+    /// Verification did not complete because ilverify crashed or otherwise
+    /// exited without its normal pass/fail result.
+    /// </summary>
+    Incomplete,
 }
