@@ -693,27 +693,10 @@ internal sealed class FunctionEmitter
             // `out`, .In for `in`. `ref` carries neither (the CLR distinguishes ref from
             // out only via the .out flag); the `in` parameter also gets an
             // IsReadOnlyAttribute custom attribute below.
-            var paramAttributes = ParameterAttributes.None;
-            if (p.RefKind == RefKind.Out)
-            {
-                paramAttributes |= ParameterAttributes.Out;
-            }
-            else if (p.RefKind == RefKind.In)
-            {
-                paramAttributes |= ParameterAttributes.In;
-            }
-
-            // ADR-0063 §10: optional parameters with a compile-time constant
-            // default get the Optional+HasDefault flags plus a Constant row.
-            if (p.HasExplicitDefaultValue)
-            {
-                paramAttributes |= ParameterAttributes.Optional | ParameterAttributes.HasDefault;
-            }
-
-            var paramHandle = this.emitCtx.Metadata.AddParameter(
-                attributes: paramAttributes,
-                name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? string.Empty),
-                sequenceNumber: sequenceNumber++);
+            var paramHandle = ParameterMetadataEmitter.AddParameter(
+                this.emitCtx,
+                p,
+                sequenceNumber++);
 
             if (p.RefKind == RefKind.In)
             {
@@ -728,12 +711,6 @@ internal sealed class FunctionEmitter
             if (p.IsVariadic)
             {
                 this.outer.customAttrEncoder.EmitParamArrayAttributeOnParameter(paramHandle);
-            }
-
-            // ADR-0063 §10: emit the Constant row carrying the default value.
-            if (p.HasExplicitDefaultValue)
-            {
-                this.emitCtx.Metadata.AddConstant(paramHandle, p.ExplicitDefaultValue);
             }
 
             paramHandles.Add((p, paramHandle, paramFlagsList[flagsIndex++]));
@@ -1038,10 +1015,11 @@ internal sealed class FunctionEmitter
                 paramAttrs |= ParameterAttributes.HasFieldMarshal;
             }
 
-            var paramHandle = this.emitCtx.Metadata.AddParameter(
-                attributes: paramAttrs,
-                name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? string.Empty),
-                sequenceNumber: sequenceNumber++);
+            var paramHandle = ParameterMetadataEmitter.AddParameter(
+                this.emitCtx,
+                p,
+                sequenceNumber++,
+                paramAttrs);
             paramHandles.Add((p, paramHandle));
 
             if (p.MarshalAsMetadata != null)
@@ -1258,10 +1236,11 @@ internal sealed class FunctionEmitter
                 outerParamAttrs |= ParameterAttributes.HasFieldMarshal;
             }
 
-            var paramHandle = this.emitCtx.Metadata.AddParameter(
-                attributes: outerParamAttrs,
-                name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? string.Empty),
-                sequenceNumber: outerSeq++);
+            var paramHandle = ParameterMetadataEmitter.AddParameter(
+                this.emitCtx,
+                p,
+                outerSeq++,
+                outerParamAttrs);
             outerParamHandles.Add((p, paramHandle));
 
             if (p.MarshalAsMetadata != null)

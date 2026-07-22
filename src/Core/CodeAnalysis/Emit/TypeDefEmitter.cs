@@ -1062,22 +1062,11 @@ internal sealed class TypeDefEmitter
         {
             var p = delegateSym.Parameters[i];
 
-            // ADR-0060 §12: stamp the Parameter row with .Out / .In for ref-kind delegate
-            // parameters, and attach IsReadOnlyAttribute for `in`.
-            var paramAttributes = ParameterAttributes.None;
-            if (p.RefKind == RefKind.Out)
-            {
-                paramAttributes |= ParameterAttributes.Out;
-            }
-            else if (p.RefKind == RefKind.In)
-            {
-                paramAttributes |= ParameterAttributes.In;
-            }
-
-            var paramHandle = this.emitCtx.Metadata.AddParameter(
-                attributes: paramAttributes,
-                name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? $"arg{i + 1}"),
-                sequenceNumber: (ushort)(i + 1));
+            var paramHandle = ParameterMetadataEmitter.AddParameter(
+                this.emitCtx,
+                p,
+                i + 1,
+                fallbackName: $"arg{i + 1}");
             invokeParamHandles.Add(paramHandle);
 
             if (p.RefKind == RefKind.In)
@@ -1306,20 +1295,7 @@ internal sealed class TypeDefEmitter
         for (var i = 0; i < parameters.Length; i++)
         {
             var p = parameters[i];
-            var paramAttributes = ParameterAttributes.None;
-            if (p.RefKind == RefKind.Out)
-            {
-                paramAttributes |= ParameterAttributes.Out;
-            }
-            else if (p.RefKind == RefKind.In)
-            {
-                paramAttributes |= ParameterAttributes.In;
-            }
-
-            var paramHandle = this.emitCtx.Metadata.AddParameter(
-                attributes: paramAttributes,
-                name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? string.Empty),
-                sequenceNumber: i + 1);
+            var paramHandle = ParameterMetadataEmitter.AddParameter(this.emitCtx, p, i + 1);
             handles.Add(paramHandle);
 
             if (p.RefKind == RefKind.In)
@@ -1628,19 +1604,8 @@ internal sealed class TypeDefEmitter
         for (var i = 0; i < parameters.Length; i++)
         {
             var p = parameters[i];
-            var attributes = p.HasExplicitDefaultValue
-                ? ParameterAttributes.Optional | ParameterAttributes.HasDefault
-                : ParameterAttributes.None;
-            var paramHandle = this.emitCtx.Metadata.AddParameter(
-                attributes: attributes,
-                name: this.emitCtx.Metadata.GetOrAddString(p.Name ?? string.Empty),
-                sequenceNumber: i + 1);
+            var paramHandle = ParameterMetadataEmitter.AddParameter(this.emitCtx, p, i + 1);
             handles.Add(paramHandle);
-
-            if (p.HasExplicitDefaultValue)
-            {
-                this.emitCtx.Metadata.AddConstant(paramHandle, p.ExplicitDefaultValue);
-            }
 
             if (p.IsVariadic)
             {
