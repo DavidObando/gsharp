@@ -142,7 +142,8 @@ public static class AsyncIteratorMoveNextBodyBuilder
             // return; (after try/catch)
             stmts.Add(new BoundReturnStatement(null, null));
 
-            return new BoundBlockStatement(null, stmts.ToImmutable());
+            return AsyncIteratorProtectedRegionBranchRewriter.Rewrite(
+                new BoundBlockStatement(null, stmts.ToImmutable()));
         }
 
         private BoundBlockStatement BuildTryBody()
