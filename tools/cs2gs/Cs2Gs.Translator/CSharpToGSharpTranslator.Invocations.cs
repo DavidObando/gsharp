@@ -1425,6 +1425,19 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            // Issue #2766: plain structs now preserve source constructors as
+            // callable G# init members. Keep the call itself instead of replaying
+            // assignments into a literal; record structs retain their separate
+            // data-struct lowering path (#2744).
+            if (!valueType.IsRecord &&
+                ctorSymbol.DeclaringSyntaxReferences.Length == 1 &&
+                ctorSymbol.DeclaringSyntaxReferences[0].GetSyntax() is ConstructorDeclarationSyntax)
+            {
+                usesCallablePrimaryConstructor = true;
+                unsupportedReason = null;
+                return true;
+            }
+
             if (!this.TryAnalyzeStructConstructor(
                 ctorSymbol,
                 valueType,

@@ -72,7 +72,7 @@ public partial class Parser
 
     /// <summary>
     /// Issue #306: parses a standalone user-defined constructor
-    /// <c>init(params) [: base(args)] { body }</c> inside a class body.
+    /// <c>init(params) [: base(args)] { body }</c> inside a class or plain-struct body.
     /// ADR-0065 §2: accepts an optional leading <c>convenience</c> contextual
     /// modifier passed in by the caller.
     /// </summary>

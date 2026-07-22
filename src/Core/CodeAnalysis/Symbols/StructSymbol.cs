@@ -583,7 +583,7 @@ public sealed class StructSymbol : TypeSymbol
 
     /// <summary>
     /// Gets the standalone user-defined constructor (<c>init(...)</c>) declared on
-    /// this class (issue #306), or <c>null</c> when the class has none. When non-null
+    /// this class or plain struct (issues #306/#2766), or <c>null</c> when the aggregate has none. When non-null
     /// the emitter materializes exactly one <c>.ctor</c> (this constructor) and
     /// suppresses the auto-generated parameterless / primary constructor.
     /// </summary>
@@ -597,7 +597,7 @@ public sealed class StructSymbol : TypeSymbol
 
     /// <summary>
     /// Gets every user-defined <c>init(...)</c> constructor declared on
-    /// this class in declaration order (ADR-0063). Empty when the class has no
+    /// this class or plain struct in declaration order (ADR-0063). Empty when the aggregate has no
     /// explicit constructor declarations. The first element always equals
     /// <see cref="ExplicitConstructor"/>.
     /// </summary>
@@ -659,7 +659,7 @@ public sealed class StructSymbol : TypeSymbol
         BaseConstructorInitializer = initializer;
     }
 
-    /// <summary>Sets <see cref="ExplicitConstructor"/> after binding the class body (issue #306).</summary>
+    /// <summary>Sets <see cref="ExplicitConstructor"/> after binding the class or plain-struct body (issues #306/#2766).</summary>
     /// <param name="constructor">The resolved standalone constructor.</param>
     public void SetExplicitConstructor(ConstructorSymbol constructor)
     {
@@ -672,7 +672,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <summary>
     /// ADR-0063: sets <see cref="ExplicitConstructors"/> (and surfaces the first
     /// declaration as the legacy <see cref="ExplicitConstructor"/>). Intended to
-    /// be called exactly once by the binder for a class that declares one or
+    /// be called exactly once by the binder for an aggregate that declares one or
     /// more <c>init(...)</c> constructors.
     /// </summary>
     /// <param name="constructors">The resolved standalone constructors in declaration order.</param>

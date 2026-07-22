@@ -1992,12 +1992,17 @@ internal sealed class ReflectionMetadataEmitter
         var structFirstMethodRows = new Dictionary<StructSymbol, int>();
         void PlanStructMethods(StructSymbol s)
         {
-            if (s.Methods.IsDefaultOrEmpty && !s.IsInline && !s.IsData && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty && !s.HasStaticInitializerBlock)
+            if (s.Methods.IsDefaultOrEmpty && s.ExplicitConstructors.IsDefaultOrEmpty && !s.IsInline && !s.IsData && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty && !s.HasStaticInitializerBlock)
             {
                 return;
             }
 
             structFirstMethodRows[s] = methodRow;
+            if (!s.ExplicitConstructors.IsDefaultOrEmpty)
+            {
+                methodRow += s.ExplicitConstructors.Length;
+            }
+
             if (s.IsInline)
             {
                 methodRow += 8;
@@ -2406,7 +2411,16 @@ internal sealed class ReflectionMetadataEmitter
         // classPrimaryCtorRows.
         foreach (var s in nonSmStructs)
         {
-            if (s.IsInline && structFirstMethodRows.TryGetValue(s, out var inlineCtorRow))
+            if (!s.ExplicitConstructors.IsDefaultOrEmpty
+                && structFirstMethodRows.TryGetValue(s, out var explicitCtorRow))
+            {
+                for (int i = 0; i < s.ExplicitConstructors.Length; i++)
+                {
+                    this.cache.ExplicitCtorHandles[s.ExplicitConstructors[i]] =
+                        MetadataTokens.MethodDefinitionHandle(explicitCtorRow + i);
+                }
+            }
+            else if (s.IsInline && structFirstMethodRows.TryGetValue(s, out var inlineCtorRow))
             {
                 this.cache.ClassPrimaryCtorHandles[s] = MetadataTokens.MethodDefinitionHandle(inlineCtorRow);
             }
@@ -3413,6 +3427,15 @@ internal sealed class ReflectionMetadataEmitter
         // 4b. Non-SM struct methods.
         void EmitStructMethodBodies(StructSymbol s)
         {
+            if (!s.ExplicitConstructors.IsDefaultOrEmpty)
+            {
+                foreach (var explicitCtor in s.ExplicitConstructors)
+                {
+                    var ctorHandle = this.typeDefEmitter.EmitClassConstructorWithBody(s, explicitCtor);
+                    this.cache.ExplicitCtorHandles[explicitCtor] = ctorHandle;
+                }
+            }
+
             if (s.IsInline)
             {
                 this.dataStructSynth.EmitInlineStructSynthesizedMembers(s);
@@ -3425,7 +3448,7 @@ internal sealed class ReflectionMetadataEmitter
                 this.dataStructSynth.EmitDataStructSynthesizedMembers(s);
             }
 
-            if (s.Methods.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty && !s.HasStaticInitializerBlock)
+            if (s.Methods.IsDefaultOrEmpty && s.ExplicitConstructors.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty && !s.HasStaticInitializerBlock)
             {
                 return;
             }

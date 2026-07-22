@@ -95,7 +95,7 @@ internal sealed partial class MethodBodyEmitter
     /// ADR-0065 §2: emits the CIL for a <c>init(args)</c> self-delegation
     /// statement that appears inside a <c>convenience init(...)</c> body.
     /// Lowered to <c>ldarg.0; &lt;args&gt;; call &lt;ctor&gt;</c> chaining to a
-    /// sibling constructor on the same class.
+    /// sibling constructor on the same aggregate.
     /// </summary>
     /// <param name="call">The bound chaining expression to emit.</param>
     private void EmitConstructorChaining(BoundConstructorChainingExpression call)

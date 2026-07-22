@@ -1241,7 +1241,7 @@ internal sealed partial class OverloadResolver
     /// <summary>
     /// ADR-0065 §2: binds a bare <c>init(args)</c> self-delegation call inside a
     /// constructor body. The selected sibling constructor must be a different
-    /// member of the same class's <see cref="StructSymbol.ExplicitConstructors"/>
+    /// member of the same aggregate's <see cref="StructSymbol.ExplicitConstructors"/>
     /// overload set. Designated initializers may not chain to a sibling; only
     /// <c>convenience init</c> bodies may issue an <c>init(args)</c> self-delegation.
     /// </summary>

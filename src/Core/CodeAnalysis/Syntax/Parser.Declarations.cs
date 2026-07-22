@@ -1364,8 +1364,10 @@ public partial class Parser
 
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "init" && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
             {
-                // Issue #306: standalone user-defined constructor
-                // `init(params) [: base(args)] { body }`. Only valid for classes.
+                // Issue #306 / #2766: standalone user-defined constructor
+                // `init(params) [: base(args)] { body }`. Plain structs admit
+                // constructors too; data/inline structs retain their canonical
+                // primary-constructor-only shape.
                 if (memberOpenModifier != null || memberOverrideModifier != null)
                 {
                     var loc = (memberOpenModifier ?? memberOverrideModifier).Location;
@@ -1377,7 +1379,10 @@ public partial class Parser
                     Diagnostics.ReportUnexpectedToken(memberAsyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);
                 }
 
-                if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword)
+                if (structOrClassKeyword.Kind != SyntaxKind.ClassKeyword
+                    && (structOrClassKeyword.Kind != SyntaxKind.StructKeyword
+                        || dataKeyword != null
+                        || inlineKeyword != null))
                 {
                     Diagnostics.ReportUnexpectedToken(Current.Location, Current.Kind, SyntaxKind.IdentifierToken);
                 }

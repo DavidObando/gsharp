@@ -596,7 +596,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <summary>Gets a value indicating whether this class was declared <c>sealed</c> (ADR-0078).</summary>
     public bool IsSealed => SealedKeyword != null;
 
-    /// <summary>Gets or sets the optional standalone user-defined constructors (<c>init(...)</c>) declared in this class body (issue #306). Empty when the class declares none. Assigned by the parser.</summary>
+    /// <summary>Gets or sets the optional standalone user-defined constructors (<c>init(...)</c>) declared in this class or plain-struct body (issues #306/#2766). Empty when the aggregate declares none. Assigned by the parser.</summary>
     public System.Collections.Immutable.ImmutableArray<ConstructorDeclarationSyntax> Constructors
     {
         get => constructors;

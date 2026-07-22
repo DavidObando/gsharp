@@ -665,7 +665,7 @@ internal sealed class ConstructorBodyEmitter
     }
 
     /// <summary>
-    /// Issue #306: builds the IL body for a class constructor materialized
+    /// Issue #306 / #2766: builds the IL body for a class or plain-struct constructor materialized
     /// from an explicit <c>init(...)</c> declaration. Chains to the base
     /// (either the explicit <c>: base(args)</c> initializer or the
     /// conventional parameterless chain) and then runs the user-authored
@@ -725,26 +725,40 @@ internal sealed class ConstructorBodyEmitter
         }
 
         var localsSignature = session.BuildLocalsSignature();
-        var emitter = session.CreateEmitter(paramSlots);
+        var emitter = session.CreateEmitter(
+            paramSlots,
+            structThisParameter: classSym.IsClass ? null : function.ThisParameter);
 
         // ADR-0065 §2: a `convenience init(...)` does NOT chain to the base
         // constructor itself — the user-authored body begins with an
         // `init(args)` self-delegation (BoundConstructorChainingExpression)
-        // that calls a sibling constructor on the same class. That sibling
+        // that calls a sibling constructor on the same aggregate. That sibling
         // is responsible for the base chain. We also skip the instance
         // field-initializer emit step here: the chained-to designated
         // initializer will run those initializers exactly once.
         if (!ctor.IsConvenience)
         {
-            // base(args) — `this` followed by the (ref-kind aware) base arguments.
-            il.LoadArgument(0);
-            if (init != null && !init.Arguments.IsDefaultOrEmpty)
+            if (classSym.IsClass)
             {
-                emitter.EmitBaseConstructorArguments(init.Arguments, init.ArgumentRefKinds);
-            }
+                // base(args) — `this` followed by the (ref-kind aware) base arguments.
+                il.LoadArgument(0);
+                if (init != null && !init.Arguments.IsDefaultOrEmpty)
+                {
+                    emitter.EmitBaseConstructorArguments(init.Arguments, init.ArgumentRefKinds);
+                }
 
-            il.OpCode(ILOpCode.Call);
-            il.Token(baseCtorToken);
+                il.OpCode(ILOpCode.Call);
+                il.Token(baseCtorToken);
+            }
+            else
+            {
+                // CLR value-type constructors do not call System.ValueType::.ctor.
+                // Zero the receiver first, matching C#'s definite-assignment/default
+                // initialization semantics for fields the source body does not write.
+                il.LoadArgument(0);
+                il.OpCode(ILOpCode.Initobj);
+                il.Token(this.outer.userTokens.ResolveUserTypeToken(classSym));
+            }
 
             // Issue #640: emit instance field initializer assignments before
             // the user-authored constructor body (matching C# semantics).

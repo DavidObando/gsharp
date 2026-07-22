@@ -13,27 +13,14 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Issue #1915 (sub-bug a): <c>TryAnalyzeStructConstructor</c> (issue #1739's
-/// ctor-to-composite-literal "zip" detection, used to translate a positional
-/// <c>new T(a, b)</c> on a struct that has no callable G# constructor into a G#
-/// composite literal <c>T{a: ..., b: ...}</c>) compared a resolved field/
-/// property's <c>ContainingType</c> against the CONSTRUCTED <c>valueType</c>
-/// (e.g. <c>Slot&lt;int&gt;</c>) and a resolved parameter's <c>ContainingSymbol</c>
-/// against the CONSTRUCTED ctor symbol — but the ctor body is walked via a
-/// semantic model over its own declaring tree, which resolves those symbols
-/// against the type's UNSUBSTITUTED (open) definition (<c>Slot&lt;T&gt;</c>).
-/// For a generic struct the two never compared equal, so every ctor was
-/// rejected with "struct constructor assigns a member from something other
-/// than a plain, once-only parameter reference" even for the identical
-/// trivial assign-through pattern that zips fine on a non-generic struct.
-/// Fixed by keying the parameter→member map by parameter ORDINAL
-/// (substitution-invariant) and comparing containing symbols via
-/// <c>OriginalDefinition</c>.
+/// Issue #1915's generic source-struct construction cases. Issue #2766 now
+/// preserves the generic struct's real constructor and constructed call rather
+/// than replaying the constructor as a composite literal.
 /// </summary>
 public class Issue1915GenericStructCtorZipTranslationTests
 {
     [Fact]
-    public void GenericStruct_PlainParameterAssignCtor_ZipsToCompositeLiteral()
+    public void GenericStruct_PlainParameterAssignCtor_PreservesConstructedCall()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -51,11 +38,12 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Slot[int32]{_content: 42}", printed);
+        Assert.Contains("init(content T)", printed);
+        Assert.Contains("Slot[int32](42)", printed);
     }
 
     [Fact]
-    public void GenericStruct_MultiParameterCtor_ZipsInDeclaredParameterOrder()
+    public void GenericStruct_MultiParameterCtor_PreservesDeclaredParameterOrder()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -73,7 +61,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Pair[string]{First: \"a\", Second: \"b\"}", printed);
+        Assert.Contains("init(first T, second T)", printed);
+        Assert.Contains("Pair[string](\"a\", \"b\")", printed);
     }
 
     private static string TranslateUnit(string source)

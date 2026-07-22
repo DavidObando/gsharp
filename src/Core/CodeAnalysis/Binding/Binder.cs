@@ -1544,9 +1544,9 @@ public sealed class Binder
 
         // Issue #306: bind standalone user-defined constructor bodies. Like
         // instance methods, the constructor body sees `this`, the constructor
-        // parameters, and the class's fields (via bare names). The body is keyed
+        // parameters, and the aggregate's fields (via bare names). The body is keyed
         // in functionBodies by the constructor's underlying FunctionSymbol.
-        // ADR-0063 §9: a class may declare multiple init(...) constructors; each
+        // ADR-0063 §9 / issue #2766: an aggregate may declare multiple init(...) constructors; each
         // body is bound independently.
         foreach (var structSym in globalScope.Structs)
         {

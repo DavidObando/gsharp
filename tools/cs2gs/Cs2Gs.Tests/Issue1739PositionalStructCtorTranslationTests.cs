@@ -13,15 +13,9 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Translator-fidelity tests for issue #1739 — a positional <c>new T(a, b, c)</c>
-/// on a SOURCE struct used to zip the constructor arguments to the struct's
-/// members by bare DECLARATION order, ignoring the constructor's actual
-/// parameter→member assignments (silently swapping/misassigning values
-/// whenever a struct's member order differs from its constructor's parameter
-/// order), and its "settable" member filter actually tested READABILITY. The
-/// fix resolves the exact constructor Roslyn bound for the call site and walks
-/// its body for the trivial per-parameter assign-through pattern; anything
-/// that does not fit that pattern is reported unsupported rather than guessed.
+/// Translator-fidelity tests for issue #1739's source-struct construction
+/// cases. Issue #2766 supersedes literal replay for plain structs: their real
+/// constructor and call now preserve assignment order and arbitrary logic.
 /// </summary>
 public class Issue1739PositionalStructCtorTranslationTests
 {
@@ -44,18 +38,13 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("P{X: 1, Y: 2}", printed);
-        Assert.DoesNotContain("P{Y: 1, X: 2}", printed);
+        Assert.Contains("init(x int32, y int32)", printed);
+        Assert.Contains("P(1, 2)", printed);
     }
 
     [Fact]
     public void ReadOnlyComputedMember_NeverPickedAsAssignmentTarget()
     {
-        // Bug #2: the old filter tested `GetMethod != null` (readability) instead
-        // of true settability, so a get-only COMPUTED property (no backing
-        // storage, `=>` bodied) could still shift into the positional zip. It
-        // cannot be a ctor-assignment target (a ctor cannot legally assign it),
-        // so it must never appear in the struct literal.
         string printed = TranslateUnit(@"
 namespace Demo
 {
@@ -73,8 +62,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Rect{Width: 3, Height: 4}", printed);
-        Assert.DoesNotContain("Area:", printed);
+        Assert.Contains("Rect(3, 4)", printed);
+        Assert.Contains("prop Area", printed);
     }
 
     [Fact]
@@ -96,8 +85,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Vec{X: 1.5, Y: 2.5}", printed);
-        Assert.DoesNotContain("Vec{Y: 1.5, X: 2.5}", printed);
+        Assert.Contains("init(x float64, y float64)", printed);
+        Assert.Contains("Vec(1.5, 2.5)", printed);
     }
 
     [Fact]
@@ -114,18 +103,13 @@ namespace Demo
     }
 }");
 
-        // `data struct Pos(X, Y)` gets its own real, directly callable primary
-        // constructor in G#, so the positional call maps straight to it — not to
-        // a struct literal (unlike the plain-struct case above).
+        // Record/data-struct construction remains on its separate primary path.
         Assert.Contains("Pos(1, 2)", printed);
     }
 
     [Fact]
-    public void CtorParameterNotAssignedToAnyMember_ReportsUnsupported()
+    public void CtorParameterNotAssignedToAnyMember_PreservesCallableInit()
     {
-        // `max` feeds no member (e.g. it would drive validation logic elsewhere) —
-        // a struct literal has no ctor body to run that logic in, so the
-        // translator must flag the gap rather than guess a member for it.
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
         {
             ("Snippet.cs", @"
@@ -150,18 +134,19 @@ namespace Demo
 
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        _ = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
 
-        Assert.Contains(
+        Assert.DoesNotContain(
             context.Diagnostics,
-            d => d.Message.Contains("issue #1739", StringComparison.Ordinal));
+            d => d.Severity == TranslationSeverity.Unsupported);
+        string printed = GSharpPrinter.Print(unit);
+        Assert.Contains("init(value int32, max int32)", printed);
+        Assert.Contains("Bounded(value, max)", printed);
     }
 
     [Fact]
-    public void CtorAssignsTransformedValue_ReportsUnsupported()
+    public void CtorAssignsTransformedValue_PreservesCallableInit()
     {
-        // `Value = raw * 2` is a transformation, not a plain parameter
-        // assign-through — a struct literal cannot replay that logic.
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
         {
             ("Snippet.cs", @"
@@ -186,11 +171,14 @@ namespace Demo
 
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        _ = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
 
-        Assert.Contains(
+        Assert.DoesNotContain(
             context.Diagnostics,
-            d => d.Message.Contains("issue #1739", StringComparison.Ordinal));
+            d => d.Severity == TranslationSeverity.Unsupported);
+        string printed = GSharpPrinter.Print(unit);
+        Assert.Contains("Value = raw * 2", printed);
+        Assert.Contains("Scaled(raw)", printed);
     }
 
     private static string TranslateUnit(string source)
