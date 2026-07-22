@@ -123,7 +123,7 @@ public class Issue1933UnsafeIlVerifyPolicyTests
             "ExpectedNumericType",
             "Corpus.Grid05.SomeOtherFixture::Run()",
             "[IL]: Error [ExpectedNumericType]: [/abs/App.dll : Corpus.Grid05.SomeOtherFixture::Run()] boom");
-        IlVerifyResult fakeResult = IlVerifyResult.FromRun(1, error.RawLine, new[] { error });
+        IlVerifyResult fakeResult = IlVerifyResult.FromRun(2, error.RawLine, new[] { error });
 
         StageOutcome outcome = await RunWithFakeResultAsync(
             allowUnsafeIl: true,
@@ -211,7 +211,7 @@ public class Issue1933UnsafeIlVerifyPolicyTests
             "Corpus.Grid12.Constructs.PointerTypeFixture::Run()",
             "[IL]: Error [ExpectedNumericType]: [/abs/App.dll : Corpus.Grid12.Constructs.PointerTypeFixture::Run()]" +
                 "[offset 0x00000004][found address of Int32] Expected numeric type on the stack.");
-        return IlVerifyResult.FromRun(1, error.RawLine, new[] { error });
+        return IlVerifyResult.FromRun(2, error.RawLine, new[] { error });
     }
 
     private static async Task<StageOutcome> RunWithFakeResultAsync(
