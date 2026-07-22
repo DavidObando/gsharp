@@ -95,13 +95,11 @@ public class PropertyParserTests
     }
 
     [Fact]
-    public void AutoPropertyInDataStruct_ParsesButBinderReportsGS0419()
+    public void AutoPropertyInDataStruct_Parses()
     {
-        // The parser accepts prop in data struct; the binder reports GS0419.
         const string source = "package P\ndata struct P {\n  var X int32\n  prop Y int32\n}\n";
         var tree = SyntaxTree.Parse(source);
 
-        // Parser should not fail — diagnostic comes from binder.
         Assert.Empty(tree.Diagnostics);
     }
 

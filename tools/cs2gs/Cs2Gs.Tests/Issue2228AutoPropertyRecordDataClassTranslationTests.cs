@@ -18,10 +18,8 @@ namespace Cs2Gs.Tests;
 /// entirely in body <c>init</c>/get-only auto-properties (no positional
 /// primary-constructor parameters) must still translate to a G#
 /// <c>data class</c> — not downgrade to a plain <c>class</c> — so it keeps
-/// value equality and <c>with</c>-expression support. cs2gs lifts each such
-/// auto-property into a synthetic primary-constructor parameter (+ field),
-/// mirroring the existing lift already used for an explicit
-/// parameter-copy constructor (ADR-0115 §B.3/§B.4).
+/// value equality and <c>with</c>-expression support. The members remain
+/// properties so their init-only metadata and accessor semantics survive.
 /// </summary>
 public class Issue2228AutoPropertyRecordDataClassTranslationTests
 {
@@ -29,8 +27,8 @@ public class Issue2228AutoPropertyRecordDataClassTranslationTests
     /// The exact reported shape (<c>OahuConfig</c>): several init auto-properties,
     /// a nullable reference-typed property, an enum-typed property with a default
     /// via a member-access initializer, and a plain literal default — all must
-    /// survive as primary-constructor parameters on a 'data class', not be
-    /// dropped to a plain class.
+    /// survive as init-only properties on a 'data class', not be
+    /// downgraded to mutable fields or a plain class.
     /// </summary>
     [Fact]
     public void RecordWithOnlyInitAutoProperties_TranslatesToDataClass()
@@ -56,19 +54,20 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("data class OahuConfig(", printed);
-        Assert.DoesNotContain("class OahuConfig {", printed);
-        Assert.Contains("DownloadDirectory string = CliPaths.DefaultDownloadDir", printed);
-        Assert.Contains("DefaultQuality DownloadQuality = DownloadQuality.High", printed);
-        Assert.Contains("MaxParallelJobs int32 = 1", printed);
-        Assert.Contains("DefaultProfileAlias string?", printed);
-        Assert.Contains("Theme string?", printed);
-        Assert.Contains("VerboseLogging bool", printed);
+        Assert.Contains("data class OahuConfig {", printed);
+        Assert.DoesNotContain("\nclass OahuConfig {", printed);
+        Assert.Contains("private var _downloadDirectory string = CliPaths.DefaultDownloadDir", printed);
+        Assert.Contains("private var _defaultQuality DownloadQuality = DownloadQuality.High", printed);
+        Assert.Contains("private var _maxParallelJobs int32 = 1", printed);
+        Assert.Contains("prop DefaultProfileAlias string? {", printed);
+        Assert.Contains("prop Theme string? {", printed);
+        Assert.Contains("prop VerboseLogging bool {", printed);
+        Assert.Contains("init;", printed);
     }
 
     /// <summary>
     /// A record-struct-shaped auto-property-only record must reach a G#
-    /// 'data struct', not a plain struct, by the same lift.
+    /// 'data struct', not a plain struct, while retaining its init accessors.
     /// </summary>
     [Fact]
     public void RecordStructWithOnlyInitAutoProperties_TranslatesToDataStruct()
@@ -84,18 +83,19 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("data struct Point3(", printed);
-        Assert.DoesNotContain("struct Point3 {", printed);
+        Assert.Contains("data struct Point3 {", printed);
+        Assert.DoesNotContain("\nstruct Point3 {", printed);
+        Assert.Contains("prop X float64 {", printed);
+        Assert.Contains("init;", printed);
     }
 
     /// <summary>
     /// A record whose auto-property implements an interface member cannot be
-    /// lifted to a primary-constructor parameter (a G# primary-ctor parameter is
-    /// not a property, OD-T1) — it must still fall back to the existing plain
-    /// class downgrade rather than silently drop the interface contract.
+    /// remains a property, so the data class can preserve both its value
+    /// semantics and interface contract.
     /// </summary>
     [Fact]
-    public void RecordWithInterfaceAutoProperty_StillDowngradesToPlainClass()
+    public void RecordWithInterfaceAutoProperty_RemainsDataClassProperty()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -111,8 +111,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("class NamedThing", printed);
-        Assert.DoesNotContain("data class NamedThing", printed);
+        Assert.Contains("data class NamedThing", printed);
+        Assert.Contains("prop Name string {", printed);
     }
 
     private static string TranslateUnit(string source)

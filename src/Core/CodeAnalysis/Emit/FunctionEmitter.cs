@@ -410,6 +410,15 @@ internal sealed class FunctionEmitter
                     }
                     else
                     {
+                        if (function.IsInitOnlySetter)
+                        {
+                            var isExternalInit = this.outer.wellKnown.GetIsExternalInitTypeRef();
+                            if (!isExternalInit.IsNil)
+                            {
+                                r.CustomModifiers().AddModifier(isExternalInit, isOptional: false);
+                            }
+                        }
+
                         this.signatures.EncodeReturnSymbol(r, function.Type, function.ReturnRefKind);
                     }
                 },

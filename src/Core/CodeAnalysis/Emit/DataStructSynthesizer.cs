@@ -136,11 +136,8 @@ internal sealed class DataStructSynthesizer
     /// <see cref="FieldSymbol"/>s the Equals/GetHashCode/ToString/Deconstruct
     /// synthesis below should read/compare. A user-declared data struct
     /// (ADR-0029) always has plain public <see cref="StructSymbol.Fields"/>
-    /// (auto-properties are rejected on data structs by the binder — see
-    /// <c>Diagnostics.ReportAutoPropertyInDataStruct</c>); an anonymous-class
-    /// literal's synthesized type (<see cref="Binding.AnonymousTypeCache"/>)
-    /// instead has get-only auto-<see cref="StructSymbol.Properties"/> with no
-    /// plain fields, so its members are their <see cref="PropertySymbol.BackingField"/>s.
+    /// plus every auto-<see cref="StructSymbol.Properties"/> backing field.
+    /// This includes property-bodied records and anonymous-class literals.
     /// Issue #2363: since a zero-field data class/struct is now legal, a
     /// user-declared type can ALSO have empty <see cref="StructSymbol.Fields"/>
     /// while still declaring ordinary (non-auto) <see cref="StructSymbol.Properties"/>
@@ -152,20 +149,12 @@ internal sealed class DataStructSynthesizer
     /// </summary>
     private static ImmutableArray<FieldSymbol> GetSynthesisFields(StructSymbol structSym)
     {
-        if (!structSym.Fields.IsDefaultOrEmpty)
-        {
-            return structSym.Fields;
-        }
-
-        if (structSym.Properties.IsDefaultOrEmpty)
-        {
-            return ImmutableArray<FieldSymbol>.Empty;
-        }
-
-        var builder = ImmutableArray.CreateBuilder<FieldSymbol>(structSym.Properties.Length);
+        var builder = ImmutableArray.CreateBuilder<FieldSymbol>(
+            structSym.Fields.Length + structSym.Properties.Length);
+        builder.AddRange(structSym.Fields);
         foreach (var property in structSym.Properties)
         {
-            if (property.BackingField != null)
+            if (property.BackingField != null && !builder.Contains(property.BackingField))
             {
                 builder.Add(property.BackingField);
             }

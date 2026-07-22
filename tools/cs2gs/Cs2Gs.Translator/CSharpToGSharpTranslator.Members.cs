@@ -1808,6 +1808,15 @@ public sealed partial class CSharpToGSharpTranslator
             // TranslateExpression's FieldExpressionSyntax case) resolves to it.
             string fieldKeywordBackingName = this.TryRegisterFieldKeywordBackingField(
                 node, symbol, primaryCtorParamNames, out IFieldSymbol fieldKeywordBackingSymbol);
+            if (fieldKeywordBackingName == null
+                && !isStatic
+                && node.Initializer != null
+                && (symbol?.IsRequired == true || symbol?.SetMethod?.IsInitOnly == true))
+            {
+                fieldKeywordBackingName = this.RegisterSynthesizedPropertyBackingField(
+                    symbol,
+                    primaryCtorParamNames);
+            }
 
             // Issue #1907 / #1072: the backing field can be used as nullable
             // independently of the property's own declared nullability (e.g.

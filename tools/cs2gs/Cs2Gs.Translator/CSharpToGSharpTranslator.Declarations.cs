@@ -1032,19 +1032,13 @@ public sealed partial class CSharpToGSharpTranslator
             // so the member loop skips the now-lifted properties.
             ConstructorLift autoPropertyLift = ConstructorLift.None;
 
-            // A `data class`/`data struct` requires at least one field (GS0104) and
-            // derives those fields from positional/primary-constructor parameters,
-            // not from auto-properties (GS0189). A fieldless record, or a record
-            // whose data lives in body auto-properties that cannot be lifted to a
-            // primary constructor, therefore maps to a plain `class`/`struct`
-            // (ADR-0115 §B.4 / OD-T5). A record *struct* with an explicit
-            // parameter-copy constructor is the exception: it lifts to a primary
-            // `data struct` (handled by AnalyzeConstructorLift), so it is left alone
-            // — a plain G# `struct` cannot carry an explicit `init` constructor.
+            // Preserve init-only/required record properties as properties. Mutable
+            // body auto-properties may still use the existing primary-field lift,
+            // but data types now admit auto-properties and zero fields, so an
+            // unlifted property no longer forces a lossy plain-class downgrade.
             if ((kind == TypeDeclarationKind.DataClass || kind == TypeDeclarationKind.DataStruct) &&
                 node is RecordDeclarationSyntax record)
             {
-                bool fieldless = IsFieldlessRecord(record);
                 bool hasAutoPropData = RecordHasAutoPropertyDataMember(record);
                 bool hasExplicitInstanceCtor = record.Members
                     .OfType<ConstructorDeclarationSyntax>()
@@ -1062,27 +1056,6 @@ public sealed partial class CSharpToGSharpTranslator
                 if (hasAutoPropData && !hasExplicitInstanceCtor && record.ParameterList == null)
                 {
                     autoPropertyLift = this.AnalyzeAutoPropertyLift(record, symbol, kind.Value);
-                }
-
-                bool lifted = autoPropertyLift != ConstructorLift.None;
-
-                bool downgrade = kind == TypeDeclarationKind.DataClass
-                    ? (fieldless || hasAutoPropData) && !lifted
-                    : fieldless || (hasAutoPropData && !hasExplicitInstanceCtor && !lifted);
-
-                if (downgrade)
-                {
-                    kind = kind == TypeDeclarationKind.DataStruct
-                        ? TypeDeclarationKind.Struct
-                        : TypeDeclarationKind.Class;
-                    string reason = fieldless
-                        ? "a G# 'data' type requires at least one field (GS0104, ADR-0115 §B.4)"
-                        : "a G# 'data' type derives its fields from positional parameters and rejects auto-property members (GS0104/GS0189, ADR-0115 §B.4)";
-                    this.context.Report(new TranslationDiagnostic(
-                        nameof(SyntaxKind.RecordDeclaration),
-                        $"record '{node.Identifier.Text}' maps to a plain '{(kind == TypeDeclarationKind.Struct ? "struct" : "class")}' because {reason}.",
-                        node.GetLocation(),
-                        TranslationSeverity.Info));
                 }
             }
 
@@ -1472,6 +1445,11 @@ public sealed partial class CSharpToGSharpTranslator
                     IsContractProperty(propSymbol))
                 {
                     return ConstructorLift.None;
+                }
+
+                if (propSymbol.IsRequired || propSymbol.SetMethod?.IsInitOnly == true)
+                {
+                    continue;
                 }
 
                 GTypeReference type = this.typeMapper.Map(propSymbol.Type, this.context, prop.Identifier.GetLocation());

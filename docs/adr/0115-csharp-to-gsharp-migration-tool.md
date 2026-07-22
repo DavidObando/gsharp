@@ -601,16 +601,12 @@ empirically (gsc **0.2.137+31ced6cfb7**) before adoption.
   `obj/` or `bin/` directory, plus generated files (`*.AssemblyInfo.cs`,
   `*.AssemblyAttributes.cs`, `*.GlobalUsings.g.cs`, `*.Version.cs`, `*.g.cs`,
   `*.g.i.cs`) — e.g. the Nerdbank.GitVersioning `ThisAssembly` file.
-- **Record → plain `class`/`struct` downgrade (OD-T5).** A C# `record`/`record struct`
-  whose data members are auto-properties that cannot become primary-constructor
-  data fields (`RecordHasAutoPropertyDataMember`) is downgraded so it does not
-  emit an invalid `data` type: a `record` **class** always downgrades to a plain
-  `class`; a `record struct` downgrades to a plain `struct` only when it has **no**
-  explicit instance constructor (a `record struct` *with* an explicit ctor must
-  still lift to a `data struct`, since a plain `struct` admits no explicit `init`).
-  This (with the existing fieldless-record rule, §B T4) clears `GS0104`
-  (fieldless `data struct`), `GS0189` (auto-property in a `data struct`), and
-  `GS0232` (explicit `ToString` colliding with a `data` type's synthesized one).
+- **Record property preservation (OD-T5, issue #2704).** Body auto-properties on
+  a C# `record`/`record struct` remain properties on the G# `data class`/`data
+  struct`; init-only and required members are never downgraded to mutable public
+  fields. Property initializers move to private backing fields with computed
+  accessors, preserving per-instance defaults while object literals call the
+  init accessor. Data aggregates support auto-properties and zero fields.
 - **Whole-app compile ordering.** `CompileStage.OrderForCompilation` topologically
   sorts the emitted `.gs` files so each type's base classes and interfaces are
   passed to `gsc` **before** it (Kahn's algorithm, stable on original order; a

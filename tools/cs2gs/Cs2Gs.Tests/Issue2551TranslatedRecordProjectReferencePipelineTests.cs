@@ -70,7 +70,8 @@ public sealed class Issue2551TranslatedRecordProjectReferencePipelineTests
             Environment.NewLine,
             Directory.GetFiles(runDirectory, "*.gs", SearchOption.AllDirectories)
                 .Select(File.ReadAllText));
-        Assert.Contains("data class Settings(", producer, StringComparison.Ordinal);
+        Assert.Contains("data class Settings {", producer, StringComparison.Ordinal);
+        Assert.Contains("prop Label string {", producer, StringComparison.Ordinal);
     }
 
     private static Fixture WriteFixture(string sourceRoot)

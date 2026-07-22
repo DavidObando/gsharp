@@ -272,7 +272,7 @@ Issue #1655: the IDs below used to collide with earlier, unrelated diagnostics (
 
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
-| GS0419 | Error | Property cannot be an auto-property in a `data struct`; use a computed property with an explicit body instead. | `data struct P { var X int32; prop Y int32 }` — `Y` has no explicit getter/setter body (ADR-0051). Previously misfiled under GS0189. |
+| GS0419 | Reserved | Former auto-property-in-`data struct` diagnostic; auto-properties are now supported in data aggregates. | Reserved for compatibility. |
 | GS0420 | Error | The argument to `nameof` must be a name reference: an identifier, member access, or type. | `nameof(123)` or `nameof(Console.WriteLine("hi"))`. Previously misfiled under GS0190. |
 | GS0421 | Error | Member is marked `open` but the enclosing class is not open. | `class C { open func M() {} }` where `C` is not declared `open` (ADR-0051). Previously misfiled under GS0190. |
 | GS0422 | Error | A ref-kind parameter (`ref`/`out`/`in`) cannot appear on an `async`, `sequence`, or `async sequence` function. | `async func f(ref x int32) { }` — the state-machine rewriter cannot hoist a managed pointer into a field (ADR-0060 §10). Previously misfiled under GS0226. |

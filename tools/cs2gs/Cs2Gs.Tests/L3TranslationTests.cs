@@ -384,7 +384,7 @@ namespace Demo
     /// class cannot name itself in its own base list).
     /// </summary>
     [Fact]
-    public void FieldlessRecord_MapsToOpenClass()
+    public void FieldlessRecord_MapsToOpenDataClass()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -393,7 +393,7 @@ namespace Demo
     public sealed record Dot(double X) : ShapeBase;
 }");
 
-        Assert.Contains("open class ShapeBase {", printed);
+        Assert.Contains("open data class ShapeBase {", printed);
         Assert.DoesNotContain("abstract", printed);
         Assert.DoesNotContain("IEquatable", printed);
         Assert.Contains("data class Dot(X float64) : ShapeBase", printed);
