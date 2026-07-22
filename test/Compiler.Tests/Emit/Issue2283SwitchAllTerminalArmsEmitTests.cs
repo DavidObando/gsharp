@@ -43,6 +43,34 @@ namespace GSharp.Compiler.Tests.Emit;
 public class Issue2283SwitchAllTerminalArmsEmitTests
 {
     [Fact]
+    public void LiteralTrueLoopEndingInReturn_VerifiesAndRuns()
+    {
+        const string source = """
+            package Issue2747.InfiniteLoop
+            import System
+
+            class Login {
+                func Callback() Uri {
+                    while true {
+                        let text = "https://example.com"
+                        var uri Uri? = nil
+                        if !Uri.TryCreate(text, UriKind.Absolute, out uri) {
+                            continue
+                        }
+
+                        return uri!!
+                    }
+                }
+            }
+
+            Console.WriteLine(Login().Callback().Host)
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("example.com\n", output);
+    }
+
+    [Fact]
     public void AllArmsTerminal_AsLastStatement_VerifiesAndRuns()
     {
         // The exact minimal repro from the issue's confirmed-root-cause
