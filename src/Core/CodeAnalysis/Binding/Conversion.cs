@@ -2073,7 +2073,8 @@ public sealed class Conversion
     private static bool IsFunctionShapeAssignable(FunctionTypeSymbol from, FunctionTypeSymbol to)
     {
         if (from == null || to == null || from.Arity != to.Arity
-            || !(from.ReturnType == to.ReturnType || ReturnTypeWidens(from.ReturnType, to.ReturnType)))
+            || !(TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(from.ReturnType, to.ReturnType)
+                || ReturnTypeWidens(from.ReturnType, to.ReturnType)))
         {
             return false;
         }
@@ -2083,7 +2084,10 @@ public sealed class Conversion
             // Function parameters are contravariant: every value the target
             // may supply must be accepted by the source callable.
             var parameterConversion = ClassifyNonStructural(to.ParameterTypes[i], from.ParameterTypes[i]);
-            if (!parameterConversion.IsImplicit)
+            if (!parameterConversion.IsImplicit
+                && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                    to.ParameterTypes[i],
+                    from.ParameterTypes[i]))
             {
                 return false;
             }
@@ -2297,6 +2301,11 @@ public sealed class Conversion
 
         for (var i = 0; i < parameters.Length; i++)
         {
+            if (parameters[i].RefKind != RefKind.None)
+            {
+                return false;
+            }
+
             var fromType = fn.ParameterTypes[i];
             var toType = parameters[i].Type;
             if (fromType == null || toType == null)
@@ -2308,7 +2317,8 @@ public sealed class Conversion
             // existing CLR-typed func→delegate rule, which is name-based
             // assignability — i.e., identity or an implicit conversion.
             var conv = Classify(fromType, toType);
-            if (!conv.Exists || !conv.IsImplicit)
+            if ((!conv.Exists || !conv.IsImplicit)
+                && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(fromType, toType))
             {
                 return false;
             }
@@ -2327,7 +2337,8 @@ public sealed class Conversion
         }
 
         var retConv = Classify(fnReturn, targetReturn);
-        return retConv.Exists && retConv.IsImplicit;
+        return (retConv.Exists && retConv.IsImplicit)
+            || TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(fnReturn, targetReturn);
     }
 
     // Issue #2290: identifies the two symbol kinds that ever wrap a genuine

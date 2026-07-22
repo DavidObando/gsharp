@@ -14,8 +14,9 @@ namespace GSharp.Compiler.Tests.Emit;
 /// parameter <c>T</c> implicitly converts to a function whose return type is the
 /// nullable form <c>T?</c> of the same type parameter. Widening a non-null value
 /// to its nullable form is always safe, so a <c>(T) -> T</c> flows into a
-/// <c>(T) -> T?</c> slot. The reverse (<c>(T) -> T?</c> to <c>(T) -> T</c>) is a
-/// null-dropping narrowing and stays rejected.
+/// <c>(T) -> T?</c> slot. Issue #2714 also permits the reverse delegate
+/// conversion because an unconstrained <c>T?</c> annotation does not change
+/// the emitted runtime signature.
 /// </summary>
 public class Issue1356FuncReturnCovarianceEmitTests
 {
@@ -78,10 +79,8 @@ public class Issue1356FuncReturnCovarianceEmitTests
     }
 
     [Fact]
-    public void Library_NullableReturnDoesNotNarrowToNonNullable_IsRejected()
+    public void Library_NullableReturnConvertsToSameRuntimeSignature()
     {
-        // Negative control: the unsafe reverse direction (`(T) -> T?` into a
-        // `(T) -> T` slot) drops the nullable annotation and must be rejected.
         var source = """
             package p
 
@@ -93,9 +92,8 @@ public class Issue1356FuncReturnCovarianceEmitTests
             }
             """;
 
-        var (exit, stdout, stderr) = TryCompileLibrary(source);
-        Assert.True(exit != 0, $"expected compile failure but succeeded.\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        Assert.Contains("GS0155", stdout + stderr);
+        var dllPath = CompileLibrary(source);
+        TryCleanup(dllPath);
     }
 
     [Fact]

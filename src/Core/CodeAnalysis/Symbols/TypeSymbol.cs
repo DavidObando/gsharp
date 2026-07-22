@@ -685,6 +685,144 @@ public class TypeSymbol : Symbol
     }
 
     /// <summary>
+    /// Compares runtime type identity while ignoring nullable-reference
+    /// annotations, which are metadata-only and do not change a CLR signature.
+    /// Nullable value types and every other structural distinction remain
+    /// significant.
+    /// </summary>
+    /// <param name="left">The first type.</param>
+    /// <param name="right">The second type.</param>
+    /// <returns><see langword="true"/> when the runtime signatures are equivalent.</returns>
+    public static bool AreRuntimeEquivalentIgnoringReferenceNullability(TypeSymbol left, TypeSymbol right)
+    {
+        left = StripReferenceNullabilityCore(left);
+        right = StripReferenceNullabilityCore(right);
+
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+
+        if (left == null || right == null)
+        {
+            return false;
+        }
+
+        if (left is NullableTypeSymbol || right is NullableTypeSymbol)
+        {
+            var leftNullable = left as NullableTypeSymbol;
+            var rightNullable = right as NullableTypeSymbol;
+            return leftNullable != null
+                && rightNullable != null
+                && AreRuntimeEquivalentIgnoringReferenceNullability(
+                    leftNullable.UnderlyingType,
+                    rightNullable.UnderlyingType);
+        }
+
+        if (left is StructSymbol leftStruct && right is StructSymbol rightStruct)
+        {
+            return AreSameConstructedUserTypeCore(
+                leftStruct.Definition ?? leftStruct,
+                leftStruct.TypeArguments,
+                rightStruct.Definition ?? rightStruct,
+                rightStruct.TypeArguments);
+        }
+
+        if (left is InterfaceSymbol leftInterface && right is InterfaceSymbol rightInterface)
+        {
+            return AreSameConstructedUserTypeCore(
+                leftInterface.Definition ?? leftInterface,
+                leftInterface.TypeArguments,
+                rightInterface.Definition ?? rightInterface,
+                rightInterface.TypeArguments);
+        }
+
+        if (left is DelegateTypeSymbol leftDelegate && right is DelegateTypeSymbol rightDelegate)
+        {
+            return AreSameConstructedUserTypeCore(
+                leftDelegate.Definition ?? leftDelegate,
+                leftDelegate.TypeArguments,
+                rightDelegate.Definition ?? rightDelegate,
+                rightDelegate.TypeArguments);
+        }
+
+        if (left.GetType() != right.GetType())
+        {
+            return false;
+        }
+
+        if (left is ArrayTypeSymbol leftArray
+            && right is ArrayTypeSymbol rightArray
+            && leftArray.Length != rightArray.Length)
+        {
+            return false;
+        }
+
+        if (left is FunctionTypeSymbol leftFunction
+            && right is FunctionTypeSymbol rightFunction
+            && !leftFunction.IsVariadic.SequenceEqual(rightFunction.IsVariadic))
+        {
+            return false;
+        }
+
+        var leftParts = GetWrappedTypes(left).ToArray();
+        var rightParts = GetWrappedTypes(right).ToArray();
+        if (leftParts.Length > 0 || rightParts.Length > 0)
+        {
+            return leftParts.Length == rightParts.Length
+                && (left.ClrType == null
+                    || right.ClrType == null
+                    || ClrTypeUtilities.AreSame(left.ClrType, right.ClrType))
+                && leftParts.Zip(rightParts, AreRuntimeEquivalentIgnoringReferenceNullability).All(equal => equal);
+        }
+
+        return left.ClrType != null
+            && right.ClrType != null
+            && ClrTypeUtilities.AreSame(left.ClrType, right.ClrType);
+
+        static TypeSymbol StripReferenceNullabilityCore(TypeSymbol type)
+        {
+            while (true)
+            {
+                switch (type)
+                {
+                    case NullabilityAnnotatedTypeSymbol annotated:
+                        type = annotated.BaseType;
+                        continue;
+                    case NullableTypeSymbol nullable when !NullableLifting.IsAnyValueTypeNullable(nullable):
+                        type = nullable.UnderlyingType;
+                        continue;
+                    default:
+                        return type;
+                }
+            }
+        }
+
+        static bool AreSameConstructedUserTypeCore(
+            TypeSymbol leftDefinition,
+            ImmutableArray<TypeSymbol> leftArguments,
+            TypeSymbol rightDefinition,
+            ImmutableArray<TypeSymbol> rightArguments)
+        {
+            if (!ReferenceEquals(leftDefinition, rightDefinition)
+                || leftArguments.Length != rightArguments.Length)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < leftArguments.Length; i++)
+            {
+                if (!AreRuntimeEquivalentIgnoringReferenceNullability(leftArguments[i], rightArguments[i]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Returns <c>true</c> when a symbolic type projection contains information
     /// that its CLR <see cref="Type"/> cannot faithfully represent.
     /// </summary>
