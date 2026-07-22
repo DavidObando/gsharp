@@ -268,7 +268,22 @@ internal sealed partial class StatementBinder
         return new BoundBlockStatement(syntax, statements.ToImmutable());
     }
 
-    private void BindBlockStatements(ImmutableArray<StatementSyntax> statementSyntaxes, int startIndex, ImmutableArray<BoundStatement>.Builder statements)
+    internal ImmutableArray<BoundStatement> BindStatementList(
+        ImmutableArray<StatementSyntax> statementSyntaxes,
+        Action<StatementSyntax> beforeBind = null,
+        Func<BoundStatement> trailingStatement = null)
+    {
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        BindBlockStatements(statementSyntaxes, 0, statements, beforeBind, trailingStatement);
+        return statements.ToImmutable();
+    }
+
+    private void BindBlockStatements(
+        ImmutableArray<StatementSyntax> statementSyntaxes,
+        int startIndex,
+        ImmutableArray<BoundStatement>.Builder statements,
+        Action<StatementSyntax> beforeBind = null,
+        Func<BoundStatement> trailingStatement = null)
     {
         // Issue #208: push a persistent narrowing frame for this statement list.
         // After each call statement whose method carries [MemberNotNull], the
@@ -281,6 +296,7 @@ internal sealed partial class StatementBinder
             for (var i = startIndex; i < statementSyntaxes.Length; i++)
             {
                 var statementSyntax = statementSyntaxes[i];
+                beforeBind?.Invoke(statementSyntax);
 
                 if (statementSyntax is DeferStatementSyntax deferSyntax)
                 {
@@ -295,7 +311,7 @@ internal sealed partial class StatementBinder
 
                     InvalidateNarrowingsForAssignedVariables(statementSyntax);
                     var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
-                    BindBlockStatements(statementSyntaxes, i + 1, innerStatements);
+                    BindBlockStatements(statementSyntaxes, i + 1, innerStatements, beforeBind, trailingStatement);
                     statements.Add(BuildCleanupTryStatement(innerStatements.ToImmutable(), defer.Cleanup));
                     return;
                 }
@@ -317,7 +333,7 @@ internal sealed partial class StatementBinder
 
                     InvalidateNarrowingsForAssignedVariables(statementSyntax);
                     var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
-                    BindBlockStatements(statementSyntaxes, i + 1, innerStatements);
+                    BindBlockStatements(statementSyntaxes, i + 1, innerStatements, beforeBind, trailingStatement);
                     statements.Add(BuildCleanupTryStatement(innerStatements.ToImmutable(), usingLowering.Cleanup));
                     return;
                 }
@@ -339,7 +355,7 @@ internal sealed partial class StatementBinder
 
                     InvalidateNarrowingsForAssignedVariables(statementSyntax);
                     var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
-                    BindBlockStatements(statementSyntaxes, i + 1, innerStatements);
+                    BindBlockStatements(statementSyntaxes, i + 1, innerStatements, beforeBind, trailingStatement);
                     statements.Add(BuildCleanupTryStatement(innerStatements.ToImmutable(), awaitUsingLowering.Cleanup));
                     return;
                 }
@@ -393,6 +409,11 @@ internal sealed partial class StatementBinder
                 // type. Runs after invalidation for the same reason as the
                 // assignment narrowing above.
                 ApplyIfJoinNarrowings(statement, memberNotNullFrame);
+            }
+
+            if (trailingStatement != null)
+            {
+                statements.Add(trailingStatement());
             }
         }
         finally

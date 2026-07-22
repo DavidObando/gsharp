@@ -69,7 +69,7 @@ internal sealed partial class ExpressionBinder
     private readonly Action<TextLocation, Symbol, string> reportObsoleteUseIfApplicable;
     private readonly Func<TypeSymbol, bool> isAsyncIteratorReturnType;
     private readonly Func<FunctionSymbol> getCurrentFunction;
-    private readonly Func<StatementSyntax, BoundStatement> bindStatement;
+    private readonly Func<ImmutableArray<StatementSyntax>, Func<BoundStatement>, ImmutableArray<BoundStatement>> bindStatementList;
 
     // Issue #1502 follow-up: when true, a same-compilation enum (or `Enum?`)
     // appearing inside a delegate shape is erased to `object` (the covariant
@@ -96,7 +96,7 @@ internal sealed partial class ExpressionBinder
         Action<TextLocation, Symbol, string> reportObsoleteUseIfApplicable,
         Func<TypeSymbol, bool> isAsyncIteratorReturnType,
         Func<FunctionSymbol> getCurrentFunction,
-        Func<StatementSyntax, BoundStatement> bindStatement = null)
+        Func<ImmutableArray<StatementSyntax>, Func<BoundStatement>, ImmutableArray<BoundStatement>> bindStatementList = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
         this.memberLookup = memberLookup ?? throw new ArgumentNullException(nameof(memberLookup));
@@ -110,7 +110,7 @@ internal sealed partial class ExpressionBinder
         this.reportObsoleteUseIfApplicable = reportObsoleteUseIfApplicable ?? throw new ArgumentNullException(nameof(reportObsoleteUseIfApplicable));
         this.isAsyncIteratorReturnType = isAsyncIteratorReturnType ?? throw new ArgumentNullException(nameof(isAsyncIteratorReturnType));
         this.getCurrentFunction = getCurrentFunction ?? throw new ArgumentNullException(nameof(getCurrentFunction));
-        this.bindStatement = bindStatement;
+        this.bindStatementList = bindStatementList;
     }
 
     private DiagnosticBag Diagnostics => binderCtx.Diagnostics;

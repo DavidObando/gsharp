@@ -903,6 +903,46 @@ internal sealed partial class ExpressionBinder
     /// a <see cref="BoundBlockExpression"/> wrapping the prefix statements and
     /// the trailing value.
     /// </summary>
+    private (ImmutableArray<BoundStatement> Statements, BoundExpression Expression) BindBlockExpressionParts(
+        ImmutableArray<StatementSyntax> statements,
+        ExpressionSyntax expression,
+        bool canBeVoid)
+    {
+        if (!statements.Any(statement =>
+            statement is UsingStatementSyntax
+                or AwaitUsingStatementSyntax
+                or DeferStatementSyntax))
+        {
+            return (bindStatementList(statements, null), BindExpression(expression, canBeVoid));
+        }
+
+        BoundExpression boundExpression = null;
+        VariableSymbol result = null;
+        var boundStatements = bindStatementList(
+            statements,
+            () =>
+            {
+                boundExpression = BindExpression(expression, canBeVoid);
+                if (boundExpression is BoundErrorExpression || boundExpression.Type == TypeSymbol.Void)
+                {
+                    return new BoundExpressionStatement(expression, boundExpression);
+                }
+
+                result = new LocalVariableSymbol(
+                    $"<blockResult{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
+                    isReadOnly: true,
+                    boundExpression.Type ?? TypeSymbol.Error);
+                scope.TryDeclareVariable(result);
+                return new BoundVariableDeclaration(expression, result, boundExpression);
+            });
+        var resultExpression = result != null
+            ? (BoundExpression)new BoundVariableExpression(expression, result)
+            : boundExpression is BoundErrorExpression
+                ? boundExpression
+                : new BoundLiteralExpression(expression, value: 0, TypeSymbol.Void);
+        return (boundStatements, resultExpression);
+    }
+
     private BoundExpression BindBlockExpressionValue(BlockExpressionSyntax syntax, bool canBeVoid = false)
     {
         if (syntax.Expression == null)
@@ -918,20 +958,14 @@ internal sealed partial class ExpressionBinder
         }
 
         // Bind prefix statements.
-        var boundStatements = ImmutableArray.CreateBuilder<BoundStatement>();
-        foreach (var stmt in syntax.Statements)
-        {
-            var boundStmt = bindStatement(stmt);
-            boundStatements.Add(boundStmt);
-        }
-
-        var boundExpression = BindExpression(syntax.Expression, canBeVoid);
+        var (boundStatements, boundExpression) =
+            BindBlockExpressionParts(syntax.Statements, syntax.Expression, canBeVoid);
         if (boundExpression is BoundErrorExpression)
         {
             return boundExpression;
         }
 
-        return new BoundBlockExpression(null, boundStatements.ToImmutable(), boundExpression);
+        return new BoundBlockExpression(null, boundStatements, boundExpression);
     }
 
     /// <summary>
@@ -955,23 +989,18 @@ internal sealed partial class ExpressionBinder
             // Lambda body block: a missing trailing expression means a void
             // lambda. Bind any prefix statements; if there is a trailing
             // expression, use it as the value; otherwise the value is void.
-            var boundStatements = ImmutableArray.CreateBuilder<BoundStatement>();
-            if (!block.Statements.IsDefaultOrEmpty)
-            {
-                foreach (var stmt in block.Statements)
-                {
-                    boundStatements.Add(bindStatement(stmt));
-                }
-            }
-
             if (block.Expression == null)
             {
+                var voidStatements = block.Statements.IsDefaultOrEmpty
+                    ? ImmutableArray<BoundStatement>.Empty
+                    : bindStatementList(block.Statements, null);
+
                 // No trailing expression — surface as a void-returning body.
                 // Re-package the prefix statements via a BoundBlockExpression
                 // wrapping a synthetic void placeholder; the LambdaBinder
                 // treats void bodies by emitting an ExpressionStatement +
                 // void return.
-                if (boundStatements.Count == 0)
+                if (voidStatements.Length == 0)
                 {
                     // Empty body `{ }` — synthesize a no-op void expression.
                     return new BoundLiteralExpression(bodySyntax, value: 0, TypeSymbol.Void);
@@ -979,17 +1008,29 @@ internal sealed partial class ExpressionBinder
 
                 return new BoundBlockExpression(
                     bodySyntax,
-                    boundStatements.ToImmutable(),
+                    voidStatements,
                     new BoundLiteralExpression(bodySyntax, value: 0, TypeSymbol.Void));
             }
 
-            var trailing = BindExpression(block.Expression, canBeVoid: true);
-            if (boundStatements.Count == 0)
+            ImmutableArray<BoundStatement> boundStatements;
+            BoundExpression trailing;
+            if (block.Statements.IsDefaultOrEmpty)
+            {
+                boundStatements = ImmutableArray<BoundStatement>.Empty;
+                trailing = BindExpression(block.Expression, canBeVoid: true);
+            }
+            else
+            {
+                (boundStatements, trailing) =
+                    BindBlockExpressionParts(block.Statements, block.Expression, canBeVoid: true);
+            }
+
+            if (boundStatements.Length == 0)
             {
                 return trailing;
             }
 
-            return new BoundBlockExpression(bodySyntax, boundStatements.ToImmutable(), trailing);
+            return new BoundBlockExpression(bodySyntax, boundStatements, trailing);
         }
 
         return BindExpression(bodySyntax, canBeVoid: true);
