@@ -522,6 +522,11 @@ internal sealed partial class DeclarationBinder
                         iface.Name,
                         iprop.Name + " (setter)");
                 }
+
+                if (!IsInterfacePropertyTypeCompatible(implProp.Type, iprop.Type, iprop.HasSetter))
+                {
+                    found = false;
+                }
             }
 
             // Issue #2150: a data-class positional (primary-constructor)
@@ -553,22 +558,7 @@ internal sealed partial class DeclarationBinder
                 // (read/write) position — like a C# `in`/`out`
                 // parameter mismatch, both directions must hold, so the
                 // nullability must match EXACTLY.
-                var positionalUnderlyingType = positionalParam.Type is NullableTypeSymbol positionalNullable
-                    ? positionalNullable.UnderlyingType
-                    : positionalParam.Type;
-                var ifaceUnderlyingType = iprop.Type is NullableTypeSymbol ifaceNullable
-                    ? ifaceNullable.UnderlyingType
-                    : iprop.Type;
-
-                var underlyingTypesMatch = System.Collections.Generic.EqualityComparer<TypeSymbol>.Default.Equals(positionalUnderlyingType, ifaceUnderlyingType);
-                var ifaceIsNullable = iprop.Type is NullableTypeSymbol;
-                var implIsNullable = positionalParam.Type is NullableTypeSymbol;
-
-                var nullabilityCompatible = iprop.HasSetter
-                    ? ifaceIsNullable == implIsNullable
-                    : !(!ifaceIsNullable && implIsNullable);
-
-                if (!underlyingTypesMatch || !nullabilityCompatible)
+                if (!IsInterfacePropertyTypeCompatible(positionalParam.Type, iprop.Type, iprop.HasSetter))
                 {
                     // Name matches but the type is incompatible: the
                     // positional parameter does not satisfy the contract.
@@ -612,6 +602,31 @@ internal sealed partial class DeclarationBinder
                     iprop.Name);
             }
         }
+    }
+
+    private static bool IsInterfacePropertyTypeCompatible(
+        TypeSymbol implementationType,
+        TypeSymbol interfaceType,
+        bool hasSetter)
+    {
+        var implementationUnderlyingType = implementationType is NullableTypeSymbol implementationNullable
+            ? implementationNullable.UnderlyingType
+            : implementationType;
+        var interfaceUnderlyingType = interfaceType is NullableTypeSymbol interfaceNullable
+            ? interfaceNullable.UnderlyingType
+            : interfaceType;
+        if (!System.Collections.Generic.EqualityComparer<TypeSymbol>.Default.Equals(
+            implementationUnderlyingType,
+            interfaceUnderlyingType))
+        {
+            return false;
+        }
+
+        var interfaceIsNullable = interfaceType is NullableTypeSymbol;
+        var implementationIsNullable = implementationType is NullableTypeSymbol;
+        return hasSetter
+            ? interfaceIsNullable == implementationIsNullable
+            : interfaceIsNullable || !implementationIsNullable;
     }
 
     private void VerifyInterfaceEventImplementations(

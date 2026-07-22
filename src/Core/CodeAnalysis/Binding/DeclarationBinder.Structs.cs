@@ -333,7 +333,13 @@ internal sealed partial class DeclarationBinder
                 // `@Attr` annotations same as any other parameter list.
                 BindAndAttachParameterAttributes(paramSyntax, primaryCtorParam);
                 ctorBuilder.Add(primaryCtorParam);
-                fields.Add(new FieldSymbol(paramName, paramType, Accessibility.Public, isReadOnly: syntax.IsInline));
+
+                // Data-type positional members are CLR properties (matching
+                // C# records); their backing fields are synthesized below.
+                if (!syntax.IsData)
+                {
+                    fields.Add(new FieldSymbol(paramName, paramType, Accessibility.Public, isReadOnly: syntax.IsInline));
+                }
             }
 
             // ADR-0101 follow-up / issue #819: at most one variadic primary-ctor
@@ -1314,10 +1320,36 @@ internal sealed partial class DeclarationBinder
         var methodNames = memberBinding.MethodNames;
         var explicitInterfaceClauseNames = memberBinding.ExplicitInterfaceClauseNames;
 
-        // ADR-0051: bind property declarations.
-        if (!syntax.Properties.IsDefaultOrEmpty)
+        // ADR-0051: bind property declarations. Positional data members are
+        // synthesized as public get/init auto-properties so peer-language
+        // consumers see the same ABI as C# records.
+        if (!syntax.Properties.IsDefaultOrEmpty || (structSymbol.IsData && structSymbol.HasPrimaryConstructor))
         {
             var propertiesBuilder = ImmutableArray.CreateBuilder<PropertySymbol>();
+            if (structSymbol.IsData && structSymbol.HasPrimaryConstructor)
+            {
+                foreach (var parameter in structSymbol.PrimaryConstructorParameters)
+                {
+                    var property = new PropertySymbol(
+                        parameter.Name,
+                        parameter.Type,
+                        Accessibility.Public,
+                        hasGetter: true,
+                        hasSetter: true,
+                        isAutoProperty: true,
+                        isVirtual: false,
+                        isOverride: false,
+                        isInitOnly: true);
+                    property.BackingField = new FieldSymbol(
+                        $"<{parameter.Name}>k__BackingField",
+                        parameter.Type,
+                        Accessibility.Private,
+                        isReadOnly: false);
+                    propertiesBuilder.Add(property);
+                    existingNames.Add(parameter.Name);
+                }
+            }
+
             foreach (var propSyntax in syntax.Properties)
             {
                 // ADR-0118 / issue #944: an indexer member (`prop this[…] T`)

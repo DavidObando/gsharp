@@ -444,6 +444,8 @@ internal sealed class ImportedMemberRefFactory
             || fullName == "System.Attribute"
             || fullName == "System.MulticastDelegate"
             || fullName == "System.Delegate"
+            || fullName == "System.Type"
+            || fullName == "System.Runtime.CompilerServices.IsExternalInit"
             // Issue #806: `Nullable<T>` and the `ValueTuple<…>` family
             // are public type-forwarded types. The host-process typeof
             // calls for these are scoped to System.Private.CoreLib; if
