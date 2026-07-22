@@ -986,60 +986,13 @@ internal sealed class SlotPlanner
 
         protected override void VisitImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
         {
-            // Issue #943: a constrained type-parameter call needs the receiver's
-            // address for the `constrained.` prefix. Variable receivers
-            // (parameters/locals/globals) are addressable directly; any other
-            // shape (an rvalue such as `getX().CompareTo(y)`) must be spilled to
-            // a local so its address can be taken.
-            //
-            // Issue #2335 (audit follow-up): a NARROWED variable receiver
-            // (ADR-0069 smart-cast — `bve.NarrowedType != null`, e.g. `if x is
-            // T { x.ToString() }` narrowing an `object`-typed parameter/local
-            // to a type-parameter view `T`) is NOT addressable directly either:
-            // the narrowed view still physically lives in the wider DECLARED
-            // storage slot, so taking that slot's own address yields
-            // `<declared>&` (e.g. `object&`), not the `!!T&` the `constrained.`
-            // prefix requires — ilverify rejects the mismatch
-            // (`StackUnexpected`) and, pre-verification, the wrong pointer
-            // shape corrupts the receiver read. Route a narrowed variable
-            // receiver through the same rvalue-spill path as any other
-            // non-addressable receiver shape so the emitter re-materializes
-            // the correctly narrowed `!!T` value (via
-            // `EmitNarrowingCastIfNeeded`) into a fresh scratch local of type
-            // `T` before taking ITS address.
-            if (node.IsConstrainedTypeParameterCall
-                && (node.Receiver is not BoundVariableExpression importedRecvVar || importedRecvVar.NarrowedType != null))
-            {
-                this.sink.Add(node.Receiver);
-            }
-            else
-            {
-                this.AddIfNeeded(node.Receiver);
-            }
-
+            this.AddReceiver(node.Receiver, node.IsConstrainedTypeParameterCall);
             base.VisitImportedInstanceCallExpression(node);
         }
 
         protected override void VisitUserInstanceCallExpression(BoundUserInstanceCallExpression node)
         {
-            // Issue #1052: a constrained type-parameter call needs the receiver's
-            // address for the `constrained.` prefix. Variable receivers
-            // (parameters/locals/globals) are addressable directly; any other shape
-            // (an rvalue) must be spilled to a local so its address can be taken.
-            //
-            // Issue #2335 (audit follow-up): see the matching narrowed-variable
-            // rationale in VisitImportedInstanceCallExpression above — a
-            // narrowed variable receiver must also be spilled here.
-            if (node.IsConstrainedTypeParameterCall
-                && (node.Receiver is not BoundVariableExpression userRecvVar || userRecvVar.NarrowedType != null))
-            {
-                this.sink.Add(node.Receiver);
-            }
-            else
-            {
-                this.AddIfNeeded(node.Receiver);
-            }
-
+            this.AddReceiver(node.Receiver, node.IsConstrainedTypeParameterCall);
             base.VisitUserInstanceCallExpression(node);
         }
 
@@ -1047,7 +1000,7 @@ internal sealed class SlotPlanner
         {
             if (node.Receiver != null)
             {
-                this.AddIfNeeded(node.Receiver);
+                this.AddReceiver(node.Receiver, node.IsConstrainedTypeParameterAccess);
             }
 
             base.VisitClrPropertyAccessExpression(node);
@@ -1057,7 +1010,7 @@ internal sealed class SlotPlanner
         {
             if (node.Receiver != null)
             {
-                this.AddIfNeeded(node.Receiver);
+                this.AddReceiver(node.Receiver, node.IsConstrainedTypeParameterAccess);
                 this.AddIfCompoundReused(node.Receiver, node.Value);
             }
 
@@ -1109,7 +1062,7 @@ internal sealed class SlotPlanner
         {
             if (node.Receiver != null)
             {
-                this.AddIfNeeded(node.Receiver);
+                this.AddReceiver(node.Receiver, node.IsConstrainedTypeParameterAccess);
             }
 
             base.VisitClrEventSubscriptionExpression(node);
@@ -1127,8 +1080,18 @@ internal sealed class SlotPlanner
 
         protected override void VisitClrIndexExpression(BoundClrIndexExpression node)
         {
-            this.AddIfNeeded(node.Target);
+            this.AddReceiver(node.Target, node.IsConstrainedTypeParameterAccess);
             base.VisitClrIndexExpression(node);
+        }
+
+        protected override void VisitClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
+        {
+            if (node.TargetExpression != null)
+            {
+                this.AddReceiver(node.TargetExpression, node.IsConstrainedTypeParameterAccess);
+            }
+
+            base.VisitClrIndexAssignmentExpression(node);
         }
 
         protected override void VisitTupleElementAccessExpression(BoundTupleElementAccessExpression node)
@@ -1166,6 +1129,18 @@ internal sealed class SlotPlanner
             {
                 this.sink.Add(receiver);
             }
+        }
+
+        private void AddReceiver(BoundExpression receiver, bool isConstrained)
+        {
+            if (isConstrained
+                && (receiver is not BoundVariableExpression bve || bve.NarrowedType != null))
+            {
+                this.sink.Add(receiver);
+                return;
+            }
+
+            this.AddIfNeeded(receiver);
         }
 
         // Issue #1688: a compound member assignment (`getObj().F += x` /
