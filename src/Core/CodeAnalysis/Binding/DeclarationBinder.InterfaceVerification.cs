@@ -148,7 +148,7 @@ internal sealed partial class DeclarationBinder
                     structSymbol,
                     iface,
                     positionalInterfaceProps);
-                ResolveExplicitInterfaceEventImplementations(structSymbol, iface);
+                VerifyInterfaceEventImplementations(syntax, structSymbol, iface);
             }
 
             static void ResolveExplicitClrInterfaceImplementations(StructSymbol structSymbol)
@@ -614,27 +614,49 @@ internal sealed partial class DeclarationBinder
         }
     }
 
-    private void ResolveExplicitInterfaceEventImplementations(StructSymbol structSymbol, InterfaceSymbol iface)
+    private void VerifyInterfaceEventImplementations(
+        StructDeclarationSyntax syntax,
+        StructSymbol structSymbol,
+        InterfaceSymbol iface)
     {
-        // ADR-0149: resolve explicit-interface EVENT implementations
-        // (`event (IFoo) Changed T`) — generalizes the #2362 property
-        // pre-pass immediately above to events for the first time.
-        // Mirrors the property pre-pass exactly: resolved against the
-        // interface's OPEN DEFINITION event table (constructed
-        // generic interfaces do not substitute Events either — see
-        // InterfaceSymbol.TryResolveMembers), and is a pure resolve
-        // pass with no ordinary implicit-event-contract diagnostic
-        // (there is currently no implicit interface-event contract
-        // check in this binder at all — adding one is out of scope
-        // for this explicit-implementation feature and would risk an
-        // unrelated regression across every existing interface-event
-        // declaration in the test suite).
-        var explicitEventDefIface = iface.Definition ?? iface;
-        if (!explicitEventDefIface.Events.IsDefaultOrEmpty)
+        var eventDefIface = iface.Definition ?? iface;
+        if (eventDefIface.Events.IsDefaultOrEmpty)
         {
-            foreach (var openIevent in explicitEventDefIface.Events)
+            return;
+        }
+
+        foreach (var interfaceEvent in eventDefIface.Events)
+        {
+            if (TryResolveExplicitInterfaceEventImplementation(structSymbol, iface, interfaceEvent) != null)
             {
-                TryResolveExplicitInterfaceEventImplementation(structSymbol, iface, openIevent);
+                continue;
+            }
+
+            EventSymbol implementation = null;
+            for (var type = structSymbol; type != null && implementation == null; type = type.BaseClass)
+            {
+                foreach (var candidate in type.Events)
+                {
+                    if (candidate.HasExplicitInterfaceClause
+                        || candidate.Name != interfaceEvent.Name
+                        || (!ReferenceEquals(type, structSymbol) && candidate.Accessibility != Accessibility.Public)
+                        || !InterfaceEventTypesEquivalent(iface, interfaceEvent, candidate))
+                    {
+                        continue;
+                    }
+
+                    implementation = candidate;
+                    break;
+                }
+            }
+
+            if (implementation == null)
+            {
+                Diagnostics.ReportInterfaceMethodNotImplemented(
+                    syntax.Identifier.Location,
+                    structSymbol.Name,
+                    iface.Name,
+                    interfaceEvent.Name);
             }
         }
     }

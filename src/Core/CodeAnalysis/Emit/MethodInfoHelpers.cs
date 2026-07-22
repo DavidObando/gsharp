@@ -63,6 +63,29 @@ internal static class MethodInfoHelpers
         {
             foreach (var iface in structSym.Interfaces)
             {
+                var defIface = iface.Definition ?? iface;
+                foreach (var interfaceEvent in defIface.Events)
+                {
+                    EventSymbol implementationEvent = null;
+                    foreach (var candidate in structSym.Events)
+                    {
+                        if (ReferenceEquals(candidate.AddMethodSymbol, method)
+                            || ReferenceEquals(candidate.RemoveMethodSymbol, method)
+                            || ReferenceEquals(candidate.RaiseMethodSymbol, method))
+                        {
+                            implementationEvent = candidate;
+                            break;
+                        }
+                    }
+
+                    if (implementationEvent != null
+                        && interfaceEvent.Name == implementationEvent.Name
+                        && DeclarationBinder.InterfaceEventTypesEquivalent(iface, interfaceEvent, implementationEvent))
+                    {
+                        return true;
+                    }
+                }
+
                 if (iface.Methods.IsDefaultOrEmpty)
                 {
                     continue;
@@ -126,7 +149,8 @@ internal static class MethodInfoHelpers
 
                 foreach (var clrMethod in clrIface.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
                 {
-                    if (clrMethod.IsSpecialName || clrMethod.Name != method.Name)
+                    if (clrMethod.Name != method.Name
+                        || (clrMethod.IsSpecialName && !method.IsSpecialName))
                     {
                         continue;
                     }

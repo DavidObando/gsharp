@@ -2192,6 +2192,18 @@ internal sealed partial class DeclarationBinder
     internal static bool TypeSignaturesEquivalent(TypeSymbol a, TypeSymbol b)
         => TypeSignaturesEquivalent(a, b, typeParamMap: null);
 
+    internal static bool InterfaceEventTypesEquivalent(
+        InterfaceSymbol iface,
+        EventSymbol interfaceEvent,
+        EventSymbol implementation)
+        => iface != null
+            && interfaceEvent != null
+            && implementation != null
+            && TypeSignaturesEquivalent(
+                interfaceEvent.Type,
+                implementation.Type,
+                BuildInterfaceTypeParameterMap(iface));
+
     private static bool TypeSignaturesEquivalent(
         TypeSymbol a,
         TypeSymbol b,
