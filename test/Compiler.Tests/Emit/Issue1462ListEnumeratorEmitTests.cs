@@ -51,6 +51,28 @@ namespace GSharp.Compiler.Tests.Emit;
 public class Issue1462ListEnumeratorEmitTests
 {
     [Fact]
+    public void NonGenericEnumeratorCurrent_IsConvertedToTheInferredElementType()
+    {
+        var source = """
+            package Issue2752
+            import System
+            import System.Text.RegularExpressions
+
+            var count = 0
+            for match in Regex.Matches("<input><span><input>", "<input>") {
+                if match.Success {
+                    count = count + 1
+                }
+            }
+
+            Console.WriteLine(count)
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("2\n", output);
+    }
+
+    [Fact]
     public void EndToEnd_ForeachOverListOfSameCompilationTypes_VerifiesAndRuns()
     {
         // Exercises every body shape the corpus hit: a sync foreach over a
