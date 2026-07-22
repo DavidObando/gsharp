@@ -192,6 +192,20 @@ internal sealed partial class MethodBodyEmitter
         this.stackAllocResultSlots = stackAllocResultSlots ?? new Dictionary<BoundStackAllocExpression, int>();
     }
 
+    private EntityHandle ResolveCurrentStateMachineFieldToken(FieldSymbol field)
+    {
+        var stateMachine = this.asyncFieldMap?.StructType ?? this.asyncIteratorEmitCtx?.SmClass;
+        if (stateMachine == null)
+        {
+            throw new InvalidOperationException(
+                $"Hoisted field '{field.Name}' was loaded outside a state machine.");
+        }
+
+        // Generic state machines require a MemberRef parented at their
+        // self-instantiated TypeSpec; a raw FieldDef changes the byref identity.
+        return this.outer.userTokens.ResolveFieldToken(stateMachine, field);
+    }
+
     public IReadOnlyList<SequencePoint> SequencePoints => this.sequencePoints;
 
     /// <summary>Issue #306: emits a single value expression onto the IL stack. Used by the constructor emitter to evaluate base-constructor argument expressions.</summary>
