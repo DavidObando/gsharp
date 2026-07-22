@@ -3,7 +3,7 @@
                  xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011"
                  xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="GSharp.VisualStudio"
+    <Identity Id="GSharp-VisualStudio"
               Version="|%CurrentProject%;GetVsixVersion|"
               Language="en-US"
               Publisher="gsharplang" />
