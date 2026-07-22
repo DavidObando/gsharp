@@ -28,6 +28,35 @@ public class SpillSequenceSpillerTests
         BoundBinaryOperator.Bind(SyntaxKind.PipePipeToken, TypeSymbol.Bool, TypeSymbol.Bool);
 
     [Fact]
+    public void ConditionalReferenceResult_UsesTypePreservingDefault()
+    {
+        var referenceType = TypeSymbol.FromClrType(typeof(object));
+        var conditional = new BoundConditionalExpression(
+            null,
+            new BoundLiteralExpression(null, true),
+            new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), referenceType),
+            new BoundAwaitExpression(null, new BoundLiteralExpression(null, 0), referenceType),
+            referenceType);
+        var resultVariable = new LocalVariableSymbol("result", false, referenceType);
+        var body = new BoundBlockStatement(
+            null,
+            ImmutableArray.Create<BoundStatement>(
+                new BoundVariableDeclaration(null, resultVariable, conditional)));
+
+        var result = SpillSequenceSpiller.Rewrite(body);
+
+        var spillDeclaration = Assert.IsType<BoundVariableDeclaration>(Assert.Single(
+            result.Statements,
+            statement => statement is BoundVariableDeclaration declaration
+                && declaration.Variable != resultVariable
+                && declaration.Variable.Type == referenceType
+                && declaration.Initializer is BoundDefaultExpression));
+        var initializer = Assert.IsType<BoundDefaultExpression>(spillDeclaration.Initializer);
+        Assert.Equal(referenceType, initializer.Type);
+        Assert.IsNotType<BoundLiteralExpression>(initializer);
+    }
+
+    [Fact]
     public void Pure_BinaryExpression_With_AwaitOnRight_SpillsLeft()
     {
         // Arrange: left is a call (not pure), right is await
