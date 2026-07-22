@@ -1412,9 +1412,8 @@ public static class SpillSequenceSpiller
 
                 if (!firstArmResultDeclared)
                 {
-                    // Declare resultLocal with a real initializer here (rather
-                    // than relying on FlushSideEffects' generic int-0 default
-                    // fallback, which is wrong for non-numeric result types).
+                    // Declare resultLocal where the selected arm first assigns
+                    // it, avoiding a redundant default initialization.
                     sideEffects.Add(new BoundVariableDeclaration(null, resultLocal, spilledResult.Value));
                     firstArmResultDeclared = true;
                 }
@@ -1570,11 +1569,8 @@ public static class SpillSequenceSpiller
             }
             else
             {
-                // It is declared (not just assigned) with the real receiver
-                // value as its initializer so FlushSideEffects never falls
-                // back to its int32-literal-0 default — which is the wrong
-                // CLR type for a reference-typed capture and would fail IL
-                // verification.
+                // Declare the capture with the real receiver value so the
+                // following null guard observes that value directly.
                 locals.Add((LocalVariableSymbol)nc.Capture);
                 sideEffects.Add(new BoundVariableDeclaration(null, (LocalVariableSymbol)nc.Capture, receiver));
                 guardCondition = new BoundVariableExpression(null, nc.Capture);
@@ -2299,7 +2295,7 @@ public static class SpillSequenceSpiller
 
                 if (!alreadyDeclared)
                 {
-                    builder.Add(new BoundVariableDeclaration(null, local, GetDefaultValue(local.Type)));
+                    builder.Add(new BoundVariableDeclaration(null, local, new BoundDefaultExpression(null, local.Type)));
                 }
             }
 
@@ -2307,28 +2303,6 @@ public static class SpillSequenceSpiller
             {
                 builder.Add(stmt);
             }
-        }
-
-        private static BoundExpression GetDefaultValue(TypeSymbol type)
-        {
-            if (type == TypeSymbol.Int32)
-            {
-                return new BoundLiteralExpression(null, 0);
-            }
-
-            if (type == TypeSymbol.Bool)
-            {
-                return new BoundLiteralExpression(null, false);
-            }
-
-            if (type == TypeSymbol.String)
-            {
-                return new BoundLiteralExpression(null, string.Empty);
-            }
-
-            // For reference types or unknown types, use default(int) as placeholder.
-            // The actual value will be overwritten before use.
-            return new BoundLiteralExpression(null, 0);
         }
 
         private bool HasAwait(BoundStatement statement) => AsyncBoundTreeQueries.HasAwait(statement, awaitMemo);
