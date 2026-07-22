@@ -1925,6 +1925,8 @@ internal sealed class ReflectionMetadataEmitter
                 this.cache.EventAccessorHandles[ev] = (addHandle, removeHandle, raiseHandle);
             }
 
+            methodRow += this.interfaceImpls.PlanInheritedEventBridges(c, methodRow);
+
             // ADR-0053: plan method rows for static methods on classes.
             if (!c.StaticMethods.IsDefaultOrEmpty)
             {
@@ -3330,6 +3332,7 @@ internal sealed class ReflectionMetadataEmitter
 
             // ADR-0052: emit event accessor methods for classes.
             this.memberDefEmitter.EmitEventAccessors(c);
+            this.interfaceImpls.EmitInheritedEventBridges(c);
 
             // ADR-0053: emit static methods for classes.
             if (!c.StaticMethods.IsDefaultOrEmpty)
@@ -3385,9 +3388,9 @@ internal sealed class ReflectionMetadataEmitter
             // event implementations (add/remove/raise accessors).
             this.interfaceImpls.EmitExplicitInterfaceEventMethodImpls(c);
 
-            // Issue #2718: bind ordinary custom event accessors directly to
-            // matching user/imported interface event slots.
-            this.interfaceImpls.EmitImplicitCustomEventMethodImpls(c);
+            // Issues #2718/#2742: bind custom and inherited event accessors
+            // directly to matching user/imported interface event slots.
+            this.interfaceImpls.EmitImplicitEventMethodImpls(c);
         }
 
         foreach (var c in topClasses)
@@ -3493,8 +3496,8 @@ internal sealed class ReflectionMetadataEmitter
             // event implementations (add/remove/raise accessors).
             this.interfaceImpls.EmitExplicitInterfaceEventMethodImpls(s);
 
-            // Issue #2718: see the class path above.
-            this.interfaceImpls.EmitImplicitCustomEventMethodImpls(s);
+            // Issues #2718/#2742: see the class path above.
+            this.interfaceImpls.EmitImplicitEventMethodImpls(s);
         }
 
         foreach (var s in topStructs)
