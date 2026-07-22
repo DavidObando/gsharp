@@ -4620,6 +4620,7 @@ internal sealed class ReflectionMetadataEmitter
     // imported-method lookup, not user-token-cache state.
     internal static MethodInfo FindImportedMethod(Type declaringType, FunctionSymbol method, BindingFlags bindingFlags)
     {
+        MethodInfo match = null;
         foreach (var candidate in declaringType.GetMethods(bindingFlags))
         {
             if (!string.Equals(candidate.Name, method.Name, StringComparison.Ordinal))
@@ -4638,13 +4639,19 @@ internal sealed class ReflectionMetadataEmitter
             {
                 var candidateType = parameters[i].ParameterType;
                 var methodType = method.Parameters[i].Type.ClrType;
-                if (parameters[i].ParameterType.IsByRef != (method.Parameters[i].RefKind != RefKind.None))
+                var isByRef = candidateType.IsByRef;
+                if (isByRef != (method.Parameters[i].RefKind != RefKind.None))
                 {
                     matches = false;
                     break;
                 }
 
-                if (methodType != null && candidateType != methodType && candidateType != methodType.MakeByRefType())
+                if (isByRef)
+                {
+                    candidateType = candidateType.GetElementType();
+                }
+
+                if (methodType != null && !ClrTypeUtilities.AreSame(candidateType, methodType))
                 {
                     matches = false;
                     break;
@@ -4653,11 +4660,17 @@ internal sealed class ReflectionMetadataEmitter
 
             if (matches)
             {
-                return candidate;
+                if (match != null)
+                {
+                    // Normalization can collapse metadata-distinct overloads.
+                    return null;
+                }
+
+                match = candidate;
             }
         }
 
-        return null;
+        return match;
     }
 
     // Issue #1785: `async func f(...) T?` for a same-compilation user value
