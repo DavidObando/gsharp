@@ -66,6 +66,7 @@ internal sealed class ConversionClassifier
     private readonly Func<InterpolatedStringExpressionSyntax, TypeSymbol, BoundExpression> bindInterpolatedStringAsFormattable;
     private readonly Func<BoundFunctionLiteralExpression, FunctionTypeSymbol, BoundFunctionLiteralExpression> createErasedFunctionLiteralAdapter;
     private readonly Func<BoundClrMethodGroupExpression, FunctionTypeSymbol, BoundExpression> createClrMethodGroupAdapter;
+    private readonly Func<FunctionSymbol, TypeSymbol, TypeSymbol> getMethodGroupObservableReturnType;
     private readonly Func<BoundExpression, bool> isLvalue;
     private readonly Func<SyntaxToken, RefKind> getRefKindFromModifier;
     private readonly Func<RefKind, string> refKindToString;
@@ -100,6 +101,8 @@ internal sealed class ConversionClassifier
     /// <param name="createClrMethodGroupAdapter">Callback that wraps a
     /// resolved CLR method group when its exact signature differs from the
     /// structural function target.</param>
+    /// <param name="getMethodGroupObservableReturnType">Callback that widens
+    /// an async method's declared result to its emitted Task/ValueTask shape.</param>
     /// <param name="isLvalue">Callback that classifies a bound expression
     /// as an l-value (addressable). Used by the conditional-ref-argument
     /// validator.</param>
@@ -118,6 +121,7 @@ internal sealed class ConversionClassifier
         Func<InterpolatedStringExpressionSyntax, TypeSymbol, BoundExpression> bindInterpolatedStringAsFormattable,
         Func<BoundFunctionLiteralExpression, FunctionTypeSymbol, BoundFunctionLiteralExpression> createErasedFunctionLiteralAdapter,
         Func<BoundClrMethodGroupExpression, FunctionTypeSymbol, BoundExpression> createClrMethodGroupAdapter,
+        Func<FunctionSymbol, TypeSymbol, TypeSymbol> getMethodGroupObservableReturnType,
         Func<BoundExpression, bool> isLvalue,
         Func<SyntaxToken, RefKind> getRefKindFromModifier,
         Func<RefKind, string> refKindToString)
@@ -130,6 +134,7 @@ internal sealed class ConversionClassifier
         this.bindInterpolatedStringAsFormattable = bindInterpolatedStringAsFormattable ?? throw new ArgumentNullException(nameof(bindInterpolatedStringAsFormattable));
         this.createErasedFunctionLiteralAdapter = createErasedFunctionLiteralAdapter ?? throw new ArgumentNullException(nameof(createErasedFunctionLiteralAdapter));
         this.createClrMethodGroupAdapter = createClrMethodGroupAdapter ?? throw new ArgumentNullException(nameof(createClrMethodGroupAdapter));
+        this.getMethodGroupObservableReturnType = getMethodGroupObservableReturnType ?? throw new ArgumentNullException(nameof(getMethodGroupObservableReturnType));
         this.isLvalue = isLvalue ?? throw new ArgumentNullException(nameof(isLvalue));
         this.getRefKindFromModifier = getRefKindFromModifier ?? throw new ArgumentNullException(nameof(getRefKindFromModifier));
         this.refKindToString = refKindToString ?? throw new ArgumentNullException(nameof(refKindToString));
@@ -1484,6 +1489,11 @@ internal sealed class ConversionClassifier
             return new BoundErrorExpression(null);
         }
 
+        var targetParameterRefKinds = GetMethodGroupTargetRefKinds(
+            targetType,
+            targetParameterTypes.Length,
+            out var targetReturnRefKind);
+
         FunctionSymbol pick = null;
         StructSymbol pickOwner = null;
         ImmutableArray<TypeSymbol> pickMethodTypeArguments = default;
@@ -1506,10 +1516,18 @@ internal sealed class ConversionClassifier
                 continue;
             }
 
+            candidateReturn = getMethodGroupObservableReturnType(candidate, candidateReturn);
+            var parameterOffset = candidate.IsExtension && group.Receiver != null ? 1 : 0;
+            if (candidate.ReturnRefKind != targetReturnRefKind)
+            {
+                continue;
+            }
+
             var paramsMatch = true;
             for (var i = 0; i < targetParameterTypes.Length; i++)
             {
-                if (!AreMethodGroupTypesEquivalent(candidateParameterTypes[i], targetParameterTypes[i]))
+                if (candidate.Parameters[i + parameterOffset].RefKind != targetParameterRefKinds[i]
+                    || !AreMethodGroupTypesEquivalent(candidateParameterTypes[i], targetParameterTypes[i]))
                 {
                     paramsMatch = false;
                     break;
@@ -2282,10 +2300,37 @@ internal sealed class ConversionClassifier
     }
 
     private static bool AreMethodGroupTypesEquivalent(TypeSymbol left, TypeSymbol right)
-        => ReferenceEquals(left, right)
-            || (left?.ClrType != null
-                && right?.ClrType != null
-                && ClrTypeUtilities.AreSame(left.ClrType, right.ClrType));
+        => TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(left, right);
+
+    private static ImmutableArray<RefKind> GetMethodGroupTargetRefKinds(
+        TypeSymbol targetType,
+        int parameterCount,
+        out RefKind returnRefKind)
+    {
+        returnRefKind = RefKind.None;
+        if (targetType is DelegateTypeSymbol userDelegate)
+        {
+            return userDelegate.Parameters.Select(parameter => parameter.RefKind).ToImmutableArray();
+        }
+
+        var invoke = targetType?.ClrType != null && ClrTypeUtilities.IsDelegateType(targetType.ClrType)
+            ? targetType.ClrType.GetMethodSafe("Invoke")
+            : null;
+        if (invoke == null)
+        {
+            return ImmutableArray.CreateRange(Enumerable.Repeat(RefKind.None, parameterCount));
+        }
+
+        returnRefKind = invoke.ReturnType.IsByRef ? RefKind.Ref : RefKind.None;
+        return invoke.GetParameters().Select(parameter =>
+            !parameter.ParameterType.IsByRef
+                ? RefKind.None
+                : parameter.IsOut
+                    ? RefKind.Out
+                    : parameter.IsIn
+                        ? RefKind.In
+                        : RefKind.Ref).ToImmutableArray();
+    }
 
     // ADR-0062: an inner ref-kind modifier on a conditional ref-argument branch
     // must agree with the outer modifier text (`ref`, `out`, `in`, or `&`).

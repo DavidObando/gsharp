@@ -595,13 +595,16 @@ internal sealed partial class MethodBodyEmitter
 
         for (var i = 0; i < from.Arity; i++)
         {
-            if (!HaveSameReferenceRepresentation(from.ParameterTypes[i], to.ParameterTypes[i]))
+            if (!HaveSameReferenceRepresentation(from.ParameterTypes[i], to.ParameterTypes[i])
+                && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                    from.ParameterTypes[i],
+                    to.ParameterTypes[i]))
             {
                 return false;
             }
         }
 
-        if (from.ReturnType == to.ReturnType)
+        if (TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(from.ReturnType, to.ReturnType))
         {
             return true;
         }

@@ -13,8 +13,9 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// Issue #1356: a function type whose return type is a bare type parameter
 /// <c>T</c> implicitly converts to a function returning the nullable form
 /// <c>T?</c> of the same type parameter (return-type covariance via the
-/// always-safe <c>T → T?</c> widening). The reverse, null-dropping direction
-/// (<c>T? → T</c>) must stay rejected. These tests pin
+/// always-safe <c>T → T?</c> widening). Issue #2714 permits the reverse
+/// delegate conversion too because an unconstrained <c>T?</c> is a
+/// nullable-reference annotation with the same runtime signature. These tests pin
 /// <see cref="Conversion.Classify"/> so the rule survives future refactors.
 /// </summary>
 public class Issue1356FuncReturnNullableWideningConversionTests
@@ -38,7 +39,7 @@ public class Issue1356FuncReturnNullableWideningConversionTests
     }
 
     [Fact]
-    public void FuncReturningNullable_DoesNotNarrowToFuncReturningTypeParameter()
+    public void FuncReturningNullable_ConvertsToSameRuntimeTypeParameterSignature()
     {
         var t = NewTypeParameter();
         var parameters = ImmutableArray.Create<TypeSymbol>(t);
@@ -47,7 +48,8 @@ public class Issue1356FuncReturnNullableWideningConversionTests
 
         var conversion = Conversion.Classify(from, to);
 
-        Assert.False(conversion.Exists);
+        Assert.True(conversion.Exists);
+        Assert.True(conversion.IsImplicit);
     }
 
     [Fact]
