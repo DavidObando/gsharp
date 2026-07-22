@@ -30,6 +30,16 @@ public sealed class Issue2744RecordAbiEmitTests
             }
             data class Credentials(Username string, Password string) {
             }
+            data class PatternRecord(Value int32) {
+            }
+            class PatternProbe {
+                shared {
+                    func Match(value PatternRecord) string -> switch value {
+                        case { Value: 1 }: "match"
+                        default: "miss"
+                    }
+                }
+            }
             open data class Base() {
             }
             data class Left() : Base() {
@@ -57,12 +67,12 @@ public sealed class Issue2744RecordAbiEmitTests
                         .Single(c => c.GetParameters().Length == 1 && c.GetParameters()[0].ParameterType == typeof(Config));
                     var baseCopyCtor = typeof(Base).GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic)
                         .Single(c => c.GetParameters().Length == 1 && c.GetParameters()[0].ParameterType == typeof(Base));
-                    return $"{original.Name}|{copy.Name}|{credentials.Username}:{credentials.Password}|{leftCopy.GetType().Name}|{copyCtor.IsPrivate}|{baseCopyCtor.IsFamily}|{typeof(Config).GetProperty("EqualityContract", BindingFlags.Instance | BindingFlags.NonPublic) != null}|{new Left().Equals((Base)new Right())}|{typeof(Plain).GetMethod("<Clone>$") == null}";
+                    return $"{original.Name}|{copy.Name}|{credentials.Username}:{credentials.Password}|{PatternProbe.Match(new PatternRecord(1))}|{leftCopy.GetType().Name}|{copyCtor.IsPrivate}|{baseCopyCtor.IsFamily}|{typeof(Config).GetProperty("EqualityContract", BindingFlags.Instance | BindingFlags.NonPublic) != null}|{new Left().Equals((Base)new Right())}|{typeof(Plain).GetMethod("<Clone>$") == null}";
                 }
             }
             """;
 
-        Assert.Equal("old|new|user:changed|Left|True|True|True|False|True", CompileAndRun(gsharp, csharp));
+        Assert.Equal("old|new|user:changed|match|Left|True|True|True|False|True", CompileAndRun(gsharp, csharp));
     }
 
     [Fact]
@@ -72,6 +82,14 @@ public sealed class Issue2744RecordAbiEmitTests
             package Records
 
             data struct Point(X int32, Y int32) {
+            }
+            class StructPatternProbe {
+                shared {
+                    func Match(point Point) string -> switch point {
+                        case { X: 1, Y: 2 }: "match"
+                        default: "miss"
+                    }
+                }
             }
             """;
         const string csharp = """
@@ -83,12 +101,12 @@ public sealed class Issue2744RecordAbiEmitTests
                 {
                     var point = new Point(1, 2);
                     var copy = point with { X = 3 };
-                    return $"{point.X},{point.Y}|{copy.X},{copy.Y}";
+                    return $"{point.X},{point.Y}|{copy.X},{copy.Y}|{StructPatternProbe.Match(point)}";
                 }
             }
             """;
 
-        Assert.Equal("1,2|3,2", CompileAndRun(gsharp, csharp));
+        Assert.Equal("1,2|3,2|match", CompileAndRun(gsharp, csharp));
     }
 
     private static string CompileAndRun(string gsharp, string csharp)

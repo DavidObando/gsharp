@@ -153,7 +153,7 @@ public sealed partial class Evaluator
 
                 foreach (var field in property.Fields)
                 {
-                    sv.Fields.TryGetValue(field.Field.Name, out var fieldValue);
+                    sv.Fields.TryGetValue(field.Property?.Name ?? field.Field.Name, out var fieldValue);
                     if (!TryMatchPattern(field.Pattern, fieldValue, outBindings))
                     {
                         return false;

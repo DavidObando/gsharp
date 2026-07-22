@@ -1343,7 +1343,7 @@ internal sealed partial class DeclarationBinder
                     property.BackingField = new FieldSymbol(
                         $"<{parameter.Name}>k__BackingField",
                         parameter.Type,
-                        Accessibility.Private,
+                        structSymbol.IsClass ? Accessibility.Private : Accessibility.Internal,
                         isReadOnly: false);
                     propertiesBuilder.Add(property);
                     existingNames.Add(parameter.Name);
