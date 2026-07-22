@@ -236,9 +236,12 @@ internal sealed partial class MethodBodyEmitter
         // reference-compatibility shortcut below, which would otherwise
         // misclassify the lift as a no-op (the underlying primitive `T`
         // is trivially "compatible with" itself).
+        // Issue #2717: imported property and expression binding can mint
+        // distinct symbols for the same CLR T, so use the binder's identity
+        // classifier rather than symbol reference equality.
         if (to is NullableTypeSymbol toValueNullableLift
             && ReflectionMetadataEmitter.IsValueTypeNullable(toValueNullableLift)
-            && from == toValueNullableLift.UnderlyingType)
+            && Conversion.ClassifyNonStructural(from, toValueNullableLift.UnderlyingType).IsIdentity)
         {
             // Issue #814 / ADR-0084 §L5: open `T → Nullable<T>` where T is an
             // open type parameter constrained to `struct`. The closed ctor
@@ -300,10 +303,13 @@ internal sealed partial class MethodBodyEmitter
         // Restrict to reference-type Nullable<T> — value-type Nullable<T>
         // is a distinct CLR struct and was handled by the dedicated branch
         // above (issue #504).
+        // Issue #2717: mirror the binder's imported-type identity rule before
+        // checking reference compatibility; nullable widening remains a no-op.
         if (to is NullableTypeSymbol toNullable
             && !ReflectionMetadataEmitter.IsValueTypeNullable(toNullable)
             && !ReflectionMetadataEmitter.IsValueTypeSymbol(from)
-            && IsReferenceCompatible(from, toNullable.UnderlyingType))
+            && (Conversion.ClassifyNonStructural(from, toNullable.UnderlyingType).IsIdentity
+                || IsReferenceCompatible(from, toNullable.UnderlyingType)))
         {
             return;
         }
