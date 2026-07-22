@@ -294,7 +294,7 @@ internal sealed partial class OverloadResolver
         }
 
         // ADR-0065 §2: a bare `init(args)` call inside a constructor body is
-        // a self-delegation to a sibling constructor on the same class. This
+        // a self-delegation to a sibling constructor on the same aggregate. This
         // is the only legal use of `init` as a callable identifier. Recognise
         // it before any other call-binding path so the generic identifier
         // fallback at the bottom doesn't surface a misleading "unknown
@@ -308,7 +308,6 @@ internal sealed partial class OverloadResolver
                 && inCtor.IsSpecialName
                 && inCtor.Name == ".ctor"
                 && inCtor.ReceiverType is StructSymbol owningClass
-                && owningClass.IsClass
                 && !owningClass.ExplicitConstructors.IsDefaultOrEmpty)
             {
                 return BindConstructorChainingExpression(syntax, owningClass, inCtor);
@@ -357,7 +356,10 @@ internal sealed partial class OverloadResolver
         // before the source-type-alias checks further down ever got a chance.
         var hasSourceConstructibleType = Scope.TryLookupTypeAlias(syntax.Identifier.Text, ctorPreferredArity, out var sourceCtorCandidate, out _)
             && sourceCtorCandidate is StructSymbol sourceCtorStruct
-            && (sourceCtorStruct.IsClass || sourceCtorStruct.IsInline || sourceCtorStruct.HasPrimaryConstructor);
+            && (sourceCtorStruct.IsClass
+                || sourceCtorStruct.IsInline
+                || sourceCtorStruct.HasPrimaryConstructor
+                || !sourceCtorStruct.ExplicitConstructors.IsDefaultOrEmpty);
 
         // Phase 4-exit: prefer CLR class instantiation over the single-arg
         // conversion-call hijack below, so that `StringBuilder(16)` resolves
@@ -390,7 +392,10 @@ internal sealed partial class OverloadResolver
             // constructor is likewise positionally constructible — `Entry(1)`
             // builds the struct, not a conversion to it.
             if (!(type is StructSymbol singleArgStruct
-                  && (singleArgStruct.IsClass || singleArgStruct.IsInline || singleArgStruct.HasPrimaryConstructor)))
+                  && (singleArgStruct.IsClass
+                      || singleArgStruct.IsInline
+                      || singleArgStruct.HasPrimaryConstructor
+                      || !singleArgStruct.ExplicitConstructors.IsDefaultOrEmpty)))
             {
                 // ADR-0047 §6 / #175: `Type(x)` as an explicit conversion
                 // is still a use of the named type.
@@ -412,7 +417,10 @@ internal sealed partial class OverloadResolver
         // `Entry(1, 2)` lowers to a struct literal initializing its fields.
         if (!hasNonConstructorCallable
             && lookupTypeWithArity(syntax.Identifier.Text, ctorPreferredArity) is StructSymbol classType
-            && (classType.IsClass || classType.IsInline || classType.HasPrimaryConstructor))
+            && (classType.IsClass
+                || classType.IsInline
+                || classType.HasPrimaryConstructor
+                || !classType.ExplicitConstructors.IsDefaultOrEmpty))
         {
             return BindConstructorCallExpression(syntax, classType);
         }

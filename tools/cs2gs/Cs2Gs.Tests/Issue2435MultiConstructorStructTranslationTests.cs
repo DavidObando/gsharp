@@ -40,7 +40,7 @@ namespace Demo
     }
 
     [Fact]
-    public void StructWithOneConstructor_LiftsAndCallSiteUsesLiteral()
+    public void StructWithOneConstructor_PreservesInitAndCall()
     {
         (string printed, TranslationContext context) = Translate(@"
 namespace Demo
@@ -64,13 +64,14 @@ namespace Demo
 }");
 
         Assert.Contains("struct Point", printed, StringComparison.Ordinal);
-        Assert.Contains("Point{X: 1, Y: 2}", printed, StringComparison.Ordinal);
+        Assert.Contains("init(x int32, y int32)", printed, StringComparison.Ordinal);
+        Assert.Contains("Point(1, 2)", printed, StringComparison.Ordinal);
         AssertNoUnsupported(context);
         AssertRoundTrips(printed);
     }
 
     [Fact]
-    public void SingleConstructorFixedAssignment_UsesLiftedFieldInitializerOnce()
+    public void SingleConstructorFixedAssignment_StaysInInit()
     {
         (string printed, TranslationContext context) = Translate(@"
 namespace Demo
@@ -93,14 +94,15 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Point{X: 1}", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("Point{X: 1, Y: 7}", printed, StringComparison.Ordinal);
+        Assert.Contains("init(x int32)", printed, StringComparison.Ordinal);
+        Assert.Contains("Y = 7", printed, StringComparison.Ordinal);
+        Assert.Contains("Point(1)", printed, StringComparison.Ordinal);
         AssertNoUnsupported(context);
         AssertRoundTrips(printed);
     }
 
     [Fact]
-    public void StructWithMultipleRepresentableConstructors_IsPreservedAndOverloadsLowerAtCallSites()
+    public void StructWithMultipleRepresentableConstructors_PreservesOverloadsAndCalls()
     {
         (string printed, TranslationContext context) = Translate(@"
 namespace Demo
@@ -131,15 +133,16 @@ namespace Demo
 }");
 
         Assert.Contains("struct Point", printed, StringComparison.Ordinal);
-        Assert.Contains("Point{X: 1, Y: 2}", printed, StringComparison.Ordinal);
-        Assert.Contains("Point{X: 3, Y: 0}", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("init(", printed, StringComparison.Ordinal);
+        Assert.Contains("init(x int32, y int32)", printed, StringComparison.Ordinal);
+        Assert.Contains("init(x int32)", printed, StringComparison.Ordinal);
+        Assert.Contains("Point(1, 2)", printed, StringComparison.Ordinal);
+        Assert.Contains("Point(3)", printed, StringComparison.Ordinal);
         AssertNoUnsupported(context);
         AssertRoundTrips(printed);
     }
 
     [Fact]
-    public void DelegatingParameterlessConstructor_LowersThroughDesignatedConstructor()
+    public void DelegatingParameterlessConstructor_PreservesConvenienceInit()
     {
         (string printed, TranslationContext context) = Translate(@"
 namespace Demo
@@ -168,14 +171,16 @@ namespace Demo
 }");
 
         Assert.Contains("struct Point", printed, StringComparison.Ordinal);
-        Assert.Contains("Point{X: 0, Y: 0}", printed, StringComparison.Ordinal);
-        Assert.Contains("Point{X: 4, Y: 5}", printed, StringComparison.Ordinal);
+        Assert.Contains("convenience init()", printed, StringComparison.Ordinal);
+        Assert.Contains("init(0, 0)", printed, StringComparison.Ordinal);
+        Assert.Contains("Point()", printed, StringComparison.Ordinal);
+        Assert.Contains("Point(4, 5)", printed, StringComparison.Ordinal);
         AssertNoUnsupported(context);
         AssertRoundTrips(printed);
     }
 
     [Fact]
-    public void ConstructorLiteral_ComposesWithDistinctObjectInitializerMembers()
+    public void ConstructorCall_ComposesWithDistinctObjectInitializerMembers()
     {
         (string printed, TranslationContext context) = Translate(@"
 namespace Demo
@@ -200,14 +205,15 @@ namespace Demo
 }");
 
         Assert.Contains("struct Reading", printed, StringComparison.Ordinal);
-        Assert.Contains("Reading{Value: 3, Label: \"ok\"}", printed, StringComparison.Ordinal);
+        Assert.Contains("Reading(3)", printed, StringComparison.Ordinal);
+        Assert.Contains("Label = \"ok\"", printed, StringComparison.Ordinal);
         Assert.Contains("IsPositive", printed, StringComparison.Ordinal);
         AssertNoUnsupported(context);
         AssertRoundTrips(printed);
     }
 
     [Fact]
-    public void UnsupportedConstructorShape_IsDiagnosedEvenWithoutCallSite()
+    public void ConstructorWithLogic_IsPreservedEvenWithoutCallSite()
     {
         (string printed, TranslationContext context) = Translate(@"
 namespace Demo
@@ -233,13 +239,11 @@ namespace Demo
     }
 }");
 
-        Assert.DoesNotContain("struct Validated", printed, StringComparison.Ordinal);
-        Assert.Contains(
-            context.Diagnostics,
-            diagnostic =>
-                diagnostic.Severity == TranslationSeverity.Unsupported &&
-                diagnostic.Message.Contains("Validated", StringComparison.Ordinal) &&
-                diagnostic.Message.Contains("#2435", StringComparison.Ordinal));
+        Assert.Contains("struct Validated", printed, StringComparison.Ordinal);
+        Assert.Contains("init(value int32)", printed, StringComparison.Ordinal);
+        Assert.Contains("init(text string)", printed, StringComparison.Ordinal);
+        AssertNoUnsupported(context);
+        AssertRoundTrips(printed);
     }
 
     private static (string Printed, TranslationContext Context) Translate(string source)

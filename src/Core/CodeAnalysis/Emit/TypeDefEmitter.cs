@@ -1624,24 +1624,26 @@ internal sealed class TypeDefEmitter
     }
 
     /// <summary>
-    /// Issue #306: emits a class constructor materialized from an explicit
+    /// Issue #306 / #2766: emits a class or plain-struct constructor materialized from an explicit
     /// <c>init(...)</c> declaration. The body first chains to the resolved base
     /// constructor (either the explicit <c>: base(args)</c> initializer or the
     /// conventional parameterless chain) and then runs the bound constructor
     /// body, which sees <c>this</c>, the constructor parameters, and the class's
     /// fields (as bare names).
     /// </summary>
-    /// <param name="classSym">The class whose explicit constructor is being emitted.</param>
-    /// <param name="ctor">The specific explicit ctor overload to emit. When <see langword="null"/> the legacy single-ctor entry on the class is used.</param>
+    /// <param name="classSym">The aggregate whose explicit constructor is being emitted.</param>
+    /// <param name="ctor">The specific explicit ctor overload to emit. When <see langword="null"/> the legacy single-ctor entry on the aggregate is used.</param>
     /// <returns>The emitted constructor's MethodDef handle.</returns>
     public MethodDefinitionHandle EmitClassConstructorWithBody(StructSymbol classSym, ConstructorSymbol ctor = null)
     {
         ctor ??= classSym.ExplicitConstructor;
         var function = ctor.Function;
         var init = ctor.BaseInitializer;
-        var baseCtorToken = init != null
-            ? this.GetBaseInitializerCtorToken(classSym, init)
-            : this.GetBaseCtorToken(classSym);
+        var baseCtorToken = classSym.IsClass
+            ? init != null
+                ? this.GetBaseInitializerCtorToken(classSym, init)
+                : this.GetBaseCtorToken(classSym)
+            : default;
 
         int bodyOffset = -1;
         if (!this.emitCtx.MetadataOnly)

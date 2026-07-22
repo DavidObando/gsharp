@@ -13,35 +13,15 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Issue #1990: a C# struct with multiple constructors that cannot ALL be
-/// lifted to a single G# primary-constructor form used to fall through to
-/// <c>TranslateConstructor</c> unconditionally, emitting an explicit
-/// <c>init(...)</c> constructor body on the translated <c>struct</c> — but
-/// the G# parser only accepts <c>init(...)</c> on a <c>class</c> header
-/// (<c>DeclarationBinder.BindConstructors</c> early-returns for a non-class
-/// type; ADR-0115 §B.5/§B.14's "no explicit init on a value aggregate" rule
-/// is by design), so the translated output failed to parse. The same defect
-/// applied to a single-constructor struct whose constructor could not
-/// collapse to a primary constructor (e.g. it reads an instance member) and
-/// to a C# record struct with a non-positional multi-ctor shape.
-///
-/// A first fix attempt silently downgraded such a type to a class/data class.
-/// That was rejected on review: it flips value semantics to reference
-/// semantics — <c>Equals</c>/<c>GetHashCode</c> become reference-identity,
-/// <c>default(T)</c> becomes <c>null</c>, copy-on-assign becomes aliasing,
-/// storage becomes heap-allocated — which is exactly the kind of silent
-/// approximation ADR-0115 §B ("the translator never guesses") forbids. Per
-/// ADR-0115's own guidance, a constructor shape that cannot be replayed as a
-/// call-site struct literal is reported as a loud <c>Unsupported</c>
-/// diagnostic and the type is dropped from the emitted output. Issue #2435
-/// later generalized the representable case: multiple simple constructors are
-/// preserved by lowering each resolved overload at its call sites, while the
-/// non-representable cases below remain explicit gaps.
+/// Issues #1990/#2435 originally rejected plain-struct constructors that could
+/// not be replayed as literals. Issue #2766 gives plain structs a real
+/// <c>init</c> surface, so those shapes now preserve their constructor bodies;
+/// record structs retain their separate data-struct lowering.
 /// </summary>
 public class Issue1990MultiCtorStructUnsupportedTests
 {
     [Fact]
-    public void MultiCtorStruct_ReportsUnsupported_AndDropsType()
+    public void MultiCtorStruct_PreservesExplicitOverloads()
     {
         (string printed, TranslationContext context) = Translate(@"
 namespace Demo
@@ -65,28 +45,18 @@ namespace Demo
     }
 }");
 
-        // The one-argument overload consumes `both` twice. Repeating the caller's
-        // argument expression in two literal fields could duplicate side effects,
-        // so no canonical G# form is invented.
-        Assert.DoesNotContain("class Point", printed);
-        Assert.DoesNotContain("struct Point", printed);
-
-        Assert.Contains(
-            context.Diagnostics,
-            d => d.Severity == TranslationSeverity.Unsupported &&
-                d.Message.Contains("Point", StringComparison.Ordinal) &&
-                d.Message.Contains("no canonical G# form", StringComparison.Ordinal) &&
-                d.Message.Contains("Equals", StringComparison.Ordinal) &&
-                d.Message.Contains("default(T)", StringComparison.Ordinal));
+        Assert.Contains("struct Point", printed);
+        Assert.Contains("init(x int32, y int32)", printed);
+        Assert.Contains("init(both int32)", printed);
+        AssertNoUnsupported(context);
+        AssertRoundTrips(printed);
     }
 
     [Fact]
-    public void SingleUnliftableCtorStruct_ReportsUnsupported_AndDropsType()
+    public void SingleUnliftableCtorStruct_PreservesBody()
     {
-        // The ctor's RHS (`Buffer = new int[Capacity]`) reads the instance
-        // member `Capacity`, so it cannot become a field initializer or a
-        // primary-constructor parameter — the lift bails, and (pre-fix) the
-        // explicit ctor was kept and emitted as an invalid struct `init`.
+        // The ctor's RHS reads instance state, so it cannot become a field
+        // initializer or primary-constructor parameter. It now stays in `init`.
         (string printed, TranslationContext context) = Translate(@"
 namespace Demo
 {
@@ -103,12 +73,10 @@ namespace Demo
     }
 }");
 
-        Assert.DoesNotContain("class Ring", printed);
-        Assert.DoesNotContain("struct Ring", printed);
-        Assert.Contains(
-            context.Diagnostics,
-            d => d.Severity == TranslationSeverity.Unsupported &&
-                d.Message.Contains("Ring", StringComparison.Ordinal));
+        Assert.Contains("struct Ring", printed);
+        Assert.Contains("init(capacity int32)", printed);
+        AssertNoUnsupported(context);
+        AssertRoundTrips(printed);
     }
 
     [Fact]
@@ -132,7 +100,7 @@ namespace Demo
     }
 
     [Fact]
-    public void MultiCtorStruct_SiblingMembersStillEmit_AndFileRoundTrips()
+    public void MultiCtorStruct_AndSiblingMembersBothEmitAndRoundTrip()
     {
         // Dropping the unsupported type must not take down the rest of the
         // file: an unrelated sibling class still translates and the printed
@@ -165,7 +133,7 @@ namespace Demo
 }");
 
         Assert.Contains("class Unrelated", printed);
-        Assert.DoesNotContain("Point", printed);
+        Assert.Contains("struct Point", printed);
 
         RoundTripResult result = GSharpRoundTrip.Validate(printed);
         Assert.True(
@@ -173,7 +141,7 @@ namespace Demo
             "Translated G# (with the unsupported type dropped) must still round-trip. Errors:\n" +
                 string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
 
-        Assert.Single(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertNoUnsupported(context);
     }
 
     private static (string Printed, TranslationContext Context) Translate(string source)
@@ -190,5 +158,21 @@ namespace Demo
 
         string printed = GSharpPrinter.Print(unit);
         return (printed, context);
+    }
+
+    private static void AssertNoUnsupported(TranslationContext context)
+    {
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
+    }
+
+    private static void AssertRoundTrips(string printed)
+    {
+        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        Assert.True(
+            result.Success,
+            "Translated G# must round-trip. Errors:\n" +
+                string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
     }
 }

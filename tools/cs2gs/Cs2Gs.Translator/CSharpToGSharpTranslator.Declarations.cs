@@ -1095,8 +1095,8 @@ public sealed partial class CSharpToGSharpTranslator
                 ? autoPropertyLift
                 : this.AnalyzeConstructorLift(node, mergedMembers, symbol, kind.Value);
 
-            // Issues #1990/#2435: G# value aggregates have no explicit `init`
-            // member, but a C# struct constructor whose complete effect is a
+            // Issues #1990/#2435: G# data structs have no explicit `init`
+            // member, but a C# record-struct constructor whose complete effect is a
             // once-only set of member assignments can still be represented at
             // every call site as a struct literal. Keep the struct and omit those
             // constructor declarations; BuildObjectCreationCore resolves the
@@ -1106,7 +1106,7 @@ public sealed partial class CSharpToGSharpTranslator
             // the type or changing value semantics via a class downgrade.
             HashSet<ConstructorDeclarationSyntax> callSiteLoweredStructConstructors = null;
             if (!lift.DropConstructor &&
-                (kind == TypeDeclarationKind.Struct || kind == TypeDeclarationKind.DataStruct) &&
+                kind == TypeDeclarationKind.DataStruct &&
                 mergedMembers.OfType<ConstructorDeclarationSyntax>().Any(c => !c.Modifiers.Any(SyntaxKind.StaticKeyword)))
             {
                 callSiteLoweredStructConstructors = new HashSet<ConstructorDeclarationSyntax>();
@@ -1136,13 +1136,13 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     this.context.ReportUnsupported(
                         node,
-                        $"'{node.Identifier.Text}' has no canonical G# form: it is a '{(kind == TypeDeclarationKind.DataStruct ? "record struct" : "struct")}' with an instance constructor that cannot be lowered to call-site struct literals. {unsupportedConstructorReason} A G# struct/data struct admits no explicit 'init(...)' constructor by design (ADR-0115 §B.5, §B.14; issues #1990 and #2435). Silently mapping it to a class would change value semantics to reference semantics (Equals/GetHashCode become reference-identity, default(T) becomes null, copies become aliases, storage becomes heap-allocated), so it is not auto-translated.");
+                        $"'{node.Identifier.Text}' has no canonical G# form: it is a record struct with an instance constructor that cannot be lowered to call-site struct literals. {unsupportedConstructorReason} A G# data struct admits no explicit 'init(...)' constructor by design (ADR-0115 §B.5, §B.14; issues #1990 and #2435). Silently mapping it to a class would change value semantics to reference semantics (Equals/GetHashCode become reference-identity, default(T) becomes null, copies become aliases, storage becomes heap-allocated), so it is not auto-translated.");
                     return null;
                 }
 
                 this.context.Report(new TranslationDiagnostic(
                     nameof(SyntaxKind.ConstructorDeclaration),
-                    $"struct '{node.Identifier.Text}' constructor overloads are lowered at their call sites to G# struct literals because G# value aggregates have no explicit 'init(...)' members (issue #2435).",
+                    $"record struct '{node.Identifier.Text}' constructor overloads are lowered at their call sites to G# struct literals because G# data structs have no explicit 'init(...)' members (issue #2435).",
                     node.GetLocation(),
                     TranslationSeverity.Info));
             }
@@ -1535,11 +1535,11 @@ public sealed partial class CSharpToGSharpTranslator
             INamedTypeSymbol symbol,
             TypeDeclarationKind kind)
         {
-            // Issue #2746: replacing any explicit class constructor with a G#
+            // Issues #2746/#2766: replacing any explicit class or plain-struct constructor with a G#
             // primary constructor changes its CLR contract. Assignment-target
             // names replace source parameter names, and private fields become
-            // public. Keep classes on the normal constructor/member paths.
-            if (kind == TypeDeclarationKind.Class)
+            // public. Keep both on the normal constructor/member paths.
+            if (kind == TypeDeclarationKind.Class || kind == TypeDeclarationKind.Struct)
             {
                 return ConstructorLift.None;
             }

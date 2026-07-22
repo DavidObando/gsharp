@@ -83,7 +83,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("struct Money(Cents int32) : IEquatable[Money] {", printed);
+        Assert.Contains("struct Money : IEquatable[Money] {", printed);
+        Assert.Contains("init(cents int32)", printed);
     }
 
     /// <summary>

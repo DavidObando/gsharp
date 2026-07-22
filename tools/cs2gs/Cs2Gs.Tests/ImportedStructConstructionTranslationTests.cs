@@ -14,9 +14,9 @@ namespace Cs2Gs.Tests;
 
 /// <summary>
 /// Translator-fidelity tests for the construction of value types. A
-/// <em>source-defined</em> <c>struct</c> / <c>data struct</c> has no callable
-/// constructor surface in G# and is built with a struct literal
-/// (<c>T{Field: value, ...}</c>). An <em>imported / BCL</em> struct (e.g.
+/// <em>source-defined</em> plain struct with an explicit constructor now keeps
+/// a callable <c>init</c>; data structs and default/object initialization use
+/// struct literals. An <em>imported / BCL</em> struct (e.g.
 /// <see cref="System.Guid"/>) is also <c>SpecialType.None</c> yet DOES expose
 /// real constructors that G# can call directly (<c>Guid(bytes, true)</c>), so a
 /// positional <c>new Guid(...)</c> must be rendered as a constructor call — not
@@ -62,10 +62,8 @@ namespace Demo
     }
 
     [Fact]
-    public void SourceStruct_PositionalNew_StillRendersStructLiteral()
+    public void SourceStruct_PositionalNew_RendersPreservedConstructorCall()
     {
-        // Regression guard: a source-defined value aggregate keeps the canonical
-        // G# struct-literal form (no callable ctor surface in G#).
         string printed = TranslateUnit(@"
 namespace Demo
 {
@@ -82,9 +80,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Point{", printed);
-        Assert.Contains("X: 1", printed);
-        Assert.Contains("Y: 2", printed);
+        Assert.Contains("init(x int32, y int32)", printed);
+        Assert.Contains("Point(1, 2)", printed);
     }
 
     /// <summary>

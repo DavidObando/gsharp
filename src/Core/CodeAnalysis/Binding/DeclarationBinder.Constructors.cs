@@ -549,8 +549,8 @@ internal sealed partial class DeclarationBinder
     }
 
     /// <summary>
-    /// Issue #306: binds the standalone user-defined constructors (<c>init(...)</c>)
-    /// declared in a class body. Each constructor becomes a <see cref="ConstructorSymbol"/>
+    /// Issue #306 / #2766: binds standalone user-defined constructors (<c>init(...)</c>)
+    /// declared in a class or plain struct body. Each constructor becomes a <see cref="ConstructorSymbol"/>
     /// whose body is bound in <see cref="Binder.BindProgram(BoundGlobalScope, ReferenceResolver)"/> as an instance-method body and
     /// emitted/interpreted as a <c>.ctor</c>.
     /// </summary>
@@ -576,11 +576,6 @@ internal sealed partial class DeclarationBinder
             return;
         }
 
-        if (!structSymbol.IsClass)
-        {
-            return;
-        }
-
         // ADR-0065 §5: when both a primary-constructor parameter list and
         // explicit `init(...)` bodies are declared, the primary constructor
         // becomes a synthesized designated initializer that participates in
@@ -588,7 +583,7 @@ internal sealed partial class DeclarationBinder
         // are diagnosed below by the same overload-equality check that catches
         // collisions between two user-declared init overloads.
         ConstructorSymbol synthesizedPrimary = null;
-        if (structSymbol.HasPrimaryConstructor)
+        if (structSymbol.IsClass && structSymbol.HasPrimaryConstructor)
         {
             synthesizedPrimary = SynthesizePrimaryConstructor(structSymbol, package);
         }
