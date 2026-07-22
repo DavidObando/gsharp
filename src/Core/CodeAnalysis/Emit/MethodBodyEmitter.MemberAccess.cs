@@ -1076,7 +1076,9 @@ internal sealed partial class MethodBodyEmitter
                     access.Type);
                 break;
             case FieldInfo field:
-                var fieldRef = this.outer.memberRefs.GetFieldReference(field);
+                var fieldRef = access.StaticContainerType != null
+                    ? this.outer.memberRefs.GetFieldReference(field, access.StaticContainerType)
+                    : this.outer.memberRefs.GetFieldReference(field);
                 this.il.OpCode(isStatic ? ILOpCode.Ldsfld : ILOpCode.Ldfld);
                 this.il.Token(fieldRef);
                 break;

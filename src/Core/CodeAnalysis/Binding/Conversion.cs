@@ -153,6 +153,9 @@ public sealed class Conversion
         // conversion as identity rather than reporting a confusing "Cannot
         // convert type 'X' to 'X'"-looking error.
         if (IsImportedTypeIdentity(from) && IsImportedTypeIdentity(to)
+            && (!(from is ImportedTypeSymbol { OpenDefinition: not null, HasSubstitutableTypeArgument: true }
+                    || to is ImportedTypeSymbol { OpenDefinition: not null, HasSubstitutableTypeArgument: true })
+                || TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(from, to))
             && ClrTypeUtilities.AreSame(from.ClrType, to.ClrType))
         {
             return Conversion.Identity;
@@ -1224,6 +1227,18 @@ public sealed class Conversion
         // target) case was already handled above and never reaches this arm.
         if (from is NullableTypeSymbol fromNullableUpcastSrc
             && IsReferenceLikeTarget(fromNullableUpcastSrc.UnderlyingType))
+        {
+            return Conversion.None;
+        }
+
+        // Issue #2735: an object-erased constructed generic must not fall
+        // through to the CLR assignability check below after its symbolic
+        // arguments failed the hierarchy/variance checks above. For example,
+        // NullLogger<Other>'s probe type NullLogger<object> implements the
+        // probe ILogger<object>, but it does not implement ILogger<Store>.
+        if (from is ImportedTypeSymbol { OpenDefinition: not null, HasSubstitutableTypeArgument: true }
+            && to is ImportedTypeSymbol mismatchedConstructedTarget
+            && TryGetConstructedGenericShape(mismatchedConstructedTarget, out _, out _))
         {
             return Conversion.None;
         }
