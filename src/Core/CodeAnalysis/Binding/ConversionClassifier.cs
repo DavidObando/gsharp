@@ -1383,7 +1383,7 @@ internal sealed class ConversionClassifier
         var argTypes = new Type[invokeParams.Length + (closesExtensionReceiver ? 1 : 0)];
         if (closesExtensionReceiver)
         {
-            var receiverClr = group.Receiver.Type?.ClrType;
+            var receiverClr = NullableTypeSymbol.GetEffectiveClrType(group.Receiver.Type);
             if (receiverClr == null
                 && !MemberLookup.TryProjectErasedClrType(group.Receiver.Type, out receiverClr))
             {

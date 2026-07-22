@@ -449,6 +449,7 @@ internal sealed partial class ExpressionBinder
             if (segment.IsExpression)
             {
                 var bound = BindExpression(segment.Expression);
+                bound = BindNaturalMethodGroupValue(bound, segment.Expression.Location);
                 if (bound is BoundErrorExpression)
                 {
                     return bound;
@@ -469,6 +470,127 @@ internal sealed partial class ExpressionBinder
         }
 
         return new BoundInterpolatedStringExpression(syntax, parts.ToImmutable());
+    }
+
+    private BoundExpression BindNaturalMethodGroupValue(BoundExpression expression, TextLocation location)
+    {
+        if (expression is BoundClrMethodGroupExpression { ResolvedMethod: null } clrGroup)
+        {
+            if (TryGetNaturalClrMethodGroupType(clrGroup, out var naturalType))
+            {
+                return conversions.BindConversion(location, clrGroup, naturalType);
+            }
+
+            Diagnostics.ReportCannotConvertMethodGroup(location, clrGroup.MethodName, TypeSymbol.Error);
+            return new BoundErrorExpression(null);
+        }
+
+        if (expression is BoundMethodGroupExpression { FunctionType: null } userGroup)
+        {
+            if (TryGetNaturalUserMethodGroupType(userGroup, out var naturalType))
+            {
+                return conversions.BindConversion(location, userGroup, naturalType);
+            }
+
+            Diagnostics.ReportCannotConvertMethodGroup(
+                location,
+                userGroup.Function?.Name ?? "<method group>",
+                TypeSymbol.Error);
+            return new BoundErrorExpression(null);
+        }
+
+        return expression;
+    }
+
+    private bool TryGetNaturalClrMethodGroupType(
+        BoundClrMethodGroupExpression group,
+        out FunctionTypeSymbol naturalType)
+    {
+        naturalType = null;
+        var closesReceiver = group.Receiver != null && group.Candidates.All(candidate => candidate.IsStatic);
+        var receiverClr = closesReceiver
+            ? NullableTypeSymbol.GetEffectiveClrType(group.Receiver.Type)
+            : null;
+        var matches = new List<(MethodInfo Method, OverloadResolution.ImplicitConversionKind ReceiverConversion)>();
+
+        foreach (var candidate in group.Candidates)
+        {
+            if (candidate.ContainsGenericParameters || candidate.ReturnType.IsByRef)
+            {
+                continue;
+            }
+
+            var parameters = candidate.GetParameters();
+            if (parameters.Any(parameter => parameter.ParameterType.IsByRef)
+                || (closesReceiver && (parameters.Length == 0 || receiverClr == null)))
+            {
+                continue;
+            }
+
+            var receiverConversion = closesReceiver
+                ? OverloadResolution.ClassifyImplicit(parameters[0].ParameterType, receiverClr)
+                : OverloadResolution.ImplicitConversionKind.Identity;
+            if (receiverConversion != OverloadResolution.ImplicitConversionKind.None)
+            {
+                matches.Add((candidate, receiverConversion));
+            }
+        }
+
+        if (matches.Count == 0)
+        {
+            return false;
+        }
+
+        var bestReceiverConversion = matches.Min(match => (int)match.ReceiverConversion);
+        var best = matches.Where(match => (int)match.ReceiverConversion == bestReceiverConversion).ToArray();
+        if (best.Length != 1)
+        {
+            return false;
+        }
+
+        var method = best[0].Method;
+        var methodParameters = method.GetParameters();
+        var offset = closesReceiver ? 1 : 0;
+        var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(methodParameters.Length - offset);
+        for (var i = offset; i < methodParameters.Length; i++)
+        {
+            parameterTypes.Add(ClrNullability.GetParameterTypeSymbol(methodParameters[i]));
+        }
+
+        var returnType = method.ReturnType.IsSameAs(typeof(void))
+            ? TypeSymbol.Void
+            : ClrNullability.GetReturnTypeSymbol(method);
+        naturalType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), returnType);
+        return naturalType.ClrType != null;
+    }
+
+    private bool TryGetNaturalUserMethodGroupType(
+        BoundMethodGroupExpression group,
+        out FunctionTypeSymbol naturalType)
+    {
+        naturalType = null;
+        if (group.Candidates.Length != 1
+            || group.Candidates[0] is not { IsGeneric: false } candidate)
+        {
+            return false;
+        }
+
+        var offset = candidate.IsExtension && group.Receiver != null ? 1 : 0;
+        var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(candidate.Parameters.Length - offset);
+        for (var i = offset; i < candidate.Parameters.Length; i++)
+        {
+            if (candidate.Parameters[i].RefKind != RefKind.None)
+            {
+                return false;
+            }
+
+            parameterTypes.Add(candidate.Parameters[i].Type);
+        }
+
+        naturalType = FunctionTypeSymbol.Get(
+            parameterTypes.MoveToImmutable(),
+            MethodGroupObservableReturnType(candidate));
+        return naturalType.ClrType != null;
     }
 
     /// <summary>
