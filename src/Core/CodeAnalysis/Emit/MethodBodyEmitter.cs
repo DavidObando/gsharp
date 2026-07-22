@@ -1105,6 +1105,16 @@ internal sealed partial class MethodBodyEmitter
         var crossesRegion = this.protectedRegionStack.Count > 0
             && !this.protectedRegionStack.Peek().Contains(target);
 
+        if (conditional is BoundLiteralExpression { Value: bool value })
+        {
+            if (value == jumpIfTrue)
+            {
+                this.il.Branch(crossesRegion ? ILOpCode.Leave : ILOpCode.Br, targetHandle);
+            }
+
+            return;
+        }
+
         if (conditional == null)
         {
             this.il.Branch(crossesRegion ? ILOpCode.Leave : ILOpCode.Br, targetHandle);
