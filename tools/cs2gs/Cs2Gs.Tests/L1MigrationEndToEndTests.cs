@@ -19,7 +19,7 @@ namespace Cs2Gs.Tests;
 
 /// <summary>
 /// The canonicalization milestone for issue #914: the real L1-Console corpus
-/// migrates end-to-end — translate (T1 tuples / T2 immutable-field init / T3
+/// migrates end-to-end — translate (T1 tuples / T2 constructor ABI / T3
 /// entry-point → top-level) → canonical G# that round-trips → compiles with the
 /// real <c>gsc</c> → runs → stdout exactly matches the C# baseline golden.
 /// </summary>
@@ -27,8 +27,8 @@ public class L1MigrationEndToEndTests
 {
     /// <summary>
     /// Translating L1 produces canonical G# that round-trips and exhibits the
-    /// three transforms: T1 native positional tuples, T2 primary-constructor lift
-    /// plus a <c>let</c> field initializer, and T3 top-level funcs and statements
+    /// three transforms: T1 native positional tuples, T2 explicit constructor
+    /// and private field preservation, and T3 top-level funcs and statements
     /// (no <c>shared { }</c> wrapper, no leftover <c>Main</c> method). No
     /// <see cref="TranslationSeverity.Unsupported"/> diagnostic survives.
     /// </summary>
@@ -48,11 +48,13 @@ public class L1MigrationEndToEndTests
         Assert.Contains("List[(string, int32, int32)]", printed);
         Assert.Contains("item.Item2 * item.Item3", printed);
 
-        // T2: the parameter-sourced field is lifted to a primary constructor and
-        // the independently-initialized field keeps a `let` initializer; the
-        // explicit constructor is gone.
-        Assert.Contains("class Cart(_customer string)", printed);
-        Assert.Contains("private let _items List[(string, int32, int32)] = List[(string, int32, int32)]()", printed);
+        // T2: the explicit constructor keeps its source parameter name and both
+        // readonly fields remain private instead of becoming primary fields.
+        Assert.Contains("class Cart {", printed);
+        Assert.Contains("private let _customer string", printed);
+        Assert.Contains("private let _items List[(string, int32, int32)]", printed);
+        Assert.Contains("init(customer string)", printed);
+        Assert.Contains("_items = List[(string, int32, int32)]()", printed);
 
         // T3: the entry class became top-level — a top-level func and the entry
         // body as top-level statements — with no `shared { }` block and no `Main`.

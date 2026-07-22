@@ -14,14 +14,14 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Issue #2436: constructor lifting tracked lifted properties by simple name,
-/// so a same-named explicit-interface forwarder was mistaken for the property
-/// consumed by the lift and silently omitted.
+/// Issue #2436: a same-named explicit-interface forwarder must survive beside
+/// the ordinary property. Issue #2746 now keeps the explicit constructor and
+/// both properties rather than collapsing the ordinary property into a field.
 /// </summary>
 public class Issue2436ExplicitInterfacePrimaryConstructorLiftTests
 {
     [Fact]
-    public void ConstructorLift_SameNamedExplicitInterfaceForwarderSurvives()
+    public void ExplicitConstructor_SameNamedExplicitInterfaceForwarderSurvives()
     {
         (CompilationUnit unit, TranslationContext context) = Translate(@"
 namespace Demo
@@ -45,20 +45,24 @@ namespace Demo
 }");
 
         TypeDeclaration holder = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Holder");
-        Parameter parameter = Assert.Single(holder.PrimaryConstructorParameters);
-        Assert.Equal("Value", parameter.Name);
+        Assert.True(holder.PrimaryConstructorParameters is null || holder.PrimaryConstructorParameters.Count == 0);
+        Assert.Equal(
+            "value",
+            Assert.Single(holder.Members.OfType<ConstructorDeclaration>()).Parameters.Single().Name);
 
         PropertyDeclaration forwarder = Assert.Single(
             holder.Members.OfType<PropertyDeclaration>(),
-            p => p.Name == "Value");
+            p => p.Name == "Value" && p.ExplicitInterfaceType != null);
         Assert.True(forwarder.ExplicitInterfaceType is NamedTypeReference { Name: "IValue" });
-        Assert.DoesNotContain(holder.Members, m => m is ConstructorDeclaration);
+        Assert.Contains(
+            holder.Members.OfType<PropertyDeclaration>(),
+            p => p.Name == "Value" && p.ExplicitInterfaceType == null);
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
         AssertRoundTripParses(GSharpPrinter.Print(unit));
     }
 
     [Fact]
-    public void ConstructorLift_SameNamedExplicitGetSetPropertyPreservesAccessorShape()
+    public void ExplicitConstructor_SameNamedExplicitGetSetPropertyPreservesAccessorShape()
     {
         (CompilationUnit unit, TranslationContext context) = Translate(@"
 namespace Demo
@@ -86,11 +90,14 @@ namespace Demo
 }");
 
         TypeDeclaration holder = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "MutableHolder");
-        Assert.Equal("Value", Assert.Single(holder.PrimaryConstructorParameters).Name);
+        Assert.True(holder.PrimaryConstructorParameters is null || holder.PrimaryConstructorParameters.Count == 0);
+        Assert.Equal(
+            "value",
+            Assert.Single(holder.Members.OfType<ConstructorDeclaration>()).Parameters.Single().Name);
 
         PropertyDeclaration forwarder = Assert.Single(
             holder.Members.OfType<PropertyDeclaration>(),
-            p => p.Name == "Value");
+            p => p.Name == "Value" && p.ExplicitInterfaceType != null);
         Assert.True(forwarder.ExplicitInterfaceType is NamedTypeReference { Name: "IMutableValue" });
         Assert.Contains(forwarder.Accessors, a => a.Kind == AccessorKind.Get);
         Assert.Contains(forwarder.Accessors, a => a.Kind == AccessorKind.Set);

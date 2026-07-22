@@ -19,7 +19,7 @@ namespace Cs2Gs.Tests;
 /// explicit zero default: <c>default(T)</c> for a non-nullable value type (bare
 /// <c>default</c> is rejected by gsc with GS0265), and <c>nil</c> for a reference
 /// or nullable value type. The default is preserved on ordinary <c>func</c>
-/// parameters and on a parameter that is lifted into a primary constructor.
+/// parameters and on an explicit constructor parameter.
 /// </summary>
 public class Issue1182OptionalDefaultParameterTranslationTests
 {
@@ -62,14 +62,16 @@ namespace Corpus.Issue1182
     }
 
     [Fact]
-    public void ValueTypeDefault_LiftedIntoPrimaryConstructor_RendersAsTypedDefault()
+    public void ValueTypeDefault_OnExplicitConstructor_RendersAsTypedDefault()
     {
         string rendered = Render();
 
-        // The explicit constructor `ChapterInfo(TimeSpan offsetFromBeginning = default)`
-        // is lifted into a primary constructor; the optional default must survive the
-        // lift so callers can write `ChapterInfo()`.
-        Assert.Contains("class ChapterInfo(Offset TimeSpan = default(TimeSpan))", rendered, StringComparison.Ordinal);
+        // The explicit constructor stays explicit to preserve its parameter and
+        // property ABI; its optional default still lets callers write `ChapterInfo()`.
+        Assert.Contains(
+            "init(offsetFromBeginning TimeSpan = default(TimeSpan))",
+            rendered,
+            StringComparison.Ordinal);
     }
 
     [Fact]
