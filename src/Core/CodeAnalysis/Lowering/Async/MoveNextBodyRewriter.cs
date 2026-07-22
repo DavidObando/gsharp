@@ -262,13 +262,14 @@ public static class MoveNextBodyRewriter
                 args);
         }
 
-        private BoundExpression ReadField(FieldSymbol field)
+        private BoundExpression ReadField(FieldSymbol field, TypeSymbol narrowedType = null)
         {
             return new BoundFieldAccessExpression(
                 null,
                 new BoundVariableExpression(null, thisParameter),
                 structType,
-                field);
+                field,
+                narrowedType);
         }
 
         private BoundExpression WriteField(FieldSymbol field, BoundExpression value)
@@ -364,7 +365,7 @@ public static class MoveNextBodyRewriter
             {
                 if (TryGetHoistedField(node.Variable, out var field))
                 {
-                    return ctx.ReadField(field);
+                    return ctx.ReadField(field, node.NarrowedType);
                 }
 
                 return node;
