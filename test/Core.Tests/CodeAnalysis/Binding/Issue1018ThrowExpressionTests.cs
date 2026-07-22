@@ -2,8 +2,12 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
+using System.Collections.Immutable;
 using System.Linq;
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
@@ -146,6 +150,88 @@ func f(s string?) string {
 ";
         var diagnostics = EmitDiagnostics(Source);
         Assert.Contains(diagnostics, d => d.IsError && d.Message.Contains("System.Exception"));
+    }
+
+    [Theory]
+    [InlineData("int32")]
+    [InlineData("string")]
+    [InlineData("void")]
+    public void NeverReturningFunction_ConvertsToAnyFunctionResult(string resultName)
+    {
+        var resultType = resultName switch
+        {
+            "int32" => TypeSymbol.Int32,
+            "string" => TypeSymbol.String,
+            _ => TypeSymbol.Void,
+        };
+        var from = FunctionTypeSymbol.Get(ImmutableArray<TypeSymbol>.Empty, TypeSymbol.Never);
+        var to = FunctionTypeSymbol.Get(ImmutableArray<TypeSymbol>.Empty, resultType);
+
+        var conversion = Conversion.Classify(from, to);
+
+        Assert.True(conversion.Exists);
+        Assert.True(conversion.IsImplicit);
+    }
+
+    [Theory]
+    [InlineData(typeof(Func<int>))]
+    [InlineData(typeof(Func<string>))]
+    [InlineData(typeof(Action))]
+    public void NeverReturningFunction_ConvertsToAnyClrDelegateResult(Type delegateType)
+    {
+        var from = FunctionTypeSymbol.Get(ImmutableArray<TypeSymbol>.Empty, TypeSymbol.Never);
+
+        var conversion = Conversion.Classify(from, ImportedTypeSymbol.Get(delegateType));
+
+        Assert.True(conversion.Exists);
+        Assert.True(conversion.IsImplicit);
+    }
+
+    [Fact]
+    public void OahuServiceFactory_ThrowExpressionInitializer_BindsCleanly()
+    {
+        const string Source = """
+            package Oahu.Cli.Server.Hosting
+            import System
+
+            interface IAuthService {
+            }
+
+            class ServerHost {
+                class ServiceFactories {
+                    private var _auth () -> IAuthService = () -> throw InvalidOperationException("AuthFactory not configured")
+                }
+            }
+            """;
+
+        Assert.Empty(EmitDiagnostics(Source).Where(d => d.IsError));
+    }
+
+    [Fact]
+    public void NonBottomReturnAndParameterMismatches_StayRejected()
+    {
+        var noParameters = ImmutableArray<TypeSymbol>.Empty;
+        var wrongReturn = Conversion.Classify(
+            FunctionTypeSymbol.Get(noParameters, TypeSymbol.String),
+            FunctionTypeSymbol.Get(noParameters, TypeSymbol.Int32));
+        var wrongParameter = Conversion.Classify(
+            FunctionTypeSymbol.Get(ImmutableArray.Create<TypeSymbol>(TypeSymbol.String), TypeSymbol.Never),
+            FunctionTypeSymbol.Get(ImmutableArray.Create<TypeSymbol>(TypeSymbol.Int32), TypeSymbol.String));
+
+        Assert.False(wrongReturn.Exists);
+        Assert.False(wrongParameter.Exists);
+
+        const string Source = """
+            package Issue2716.Negative
+
+            interface IAuthService {
+            }
+
+            class ServiceFactories {
+                private var _auth () -> IAuthService = () -> "not an auth service"
+            }
+            """;
+        Assert.Contains(EmitDiagnostics(Source), d => d.IsError && d.Id == "GS0155");
     }
 
     private static System.Collections.Generic.IEnumerable<SyntaxNode> Descendants(SyntaxNode node)

@@ -2140,6 +2140,11 @@ public sealed class Conversion
 
         var invokeReturnIsVoid = invokeReturnType == null
             || string.Equals(invokeReturnType.FullName, "System.Void", StringComparison.Ordinal);
+        if (fn.ReturnType == TypeSymbol.Never)
+        {
+            return true;
+        }
+
         if (fn.ReturnType == TypeSymbol.Void || fn.ReturnType == null)
         {
             return invokeReturnIsVoid;
@@ -2457,6 +2462,13 @@ public sealed class Conversion
     /// </summary>
     private static bool ReturnTypeWidens(TypeSymbol fromReturn, TypeSymbol toReturn)
     {
+        // Issue #2716: `never` is the bottom type. A callable that cannot
+        // return satisfies every result slot, including void.
+        if (fromReturn == TypeSymbol.Never && toReturn != null)
+        {
+            return true;
+        }
+
         if (fromReturn == null || toReturn == null
             || fromReturn == TypeSymbol.Void || toReturn == TypeSymbol.Void)
         {

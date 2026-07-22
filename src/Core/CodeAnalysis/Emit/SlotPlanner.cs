@@ -113,6 +113,16 @@ internal sealed class SlotPlanner
             .OrderBy(s => s.Declaration?.Span.Start ?? int.MaxValue)
             .ThenBy(s => s.Name, StringComparer.Ordinal))
         {
+            // Issue #2716: instance initializers are injected into constructors
+            // after MethodDef planning, so discover their lambdas here.
+            foreach (var field in type.Fields)
+            {
+                if (type.InstanceFieldInitializers.TryGetValue(field, out var initializer))
+                {
+                    collector.Visit(initializer);
+                }
+            }
+
             foreach (var field in type.StaticFields)
             {
                 if (type.StaticFieldInitializers.TryGetValue(field, out var initializer))

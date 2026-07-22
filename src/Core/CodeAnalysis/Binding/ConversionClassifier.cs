@@ -441,6 +441,23 @@ internal sealed class ConversionClassifier
             return createErasedFunctionLiteralAdapter(literal, targetFunctionType);
         }
 
+        // Issue #2716: a throw-expression lambda naturally has a `never`
+        // result. Shape its synthesized method to the target result type; the
+        // body still throws and therefore needs no value conversion.
+        if (expression is BoundFunctionLiteralExpression neverCandidateLiteral
+            && neverCandidateLiteral.FunctionType is FunctionTypeSymbol neverCandidateFnType
+            && neverCandidateFnType.ReturnType == TypeSymbol.Never
+            && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out var neverTargetFnType)
+            && !ReferenceEquals(neverTargetFnType.ReturnType, TypeSymbol.Never)
+            && Conversion.Classify(neverCandidateFnType, neverTargetFnType).IsImplicit)
+        {
+            var shaped = createErasedFunctionLiteralAdapter(neverCandidateLiteral, neverTargetFnType);
+            if (!ReferenceEquals(shaped, neverCandidateLiteral))
+            {
+                return BindConversion(diagnosticLocation, shaped, type, allowExplicit);
+            }
+        }
+
         // Issue #889: a `func`/arrow literal whose natural return type carries a
         // value (e.g. `() -> called = called + 1`, inferred as `() -> int32`)
         // converts to a void-returning delegate target (System.Action, a named
