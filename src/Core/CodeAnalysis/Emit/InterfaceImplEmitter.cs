@@ -9,7 +9,10 @@
 #pragma warning disable SA1615 // return-value documentation missing — same as SA1611
 
 using System;
+using System.Collections.Generic;
+using System.Reflection;
 using System.Reflection.Metadata;
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Emit;
@@ -454,6 +457,141 @@ internal sealed class InterfaceImplEmitter
                 break;
             }
         }
+    }
+
+    /// <summary>
+    /// Issue #2718: custom event accessors are emitted through the general
+    /// function path, so their metadata shape must not rely on the field-like
+    /// event emitter's implicit-interface promotion. Bind every matching
+    /// ordinary custom event directly to its user or imported interface slots.
+    /// </summary>
+    internal void EmitImplicitCustomEventMethodImpls(StructSymbol structSymbol)
+    {
+        if (structSymbol == null
+            || structSymbol.Events.IsDefaultOrEmpty
+            || !this.cache.StructTypeDefs.TryGetValue(structSymbol, out var implTypeDef))
+        {
+            return;
+        }
+
+        foreach (var ev in structSymbol.Events)
+        {
+            if (ev.IsFieldLike
+                || ev.HasExplicitInterfaceClause
+                || !this.cache.EventAccessorHandles.TryGetValue(ev, out var implAccessors))
+            {
+                continue;
+            }
+
+            foreach (var iface in structSymbol.Interfaces)
+            {
+                var defIface = iface.Definition ?? iface;
+                foreach (var slotEvent in defIface.Events)
+                {
+                    if (slotEvent.Name != ev.Name
+                        || !DeclarationBinder.InterfaceEventTypesEquivalent(iface, slotEvent, ev)
+                        || IsExplicitlyImplemented(structSymbol, slotEvent))
+                    {
+                        continue;
+                    }
+
+                    var isGenericIface = ReflectionMetadataEmitter.IsUserGenericInterfaceReference(iface);
+                    if (slotEvent.AddMethodSymbol != null)
+                    {
+                        EntityHandle? declaration = isGenericIface
+                            ? this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(iface, slotEvent.AddMethodSymbol)
+                            : this.cache.MethodHandles.TryGetValue(slotEvent.AddMethodSymbol, out var handle)
+                                ? handle
+                                : (EntityHandle?)null;
+                        if (declaration.HasValue)
+                        {
+                            this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Add, declaration.Value);
+                        }
+                    }
+
+                    if (slotEvent.RemoveMethodSymbol != null)
+                    {
+                        EntityHandle? declaration = isGenericIface
+                            ? this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(iface, slotEvent.RemoveMethodSymbol)
+                            : this.cache.MethodHandles.TryGetValue(slotEvent.RemoveMethodSymbol, out var handle)
+                                ? handle
+                                : (EntityHandle?)null;
+                        if (declaration.HasValue)
+                        {
+                            this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Remove, declaration.Value);
+                        }
+                    }
+                }
+            }
+
+            var emittedClrSlots = new HashSet<MethodInfo>();
+            foreach (var ifaceSymbol in structSymbol.ImplementedClrInterfaces)
+            {
+                var declaredInterface = ifaceSymbol?.ClrType;
+                if (declaredInterface?.IsInterface != true)
+                {
+                    continue;
+                }
+
+                var interfaces = new List<Type> { declaredInterface };
+                interfaces.AddRange(declaredInterface.GetInterfaces());
+                foreach (var clrInterface in interfaces)
+                {
+                    var containingType = ReferenceEquals(clrInterface, declaredInterface)
+                        ? ifaceSymbol
+                        : TypeSymbol.FromClrType(clrInterface);
+                    foreach (var slotEvent in clrInterface.GetEvents(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                    {
+                        var slotType = MemberLookup.GetClrEventHandlerTypeSymbol(containingType, slotEvent);
+                        if (slotEvent.Name != ev.Name
+                            || !DeclarationBinder.TypeSignaturesEquivalent(slotType, ev.Type)
+                            || IsImportedSlotExplicitlyImplemented(structSymbol, slotEvent))
+                        {
+                            continue;
+                        }
+
+                        if (slotEvent.AddMethod != null && emittedClrSlots.Add(slotEvent.AddMethod))
+                        {
+                            var declaration = this.outer.memberRefs.GetMethodEntityHandle(slotEvent.AddMethod, containingType);
+                            this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Add, declaration);
+                        }
+
+                        if (slotEvent.RemoveMethod != null && emittedClrSlots.Add(slotEvent.RemoveMethod))
+                        {
+                            var declaration = this.outer.memberRefs.GetMethodEntityHandle(slotEvent.RemoveMethod, containingType);
+                            this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Remove, declaration);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static bool IsExplicitlyImplemented(StructSymbol type, EventSymbol slot)
+    {
+        foreach (var candidate in type.Events)
+        {
+            if (ReferenceEquals(candidate.ExplicitInterfaceMember, slot))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsImportedSlotExplicitlyImplemented(StructSymbol type, EventInfo slot)
+    {
+        foreach (var candidate in type.Events)
+        {
+            if (candidate.ExplicitInterfaceAddSlot == slot.AddMethod
+                || candidate.ExplicitInterfaceRemoveSlot == slot.RemoveMethod)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

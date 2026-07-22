@@ -3384,6 +3384,10 @@ internal sealed class ReflectionMetadataEmitter
             // ADR-0149: emit MethodImpl rows for explicit-interface-clause
             // event implementations (add/remove/raise accessors).
             this.interfaceImpls.EmitExplicitInterfaceEventMethodImpls(c);
+
+            // Issue #2718: bind ordinary custom event accessors directly to
+            // matching user/imported interface event slots.
+            this.interfaceImpls.EmitImplicitCustomEventMethodImpls(c);
         }
 
         foreach (var c in topClasses)
@@ -3488,6 +3492,9 @@ internal sealed class ReflectionMetadataEmitter
             // ADR-0149: emit MethodImpl rows for explicit-interface-clause
             // event implementations (add/remove/raise accessors).
             this.interfaceImpls.EmitExplicitInterfaceEventMethodImpls(s);
+
+            // Issue #2718: see the class path above.
+            this.interfaceImpls.EmitImplicitCustomEventMethodImpls(s);
         }
 
         foreach (var s in topStructs)
