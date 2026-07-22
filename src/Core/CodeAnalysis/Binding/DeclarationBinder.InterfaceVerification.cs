@@ -523,7 +523,12 @@ internal sealed partial class DeclarationBinder
                         iprop.Name + " (setter)");
                 }
 
-                if (!IsInterfacePropertyTypeCompatible(implProp.Type, iprop.Type, iprop.HasSetter))
+                // Positional data members now appear in Properties too. Route
+                // them through the existing positional compatibility check
+                // below; ordinary declared properties keep their established
+                // interface-verification behavior.
+                if (implProp.Declaration is null
+                    && TypeMemberModel.TryGetPrimaryConstructorParameter(structSymbol, iprop.Name, out _))
                 {
                     found = false;
                 }
