@@ -1624,20 +1624,14 @@ public sealed partial class CSharpToGSharpTranslator
                         targetType = propertySymbol.Type;
                         targetProperty = propertySymbol;
 
-                        // OD-T1: G# primary-constructor parameters are NOT
-                        // properties, so a *class* that copies a constructor
-                        // parameter into a property which satisfies an interface or
-                        // overridden-member contract cannot lift — dropping the
-                        // property member would break the contract (GS0187) and
-                        // cascade to GS0214/GS0183 on derived/override members. Keep
-                        // the explicit `init(...)` so the get-only auto-property
-                        // survives (emitted as init-only `{ get; init; }`). A
-                        // property that is *not* a contract member is still lifted to
-                        // the primary constructor (the L1 canonical form). Value
-                        // types always lift: a G# `struct`/`data struct` cannot carry
-                        // an in-body `init` (ADR-0115 §B.3 / B.6 / T2).
-                        if (kind == TypeDeclarationKind.Class &&
-                            IsContractProperty(propertySymbol))
+                        // Issue #2746: a G# primary-constructor parameter is not a
+                        // property. Lifting a class property therefore renames the
+                        // constructor parameter after the property and replaces its
+                        // CLR getter with a public field. Keep the explicit class
+                        // constructor and reuse normal property translation instead.
+                        // Value types still lift because G# `struct`/`data struct`
+                        // cannot carry an in-body `init` (ADR-0115 §B.3 / B.6 / T2).
+                        if (kind == TypeDeclarationKind.Class)
                         {
                             return ConstructorLift.None;
                         }
