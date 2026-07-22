@@ -500,7 +500,14 @@ public static class SpillSequenceSpiller
                         clrPropAssign,
                         clrPropAssign.Receiver,
                         clrPropAssign.Value,
-                        (recv, val) => new BoundClrPropertyAssignmentExpression(null, recv, clrPropAssign.Member, val, clrPropAssign.Type));
+                        (recv, val) => new BoundClrPropertyAssignmentExpression(
+                            null,
+                            recv,
+                            clrPropAssign.Member,
+                            val,
+                            clrPropAssign.Type,
+                            clrPropAssign.ConstrainedReceiverTypeParameter,
+                            clrPropAssign.ConstrainedInterfaceType));
                 case BoundClrBinaryOperatorExpression clrBinary:
                     // Issue #2388: preserve whichever of Method (imported CLR
                     // type) / Function (nullable-lifted same-compilation

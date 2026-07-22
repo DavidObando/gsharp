@@ -210,6 +210,88 @@ public sealed class Issue2514ImportedInterfaceConstraintMemberTests
             Run(consumerPath));
     }
 
+    [Fact]
+    public void ConstrainedObjectInitializer_WithSpilledSetterValue_RunsAndVerifies()
+    {
+        const string source = """
+            package Issue2741
+            import System
+            import System.Collections.Generic
+            import Issue2514.Contracts
+
+            func Next(value string) string -> value + "!"
+
+            func Add[T IContract[string] class init()](items ICollection[T], names IEnumerable[string]) {
+                for name in names {
+                    var item = T{Name: Next(name)}
+                    items.Add(item)
+                }
+            }
+
+            func Main() {
+                var items = List[RefContract]()
+                var names = List[string]()
+                names.Add("Ada")
+                names.Add("Grace")
+                Add[RefContract](items, names)
+                Console.WriteLine(items[0].Name)
+                Console.WriteLine(items[1].Name)
+            }
+            """;
+
+        using var result = Compile(source, "exe");
+        Assert.Equal("Ada!\nGrace!\n", Run(result.OutputPath));
+        IlVerifier.Verify(result.OutputPath, additionalReferences: new[] { result.ContractsPath });
+    }
+
+    [Fact]
+    public void OrdinaryInterfaceReceiver_WithSpilledSetterValue_RunsAndVerifies()
+    {
+        const string source = """
+            package Issue2741Control
+            import System
+            import Issue2514.Contracts
+
+            func Next(value string) string -> value + "!"
+            func SetName(value IContract[string], name string) { value.Name = Next(name) }
+
+            func Main() {
+                var value = RefContract()
+                SetName(value, "ordinary")
+                Console.WriteLine(value.Name)
+            }
+            """;
+
+        using var result = Compile(source, "exe");
+        Assert.Equal("ordinary!\n", Run(result.OutputPath));
+        IlVerifier.Verify(result.OutputPath, additionalReferences: new[] { result.ContractsPath });
+    }
+
+    [Fact]
+    public void ConstrainedObjectInitializer_WithAwaitedSetterValue_RunsAndVerifies()
+    {
+        const string source = """
+            package Issue2741Async
+            import System
+            import System.Threading.Tasks
+            import Issue2514.Contracts
+
+            async func Make[T IContract[string] class init()](name string) T {
+                var pending = Task.FromResult[string](name + "!")
+                return T{Name: await pending}
+            }
+
+            func Main() {
+                var value = Make[RefContract]("async").Result
+                Console.WriteLine(value.Name)
+            }
+            """;
+
+        using var result = Compile(source, "exe");
+        Assert.Equal("async!\n", Run(result.OutputPath));
+        IlVerifier.Verify(result.OutputPath, additionalReferences: new[] { result.ContractsPath });
+    }
+
     [Theory]
     [InlineData(
         "func Bad[T IContract[string]](value T) string -> value.Missing",

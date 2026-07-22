@@ -274,7 +274,9 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
             receiver,
             rewritten.Member,
             value,
-            rewritten.Type);
+            rewritten.Type,
+            rewritten.ConstrainedReceiverTypeParameter,
+            rewritten.ConstrainedInterfaceType);
 
         return new BoundBlockExpression(rewritten.Syntax, statements.ToImmutable(), assignment);
     }
