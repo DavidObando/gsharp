@@ -45,10 +45,9 @@ namespace GSharp.Core.CodeAnalysis.Lowering;
 /// the lambda body to read the static field directly at every use.
 /// </para>
 /// <para>
-/// For-range key/value variables are intentionally not boxed: the
-/// existing snapshot emit happens to match C#'s
-/// per-iteration-fresh-variable semantics for <c>foreach</c>, so leaving
-/// them alone is both correct and cheaper.
+/// For-range key/value variables are boxed at the start of each iteration.
+/// This preserves foreach-style fresh-variable semantics when closures
+/// escape while still sharing one cell among closures from the same iteration.
 /// </para>
 /// </remarks>
 internal static class CaptureBoxingRewriter
@@ -865,6 +864,44 @@ internal static class CaptureBoxingRewriter
             }
 
             return new BoundSelectStatement(null, builder.MoveToImmutable());
+        }
+
+        /// <inheritdoc/>
+        protected override BoundStatement RewriteForRangeStatement(BoundForRangeStatement node)
+        {
+            var collection = this.RewriteExpression(node.Collection);
+            var body = this.RewriteStatement(node.Body);
+            var seed = ImmutableArray<BoundStatement>.Empty;
+
+            if (node.KeyVariable != null && this.boxInfo.TryGetValue(node.KeyVariable, out var keyBox))
+            {
+                seed = seed.AddRange(this.BuildBoxSeedStatements(keyBox));
+            }
+
+            if (node.ValueVariable != null && this.boxInfo.TryGetValue(node.ValueVariable, out var valueBox))
+            {
+                seed = seed.AddRange(this.BuildBoxSeedStatements(valueBox));
+            }
+
+            if (!seed.IsEmpty)
+            {
+                body = PrependSeedStatements(body, seed);
+            }
+
+            if (ReferenceEquals(collection, node.Collection) && ReferenceEquals(body, node.Body))
+            {
+                return node;
+            }
+
+            return new BoundForRangeStatement(
+                node.Syntax,
+                node.KeyVariable,
+                node.ValueVariable,
+                collection,
+                node.IterationKind,
+                body,
+                node.BreakLabel,
+                node.ContinueLabel);
         }
 
         /// <inheritdoc/>
