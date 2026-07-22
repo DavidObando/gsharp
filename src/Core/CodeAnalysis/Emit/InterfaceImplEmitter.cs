@@ -12,6 +12,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 
@@ -43,6 +44,7 @@ internal sealed class InterfaceImplEmitter
     private readonly ReflectionMetadataEmitter outer;
     private readonly EmitContext emitCtx;
     private readonly MetadataTokenCache cache;
+    private readonly Dictionary<StructSymbol, List<InheritedEventBridge>> inheritedEventBridges = new();
 
     public InterfaceImplEmitter(ReflectionMetadataEmitter outer)
     {
@@ -460,111 +462,375 @@ internal sealed class InterfaceImplEmitter
     }
 
     /// <summary>
-    /// Issue #2718: custom event accessors are emitted through the general
-    /// function path, so their metadata shape must not rely on the field-like
-    /// event emitter's implicit-interface promotion. Bind every matching
-    /// ordinary custom event directly to its user or imported interface slots.
+    /// Issues #2718/#2742: binds interface event slots whose implementation
+    /// cannot be wired by ordinary name-based dispatch. This includes custom
+    /// event accessors and events inherited from a base class that did not
+    /// itself declare the interface.
     /// </summary>
-    internal void EmitImplicitCustomEventMethodImpls(StructSymbol structSymbol)
+    internal void EmitImplicitEventMethodImpls(StructSymbol structSymbol)
     {
         if (structSymbol == null
-            || structSymbol.Events.IsDefaultOrEmpty
             || !this.cache.StructTypeDefs.TryGetValue(structSymbol, out var implTypeDef))
         {
             return;
         }
 
-        foreach (var ev in structSymbol.Events)
+        foreach (var iface in structSymbol.Interfaces)
         {
-            if (ev.IsFieldLike
-                || ev.HasExplicitInterfaceClause
-                || !this.cache.EventAccessorHandles.TryGetValue(ev, out var implAccessors))
+            var defIface = iface.Definition ?? iface;
+            foreach (var slotEvent in defIface.Events)
             {
-                continue;
-            }
-
-            foreach (var iface in structSymbol.Interfaces)
-            {
-                var defIface = iface.Definition ?? iface;
-                foreach (var slotEvent in defIface.Events)
-                {
-                    if (slotEvent.Name != ev.Name
-                        || !DeclarationBinder.InterfaceEventTypesEquivalent(iface, slotEvent, ev)
-                        || IsExplicitlyImplemented(structSymbol, slotEvent))
-                    {
-                        continue;
-                    }
-
-                    var isGenericIface = ReflectionMetadataEmitter.IsUserGenericInterfaceReference(iface);
-                    if (slotEvent.AddMethodSymbol != null)
-                    {
-                        EntityHandle? declaration = isGenericIface
-                            ? this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(iface, slotEvent.AddMethodSymbol)
-                            : this.cache.MethodHandles.TryGetValue(slotEvent.AddMethodSymbol, out var handle)
-                                ? handle
-                                : (EntityHandle?)null;
-                        if (declaration.HasValue)
-                        {
-                            this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Add, declaration.Value);
-                        }
-                    }
-
-                    if (slotEvent.RemoveMethodSymbol != null)
-                    {
-                        EntityHandle? declaration = isGenericIface
-                            ? this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(iface, slotEvent.RemoveMethodSymbol)
-                            : this.cache.MethodHandles.TryGetValue(slotEvent.RemoveMethodSymbol, out var handle)
-                                ? handle
-                                : (EntityHandle?)null;
-                        if (declaration.HasValue)
-                        {
-                            this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Remove, declaration.Value);
-                        }
-                    }
-                }
-            }
-
-            var emittedClrSlots = new HashSet<MethodInfo>();
-            foreach (var ifaceSymbol in structSymbol.ImplementedClrInterfaces)
-            {
-                var declaredInterface = ifaceSymbol?.ClrType;
-                if (declaredInterface?.IsInterface != true)
+                if (IsExplicitlyImplemented(structSymbol, slotEvent)
+                    || !TryFindImplicitEvent(structSymbol, iface, slotEvent, out var ev, out var declaringType)
+                    || (ReferenceEquals(declaringType, structSymbol) && ev.IsFieldLike)
+                    || !this.cache.EventAccessorHandles.TryGetValue(ev, out var implAccessors))
                 {
                     continue;
                 }
 
-                var interfaces = new List<Type> { declaredInterface };
-                interfaces.AddRange(declaredInterface.GetInterfaces());
-                foreach (var clrInterface in interfaces)
+                var isGenericIface = ReflectionMetadataEmitter.IsUserGenericInterfaceReference(iface);
+                if (slotEvent.AddMethodSymbol != null)
                 {
-                    var containingType = ReferenceEquals(clrInterface, declaredInterface)
-                        ? ifaceSymbol
-                        : TypeSymbol.FromClrType(clrInterface);
-                    foreach (var slotEvent in clrInterface.GetEvents(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                    EntityHandle? declaration = isGenericIface
+                        ? this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(iface, slotEvent.AddMethodSymbol)
+                        : this.cache.MethodHandles.TryGetValue(slotEvent.AddMethodSymbol, out var handle)
+                            ? handle
+                            : (EntityHandle?)null;
+                    if (declaration.HasValue)
                     {
-                        var slotType = MemberLookup.GetClrEventHandlerTypeSymbol(containingType, slotEvent);
-                        if (slotEvent.Name != ev.Name
-                            || !DeclarationBinder.TypeSignaturesEquivalent(slotType, ev.Type)
-                            || IsImportedSlotExplicitlyImplemented(structSymbol, slotEvent))
-                        {
-                            continue;
-                        }
+                        var body = this.GetEventAccessorBody(
+                            structSymbol,
+                            declaringType,
+                            ev,
+                            isAdd: true,
+                            implAccessors.Add);
+                        this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, body, declaration.Value);
+                    }
+                }
 
-                        if (slotEvent.AddMethod != null && emittedClrSlots.Add(slotEvent.AddMethod))
-                        {
-                            var declaration = this.outer.memberRefs.GetMethodEntityHandle(slotEvent.AddMethod, containingType);
-                            this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Add, declaration);
-                        }
-
-                        if (slotEvent.RemoveMethod != null && emittedClrSlots.Add(slotEvent.RemoveMethod))
-                        {
-                            var declaration = this.outer.memberRefs.GetMethodEntityHandle(slotEvent.RemoveMethod, containingType);
-                            this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implAccessors.Remove, declaration);
-                        }
+                if (slotEvent.RemoveMethodSymbol != null)
+                {
+                    EntityHandle? declaration = isGenericIface
+                        ? this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(iface, slotEvent.RemoveMethodSymbol)
+                        : this.cache.MethodHandles.TryGetValue(slotEvent.RemoveMethodSymbol, out var handle)
+                            ? handle
+                            : (EntityHandle?)null;
+                    if (declaration.HasValue)
+                    {
+                        var body = this.GetEventAccessorBody(
+                            structSymbol,
+                            declaringType,
+                            ev,
+                            isAdd: false,
+                            implAccessors.Remove);
+                        this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, body, declaration.Value);
                     }
                 }
             }
         }
+
+        var emittedClrSlots = new HashSet<MethodInfo>();
+        foreach (var ifaceSymbol in structSymbol.ImplementedClrInterfaces)
+        {
+            var declaredInterface = ifaceSymbol?.ClrType;
+            if (declaredInterface?.IsInterface != true)
+            {
+                continue;
+            }
+
+            var interfaces = new List<Type> { declaredInterface };
+            interfaces.AddRange(declaredInterface.GetInterfaces());
+            foreach (var clrInterface in interfaces)
+            {
+                var containingType = ReferenceEquals(clrInterface, declaredInterface)
+                    ? ifaceSymbol
+                    : TypeSymbol.FromClrType(clrInterface);
+                foreach (var slotEvent in clrInterface.GetEvents(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                {
+                    var slotType = MemberLookup.GetClrEventHandlerTypeSymbol(containingType, slotEvent);
+                    if (IsImportedSlotExplicitlyImplemented(structSymbol, slotEvent)
+                        || !TryFindImplicitEvent(structSymbol, slotEvent.Name, slotType, out var ev, out var declaringType)
+                        || (ReferenceEquals(declaringType, structSymbol) && ev.IsFieldLike)
+                        || !this.cache.EventAccessorHandles.TryGetValue(ev, out var implAccessors))
+                    {
+                        continue;
+                    }
+
+                    if (slotEvent.AddMethod != null && emittedClrSlots.Add(slotEvent.AddMethod))
+                    {
+                        var declaration = this.outer.memberRefs.GetMethodEntityHandle(slotEvent.AddMethod, containingType);
+                        var body = this.GetEventAccessorBody(
+                            structSymbol,
+                            declaringType,
+                            ev,
+                            isAdd: true,
+                            implAccessors.Add);
+                        this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, body, declaration);
+                    }
+
+                    if (slotEvent.RemoveMethod != null && emittedClrSlots.Add(slotEvent.RemoveMethod))
+                    {
+                        var declaration = this.outer.memberRefs.GetMethodEntityHandle(slotEvent.RemoveMethod, containingType);
+                        var body = this.GetEventAccessorBody(
+                            structSymbol,
+                            declaringType,
+                            ev,
+                            isAdd: false,
+                            implAccessors.Remove);
+                        this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, body, declaration);
+                    }
+                }
+            }
+        }
+    }
+
+    internal int PlanInheritedEventBridges(StructSymbol structSymbol, int firstMethodRow)
+    {
+        var nextMethodRow = firstMethodRow;
+
+        foreach (var iface in structSymbol.Interfaces)
+        {
+            var defIface = iface.Definition ?? iface;
+            foreach (var slotEvent in defIface.Events)
+            {
+                if (!IsExplicitlyImplemented(structSymbol, slotEvent)
+                    && TryFindImplicitEvent(structSymbol, iface, slotEvent, out var ev, out var declaringType)
+                    && !ReferenceEquals(declaringType, structSymbol))
+                {
+                    PlanBridge(ev);
+                }
+            }
+        }
+
+        foreach (var ifaceSymbol in structSymbol.ImplementedClrInterfaces)
+        {
+            var declaredInterface = ifaceSymbol?.ClrType;
+            if (declaredInterface?.IsInterface != true)
+            {
+                continue;
+            }
+
+            var interfaces = new List<Type> { declaredInterface };
+            interfaces.AddRange(declaredInterface.GetInterfaces());
+            foreach (var clrInterface in interfaces)
+            {
+                var containingType = ReferenceEquals(clrInterface, declaredInterface)
+                    ? ifaceSymbol
+                    : TypeSymbol.FromClrType(clrInterface);
+                foreach (var slotEvent in clrInterface.GetEvents(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                {
+                    var slotType = MemberLookup.GetClrEventHandlerTypeSymbol(containingType, slotEvent);
+                    if (!IsImportedSlotExplicitlyImplemented(structSymbol, slotEvent)
+                        && TryFindImplicitEvent(structSymbol, slotEvent.Name, slotType, out var ev, out var declaringType)
+                        && !ReferenceEquals(declaringType, structSymbol))
+                    {
+                        PlanBridge(ev);
+                    }
+                }
+            }
+        }
+
+        return nextMethodRow - firstMethodRow;
+
+        void PlanBridge(EventSymbol ev)
+        {
+            if (!this.inheritedEventBridges.TryGetValue(structSymbol, out var bridges))
+            {
+                bridges = new List<InheritedEventBridge>();
+                this.inheritedEventBridges[structSymbol] = bridges;
+            }
+
+            foreach (var existing in bridges)
+            {
+                if (ReferenceEquals(existing.Event, ev))
+                {
+                    return;
+                }
+            }
+
+            bridges.Add(new InheritedEventBridge(
+                ev,
+                MetadataTokens.MethodDefinitionHandle(nextMethodRow++),
+                MetadataTokens.MethodDefinitionHandle(nextMethodRow++)));
+        }
+    }
+
+    internal void EmitInheritedEventBridges(StructSymbol structSymbol)
+    {
+        if (!this.inheritedEventBridges.TryGetValue(structSymbol, out var bridges))
+        {
+            return;
+        }
+
+        foreach (var bridge in bridges)
+        {
+            var declaringType = FindDeclaringType(structSymbol, bridge.Event);
+            this.EmitInheritedEventBridge(
+                declaringType,
+                bridge.Event,
+                bridge.Add,
+                isAdd: true);
+            this.EmitInheritedEventBridge(
+                declaringType,
+                bridge.Event,
+                bridge.Remove,
+                isAdd: false);
+        }
+    }
+
+    private static bool TryFindImplicitEvent(
+        StructSymbol type,
+        InterfaceSymbol iface,
+        EventSymbol slot,
+        out EventSymbol implementation,
+        out StructSymbol declaringType)
+    {
+        for (var current = type; current != null; current = current.BaseClass)
+        {
+            foreach (var candidate in current.Events)
+            {
+                if (!candidate.HasExplicitInterfaceClause
+                    && candidate.Name == slot.Name
+                    && (ReferenceEquals(current, type) || candidate.Accessibility == Accessibility.Public)
+                    && DeclarationBinder.InterfaceEventTypesEquivalent(iface, slot, candidate))
+                {
+                    implementation = candidate;
+                    declaringType = current;
+                    return true;
+                }
+            }
+        }
+
+        implementation = null;
+        declaringType = null;
+        return false;
+    }
+
+    private static bool TryFindImplicitEvent(
+        StructSymbol type,
+        string name,
+        TypeSymbol slotType,
+        out EventSymbol implementation,
+        out StructSymbol declaringType)
+    {
+        for (var current = type; current != null; current = current.BaseClass)
+        {
+            foreach (var candidate in current.Events)
+            {
+                if (!candidate.HasExplicitInterfaceClause
+                    && candidate.Name == name
+                    && (ReferenceEquals(current, type) || candidate.Accessibility == Accessibility.Public)
+                    && DeclarationBinder.TypeSignaturesEquivalent(slotType, candidate.Type))
+                {
+                    implementation = candidate;
+                    declaringType = current;
+                    return true;
+                }
+            }
+        }
+
+        implementation = null;
+        declaringType = null;
+        return false;
+    }
+
+    private EntityHandle GetEventAccessorBody(
+        StructSymbol implementingType,
+        StructSymbol declaringType,
+        EventSymbol ev,
+        bool isAdd,
+        MethodDefinitionHandle definition)
+    {
+        if (ReferenceEquals(implementingType, declaringType))
+        {
+            return definition;
+        }
+
+        foreach (var bridge in this.inheritedEventBridges[implementingType])
+        {
+            if (ReferenceEquals(bridge.Event, ev))
+            {
+                return isAdd ? bridge.Add : bridge.Remove;
+            }
+        }
+
+        throw new InvalidOperationException("Inherited event bridge was not planned.");
+    }
+
+    private void EmitInheritedEventBridge(
+        StructSymbol declaringType,
+        EventSymbol ev,
+        MethodDefinitionHandle expectedHandle,
+        bool isAdd)
+    {
+        var accessors = this.cache.EventAccessorHandles[ev];
+        var accessor = isAdd ? ev.AddMethodSymbol : ev.RemoveMethodSymbol;
+        EntityHandle target = declaringType.Definition != null
+            && !ReferenceEquals(declaringType.Definition, declaringType)
+            && accessor != null
+                ? this.outer.userTokens.ResolveUserInstanceMethodToken(declaringType, accessor)
+                : isAdd ? accessors.Add : accessors.Remove;
+
+        var bodyOffset = -1;
+        if (!this.emitCtx.MetadataOnly)
+        {
+            var il = new InstructionEncoder(new BlobBuilder());
+            il.LoadArgument(0);
+            il.LoadArgument(1);
+            il.OpCode(ILOpCode.Call);
+            il.Token(target);
+            il.OpCode(ILOpCode.Ret);
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(
+                il,
+                maxStack: MaxStackTracker.ComputeMaxStack(il));
+        }
+
+        var eventType = declaringType.SubstituteMemberType(ev.Type);
+        var signature = new BlobBuilder();
+        new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                1,
+                returnType => returnType.Void(),
+                parameters => this.outer.signatures.EncodeTypeSymbol(parameters.AddParameter().Type(), eventType));
+        var firstParameter = this.outer.customAttrEncoder.NextParameterHandle();
+        this.emitCtx.Metadata.AddParameter(
+            ParameterAttributes.None,
+            this.emitCtx.Metadata.GetOrAddString("value"),
+            sequenceNumber: 1);
+
+        var emittedHandle = this.emitCtx.Metadata.AddMethodDefinition(
+            MethodAttributes.Private
+                | MethodAttributes.Final
+                | MethodAttributes.Virtual
+                | MethodAttributes.HideBySig
+                | MethodAttributes.NewSlot
+                | MethodAttributes.SpecialName,
+            MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            this.emitCtx.Metadata.GetOrAddString((isAdd ? "add_" : "remove_") + ev.Name),
+            this.emitCtx.Metadata.GetOrAddBlob(signature),
+            bodyOffset,
+            firstParameter);
+
+        if (emittedHandle != expectedHandle)
+        {
+            throw new InvalidOperationException("Inherited event bridge MethodDef row was not emitted in planned order.");
+        }
+    }
+
+    private static StructSymbol FindDeclaringType(StructSymbol type, EventSymbol ev)
+    {
+        for (var current = type.BaseClass; current != null; current = current.BaseClass)
+        {
+            foreach (var candidate in current.Events)
+            {
+                if (ReferenceEquals(candidate, ev))
+                {
+                    return current;
+                }
+            }
+        }
+
+        throw new InvalidOperationException("Inherited event declaring type was not found.");
     }
 
     private static bool IsExplicitlyImplemented(StructSymbol type, EventSymbol slot)
@@ -908,4 +1174,9 @@ internal sealed class InterfaceImplEmitter
 
         return true;
     }
+
+    private sealed record InheritedEventBridge(
+        EventSymbol Event,
+        MethodDefinitionHandle Add,
+        MethodDefinitionHandle Remove);
 }
