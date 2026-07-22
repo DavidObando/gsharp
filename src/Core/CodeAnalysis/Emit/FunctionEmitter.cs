@@ -154,11 +154,19 @@ internal sealed class FunctionEmitter
             };
 
             var localsSignature = session.BuildLocalsSignature();
+            // Issue #2727: async closure Invoke bodies still need their
+            // capture map after they move into the state machine.
+            var enclosingClosure = this.outer.closures.ClosureInvokeToInfo.TryGetValue(
+                plan.KickoffMethod,
+                out var closure)
+                ? closure
+                : null;
             var emitter = session.CreateEmitter(
                 parameters,
                 structThisParameter: moveNextBody.ThisParameter,
                 asyncFieldMap: plan.FieldMap,
-                asyncPlan: plan);
+                asyncPlan: plan,
+                enclosingClosure: enclosingClosure);
 
             try
             {

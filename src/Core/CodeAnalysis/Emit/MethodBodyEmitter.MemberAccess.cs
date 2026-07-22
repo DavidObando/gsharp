@@ -86,9 +86,9 @@ internal sealed partial class MethodBodyEmitter
         }
 
         // Issue #503 follow-up (nested-closure transitive capture): the
-        // current method is a closure's Invoke and `variable` is one of
-        // the enclosing closure's captured outer locals. Load it via
-        // `ldarg.0; ldfld <displayClass>::<capField>`.
+        // current method is a closure's Invoke (or issue #2727's async
+        // MoveNext for that Invoke) and `variable` is one of the enclosing
+        // closure's captured outer locals.
         if (this.TryLoadFromEnclosingClosure(variable))
         {
             return;
@@ -107,6 +107,20 @@ internal sealed partial class MethodBodyEmitter
         }
 
         this.il.OpCode(ILOpCode.Ldarg_0);
+        // In MoveNext, arg0 is the state machine. Follow its hoisted `this`
+        // field to the closure before loading the captured value.
+        if (this.asyncFieldMap?.ThisField is FieldSymbol thisField)
+        {
+            if (!this.outer.cache.StructFieldDefs.TryGetValue(thisField, out var thisFieldHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Hoisted field '{thisField.Name}' has no emitted FieldDef.");
+            }
+
+            this.il.OpCode(ILOpCode.Ldfld);
+            this.il.Token(thisFieldHandle);
+        }
+
         this.il.OpCode(ILOpCode.Ldfld);
         this.il.Token(this.outer.userTokens.ResolveFieldToken(this.enclosingClosure.ConstructedClassSym, capField));
         return true;
