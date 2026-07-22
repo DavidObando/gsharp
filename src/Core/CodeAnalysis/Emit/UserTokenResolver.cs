@@ -218,9 +218,10 @@ internal sealed class UserTokenResolver
         }
 
         var args = new TypeSymbol[tps.Length];
+        var inferenceReturn = AsyncReturnTypeNormalizer.GetDeclaredResultType(call.Function, call.ReturnType);
         for (int i = 0; i < tps.Length; i++)
         {
-            args[i] = InferMethodTypeArgument(call.Function, call.Arguments, call.ReturnType, tps[i]);
+            args[i] = InferMethodTypeArgument(call.Function, call.Arguments, inferenceReturn, tps[i]);
         }
 
         return this.BuildMethodSpec(openMethod, args);
@@ -252,6 +253,7 @@ internal sealed class UserTokenResolver
 
         var args = new TypeSymbol[tps.Length];
         var calleeParameterOffset = call.Method.ExplicitReceiverParameter == null ? 0 : 1;
+        var inferenceReturn = AsyncReturnTypeNormalizer.GetDeclaredResultType(call.Method, call.Type);
 
         // The user-instance call's Arguments excludes the receiver,
         // but Method.Parameters includes the explicit receiver (when
@@ -265,7 +267,7 @@ internal sealed class UserTokenResolver
 
         for (int i = 0; i < tps.Length; i++)
         {
-            args[i] = InferMethodTypeArgument(userParams, call.Arguments, call.Type, call.Method.Type, tps[i]);
+            args[i] = InferMethodTypeArgument(userParams, call.Arguments, inferenceReturn, call.Method.Type, tps[i]);
         }
 
         return this.BuildMethodSpec(openMethod, args);
