@@ -1682,6 +1682,38 @@ internal sealed class ImportedMemberRefFactory
         return handle;
     }
 
+    internal MemberReferenceHandle GetFieldReference(FieldInfo field, TypeSymbol containingTypeSymbol)
+    {
+        if (!TryNormalizeToSymbolicContainer(containingTypeSymbol, out var openDefinition, out var typeArguments))
+        {
+            return this.GetFieldReference(field);
+        }
+
+        var openField = openDefinition.GetField(
+            field.Name,
+            BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException(
+                $"Open generic type '{openDefinition.FullName}' has no field '{field.Name}'.");
+        var symbolicView = ImportedTypeSymbol.GetConstructed(
+            openDefinition.MakeGenericType(this.GetErasedObjectArgs(openDefinition)),
+            openDefinition,
+            typeArguments);
+        var parentBlob = new BlobBuilder();
+        this.signatures.EncodeTypeSymbol(
+            new BlobEncoder(parentBlob).TypeSpecificationSignature(),
+            symbolicView);
+        var parent = this.emitCtx.Metadata.AddTypeSpecification(
+            this.emitCtx.Metadata.GetOrAddBlob(parentBlob));
+        var sigBlob = new BlobBuilder();
+        this.signatures.EncodeClrType(
+            new BlobEncoder(sigBlob).FieldSignature(),
+            openField.FieldType);
+        return this.emitCtx.Metadata.AddMemberReference(
+            parent,
+            this.emitCtx.Metadata.GetOrAddString(field.Name),
+            this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+    }
+
     /// <summary>
     /// Issue #649: Gets a MemberRef for a field on a constructed generic type without
     /// calling <c>.GetField()</c> on the closed generic (which throws
