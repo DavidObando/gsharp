@@ -63,15 +63,11 @@ namespace Corpus.Issue2003
     }
 
     [Fact]
-    public void FieldKeywordBackingField_AvoidsCollisionWithLiftedPrimaryCtorParameterField()
+    public void FieldKeywordBackingField_AvoidsCollisionWithExplicitConstructorField()
     {
-        // T2 (ADR-0115 §B.3): an explicit constructor whose only statement is
-        // `_level = level` is canonicalized into a primary-constructor
-        // parameter field named after the ORIGINAL source field `_level`.
-        // That source field IS visible via `GetMembers()` before the lift, so
-        // this case is already handled by the pre-existing check — kept here
-        // as a regression guard alongside the true synthesized-sibling case
-        // above.
+        // Issue #2746 keeps the explicit constructor and original `_level`
+        // field. The field-keyword property must still choose a distinct
+        // synthesized backing name.
         string rendered = Render(@"
 namespace Corpus.Issue2003
 {
@@ -93,7 +89,9 @@ namespace Corpus.Issue2003
 }
 ");
 
-        Assert.Contains("class Gauge(_level int32)", rendered, StringComparison.Ordinal);
+        Assert.Contains("class Gauge {", rendered, StringComparison.Ordinal);
+        Assert.Contains("private var _level int32", rendered, StringComparison.Ordinal);
+        Assert.Contains("init(level int32)", rendered, StringComparison.Ordinal);
         Assert.Contains("private var _level2 int32", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }

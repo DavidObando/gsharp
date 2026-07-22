@@ -130,40 +130,26 @@ namespace Corpus.L1
         Assert.Null(cart.BaseType);
     }
 
-    /// <summary>B.3 (T2): the parameter-sourced <c>readonly</c> field
-    /// <c>_customer</c> is canonicalized to a primary-constructor parameter; the
-    /// independently-initialized <c>readonly</c> field <c>_items</c> becomes a
-    /// <c>let</c> field carrying its initializer, and the explicit <c>init</c> is
-    /// dropped.</summary>
+    /// <summary>B.3 (T2): explicit class constructors and their private
+    /// <c>readonly</c> fields preserve their CLR shape.</summary>
     [Fact]
-    public void L1Document_CanonicalizesImmutableFieldInitialization()
+    public void L1Document_PreservesImmutableFieldInitializationAbi()
     {
         (CompilationUnit unit, TranslationContext context) = TranslateL1();
         TypeDeclaration cart = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Cart");
 
-        // `_customer = customer` lifts to a primary-constructor parameter named
-        // after the field; the standalone `_customer` field is gone.
-        Parameter customer = Assert.Single(cart.PrimaryConstructorParameters);
-        Assert.Equal("_customer", customer.Name);
-        Assert.Equal("string", Assert.IsType<NamedTypeReference>(customer.Type).Name);
-        Assert.DoesNotContain(cart.Members.OfType<FieldDeclaration>(), f => f.Name == "_customer");
+        Assert.True(cart.PrimaryConstructorParameters is null || cart.PrimaryConstructorParameters.Count == 0);
+        FieldDeclaration[] fields = cart.Members.OfType<FieldDeclaration>().ToArray();
+        Assert.Equal(new[] { "_customer", "_items" }, fields.Select(field => field.Name));
+        Assert.All(fields, field => Assert.Equal(Visibility.Private, field.Visibility));
+        Assert.All(fields, field => Assert.Equal(BindingKind.Let, field.Binding));
+        Assert.All(fields, field => Assert.Null(field.Initializer));
 
-        // `_items = new List<...>()` stays a `let` field but gains the initializer.
-        FieldDeclaration items = cart.Members
-            .OfType<FieldDeclaration>()
-            .Single(f => f.Name == "_items");
-        Assert.Equal(BindingKind.Let, items.Binding);
-        Assert.Equal(Visibility.Private, items.Visibility);
-        Assert.NotNull(items.Initializer);
-
-        // The fully-consumed constructor is dropped (no in-body constructor remains).
-        Assert.DoesNotContain(cart.Members.OfType<MethodDeclaration>(), m => m.Name == "Cart");
-
-        Assert.Contains(
+        ConstructorDeclaration constructor = Assert.Single(cart.Members.OfType<ConstructorDeclaration>());
+        Assert.Equal("customer", Assert.Single(constructor.Parameters).Name);
+        Assert.DoesNotContain(
             context.Diagnostics,
-            d => d.Severity == TranslationSeverity.Info &&
-                d.Message.Contains("primary constructor") &&
-                d.Message.Contains("_customer"));
+            diagnostic => diagnostic.Message.Contains("primary constructor", StringComparison.Ordinal));
     }
 
     /// <summary>T1 (ADR-0115 §B.4): a C# named-tuple field type maps to the

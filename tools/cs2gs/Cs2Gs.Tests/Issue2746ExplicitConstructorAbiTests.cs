@@ -1,4 +1,4 @@
-// <copyright file="Issue2746ConstructorPropertyAbiTests.cs" company="GSharp">
+// <copyright file="Issue2746ExplicitConstructorAbiTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -14,7 +14,7 @@ using Xunit;
 
 namespace Cs2Gs.Tests;
 
-public sealed class Issue2746ConstructorPropertyAbiTests
+public sealed class Issue2746ExplicitConstructorAbiTests
 {
     private const string Source = """
         namespace Oahu.Cli;
@@ -62,6 +62,23 @@ public sealed class Issue2746ConstructorPropertyAbiTests
 
             public bool Unattended { get; }
         }
+
+        public sealed class FieldBackedPolicy
+        {
+            private readonly string _route;
+            private readonly bool _enabled;
+
+            public FieldBackedPolicy(string route, bool enabled)
+            {
+                _route = route;
+                _enabled = enabled;
+            }
+
+            public string Route => _route;
+
+            public bool Enabled => _enabled;
+        }
+
         """;
 
     [Fact]
@@ -79,6 +96,18 @@ public sealed class Issue2746ConstructorPropertyAbiTests
             "CapabilityPolicy",
             new[] { "transport", "unattended" },
             new[] { "Transport", "Unattended" });
+
+        TypeDeclaration fieldBacked = unit.Members
+            .OfType<TypeDeclaration>()
+            .Single(t => t.Name == "FieldBackedPolicy");
+        AssertClassShape(
+            unit,
+            "FieldBackedPolicy",
+            new[] { "route", "enabled" },
+            new[] { "Route", "Enabled" });
+        Assert.All(
+            fieldBacked.Members.OfType<FieldDeclaration>(),
+            field => Assert.Equal(Visibility.Private, field.Visibility));
     }
 
     [Fact]
@@ -133,9 +162,14 @@ public sealed class Issue2746ConstructorPropertyAbiTests
             var policy = new CapabilityPolicy(
                 transport: ServerTransport.Stdio,
                 unattended: true);
+            var fieldBacked = new FieldBackedPolicy(route: "build", enabled: true);
 
             Console.WriteLine($"{output.Format}:{output.Quiet}:{output.UseColor}:{output.UseAscii}");
             Console.WriteLine($"{policy.Transport}:{policy.Unattended}");
+            Console.WriteLine($"{fieldBacked.Route}:{fieldBacked.Enabled}");
+            Console.WriteLine(typeof(FieldBackedPolicy).GetFields(
+                System.Reflection.BindingFlags.Public |
+                System.Reflection.BindingFlags.Instance).Length);
             """);
 
         AssertProcessSucceeds("dotnet", consumerDir, "restore", "--nologo");
@@ -149,6 +183,8 @@ public sealed class Issue2746ConstructorPropertyAbiTests
             "Release");
         Assert.Contains("Json:True:False:True", output, StringComparison.Ordinal);
         Assert.Contains("Stdio:True", output, StringComparison.Ordinal);
+        Assert.Contains("build:True", output, StringComparison.Ordinal);
+        Assert.Contains(Environment.NewLine + "0" + Environment.NewLine, output, StringComparison.Ordinal);
     }
 
     [Fact]

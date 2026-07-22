@@ -582,9 +582,9 @@ namespace Demo
     /// Defect #914-1: a parameterless-constructor assignment whose right-hand side
     /// reads an instance member (here the abstract instance property
     /// <c>InputBufferSize</c>) must NOT be hoisted into a G# field initializer — a
-    /// field initializer cannot reference instance state (GS0125). It stays in a
-    /// synthesized <c>init()</c> body, while a sibling assignment with a fully
-    /// static RHS is still hoisted to a field initializer.
+    /// field initializer cannot reference instance state (GS0125). Issue #2746
+    /// keeps the entire explicit class constructor, preserving both assignments'
+    /// order and the fields' visibility.
     /// </summary>
     [Fact]
     public void CtorAssignment_ReferencingInstanceMember_StaysInInitBody()
@@ -609,14 +609,16 @@ namespace Demo
 
         // The instance-member-dependent assignment is kept in an init() body.
         Assert.Contains("init()", printed);
+        Assert.Contains("cache = [8]int32", printed);
         Assert.Contains("buffer = [InputBufferSize]TInput", printed);
 
         // The field itself carries no (invalid) initializer.
         Assert.Contains("var buffer []TInput", printed);
         Assert.DoesNotContain("var buffer []TInput = ", printed);
 
-        // The static-RHS sibling assignment is still hoisted to a field initializer.
-        Assert.Contains("cache []int32 = [8]int32", printed);
+        // The static-RHS sibling remains in the same explicit constructor.
+        Assert.Contains("let cache []int32", printed);
+        Assert.DoesNotContain("let cache []int32 = ", printed);
     }
 
     /// <summary>

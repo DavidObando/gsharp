@@ -20,8 +20,8 @@ namespace Cs2Gs.Tests;
 /// Translator-fidelity tests for the residual Oahu.Foundation oblivious-sink
 /// defects fixed under issue #914:
 /// <list type="number">
-/// <item>a T2-lifted primary-constructor parameter must receive the same
-/// oblivious-nullability promotion as an ordinary parameter,</item>
+/// <item>an explicit constructor parameter receives ordinary
+/// oblivious-nullability promotion,</item>
 /// <item>a null-conditional delegate invoke on a non-simple (call / <c>??</c>)
 /// receiver must spill the receiver into a local and invoke it directly,</item>
 /// <item>a promoted-nullable function value subscribed to a CLR event must be
@@ -35,14 +35,11 @@ namespace Cs2Gs.Tests;
 public class Issue914FoundationSinkTranslationTests
 {
     [Fact]
-    public void Oblivious_LiftedPrimaryConstructorDelegateParameter_PromotesToNullable()
+    public void Oblivious_ExplicitConstructorDelegateParameter_PromotesToNullable()
     {
-        // `report` is copied into a field by the single constructor, so the class
-        // canonicalizes to a class-header primary constructor. It is invoked
-        // null-conditionally (`report?.Invoke`) and a derived ctor forwards a
-        // promoted-nullable `base(report)` argument, so the lifted primary-ctor
-        // parameter must render `((T) -> void)?` — otherwise the base ctor's
-        // 1-arg signature no longer matches (GS0214).
+        // `report` is invoked null-conditionally and a derived ctor forwards a
+        // promoted-nullable `base(report)` argument, so the kept explicit
+        // constructor parameter must render `((T) -> void)?`.
         string printed = TranslateOblivious(@"
 using System;
 namespace Demo
@@ -60,16 +57,16 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("open class ProgressBase[T](report ((T) -> void)?)", printed);
+        Assert.Contains("open class ProgressBase[T] {", printed);
+        Assert.Contains("init(report ((T) -> void)?)", printed);
     }
 
     [Fact]
-    public void Enabled_LiftedPrimaryConstructorDelegateParameter_StaysUnpromoted()
+    public void Enabled_ExplicitConstructorDelegateParameter_StaysUnpromoted()
     {
         // Under a nullable-ENABLED compilation the whole-program taint analysis
-        // short-circuits to false and the base parameter carries no null default
-        // of its own, so the lifted primary-ctor parameter stays the non-nullable
-        // `(T) -> void` — proving enabled code is byte-identical.
+        // short-circuits to false, so the explicit constructor parameter stays
+        // the non-nullable `(T) -> void`.
         string printed = TranslateEnabled(@"
 using System;
 namespace Demo
@@ -87,8 +84,9 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("open class ProgressBase[T](report (T) -> void)", printed);
-        Assert.DoesNotContain("open class ProgressBase[T](report ((T) -> void)?)", printed);
+        Assert.Contains("open class ProgressBase[T] {", printed);
+        Assert.Contains("init(report (T) -> void)", printed);
+        Assert.DoesNotContain("init(report ((T) -> void)?)", printed);
     }
 
     [Fact]

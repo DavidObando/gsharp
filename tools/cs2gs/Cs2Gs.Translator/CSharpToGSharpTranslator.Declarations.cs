@@ -1535,6 +1535,15 @@ public sealed partial class CSharpToGSharpTranslator
             INamedTypeSymbol symbol,
             TypeDeclarationKind kind)
         {
+            // Issue #2746: replacing any explicit class constructor with a G#
+            // primary constructor changes its CLR contract. Assignment-target
+            // names replace source parameter names, and private fields become
+            // public. Keep classes on the normal constructor/member paths.
+            if (kind == TypeDeclarationKind.Class)
+            {
+                return ConstructorLift.None;
+            }
+
             // A C# `record struct` with an explicit (non-positional) constructor
             // cannot keep an in-body `init` member: the G# parser only accepts a
             // primary constructor on a `data struct`. Such a record-struct
@@ -1624,17 +1633,8 @@ public sealed partial class CSharpToGSharpTranslator
                         targetType = propertySymbol.Type;
                         targetProperty = propertySymbol;
 
-                        // Issue #2746: a G# primary-constructor parameter is not a
-                        // property. Lifting a class property therefore renames the
-                        // constructor parameter after the property and replaces its
-                        // CLR getter with a public field. Keep the explicit class
-                        // constructor and reuse normal property translation instead.
                         // Value types still lift because G# `struct`/`data struct`
                         // cannot carry an in-body `init` (ADR-0115 §B.3 / B.6 / T2).
-                        if (kind == TypeDeclarationKind.Class)
-                        {
-                            return ConstructorLift.None;
-                        }
                     }
                     else
                     {
