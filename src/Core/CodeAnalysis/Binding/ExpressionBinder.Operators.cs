@@ -786,8 +786,36 @@ internal sealed partial class ExpressionBinder
 
         var condition = BindExpression(syntax.Condition, TypeSymbol.Bool);
 
-        var whenTrue = BindBlockExpressionValue(syntax.ThenBlock, canBeVoid);
-        var whenFalse = BindIfExpressionElseBranch(syntax.ElseExpression, canBeVoid);
+        // Issue #2640: an if-expression branch observes the same nil-guard
+        // narrowing as an if-statement. Otherwise a nullable hole can poison
+        // the interpolation before handler overload resolution runs.
+        Dictionary<AccessPath, TypeSymbol> whenTrueNarrowing = null;
+        Dictionary<AccessPath, TypeSymbol> whenFalseNarrowing = null;
+        if (SmartCastStability.TryClassifyNilGuardLeaf(
+            condition,
+            restrictBareVariableToLocalsAndParams: false,
+            referenceNullableOnly: false,
+            out var target,
+            out var underlying,
+            out var nonNilWhenTrue))
+        {
+            var frame = new Dictionary<AccessPath, TypeSymbol> { [target] = underlying };
+            if (nonNilWhenTrue)
+            {
+                whenTrueNarrowing = frame;
+            }
+            else
+            {
+                whenFalseNarrowing = frame;
+            }
+        }
+
+        var whenTrue = BindWithNarrowing(
+            whenTrueNarrowing,
+            () => BindBlockExpressionValue(syntax.ThenBlock, canBeVoid));
+        var whenFalse = BindWithNarrowing(
+            whenFalseNarrowing,
+            () => BindIfExpressionElseBranch(syntax.ElseExpression, canBeVoid));
 
         if (condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression)
         {
@@ -846,6 +874,26 @@ internal sealed partial class ExpressionBinder
 
         // Should not happen from well-formed parse trees.
         return new BoundErrorExpression(null);
+    }
+
+    private BoundExpression BindWithNarrowing(
+        Dictionary<AccessPath, TypeSymbol> narrowing,
+        Func<BoundExpression> bind)
+    {
+        if (narrowing == null)
+        {
+            return bind();
+        }
+
+        binderCtx.NarrowedVariables.Add(narrowing);
+        try
+        {
+            return bind();
+        }
+        finally
+        {
+            binderCtx.NarrowedVariables.RemoveAt(binderCtx.NarrowedVariables.Count - 1);
+        }
     }
 
     /// <summary>

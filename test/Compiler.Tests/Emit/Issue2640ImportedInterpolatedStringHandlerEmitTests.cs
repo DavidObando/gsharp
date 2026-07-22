@@ -51,16 +51,14 @@ public class Issue2640ImportedInterpolatedStringHandlerEmitTests
     }
 
     [Fact]
-    public void OahuStringCreate_InvariantCulture_EmitsVerifiesAndRuns()
+    public void OahuJobsScreen_FormatPercent_EmitsVerifiesAndRuns()
     {
         const string Source = """
             package Oahu.Cli.Tui
             import System
             import System.Globalization
 
-            func FormatPercent(value float64) string {
-                return String.Create(CultureInfo.InvariantCulture, "${int(Math.Round(value * 100.0)),3}%")
-            }
+            func FormatPercent(p float64?) string -> if p != nil { String.Create(CultureInfo.InvariantCulture, "${int32(Math.Round(p * float64(100.0))),3}%") } else { "  …" }
 
             Console.Write(FormatPercent(0.42))
             """;
@@ -68,6 +66,8 @@ public class Issue2640ImportedInterpolatedStringHandlerEmitTests
         var (exitCode, diagnostics, outputPath, directory) = Compile(Source);
         try
         {
+            Assert.DoesNotContain("Cannot find function Create", diagnostics, StringComparison.Ordinal);
+            Assert.DoesNotContain("Cannot find function Round", diagnostics, StringComparison.Ordinal);
             Assert.True(exitCode == 0, diagnostics);
             IlVerifier.Verify(outputPath);
             Assert.Equal(" 42%", Run(outputPath, directory));
