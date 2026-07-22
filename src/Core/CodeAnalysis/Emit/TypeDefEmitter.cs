@@ -286,9 +286,15 @@ internal sealed class TypeDefEmitter
 
             var sigBlob = new BlobBuilder();
             this.encodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), prop.Type);
+            var attributes = AccessibilityMap.MapFieldAccessibility(prop.BackingField.Accessibility);
+            if (prop.BackingField.IsReadOnly)
+            {
+                attributes |= FieldAttributes.InitOnly;
+            }
+
             var backingHandle = this.emitCtx.Metadata.AddFieldDefinition(
-                attributes: FieldAttributes.Private,
-                name: this.emitCtx.Metadata.GetOrAddString($"<{prop.Name}>k__BackingField"),
+                attributes,
+                name: this.emitCtx.Metadata.GetOrAddString(prop.BackingField.Name),
                 signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
             if (firstField.IsNil)
             {

@@ -1872,7 +1872,7 @@ internal sealed class ReflectionMetadataEmitter
             // with a user ToString override reserves five rows).
             if (c.IsData)
             {
-                methodRow += 7
+                methodRow += 10
                     - (DataStructSynthesizer.HasZeroSynthesisFields(c) ? 1 : 0)
                     - (DataStructSynthesizer.HasUserToStringOverride(c) ? 1 : 0);
             }
@@ -2029,7 +2029,7 @@ internal sealed class ReflectionMetadataEmitter
                 // `!classType.IsClass`). It needs one extra reserved row for
                 // a real newobj-callable instance constructor, emitted by
                 // DataStructSynthesizer.EmitDataStructSynthesizedMembers.
-                if (s.Fields.IsDefaultOrEmpty && s.HasPrimaryConstructor)
+                if (s.HasPrimaryConstructor)
                 {
                     classPrimaryCtorRows[s] = methodRow++;
                 }
@@ -3328,6 +3328,11 @@ internal sealed class ReflectionMetadataEmitter
 
             // ADR-0051 Phase 6: emit property accessor methods for classes.
             this.memberDefEmitter.EmitPropertyAccessors(c);
+            if (c.IsData)
+            {
+                this.dataStructSynth.EmitDataClassEqualityContractProperty(c);
+            }
+
             this.EmitDefaultMemberAttributeIfIndexer(c);
 
             // ADR-0052: emit event accessor methods for classes.

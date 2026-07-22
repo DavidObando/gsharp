@@ -405,6 +405,36 @@ internal sealed partial class MethodBodyEmitter
 
         foreach (var field in pp.Fields)
         {
+            if (field.Property != null)
+            {
+                if (ReflectionMetadataEmitter.IsValueTypeSymbol(valueType)
+                    && field.Property.BackingField != null
+                    && this.outer.cache.StructFieldDefs.TryGetValue(field.Property.BackingField, out var backingField))
+                {
+                    Action loadBackingField = () =>
+                    {
+                        loadValue();
+                        this.il.OpCode(ILOpCode.Ldfld);
+                        this.il.Token(backingField);
+                    };
+                    this.EmitPattern(field.Pattern, loadBackingField, field.Type, failLabel);
+                    continue;
+                }
+
+                var getter = this.outer.userTokens.ResolveUserPropertyAccessorToken(
+                    valueType as StructSymbol,
+                    field.Property,
+                    wantSetter: false);
+                Action loadProperty = () =>
+                {
+                    loadValue();
+                    this.il.OpCode(ILOpCode.Callvirt);
+                    this.il.Token(getter);
+                };
+                this.EmitPattern(field.Pattern, loadProperty, field.Type, failLabel);
+                continue;
+            }
+
             if (!this.outer.cache.StructFieldDefs.TryGetValue(field.Field, out var fieldHandle))
             {
                 throw new InvalidOperationException(
@@ -419,7 +449,7 @@ internal sealed partial class MethodBodyEmitter
                 this.il.Token(fieldHandle);
             };
 
-            this.EmitPattern(field.Pattern, loadChild, field.Field.Type, failLabel);
+            this.EmitPattern(field.Pattern, loadChild, field.Type, failLabel);
         }
     }
 

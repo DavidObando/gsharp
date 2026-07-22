@@ -365,8 +365,20 @@ internal sealed class PatternBinder
         {
             if (!TypeMemberModel.TryGetFieldIncludingInherited(structType, fieldSyntax.Identifier.Text, MemberQuery.Instance(MemberKinds.Field), out var field, out _))
             {
-                Diagnostics.ReportUndefinedFieldOnType(fieldSyntax.Identifier.Location, fieldSyntax.Identifier.Text, discriminantType);
-                fields.Add(new BoundPropertyPatternField(syntax, new FieldSymbol(fieldSyntax.Identifier.Text, TypeSymbol.Error, Accessibility.Public), BindPattern(fieldSyntax.Pattern, TypeSymbol.Error)));
+                if (!TypeMemberModel.TryGetProperty(structType, fieldSyntax.Identifier.Text, out var property)
+                    || property.Declaration is not null
+                    || property.BackingField is null
+                    || !TypeMemberModel.TryGetPrimaryConstructorParameter(structType, property.Name, out _))
+                {
+                    Diagnostics.ReportUndefinedFieldOnType(fieldSyntax.Identifier.Location, fieldSyntax.Identifier.Text, discriminantType);
+                    fields.Add(new BoundPropertyPatternField(syntax, new FieldSymbol(fieldSyntax.Identifier.Text, TypeSymbol.Error, Accessibility.Public), BindPattern(fieldSyntax.Pattern, TypeSymbol.Error)));
+                    continue;
+                }
+
+                fields.Add(new BoundPropertyPatternField(
+                    syntax,
+                    property,
+                    BindPattern(fieldSyntax.Pattern, property.Type)));
                 continue;
             }
 
