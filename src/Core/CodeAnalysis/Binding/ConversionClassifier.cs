@@ -592,6 +592,18 @@ internal sealed class ConversionClassifier
             return expression;
         }
 
+        // Issue #2732: Nullable<T>.ClrType aliases T, but its IL stack shape
+        // remains Nullable<T>. Lower an explicit nullable-to-underlying
+        // conversion to the existing `!!` unwrap before async hoisting.
+        if (expression.Type is NullableTypeSymbol sourceNullable
+            && (NullableLifting.IsValueTypeNullable(sourceNullable)
+                || NullableLifting.IsUserValueTypeNullable(sourceNullable))
+            && Conversion.ClassifyNonStructural(sourceNullable.UnderlyingType, type).IsIdentity)
+        {
+            var unwrap = BoundUnaryOperator.Bind(SyntaxKind.BangBangToken, expression.Type);
+            return new BoundUnaryExpression(null, unwrap, expression);
+        }
+
         if (conversion.IsStructuralProjection)
         {
             if (TryResolveUserDefinedSymbolConversion(expression.Type, type, allowExplicit, out var projectionUserConvOp))
