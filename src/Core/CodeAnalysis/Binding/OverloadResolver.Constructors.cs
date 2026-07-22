@@ -364,6 +364,13 @@ internal sealed partial class OverloadResolver
                     continue;
                 }
 
+                if (TryBindConstructorMethodGroup(argument, parameter.Type, parameterSyntaxV[i].Location, out var methodGroupArg))
+                {
+                    boundArguments[i] = methodGroupArg;
+                    hasErrorsV |= methodGroupArg is BoundErrorExpression;
+                    continue;
+                }
+
                 // Issue #2069/#2084: force the wrap for a func/arrow literal
                 // argument flowing into a NAMED delegate parameter — see the
                 // matching comment at the other constructor-argument path
@@ -610,6 +617,13 @@ internal sealed partial class OverloadResolver
                 && !ReferenceEquals(argument.Type, namedDelegateCtorTarget))
             {
                 boundArguments[i] = conversions.BindConversion(parameterSyntax[i].Location, argument, parameter.Type);
+                continue;
+            }
+
+            if (TryBindConstructorMethodGroup(argument, parameter.Type, parameterSyntax[i].Location, out var methodGroupArg))
+            {
+                boundArguments[i] = methodGroupArg;
+                hasErrors |= methodGroupArg is BoundErrorExpression;
                 continue;
             }
 
@@ -1029,6 +1043,13 @@ internal sealed partial class OverloadResolver
                 ? parameterSyntax[i].Location
                 : syntax.Identifier.Location;
 
+            if (TryBindConstructorMethodGroup(argument, paramType, argLocation, out var methodGroupArg))
+            {
+                convertedArguments.Add(methodGroupArg);
+                hasErrors |= methodGroupArg is BoundErrorExpression;
+                continue;
+            }
+
             // Issue #2069: force the wrap for a func/arrow literal argument
             // flowing into a NAMED delegate parameter — see the matching
             // comment above (constructor-argument path) for the full
@@ -1430,6 +1451,13 @@ internal sealed partial class OverloadResolver
                 i < parameterSyntax.Length ? parameterSyntax[i] : null,
                 parameter.Type);
 
+            if (TryBindConstructorMethodGroup(argument, parameter.Type, argLocation, out var methodGroupArg))
+            {
+                convertedArgs.Add(methodGroupArg);
+                hadErrors |= methodGroupArg is BoundErrorExpression;
+                continue;
+            }
+
             if (argument.Type == TypeSymbol.Error)
             {
                 hadErrors = true;
@@ -1520,6 +1548,22 @@ internal sealed partial class OverloadResolver
         }
 
         return new BoundConstructorChainingExpression(syntax, selectedCtor, convertedArgs.ToImmutable());
+    }
+
+    private bool TryBindConstructorMethodGroup(
+        BoundExpression argument,
+        TypeSymbol targetType,
+        TextLocation location,
+        out BoundExpression converted)
+    {
+        if (OverloadResolution.IsUnresolvedMethodGroupArgument(argument))
+        {
+            converted = conversions.BindConversion(location, argument, targetType);
+            return true;
+        }
+
+        converted = null;
+        return false;
     }
 
     /// <summary>
