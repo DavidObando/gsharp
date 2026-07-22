@@ -4203,12 +4203,15 @@ internal sealed class ReflectionMetadataEmitter
         FunctionSymbol function,
         IReadOnlyDictionary<VariableSymbol, int> locals)
     {
-        if (!IsValueTypeSymbol(receiver.Type))
+        // A constrained type parameter needs an address even though its
+        // value/reference shape is unknown until the generic is closed.
+        if (!IsValueTypeSymbol(receiver.Type) && receiver.Type is not TypeParameterSymbol)
         {
             return false;
         }
 
         if (receiver is BoundVariableExpression bve
+            && bve.NarrowedType == null
             && this.CanLoadVariableAddressForReceiverSpill(bve.Variable, function, locals))
         {
             return false;
