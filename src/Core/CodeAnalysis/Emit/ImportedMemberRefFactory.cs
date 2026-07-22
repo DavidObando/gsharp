@@ -211,8 +211,7 @@ internal sealed class ImportedMemberRefFactory
         // body throws GS9998 from the EnumSymbol/throw tail below.
         if (element is TupleTypeSymbol symbolicTuple
             && symbolicTuple.ClrType == null
-            && symbolicTuple.Arity >= 2
-            && symbolicTuple.Arity <= 7)
+            && symbolicTuple.Arity >= 2)
         {
             return this.GetTupleTypeSpec(symbolicTuple);
         }
@@ -1847,30 +1846,8 @@ internal sealed class ImportedMemberRefFactory
     /// </summary>
     private EntityHandle GetTupleTypeSpec(TupleTypeSymbol tupleType)
     {
-        var arity = tupleType.Arity;
-        var openType = arity switch
-        {
-            2 => typeof(ValueTuple<,>),
-            3 => typeof(ValueTuple<,,>),
-            4 => typeof(ValueTuple<,,,>),
-            5 => typeof(ValueTuple<,,,,>),
-            6 => typeof(ValueTuple<,,,,,>),
-            7 => typeof(ValueTuple<,,,,,,>),
-            _ => throw new NotSupportedException(
-                $"Symbolic tuple TypeSpec not supported for arity {arity}."),
-        };
-
         var sigBlob = new BlobBuilder();
-        var genInst = new BlobEncoder(sigBlob).TypeSpecificationSignature()
-            .GenericInstantiation(
-                this.GetTypeReference(openType),
-                arity,
-                isValueType: true);
-        foreach (var elemType in tupleType.ElementTypes)
-        {
-            this.signatures.EncodeTypeSymbol(genInst.AddArgument(), elemType);
-        }
-
+        this.signatures.EncodeTypeSymbol(new BlobEncoder(sigBlob).TypeSpecificationSignature(), tupleType);
         return this.emitCtx.Metadata.AddTypeSpecification(
             this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
     }

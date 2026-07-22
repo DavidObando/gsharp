@@ -171,22 +171,23 @@ public static class AsyncStateMachineTypeBuilder
         return sm;
     }
 
-    private static List<(Type PoolKey, TypeSymbol FieldType)> CollectAwaiterPoolFields(BoundStatement body)
+    private static List<(string PoolKey, TypeSymbol FieldType)> CollectAwaiterPoolFields(BoundStatement body)
     {
         var collector = new AwaiterTypeCollector();
         collector.Walk(body);
 
-        var result = new List<(Type PoolKey, TypeSymbol FieldType)>();
-        var seen = new HashSet<Type>();
+        var result = new List<(string PoolKey, TypeSymbol FieldType)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         bool hasReferenceAwaiter = false;
 
         foreach (var (awaiterClrType, awaiterTypeSymbol) in collector.AwaiterTypes)
         {
             if (awaiterClrType.IsValueType)
             {
-                if (seen.Add(awaiterClrType))
+                var poolKey = SynthesizedStateMachineType.GetAwaiterPoolKey(awaiterClrType, awaiterTypeSymbol);
+                if (seen.Add(poolKey))
                 {
-                    result.Add((awaiterClrType, awaiterTypeSymbol));
+                    result.Add((poolKey, awaiterTypeSymbol));
                 }
             }
             else
@@ -194,7 +195,7 @@ public static class AsyncStateMachineTypeBuilder
                 if (!hasReferenceAwaiter)
                 {
                     hasReferenceAwaiter = true;
-                    result.Add((typeof(object), awaiterTypeSymbol));
+                    result.Add((SynthesizedStateMachineType.ReferenceAwaiterPoolKey, awaiterTypeSymbol));
                 }
             }
         }

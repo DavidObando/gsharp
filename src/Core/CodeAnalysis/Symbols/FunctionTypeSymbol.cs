@@ -296,7 +296,14 @@ public sealed class FunctionTypeSymbol : TypeSymbol
             case ArrayTypeSymbol:
             case PinnedTypeSymbol:
             case NullabilityAnnotatedTypeSymbol:
+            case TupleTypeSymbol:
                 AppendStructuralKey(builder, type);
+                break;
+
+            // Issue #2750: TypeArguments retain emit identity that an erased
+            // constructed generic's ClrType cannot represent.
+            case ImportedTypeSymbol imported when !imported.TypeArguments.IsDefaultOrEmpty:
+                AppendStructuralKey(builder, imported);
                 break;
 
             // Issue #1620: a composite type (List[T], []T, T?, (T, int32), ...)

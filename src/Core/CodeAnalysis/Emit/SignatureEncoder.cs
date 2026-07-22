@@ -494,31 +494,11 @@ internal sealed class SignatureEncoder
             var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
             this.EncodeClrType(encoder, channelClr);
         }
-        else if (type is TupleTypeSymbol tupleWithNullClr && tupleWithNullClr.ClrType == null
-            && tupleWithNullClr.Arity >= 2 && tupleWithNullClr.Arity <= 7)
+        else if (type is TupleTypeSymbol tupleWithNullClr && tupleWithNullClr.ClrType == null)
         {
-            // Issue #649: Tuple containing G#-defined types whose ClrType is null.
-            // Encode as ValueTuple<...> generic instantiation using EncodeTypeSymbol
-            // for each element so user-defined types reference their TypeDef handles.
-            var openType = tupleWithNullClr.Arity switch
-            {
-                2 => typeof(ValueTuple<,>),
-                3 => typeof(ValueTuple<,,>),
-                4 => typeof(ValueTuple<,,,>),
-                5 => typeof(ValueTuple<,,,,>),
-                6 => typeof(ValueTuple<,,,,,>),
-                7 => typeof(ValueTuple<,,,,,,>),
-                _ => throw new NotSupportedException("unreachable"),
-            };
-
-            var genericInst = encoder.GenericInstantiation(
-                this.outer.memberRefs.GetTypeReference(openType),
-                tupleWithNullClr.Arity,
-                isValueType: true);
-            foreach (var elemType in tupleWithNullClr.ElementTypes)
-            {
-                this.EncodeTypeSymbol(genericInst.AddArgument(), elemType);
-            }
+            // Issues #649/#2750: encode symbolic tuples recursively so arity
+            // 8+ uses ValueTuple<T1,...,T7,TRest> without erasing elements.
+            this.EncodeTupleType(encoder, tupleWithNullClr.ElementTypes, 0, tupleWithNullClr.Arity);
         }
         else if (type is FunctionPointerTypeSymbol fnPtr)
         {
@@ -577,6 +557,30 @@ internal sealed class SignatureEncoder
         else
         {
             throw new NotSupportedException($"Cannot encode signature for type '{type?.Name}' yet.");
+        }
+    }
+
+    private void EncodeTupleType(
+        SignatureTypeEncoder encoder,
+        ImmutableArray<TypeSymbol> elementTypes,
+        int start,
+        int count)
+    {
+        var physicalArity = count <= 7 ? count : 8;
+        var genericInst = encoder.GenericInstantiation(
+            this.outer.memberRefs.GetTypeReference(TupleTypeSymbol.GetOpenClrType(physicalArity)),
+            physicalArity,
+            isValueType: true);
+
+        var directCount = Math.Min(count, 7);
+        for (var i = 0; i < directCount; i++)
+        {
+            this.EncodeTypeSymbol(genericInst.AddArgument(), elementTypes[start + i]);
+        }
+
+        if (count > 7)
+        {
+            this.EncodeTupleType(genericInst.AddArgument(), elementTypes, start + 7, count - 7);
         }
     }
 

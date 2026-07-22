@@ -1582,9 +1582,8 @@ internal sealed partial class MethodBodyEmitter
     {
         // Phase 4.5 emit parity: `(e1, e2, ...)` lowers to
         // `newobj ValueTuple<T1, T2, ...>::.ctor(T1, T2, ...)`. The CLR
-        // backing type is set by TupleTypeSymbol.BuildClrType for arities
-        // 2–7; higher arities have a null ClrType when element types include
-        // G#-defined types (StructSymbol) that don't yet have a runtime Type.
+        // backing type is set by TupleTypeSymbol.BuildClrType; arity 8+
+        // recursively constructs the CLR's canonical TRest chain.
         var clrType = tuple.TupleType.ClrType;
         var arity = tuple.TupleType.Arity;
 
@@ -1608,41 +1607,7 @@ internal sealed partial class MethodBodyEmitter
                 $"Tuple of arity {arity} has no CLR backing type; emit not supported.");
         }
 
-        foreach (var elem in tuple.Elements)
-        {
-            this.EmitExpression(elem);
-        }
-
-        this.il.OpCode(ILOpCode.Newobj);
-
-        // Issue #649: When a tuple's type arguments include a type loaded via
-        // MetadataLoadContext (e.g. a project-referenced CLR class), calling
-        // .GetConstructors() on the closed generic throws NotSupportedException.
-        // Resolve the ctor from the open generic type definition instead.
-        if (clrType.IsConstructedGenericType)
-        {
-            this.il.Token(this.outer.memberRefs.GetCtorReferenceOnConstructedGeneric(clrType, tuple.Elements.Length));
-        }
-        else
-        {
-            ConstructorInfo ctor = null;
-            foreach (var c in clrType.GetConstructors())
-            {
-                if (c.GetParameters().Length == tuple.Elements.Length)
-                {
-                    ctor = c;
-                    break;
-                }
-            }
-
-            if (ctor == null)
-            {
-                throw new InvalidOperationException(
-                    $"ValueTuple type '{clrType.FullName}' has no constructor of arity {tuple.Elements.Length}.");
-            }
-
-            this.il.Token(this.outer.memberRefs.GetCtorReference(ctor));
-        }
+        this.EmitTupleLiteral(tuple.Elements, 0, tuple.Elements.Length, clrType);
     }
 
     private void EmitTupleElementAccess(BoundTupleElementAccessExpression access)
@@ -1674,23 +1639,72 @@ internal sealed partial class MethodBodyEmitter
         }
 
         this.EmitInstanceReceiver(access.Receiver);
-        this.il.OpCode(ILOpCode.Ldfld);
+        var remainingIndex = access.Index;
+        while (remainingIndex >= 7)
+        {
+            this.il.OpCode(ILOpCode.Ldflda);
+            this.il.Token(this.outer.memberRefs.GetFieldReferenceOnConstructedGeneric(clrType, "Rest"));
+            clrType = clrType.GetGenericArguments()[7];
+            remainingIndex -= 7;
+        }
 
-        // Issue #649: When a tuple's type arguments include a type loaded via
-        // MetadataLoadContext (e.g. a project-referenced CLR class), calling
-        // .GetField() on the closed generic throws NotSupportedException.
-        // Resolve the field from the open generic type definition instead.
+        fieldName = "Item" + (remainingIndex + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        this.il.OpCode(ILOpCode.Ldfld);
         if (clrType.IsConstructedGenericType)
         {
             this.il.Token(this.outer.memberRefs.GetFieldReferenceOnConstructedGeneric(clrType, fieldName));
+            return;
         }
-        else
+
+        var field = clrType.GetField(fieldName)
+            ?? throw new InvalidOperationException(
+                $"ValueTuple type '{clrType.FullName}' has no public field '{fieldName}'.");
+        this.il.Token(this.outer.memberRefs.GetFieldReference(field));
+    }
+
+    private void EmitTupleLiteral(
+        ImmutableArray<BoundExpression> elements,
+        int start,
+        int count,
+        Type clrType)
+    {
+        var directCount = Math.Min(count, 7);
+        for (var i = 0; i < directCount; i++)
         {
-            var field = clrType.GetField(fieldName)
-                ?? throw new InvalidOperationException(
-                    $"ValueTuple type '{clrType.FullName}' has no public field '{fieldName}'.");
-            this.il.Token(this.outer.memberRefs.GetFieldReference(field));
+            this.EmitExpression(elements[start + i]);
         }
+
+        if (count > 7)
+        {
+            var restType = clrType.GetGenericArguments()[7];
+            this.EmitTupleLiteral(elements, start + 7, count - 7, restType);
+        }
+
+        var parameterCount = count > 7 ? 8 : count;
+        this.il.OpCode(ILOpCode.Newobj);
+        if (clrType.IsConstructedGenericType)
+        {
+            this.il.Token(this.outer.memberRefs.GetCtorReferenceOnConstructedGeneric(clrType, parameterCount));
+            return;
+        }
+
+        ConstructorInfo ctor = null;
+        foreach (var candidate in clrType.GetConstructors())
+        {
+            if (candidate.GetParameters().Length == parameterCount)
+            {
+                ctor = candidate;
+                break;
+            }
+        }
+
+        if (ctor == null)
+        {
+            throw new InvalidOperationException(
+                $"ValueTuple type '{clrType.FullName}' has no constructor of arity {parameterCount}.");
+        }
+
+        this.il.Token(this.outer.memberRefs.GetCtorReference(ctor));
     }
 
     /// <summary>ADR-0039: Emits address-of by dispatching on the operand shape.</summary>

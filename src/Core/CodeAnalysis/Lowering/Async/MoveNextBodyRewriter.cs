@@ -713,7 +713,7 @@ public static class MoveNextBodyRewriter
                 ctx.allLocals.Add(awaiterLocal);
 
                 // Get the pooled awaiter field.
-                var awaiterField = ctx.plan.StateMachine.GetAwaiterPoolField(awaiterClrType);
+                var awaiterField = ctx.plan.StateMachine.GetAwaiterPoolField(awaiterClrType, awaiterTypeSymbol);
                 if (awaiterField == null)
                 {
                     throw new InvalidOperationException(

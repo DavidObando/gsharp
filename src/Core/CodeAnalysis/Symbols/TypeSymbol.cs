@@ -175,8 +175,8 @@ public class TypeSymbol : Symbol
         // parsed from G# tuple-literal syntax) must map back onto GSharp's own
         // `TupleTypeSymbol` — not a plain `ImportedTypeSymbol` — so downstream
         // binders (deconstruction, member access) recognize it as a tuple.
-        // Same arity ceiling as `TupleTypeSymbol.BuildClrType` (2–7): higher
-        // arities and the `Rest`-chained 8+ shapes are left as imported types.
+        // Issue #2750: canonical Rest-chained arity-8+ shapes are flattened
+        // back into the source-level positional tuple symbol.
         if (TryGetTupleTypeSymbol(clrType, out var tupleTypeSymbol))
         {
             return tupleTypeSymbol;
@@ -960,10 +960,9 @@ public class TypeSymbol : Symbol
 
     /// <summary>
     /// Issue #1922: recognizes a closed generic <c>System.ValueTuple&lt;...&gt;</c>
-    /// or <c>System.Tuple&lt;...&gt;</c> CLR type (arity 2–7, matching
-    /// <see cref="TupleTypeSymbol"/>'s own CLR-backing ceiling) and maps it onto
-    /// the equivalent <see cref="TupleTypeSymbol"/> by recursively resolving
-    /// each generic argument through <see cref="FromClrType"/>.
+    /// or <c>System.Tuple&lt;...&gt;</c> CLR type and maps it onto the equivalent
+    /// flat <see cref="TupleTypeSymbol"/>, including canonical arity-8+
+    /// <c>TRest</c> nesting.
     /// </summary>
     /// <param name="clrType">The candidate CLR type.</param>
     /// <param name="tupleTypeSymbol">The resulting tuple symbol, if matched.</param>
@@ -976,18 +975,58 @@ public class TypeSymbol : Symbol
             return false;
         }
 
-        var defName = clrType.GetGenericTypeDefinition().FullName;
-        var isTupleFamily = defName is "System.ValueTuple`2" or "System.ValueTuple`3" or "System.ValueTuple`4"
-            or "System.ValueTuple`5" or "System.ValueTuple`6" or "System.ValueTuple`7"
-            or "System.Tuple`2" or "System.Tuple`3" or "System.Tuple`4"
-            or "System.Tuple`5" or "System.Tuple`6" or "System.Tuple`7";
-        if (!isTupleFamily)
+        var elementTypes = ImmutableArray.CreateBuilder<TypeSymbol>();
+        if (!TryCollectTupleElements(clrType, elementTypes, allowSingleElementRest: false))
         {
             return false;
         }
 
-        var elementTypes = clrType.GetGenericArguments().Select(FromClrType).ToImmutableArray();
-        tupleTypeSymbol = TupleTypeSymbol.Get(elementTypes);
+        tupleTypeSymbol = TupleTypeSymbol.Get(elementTypes.ToImmutable());
         return true;
+    }
+
+    private static bool TryCollectTupleElements(
+        Type clrType,
+        ImmutableArray<TypeSymbol>.Builder elementTypes,
+        bool allowSingleElementRest)
+    {
+        if (!clrType.IsGenericType || clrType.IsGenericTypeDefinition)
+        {
+            return false;
+        }
+
+        var definitionName = clrType.GetGenericTypeDefinition().FullName;
+        var isValueTuple = definitionName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true;
+        var isReferenceTuple = definitionName?.StartsWith("System.Tuple`", StringComparison.Ordinal) == true;
+        if (!isValueTuple && !isReferenceTuple)
+        {
+            return false;
+        }
+
+        var arguments = clrType.GetGenericArguments();
+        if (arguments.Length == 1)
+        {
+            if (!allowSingleElementRest)
+            {
+                return false;
+            }
+
+            elementTypes.Add(FromClrType(arguments[0]));
+            return true;
+        }
+
+        if (arguments.Length is < 2 or > 8)
+        {
+            return false;
+        }
+
+        var directCount = arguments.Length == 8 ? 7 : arguments.Length;
+        for (var i = 0; i < directCount; i++)
+        {
+            elementTypes.Add(FromClrType(arguments[i]));
+        }
+
+        return arguments.Length != 8
+            || TryCollectTupleElements(arguments[7], elementTypes, allowSingleElementRest: true);
     }
 }

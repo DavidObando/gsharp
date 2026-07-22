@@ -14,7 +14,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Phase 4.5 — tuple types <c>(T1, T2, ...)</c>, tuple literals, and tuple
-/// element access via <c>.Item1</c>..<c>.ItemN</c> (interpreter-only).
+/// element access via <c>.Item1</c>..<c>.ItemN</c>.
 /// </summary>
 public class TupleTests
 {
@@ -38,6 +38,18 @@ p.Item2
 ");
         Assert.Empty(result.Diagnostics);
         Assert.Equal("x", result.Value);
+    }
+
+    [Fact]
+    public void TupleLiteral_ArityEight_ParsesAndBinds()
+    {
+        var syntaxTree = SyntaxTree.Parse(SourceText.From(@"
+let values = (1, 2, 3, 4, 5, 6, 7, 8)
+values.Item8
+"));
+        var compilation = new Compilation(syntaxTree);
+
+        Assert.Empty(compilation.BoundProgram.Diagnostics);
     }
 
     [Fact]
