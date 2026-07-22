@@ -111,14 +111,8 @@ internal sealed partial class MethodBodyEmitter
         // field to the closure before loading the captured value.
         if (this.asyncFieldMap?.ThisField is FieldSymbol thisField)
         {
-            if (!this.outer.cache.StructFieldDefs.TryGetValue(thisField, out var thisFieldHandle))
-            {
-                throw new InvalidOperationException(
-                    $"Hoisted field '{thisField.Name}' has no emitted FieldDef.");
-            }
-
             this.il.OpCode(ILOpCode.Ldfld);
-            this.il.Token(thisFieldHandle);
+            this.il.Token(this.ResolveCurrentStateMachineFieldToken(thisField));
         }
 
         this.il.OpCode(ILOpCode.Ldfld);

@@ -1009,15 +1009,9 @@ internal sealed partial class MethodBodyEmitter
             || (this.asyncIteratorEmitCtx != null && this.asyncIteratorEmitCtx.FieldMap.TryGetValue(captured, out hoistedField)))
         {
             // Load from the state machine: ldarg.0; ldfld <smStruct>::<hoistedField>
-            if (!this.outer.cache.StructFieldDefs.TryGetValue(hoistedField, out var hoistedHandle))
-            {
-                throw new InvalidOperationException(
-                    $"Hoisted field '{hoistedField.Name}' has no emitted FieldDef.");
-            }
-
             this.il.OpCode(ILOpCode.Ldarg_0);
             this.il.OpCode(ILOpCode.Ldfld);
-            this.il.Token(hoistedHandle);
+            this.il.Token(this.ResolveCurrentStateMachineFieldToken(hoistedField));
             return;
         }
 
