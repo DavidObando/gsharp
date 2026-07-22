@@ -32,6 +32,20 @@ public sealed class Issue2750AsyncTupleAwaiterEmitTests
                     await Task.Yield();
                     return (new Uri("https://example.test"), new HttpResponseMessage());
                 }
+
+                public static async Task<(
+                    int One, int Two, int Three, int Four,
+                    int Five, int Six, int Seven, int Eight)> NamedEightAsync()
+                {
+                    await Task.Yield();
+                    return (1, 2, 3, 4, 5, 6, 7, 8);
+                }
+
+                public static async Task<(T, T, T, T, T, T, T, T)> GenericEightAsync<T>(T value)
+                {
+                    await Task.Yield();
+                    return (value, value, value, value, value, value, value, value);
+                }
             }
             """;
         const string source = """
@@ -62,6 +76,21 @@ public sealed class Issue2750AsyncTupleAwaiterEmitTests
                 return (1, 2, 3, 4, 5, 6, 7)
             }
 
+            async func EightAsync() (int32, int32, int32, int32, int32, int32, int32, int32) {
+                await Task.Yield()
+                return (1, 2, 3, 4, 5, 6, 7, 8)
+            }
+
+            async func NineAsync() (int32, int32, int32, int32, int32, int32, int32, int32, int32) {
+                await Task.Yield()
+                return (1, 2, 3, 4, 5, 6, 7, 8, 9)
+            }
+
+            async func FifteenAsync() (int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32) {
+                await Task.Yield()
+                return (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
+            }
+
             async func NestedAsync() ((int32, string), (bool, float64)) {
                 await Task.Yield()
                 return ((4, "nested"), (true, 2.5))
@@ -87,10 +116,19 @@ public sealed class Issue2750AsyncTupleAwaiterEmitTests
                 Console.WriteLine("$three:$tripleText:$flag")
                 let (_, _, _, _, _, _, seven) = await SevenAsync()
                 Console.WriteLine(seven)
+                let eight = await EightAsync()
+                Console.WriteLine(eight.Item8)
+                let nine = await NineAsync()
+                Console.WriteLine(nine.Item9)
+                let fifteen = await FifteenAsync()
+                Console.WriteLine(fifteen.Item15)
+                let namedEight = await TupleApi.NamedEightAsync()
+                Console.WriteLine(namedEight.Item8)
                 let nested = await NestedAsync()
                 Console.WriteLine("${nested.Item1.Item2}:${nested.Item2.Item2}")
                 let (genericLeft, genericRight) = await GenericPairAsync[string]("generic-pair")
                 Console.WriteLine("$genericLeft:$genericRight")
+                let genericEight = await TupleApi.GenericEightAsync[string]("unused")
                 Console.WriteLine(number)
                 return await FinalAddressAsync()
             }
@@ -99,7 +137,7 @@ public sealed class Issue2750AsyncTupleAwaiterEmitTests
             """;
 
         Assert.Equal(
-            "first.test\nexample.test\ngeneric\nnullable.test\n3:triple:True\n7\nnested:2.5\ngeneric-pair:generic-pair\n8\nfinal.test\n",
+            "first.test\nexample.test\ngeneric\nnullable.test\n3:triple:True\n7\n8\n9\n15\n8\nnested:2.5\ngeneric-pair:generic-pair\n8\nfinal.test\n",
             CompileVerifyAndRun(source, helperSource));
     }
 

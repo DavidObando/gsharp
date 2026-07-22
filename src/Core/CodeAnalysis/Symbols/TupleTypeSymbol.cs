@@ -16,9 +16,8 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// <remarks>
 /// Backed by the CLR <c>System.ValueTuple&lt;...&gt;</c> family. Instances are
 /// cached per element-type sequence so identical tuple types compare by
-/// reference. The CLR backing type is only set for tuple arities 1–8 (the
-/// generic ValueTuple shapes shipped in the BCL); higher arities currently
-/// have a <c>null</c> ClrType and are interpreter-only.
+/// reference. Arity 8 and higher use the CLR's canonical
+/// <c>ValueTuple&lt;T1,...,T7,TRest&gt;</c> nesting.
 /// </remarks>
 public sealed class TupleTypeSymbol : TypeSymbol
 {
@@ -77,6 +76,20 @@ public sealed class TupleTypeSymbol : TypeSymbol
     /// </summary>
     internal static void ClearCache() => Cache.Clear();
 
+    internal static Type GetOpenClrType(int arity)
+        => arity switch
+        {
+            1 => typeof(ValueTuple<>),
+            2 => typeof(ValueTuple<,>),
+            3 => typeof(ValueTuple<,,>),
+            4 => typeof(ValueTuple<,,,>),
+            5 => typeof(ValueTuple<,,,,>),
+            6 => typeof(ValueTuple<,,,,,>),
+            7 => typeof(ValueTuple<,,,,,,>),
+            8 => typeof(ValueTuple<,,,,,,,>),
+            _ => throw new ArgumentOutOfRangeException(nameof(arity)),
+        };
+
     private static string BuildName(ImmutableArray<TypeSymbol> elementTypes)
     {
         var sb = new StringBuilder("(");
@@ -105,15 +118,19 @@ public sealed class TupleTypeSymbol : TypeSymbol
         }
 
         var clrTypes = elementTypes.Select(t => t.ClrType).ToArray();
-        switch (clrTypes.Length)
+        return BuildClrType(clrTypes, 0, clrTypes.Length);
+    }
+
+    private static Type BuildClrType(Type[] elementTypes, int start, int count)
+    {
+        if (count <= 7)
         {
-            case 2: return typeof(ValueTuple<,>).MakeGenericType(clrTypes);
-            case 3: return typeof(ValueTuple<,,>).MakeGenericType(clrTypes);
-            case 4: return typeof(ValueTuple<,,,>).MakeGenericType(clrTypes);
-            case 5: return typeof(ValueTuple<,,,,>).MakeGenericType(clrTypes);
-            case 6: return typeof(ValueTuple<,,,,,>).MakeGenericType(clrTypes);
-            case 7: return typeof(ValueTuple<,,,,,,>).MakeGenericType(clrTypes);
-            default: return null;
+            return GetOpenClrType(count).MakeGenericType(elementTypes[start..(start + count)]);
         }
+
+        var arguments = new Type[8];
+        Array.Copy(elementTypes, start, arguments, 0, 7);
+        arguments[7] = BuildClrType(elementTypes, start + 7, count - 7);
+        return GetOpenClrType(8).MakeGenericType(arguments);
     }
 }
