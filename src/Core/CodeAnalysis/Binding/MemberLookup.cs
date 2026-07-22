@@ -1971,6 +1971,71 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
+    /// Reifies a structural function type as an expected named delegate when
+    /// their complete signatures are identical. The direction is deliberate:
+    /// two named delegates never become equivalent merely because their
+    /// <c>Invoke</c> methods have the same shape.
+    /// </summary>
+    /// <param name="actual">The source structural function type.</param>
+    /// <param name="expected">The expected named delegate type.</param>
+    /// <param name="canonical">The expected delegate on success; otherwise the source type.</param>
+    /// <returns><see langword="true"/> when the structural signature exactly matches the delegate.</returns>
+    public static bool TryCanonicalizeStructuralFunctionType(
+        TypeSymbol actual,
+        TypeSymbol expected,
+        out TypeSymbol canonical)
+    {
+        canonical = actual;
+        if (actual is not FunctionTypeSymbol actualFunction
+            || expected is FunctionTypeSymbol
+            || !TryGetDelegateFunctionTypeFromSymbol(expected, out var expectedFunction)
+            || !FunctionShapesExactlyMatch(actualFunction, expectedFunction))
+        {
+            return false;
+        }
+
+        canonical = expected;
+        return true;
+
+        static bool FunctionShapesExactlyMatch(
+            FunctionTypeSymbol actual,
+            FunctionTypeSymbol expected)
+        {
+            if (actual.Arity != expected.Arity
+                || !actual.IsVariadic.SequenceEqual(expected.IsVariadic)
+                || !FunctionComponentExactlyMatches(actual.ReturnType, expected.ReturnType))
+            {
+                return false;
+            }
+
+            for (var i = 0; i < actual.Arity; i++)
+            {
+                if (!FunctionComponentExactlyMatches(
+                    actual.ParameterTypes[i],
+                    expected.ParameterTypes[i]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        static bool FunctionComponentExactlyMatches(TypeSymbol actual, TypeSymbol expected)
+        {
+            if (TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(actual, expected))
+            {
+                return true;
+            }
+
+            return actual is FunctionTypeSymbol actualFunction
+                && expected is not FunctionTypeSymbol
+                && TryGetDelegateFunctionTypeFromSymbol(expected, out var expectedFunction)
+                && FunctionShapesExactlyMatch(actualFunction, expectedFunction);
+        }
+    }
+
+    /// <summary>
     /// Issue #2130: resolves the effective lambda target shape for any target
     /// type that may consume a source lambda — a native function type, a
     /// delegate, or <c>System.Linq.Expressions.Expression&lt;TDelegate&gt;</c>.

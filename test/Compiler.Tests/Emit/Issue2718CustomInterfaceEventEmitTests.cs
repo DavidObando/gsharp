@@ -49,7 +49,7 @@ public sealed class Issue2718CustomInterfaceEventEmitTests
                     this.inner = inner
                 }
 
-                event ChangedSettings EventHandler {
+                event ChangedSettings (object?, EventArgs) -> void {
                     add { inner.ChangedSettings += value }
                     remove { inner.ChangedSettings -= value }
                 }
@@ -113,11 +113,111 @@ public sealed class Issue2718CustomInterfaceEventEmitTests
             Assert.Equal(
                 new[] { "add_ChangedSettings", "remove_ChangedSettings" },
                 interfaceMap.TargetMethods.Select(m => m.Name).OrderBy(n => n).ToArray());
+            Assert.Equal(
+                typeof(EventHandler),
+                implementationType.GetEvent("ChangedSettings")!.EventHandlerType);
+            Assert.All(
+                interfaceMap.TargetMethods,
+                method => Assert.Equal(typeof(EventHandler), method.GetParameters().Single().ParameterType));
         }
         finally
         {
             loadContext.Unload();
         }
+    }
+
+    [Fact]
+    public void OahuCli_ActionOfAction_MethodGroup_BindsRunsAndIlVerifies()
+    {
+        const string contracts = """
+            package Oahu.Core
+            import System
+
+            class AppShellOptions { }
+
+            class TuiHost {
+                shared {
+                    func Run(options AppShellOptions?, registerRestore Action[Action]?) {
+                        registerRestore!!(() -> Console.WriteLine("restored"))
+                    }
+                }
+            }
+            """;
+        const string source = """
+            package Oahu.Cli
+            import System
+            import Oahu.Core
+
+            class CliEnvironment {
+                shared {
+                    func RegisterRestore(restore () -> void) {
+                        restore()
+                    }
+                }
+            }
+
+            func Main() {
+                TuiHost.Run(AppShellOptions{}, CliEnvironment.RegisterRestore)
+            }
+            """;
+
+        using var artifacts = Compile(source, "exe", contracts);
+        Assert.Equal("restored\n", Run(artifacts.OutputPath));
+        IlVerifier.Verify(artifacts.OutputPath, additionalReferences: new[] { artifacts.ContractsPath });
+
+        var loadContext = new AssemblyLoadContext("Issue2726", isCollectible: true);
+        loadContext.Resolving += (_, name) => name.Name == "Oahu.Core"
+            ? loadContext.LoadFromAssemblyPath(artifacts.ContractsPath)
+            : null;
+        try
+        {
+            var assembly = loadContext.LoadFromAssemblyPath(artifacts.OutputPath);
+            var method = assembly.GetTypes()
+                .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
+                .Single(candidate => candidate.Name == "RegisterRestore");
+            Assert.Equal(typeof(Action), method.GetParameters().Single().ParameterType);
+        }
+        finally
+        {
+            loadContext.Unload();
+        }
+    }
+
+    [Fact]
+    public void DistinctNamedDelegateOverloads_RemainAmbiguous()
+    {
+        const string contracts = """
+            package DelegateContracts
+
+            type FirstHandler = delegate func(value int32) void
+            type SecondHandler = delegate func(value int32) void
+
+            class Dispatcher {
+                shared {
+                    func Run(callback FirstHandler) { }
+                    func Run(callback SecondHandler) { }
+                }
+            }
+            """;
+        const string source = """
+            package DelegateConsumer
+            import DelegateContracts
+
+            class Handlers {
+                shared {
+                    func Handle(value int32) { }
+                }
+            }
+
+            func Main() {
+                Dispatcher.Run(Handlers.Handle)
+            }
+            """;
+
+        using var artifacts = Compile(source, "library", contracts, expectSuccess: false);
+        Assert.NotEqual(0, artifacts.ExitCode);
+        var output = artifacts.Stdout + artifacts.Stderr;
+        Assert.True(output.Contains("GS0160", StringComparison.Ordinal), output);
     }
 
     [Fact]
