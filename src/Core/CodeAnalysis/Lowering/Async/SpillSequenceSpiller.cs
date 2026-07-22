@@ -928,7 +928,12 @@ public static class SpillSequenceSpiller
                 return Trivial(call);
             }
 
-            var value = new BoundCallExpression(null, call.Function, args.ToImmutable(), call.ReturnType);
+            var value = new BoundCallExpression(null, call.Function, args.ToImmutable(), call.ReturnType, call.IsConditionalElided)
+            {
+                StaticGenericOwnerType = call.StaticGenericOwnerType,
+                StaticGenericInterfaceOwnerType = call.StaticGenericInterfaceOwnerType,
+                MethodTypeArguments = call.MethodTypeArguments,
+            };
             return new BoundSpillSequenceExpression(
                 null,
                 locals.ToImmutable(),

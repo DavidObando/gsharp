@@ -493,6 +493,7 @@ internal sealed partial class StatementBinder
                 {
                     StaticGenericOwnerType = call.StaticGenericOwnerType,
                     StaticGenericInterfaceOwnerType = call.StaticGenericInterfaceOwnerType,
+                    MethodTypeArguments = call.MethodTypeArguments,
                 };
             case BoundIndirectCallExpression call:
                 return new BoundIndirectCallExpression(null, CaptureExpression(call.Target, prefix), call.FunctionType, CaptureArguments(call.Arguments, prefix));

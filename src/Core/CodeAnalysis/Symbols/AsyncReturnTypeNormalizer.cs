@@ -21,6 +21,20 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 internal static class AsyncReturnTypeNormalizer
 {
     /// <summary>
+    /// Returns the declared result represented by a call-site return type.
+    /// Async calls carry one observable Task/ValueTask wrapper, which is
+    /// removed exactly once; all other calls and shapes pass through.
+    /// </summary>
+    /// <param name="function">The called function.</param>
+    /// <param name="callSiteReturnType">The bound call's observable return type.</param>
+    /// <returns>The declared result type used for generic substitution.</returns>
+    public static TypeSymbol GetDeclaredResultType(FunctionSymbol function, TypeSymbol callSiteReturnType)
+        => function?.IsAsync == true
+            && TryUnwrapTaskReturnType(callSiteReturnType, out var declaredResult)
+                ? declaredResult
+                : callSiteReturnType;
+
+    /// <summary>
     /// Unwraps the awaited result of a <c>Task</c> / <c>Task[T]</c> /
     /// <c>ValueTask</c> / <c>ValueTask[T]</c> return type symbol: the
     /// non-generic forms resolve to <see cref="TypeSymbol.Void"/>, the generic

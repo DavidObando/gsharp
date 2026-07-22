@@ -624,6 +624,7 @@ public abstract class BoundTreeRewriter
         {
             StaticGenericOwnerType = node.StaticGenericOwnerType,
             StaticGenericInterfaceOwnerType = node.StaticGenericInterfaceOwnerType,
+            MethodTypeArguments = node.MethodTypeArguments,
         };
     }
 
