@@ -940,7 +940,10 @@ public sealed class Lowerer : BoundTreeRewriter
             // continues to destructure into `Current.Key` / `Current.Value`.
             if (node.KeyVariable == null)
             {
-                statements.Add(new BoundVariableDeclaration(node.Syntax, node.ValueVariable, currentAccess));
+                statements.Add(new BoundVariableDeclaration(
+                    node.Syntax,
+                    node.ValueVariable,
+                    ConvertEnumeratorCurrent(currentAccess, node.ValueVariable.Type)));
             }
             else
             {
@@ -986,7 +989,10 @@ public sealed class Lowerer : BoundTreeRewriter
                 statements.Add(new BoundVariableDeclaration(node.Syntax, node.KeyVariable, new BoundVariableExpression(node.Syntax, indexSymbol)));
             }
 
-            statements.Add(new BoundVariableDeclaration(node.Syntax, node.ValueVariable, currentAccess));
+            statements.Add(new BoundVariableDeclaration(
+                node.Syntax,
+                node.ValueVariable,
+                ConvertEnumeratorCurrent(currentAccess, node.ValueVariable.Type)));
         }
 
         statements.Add(node.Body);
@@ -1053,6 +1059,13 @@ public sealed class Lowerer : BoundTreeRewriter
         }
 
         return new BoundBlockStatement(node.Syntax, statements.ToImmutable());
+    }
+
+    private static BoundExpression ConvertEnumeratorCurrent(BoundExpression current, TypeSymbol elementType)
+    {
+        return current.Type == TypeSymbol.Object || current.Type?.ClrType.IsSameAs(typeof(object)) == true
+            ? new BoundConversionExpression(current.Syntax, elementType, current)
+            : current;
     }
 
     private static BoundExpression TryBuildEnumeratorDisposeCall(LocalVariableSymbol enumeratorSymbol)
