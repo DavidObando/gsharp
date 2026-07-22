@@ -1527,7 +1527,10 @@ internal sealed class ConversionClassifier
             for (var i = 0; i < targetParameterTypes.Length; i++)
             {
                 if (candidate.Parameters[i + parameterOffset].RefKind != targetParameterRefKinds[i]
-                    || !AreMethodGroupTypesEquivalent(candidateParameterTypes[i], targetParameterTypes[i]))
+                    || !TryCanonicalizeMethodGroupType(
+                        candidateParameterTypes[i],
+                        targetParameterTypes[i],
+                        out candidateParameterTypes[i]))
                 {
                     paramsMatch = false;
                     break;
@@ -1539,7 +1542,10 @@ internal sealed class ConversionClassifier
                 continue;
             }
 
-            if (!AreMethodGroupTypesEquivalent(candidateReturn, targetReturnType))
+            if (!TryCanonicalizeMethodGroupType(
+                candidateReturn,
+                targetReturnType,
+                out candidateReturn))
             {
                 continue;
             }
@@ -2299,8 +2305,22 @@ internal sealed class ConversionClassifier
         return ClrTypeUtilities.IsAssignableByName(invokeReturn, methodReturn);
     }
 
-    private static bool AreMethodGroupTypesEquivalent(TypeSymbol left, TypeSymbol right)
-        => TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(left, right);
+    private static bool TryCanonicalizeMethodGroupType(
+        TypeSymbol actual,
+        TypeSymbol expected,
+        out TypeSymbol canonical)
+    {
+        canonical = actual;
+        if (TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(actual, expected))
+        {
+            return true;
+        }
+
+        return MemberLookup.TryCanonicalizeStructuralFunctionType(actual, expected, out canonical)
+            && actual.ClrType != null
+            && expected.ClrType != null
+            && ClrTypeUtilities.AreSame(actual.ClrType, expected.ClrType);
+    }
 
     private static ImmutableArray<RefKind> GetMethodGroupTargetRefKinds(
         TypeSymbol targetType,
