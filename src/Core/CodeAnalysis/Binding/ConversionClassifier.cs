@@ -2531,28 +2531,80 @@ internal sealed class ConversionClassifier
             return false;
         }
 
-        // Numeric / bool / char / string / enum-underlying types are CLR Constant-table representable.
-        switch (value)
+        if (!Conversion.Classify(inner.Type, parameterType).IsImplicit)
         {
-            case bool:
-            case sbyte:
-            case byte:
-            case short:
-            case ushort:
-            case int:
-            case uint:
-            case long:
-            case ulong:
-            case float:
-            case double:
-            case char:
-            case string:
-                return true;
-            default:
-                reason = $"the default value type '{value.GetType().Name}' is not representable in CLR parameter metadata.";
-                value = null;
-                return false;
+            reason = $"the default value of type '{inner.Type.Name}' is not implicitly convertible to parameter type '{parameterType.Name}'.";
+            value = null;
+            return false;
         }
+
+        return TryNormalizeMetadataConstant(value, parameterType, out value, out reason);
+    }
+
+    // Constant rows carry the parameter's converted primitive value, not the
+    // source literal's type (for example, `int64 x = 1` requires an I8 row).
+    private static bool TryNormalizeMetadataConstant(object value, TypeSymbol parameterType, out object normalized, out string reason)
+    {
+        normalized = null;
+        reason = null;
+        var target = parameterType is NullableTypeSymbol nullable ? nullable.UnderlyingType : parameterType;
+
+        try
+        {
+            if (target.ClrType is System.Type clrType && TryNormalizeClrConstant(value, clrType, out normalized))
+            {
+                return true;
+            }
+            else if (target is EnumSymbol)
+            {
+                normalized = Convert.ToInt32(value, System.Globalization.CultureInfo.InvariantCulture);
+            }
+            else if ((target == TypeSymbol.NInt || target == TypeSymbol.NUInt)
+                && value is sbyte or byte or short or ushort or int or uint or long or ulong)
+            {
+                normalized = value;
+            }
+        }
+        catch (Exception)
+        {
+            normalized = null;
+        }
+
+        if (normalized != null)
+        {
+            return true;
+        }
+
+        reason = $"the default value type '{value.GetType().Name}' is not representable for parameter type '{parameterType.Name}' in CLR metadata.";
+        return false;
+    }
+
+    private static bool TryNormalizeClrConstant(object value, System.Type targetType, out object normalized)
+    {
+        normalized = null;
+        if (targetType.IsEnum)
+        {
+            targetType = Enum.GetUnderlyingType(targetType);
+        }
+
+        normalized = Type.GetTypeCode(targetType) switch
+        {
+            TypeCode.Boolean when value is bool => value,
+            TypeCode.Char when value is char => value,
+            TypeCode.SByte => Convert.ToSByte(value, System.Globalization.CultureInfo.InvariantCulture),
+            TypeCode.Byte => Convert.ToByte(value, System.Globalization.CultureInfo.InvariantCulture),
+            TypeCode.Int16 => Convert.ToInt16(value, System.Globalization.CultureInfo.InvariantCulture),
+            TypeCode.UInt16 => Convert.ToUInt16(value, System.Globalization.CultureInfo.InvariantCulture),
+            TypeCode.Int32 => Convert.ToInt32(value, System.Globalization.CultureInfo.InvariantCulture),
+            TypeCode.UInt32 => Convert.ToUInt32(value, System.Globalization.CultureInfo.InvariantCulture),
+            TypeCode.Int64 => Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture),
+            TypeCode.UInt64 => Convert.ToUInt64(value, System.Globalization.CultureInfo.InvariantCulture),
+            TypeCode.Single => Convert.ToSingle(value, System.Globalization.CultureInfo.InvariantCulture),
+            TypeCode.Double => Convert.ToDouble(value, System.Globalization.CultureInfo.InvariantCulture),
+            TypeCode.String when value is string => value,
+            _ => null,
+        };
+        return normalized != null;
     }
 
     // Issue #1182: extracts the constant default for a value-type `default(T)` /
