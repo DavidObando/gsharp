@@ -2013,7 +2013,9 @@ internal sealed class LambdaBinder
                         new BoundReturnStatement(rewritten.Syntax, expression: null)));
             }
 
-            if (rewritten.Expression.Type == this.adapterReturnType)
+            // A bottom-typed return never reaches the target slot.
+            if (rewritten.Expression.Type == this.adapterReturnType
+                || rewritten.Expression.Type == TypeSymbol.Never)
             {
                 return rewritten;
             }

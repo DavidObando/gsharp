@@ -180,6 +180,63 @@ public class Issue1018ThrowExpressionEmitTests
     }
 
     [Fact]
+    public void ThrowOnlyLambda_TypedFactoryShapes_ThrowThroughToCatch()
+    {
+        // Issue #2716: `() -> never` must lower to each target signature while
+        // retaining the throw as the only runtime control-flow edge.
+        var source = """
+            package P
+
+            import System
+
+            interface IAuthService {
+            }
+
+            class ServiceFactories {
+                private var _auth () -> IAuthService = () -> throw InvalidOperationException("auth")
+
+                func Auth() IAuthService -> this._auth()
+            }
+
+            type NumberFactory = delegate func() int32
+
+            let numberFactory Func[int32] = () -> throw InvalidOperationException("number")
+            let namedFactory NumberFactory = () -> throw InvalidOperationException("named")
+            let action Action = () -> throw InvalidOperationException("action")
+
+            let factories = ServiceFactories()
+            try {
+                factories.Auth()
+                Console.WriteLine("unreachable auth")
+            } catch (e InvalidOperationException) {
+                Console.WriteLine(e.Message)
+            }
+            try {
+                numberFactory()
+                Console.WriteLine("unreachable number")
+            } catch (e InvalidOperationException) {
+                Console.WriteLine(e.Message)
+            }
+            try {
+                namedFactory()
+                Console.WriteLine("unreachable named")
+            } catch (e InvalidOperationException) {
+                Console.WriteLine(e.Message)
+            }
+            try {
+                action()
+                Console.WriteLine("unreachable action")
+            } catch (e InvalidOperationException) {
+                Console.WriteLine(e.Message)
+            }
+            Console.WriteLine("done")
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("auth\nnumber\nnamed\naction\ndone\n", output);
+    }
+
+    [Fact]
     public void ThrowExpression_InArgumentPosition()
     {
         var source = """
