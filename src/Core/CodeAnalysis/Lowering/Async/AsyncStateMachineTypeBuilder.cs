@@ -117,16 +117,9 @@ public static class AsyncStateMachineTypeBuilder
 
         var builderFieldType = TypeSymbol.FromClrType(builderInfo.BuilderType);
 
-        // Issue #2381: widened from a bare struct/interface/enum/type-
-        // parameter kickoff-type check to `ArgIsSymbolicUserDefined` (shared
-        // with the emitter's call-site/return-type symbolic-encoding gate)
-        // so an imported generic closed over a same-compilation argument
-        // (`List[DiagnosticCheck]`, `Dictionary[string, DiagnosticCheck]`,
-        // nested/array/nullable shapes, …) ALSO gets its builder field type
-        // rebuilt as a symbolic constructed generic instead of the
-        // reflection-resolved (and, for such an argument, object-erased)
-        // `builderInfo.BuilderType`.
-        if (ReflectionMetadataEmitter.ArgIsSymbolicUserDefined(kickoff.Type)
+        // Issues #2381/#2713: match WrapAsTask's symbolic projection guard so
+        // the builder field retains every result shape the CLR type erases.
+        if (TypeSymbol.RequiresSymbolicProjection(kickoff.Type)
             && builderInfo.BuilderType is { IsConstructedGenericType: true } builderClrType)
         {
             builderFieldType = ImportedTypeSymbol.GetConstructed(
@@ -280,13 +273,9 @@ public static class AsyncStateMachineTypeBuilder
                 // override in `Build` and `ResultTypeSymbol`), so the emitted
                 // IL still carries `!!0`/`!0`, not `object`.
                 //
-                // Issue #2381: widened to the shared `ArgIsSymbolicUserDefined`
-                // predicate so an array/slice of a same-compilation user type
-                // (`[N]DiagnosticCheck` / `[]DiagnosticCheck` — whose eagerly-
-                // cached `ClrType` is null when the element had no CLR type
-                // yet) reaches the same erase-then-re-widen treatment instead
-                // of aborting async state-machine synthesis outright.
-                if (ReflectionMetadataEmitter.ArgIsSymbolicUserDefined(kickoff.Type))
+                // Issues #2381/#2713: erase every symbolic projection only
+                // for reflection-based builder discovery; emission restores it.
+                if (TypeSymbol.RequiresSymbolicProjection(kickoff.Type))
                 {
                     inner = references.MapClrTypeToReferences(typeof(object));
                 }
