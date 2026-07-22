@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Text;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Lowering.Async;
@@ -35,8 +36,10 @@ namespace GSharp.Core.CodeAnalysis.Lowering.Async;
 /// </remarks>
 public sealed class SynthesizedStateMachineType : TypeSymbol
 {
+    internal const string ReferenceAwaiterPoolKey = "!reference-awaiter";
+
     private readonly List<FieldSymbol> fields = new List<FieldSymbol>();
-    private readonly Dictionary<Type, FieldSymbol> awaiterPoolFields = new Dictionary<Type, FieldSymbol>();
+    private readonly Dictionary<string, FieldSymbol> awaiterPoolFields = new Dictionary<string, FieldSymbol>(StringComparer.Ordinal);
     private StructSymbol materializedStruct;
 
     /// <summary>
@@ -111,12 +114,10 @@ public sealed class SynthesizedStateMachineType : TypeSymbol
         fields.Add(field);
     }
 
-    /// <summary>Registers a pooled awaiter field keyed by CLR type.
-    /// Value-type awaiters are keyed by their actual type; reference-typed
-    /// awaiters are keyed by <c>typeof(object)</c>.</summary>
-    /// <param name="poolKey">The CLR type key for the awaiter pool.</param>
+    /// <summary>Registers a pooled awaiter field keyed by its emitted type identity.</summary>
+    /// <param name="poolKey">The emitted type identity key for the awaiter pool.</param>
     /// <param name="field">The field symbol for the pool slot.</param>
-    public void RegisterAwaiterPoolField(Type poolKey, FieldSymbol field)
+    public void RegisterAwaiterPoolField(string poolKey, FieldSymbol field)
     {
         if (poolKey == null)
         {
@@ -131,19 +132,18 @@ public sealed class SynthesizedStateMachineType : TypeSymbol
         awaiterPoolFields[poolKey] = field;
     }
 
-    /// <summary>Gets the pooled awaiter field for the given CLR awaiter type.
-    /// For reference-typed awaiters, pass <c>typeof(object)</c>.</summary>
-    /// <param name="awaiterClrType">The CLR awaiter type (value type) or
-    /// <c>typeof(object)</c> for reference-typed awaiters.</param>
+    /// <summary>Gets the pooled awaiter field for the given emitted awaiter type.</summary>
+    /// <param name="awaiterClrType">The CLR awaiter type.</param>
+    /// <param name="awaiterTypeSymbol">The symbolic awaiter type retained for emission.</param>
     /// <returns>The awaiter pool field, or <see langword="null"/> if not registered.</returns>
-    public FieldSymbol GetAwaiterPoolField(Type awaiterClrType)
+    public FieldSymbol GetAwaiterPoolField(Type awaiterClrType, TypeSymbol awaiterTypeSymbol)
     {
         if (awaiterClrType == null)
         {
             return null;
         }
 
-        var key = awaiterClrType.IsValueType ? awaiterClrType : typeof(object);
+        var key = GetAwaiterPoolKey(awaiterClrType, awaiterTypeSymbol);
         return awaiterPoolFields.TryGetValue(key, out var field) ? field : null;
     }
 
@@ -177,5 +177,21 @@ public sealed class SynthesizedStateMachineType : TypeSymbol
             isClass: ContainerKind == StateMachineContainerKind.Class);
 
         return materializedStruct;
+    }
+
+    internal static string GetAwaiterPoolKey(Type awaiterClrType, TypeSymbol awaiterTypeSymbol)
+    {
+        if (!awaiterClrType.IsValueType)
+        {
+            return ReferenceAwaiterPoolKey;
+        }
+
+        // Issue #2750: distinct symbolic Task<T> results can share the erased
+        // TaskAwaiter<object> CLR shape, but their emitted fields cannot.
+        var builder = new StringBuilder();
+        FunctionTypeSymbol.AppendIdentityKey(
+            builder,
+            awaiterTypeSymbol ?? TypeSymbol.FromClrType(awaiterClrType));
+        return builder.ToString();
     }
 }
