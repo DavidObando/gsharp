@@ -312,7 +312,7 @@ public sealed class Binder
             reportObsoleteUseIfApplicable: ReportObsoleteUseIfApplicable,
             isAsyncIteratorReturnType: IsAsyncIteratorReturnType,
             getCurrentFunction: () => this.function,
-            bindStatement: syntax => statements.BindStatement(syntax));
+            bindStatementList: (syntax, trailing) => statements.BindStatementList(syntax, trailingStatement: trailing));
 
         // statements/declarations still reference this.expressions through
         // the callbacks above; expressions is wired last so its constructor
@@ -1102,12 +1102,36 @@ public sealed class Binder
             // types / functions remain visible while the new binder's own
             // RootScope owns the `args` parameter declaration.
             var tlsBinder = new Binder(binder.scope, synthesizedEntryPoint);
-            foreach (var globalStatement in globalStatements)
+            string previousPackage = null;
+            SyntaxTree previousTree = null;
+            var contextSet = false;
+            try
             {
-                RunWithPackage(
-                    packageByTree[globalStatement.SyntaxTree],
-                    globalStatement.SyntaxTree,
-                    () => statements.Add(tlsBinder.statements.BindStatement(globalStatement.Statement)));
+                statements.AddRange(tlsBinder.statements.BindStatementList(
+                    globalStatements.Select(s => s.Statement).ToImmutableArray(),
+                    statement =>
+                    {
+                        var tree = statement.SyntaxTree;
+                        if (!contextSet)
+                        {
+                            previousPackage = binder.scope.SetCurrentDeclaringPackage(packageByTree[tree]?.Name);
+                            previousTree = binder.scope.SetCurrentReferencingSyntaxTree(tree);
+                            contextSet = true;
+                        }
+                        else
+                        {
+                            binder.scope.SetCurrentDeclaringPackage(packageByTree[tree]?.Name);
+                            binder.scope.SetCurrentReferencingSyntaxTree(tree);
+                        }
+                    }));
+            }
+            finally
+            {
+                if (contextSet)
+                {
+                    binder.scope.SetCurrentDeclaringPackage(previousPackage);
+                    binder.scope.SetCurrentReferencingSyntaxTree(previousTree);
+                }
             }
 
             // Issue #1884: all TLS global statements share the synthesized
