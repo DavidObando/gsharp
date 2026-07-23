@@ -454,7 +454,10 @@ public static class AsyncExceptionHandlerRewriter
 
             // Emit lifted catch handlers (for catch-with-await in try/catch/finally).
             // Each handler is guarded by its per-clause capture so it only runs
-            // when that specific typed catch actually fired.
+            // when that specific typed catch actually fired. Keep the lifted
+            // handlers in a try/catch so a rethrow (or a new exception from an
+            // awaited handler) is captured until the lifted finally has run.
+            var liftedHandlerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
             foreach (var (original, body, captureLocal) in liftedCatchHandlers)
             {
                 var endLabel = MakeLabel("liftcatch_end");
@@ -469,34 +472,56 @@ public static class AsyncExceptionHandlerRewriter
                         TypeSymbol.Null),
                     nullLit);
 
-                statements.Add(new BoundConditionalGotoStatement(null, endLabel, condition, jumpIfTrue: true));
+                liftedHandlerStatements.Add(new BoundConditionalGotoStatement(null, endLabel, condition, jumpIfTrue: true));
 
                 var rebind = new BoundVariableDeclaration(
                     null,
                     original.Variable,
                     new BoundVariableExpression(null, captureLocal));
-                statements.Add(rebind);
+                liftedHandlerStatements.Add(rebind);
 
                 if (body is BoundBlockStatement block)
                 {
                     foreach (var stmt in block.Statements)
                     {
-                        statements.Add(stmt);
+                        liftedHandlerStatements.Add(stmt);
                     }
                 }
                 else
                 {
-                    statements.Add(body);
+                    liftedHandlerStatements.Add(body);
                 }
 
                 // Clear pendingException after handling so the rethrow below doesn't fire
-                statements.Add(new BoundExpressionStatement(
+                liftedHandlerStatements.Add(new BoundExpressionStatement(
                     null,
                     new BoundAssignmentExpression(
                         null,
                         pendingExLocal,
                         new BoundLiteralExpression(null, null, TypeSymbol.Null))));
-                statements.Add(new BoundLabelStatement(null, endLabel));
+                liftedHandlerStatements.Add(new BoundLabelStatement(null, endLabel));
+            }
+
+            if (liftedHandlerStatements.Count > 0)
+            {
+                var liftedEx = new LocalVariableSymbol(
+                    $"<>ex_lifted_{localOrdinal++}", isReadOnly: false, exceptionType);
+                var captureLiftedEx = new BoundExpressionStatement(
+                    null,
+                    new BoundAssignmentExpression(
+                        null,
+                        pendingExLocal,
+                        new BoundVariableExpression(null, liftedEx)));
+                statements.Add(new BoundTryStatement(
+                    null,
+                    new BoundBlockStatement(null, liftedHandlerStatements.ToImmutable()),
+                    ImmutableArray.Create(new BoundCatchClause(
+                        exceptionType,
+                        liftedEx,
+                        new BoundBlockStatement(
+                            null,
+                            ImmutableArray.Create<BoundStatement>(captureLiftedEx)))),
+                    finallyBlock: null));
             }
 
             // Pattern C: place the lifted-finally tail label that funneled exits
