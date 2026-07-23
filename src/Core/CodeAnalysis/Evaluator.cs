@@ -301,17 +301,6 @@ public sealed partial class Evaluator
         public void Dispose() => stack.Pop();
     }
 
-    private sealed class YieldFinder : Binding.BoundTreeRewriter
-    {
-        public bool Found { get; private set; }
-
-        protected override BoundStatement RewriteYieldStatement(BoundYieldStatement node)
-        {
-            Found = true;
-            return node;
-        }
-    }
-
     /// <summary>
     /// Issue #491 (ADR-0060 follow-up): sentinel stored in the locals dictionary
     /// for a ref-aliasing local. Reads of the local re-evaluate <see cref="Operand"/>;

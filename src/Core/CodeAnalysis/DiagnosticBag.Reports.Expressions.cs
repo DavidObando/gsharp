@@ -683,6 +683,12 @@ public sealed partial class DiagnosticBag
     public void ReportLambdaBindingTypeCannotBeInferred(TextLocation location, string parameterName)
     => Report(location, DiagnosticDescriptors.LambdaBindingTypeCannotBeInferred, parameterName, parameterName);
 
+    /// <summary>Reports GS0497 for an async iterator function literal, whose state-machine synthesis is unsupported.</summary>
+    /// <param name="location">The function literal's source location.</param>
+    /// <param name="returnType">The unsupported async-iterator return type.</param>
+    public void ReportAsyncIteratorFunctionLiteralNotSupported(TextLocation location, TypeSymbol returnType)
+    => Report(location, DiagnosticDescriptors.AsyncIteratorFunctionLiteralNotSupported, returnType);
+
     /// <summary>
     /// Reports GS0362 — ADR-0100 / issue #795: a bare <c>default</c>
     /// literal appears in a position where no target type can be

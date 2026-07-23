@@ -24,6 +24,18 @@ public sealed class Issue2786AsyncIteratorCoalesceEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
+            interface StreamProvider {
+                func Values() IAsyncEnumerable[int32];
+                func Forward() IAsyncEnumerable[int32] { return Values() }
+            }
+
+            class Provider : StreamProvider {
+                async func Values() IAsyncEnumerable[int32] {
+                    await Task.CompletedTask
+                    yield 8
+                }
+            }
+
             class Streams {
                 async func InstanceEmpty() IAsyncEnumerable[int32] {
                     await Task.CompletedTask
@@ -96,6 +108,8 @@ public sealed class Issue2786AsyncIteratorCoalesceEmitTests
             Console.WriteLine("conditional-one=" + Count[int32](streams.Conditional(false)).GetAwaiter().GetResult().ToString())
             Console.WriteLine("generic-empty=" + Count[int32](streams.GenericNested[int32](true, 7)).GetAwaiter().GetResult().ToString())
             Console.WriteLine("generic-one=" + Count[int32](streams.GenericNested[int32](false, 7)).GetAwaiter().GetResult().ToString())
+            let provider StreamProvider = Provider()
+            Console.WriteLine("dim=" + Count[int32](provider.Forward()).GetAwaiter().GetResult().ToString())
             Console.WriteLine("sync=" + CountSync[int32](streams.SyncControl(nil)).ToString())
             Console.WriteLine("value=" + Streams.Value().GetAwaiter().GetResult().ToString())
             Streams.Work().GetAwaiter().GetResult()
@@ -118,6 +132,7 @@ public sealed class Issue2786AsyncIteratorCoalesceEmitTests
             conditional-one=1
             generic-empty=0
             generic-one=1
+            dim=1
             sync-wrapper
             sync=1
             value=42
@@ -163,6 +178,10 @@ public sealed class Issue2786AsyncIteratorCoalesceEmitTests
         Assert.Equal(typeof(IEnumerable<int>), GetMethod(streams, "SyncControl").ReturnType);
         Assert.Equal(typeof(Task<int>), GetMethod(streams, "Value").ReturnType);
         Assert.Equal(typeof(Task), GetMethod(streams, "Work").ReturnType);
+
+        var provider = assembly.GetType("Issue2786.StreamProvider", throwOnError: true)!;
+        Assert.Equal(typeof(IAsyncEnumerable<int>), GetMethod(provider, "Values").ReturnType);
+        Assert.Equal(typeof(IAsyncEnumerable<int>), GetMethod(provider, "Forward").ReturnType);
         loadContext.Unload();
     }
 
