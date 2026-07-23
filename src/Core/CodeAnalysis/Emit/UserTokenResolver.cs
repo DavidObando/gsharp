@@ -76,15 +76,26 @@ internal sealed class UserTokenResolver
     private readonly SignatureEncoder signatures;
     private readonly ImportedMemberRefFactory memberRefs;
 
-    private readonly Dictionary<(StructSymbol Sym, object Remap), EntityHandle> userStructTypeSpecCache = new();
-    private readonly Dictionary<(StructSymbol Containing, FieldSymbol DefField, object Remap), EntityHandle> userStructFieldRefCache = new();
-    private readonly Dictionary<(StructSymbol Containing, EntityHandle OpenMember, object Remap), EntityHandle> userStructMethodRefCache = new();
-    private readonly Dictionary<InterfaceSymbol, EntityHandle> userInterfaceTypeSpecCache = new(ReferenceEqualityComparer.Instance);
-    private readonly Dictionary<(InterfaceSymbol Containing, EntityHandle OpenMember), EntityHandle> userInterfaceMethodRefCache = new();
-    private readonly Dictionary<(InterfaceSymbol Containing, FieldSymbol DefField), EntityHandle> userInterfaceFieldRefCache = new();
-    private readonly Dictionary<DelegateTypeSymbol, EntityHandle> userDelegateTypeSpecCache = new(ReferenceEqualityComparer.Instance);
-    private readonly Dictionary<DelegateTypeSymbol, EntityHandle> userDelegateCtorRefCache = new(ReferenceEqualityComparer.Instance);
-    private readonly Dictionary<DelegateTypeSymbol, EntityHandle> userDelegateInvokeRefCache = new(ReferenceEqualityComparer.Instance);
+    // Issue #2793: user-declared generic metadata is encoding-sensitive to
+    // BOTH active remap channels — the class/state-machine remap
+    // (ActiveIteratorStateMachineRemap, VAR) and the generic-promoted-lambda
+    // remap (ActiveLambdaMethodTypeParamRemap, MVAR). The same user generic
+    // struct referenced inside a generic-promoted lambda encodes its type
+    // arguments under the lambda method's own MVAR ordinals, which differ from
+    // the enclosing method's MVAR ordinals at its outer use site. Keying only
+    // on the class remap let a lambda-scope TypeSpec/MemberRef leak into the
+    // enclosing scope (and vice versa), producing an out-of-range MVAR index
+    // (ilverify get_GenericParameters IndexOutOfRange / runtime
+    // BadImageFormatException). Both channels are part of every key.
+    private readonly Dictionary<(StructSymbol Sym, object ClassRemap, object MethodRemap), EntityHandle> userStructTypeSpecCache = new();
+    private readonly Dictionary<(StructSymbol Containing, FieldSymbol DefField, object ClassRemap, object MethodRemap), EntityHandle> userStructFieldRefCache = new();
+    private readonly Dictionary<(StructSymbol Containing, EntityHandle OpenMember, object ClassRemap, object MethodRemap), EntityHandle> userStructMethodRefCache = new();
+    private readonly Dictionary<(InterfaceSymbol Sym, object ClassRemap, object MethodRemap), EntityHandle> userInterfaceTypeSpecCache = new();
+    private readonly Dictionary<(InterfaceSymbol Containing, EntityHandle OpenMember, object ClassRemap, object MethodRemap), EntityHandle> userInterfaceMethodRefCache = new();
+    private readonly Dictionary<(InterfaceSymbol Containing, FieldSymbol DefField, object ClassRemap, object MethodRemap), EntityHandle> userInterfaceFieldRefCache = new();
+    private readonly Dictionary<(DelegateTypeSymbol Sym, object ClassRemap, object MethodRemap), EntityHandle> userDelegateTypeSpecCache = new();
+    private readonly Dictionary<(DelegateTypeSymbol Sym, object ClassRemap, object MethodRemap), EntityHandle> userDelegateCtorRefCache = new();
+    private readonly Dictionary<(DelegateTypeSymbol Sym, object ClassRemap, object MethodRemap), EntityHandle> userDelegateInvokeRefCache = new();
 
     // Issue #2118: per-lambda-function ordered ORIGINAL enclosing type
     // parameters used as the MethodSpec type arguments when the lambda is
@@ -787,6 +798,40 @@ internal sealed class UserTokenResolver
     }
 
     /// <summary>
+    /// Issue #2793: builds the user-struct <c>TypeSpec</c> cache key for
+    /// <paramref name="structSym"/> under the two encoding-sensitive remap
+    /// channels — the class/state-machine remap
+    /// (<see cref="GenericRemapState.ActiveIteratorStateMachineRemap"/>, VAR)
+    /// and the generic-promoted-lambda remap
+    /// (<see cref="GenericRemapState.ActiveLambdaMethodTypeParamRemap"/>, MVAR).
+    /// The object identity of each active remap distinguishes the same symbol
+    /// encoded under different scopes so a lambda-scope encoding is never
+    /// reused at an enclosing-method use site.
+    /// </summary>
+    private (StructSymbol Sym, object ClassRemap, object MethodRemap) GetUserStructRemapKey(StructSymbol structSym)
+        => (structSym, this.remaps.ActiveIteratorStateMachineRemap, this.remaps.ActiveLambdaMethodTypeParamRemap);
+
+    /// <summary>
+    /// Issue #2793: user-interface variant of <see cref="GetUserStructRemapKey"/>.
+    /// A user-declared generic interface's <c>TypeSpec</c>/<c>MemberRef</c> is
+    /// equally sensitive to both active remap channels through its encoded type
+    /// arguments (directly for the TypeSpec, transitively via the parent
+    /// TypeSpec for its member refs).
+    /// </summary>
+    private (InterfaceSymbol Sym, object ClassRemap, object MethodRemap) GetUserInterfaceRemapKey(InterfaceSymbol ifaceSym)
+        => (ifaceSym, this.remaps.ActiveIteratorStateMachineRemap, this.remaps.ActiveLambdaMethodTypeParamRemap);
+
+    /// <summary>
+    /// Issue #2793: user-delegate variant of <see cref="GetUserStructRemapKey"/>.
+    /// A user-declared generic named delegate's <c>TypeSpec</c>, <c>.ctor</c>
+    /// and <c>Invoke</c> refs are sensitive to both active remap channels
+    /// through the encoded type arguments of the (possibly shared) parent
+    /// TypeSpec.
+    /// </summary>
+    private (DelegateTypeSymbol Sym, object ClassRemap, object MethodRemap) GetUserDelegateRemapKey(DelegateTypeSymbol delegateSym)
+        => (delegateSym, this.remaps.ActiveIteratorStateMachineRemap, this.remaps.ActiveLambdaMethodTypeParamRemap);
+
+    /// <summary>
     /// ADR-0087 §3 R3: returns a <c>TypeSpec</c> EntityHandle for a
     /// user-declared generic type. When <paramref name="structSym"/>
     /// carries <see cref="StructSymbol.TypeArguments"/> the spec
@@ -797,7 +842,8 @@ internal sealed class UserTokenResolver
     /// </summary>
     internal EntityHandle GetUserStructTypeSpec(StructSymbol structSym)
     {
-        if (this.userStructTypeSpecCache.TryGetValue((structSym, this.remaps.ActiveIteratorStateMachineRemap), out var cached))
+        var cacheKey = this.GetUserStructRemapKey(structSym);
+        if (this.userStructTypeSpecCache.TryGetValue(cacheKey, out var cached))
         {
             return cached;
         }
@@ -820,7 +866,7 @@ internal sealed class UserTokenResolver
         }
 
         var spec = (EntityHandle)this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        this.userStructTypeSpecCache[(structSym, this.remaps.ActiveIteratorStateMachineRemap)] = spec;
+        this.userStructTypeSpecCache[cacheKey] = spec;
         return spec;
     }
 
@@ -968,7 +1014,8 @@ internal sealed class UserTokenResolver
     /// <returns>The TypeSpec handle.</returns>
     internal EntityHandle GetUserDelegateTypeSpec(DelegateTypeSymbol delegateSym)
     {
-        if (this.userDelegateTypeSpecCache.TryGetValue(delegateSym, out var cached))
+        var cacheKey = this.GetUserDelegateRemapKey(delegateSym);
+        if (this.userDelegateTypeSpecCache.TryGetValue(cacheKey, out var cached))
         {
             return cached;
         }
@@ -990,7 +1037,7 @@ internal sealed class UserTokenResolver
         }
 
         var spec = (EntityHandle)this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        this.userDelegateTypeSpecCache[delegateSym] = spec;
+        this.userDelegateTypeSpecCache[cacheKey] = spec;
         return spec;
     }
 
@@ -1017,7 +1064,7 @@ internal sealed class UserTokenResolver
             return ctorHandle;
         }
 
-        if (this.userDelegateCtorRefCache.TryGetValue(delegateSym, out var cached))
+        if (this.userDelegateCtorRefCache.TryGetValue(this.GetUserDelegateRemapKey(delegateSym), out var cached))
         {
             return cached;
         }
@@ -1038,7 +1085,7 @@ internal sealed class UserTokenResolver
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        this.userDelegateCtorRefCache[delegateSym] = memberRef;
+        this.userDelegateCtorRefCache[this.GetUserDelegateRemapKey(delegateSym)] = memberRef;
         return memberRef;
     }
 
@@ -1066,7 +1113,7 @@ internal sealed class UserTokenResolver
             return invokeHandle;
         }
 
-        if (this.userDelegateInvokeRefCache.TryGetValue(delegateSym, out var cached))
+        if (this.userDelegateInvokeRefCache.TryGetValue(this.GetUserDelegateRemapKey(delegateSym), out var cached))
         {
             return cached;
         }
@@ -1089,7 +1136,7 @@ internal sealed class UserTokenResolver
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString("Invoke"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        this.userDelegateInvokeRefCache[delegateSym] = memberRef;
+        this.userDelegateInvokeRefCache[this.GetUserDelegateRemapKey(delegateSym)] = memberRef;
         return memberRef;
     }
 
@@ -1148,7 +1195,7 @@ internal sealed class UserTokenResolver
             defField = fieldOnContaining;
         }
 
-        var key = (containingType, defField, (object)this.remaps.ActiveIteratorStateMachineRemap);
+        var key = (containingType, defField, (object)this.remaps.ActiveIteratorStateMachineRemap, (object)this.remaps.ActiveLambdaMethodTypeParamRemap);
         if (this.userStructFieldRefCache.TryGetValue(key, out var cached))
         {
             return cached;
@@ -1235,7 +1282,7 @@ internal sealed class UserTokenResolver
         var def = containingInterface.Definition ?? containingInterface;
         var defField = def.GetStaticField(fieldOnContaining.Name) ?? fieldOnContaining;
 
-        var key = (containingInterface, defField);
+        var key = (containingInterface, defField, (object)this.remaps.ActiveIteratorStateMachineRemap, (object)this.remaps.ActiveLambdaMethodTypeParamRemap);
         if (this.userInterfaceFieldRefCache.TryGetValue(key, out var cached))
         {
             return cached;
@@ -1266,7 +1313,7 @@ internal sealed class UserTokenResolver
         string methodName,
         BlobBuilder signature)
     {
-        var key = (containingType, openMethodDef, (object)this.remaps.ActiveIteratorStateMachineRemap);
+        var key = (containingType, openMethodDef, (object)this.remaps.ActiveIteratorStateMachineRemap, (object)this.remaps.ActiveLambdaMethodTypeParamRemap);
         if (this.userStructMethodRefCache.TryGetValue(key, out var cached))
         {
             return cached;
@@ -1511,7 +1558,7 @@ internal sealed class UserTokenResolver
         string methodName,
         BlobBuilder signature)
     {
-        var key = (containingInterface, openMethodDef);
+        var key = (containingInterface, openMethodDef, (object)this.remaps.ActiveIteratorStateMachineRemap, (object)this.remaps.ActiveLambdaMethodTypeParamRemap);
         if (this.userInterfaceMethodRefCache.TryGetValue(key, out var cached))
         {
             return cached;
@@ -1667,7 +1714,8 @@ internal sealed class UserTokenResolver
     /// </summary>
     internal EntityHandle GetUserInterfaceTypeSpec(InterfaceSymbol ifaceSym)
     {
-        if (this.userInterfaceTypeSpecCache.TryGetValue(ifaceSym, out var cached))
+        var cacheKey = this.GetUserInterfaceRemapKey(ifaceSym);
+        if (this.userInterfaceTypeSpecCache.TryGetValue(cacheKey, out var cached))
         {
             return cached;
         }
@@ -1705,7 +1753,7 @@ internal sealed class UserTokenResolver
         }
 
         var spec = (EntityHandle)this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        this.userInterfaceTypeSpecCache[ifaceSym] = spec;
+        this.userInterfaceTypeSpecCache[cacheKey] = spec;
         return spec;
     }
 
@@ -1730,7 +1778,7 @@ internal sealed class UserTokenResolver
             return openDef;
         }
 
-        var key = (containingInterface, openDef);
+        var key = (containingInterface, openDef, (object)this.remaps.ActiveIteratorStateMachineRemap, (object)this.remaps.ActiveLambdaMethodTypeParamRemap);
         if (this.userInterfaceMethodRefCache.TryGetValue(key, out var cached))
         {
             return cached;
