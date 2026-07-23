@@ -146,7 +146,9 @@ public static class IteratorMoveNextBodyBuilder
         statements.Add(new BoundExpressionStatement(null, FieldWrite(stateField, new BoundLiteralExpression(null, -1))));
         statements.Add(new BoundReturnStatement(null, new BoundLiteralExpression(null, false)));
 
-        return new IteratorMoveNextBody(Lowerer.Lower(new BoundBlockStatement(null, statements.ToImmutable())), thisParameter);
+        var body = IteratorProtectedRegionBranchRewriter.Rewrite(
+            new BoundBlockStatement(null, statements.ToImmutable()));
+        return new IteratorMoveNextBody(Lowerer.Lower(body), thisParameter);
     }
 
     /// <summary>

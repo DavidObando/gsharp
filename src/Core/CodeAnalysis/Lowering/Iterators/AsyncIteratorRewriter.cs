@@ -66,7 +66,9 @@ public static class AsyncIteratorRewriter
 
             // Run async lowering pipeline on the body: exception handler rewrite,
             // spill, ref-hoist. This lifts awaits to statement level.
-            var exhRewritten = AsyncExceptionHandlerRewriter.Rewrite(loweredBody);
+            var exhRewritten = AsyncExceptionHandlerRewriter.Rewrite(
+                loweredBody,
+                preserveFinallyAcrossSuspension: true);
             var spilledBody = SpillSequenceSpiller.Rewrite(exhRewritten);
             var refHoisted = RefInitializationHoister.Rewrite(spilledBody);
 

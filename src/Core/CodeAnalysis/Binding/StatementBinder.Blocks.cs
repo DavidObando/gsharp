@@ -347,20 +347,42 @@ internal sealed partial class StatementBinder
             return usingLowering.ErrorStatement;
         }
 
-        var tryStmt = BuildCleanupTryStatement(ImmutableArray<BoundStatement>.Empty, usingLowering.Cleanup);
-        return new BoundBlockStatement(syntax, ImmutableArray.Create<BoundStatement>(usingLowering.Declaration, tryStmt));
+        var tryStmt = BuildCleanupTryStatement(
+            ImmutableArray<BoundStatement>.Empty,
+            usingLowering.Cleanup,
+            usingLowering.Initialized);
+        return new BoundBlockStatement(
+            syntax,
+            ImmutableArray.Create<BoundStatement>(
+                usingLowering.InitializedDeclaration,
+                usingLowering.Declaration,
+                BuildInitializedAssignment(usingLowering.Initialized),
+                tryStmt));
     }
 
-    private (BoundVariableDeclaration Declaration, BoundExpression Cleanup, BoundStatement ErrorStatement) BindUsingStatementInBlock(UsingStatementSyntax syntax)
+    private (
+        BoundVariableDeclaration InitializedDeclaration,
+        BoundVariableDeclaration Declaration,
+        VariableSymbol Initialized,
+        BoundExpression Cleanup,
+        BoundStatement ErrorStatement) BindUsingStatementInBlock(UsingStatementSyntax syntax)
     {
         var declaration = (BoundVariableDeclaration)BindVariableDeclaration(syntax.Declaration);
         var disposeCall = conversions.TryBuildDisposeCall(declaration.Variable, syntax.UsingKeyword.Location);
         if (disposeCall == null)
         {
-            return (declaration, null, BindErrorStatement());
+            return (null, declaration, null, null, BindErrorStatement());
         }
 
-        return (declaration, disposeCall, null);
+        var initialized = new LocalVariableSymbol(
+            "<>usingInitialized" + usingInitializationFlagCount++,
+            isReadOnly: false,
+            TypeSymbol.Bool);
+        var initializedDeclaration = new BoundVariableDeclaration(
+            null,
+            initialized,
+            new BoundLiteralExpression(null, false));
+        return (initializedDeclaration, declaration, initialized, disposeCall, null);
     }
 
     private BoundStatement BindAwaitUsingStatement(AwaitUsingStatementSyntax syntax)
@@ -371,27 +393,49 @@ internal sealed partial class StatementBinder
             return awaitUsingLowering.ErrorStatement;
         }
 
-        var tryStmt = BuildCleanupTryStatement(ImmutableArray<BoundStatement>.Empty, awaitUsingLowering.Cleanup);
-        return new BoundBlockStatement(syntax, ImmutableArray.Create<BoundStatement>(awaitUsingLowering.Declaration, tryStmt));
+        var tryStmt = BuildCleanupTryStatement(
+            ImmutableArray<BoundStatement>.Empty,
+            awaitUsingLowering.Cleanup,
+            awaitUsingLowering.Initialized);
+        return new BoundBlockStatement(
+            syntax,
+            ImmutableArray.Create<BoundStatement>(
+                awaitUsingLowering.InitializedDeclaration,
+                awaitUsingLowering.Declaration,
+                BuildInitializedAssignment(awaitUsingLowering.Initialized),
+                tryStmt));
     }
 
-    private (BoundVariableDeclaration Declaration, BoundExpression Cleanup, BoundStatement ErrorStatement) BindAwaitUsingStatementInBlock(AwaitUsingStatementSyntax syntax)
+    private (
+        BoundVariableDeclaration InitializedDeclaration,
+        BoundVariableDeclaration Declaration,
+        VariableSymbol Initialized,
+        BoundExpression Cleanup,
+        BoundStatement ErrorStatement) BindAwaitUsingStatementInBlock(AwaitUsingStatementSyntax syntax)
     {
         // Gate: await using let requires an async context.
         if (function == null || !function.IsAsync)
         {
             Diagnostics.ReportAwaitUsingOutsideAsyncFunction(syntax.AwaitKeyword.Location);
-            return (null, null, BindErrorStatement());
+            return (null, null, null, null, BindErrorStatement());
         }
 
         var declaration = (BoundVariableDeclaration)BindVariableDeclaration(syntax.Declaration);
         var disposeAsyncCall = conversions.TryBuildDisposeAsyncCall(declaration.Variable, syntax.AwaitKeyword.Location);
         if (disposeAsyncCall == null)
         {
-            return (declaration, null, BindErrorStatement());
+            return (null, declaration, null, null, BindErrorStatement());
         }
 
-        return (declaration, disposeAsyncCall, null);
+        var initialized = new LocalVariableSymbol(
+            "<>usingInitialized" + usingInitializationFlagCount++,
+            isReadOnly: false,
+            TypeSymbol.Bool);
+        var initializedDeclaration = new BoundVariableDeclaration(
+            null,
+            initialized,
+            new BoundLiteralExpression(null, false));
+        return (initializedDeclaration, declaration, initialized, disposeAsyncCall, null);
     }
 
     private BoundStatement BindDeferStatement(DeferStatementSyntax syntax)

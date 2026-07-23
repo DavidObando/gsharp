@@ -38,13 +38,15 @@ public static class AsyncIteratorMoveNextBodyBuilder
         FieldSymbol currentField,
         FieldSymbol promiseField,
         FieldSymbol disposeModeField,
+        FieldSymbol disposeExceptionField,
         FieldSymbol builderField,
         Dictionary<VariableSymbol, FieldSymbol> fieldMap,
         Dictionary<Type, FieldSymbol> awaiterPoolFields)
     {
         var ctx = new BuildContext(
             plan, smClass, thisParameter, stateField, currentField,
-            promiseField, disposeModeField, builderField, fieldMap, awaiterPoolFields);
+            promiseField, disposeModeField, disposeExceptionField,
+            builderField, fieldMap, awaiterPoolFields);
         return ctx.BuildBody();
     }
 
@@ -57,6 +59,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
         private readonly FieldSymbol currentField;
         private readonly FieldSymbol promiseField;
         private readonly FieldSymbol disposeModeField;
+        private readonly FieldSymbol disposeExceptionField;
         private readonly FieldSymbol builderField;
         private readonly Dictionary<VariableSymbol, FieldSymbol> fieldMap;
         private readonly Dictionary<Type, FieldSymbol> awaiterPoolFields;
@@ -81,6 +84,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
             FieldSymbol currentField,
             FieldSymbol promiseField,
             FieldSymbol disposeModeField,
+            FieldSymbol disposeExceptionField,
             FieldSymbol builderField,
             Dictionary<VariableSymbol, FieldSymbol> fieldMap,
             Dictionary<Type, FieldSymbol> awaiterPoolFields)
@@ -92,6 +96,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
             this.currentField = currentField;
             this.promiseField = promiseField;
             this.disposeModeField = disposeModeField;
+            this.disposeExceptionField = disposeExceptionField;
             this.builderField = builderField;
             this.fieldMap = fieldMap;
             this.awaiterPoolFields = awaiterPoolFields;
@@ -142,7 +147,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
             // return; (after try/catch)
             stmts.Add(new BoundReturnStatement(null, null));
 
-            return AsyncIteratorProtectedRegionBranchRewriter.Rewrite(
+            return IteratorProtectedRegionBranchRewriter.Rewrite(
                 new BoundBlockStatement(null, stmts.ToImmutable()));
         }
 
@@ -152,6 +157,12 @@ public static class AsyncIteratorMoveNextBodyBuilder
 
             // State dispatch: check state and jump to resume labels.
             EmitStateDispatch(stmts);
+
+            stmts.Add(new BoundConditionalGotoStatement(
+                null,
+                endOfBodyLabel,
+                ReadField(disposeModeField),
+                jumpIfTrue: true));
 
             // Rewritten user body.
             var rewriter = new InnerRewriter(this);
@@ -218,7 +229,24 @@ public static class AsyncIteratorMoveNextBodyBuilder
             // state = -2;
             stmts.Add(Stmt(WriteField(stateField, Literal(StateMachineStates.FinishedState))));
 
-            // promise.SetException(ex);
+            var exceptionType = TypeSymbol.FromClrType(typeof(Exception));
+            var isDisposeException = new BoundBinaryExpression(
+                null,
+                new BoundVariableExpression(null, exLocal),
+                BoundBinaryOperator.MakeReferenceEquality(
+                    SyntaxKind.EqualsEqualsToken,
+                    exceptionType,
+                    exceptionType),
+                ReadField(disposeExceptionField));
+            var completingDispose = new BoundBinaryExpression(
+                null,
+                ReadField(disposeModeField),
+                BoundBinaryOperator.Bind(
+                    SyntaxKind.AmpersandAmpersandToken,
+                    TypeSymbol.Bool,
+                    TypeSymbol.Bool),
+                isDisposeException);
+
             var promiseFieldType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
             var setExceptionMethod = promiseFieldType.GetMethod("SetException", new[] { typeof(Exception) });
             var promiseAddr = new BoundAddressOfExpression(
@@ -230,7 +258,11 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 setExceptionMethod,
                 TypeSymbol.Void,
                 ImmutableArray.Create<BoundExpression>(new BoundVariableExpression(null, exLocal)));
-            stmts.Add(Stmt(call));
+            stmts.Add(new BoundIfStatement(
+                null,
+                completingDispose,
+                Stmt(EmitPromiseSetResult(false)),
+                Stmt(call)));
 
             return new BoundBlockStatement(null, stmts.ToImmutable());
         }
@@ -357,12 +389,22 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 // this.<>1__state = -1;
                 stmts.Add(Stmt(ctx.WriteField(ctx.stateField, Literal(StateMachineStates.NotStartedOrRunningState))));
 
-                // if (<>w__disposeMode) goto endOfBody;
-                stmts.Add(new BoundConditionalGotoStatement(
+                var disposeException = new BoundClrConstructorCallExpression(
                     null,
-                    ctx.endOfBodyLabel,
+                    typeof(Exception),
+                    typeof(Exception).GetConstructor(Type.EmptyTypes),
+                    ImmutableArray<BoundExpression>.Empty,
+                    TypeSymbol.FromClrType(typeof(Exception)));
+                var throwDispose = new BoundBlockStatement(
+                    null,
+                    ImmutableArray.Create<BoundStatement>(
+                        Stmt(ctx.WriteField(ctx.disposeExceptionField, disposeException)),
+                        new BoundThrowStatement(null, ctx.ReadField(ctx.disposeExceptionField))));
+                stmts.Add(new BoundIfStatement(
+                    null,
                     ctx.ReadField(ctx.disposeModeField),
-                    jumpIfTrue: true));
+                    throwDispose,
+                    elseStatement: null));
 
                 return new BoundBlockStatement(null, stmts.ToImmutable());
             }
@@ -426,7 +468,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
                     null,
                     new BoundBlockStatement(null, tryStatements.ToImmutable()),
                     result.CatchClauses,
-                    result.FinallyBlock);
+                    GuardFinally(result.FinallyBlock, awaitEntries, yieldEntries));
 
                 if (awaitEntryLabel == null && yieldEntryLabel == null)
                 {
@@ -458,6 +500,64 @@ public static class AsyncIteratorMoveNextBodyBuilder
             {
                 // In an async iterator, `return` means end iteration.
                 return new BoundGotoStatement(null, ctx.endOfBodyLabel);
+            }
+
+            private BoundStatement GuardFinally(
+                BoundStatement finallyBlock,
+                ImmutableArray<TryDispatchEntry> awaitEntries,
+                ImmutableArray<IteratorTryDispatchEntry> yieldEntries)
+            {
+                if (finallyBlock == null)
+                {
+                    return null;
+                }
+
+                BoundExpression suspended = null;
+                foreach (var entry in awaitEntries)
+                {
+                    suspended = AddSuspendedState(suspended, entry.State);
+                }
+
+                foreach (var entry in yieldEntries)
+                {
+                    suspended = AddSuspendedState(suspended, entry.State);
+                }
+
+                if (suspended == null)
+                {
+                    return finallyBlock;
+                }
+
+                var notSuspended = new BoundUnaryExpression(
+                    null,
+                    BoundUnaryOperator.Bind(SyntaxKind.BangToken, TypeSymbol.Bool),
+                    suspended);
+                return new BoundBlockStatement(
+                    null,
+                    ImmutableArray.Create<BoundStatement>(
+                        new BoundIfStatement(null, notSuspended, finallyBlock, elseStatement: null)));
+            }
+
+            private BoundExpression AddSuspendedState(BoundExpression condition, int state)
+            {
+                var equalsState = new BoundBinaryExpression(
+                    null,
+                    ctx.ReadField(ctx.stateField),
+                    BoundBinaryOperator.Bind(
+                        SyntaxKind.EqualsEqualsToken,
+                        TypeSymbol.Int32,
+                        TypeSymbol.Int32),
+                    Literal(state));
+                return condition == null
+                    ? equalsState
+                    : new BoundBinaryExpression(
+                        null,
+                        condition,
+                        BoundBinaryOperator.Bind(
+                            SyntaxKind.PipePipeToken,
+                            TypeSymbol.Bool,
+                            TypeSymbol.Bool),
+                        equalsState);
             }
 
             private BoundConditionalGotoStatement DispatchTo(int state, BoundLabel target)

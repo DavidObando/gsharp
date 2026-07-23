@@ -97,15 +97,20 @@ public static class AsyncExceptionHandlerRewriter
     /// a catch or finally handler.
     /// </summary>
     /// <param name="body">The async method body to rewrite.</param>
+    /// <param name="preserveFinallyAcrossSuspension">
+    /// Whether the caller guards retained finally blocks against suspension.
+    /// </param>
     /// <returns>The rewritten body with handlers lifted.</returns>
-    public static BoundBlockStatement Rewrite(BoundBlockStatement body)
+    public static BoundBlockStatement Rewrite(
+        BoundBlockStatement body,
+        bool preserveFinallyAcrossSuspension = false)
     {
         if (body == null || !AsyncBoundTreeQueries.HasAwait(body))
         {
             return body;
         }
 
-        var rewriter = new Rewriter();
+        var rewriter = new Rewriter(preserveFinallyAcrossSuspension);
         var result = rewriter.RewriteStatement(body);
         return result as BoundBlockStatement ?? new BoundBlockStatement(null, ImmutableArray.Create(result));
     }
@@ -124,8 +129,14 @@ public static class AsyncExceptionHandlerRewriter
         // instances (see BoundTreeRewriter), so a memoized entry is never observed
         // for a node that was actually mutated.
         private readonly Dictionary<BoundNode, bool> awaitMemo = AsyncBoundTreeQueries.CreateHasAwaitMemo();
+        private readonly bool preserveFinallyAcrossSuspension;
 
         private int localOrdinal;
+
+        public Rewriter(bool preserveFinallyAcrossSuspension)
+        {
+            this.preserveFinallyAcrossSuspension = preserveFinallyAcrossSuspension;
+        }
 
         /// <summary>
         /// Creates a fresh synthesized local with a deterministic, collision-free
@@ -176,7 +187,8 @@ public static class AsyncExceptionHandlerRewriter
             //      finally should run only when the try completes normally,
             //      exceptionally, or via early exit — not on async suspension).
             bool tryBodyHasAwait = HasAwait(rewrittenTry);
-            bool needsFinallyLift = rewrittenFinally != null && (finallyHasAwait || tryBodyHasAwait);
+            bool needsFinallyLift = rewrittenFinally != null
+                && (finallyHasAwait || (tryBodyHasAwait && !preserveFinallyAcrossSuspension));
 
             if (!anyCatchHasAwait && !needsFinallyLift)
             {
