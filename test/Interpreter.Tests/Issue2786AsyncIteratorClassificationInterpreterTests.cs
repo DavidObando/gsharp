@@ -61,6 +61,55 @@ public sealed class Issue2786AsyncIteratorClassificationInterpreterTests
         Assert.Equal("0:0:42\n", RunSubmission(source));
     }
 
+    [Fact]
+    public void ConstrainedStaticAsyncIterator_UsesSharedIteratorClassification()
+    {
+        const string source = """
+            import System
+            import System.Collections.Generic
+            import System.Threading.Tasks
+
+            sealed interface IStreams {
+                shared {
+                    func Empty() IAsyncEnumerable[int32];
+                    func Values() IAsyncEnumerable[int32];
+                }
+            }
+
+            class Streams : IStreams {
+                shared {
+                    async func Empty() IAsyncEnumerable[int32] {
+                        await Task.CompletedTask
+                    }
+
+                    async func Values() IAsyncEnumerable[int32] {
+                        await Task.CompletedTask
+                        yield 42
+                    }
+                }
+            }
+
+            func GetEmpty[T IStreams](witness T) IAsyncEnumerable[int32] -> T.Empty()
+            func GetValues[T IStreams](witness T) IAsyncEnumerable[int32] -> T.Values()
+
+            var emptyCount = 0
+            let empty = GetEmpty(Streams{}).GetAsyncEnumerator()
+            for empty.MoveNextAsync().AsTask().Result {
+                emptyCount += 1
+            }
+
+            var sum = 0
+            let values = GetValues(Streams{}).GetAsyncEnumerator()
+            for values.MoveNextAsync().AsTask().Result {
+                sum += values.Current
+            }
+
+            Console.WriteLine(emptyCount.ToString() + ":" + sum.ToString())
+            """;
+
+        Assert.Equal("0:42\n", RunSubmission(source));
+    }
+
     private static string RunSubmission(string source)
     {
         using var output = new StringWriter();

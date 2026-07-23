@@ -571,7 +571,7 @@ public sealed partial class Evaluator
 
         using (PushFrame(frame2))
         {
-            return EvaluateFunctionBody(statement);
+            return EvaluateUserMethodBody(target, statement);
         }
     }
 
