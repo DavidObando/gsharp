@@ -1356,10 +1356,6 @@ internal sealed class TypeDefEmitter
             // Issue #640: when the class declares instance field initializers,
             // delegate to the body-emitter callback so expressions are evaluated
             // and stored into fields after the base ctor call.
-            // Issue #1714: also delegate when a plain `string` field or
-            // auto-property (with no declared initializer) needs the
-            // synthesized `""` zero-value fallback — otherwise it would keep
-            // the CLR default `null`, diverging from the interpreter.
             if (ConstructorBodyEmitter.NeedsInstanceFieldInitializerStatements(classSym))
             {
                 bodyOffset = this.emitClassDefaultConstructorBodyBytes(classSym, baseCtorToken);
@@ -1437,10 +1433,6 @@ internal sealed class TypeDefEmitter
             // delegate to the body-emitter callback so expressions are evaluated
             // and stored into fields after the base ctor call and primary ctor
             // parameter assignments.
-            // Issue #1714: also delegate when a plain `string` field or
-            // auto-property (with no declared initializer, and not backed by
-            // a primary-ctor parameter) needs the synthesized `""` zero-value
-            // fallback.
             // ADR-0087 §3 R3: also delegate to the callback for generic
             // user classes so the param→field stfld is routed through a
             // TypeSpec-parented MemberRef (the callback uses

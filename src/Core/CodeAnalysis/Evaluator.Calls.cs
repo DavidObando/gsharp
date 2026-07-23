@@ -393,7 +393,7 @@ public sealed partial class Evaluator
                 return fieldValue;
             }
 
-            return DefaultValue(node.Property.Type);
+            return ClrDefaultValue(node.Property.Type);
         }
 
         var method = node.Method;
