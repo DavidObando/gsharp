@@ -24,7 +24,12 @@ internal sealed partial class StatementBinder
 {
     private BoundStatement BindGotoStatement(GotoStatementSyntax syntax)
     {
-        var label = GetOrCreateUserLabelForGoto(syntax.LabelIdentifier.Text, syntax.LabelIdentifier.Location);
+        var labelName = syntax.LabelIdentifier.Text;
+        var label = GetOrCreateUserLabelForGoto(labelName, syntax.LabelIdentifier.Location);
+        userGotoHandlerRegions.Add((
+            labelName,
+            syntax.LabelIdentifier.Location,
+            exceptionHandlerRegions.Reverse().ToImmutableArray()));
         return new BoundGotoStatement(syntax, label);
     }
 
@@ -65,6 +70,7 @@ internal sealed partial class StatementBinder
             return binderCtx.UserLabels[labelName];
         }
 
+        userLabelHandlerRegions[labelName] = exceptionHandlerRegions.Reverse().ToImmutableArray();
         binderCtx.UnresolvedGotoLabels.Remove(labelName);
         if (!binderCtx.UserLabels.TryGetValue(labelName, out var label))
         {
@@ -89,7 +95,38 @@ internal sealed partial class StatementBinder
             Diagnostics.ReportUndefinedGotoLabel(entry.Value, entry.Key);
         }
 
+        foreach (var branch in userGotoHandlerRegions)
+        {
+            if (userLabelHandlerRegions.TryGetValue(branch.LabelName, out var targetRegions)
+                && !IsHandlerRegionPrefix(targetRegions, branch.SourceRegions))
+            {
+                Diagnostics.ReportGotoIntoExceptionHandler(branch.Location, branch.LabelName);
+            }
+        }
+
         binderCtx.UnresolvedGotoLabels.Clear();
+        userGotoHandlerRegions.Clear();
+        userLabelHandlerRegions.Clear();
+    }
+
+    private static bool IsHandlerRegionPrefix(
+        ImmutableArray<SyntaxNode> targetRegions,
+        ImmutableArray<SyntaxNode> sourceRegions)
+    {
+        if (targetRegions.Length > sourceRegions.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < targetRegions.Length; i++)
+        {
+            if (!ReferenceEquals(targetRegions[i], sourceRegions[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>

@@ -54,7 +54,7 @@ public sealed class Lowerer : BoundTreeRewriter
         var lowerer = new Lowerer();
         var result = lowerer.RewriteStatement(statement);
         result = lowerer.WrapWithMethodExitEpilogue(result);
-        return Flatten(result);
+        return RewriteProtectedRegionEntries(result);
     }
 
     /// <summary>
@@ -71,7 +71,7 @@ public sealed class Lowerer : BoundTreeRewriter
         var lowerer = new Lowerer(declaringType);
         var result = lowerer.RewriteStatement(statement);
         result = lowerer.WrapWithMethodExitEpilogue(result);
-        return Flatten(result);
+        return RewriteProtectedRegionEntries(result);
     }
 
     /// <inheritdoc/>
@@ -1434,6 +1434,12 @@ public sealed class Lowerer : BoundTreeRewriter
             System.Reflection.FieldInfo field => TypeSymbol.FromClrType(field.FieldType),
             _ => TypeSymbol.Error,
         };
+    }
+
+    private static BoundBlockStatement RewriteProtectedRegionEntries(BoundStatement statement)
+    {
+        var flattened = Flatten(statement);
+        return Flatten(ProtectedRegionBranchRewriter.Rewrite(flattened));
     }
 
     /// <summary>

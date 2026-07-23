@@ -770,6 +770,10 @@ internal sealed class StateMachineEmitter
             var promiseFieldType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>));
             var promiseField = new FieldSymbol("<>v__promiseOfValueOrEnd", promiseFieldType, Accessibility.Public);
             var disposeModeField = new FieldSymbol("<>w__disposeMode", TypeSymbol.Bool, Accessibility.Public);
+            var disposeExceptionField = new FieldSymbol(
+                "<>w__disposeException",
+                TypeSymbol.FromClrType(typeof(Exception)),
+                Accessibility.Public);
             var builderFieldType = TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.AsyncIteratorMethodBuilder));
             var builderField = new FieldSymbol("<>t__builder", builderFieldType, Accessibility.Public);
 
@@ -778,6 +782,7 @@ internal sealed class StateMachineEmitter
             fields.Add(currentField);
             fields.Add(promiseField);
             fields.Add(disposeModeField);
+            fields.Add(disposeExceptionField);
             fields.Add(builderField);
 
             var fieldMap = new Dictionary<VariableSymbol, FieldSymbol>();
@@ -918,7 +923,8 @@ internal sealed class StateMachineEmitter
             // Build MoveNext body (handles both yield and await).
             var moveNextBody = AsyncIteratorMoveNextBodyBuilder.Build(
                 plan, smClass, moveNext.ThisParameter, stateField, currentField,
-                promiseField, disposeModeField, builderField, fieldMap, awaiterPoolFields);
+                promiseField, disposeModeField, disposeExceptionField,
+                builderField, fieldMap, awaiterPoolFields);
             this.lambdaBodies[moveNext] = Lowerer.Lower(moveNextBody);
 
             // get_Current: return this.<>2__current;
@@ -1113,8 +1119,57 @@ internal sealed class StateMachineEmitter
         // builder.MoveNext(ref this); — uses marker node for MethodSpec emission
         stmts.Add(new BoundExpressionStatement(null, new BoundStateMachineBuilderMoveNext(null, builderField, thisParam, smClass)));
 
-        // Return default ValueTask (completed).
-        stmts.Add(new BoundReturnStatement(null, new BoundDefaultExpression(null, TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask)))));
+        var versionGetter = promiseType.GetProperty("Version").GetGetMethod();
+        var versionCall = new BoundImportedInstanceCallExpression(
+            null,
+            new BoundAddressOfExpression(
+                null,
+                new BoundFieldAccessExpression(
+                    null,
+                    new BoundVariableExpression(null, thisParam),
+                    smClass,
+                    promiseField)),
+            versionGetter,
+            TypeSymbol.FromClrType(typeof(short)),
+            ImmutableArray<BoundExpression>.Empty);
+        var versionLocal = new LocalVariableSymbol(
+            "<>disposeVersion",
+            isReadOnly: false,
+            TypeSymbol.FromClrType(typeof(short)));
+        stmts.Add(new BoundVariableDeclaration(null, versionLocal, versionCall));
+
+        var valueTaskBoolType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask<bool>));
+        var valueTaskBool = new BoundClrConstructorCallExpression(
+            null,
+            typeof(System.Threading.Tasks.ValueTask<bool>),
+            typeof(System.Threading.Tasks.ValueTask<bool>).GetConstructor(
+                new[] { typeof(System.Threading.Tasks.Sources.IValueTaskSource<bool>), typeof(short) }),
+            ImmutableArray.Create<BoundExpression>(
+                new BoundVariableExpression(null, thisParam),
+                new BoundVariableExpression(null, versionLocal)),
+            valueTaskBoolType);
+        var valueTaskBoolLocal = new LocalVariableSymbol(
+            "<>disposeTask",
+            isReadOnly: false,
+            valueTaskBoolType);
+        stmts.Add(new BoundVariableDeclaration(null, valueTaskBoolLocal, valueTaskBool));
+
+        var asTask = new BoundImportedInstanceCallExpression(
+            null,
+            new BoundAddressOfExpression(
+                null,
+                new BoundVariableExpression(null, valueTaskBoolLocal)),
+            typeof(System.Threading.Tasks.ValueTask<bool>).GetMethod("AsTask", Type.EmptyTypes),
+            TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task<bool>)),
+            ImmutableArray<BoundExpression>.Empty);
+        var valueTask = new BoundClrConstructorCallExpression(
+            null,
+            typeof(System.Threading.Tasks.ValueTask),
+            typeof(System.Threading.Tasks.ValueTask).GetConstructor(
+                new[] { typeof(System.Threading.Tasks.Task) }),
+            ImmutableArray.Create<BoundExpression>(asTask),
+            TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask)));
+        stmts.Add(new BoundReturnStatement(null, valueTask));
 
         return Lowerer.Lower(new BoundBlockStatement(null, stmts.ToImmutable()));
     }

@@ -1,4 +1,4 @@
-// <copyright file="AsyncIteratorProtectedRegionBranchRewriter.cs" company="GSharp">
+// <copyright file="ProtectedRegionBranchRewriter.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -8,13 +8,13 @@ using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
-namespace GSharp.Core.CodeAnalysis.Lowering.Iterators;
+namespace GSharp.Core.CodeAnalysis.Lowering;
 
 /// <summary>
-/// Routes async-iterator branches that enter a protected try region through
+/// Routes branches that enter a protected try region through
 /// legal outside-entry and inside-dispatch points.
 /// </summary>
-internal static class AsyncIteratorProtectedRegionBranchRewriter
+internal static class ProtectedRegionBranchRewriter
 {
     public static BoundBlockStatement Rewrite(BoundBlockStatement body)
     {

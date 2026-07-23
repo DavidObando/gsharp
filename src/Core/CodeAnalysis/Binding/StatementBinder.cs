@@ -91,6 +91,12 @@ internal sealed partial class StatementBinder
     private readonly Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression> bindLambdaWithTargetType;
     private readonly Func<VariableDeclarationSyntax, BoundStatement> bindGenericLocalFunctionDeclaration;
     private readonly Action<TextLocation, string, BoundFunctionLiteralExpression> checkNonGenericLocalFunctionEnclosingTypeParameterReference;
+    private readonly Stack<SyntaxNode> exceptionHandlerRegions = new();
+    private readonly Dictionary<string, ImmutableArray<SyntaxNode>> userLabelHandlerRegions =
+        new(StringComparer.Ordinal);
+    private readonly List<(string LabelName, TextLocation Location, ImmutableArray<SyntaxNode> SourceRegions)>
+        userGotoHandlerRegions = new();
+    private int usingInitializationFlagCount;
 
     public StatementBinder(
         BinderContext binderCtx,
@@ -319,6 +325,11 @@ internal sealed partial class StatementBinder
                 if (statementSyntax is UsingStatementSyntax usingSyntax)
                 {
                     var usingLowering = BindUsingStatementInBlock(usingSyntax);
+                    if (usingLowering.InitializedDeclaration != null)
+                    {
+                        statements.Add(usingLowering.InitializedDeclaration);
+                    }
+
                     if (usingLowering.Declaration != null)
                     {
                         statements.Add(usingLowering.Declaration);
@@ -331,16 +342,25 @@ internal sealed partial class StatementBinder
                         continue;
                     }
 
+                    statements.Add(BuildInitializedAssignment(usingLowering.Initialized));
                     InvalidateNarrowingsForAssignedVariables(statementSyntax);
                     var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
                     BindBlockStatements(statementSyntaxes, i + 1, innerStatements, beforeBind, trailingStatement);
-                    statements.Add(BuildCleanupTryStatement(innerStatements.ToImmutable(), usingLowering.Cleanup));
+                    statements.Add(BuildCleanupTryStatement(
+                        innerStatements.ToImmutable(),
+                        usingLowering.Cleanup,
+                        usingLowering.Initialized));
                     return;
                 }
 
                 if (statementSyntax is AwaitUsingStatementSyntax awaitUsingSyntax)
                 {
                     var awaitUsingLowering = BindAwaitUsingStatementInBlock(awaitUsingSyntax);
+                    if (awaitUsingLowering.InitializedDeclaration != null)
+                    {
+                        statements.Add(awaitUsingLowering.InitializedDeclaration);
+                    }
+
                     if (awaitUsingLowering.Declaration != null)
                     {
                         statements.Add(awaitUsingLowering.Declaration);
@@ -353,10 +373,14 @@ internal sealed partial class StatementBinder
                         continue;
                     }
 
+                    statements.Add(BuildInitializedAssignment(awaitUsingLowering.Initialized));
                     InvalidateNarrowingsForAssignedVariables(statementSyntax);
                     var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
                     BindBlockStatements(statementSyntaxes, i + 1, innerStatements, beforeBind, trailingStatement);
-                    statements.Add(BuildCleanupTryStatement(innerStatements.ToImmutable(), awaitUsingLowering.Cleanup));
+                    statements.Add(BuildCleanupTryStatement(
+                        innerStatements.ToImmutable(),
+                        awaitUsingLowering.Cleanup,
+                        awaitUsingLowering.Initialized));
                     return;
                 }
 
@@ -422,10 +446,38 @@ internal sealed partial class StatementBinder
         }
     }
 
-    private BoundTryStatement BuildCleanupTryStatement(ImmutableArray<BoundStatement> protectedStatements, BoundExpression cleanup)
+    private static BoundExpressionStatement BuildInitializedAssignment(
+        VariableSymbol initialized,
+        bool value = true)
+        => new(
+            null,
+            new BoundAssignmentExpression(
+                null,
+                initialized,
+                new BoundLiteralExpression(null, value)));
+
+    private BoundTryStatement BuildCleanupTryStatement(
+        ImmutableArray<BoundStatement> protectedStatements,
+        BoundExpression cleanup,
+        VariableSymbol initialized = null)
     {
         var tryBlock = new BoundBlockStatement(null, protectedStatements);
-        var finallyBlock = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(null, cleanup)));
+        BoundStatement cleanupStatement = new BoundExpressionStatement(null, cleanup);
+        if (initialized != null)
+        {
+            cleanupStatement = new BoundBlockStatement(
+                null,
+                ImmutableArray.Create<BoundStatement>(
+                    BuildInitializedAssignment(initialized, value: false),
+                    cleanupStatement));
+            cleanupStatement = new BoundIfStatement(
+                null,
+                new BoundVariableExpression(null, initialized),
+                cleanupStatement,
+                elseStatement: null);
+        }
+
+        var finallyBlock = new BoundBlockStatement(null, ImmutableArray.Create(cleanupStatement));
         return new BoundTryStatement(null, tryBlock, ImmutableArray<BoundCatchClause>.Empty, finallyBlock);
     }
 }
