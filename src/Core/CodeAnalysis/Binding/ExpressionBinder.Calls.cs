@@ -1336,6 +1336,19 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
+            // Issue #2782: a general Delegate candidate has no Invoke shape with which to
+            // contextually bind the lambda. It can still win overload
+            // resolution, so a sibling's concrete delegate signature must not
+            // pin (and potentially erase) the lambda's natural return type.
+            var parameterFullName = parameterType.FullName;
+            if (string.Equals(parameterFullName, "System.Delegate", StringComparison.Ordinal)
+                || string.Equals(parameterFullName, "System.MulticastDelegate", StringComparison.Ordinal))
+            {
+                target = null;
+                blockedByOpenGenericParameter = false;
+                return false;
+            }
+
             if (!MemberLookup.TryGetLambdaTargetFunctionType(parameterType, out var candidate) || candidate == null)
             {
                 continue;
