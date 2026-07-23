@@ -1009,6 +1009,11 @@ internal sealed class MemberDefEmitter
             return this.GetEventTypeSpecHandle(type);
         }
 
+        if (type is ImportedTypeSymbol { OpenDefinition: not null, TypeArguments.IsDefaultOrEmpty: false })
+        {
+            return this.GetEventTypeSpecHandle(type);
+        }
+
         if (type.ClrType != null)
         {
             return this.getTypeHandleForMember(type.ClrType);
@@ -1314,19 +1319,27 @@ internal sealed class MemberDefEmitter
         }
 
         // Build signature: parameters match the handler type's parameters, return void.
+        // Issue #2726 follow-up: resolve the raise parameters through the general
+        // delegate-shape helper so canonicalized nominal CLR handler types
+        // (`EventHandler`/`EventHandler<T>`) — which are `ImportedTypeSymbol`s, not
+        // `FunctionTypeSymbol`s — expose their real `(object, EventArgs)` /
+        // `(object, T)` parameters instead of falling through to a zero-parameter
+        // shape.
         int paramCount = 0;
-        if (ev.Type is FunctionTypeSymbol fnType)
+        FunctionTypeSymbol raiseShape = null;
+        if (MemberLookup.TryGetDelegateFunctionTypeFromSymbol(ev.Type, out var resolvedShape))
         {
-            paramCount = fnType.ParameterTypes.Length;
+            raiseShape = resolvedShape;
+            paramCount = resolvedShape.ParameterTypes.Length;
         }
 
         var sigBlob = new BlobBuilder();
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: !isStatic)
             .Parameters(paramCount, r => r.Void(), ps =>
             {
-                if (ev.Type is FunctionTypeSymbol fn)
+                if (raiseShape != null)
                 {
-                    foreach (var pt in fn.ParameterTypes)
+                    foreach (var pt in raiseShape.ParameterTypes)
                     {
                         this.encodeTypeSymbol(ps.AddParameter().Type(), pt);
                     }
@@ -1692,19 +1705,25 @@ internal sealed class MemberDefEmitter
             // Issue #257: emit abstract raise_X MethodDef if present.
             if (ev.RaiseMethodSymbol != null)
             {
+                // Issue #2726 follow-up: mirror the class/struct raise-signature fix
+                // so canonicalized nominal CLR handler types on interface events
+                // (`EventHandler`/`EventHandler<T>`) expose their real parameters
+                // instead of a zero-parameter shape.
                 int raiseParamCount = 0;
-                if (ev.Type is FunctionTypeSymbol fnType)
+                FunctionTypeSymbol raiseShape = null;
+                if (MemberLookup.TryGetDelegateFunctionTypeFromSymbol(ev.Type, out var resolvedShape))
                 {
-                    raiseParamCount = fnType.ParameterTypes.Length;
+                    raiseShape = resolvedShape;
+                    raiseParamCount = resolvedShape.ParameterTypes.Length;
                 }
 
                 var raiseSigBlob = new BlobBuilder();
                 new BlobEncoder(raiseSigBlob).MethodSignature(isInstanceMethod: true)
                     .Parameters(raiseParamCount, r => r.Void(), ps =>
                     {
-                        if (ev.Type is FunctionTypeSymbol fn)
+                        if (raiseShape != null)
                         {
-                            foreach (var pt in fn.ParameterTypes)
+                            foreach (var pt in raiseShape.ParameterTypes)
                             {
                                 this.encodeTypeSymbol(ps.AddParameter().Type(), pt);
                             }

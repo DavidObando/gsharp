@@ -338,7 +338,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("event Changed (object?, int32) -> void", printed);
+        Assert.Contains("event Changed EventHandler[int32]", printed);
     }
 
     /// <summary>

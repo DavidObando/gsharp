@@ -1948,21 +1948,15 @@ internal sealed class MemberLookup
             // `TryGetDelegateFunctionType(Type, ...)` below therefore widens
             // that argument to `object`. When the symbolic
             // `OpenDefinition`/`TypeArguments` shape (#313 construction) is
-            // available and every argument is fully resolved (no leftover
-            // open <see cref="TypeParameterSymbol"/>), build the
-            // `FunctionTypeSymbol` directly from that symbolic shape instead,
-            // preserving the real argument types. Falls through to the
+            // available, build the `FunctionTypeSymbol` directly from that
+            // symbolic shape instead, preserving real user types and open
+            // <see cref="TypeParameterSymbol"/> slots. Falls through to the
             // reflection-based path below for anything that isn't a simple
             // `Invoke(...)` shape mapping directly onto the delegate's own
-            // generic parameters (e.g. an Invoke signature that nests a type
-            // parameter inside another generic), and for genuinely-open
-            // generic parameters (still-unresolved method type parameters),
-            // which keep their existing (deliberate) `object`-widening
-            // behavior unchanged.
+            // generic parameters.
             case ImportedTypeSymbol imported
                 when imported.OpenDefinition != null
                     && !imported.TypeArguments.IsDefaultOrEmpty
-                    && !imported.TypeArguments.Any(TypeSymbol.ContainsTypeParameter)
                     && TryGetDelegateFunctionTypeFromOpenDefinition(imported.OpenDefinition, imported.TypeArguments, out functionType):
                 return true;
             default:
@@ -2032,6 +2026,85 @@ internal sealed class MemberLookup
                 && expected is not FunctionTypeSymbol
                 && TryGetDelegateFunctionTypeFromSymbol(expected, out var expectedFunction)
                 && FunctionShapesExactlyMatch(actualFunction, expectedFunction);
+        }
+    }
+
+    /// <summary>
+    /// Reifies the conventional structural CLR event shape as
+    /// <see cref="EventHandler"/> or <see cref="EventHandler{TEventArgs}"/>.
+    /// This is intentionally event-only: the same function shape in a method,
+    /// field, or local remains an <see cref="Action{T1,T2}"/>.
+    /// </summary>
+    /// <param name="handlerType">The declared event handler type.</param>
+    /// <returns>The matching nominal event delegate, or <paramref name="handlerType"/>.</returns>
+    public static TypeSymbol CanonicalizeWellKnownEventHandler(TypeSymbol handlerType)
+    {
+        if (handlerType is not FunctionTypeSymbol function
+            || function.Arity != 2
+            || function.HasVariadic
+            || !FunctionTypeSymbol.IsVoidReturn(function.ReturnType))
+        {
+            return handlerType;
+        }
+
+        var senderType = function.ParameterTypes[0] switch
+        {
+            NullableTypeSymbol nullable => nullable.UnderlyingType,
+            NullabilityAnnotatedTypeSymbol annotated => annotated.BaseType,
+            _ => null,
+        };
+        if (senderType == null
+            || !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(senderType, TypeSymbol.Object))
+        {
+            return handlerType;
+        }
+
+        var eventArgsType = function.ParameterTypes[1];
+        var eventArgsClr = NullableLifting.GetEffectiveClrType(eventArgsType);
+        if (!IsEventArgsType(eventArgsType, eventArgsClr))
+        {
+            return handlerType;
+        }
+
+        if (eventArgsClr != null
+            && string.Equals(eventArgsClr.FullName, typeof(EventArgs).FullName, StringComparison.Ordinal))
+        {
+            return TypeSymbol.FromClrType(typeof(EventHandler));
+        }
+
+        var closedEventHandler = eventArgsClr == null
+            ? typeof(EventHandler<EventArgs>)
+            : typeof(EventHandler<>).MakeGenericType(eventArgsClr);
+        return ImportedTypeSymbol.GetConstructed(
+            closedEventHandler,
+            typeof(EventHandler<>),
+            ImmutableArray.Create(eventArgsType));
+
+        static bool IsEventArgsType(TypeSymbol type, Type clrType)
+        {
+            if (clrType != null)
+            {
+                return ClrTypeUtilities.IsAssignableByName(typeof(EventArgs), clrType);
+            }
+
+            if (type is TypeParameterSymbol { ClassConstraint: TypeSymbol classConstraint })
+            {
+                return IsEventArgsType(
+                    classConstraint,
+                    NullableLifting.GetEffectiveClrType(classConstraint));
+            }
+
+            for (var current = type as StructSymbol; current != null; current = current.BaseClass)
+            {
+                var importedBaseClr = NullableLifting.GetEffectiveClrType(current.ImportedBaseType);
+                if (importedBaseClr != null
+                    && ClrTypeUtilities.IsAssignableByName(typeof(EventArgs), importedBaseClr))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 
@@ -3894,7 +3967,7 @@ internal sealed class MemberLookup
                 typeArguments,
                 openMethodDefinition: null,
                 methodTypeArguments: default);
-            if (mappedParam == null || mappedParam == TypeSymbol.Error || TypeSymbol.ContainsTypeParameter(mappedParam))
+            if (mappedParam == null || mappedParam == TypeSymbol.Error)
             {
                 return false;
             }
@@ -3923,7 +3996,7 @@ internal sealed class MemberLookup
                 typeArguments,
                 openMethodDefinition: null,
                 methodTypeArguments: default);
-            if (returnType == null || returnType == TypeSymbol.Error || TypeSymbol.ContainsTypeParameter(returnType))
+            if (returnType == null || returnType == TypeSymbol.Error)
             {
                 return false;
             }
