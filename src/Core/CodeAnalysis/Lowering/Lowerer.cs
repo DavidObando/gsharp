@@ -1458,20 +1458,14 @@ public sealed class Lowerer : BoundTreeRewriter
             case BoundGotoStatement:
                 return true;
             case BoundBlockStatement block:
-                {
-                    for (int i = block.Statements.Length - 1; i >= 0; i--)
-                    {
-                        var s = block.Statements[i];
-                        if (s is BoundLabelStatement)
-                        {
-                            continue;
-                        }
-
-                        return EndsInUnconditionalTransfer(s);
-                    }
-
-                    return false;
-                }
+                // A trailing label is a reachable continuation for branches
+                // inside the block, so the block can fall through even when
+                // the statement preceding that label is a throw/goto. Keeping
+                // that continuation preserves the branch around a later else
+                // arm when async catch awaits resume (#2781).
+                return block.Statements.Length > 0
+                    && block.Statements[block.Statements.Length - 1] is not BoundLabelStatement
+                    && EndsInUnconditionalTransfer(block.Statements[block.Statements.Length - 1]);
 
             default:
                 return false;

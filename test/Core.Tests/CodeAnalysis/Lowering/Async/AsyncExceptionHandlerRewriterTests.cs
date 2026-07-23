@@ -526,7 +526,9 @@ ImmutableArray.Create<BoundStatement>(
 
         // Assert
         var innerBlock = Assert.IsType<BoundBlockStatement>(result.Statements[0]);
-        var rewrittenTry = innerBlock.Statements.OfType<BoundTryStatement>().Single();
+        var rewrittenTries = innerBlock.Statements.OfType<BoundTryStatement>().ToArray();
+        Assert.Equal(2, rewrittenTries.Length);
+        var rewrittenTry = rewrittenTries[0];
         Assert.Null(rewrittenTry.FinallyBlock);
 
         // Two clauses: typed [ArgumentException] then catch-all [Exception]
@@ -534,6 +536,11 @@ ImmutableArray.Create<BoundStatement>(
         Assert.Equal(2, rewrittenTry.CatchClauses.Length);
         Assert.Same(argExType, rewrittenTry.CatchClauses[0].ExceptionType);
         Assert.Same(ExceptionType, rewrittenTry.CatchClauses[1].ExceptionType);
+
+        // The lifted handler is protected too, so a rethrow cannot bypass the
+        // lifted finally; its exception is captured and rethrown afterward.
+        Assert.Single(rewrittenTries[1].CatchClauses);
+        Assert.Same(ExceptionType, rewrittenTries[1].CatchClauses[0].ExceptionType);
     }
 
     // ----------------------------------------------------------------------
