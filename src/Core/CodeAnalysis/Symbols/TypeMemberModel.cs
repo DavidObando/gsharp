@@ -25,6 +25,51 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 public static class TypeMemberModel
 {
     /// <summary>
+    /// Returns the ordered members used by synthesized and bound data-type
+    /// deconstruction. Positional data types deconstruct their primary-
+    /// constructor properties; non-positional data types retain their
+    /// field/auto-property behavior.
+    /// </summary>
+    /// <param name="type">The data class or data struct.</param>
+    /// <returns>The logical deconstruction members in declaration order.</returns>
+    public static ImmutableArray<Symbol> GetDataDeconstructionMembers(StructSymbol type)
+    {
+        if (type == null || !type.IsData)
+        {
+            return ImmutableArray<Symbol>.Empty;
+        }
+
+        var members = ImmutableArray.CreateBuilder<Symbol>();
+        if (type.HasPrimaryConstructor || type.Declaration?.HasPrimaryConstructor == true)
+        {
+            foreach (var parameter in type.PrimaryConstructorParameters)
+            {
+                foreach (var property in type.Properties)
+                {
+                    if (property.Name == parameter.Name && property.Declaration == null)
+                    {
+                        members.Add(property);
+                        break;
+                    }
+                }
+            }
+
+            return members.ToImmutable();
+        }
+
+        members.AddRange(type.Fields);
+        foreach (var property in type.Properties)
+        {
+            if (!property.IsStatic && !property.IsIndexer && property.BackingField != null)
+            {
+                members.Add(property);
+            }
+        }
+
+        return members.ToImmutable();
+    }
+
+    /// <summary>
     /// Looks up the first member named <paramref name="name"/> on
     /// <paramref name="type"/> honoring <paramref name="query"/>. The search
     /// order — property → field → event → method, instance entries before static

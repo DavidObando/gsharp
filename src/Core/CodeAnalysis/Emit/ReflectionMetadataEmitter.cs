@@ -1861,7 +1861,7 @@ internal sealed class ReflectionMetadataEmitter
             // which must run in the same relative order (before
             // user-declared methods) so the MethodDef rows line up.
             // Issue #2363: a zero-field data class skips Deconstruct (one
-            // fewer row) — see DataStructSynthesizer.HasZeroSynthesisFields
+            // fewer row) — see DataStructSynthesizer.HasZeroDeconstructionMembers
             // and EmitDataStructSynthesizedMembers's matching skip.
             // Issue #2361: when the class declares a compatible hand-written
             // ToString, one fewer row is reserved here too — the "ToString"
@@ -1873,7 +1873,7 @@ internal sealed class ReflectionMetadataEmitter
             if (c.IsData)
             {
                 methodRow += 10
-                    - (DataStructSynthesizer.HasZeroSynthesisFields(c) ? 1 : 0)
+                    - (DataStructSynthesizer.HasZeroDeconstructionMembers(c) ? 1 : 0)
                     - (DataStructSynthesizer.HasUserToStringOverride(c) ? 1 : 0);
             }
 
@@ -2020,7 +2020,7 @@ internal sealed class ReflectionMetadataEmitter
                 // class-side comment in PlanClassMethods above. The two
                 // skips compose independently.
                 methodRow += 7
-                    - (DataStructSynthesizer.HasZeroSynthesisFields(s) ? 1 : 0)
+                    - (DataStructSynthesizer.HasZeroDeconstructionMembers(s) ? 1 : 0)
                     - (DataStructSynthesizer.HasUserToStringOverride(s) ? 1 : 0);
 
                 // Rubber-duck follow-up to issue #2224: an anonymous-class
