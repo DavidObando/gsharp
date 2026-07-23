@@ -2024,18 +2024,21 @@ internal sealed class ImportedMemberRefFactory
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
     }
 
-    // ADR-0087 §3 R6: cache for reified delegate (Func/Action) TypeSpecs
-    // keyed by a stable function-type symbol identity. A FunctionTypeSymbol
-    // is cached by its parameter/return symbol identities (see
-    // FunctionTypeSymbol.Get) so reference-equality is sufficient.
-    private readonly Dictionary<FunctionTypeSymbol, EntityHandle> functionDelegateTypeSpecCache =
-        new Dictionary<FunctionTypeSymbol, EntityHandle>(ReferenceEqualityComparer.Instance);
+    // ADR-0087 §3 R6: cache reified delegate metadata by function shape and
+    // active generic-remap scopes. The same interned FunctionTypeSymbol can
+    // encode as VAR inside a synthesized generic class and MVAR at its outer
+    // generic-method use site.
+    private readonly Dictionary<(FunctionTypeSymbol Type, object ClassRemap, object MethodRemap), EntityHandle>
+        functionDelegateTypeSpecCache = new();
 
-    private readonly Dictionary<FunctionTypeSymbol, EntityHandle> functionDelegateCtorRefCache =
-        new Dictionary<FunctionTypeSymbol, EntityHandle>(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<(FunctionTypeSymbol Type, object ClassRemap, object MethodRemap), EntityHandle>
+        functionDelegateCtorRefCache = new();
 
-    private readonly Dictionary<FunctionTypeSymbol, EntityHandle> functionDelegateInvokeRefCache =
-        new Dictionary<FunctionTypeSymbol, EntityHandle>(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<(FunctionTypeSymbol Type, object ClassRemap, object MethodRemap), EntityHandle>
+        functionDelegateInvokeRefCache = new();
+
+    private (FunctionTypeSymbol Type, object ClassRemap, object MethodRemap) GetFunctionDelegateCacheKey(FunctionTypeSymbol fnType)
+        => (fnType, this.remaps.ActiveIteratorStateMachineRemap, this.remaps.ActiveLambdaMethodTypeParamRemap);
 
     /// <summary>
     /// ADR-0087 §3 R6: returns a <c>TypeSpec</c> EntityHandle for the
@@ -2045,7 +2048,8 @@ internal sealed class ImportedMemberRefFactory
     /// </summary>
     internal EntityHandle GetFunctionDelegateTypeSpec(FunctionTypeSymbol fnType)
     {
-        if (this.functionDelegateTypeSpecCache.TryGetValue(fnType, out var cached))
+        var cacheKey = this.GetFunctionDelegateCacheKey(fnType);
+        if (this.functionDelegateTypeSpecCache.TryGetValue(cacheKey, out var cached))
         {
             return cached;
         }
@@ -2053,7 +2057,7 @@ internal sealed class ImportedMemberRefFactory
         var sigBlob = new BlobBuilder();
         this.signatures.EncodeFunctionTypeSymbol(new BlobEncoder(sigBlob).TypeSpecificationSignature(), fnType);
         var spec = (EntityHandle)this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        this.functionDelegateTypeSpecCache[fnType] = spec;
+        this.functionDelegateTypeSpecCache[cacheKey] = spec;
         return spec;
     }
 
@@ -2099,7 +2103,8 @@ internal sealed class ImportedMemberRefFactory
     /// </summary>
     internal EntityHandle GetFunctionDelegateCtorRef(FunctionTypeSymbol fnType)
     {
-        if (this.functionDelegateCtorRefCache.TryGetValue(fnType, out var cached))
+        var cacheKey = this.GetFunctionDelegateCacheKey(fnType);
+        if (this.functionDelegateCtorRefCache.TryGetValue(cacheKey, out var cached))
         {
             return cached;
         }
@@ -2124,7 +2129,7 @@ internal sealed class ImportedMemberRefFactory
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        this.functionDelegateCtorRefCache[fnType] = handle;
+        this.functionDelegateCtorRefCache[cacheKey] = handle;
         return handle;
     }
 
@@ -2143,7 +2148,8 @@ internal sealed class ImportedMemberRefFactory
     /// </summary>
     internal EntityHandle GetFunctionDelegateInvokeRef(FunctionTypeSymbol fnType)
     {
-        if (this.functionDelegateInvokeRefCache.TryGetValue(fnType, out var cached))
+        var cacheKey = this.GetFunctionDelegateCacheKey(fnType);
+        if (this.functionDelegateInvokeRefCache.TryGetValue(cacheKey, out var cached))
         {
             return cached;
         }
@@ -2187,7 +2193,7 @@ internal sealed class ImportedMemberRefFactory
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString("Invoke"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        this.functionDelegateInvokeRefCache[fnType] = handle;
+        this.functionDelegateInvokeRefCache[cacheKey] = handle;
         return handle;
     }
 
