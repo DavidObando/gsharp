@@ -13,6 +13,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
+using GSharp.Core.CodeAnalysis.Lowering.Async;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
@@ -303,7 +304,8 @@ internal sealed partial class DeclarationBinder
                 methodReceiverStruct,
                 explicitReceiverParameter);
             function.TypeParameters = typeParameters;
-            function.IsAsync = syntax.IsAsync || isAsyncIteratorReturnType(type);
+            function.IsAsync = syntax.IsAsync
+                || (isAsyncIteratorReturnType(type) && IteratorDetection.ContainsYield(syntax.Body));
             function.AsyncReturnsValueTask = typeIsValueTask;
             function.IsUnsafe = syntax.IsUnsafe;
             function.ReturnRefKind = returnRefKind;
@@ -336,7 +338,8 @@ internal sealed partial class DeclarationBinder
 
         function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package, accessibility);
         function.TypeParameters = typeParameters;
-        function.IsAsync = syntax.IsAsync || isAsyncIteratorReturnType(type);
+        function.IsAsync = syntax.IsAsync
+            || (isAsyncIteratorReturnType(type) && IteratorDetection.ContainsYield(syntax.Body));
         function.AsyncReturnsValueTask = typeIsValueTask;
         function.IsUnsafe = syntax.IsUnsafe;
         function.ReturnRefKind = returnRefKind;
@@ -1408,6 +1411,12 @@ internal sealed partial class DeclarationBinder
         IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParamMap)
     {
         var baseIsAsync = baseMethod.IsAsync;
+        if (AsyncIteratorDetection.IsAsyncIteratorReturnType(baseMethod.Type)
+            && AsyncIteratorDetection.IsAsyncIteratorReturnType(derivedReturnType))
+        {
+            return TypeSignaturesEquivalent(baseMethod.Type, derivedReturnType, typeParamMap);
+        }
+
         if (baseIsAsync == derivedIsAsync)
         {
             return TypeSignaturesEquivalent(baseMethod.Type, derivedReturnType, typeParamMap);

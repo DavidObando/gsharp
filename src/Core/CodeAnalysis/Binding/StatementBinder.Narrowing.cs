@@ -1252,10 +1252,12 @@ internal sealed partial class StatementBinder
 
         if (initializer.Type is StructSymbol structType && (structType.IsData || structType.IsInline))
         {
-            var fields = structType.Fields;
-            if (syntax.Identifiers.Count != fields.Length)
+            var members = structType.IsData
+                ? TypeMemberModel.GetDataDeconstructionMembers(structType)
+                : structType.Fields.Cast<Symbol>().ToImmutableArray();
+            if (syntax.Identifiers.Count != members.Length)
             {
-                Diagnostics.ReportDeconstructionFieldCountMismatch(syntax.CloseParenToken.Location, fields.Length, syntax.Identifiers.Count);
+                Diagnostics.ReportDeconstructionFieldCountMismatch(syntax.CloseParenToken.Location, members.Length, syntax.Identifiers.Count);
                 return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
             }
 
@@ -1273,9 +1275,12 @@ internal sealed partial class StatementBinder
                     continue;
                 }
 
-                var field = fields[i];
-                var elemVar = bindLocalVariable(idTok, isReadOnly: true, field.Type);
-                var access = new BoundFieldAccessExpression(null, new BoundVariableExpression(null, tempVar), structType, field);
+                var member = members[i];
+                var elemVar = bindLocalVariable(idTok, isReadOnly: true, GetDeconstructionMemberType(member));
+                var access = BindDeconstructionMemberAccess(
+                    new BoundVariableExpression(null, tempVar),
+                    structType,
+                    member);
                 statements.Add(new BoundVariableDeclaration(syntax, elemVar, access));
             }
 
@@ -1347,10 +1352,12 @@ internal sealed partial class StatementBinder
 
         if (elementType is StructSymbol structType && (structType.IsData || structType.IsInline))
         {
-            var fields = structType.Fields;
-            if (identifiers.Count != fields.Length)
+            var members = structType.IsData
+                ? TypeMemberModel.GetDataDeconstructionMembers(structType)
+                : structType.Fields.Cast<Symbol>().ToImmutableArray();
+            if (identifiers.Count != members.Length)
             {
-                Diagnostics.ReportDeconstructionFieldCountMismatch(closeParenLocation, fields.Length, identifiers.Count);
+                Diagnostics.ReportDeconstructionFieldCountMismatch(closeParenLocation, members.Length, identifiers.Count);
                 DeclareErrorTypedLocals(identifiers);
                 return ImmutableArray<BoundStatement>.Empty;
             }
@@ -1363,9 +1370,9 @@ internal sealed partial class StatementBinder
                     continue;
                 }
 
-                var field = fields[i];
-                var elemVar = bindLocalVariable(identifiers[i], isReadOnly: true, field.Type);
-                var access = new BoundFieldAccessExpression(null, elementAccessBase, structType, field);
+                var member = members[i];
+                var elemVar = bindLocalVariable(identifiers[i], isReadOnly: true, GetDeconstructionMemberType(member));
+                var access = BindDeconstructionMemberAccess(elementAccessBase, structType, member);
                 statements.Add(new BoundVariableDeclaration(null, elemVar, access));
             }
 
@@ -1389,6 +1396,23 @@ internal sealed partial class StatementBinder
         DeclareErrorTypedLocals(identifiers);
         return ImmutableArray<BoundStatement>.Empty;
     }
+
+    private static TypeSymbol GetDeconstructionMemberType(Symbol member) => member switch
+    {
+        FieldSymbol field => field.Type,
+        PropertySymbol property => property.Type,
+        _ => TypeSymbol.Error,
+    };
+
+    private static BoundExpression BindDeconstructionMemberAccess(
+        BoundExpression receiver,
+        StructSymbol type,
+        Symbol member) => member switch
+    {
+        FieldSymbol field => new BoundFieldAccessExpression(null, receiver, type, field),
+        PropertySymbol property => new BoundPropertyAccessExpression(null, receiver, type, property),
+        _ => new BoundErrorExpression(null),
+    };
 
     private bool TryBindImportedDeconstruct(
         BoundExpression receiver,

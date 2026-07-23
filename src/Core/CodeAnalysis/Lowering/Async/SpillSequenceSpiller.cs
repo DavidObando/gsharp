@@ -1473,23 +1473,9 @@ public static class SpillSequenceSpiller
             // nor WhenNotNull contains an await. `nc.Capture` is declared as
             // the unwrapped `T` (so member-access binding resolves against
             // `T`), so it can never directly hold the real `Nullable<T>`
-            // receiver value; and since this whole method reachable via
-            // SpillExpression only runs inside an async method body,
-            // MoveNextBodyRewriter's hoisting walk may promote `nc.Capture`
-            // to a state-machine field regardless of whether *this specific*
-            // access spans a suspension point — and it only redirects
-            // bound-tree-visible reads/writes (BoundVariableExpression /
-            // BoundAssignmentExpression / BoundVariableDeclaration nodes),
-            // never the emitter's direct EmitStoreVariable/EmitLoadVariable
-            // calls. Leaving the node's own capture-write to
-            // EmitNullConditionalAccess (as the Trivial passthrough would)
-            // risks a silent dead store into an unused fallback local while
-            // every real read resolves to a never-written hoisted field —
-            // wrong runtime value with still-valid IL (ilverify cannot see
-            // this). Building the write as a genuine
-            // BoundAssignmentExpression here (mirroring the existing
-            // reference-type Leg-1/2/3 patterns below) keeps it visible to
-            // the hoisting walk regardless of leg.
+            // receiver value. The shared variable emitter routes hoisted
+            // captures to state-machine fields (issue #2771), but it cannot
+            // reconcile this wrapper/unwrapped type mismatch.
             var isValueTypeNullableReceiver = nc.Receiver.Type is NullableTypeSymbol ncReceiverNullable
                 && NullableLifting.IsAnyValueTypeNullable(ncReceiverNullable);
 
@@ -1517,28 +1503,9 @@ public static class SpillSequenceSpiller
             {
                 // Reference-type (or non-nullable-collapse) receiver, only
                 // the receiver needed spilling — WhenNotNull is still
-                // await-free. EmitNullConditionalAccess writes/reads
-                // nc.Capture via direct EmitStoreVariable/EmitLoadVariable
-                // calls, not through bound-tree Assignment/Variable nodes —
-                // so MoveNextBodyRewriter's hoisted-field substitution (which
-                // only rewrites nodes it can see in the tree) never touches
-                // that write, and it would land in a plain local while every
-                // *read* of nc.Capture nested inside nc.WhenNotNull (a real
-                // BoundVariableExpression the rewriter *does* see) gets
-                // redirected to the hoisted field instead — reading an
-                // never-written field. Declaring the capture explicitly here
-                // (a real BoundVariableDeclaration the rewriter recognizes)
-                // and feeding the capture variable back in as its own
-                // receiver makes emitter's redundant internal store a
-                // harmless no-op dead store into the (unused) plain-local
-                // fallback slot, while every real read still consistently
-                // resolves to the (already correctly written) hoisted field.
-                // `nc.Capture` shares the CLR representation of `receiver`
-                // for reference types, so this workaround remains sound.
-                sideEffects.Add(new BoundVariableDeclaration(null, (LocalVariableSymbol)nc.Capture, receiver));
-                locals.Add((LocalVariableSymbol)nc.Capture);
-                var captureRef = new BoundVariableExpression(null, nc.Capture);
-                var rebuiltNc = new BoundNullConditionalAccessExpression(null, captureRef, nc.Capture, nc.WhenNotNull, nc.Type, nc.ResultSlot);
+                // await-free. The emitter's shared variable load/store path
+                // preserves nc.Capture whether it remains local or is hoisted.
+                var rebuiltNc = new BoundNullConditionalAccessExpression(null, receiver, nc.Capture, nc.WhenNotNull, nc.Type, nc.ResultSlot);
                 return new BoundSpillSequenceExpression(null, locals.ToImmutable(), sideEffects.ToImmutable(), rebuiltNc);
             }
 

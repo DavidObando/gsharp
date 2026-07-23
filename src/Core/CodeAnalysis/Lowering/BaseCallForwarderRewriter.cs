@@ -67,7 +67,7 @@ public static class BaseCallForwarderRewriter
                 continue;
             }
 
-            var isStateMachine = function.IsAsync || ContainsYield(body);
+            var isStateMachine = function.IsAsync || IteratorDetection.ContainsYield(body);
             if (!isStateMachine)
             {
                 continue;
@@ -134,26 +134,6 @@ public static class BaseCallForwarderRewriter
             FriendAssemblies = program.FriendAssemblies,
             AssemblyAttributes = program.AssemblyAttributes,
         };
-    }
-
-    private static bool ContainsYield(BoundStatement statement)
-    {
-        var walker = new YieldWalker();
-        walker.Visit(statement);
-        return walker.Found;
-    }
-
-    private sealed class YieldWalker : BoundTreeRewriter
-    {
-        public bool Found { get; private set; }
-
-        public void Visit(BoundStatement statement) => this.RewriteStatement(statement);
-
-        protected override BoundStatement RewriteYieldStatement(BoundYieldStatement node)
-        {
-            this.Found = true;
-            return node;
-        }
     }
 
     private sealed class Rewriter : BoundTreeRewriter
