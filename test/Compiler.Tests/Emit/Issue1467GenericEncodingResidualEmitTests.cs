@@ -201,8 +201,14 @@ public class Issue1467GenericEncodingResidualEmitTests
             }
 
             func Main() {
-                var result = [1, 2].Flat((x int32) -> [x, x + 1])
-                Console.WriteLine(result.SelectMany((values IEnumerable[int32]) -> values).Sum())
+                var result = [2]int32{1, 2}.Flat((x int32) -> [2]int32{x, x + 1})
+                var total int32
+                for values in result {
+                    for value in values {
+                        total += value
+                    }
+                }
+                Console.WriteLine(total)
             }
             """;
 
