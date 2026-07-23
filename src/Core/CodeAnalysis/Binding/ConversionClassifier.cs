@@ -2499,7 +2499,28 @@ internal sealed class ConversionClassifier
             inner = bce.Expression;
         }
 
-        if (inner is BoundLiteralExpression lit)
+        if (ExpressionBinder.IsIntegerType(inner.Type)
+            && ExpressionBinder.TryGetConstantIntegerValue(inner, out var integerValue)
+            && TryGetIntegralMetadataTarget(parameterType, out var integralTarget))
+        {
+            if (integralTarget == TypeSymbol.Char
+                && integerValue >= char.MinValue
+                && integerValue <= char.MaxValue)
+            {
+                value = (char)(ushort)integerValue;
+                return true;
+            }
+
+            if (ExpressionBinder.TryAdaptIntegerLiteral(integerValue, integralTarget, out value))
+            {
+                return true;
+            }
+
+            reason = $"integer constant '{integerValue}' is outside the range of parameter type '{parameterType.Name}'.";
+            value = null;
+            return false;
+        }
+        else if (inner is BoundLiteralExpression lit)
         {
             value = lit.Value;
         }
@@ -2539,6 +2560,21 @@ internal sealed class ConversionClassifier
         }
 
         return TryNormalizeMetadataConstant(value, parameterType, out value, out reason);
+    }
+
+    private static bool TryGetIntegralMetadataTarget(TypeSymbol parameterType, out TypeSymbol target)
+    {
+        target = parameterType is NullableTypeSymbol nullable ? nullable.UnderlyingType : parameterType;
+        if (target is EnumSymbol enumType)
+        {
+            target = enumType.UnderlyingType;
+        }
+        else if (target.ClrType is System.Type { IsEnum: true } clrEnum)
+        {
+            target = TypeSymbol.FromClrType(Enum.GetUnderlyingType(clrEnum));
+        }
+
+        return target == TypeSymbol.Char || ExpressionBinder.IsIntegerType(target);
     }
 
     // Constant rows carry the parameter's converted primitive value, not the
