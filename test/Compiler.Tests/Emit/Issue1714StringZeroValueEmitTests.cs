@@ -6,6 +6,8 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System.Reflection;
 using System.Text.RegularExpressions;
 using GSharp.Compiler;
 using GSharp.Core.CodeAnalysis;
@@ -18,15 +20,11 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// Issue #1714: the interpreter's <c>Evaluator.DefaultValue</c> gives
-/// <c>string</c> Go-style value semantics — its zero value is <c>""</c>, not
-/// the CLR reference-type default <c>null</c>. Before this fix the emitted
-/// IL diverged and produced <c>null</c> for a missing map value, an
-/// uninitialized struct/class string field, and an unset <c>string</c>
-/// auto-property. These end-to-end tests compile-and-run each scenario and
-/// assert the emitted program agrees with the chosen (interpreter) zero-value
-/// semantics: <c>""</c>, never <c>nil</c>. Each uses a UNIQUE package/type
-/// name because the in-process <c>FunctionTypeSymbol</c> cache is name-keyed.
+/// Issue #1714: language zero values and CLR storage defaults are distinct.
+/// Map misses retain the language's empty-string zero value, while fields and
+/// auto-property backing fields retain the CLR default for their storage type.
+/// Each source uses unique package/type names because the in-process
+/// <c>FunctionTypeSymbol</c> cache is name-keyed.
 /// </summary>
 public class Issue1714StringZeroValueEmitTests
 {
@@ -52,7 +50,7 @@ public class Issue1714StringZeroValueEmitTests
     }
 
     [Fact]
-    public void EndToEnd_StructStringField_DefaultsToEmptyString()
+    public void EndToEnd_StructStringField_DefaultsToNull()
     {
         const string source = """
             package i1714structfield
@@ -69,18 +67,12 @@ public class Issue1714StringZeroValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n5\n", output);
-
-        // Not asserting interpreter parity here: a struct-literal with an
-        // omitted field is constant-folded at bind time
-        // (ExpressionBinder.Literals), a separate code path from
-        // Evaluator.DefaultValue that pre-dates and is out of scope for this
-        // fix — see EndToEnd_NestedStructStringField_DefaultDefaultsToEmptyString
-        // for the `default(T)` recursion path parity IS asserted for.
+        Assert.Equal("False\nTrue\n5\n", output);
+        Assert.Equal(RunInterpreter(source), output);
     }
 
     [Fact]
-    public void EndToEnd_ClassStringField_DefaultsToEmptyString()
+    public void EndToEnd_ClassStringField_DefaultsToNull()
     {
         const string source = """
             package i1714classfield
@@ -96,12 +88,12 @@ public class Issue1714StringZeroValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n", output);
+        Assert.Equal("False\nTrue\n", output);
         Assert.Equal(RunInterpreter(source), output);
     }
 
     [Fact]
-    public void EndToEnd_ClassStringAutoProperty_DefaultsToEmptyString()
+    public void EndToEnd_ClassStringAutoProperty_DefaultsToNull()
     {
         const string source = """
             package i1714autoprop
@@ -117,19 +109,13 @@ public class Issue1714StringZeroValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n", output);
+        Assert.Equal("False\nTrue\n", output);
         Assert.Equal(RunInterpreter(source), output);
     }
 
     [Fact]
     public void EndToEnd_DefaultStringExpression_IsNull()
     {
-        // Issue #1714 scopes the Go-style `""` zero value to UNINITIALIZED
-        // STORAGE (map-miss, struct/class field, auto-property) — not to the
-        // explicit `default`/`default(string)` EXPRESSION, which keeps its
-        // pre-existing, intentionally-tested CLR-null semantics (ADR-0100's
-        // EvaluateDefaultExpression short-circuits `nil` for reference types;
-        // see also Issue1391/Issue1496/Issue795 default-expression tests).
         const string source = """
             package i1714defaultexpr
             import System
@@ -143,26 +129,12 @@ public class Issue1714StringZeroValueEmitTests
 
         var output = CompileAndRun(source);
         Assert.Equal("False\nTrue\n", output);
-
-        // Not asserting interpreter parity here: Evaluator.DefaultValue
-        // special-cases `string` to `""` for ALL defaulting, including the
-        // explicit `default` expression — a separate, pre-existing
-        // interpreter/emit divergence for the default-EXPRESSION path,
-        // rooted in ADR-0100, that is out of scope for issue #1714 (which
-        // scopes only the three uninitialized-storage sites).
+        Assert.Equal(RunInterpreter(source), output);
     }
 
     [Fact]
-    public void EndToEnd_NestedStructStringField_DefaultDefaultsToEmptyString()
+    public void EndToEnd_NestedStructStringFields_DefaultToNull()
     {
-        // Reviewer follow-up gap: `Evaluator.DefaultValue(StructSymbol)`
-        // recursively defaults every field, so a `string` field nested
-        // INSIDE a struct-typed field also becomes `""`. The emitter's
-        // post-`initobj` fixup previously patched only directly-declared
-        // string fields on the outer struct — a struct-typed field's own
-        // string sub-field stayed `null` after `initobj` zeroed its bytes.
-        // `Inner2` adds a third nesting level to prove the fix generalizes
-        // beyond one specific Outer/Inner shape.
         const string source = """
             package i1714nestedstruct
             import System
@@ -182,8 +154,145 @@ public class Issue1714StringZeroValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\nTrue\nFalse\n[][]\n", output);
+        Assert.Equal("False\nTrue\nFalse\nTrue\n[][]\n", output);
         Assert.Equal(RunInterpreter(source), output);
+    }
+
+    [Fact]
+    public void EndToEnd_InstanceAndStaticReferenceFields_MatchClrDefaults()
+    {
+        const string source = """
+            package i1714references
+            import System
+
+            class Child {}
+
+            struct StructHolder {
+                var Empty string = ""
+            }
+
+            class Holder {
+                var Text string
+                var MaybeText string?
+                var Value object
+                var Items []int32
+                var ChildValue Child
+                var Empty string = ""
+
+                func InstanceDefaultsAreCorrect() bool {
+                    return Text == nil && MaybeText == nil && ChildValue == nil && Empty == ""
+                }
+
+                shared {
+                    var SharedText string
+                    var SharedValue object
+                    var SharedItems []int32
+                    var SharedChild Child?
+
+                    func DefaultsAreCorrect() bool {
+                        return SharedText == nil && SharedChild == nil
+                    }
+                }
+            }
+
+            func Main() {
+                Console.WriteLine(Holder{}.InstanceDefaultsAreCorrect())
+                Console.WriteLine(Holder.DefaultsAreCorrect())
+                Console.WriteLine(StructHolder{}.Empty == "")
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("True\nTrue\nTrue\n", output);
+        Assert.Equal(RunInterpreter(source), output);
+    }
+
+    [Fact]
+    public void Reflection_ReferenceFields_UseClrNullAndPreserveAnnotationsAndInitializer()
+    {
+        const string source = """
+            package i1714reflection
+
+            class Child {}
+
+            class ClassFields {
+                public var Text string
+                public var MaybeText string?
+                public var Value object
+                public var Items []int32
+                public var ChildValue Child
+                public var Empty string = ""
+                shared {
+                    public var SharedText string
+                    public var SharedValue object
+                    public var SharedItems []int32
+                    public var SharedChild Child?
+                }
+            }
+
+            struct StructFields {
+                public var Text string
+                public var MaybeText string?
+                public var Value object
+                public var Items []int32
+                public var ChildValue Child
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var classType = assembly.GetTypes().Single(t => t.Name == "ClassFields");
+        var classValue = Activator.CreateInstance(classType);
+        var structType = assembly.GetTypes().Single(t => t.Name == "StructFields");
+        var structValue = Activator.CreateInstance(structType);
+
+        foreach (var name in new[] { "Text", "MaybeText", "Value", "Items", "ChildValue" })
+        {
+            Assert.Null(classType.GetField(name)!.GetValue(classValue));
+            Assert.Null(structType.GetField(name)!.GetValue(structValue));
+        }
+
+        Assert.Null(classType.GetField("SharedText")!.GetValue(null));
+        Assert.Null(classType.GetField("SharedValue")!.GetValue(null));
+        Assert.Null(classType.GetField("SharedItems")!.GetValue(null));
+        Assert.Null(classType.GetField("SharedChild")!.GetValue(null));
+        Assert.Equal(string.Empty, classType.GetField("Empty")!.GetValue(classValue));
+
+        var nullability = new NullabilityInfoContext();
+        Assert.Equal(NullabilityState.NotNull, nullability.Create(classType.GetField("Text")!).ReadState);
+        Assert.Equal(NullabilityState.Nullable, nullability.Create(classType.GetField("MaybeText")!).ReadState);
+        Assert.Equal(NullabilityState.NotNull, nullability.Create(classType.GetField("Value")!).ReadState);
+        Assert.Equal(NullabilityState.NotNull, nullability.Create(classType.GetField("Items")!).ReadState);
+        Assert.Equal(NullabilityState.NotNull, nullability.Create(classType.GetField("ChildValue")!).ReadState);
+        Assert.Equal(NullabilityState.NotNull, nullability.Create(classType.GetField("SharedText")!).ReadState);
+        Assert.Equal(NullabilityState.NotNull, nullability.Create(classType.GetField("SharedValue")!).ReadState);
+        Assert.Equal(NullabilityState.NotNull, nullability.Create(classType.GetField("SharedItems")!).ReadState);
+        Assert.Equal(NullabilityState.Nullable, nullability.Create(classType.GetField("SharedChild")!).ReadState);
+        Assert.Equal(NullabilityState.NotNull, nullability.Create(structType.GetField("Text")!).ReadState);
+        Assert.Equal(NullabilityState.Nullable, nullability.Create(structType.GetField("MaybeText")!).ReadState);
+    }
+
+    [Fact]
+    public void FieldDefaults_DoNotChangeDefiniteAssignmentDiagnostics()
+    {
+        const string fields = """
+            package i1714fielddiagnostics
+            class Child {}
+            class Box {
+                var Text string
+                var ChildValue Child
+            }
+            """;
+        var fieldsResult = Evaluate(fields);
+        Assert.Empty(fieldsResult.Diagnostics);
+
+        const string unassignedOut = """
+            package i1714outdiagnostics
+            func bad(out value string) {
+                return
+            }
+            """;
+        var outResult = Evaluate(unassignedOut);
+        Assert.Contains(outResult.Diagnostics, d => d.Id == "GS0238");
     }
 
     /// <summary>
@@ -213,6 +322,38 @@ public class Issue1714StringZeroValueEmitTests
         }
 
         return outWriter.ToString().Replace("\r\n", "\n");
+    }
+
+    private static EvaluationResult Evaluate(string source)
+    {
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        return new Compilation(tree).Evaluate(new Dictionary<VariableSymbol, object>());
+    }
+
+    private static Assembly CompileToAssembly(string source)
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_1714_reflection_").FullName;
+        try
+        {
+            var srcPath = Path.Combine(tempDir, "test.gs");
+            var dllPath = Path.Combine(tempDir, "test.dll");
+            File.WriteAllText(srcPath, source);
+
+            var exitCode = Program.Main(new[]
+            {
+                "/out:" + dllPath,
+                "/target:library",
+                "/targetframework:net10.0",
+                srcPath,
+            });
+            Assert.Equal(0, exitCode);
+            IlVerifier.Verify(dllPath);
+            return Assembly.Load(File.ReadAllBytes(dllPath));
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
     }
 
     /// <summary>

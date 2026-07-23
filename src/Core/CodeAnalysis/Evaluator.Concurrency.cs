@@ -482,19 +482,7 @@ public sealed partial class Evaluator
             return null;
         }
 
-        var known = DefaultValue(node.Type);
-        if (known != null)
-        {
-            return known;
-        }
-
-        var clr = node.Type?.ClrType;
-        if (clr == null || !clr.IsValueType)
-        {
-            return null;
-        }
-
-        return System.Activator.CreateInstance(clr);
+        return ClrDefaultValue(node.Type);
     }
 
     private object EvaluateTypeParameterConstructionExpression(BoundTypeParameterConstructionExpression node)

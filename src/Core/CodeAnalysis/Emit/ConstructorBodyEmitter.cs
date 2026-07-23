@@ -11,7 +11,6 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
-using System.Linq;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
@@ -28,7 +27,7 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// #1030), the default/primary/base-initializer/explicit-body instance
 /// constructors (issues #640/#306), and the class deinitializer (<c>Finalize</c>
 /// override, ADR-0068 / issue #698), plus the instance-field-initializer
-/// statement builders they all share (issue #1714).
+/// statement builders they all share.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -326,109 +325,8 @@ internal sealed class ConstructorBodyEmitter
         return this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
     }
 
-    /// <summary>
-    /// Issue #1714: true when <see cref="BuildInstanceFieldInitializerStatements"/>
-    /// would produce a non-empty statement list for <paramref name="classSym"/> —
-    /// either a declared instance field initializer, or a `string`-typed field
-    /// (plain or auto-property backing field) that needs the Go-style `""`
-    /// zero-value fallback. Callers use this instead of checking
-    /// <c>InstanceFieldInitializers.IsEmpty</c> directly so the fallback isn't
-    /// silently skipped.
-    /// </summary>
     internal static bool NeedsInstanceFieldInitializerStatements(StructSymbol classSym)
-    {
-        if (!classSym.InstanceFieldInitializers.IsEmpty)
-        {
-            return true;
-        }
-
-        var primaryParamFieldNames = classSym.PrimaryConstructorParameters.IsDefaultOrEmpty
-            ? null
-            : classSym.PrimaryConstructorParameters.Select(p => p.Name).ToImmutableHashSet();
-
-        foreach (var field in classSym.Fields)
-        {
-            if (primaryParamFieldNames?.Contains(field.Name) == true)
-            {
-                continue;
-            }
-
-            if (field.Type == TypeSymbol.String)
-            {
-                return true;
-            }
-
-            // Issue #1714: a struct-typed field may itself contain a `string`
-            // field (at any nesting depth) that needs the same fallback —
-            // see AppendNestedStructStringDefaultAssignments.
-            if (field.Type is StructSymbol nestedStructField
-                && ReflectionMetadataEmitter.IsValueTypeSymbol(nestedStructField)
-                && !ReflectionMetadataEmitter.IsUserGenericTypeReference(nestedStructField)
-                && HasNestedStringField(nestedStructField, depth: 0))
-            {
-                return true;
-            }
-        }
-
-        foreach (var property in classSym.Properties)
-        {
-            // Rubber-duck follow-up to issue #2224: a property whose name
-            // matches a primary-ctor parameter (e.g. an anonymous-class
-            // literal's synthesized get-only auto-properties) is already
-            // assigned its real value by the primary ctor's param→field
-            // stfld (see TryGetPrimaryCtorTargetField) — the string-default
-            // fallback must not run for it, or it would clobber that value
-            // with "".
-            if (primaryParamFieldNames?.Contains(property.Name) == true)
-            {
-                continue;
-            }
-
-            if (property.IsAutoProperty && property.BackingField != null && property.Type == TypeSymbol.String)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Issue #1714: true when <paramref name="structType"/> has a `string`
-    /// field reachable at any nesting depth through a chain of struct-typed
-    /// fields — i.e. whether <see cref="AppendNestedStructStringDefaultAssignments"/>
-    /// would emit at least one assignment for it. Mirrors the recursion depth
-    /// guard used there for the same defensive reason.
-    /// </summary>
-    private static bool HasNestedStringField(StructSymbol structType, int depth)
-    {
-        const int maxDepth = 64;
-        if (depth >= maxDepth)
-        {
-            return false;
-        }
-
-        for (var t = structType; t != null; t = t.BaseClass)
-        {
-            foreach (var field in t.Fields)
-            {
-                if (field.Type == TypeSymbol.String)
-                {
-                    return true;
-                }
-
-                if (field.Type is StructSymbol nestedStruct
-                    && ReflectionMetadataEmitter.IsValueTypeSymbol(nestedStruct)
-                    && !ReflectionMetadataEmitter.IsUserGenericTypeReference(nestedStruct)
-                    && HasNestedStringField(nestedStruct, depth + 1))
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
+        => !classSym.InstanceFieldInitializers.IsEmpty;
 
     /// <summary>
     /// Issue #640: builds the bound assignment statements for all instance
@@ -437,15 +335,6 @@ internal sealed class ConstructorBodyEmitter
     /// </summary>
     private static ImmutableArray<BoundStatement> BuildInstanceFieldInitializerStatements(StructSymbol classSym, ParameterSymbol thisParam = null)
     {
-        // Issue #1714: a primary-ctor parameter assigns its same-named field
-        // via a raw `stfld` emitted *before* this statement list runs (see
-        // EmitClassPrimaryConstructorBodyBytes) — exclude those fields here so
-        // the synthesized string-default fallback below does not clobber the
-        // primary-ctor-supplied value with `""`.
-        var primaryParamFieldNames = classSym.PrimaryConstructorParameters.IsDefaultOrEmpty
-            ? null
-            : classSym.PrimaryConstructorParameters.Select(p => p.Name).ToImmutableHashSet();
-
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         foreach (var field in classSym.Fields)
         {
@@ -453,114 +342,10 @@ internal sealed class ConstructorBodyEmitter
             {
                 var assignment = new BoundFieldAssignmentExpression(null, thisParam, classSym, field, initExpr);
                 statements.Add(new BoundExpressionStatement(null, assignment));
-                continue;
-            }
-
-            // Issue #1714: `string` has Go-style value semantics in G# — its
-            // zero value is `""`, not the CLR reference-type default `null`
-            // (matching the interpreter's Evaluator.DefaultValue). A field
-            // with no explicit initializer would otherwise keep the CLR
-            // default (`null`) forever, since nothing else stores into it.
-            // Only applies to plain fields, not primary-ctor-parameter fields
-            // (those are populated from the argument, not defaulted).
-            if (field.Type == TypeSymbol.String && primaryParamFieldNames?.Contains(field.Name) != true)
-            {
-                var defaultExpr = new BoundLiteralExpression(null, string.Empty, TypeSymbol.String); // Issue #1714: storage default site, not the `default` expression.
-                var assignment = new BoundFieldAssignmentExpression(null, thisParam, classSym, field, defaultExpr);
-                statements.Add(new BoundExpressionStatement(null, assignment));
-                continue;
-            }
-
-            // Issue #1714: a struct-typed field with no explicit initializer is
-            // zero-inited the same way `default(FieldType)` is (see the
-            // MethodBodyEmitter.Conversions.cs initobj fixup) — its own string
-            // sub-fields, at any nesting depth, would otherwise stay `null`.
-            // Mirror the interpreter's Evaluator.DefaultValue(StructSymbol)
-            // recursion here so a nested string field also becomes `""`.
-            if (field.Type is StructSymbol nestedStructField
-                && ReflectionMetadataEmitter.IsValueTypeSymbol(nestedStructField)
-                && !ReflectionMetadataEmitter.IsUserGenericTypeReference(nestedStructField)
-                && primaryParamFieldNames?.Contains(field.Name) != true)
-            {
-                var fieldAccess = new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), classSym, field);
-                AppendNestedStructStringDefaultAssignments(statements, fieldAccess, nestedStructField, depth: 0);
-            }
-        }
-
-        // Issue #1714: auto-property backing fields are not part of
-        // `classSym.Fields` (see PlanAggregateFields) and properties have no
-        // declaration-level initializer syntax, so an unset `string`
-        // auto-property's backing field would otherwise stay at the CLR
-        // default `null` — diverging from the interpreter, which always
-        // computes an unset property's value via DefaultValue(property.Type).
-        foreach (var property in classSym.Properties)
-        {
-            // Rubber-duck follow-up to issue #2224: skip a property whose
-            // name matches a primary-ctor parameter (e.g. an anonymous-class
-            // literal's synthesized get-only auto-properties) — its backing
-            // field is already assigned the real argument value by the
-            // primary ctor's param→field stfld (TryGetPrimaryCtorTargetField),
-            // emitted before these statements run; defaulting it here would
-            // clobber that value with "".
-            if (primaryParamFieldNames?.Contains(property.Name) == true)
-            {
-                continue;
-            }
-
-            if (property.IsAutoProperty && property.BackingField != null && property.Type == TypeSymbol.String)
-            {
-                var defaultExpr = new BoundLiteralExpression(null, string.Empty, TypeSymbol.String); // Issue #1714: storage default site, not the `default` expression.
-                var assignment = new BoundFieldAssignmentExpression(null, thisParam, classSym, property.BackingField, defaultExpr);
-                statements.Add(new BoundExpressionStatement(null, assignment));
             }
         }
 
         return statements.ToImmutable();
-    }
-
-    /// <summary>
-    /// Issue #1714: recursively walks <paramref name="structType"/>'s fields
-    /// (base-class chain first, same order as
-    /// <c>Evaluator.DefaultValue(StructSymbol)</c>) and appends a synthesized
-    /// <c>receiver.Field = ""</c> statement for every `string` field found —
-    /// at any nesting depth reachable through a chain of struct-typed fields
-    /// — using <see cref="BoundFieldAssignmentExpression.WithExpressionReceiver"/>
-    /// to build the nested member-access chain. A struct value type cannot
-    /// contain itself by value (the compiler rejects such declarations), so
-    /// unbounded recursion isn't reachable in practice; <paramref name="depth"/>
-    /// is a defensive cap guarding against that invariant ever being violated.
-    /// </summary>
-    private static void AppendNestedStructStringDefaultAssignments(
-        ImmutableArray<BoundStatement>.Builder statements,
-        BoundExpression receiverExpr,
-        StructSymbol structType,
-        int depth)
-    {
-        const int maxDepth = 64;
-        if (depth >= maxDepth)
-        {
-            return;
-        }
-
-        for (var t = structType; t != null; t = t.BaseClass)
-        {
-            foreach (var field in t.Fields)
-            {
-                if (field.Type == TypeSymbol.String)
-                {
-                    var defaultExpr = new BoundLiteralExpression(null, string.Empty, TypeSymbol.String); // Issue #1714: storage default site, not the `default` expression.
-                    var assignment = BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, t, field, defaultExpr);
-                    statements.Add(new BoundExpressionStatement(null, assignment));
-                }
-                else if (field.Type is StructSymbol nestedStruct
-                    && ReflectionMetadataEmitter.IsValueTypeSymbol(nestedStruct)
-                    && !ReflectionMetadataEmitter.IsUserGenericTypeReference(nestedStruct))
-                {
-                    var nestedFieldAccess = new BoundFieldAccessExpression(null, receiverExpr, t, field);
-                    AppendNestedStructStringDefaultAssignments(statements, nestedFieldAccess, nestedStruct, depth + 1);
-                }
-            }
-        }
     }
 
     /// <summary>
