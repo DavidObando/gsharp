@@ -342,20 +342,9 @@ public sealed class CSharpTypeMapper
     }
 
     /// <summary>
-    /// Issue #1960 item 3: maps an event's handler type, preferring a
-    /// SOURCE-DECLARED named delegate's own name over the structural
-    /// <c>func(...)</c> arrow form that <see cref="Map"/> always uses for
-    /// delegate types. An event declared as <c>event Ticked TickHandler;</c>
-    /// round-trips higher-fidelity than the anonymous <c>event Ticked (int32)
-    /// -&gt; void</c> shape, and it matches C#'s own event-type story (named
-    /// delegates document the handler shape for consumers). Scoped to events
-    /// only (not <see cref="Map"/> generally) — a plain local/field/parameter
-    /// of a same-package named-delegate type still lowers through the arrow
-    /// form, since referencing a named delegate type from outside its own
-    /// declaration currently trips a gsc emitter bug ("Delegate 'X' has no
-    /// emitted TypeDef") for those positions; only the event accessor shape
-    /// has been verified to compile with the named form (see corpus
-    /// G07-Members-Console).
+    /// Maps an event's handler type without erasing its nominal delegate
+    /// identity. Event metadata and add/remove signatures are ABI-sensitive:
+    /// structurally equivalent delegates are not interchangeable in the CLR.
     /// </summary>
     /// <param name="type">The event's declared handler type.</param>
     /// <param name="context">The translation context that accumulates diagnostics.</param>
@@ -363,8 +352,7 @@ public sealed class CSharpTypeMapper
     /// <returns>The canonical G# type reference for the event's handler type.</returns>
     public GTypeReference MapEventType(ITypeSymbol type, TranslationContext context, Location location)
     {
-        if (type is INamedTypeSymbol { TypeKind: TypeKind.Delegate, DelegateInvokeMethod: not null } named &&
-            named.DeclaringSyntaxReferences.Length > 0)
+        if (type is INamedTypeSymbol { TypeKind: TypeKind.Delegate, DelegateInvokeMethod: not null } named)
         {
             if (named.IsGenericType)
             {

@@ -76,7 +76,7 @@ namespace Corpus.Issue1899
 }
 ");
 
-        Assert.Contains("event Ticked (object?, EventArgs) -> void", rendered, StringComparison.Ordinal);
+        Assert.Contains("event Ticked EventHandler", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 

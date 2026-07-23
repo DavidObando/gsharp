@@ -2036,6 +2036,78 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
+    /// Reifies the conventional structural CLR event shape as
+    /// <see cref="EventHandler"/> or <see cref="EventHandler{TEventArgs}"/>.
+    /// This is intentionally event-only: the same function shape in a method,
+    /// field, or local remains an <see cref="Action{T1,T2}"/>.
+    /// </summary>
+    /// <param name="handlerType">The declared event handler type.</param>
+    /// <returns>The matching nominal event delegate, or <paramref name="handlerType"/>.</returns>
+    public static TypeSymbol CanonicalizeWellKnownEventHandler(TypeSymbol handlerType)
+    {
+        if (handlerType is not FunctionTypeSymbol function
+            || function.Arity != 2
+            || function.HasVariadic
+            || !FunctionTypeSymbol.IsVoidReturn(function.ReturnType))
+        {
+            return handlerType;
+        }
+
+        var senderType = function.ParameterTypes[0] switch
+        {
+            NullableTypeSymbol nullable => nullable.UnderlyingType,
+            NullabilityAnnotatedTypeSymbol annotated => annotated.BaseType,
+            _ => null,
+        };
+        if (senderType == null
+            || !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(senderType, TypeSymbol.Object))
+        {
+            return handlerType;
+        }
+
+        var eventArgsType = function.ParameterTypes[1];
+        var eventArgsClr = NullableLifting.GetEffectiveClrType(eventArgsType);
+        if (!IsEventArgsType(eventArgsType, eventArgsClr))
+        {
+            return handlerType;
+        }
+
+        if (eventArgsClr != null
+            && string.Equals(eventArgsClr.FullName, typeof(EventArgs).FullName, StringComparison.Ordinal))
+        {
+            return TypeSymbol.FromClrType(typeof(EventHandler));
+        }
+
+        var closedEventHandler = eventArgsClr == null
+            ? typeof(EventHandler<EventArgs>)
+            : typeof(EventHandler<>).MakeGenericType(eventArgsClr);
+        return ImportedTypeSymbol.GetConstructed(
+            closedEventHandler,
+            typeof(EventHandler<>),
+            ImmutableArray.Create(eventArgsType));
+
+        static bool IsEventArgsType(TypeSymbol type, Type clrType)
+        {
+            if (clrType != null)
+            {
+                return ClrTypeUtilities.IsAssignableByName(typeof(EventArgs), clrType);
+            }
+
+            for (var current = type as StructSymbol; current != null; current = current.BaseClass)
+            {
+                var importedBaseClr = NullableLifting.GetEffectiveClrType(current.ImportedBaseType);
+                if (importedBaseClr != null
+                    && ClrTypeUtilities.IsAssignableByName(typeof(EventArgs), importedBaseClr))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Issue #2130: resolves the effective lambda target shape for any target
     /// type that may consume a source lambda — a native function type, a
     /// delegate, or <c>System.Linq.Expressions.Expression&lt;TDelegate&gt;</c>.

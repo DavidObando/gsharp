@@ -1009,6 +1009,11 @@ internal sealed class MemberDefEmitter
             return this.GetEventTypeSpecHandle(type);
         }
 
+        if (type is ImportedTypeSymbol { OpenDefinition: not null, TypeArguments.IsDefaultOrEmpty: false })
+        {
+            return this.GetEventTypeSpecHandle(type);
+        }
+
         if (type.ClrType != null)
         {
             return this.getTypeHandleForMember(type.ClrType);

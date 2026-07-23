@@ -198,12 +198,8 @@ namespace Corpus.Issue1960
     }
 
     [Fact]
-    public void EventFieldDeclaration_WithBclDelegate_StillUsesArrowForm()
+    public void EventFieldDeclaration_WithBclDelegate_PreservesNominalType()
     {
-        // A BCL delegate (EventHandler, Action, Func, ...) has no G# alias
-        // declaration to preserve, so it must keep lowering to the
-        // structural arrow form — the item-3 fix is scoped to
-        // SOURCE-declared delegates only.
         string rendered = Render(@"
 using System;
 
@@ -212,11 +208,16 @@ namespace Corpus.Issue1960
     public class TickSource
     {
         public event EventHandler? Ticked;
+        public event EventHandler<EventArgs>? Detailed;
+        public event Action<object, EventArgs>? ExplicitAction;
     }
 }
 ");
 
-        Assert.Contains("event Ticked (object?, EventArgs) -> void", rendered, StringComparison.Ordinal);
+        Assert.Contains("event Ticked EventHandler", rendered, StringComparison.Ordinal);
+        Assert.Contains("event Detailed EventHandler[EventArgs]", rendered, StringComparison.Ordinal);
+        Assert.Contains("event ExplicitAction Action[object, EventArgs]", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("event Ticked (object?, EventArgs) -> void", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 

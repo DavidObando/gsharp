@@ -693,6 +693,8 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
+                handlerType = MemberLookup.CanonicalizeWellKnownEventHandler(handlerType);
+
                 var eventSymbol = new EventSymbol(
                     eventName,
                     handlerType,

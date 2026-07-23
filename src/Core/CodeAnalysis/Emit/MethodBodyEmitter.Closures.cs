@@ -602,7 +602,10 @@ internal sealed partial class MethodBodyEmitter
         if (node.Handler is BoundFunctionLiteralExpression literalHandler
             && node.EventType?.ClrType != null)
         {
-            var mappedDelegateType = this.outer.signatures.MapToReferenceClrType(node.EventType.ClrType);
+            var eventDelegateType = node.EventType is ImportedTypeSymbol imported
+                ? imported.ReifyClosedClrType()
+                : node.EventType.ClrType;
+            var mappedDelegateType = this.outer.signatures.MapToReferenceClrType(eventDelegateType);
             this.EmitFunctionLiteral(literalHandler, mappedDelegateType);
         }
         else

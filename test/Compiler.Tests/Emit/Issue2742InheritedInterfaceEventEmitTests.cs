@@ -50,11 +50,13 @@ public sealed class Issue2742InheritedInterfaceEventEmitTests
         var map = type.GetInterfaceMap(contract);
 
         var hits = 0;
-        Action<object, EventArgs> handler = (_, _) => hits++;
-        contract.GetEvent("ChangedSettings")!.AddEventHandler(instance, handler);
+        EventHandler handler = (_, _) => hits++;
+        var changedSettings = contract.GetEvent("ChangedSettings")!;
+        changedSettings.AddEventHandler(instance, handler);
         type.GetMethod("Raise")!.Invoke(instance, null);
 
         Assert.Equal(1, hits);
+        Assert.Equal(typeof(EventHandler), changedSettings.EventHandlerType);
         Assert.Equal(
             new[] { "add_ChangedSettings", "get_Flag", "Ping", "remove_ChangedSettings" },
             map.TargetMethods.Select(method => method.Name).OrderBy(name => name).ToArray());

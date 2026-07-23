@@ -1704,6 +1704,7 @@ internal sealed partial class DeclarationBinder
                     baseBinding,
                     eventName,
                     handlerType);
+                handlerType = MemberLookup.CanonicalizeWellKnownEventHandler(handlerType);
 
                 var eventAccessibility = resolveAccessibility(eventSyntax.AccessibilityModifier);
                 bool isFieldLike = eventSyntax.OpenBraceToken == null;
@@ -1844,7 +1845,7 @@ internal sealed partial class DeclarationBinder
                 if (eventSyntax.Accessors.Any(a => a.IsRaise))
                 {
                     var raiseParams = ImmutableArray<ParameterSymbol>.Empty;
-                    if (handlerType is FunctionTypeSymbol fnType)
+                    if (MemberLookup.TryGetDelegateFunctionTypeFromSymbol(handlerType, out var fnType))
                     {
                         var builder = ImmutableArray.CreateBuilder<ParameterSymbol>(fnType.ParameterTypes.Length);
                         for (int pi = 0; pi < fnType.ParameterTypes.Length; pi++)
@@ -2550,6 +2551,8 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
+                handlerType = MemberLookup.CanonicalizeWellKnownEventHandler(handlerType);
+
                 var eventAccessibility = resolveAccessibility(eventSyntax.AccessibilityModifier);
                 bool isFieldLike = eventSyntax.OpenBraceToken == null;
 
@@ -2623,7 +2626,7 @@ internal sealed partial class DeclarationBinder
                 if (eventSyntax.Accessors.Any(a => a.IsRaise))
                 {
                     var raiseParams = ImmutableArray<ParameterSymbol>.Empty;
-                    if (handlerType is FunctionTypeSymbol fnType)
+                    if (MemberLookup.TryGetDelegateFunctionTypeFromSymbol(handlerType, out var fnType))
                     {
                         var builder = ImmutableArray.CreateBuilder<ParameterSymbol>(fnType.ParameterTypes.Length);
                         for (int pi = 0; pi < fnType.ParameterTypes.Length; pi++)
