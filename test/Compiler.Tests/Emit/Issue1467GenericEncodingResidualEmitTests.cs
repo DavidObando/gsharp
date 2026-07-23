@@ -187,6 +187,29 @@ public class Issue1467GenericEncodingResidualEmitTests
         Assert.Equal("okC\n", output);
     }
 
+    [Fact]
+    public void Issue2785_GenericExtensionDelegateTypeSpecUsesMethodParameters()
+    {
+        var source = """
+            package Probe2785
+            import System
+            import System.Collections.Generic
+            import System.Linq
+
+            func (source IEnumerable[TSource]) Flat[TSource, TResult](selector (TSource) -> IEnumerable[TResult]) IEnumerable[IEnumerable[TResult]] {
+                return source.Select((s TSource) -> selector(s)).ToArray()
+            }
+
+            func Main() {
+                var result = [1, 2].Flat((x int32) -> [x, x + 1])
+                Console.WriteLine(result.SelectMany((values IEnumerable[int32]) -> values).Sum())
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("8\n", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_1467_exe_").FullName;
