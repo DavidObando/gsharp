@@ -31,10 +31,14 @@ internal sealed partial class OverloadResolver
     /// (e.g. <c>ldfld Base::Changed</c>) — including the backing field declared
     /// on a base class, so an inherited event can be raised from a derived type
     /// — rather than a (non-existent) local slot.</description></item>
-    /// <item><description>The conditional raise form <c>Ev?(args)</c> on a
-    /// <c>void</c> delegate is guarded by a null check (a
+    /// <item><description>The conditional raise form <c>Ev?(args)</c> is
+    /// guarded by a null check (a
     /// <see cref="BoundNullConditionalAccessExpression"/>), so raising an event
-    /// with no subscribers is a safe no-op, mirroring <c>Ev?.Invoke(args)</c>.
+    /// with no subscribers is a safe short-circuit, mirroring
+    /// <c>Ev?.Invoke(args)</c>. A <c>void</c> delegate yields a plain no-op;
+    /// Issue #2798: a value-returning delegate yields the correct optional/null
+    /// result via the established result-slot lowering instead of NRE-ing on a
+    /// null backing delegate.
     /// </description></item>
     /// </list>
     /// </summary>
@@ -47,20 +51,52 @@ internal sealed partial class OverloadResolver
     {
         if (variable is ImplicitFieldVariableSymbol implicitField)
         {
-            if (syntax.NullableQuestionToken != null
-                && ReferenceEquals(fnType.ReturnType, TypeSymbol.Void))
+            // Issue #1213 / #2798: the null-conditional raise form `Ev?(args)`
+            // of a field-like event's implicit backing delegate must
+            // short-circuit when the delegate is null (no subscribers). The
+            // `void`-returning raise is a plain no-op; a value-returning raise
+            // (Issue #2798: e.g. a structural `(int32) -> int32` event) must
+            // yield the correct optional/null result via the established
+            // result-slot lowering rather than NRE-ing on a null backing
+            // delegate. The receiver is evaluated once into `capture`; a
+            // non-null delegate invokes normally.
+            if (syntax.NullableQuestionToken != null)
             {
                 var captureName = "$ncap_" + (++binderCtx.NullConditionalCaptureCounter)
                     .ToString(System.Globalization.CultureInfo.InvariantCulture);
                 var capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: implicitField.Field.Type);
                 var invoke = new BoundIndirectCallExpression(null, new BoundVariableExpression(null, capture), fnType, args);
+
+                if (ReferenceEquals(fnType.ReturnType, TypeSymbol.Void))
+                {
+                    return new BoundNullConditionalAccessExpression(
+                        syntax,
+                        BuildImplicitFieldLoad(implicitField),
+                        capture,
+                        invoke,
+                        TypeSymbol.Void,
+                        resultSlot: null);
+                }
+
+                var resultType = fnType.ReturnType is NullableTypeSymbol
+                    ? fnType.ReturnType
+                    : (TypeSymbol)NullableTypeSymbol.Get(fnType.ReturnType);
+                LocalVariableSymbol resultSlot = null;
+                if (resultType is NullableTypeSymbol nullableResult
+                    && GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(nullableResult.UnderlyingType))
+                {
+                    var resultSlotName = "$nres_" + binderCtx.NullConditionalCaptureCounter
+                        .ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    resultSlot = new LocalVariableSymbol(resultSlotName, isReadOnly: false, type: resultType);
+                }
+
                 return new BoundNullConditionalAccessExpression(
                     syntax,
                     BuildImplicitFieldLoad(implicitField),
                     capture,
                     invoke,
-                    TypeSymbol.Void,
-                    resultSlot: null);
+                    resultType,
+                    resultSlot);
             }
 
             return new BoundIndirectCallExpression(null, BuildImplicitFieldLoad(implicitField), fnType, args);
