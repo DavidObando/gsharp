@@ -167,6 +167,23 @@ public class AsyncIteratorRewriterTests
     }
 
     [Fact]
+    public void Rewrite_AsyncEnumerableWithoutYield_ProducesNoPlan()
+    {
+        var function = new FunctionSymbol(
+            "eager",
+            ImmutableArray<ParameterSymbol>.Empty,
+            TypeSymbol.FromClrType(typeof(IAsyncEnumerable<int>)),
+            package: Package);
+        var body = Block(new BoundReturnStatement(
+            null,
+            new BoundLiteralExpression(null, null, function.Type)));
+
+        var result = AsyncIteratorRewriter.Rewrite(MakeProgram(function, body));
+
+        Assert.Empty(result.Plans);
+    }
+
+    [Fact]
     public void Rewrite_IsEnumerable_TrueForIAsyncEnumerable()
     {
         // Arrange

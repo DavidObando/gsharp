@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Lowering.Async;
@@ -31,15 +32,18 @@ public static class AsyncIteratorDetection
 {
     /// <summary>
     /// Determines whether <paramref name="function"/> is an async iterator —
-    /// one whose declared return type is <c>sequence[T]</c>
+    /// one whose body contains <c>yield</c> and whose declared return type is <c>sequence[T]</c>
     /// (<see cref="AsyncSequenceTypeSymbol"/>) or
     /// <c>IAsyncEnumerable[T]</c> / <c>IAsyncEnumerator[T]</c> in any of its
     /// closed-CLR, open-imported, or user-element forms.
     /// </summary>
     /// <param name="function">The function symbol to inspect.</param>
+    /// <param name="body">The function's bound body.</param>
     /// <returns><see langword="true"/> when the function is an async iterator.</returns>
-    public static bool IsAsyncIteratorFunction(FunctionSymbol function)
-        => function != null && GetElementType(function.Type) != null;
+    public static bool IsAsyncIteratorFunction(FunctionSymbol function, BoundStatement body)
+        => function != null
+            && GetElementType(function.Type) != null
+            && IteratorDetection.ContainsYield(body);
 
     /// <summary>
     /// Determines whether <paramref name="type"/> is an async-iterator return

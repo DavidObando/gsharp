@@ -44,15 +44,16 @@ public static class AsyncEmitPrecheck
 
         var builder = ImmutableArray.CreateBuilder<Diagnostic>();
 
-        foreach (var function in program.Functions.Keys)
+        foreach (var pair in program.Functions)
         {
+            var function = pair.Key;
             if (!function.IsAsync)
             {
                 continue;
             }
 
             // Async iterators are now supported — no gate needed.
-            if (IsAsyncIterator(function))
+            if (AsyncIteratorDetection.IsAsyncIteratorFunction(function, pair.Value))
             {
                 continue;
             }
@@ -69,7 +70,7 @@ public static class AsyncEmitPrecheck
 
         if (program.EntryPoint is { } entry && entry.IsAsync && !program.Functions.ContainsKey(entry))
         {
-            if (!IsAsyncIterator(entry) && entry.StateMachineType == null)
+            if (entry.StateMachineType == null)
             {
                 builder.Add(new Diagnostic(LocateAsyncFunction(entry), "GS0190", DiagnosticSeverity.Error, AsyncStateMachineUnavailableMessage));
             }
@@ -77,15 +78,6 @@ public static class AsyncEmitPrecheck
 
         return builder.ToImmutable();
     }
-
-    /// <summary>
-    /// Determines whether the given async function is an async iterator
-    /// (returns IAsyncEnumerable or IAsyncEnumerator), including the symbolic
-    /// open-generic forms (issue #1489) via the shared
-    /// <see cref="AsyncIteratorDetection"/> helper.
-    /// </summary>
-    private static bool IsAsyncIterator(FunctionSymbol function)
-        => AsyncIteratorDetection.IsAsyncIteratorFunction(function);
 
     private static TextLocation LocateAsyncFunction(FunctionSymbol function)
     {

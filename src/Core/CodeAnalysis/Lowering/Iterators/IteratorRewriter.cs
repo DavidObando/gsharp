@@ -11,6 +11,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Lowering.Async;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Lowering.Iterators;
@@ -41,13 +42,13 @@ public static class IteratorRewriter
             var function = pair.Key;
             var body = pair.Value;
 
-            if (!ContainsYield(body))
+            if (!IteratorDetection.ContainsYield(body))
             {
                 continue;
             }
 
             // Skip async iterators — they go through the async iterator rewriter path.
-            if (IsAsyncIteratorFunction(function))
+            if (AsyncIteratorDetection.IsAsyncIteratorFunction(function, body))
             {
                 continue;
             }
@@ -63,37 +64,6 @@ public static class IteratorRewriter
         }
 
         return new IteratorRewriteResult(program, plans.ToImmutable());
-    }
-
-    private static bool IsAsyncIteratorFunction(FunctionSymbol function)
-    {
-        // Issue #798: a generic `async sequence[T]` function is an
-        // AsyncSequenceTypeSymbol whose ClrType is null for open T (the
-        // CLR projection erases the element type). Recognize the symbolic
-        // form so the sync IteratorRewriter correctly skips it and the
-        // function flows to AsyncIteratorRewriter.
-        if (function.Type is AsyncSequenceTypeSymbol)
-        {
-            return true;
-        }
-
-        var clr = function.Type?.ClrType;
-        if (clr == null || !clr.IsGenericType || clr.IsGenericTypeDefinition)
-        {
-            return false;
-        }
-
-        var def = clr.GetGenericTypeDefinition();
-        var fullName = def?.FullName;
-        return fullName == "System.Collections.Generic.IAsyncEnumerable`1"
-            || fullName == "System.Collections.Generic.IAsyncEnumerator`1";
-    }
-
-    private static bool ContainsYield(BoundStatement statement)
-    {
-        var walker = new YieldWalker();
-        walker.Visit(statement);
-        return walker.Found;
     }
 
     private static TypeSymbol GetIteratorElementType(TypeSymbol type)
@@ -168,16 +138,6 @@ public static class IteratorRewriter
         var collector = new LocalCollector();
         collector.Visit(body);
         return collector.Locals.ToImmutableArray();
-    }
-
-    private sealed class YieldWalker : BoundTreeWalker
-    {
-        public bool Found { get; private set; }
-
-        protected override void VisitYieldStatement(BoundYieldStatement node)
-        {
-            Found = true;
-        }
     }
 
     private sealed class YieldStateCollector : BoundTreeWalker

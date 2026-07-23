@@ -329,6 +329,9 @@ internal sealed partial class DeclarationBinder
                 methodAccessibility,
                 receiverType: isStaticInterfaceMethod ? null : (TypeSymbol)interfaceSymbol);
             methodSymbol.ReturnRefKind = methodReturnRefKind;
+
+            // Bodyless interface declarations describe an async-iterator ABI;
+            // executable implementations are classified from their own yield.
             methodSymbol.IsAsync = methodSyntax.IsAsync || isAsyncIteratorReturnType(returnType);
             methodSymbol.AsyncReturnsValueTask = returnTypeIsValueTask;
             methodSymbol.IsUnsafe = methodSyntax.IsUnsafe;

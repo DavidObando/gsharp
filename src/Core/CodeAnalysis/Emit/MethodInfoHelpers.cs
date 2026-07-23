@@ -4,6 +4,7 @@
 
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Lowering.Async;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Emit;
@@ -255,6 +256,12 @@ internal static class MethodInfoHelpers
     /// </summary>
     private static bool ReturnTypesMatch(FunctionSymbol interfaceMethod, FunctionSymbol implementationMethod)
     {
+        if (AsyncIteratorDetection.IsAsyncIteratorReturnType(interfaceMethod.Type)
+            && AsyncIteratorDetection.IsAsyncIteratorReturnType(implementationMethod.Type))
+        {
+            return AwaitedTypesMatch(interfaceMethod.Type, implementationMethod.Type);
+        }
+
         if (interfaceMethod.IsAsync == implementationMethod.IsAsync)
         {
             return ReferenceEquals(interfaceMethod.Type, implementationMethod.Type);

@@ -49,7 +49,7 @@ public static class AsyncIteratorRewriter
             var function = pair.Key;
             var body = pair.Value;
 
-            if (!IsAsyncIteratorFunction(function))
+            if (!AsyncIteratorDetection.IsAsyncIteratorFunction(function, body))
             {
                 continue;
             }
@@ -102,16 +102,6 @@ public static class AsyncIteratorRewriter
         return new AsyncIteratorRewriteResult(program, plans.ToImmutable());
     }
 
-    private static bool IsAsyncIteratorFunction(FunctionSymbol function)
-        => AsyncIteratorDetection.IsAsyncIteratorFunction(function);
-
-    private static bool ContainsYield(BoundStatement statement)
-    {
-        var walker = new YieldWalker();
-        walker.Visit(statement);
-        return walker.Found;
-    }
-
     private static TypeSymbol GetAsyncIteratorElementType(TypeSymbol type)
         => AsyncIteratorDetection.GetElementType(type);
 
@@ -144,16 +134,6 @@ public static class AsyncIteratorRewriter
         }
 
         return result.ToImmutable();
-    }
-
-    private sealed class YieldWalker : BoundTreeWalker
-    {
-        public bool Found { get; private set; }
-
-        protected override void VisitYieldStatement(BoundYieldStatement node)
-        {
-            Found = true;
-        }
     }
 
     /// <summary>
