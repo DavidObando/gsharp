@@ -95,6 +95,20 @@ Reset()
     }
 
     [Fact]
+    public void CallAndBraceFollowedByElementOnNextLine_StaysSeparate()
+    {
+        var tree = SyntaxTree.Parse(@"
+Reset() {
+    Record
+}
+");
+        Assert.Empty(tree.Diagnostics);
+        var statement = tree.Root.Members.OfType<GlobalStatementSyntax>().First().Statement;
+        var expression = Assert.IsType<ExpressionStatementSyntax>(statement).Expression;
+        Assert.IsType<CallExpressionSyntax>(expression);
+    }
+
+    [Fact]
     public void DictionaryInitializer_KeyedPairs_ParsesKeyedElements()
     {
         var init = ParseInitializer(@"

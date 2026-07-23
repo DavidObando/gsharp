@@ -1143,9 +1143,10 @@ public partial class Parser
 
     // Issue #479 / ADR-0117: recognises a collection-initializer `{` after a
     // constructor call (`List[int32](){…}`, `Dictionary[K, V](cmp){…}`). An
-    // arbitrary single expression is accepted when its brace starts on the same
-    // line as the call; a brace on the next line may instead be a standalone
-    // block. Indexed, literal, keyed, and multi-element forms stay unambiguous.
+    // arbitrary single expression is accepted when its brace and element start
+    // on the call's line; a line break may instead indicate a standalone block
+    // or an incomplete object initializer in editor input. Indexed, literal,
+    // keyed, and multi-element forms stay unambiguous.
     private bool LooksLikeCollectionInitializerBrace(ExpressionSyntax target)
     {
         var k1 = Peek(1).Kind;
@@ -1189,7 +1190,8 @@ public partial class Parser
                 if (depth == 0)
                 {
                     return target is CallExpressionSyntax call
-                        && !IsTokenOnNewLineAfter(Current, call.CloseParenthesisToken);
+                        && !IsTokenOnNewLineAfter(Current, call.CloseParenthesisToken)
+                        && !IsTokenOnNewLineAfter(Peek(1), Current);
                 }
 
                 depth--;
