@@ -273,14 +273,12 @@ internal sealed partial class ExpressionBinder
         }
 
         var resultType = target.Type;
-        var clrType = resultType.ClrType;
         var hasNonIndexedElement = syntax.Elements.Any(e => e is not IndexedCollectionElementSyntax);
 
         // A collection initializer requires an accessible instance `Add` for the
         // bare / key:value element forms. Indexed `[k] = v` entries go through
         // the indexer-set path, which reports its own GS0226/indexability errors.
-        var hasAdd = clrType != null && MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(clrType, "Add").Count > 0;
-        if (clrType == null || (hasNonIndexedElement && !hasAdd))
+        if (hasNonIndexedElement && !HasCollectionAdd(resultType))
         {
             Diagnostics.ReportTypeNotCollectionInitializable(syntax.OpenBraceToken.Location, resultType);
             BindCollectionElementsForDiagnostics(syntax);
@@ -366,10 +364,8 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var clrType = propRead.Type.ClrType;
         var hasNonIndexedElement = braced.Elements.Any(e => e is not IndexedCollectionElementSyntax);
-        var hasAdd = clrType != null && MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(clrType, "Add").Count > 0;
-        if (clrType == null || (hasNonIndexedElement && !hasAdd))
+        if (hasNonIndexedElement && !HasCollectionAdd(propRead.Type))
         {
             return false;
         }
@@ -380,6 +376,17 @@ internal sealed partial class ExpressionBinder
         statements.Add(new BoundVariableDeclaration(braced, memberLocal, propRead));
         EmitCollectionElementAddStatements(memberLocal, braced.Elements, statements);
         return true;
+    }
+
+    private static bool HasCollectionAdd(TypeSymbol type)
+    {
+        if (!TypeMemberModel.GetMethods(type, "Add", MemberQuery.Instance(MemberKinds.Method)).IsDefaultOrEmpty)
+        {
+            return true;
+        }
+
+        return type.ClrType is { } clrType
+            && MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(clrType, "Add").Count > 0;
     }
 
     /// <summary>

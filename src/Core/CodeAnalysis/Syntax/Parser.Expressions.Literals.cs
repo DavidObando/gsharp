@@ -62,7 +62,7 @@ public partial class Parser
         {
             // Issue #479 / ADR-0117: a collection initializer applied to a
             // constructor call (`List[int32](){…}`, `Dictionary[K, V](cmp){…}`).
-            if (LooksLikeCollectionInitializerBrace())
+            if (LooksLikeCollectionInitializerBrace(target))
             {
                 return ParseCollectionInitializerExpression(target);
             }

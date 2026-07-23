@@ -69,6 +69,32 @@ let hs = HashSet[int32](){ 1, 2, 3 }
     }
 
     [Fact]
+    public void ConstructorInitializer_SingleIdentifier_ParsesBareElement()
+    {
+        var init = ParseInitializer(@"
+let bag = Bag(){ item }
+");
+        Assert.Single(init.Elements);
+        var element = Assert.IsType<ExpressionCollectionElementSyntax>(init.Elements[0]);
+        Assert.IsType<NameExpressionSyntax>(element.Expression);
+    }
+
+    [Fact]
+    public void CallFollowedByBlockOnNextLine_StaysSeparate()
+    {
+        var tree = SyntaxTree.Parse(@"
+Reset()
+{
+    defer Record()
+}
+");
+        Assert.Empty(tree.Diagnostics);
+        var statement = tree.Root.Members.OfType<GlobalStatementSyntax>().First().Statement;
+        var expression = Assert.IsType<ExpressionStatementSyntax>(statement).Expression;
+        Assert.IsType<CallExpressionSyntax>(expression);
+    }
+
+    [Fact]
     public void DictionaryInitializer_KeyedPairs_ParsesKeyedElements()
     {
         var init = ParseInitializer(@"
