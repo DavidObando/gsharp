@@ -1026,12 +1026,44 @@ internal sealed partial class OverloadResolver
         // invocation of the delegate's `Invoke` method, identical in behavior
         // to the explicit `f.Invoke(x)` form.
         if (symbol is VariableSymbol delegateVar
-            && (narrowedCallTargetType ?? delegateVar.Type)?.ClrType is System.Type delegateClrType
+            && (narrowedCallTargetType ?? delegateVar.Type) is TypeSymbol delegateTargetType
+            && delegateTargetType.ClrType is System.Type delegateClrType
             && ClrTypeUtilities.IsDelegateType(delegateClrType))
         {
             var receiver = delegateVar is ImplicitFieldVariableSymbol clrImplicitField
                 ? BuildImplicitFieldLoad(clrImplicitField)
                 : (BoundExpression)new BoundVariableExpression(null, delegateVar);
+
+            // Issue #2796: a null-conditional raise `Evt?(args)` of a CLR
+            // delegate-typed value — canonically a field-like event's backing
+            // delegate, which PR #2792 (fix/2726) now emits as a nominal
+            // `System.EventHandler`/`EventHandler<T>` — must short-circuit to a
+            // no-op when the delegate is null, mirroring C# `Evt?.Invoke(args)`.
+            // Without the guard the emitted `callvirt Invoke` dereferences a
+            // null delegate and NREs on a fresh event with no subscribers. The
+            // FunctionTypeSymbol and named-delegate call paths above already
+            // guard the `void`-returning raise via BuildIndirectDelegateCall;
+            // the CLR-delegate path — reached once a structural
+            // `(object?, EventArgs) -> void` or nominal `EventHandler` event is
+            // a CLR delegate — must do the same. Only the canonical
+            // `void`-returning event-raise form is guarded here: the invoke
+            // leaves no value on the stack, so the null branch is a plain no-op.
+            // Value-returning conditional invocations keep their existing
+            // lowering and fall through to the plain Invoke path below.
+            if (syntax.NullableQuestionToken != null)
+            {
+                var eventRaiseCaptureName = "$ncap_" + (++binderCtx.NullConditionalCaptureCounter)
+                    .ToString(System.Globalization.CultureInfo.InvariantCulture);
+                var eventRaiseCapture = new LocalVariableSymbol(eventRaiseCaptureName, isReadOnly: true, type: delegateTargetType);
+                var eventRaiseCaptureRef = new BoundVariableExpression(null, eventRaiseCapture);
+                if (tryBindInheritedClrInstanceCall(eventRaiseCaptureRef, delegateClrType, "Invoke", boundArguments.ToImmutable(), syntax, out var guardedInvoke, null, default, argumentNames)
+                    && guardedInvoke is not BoundErrorExpression
+                    && ReferenceEquals(guardedInvoke.Type, TypeSymbol.Void))
+                {
+                    return new BoundNullConditionalAccessExpression(syntax, receiver, eventRaiseCapture, guardedInvoke, TypeSymbol.Void, resultSlot: null);
+                }
+            }
+
             if (tryBindInheritedClrInstanceCall(receiver, delegateClrType, "Invoke", boundArguments.ToImmutable(), syntax, out var invokeCall, null, default, argumentNames))
             {
                 return invokeCall;
