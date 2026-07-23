@@ -46,6 +46,17 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #2771: emitter-owned variable operations (notably `?.`
+        // captures) bypass MoveNextBodyRewriter's bound-node substitution.
+        if (this.asyncFieldMap != null
+            && this.asyncFieldMap.TryGetHoistedField(variable, out var hoistedField))
+        {
+            this.il.OpCode(ILOpCode.Ldarg_0);
+            this.il.OpCode(ILOpCode.Ldfld);
+            this.il.Token(this.ResolveCurrentStateMachineFieldToken(hoistedField));
+            return;
+        }
+
         if (variable is ParameterSymbol ps && this.parameters.TryGetValue(ps, out var argIndex))
         {
             this.il.LoadArgument(argIndex);
@@ -194,6 +205,20 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitStoreVariable(VariableSymbol variable)
     {
+        if (this.asyncFieldMap != null
+            && this.asyncFieldMap.TryGetHoistedField(variable, out var hoistedField))
+        {
+            // stfld needs the receiver below the value; the planned fallback
+            // local provides the stack reorder without changing value identity.
+            var valueSlot = this.locals[variable];
+            this.il.StoreLocal(valueSlot);
+            this.il.OpCode(ILOpCode.Ldarg_0);
+            this.il.LoadLocal(valueSlot);
+            this.il.OpCode(ILOpCode.Stfld);
+            this.il.Token(this.ResolveCurrentStateMachineFieldToken(hoistedField));
+            return;
+        }
+
         if (variable is ParameterSymbol ps && this.parameters.TryGetValue(ps, out var argIndex))
         {
             this.il.StoreArgument(argIndex);
