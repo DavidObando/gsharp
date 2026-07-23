@@ -1366,6 +1366,22 @@ internal sealed class UserTokenResolver
                 $"Instance method '{method.Name}' has no emitted handle.");
         }
 
+        return this.ResolveUserInstanceMethodToken(containingType, method, openDef);
+    }
+
+    /// <summary>
+    /// Resolves a user instance method token when the caller owns a separately
+    /// planned MethodDef handle, such as a synthesized event accessor.
+    /// </summary>
+    /// <param name="containingType">The method's declaring type.</param>
+    /// <param name="method">The method symbol whose signature is encoded.</param>
+    /// <param name="openDef">The open MethodDef handle.</param>
+    /// <returns>The MethodDef or a MemberRef parented at the constructed type.</returns>
+    internal EntityHandle ResolveUserInstanceMethodToken(
+        StructSymbol containingType,
+        FunctionSymbol method,
+        MethodDefinitionHandle openDef)
+    {
         if (!ReflectionMetadataEmitter.IsUserGenericTypeReference(containingType))
         {
             return openDef;

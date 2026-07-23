@@ -1948,21 +1948,15 @@ internal sealed class MemberLookup
             // `TryGetDelegateFunctionType(Type, ...)` below therefore widens
             // that argument to `object`. When the symbolic
             // `OpenDefinition`/`TypeArguments` shape (#313 construction) is
-            // available and every argument is fully resolved (no leftover
-            // open <see cref="TypeParameterSymbol"/>), build the
-            // `FunctionTypeSymbol` directly from that symbolic shape instead,
-            // preserving the real argument types. Falls through to the
+            // available, build the `FunctionTypeSymbol` directly from that
+            // symbolic shape instead, preserving real user types and open
+            // <see cref="TypeParameterSymbol"/> slots. Falls through to the
             // reflection-based path below for anything that isn't a simple
             // `Invoke(...)` shape mapping directly onto the delegate's own
-            // generic parameters (e.g. an Invoke signature that nests a type
-            // parameter inside another generic), and for genuinely-open
-            // generic parameters (still-unresolved method type parameters),
-            // which keep their existing (deliberate) `object`-widening
-            // behavior unchanged.
+            // generic parameters.
             case ImportedTypeSymbol imported
                 when imported.OpenDefinition != null
                     && !imported.TypeArguments.IsDefaultOrEmpty
-                    && !imported.TypeArguments.Any(TypeSymbol.ContainsTypeParameter)
                     && TryGetDelegateFunctionTypeFromOpenDefinition(imported.OpenDefinition, imported.TypeArguments, out functionType):
                 return true;
             default:
@@ -2091,6 +2085,13 @@ internal sealed class MemberLookup
             if (clrType != null)
             {
                 return ClrTypeUtilities.IsAssignableByName(typeof(EventArgs), clrType);
+            }
+
+            if (type is TypeParameterSymbol { ClassConstraint: TypeSymbol classConstraint })
+            {
+                return IsEventArgsType(
+                    classConstraint,
+                    NullableLifting.GetEffectiveClrType(classConstraint));
             }
 
             for (var current = type as StructSymbol; current != null; current = current.BaseClass)
@@ -3966,7 +3967,7 @@ internal sealed class MemberLookup
                 typeArguments,
                 openMethodDefinition: null,
                 methodTypeArguments: default);
-            if (mappedParam == null || mappedParam == TypeSymbol.Error || TypeSymbol.ContainsTypeParameter(mappedParam))
+            if (mappedParam == null || mappedParam == TypeSymbol.Error)
             {
                 return false;
             }
@@ -3995,7 +3996,7 @@ internal sealed class MemberLookup
                 typeArguments,
                 openMethodDefinition: null,
                 methodTypeArguments: default);
-            if (returnType == null || returnType == TypeSymbol.Error || TypeSymbol.ContainsTypeParameter(returnType))
+            if (returnType == null || returnType == TypeSymbol.Error)
             {
                 return false;
             }

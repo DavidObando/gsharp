@@ -600,13 +600,18 @@ internal sealed partial class MethodBodyEmitter
         // and non-capturing lambdas both flow through the closure builder
         // with the correct target delegate ctor (object, IntPtr).
         if (node.Handler is BoundFunctionLiteralExpression literalHandler
+            && node.EventType is ImportedTypeSymbol { OpenDefinition: not null } symbolicDelegate)
+        {
+            this.EmitFunctionLiteral(
+                literalHandler,
+                overrideDelegateType: null,
+                symbolicDelegateCtorRef: this.outer.memberRefs.GetConstructedDelegateCtorRef(symbolicDelegate));
+        }
+        else if (node.Handler is BoundFunctionLiteralExpression literalHandlerWithClrType
             && node.EventType?.ClrType != null)
         {
-            var eventDelegateType = node.EventType is ImportedTypeSymbol imported
-                ? imported.ReifyClosedClrType()
-                : node.EventType.ClrType;
-            var mappedDelegateType = this.outer.signatures.MapToReferenceClrType(eventDelegateType);
-            this.EmitFunctionLiteral(literalHandler, mappedDelegateType);
+            var mappedDelegateType = this.outer.signatures.MapToReferenceClrType(node.EventType.ClrType);
+            this.EmitFunctionLiteral(literalHandlerWithClrType, mappedDelegateType);
         }
         else
         {
@@ -625,6 +630,20 @@ internal sealed partial class MethodBodyEmitter
             {
                 var accessorToken = this.outer.userTokens.ResolveUserStaticMethodToken(staticOwner, accessorMethodSymbol, accessorHandle);
                 this.il.OpCode(ILOpCode.Call);
+                this.il.Token(accessorToken);
+                return;
+            }
+
+            if (node.Receiver != null
+                && node.StructType is StructSymbol instanceOwner
+                && ReflectionMetadataEmitter.IsUserGenericTypeReference(instanceOwner)
+                && accessorMethodSymbol != null)
+            {
+                var accessorToken = this.outer.userTokens.ResolveUserInstanceMethodToken(
+                    instanceOwner,
+                    accessorMethodSymbol,
+                    accessorHandle);
+                this.il.OpCode(node.Event.IsVirtual || node.Event.IsOverride ? ILOpCode.Callvirt : ILOpCode.Call);
                 this.il.Token(accessorToken);
                 return;
             }

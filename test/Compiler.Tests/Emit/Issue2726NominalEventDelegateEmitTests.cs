@@ -101,6 +101,56 @@ public sealed class Issue2726NominalEventDelegateEmitTests
     }
 
     [Fact]
+    public void ConstrainedGenericStructuralEvent_PreservesOpenAbiAndLambdaRuns()
+    {
+        const string source = """
+            package Issue2726.Generic
+            import System
+
+            class LocalArgs : EventArgs { }
+
+            class GenericRaiser[T EventArgs] {
+                event Changed (object?, T) -> void
+                event NominalChanged EventHandler[T]
+
+                func Run(args T) int32 {
+                    var hits int32 = 0
+                    NominalChanged += (sender object?, value T) -> { hits += 1 }
+                    this.NominalChanged?.Invoke(this, args)
+                    return hits
+                }
+            }
+
+            class UnconstrainedRaiser[T any] {
+                event Changed (object?, T) -> void
+            }
+            """;
+
+        using var artifacts = CompileGSharp(source, "GenericEvents.dll");
+        IlVerifier.Verify(artifacts.OutputPath);
+
+        var assembly = Assembly.LoadFrom(artifacts.OutputPath);
+        var openRaiser = assembly.GetType("Issue2726.Generic.GenericRaiser`1")!;
+        var typeParameter = openRaiser.GetGenericArguments().Single();
+        var expectedHandler = typeof(EventHandler<>).MakeGenericType(typeParameter);
+        AssertEventAbi(openRaiser.GetEvent("Changed")!, expectedHandler);
+        AssertEventAbi(openRaiser.GetEvent("NominalChanged")!, expectedHandler);
+
+        var openUnconstrained = assembly.GetType("Issue2726.Generic.UnconstrainedRaiser`1")!;
+        var unconstrainedParameter = openUnconstrained.GetGenericArguments().Single();
+        AssertEventAbi(
+            openUnconstrained.GetEvent("Changed")!,
+            typeof(Action<,>).MakeGenericType(typeof(object), unconstrainedParameter));
+
+        var localArgs = assembly.GetType("Issue2726.Generic.LocalArgs")!;
+        var closedRaiser = openRaiser.MakeGenericType(localArgs);
+        var instance = Activator.CreateInstance(closedRaiser)!;
+        Assert.Equal(1, closedRaiser.GetMethod("Run")!.Invoke(
+            instance,
+            new[] { Activator.CreateInstance(localArgs) }));
+    }
+
+    [Fact]
     public void Override_Wins_Over_Inner_Quality()
     {
         using var artifacts = CompileBaselineConsumerAndMigratedContract();
