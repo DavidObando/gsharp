@@ -229,7 +229,7 @@ public sealed class SharedAssetParityTests
             vsRoot, "src", "VsGsharp", "source.extension.vsixmanifest"));
         Assert.All(
             manifest.Descendants().Where(element => element.Name.LocalName == "InstallationTarget"),
-            target => Assert.Equal("[18.0,)", target.Attribute("Version")?.Value));
+            target => Assert.Equal("[17.14,)", target.Attribute("Version")?.Value));
         string[] assets = manifest.Descendants()
             .Where(element => element.Name.LocalName == "Asset")
             .Select(element => (string)element.Attribute("Type")!)
