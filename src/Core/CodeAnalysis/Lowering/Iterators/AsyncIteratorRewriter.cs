@@ -24,7 +24,7 @@ using GSharp.Core.CodeAnalysis.Symbols;
 namespace GSharp.Core.CodeAnalysis.Lowering.Iterators;
 
 /// <summary>
-/// Rewrites async iterator functions (those with <c>yield</c> and returning
+/// Rewrites async iterator functions (explicitly async or containing <c>yield</c>, and returning
 /// <c>IAsyncEnumerable&lt;T&gt;</c> or <c>IAsyncEnumerator&lt;T&gt;</c>)
 /// into state-machine classes. Combines the yield-lowering of
 /// <see cref="IteratorRewriter"/> with the await-lowering of

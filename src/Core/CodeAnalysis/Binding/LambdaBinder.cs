@@ -272,6 +272,12 @@ internal sealed class LambdaBinder
         var isAsync = syntax.IsAsync
             || (isAsyncIteratorReturnType(returnType) && IteratorDetection.ContainsYield(syntax.Body));
 
+        if (isAsync && isAsyncIteratorReturnType(returnType))
+        {
+            Diagnostics.ReportAsyncIteratorFunctionLiteralNotSupported(syntax.Location, returnType);
+            return new BoundErrorExpression(syntax);
+        }
+
         // ADR-0058: a managed-pointer (*T) cannot be used as a lambda return type
         // because CLR Func<> delegates cannot carry by-ref type arguments.
         if (returnType is ByRefTypeSymbol && syntax.ReturnTypeClause != null)
@@ -736,6 +742,12 @@ internal sealed class LambdaBinder
         // produced by the body-binding pipeline is replaced by the common
         // type of all return-statement expressions.
         var returnType = InferLambdaReturnType(boundBody, syntax, inferReturnTypeFromBody ? null : targetFunctionType, isAsync);
+
+        if (isAsync && isAsyncIteratorReturnType(returnType))
+        {
+            Diagnostics.ReportAsyncIteratorFunctionLiteralNotSupported(syntax.Location, returnType);
+            return new BoundErrorExpression(syntax);
+        }
 
         // ADR-0058: a managed-pointer (*T) cannot be used as a lambda return
         // type because CLR Func<> delegates cannot carry by-ref type arguments.

@@ -137,7 +137,7 @@ public class Issue2787IteratorUsingEarlyExitEmitTests
             }
             """;
 
-        Assert.Contains(CompileExpectingErrors(source), line => line.Contains("GS0497"));
+        Assert.Contains(CompileExpectingErrors(source), line => line.Contains("GS0498"));
     }
 
     [Fact]
@@ -157,7 +157,7 @@ public class Issue2787IteratorUsingEarlyExitEmitTests
             }
             """;
 
-        Assert.Contains(CompileExpectingErrors(source), line => line.Contains("GS0497"));
+        Assert.Contains(CompileExpectingErrors(source), line => line.Contains("GS0498"));
     }
 
     [Fact]

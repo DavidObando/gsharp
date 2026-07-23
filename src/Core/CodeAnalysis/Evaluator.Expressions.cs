@@ -658,7 +658,7 @@ public sealed partial class Evaluator
             {
                 if (!sv.Fields.ContainsKey(f.Name))
                 {
-                    sv.Fields[f.Name] = DefaultValue(f.Type);
+                    sv.Fields[f.Name] = ClrDefaultValue(f.Type);
                 }
             }
         }
@@ -865,7 +865,7 @@ public sealed partial class Evaluator
             {
                 if (!sv.Fields.ContainsKey(f.Name))
                 {
-                    sv.Fields[f.Name] = DefaultValue(f.Type);
+                    sv.Fields[f.Name] = ClrDefaultValue(f.Type);
                 }
             }
         }
@@ -1543,7 +1543,7 @@ public sealed partial class Evaluator
                     return ifaceValue;
                 }
 
-                return DefaultValue(node.Field.Type);
+                return ClrDefaultValue(node.Field.Type);
             }
 
             if (TryGetStaticField(node.StructType, node.Field, out var staticValue))
@@ -1551,7 +1551,7 @@ public sealed partial class Evaluator
                 return staticValue;
             }
 
-            return DefaultValue(node.Field.Type);
+            return ClrDefaultValue(node.Field.Type);
         }
 
         var receiverValue = EvaluateExpression(node.Receiver);
@@ -1560,7 +1560,7 @@ public sealed partial class Evaluator
             return value;
         }
 
-        return DefaultValue(node.Field.Type);
+        return ClrDefaultValue(node.Field.Type);
     }
 
     private object EvaluateFieldAssignmentExpression(BoundFieldAssignmentExpression node)
@@ -1635,7 +1635,7 @@ public sealed partial class Evaluator
                 }
             }
 
-            return DefaultValue(node.Property.Type);
+            return ClrDefaultValue(node.Property.Type);
         }
 
         var receiverValue = EvaluateExpression(node.Receiver);
@@ -1677,7 +1677,7 @@ public sealed partial class Evaluator
                 return value;
             }
 
-            return DefaultValue(property.Type);
+            return ClrDefaultValue(property.Type);
         }
 
         // Computed property: execute the bound getter body.
@@ -1693,7 +1693,7 @@ public sealed partial class Evaluator
             }
         }
 
-        return DefaultValue(property.Type);
+        return ClrDefaultValue(property.Type);
     }
 
     private object EvaluatePropertyAssignmentExpression(BoundPropertyAssignmentExpression node)
@@ -1774,6 +1774,12 @@ public sealed partial class Evaluator
     }
 
     private static object DefaultValue(Symbols.TypeSymbol type)
+        => GetDefaultValue(type, useLanguageStringZero: true);
+
+    private static object ClrDefaultValue(Symbols.TypeSymbol type)
+        => GetDefaultValue(type, useLanguageStringZero: false);
+
+    private static object GetDefaultValue(Symbols.TypeSymbol type, bool useLanguageStringZero)
     {
         // Issue #504/#1652: NullableTypeSymbol.ClrType aliases the underlying
         // type's ClrType (e.g. `int?` reports `typeof(int)`), so it must be
@@ -1786,7 +1792,7 @@ public sealed partial class Evaluator
 
         if (type == Symbols.TypeSymbol.String)
         {
-            return string.Empty;
+            return useLanguageStringZero ? string.Empty : null;
         }
 
         // Issue #1652: user-defined enums have no ClrType (they're not emitted
@@ -1806,10 +1812,15 @@ public sealed partial class Evaluator
 
         if (type is Symbols.StructSymbol s)
         {
+            if (s.IsClass)
+            {
+                return null;
+            }
+
             var sv = new StructValue(s);
             foreach (var f in s.Fields)
             {
-                sv.Fields[f.Name] = DefaultValue(f.Type);
+                sv.Fields[f.Name] = GetDefaultValue(f.Type, useLanguageStringZero);
             }
 
             return sv;

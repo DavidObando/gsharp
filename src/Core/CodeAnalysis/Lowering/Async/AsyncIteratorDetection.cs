@@ -27,12 +27,15 @@ namespace GSharp.Core.CodeAnalysis.Lowering.Async;
 /// could not be resolved) and ultimately reported as <c>GS0190</c>. Routing
 /// every site through this helper keeps the three checks in lock-step so the
 /// symbolic open-generic form is recognised consistently.</para>
+/// <para>Issue #2786: an explicitly async iterator remains an iterator when its
+/// body has no <c>yield</c>; plain-async lowering would spuriously change its
+/// runtime return type to <c>Task&lt;IAsyncEnumerable&lt;T&gt;&gt;</c>.</para>
 /// </remarks>
 public static class AsyncIteratorDetection
 {
     /// <summary>
     /// Determines whether <paramref name="function"/> is an async iterator —
-    /// one whose body contains <c>yield</c> and whose declared return type is <c>sequence[T]</c>
+    /// one that is explicitly async or contains <c>yield</c>, and whose declared return type is <c>sequence[T]</c>
     /// (<see cref="AsyncSequenceTypeSymbol"/>) or
     /// <c>IAsyncEnumerable[T]</c> / <c>IAsyncEnumerator[T]</c> in any of its
     /// closed-CLR, open-imported, or user-element forms.
@@ -43,7 +46,7 @@ public static class AsyncIteratorDetection
     public static bool IsAsyncIteratorFunction(FunctionSymbol function, BoundStatement body)
         => function != null
             && GetElementType(function.Type) != null
-            && IteratorDetection.ContainsYield(body);
+            && (function.IsAsync || IteratorDetection.ContainsYield(body));
 
     /// <summary>
     /// Determines whether <paramref name="type"/> is an async-iterator return

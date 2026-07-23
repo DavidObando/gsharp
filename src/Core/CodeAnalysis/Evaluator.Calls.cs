@@ -12,6 +12,7 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Lowering.Async;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using Emit = GSharp.Core.CodeAnalysis.Emit;
@@ -138,9 +139,8 @@ public sealed partial class Evaluator
             return cached;
         }
 
-        var walker = new YieldFinder();
-        walker.RewriteStatement(body);
-        cached = walker.Found;
+        cached = AsyncIteratorDetection.IsAsyncIteratorFunction(function, body)
+            || IteratorDetection.ContainsYield(body);
         CacheIsIteratorFunction(function, cached);
         return cached;
     }
@@ -174,6 +174,17 @@ public sealed partial class Evaluator
         }
 
         return list;
+    }
+
+    private object EvaluateUserMethodBody(FunctionSymbol function, BoundBlockStatement body)
+    {
+        if (IsIteratorFunction(function, body))
+        {
+            return EvaluateIteratorFunction(function, body);
+        }
+
+        var result = EvaluateFunctionBody(body);
+        return function.IsAsync ? WrapAsyncResult(function.Type, result) : result;
     }
 
     private void EvaluateYieldStatement(BoundYieldStatement node)
@@ -315,7 +326,7 @@ public sealed partial class Evaluator
         using (PushFrame(frame))
         {
             var statement = program.Functions[method];
-            return EvaluateFunctionBody(statement);
+            return EvaluateUserMethodBody(method, statement);
         }
     }
 
@@ -351,7 +362,7 @@ public sealed partial class Evaluator
         using (PushFrame(frame))
         {
             var statement = program.Functions[method];
-            return EvaluateFunctionBody(statement);
+            return EvaluateUserMethodBody(method, statement);
         }
     }
 
@@ -393,7 +404,7 @@ public sealed partial class Evaluator
                 return fieldValue;
             }
 
-            return DefaultValue(node.Property.Type);
+            return ClrDefaultValue(node.Property.Type);
         }
 
         var method = node.Method;
@@ -414,7 +425,7 @@ public sealed partial class Evaluator
         using (PushFrame(frame))
         {
             var statement = program.Functions[method];
-            return EvaluateFunctionBody(statement);
+            return EvaluateUserMethodBody(method, statement);
         }
     }
 
@@ -560,7 +571,7 @@ public sealed partial class Evaluator
 
         using (PushFrame(frame2))
         {
-            return EvaluateFunctionBody(statement);
+            return EvaluateUserMethodBody(target, statement);
         }
     }
 
