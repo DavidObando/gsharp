@@ -110,19 +110,6 @@ internal sealed partial class OverloadResolver
             return false;
         }
 
-        if (!argumentNames.IsDefault)
-        {
-            Diagnostics.ReportNamedArgumentParameterNotFound(syntax.Identifier.Location, variable.Name, FirstNamedArgumentName(argumentNames));
-            result = new BoundErrorExpression(null);
-            return true;
-        }
-
-        if (!TryBindFunctionTypeArguments(variable.Name, functionType, syntax, boundArguments, out var convertedArgs))
-        {
-            result = new BoundErrorExpression(null);
-            return true;
-        }
-
         var delegateLoad = TryBuildImplicitMemberLoad(variable, syntax.Identifier.Location, out var implicitLoad)
             ? implicitLoad
             : new BoundVariableExpression(null, variable);
@@ -136,7 +123,44 @@ internal sealed partial class OverloadResolver
             .ToString(System.Globalization.CultureInfo.InvariantCulture);
         var capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: nullable.UnderlyingType);
         var captureRef = new BoundVariableExpression(null, capture);
-        var whenNotNull = new BoundIndirectCallExpression(null, captureRef, functionType, convertedArgs);
+        BoundExpression whenNotNull;
+        if (nullable.UnderlyingType is not FunctionTypeSymbol
+            && nullable.UnderlyingType is not DelegateTypeSymbol
+            && nullable.UnderlyingType.ClrType is System.Type delegateClr
+            && ClrTypeUtilities.IsDelegateType(delegateClr))
+        {
+            if (!tryBindInheritedClrInstanceCall(
+                captureRef,
+                delegateClr,
+                "Invoke",
+                boundArguments,
+                syntax,
+                out whenNotNull,
+                explicitTypeArgs: null,
+                typeArgSymbols: default,
+                argumentNames))
+            {
+                result = new BoundErrorExpression(null);
+                return true;
+            }
+        }
+        else
+        {
+            if (!argumentNames.IsDefault)
+            {
+                Diagnostics.ReportNamedArgumentParameterNotFound(syntax.Identifier.Location, variable.Name, FirstNamedArgumentName(argumentNames));
+                result = new BoundErrorExpression(null);
+                return true;
+            }
+
+            if (!TryBindFunctionTypeArguments(variable.Name, functionType, syntax, boundArguments, out var convertedArgs))
+            {
+                result = new BoundErrorExpression(null);
+                return true;
+            }
+
+            whenNotNull = new BoundIndirectCallExpression(null, captureRef, functionType, convertedArgs);
+        }
 
         if (ReferenceEquals(functionType.ReturnType, TypeSymbol.Void))
         {
@@ -155,7 +179,7 @@ internal sealed partial class OverloadResolver
             : (TypeSymbol)NullableTypeSymbol.Get(functionType.ReturnType);
         LocalVariableSymbol resultSlot = null;
         if (resultType is NullableTypeSymbol nullableResult
-            && nullableResult.UnderlyingType?.ClrType is { IsValueType: true })
+            && GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(nullableResult.UnderlyingType))
         {
             var resultSlotName = "$nres_" + binderCtx.NullConditionalCaptureCounter
                 .ToString(System.Globalization.CultureInfo.InvariantCulture);

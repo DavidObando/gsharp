@@ -484,6 +484,11 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
+        var callableType = ce.NullableQuestionToken != null
+            && memberType is NullableTypeSymbol nullableMember
+            ? nullableMember.UnderlyingType
+            : memberType;
+
         if (isStatic)
         {
             var accessibility = matchedField?.Accessibility ?? matchedProperty.Accessibility;
@@ -494,15 +499,15 @@ internal sealed partial class ExpressionBinder
         }
 
         FunctionTypeSymbol functionType;
-        if (memberType is FunctionTypeSymbol fts)
+        if (callableType is FunctionTypeSymbol fts)
         {
             functionType = fts;
         }
-        else if (memberType is DelegateTypeSymbol nds)
+        else if (callableType is DelegateTypeSymbol nds)
         {
             functionType = nds.EquivalentFunctionType;
         }
-        else if (memberType.ClrType is System.Type memberClrType
+        else if (callableType.ClrType is System.Type memberClrType
             && ClrTypeUtilities.IsDelegateType(memberClrType)
             && MemberLookup.TryGetDelegateFunctionType(memberClrType, out var clrFn))
         {
@@ -581,8 +586,74 @@ internal sealed partial class ExpressionBinder
                 ? new BoundFieldAccessExpression(null, receiver, declaringType, matchedField, memberType)
                 : new BoundFieldAccessExpression(null, receiver, declaringType, matchedField)
             : new BoundPropertyAccessExpression(null, receiver, declaringType, matchedProperty);
-        result = new BoundIndirectCallExpression(null, memberLoad, functionType, convertedArgs.MoveToImmutable());
+        result = BuildDelegateMemberInvocation(
+            ce,
+            memberLoad,
+            callableType,
+            functionType,
+            convertedArgs.MoveToImmutable());
         return true;
+    }
+
+    private BoundExpression BuildDelegateMemberInvocation(
+        CallExpressionSyntax syntax,
+        BoundExpression delegateLoad,
+        TypeSymbol delegateType,
+        FunctionTypeSymbol functionType,
+        ImmutableArray<BoundExpression> arguments)
+    {
+        if (syntax.NullableQuestionToken == null)
+        {
+            return new BoundIndirectCallExpression(null, delegateLoad, functionType, arguments);
+        }
+
+        var captureName = "$ncap_" + (++binderCtx.NullConditionalCaptureCounter)
+            .ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: delegateType);
+        var invoke = new BoundIndirectCallExpression(
+            null,
+            new BoundVariableExpression(null, capture),
+            functionType,
+            arguments);
+        return BuildNullConditionalDelegateInvocation(syntax, delegateLoad, capture, invoke);
+    }
+
+    private BoundExpression BuildNullConditionalDelegateInvocation(
+        CallExpressionSyntax syntax,
+        BoundExpression delegateLoad,
+        LocalVariableSymbol capture,
+        BoundExpression invoke)
+    {
+        if (ReferenceEquals(invoke.Type, TypeSymbol.Void))
+        {
+            return new BoundNullConditionalAccessExpression(
+                syntax,
+                delegateLoad,
+                capture,
+                invoke,
+                TypeSymbol.Void,
+                resultSlot: null);
+        }
+
+        var resultType = invoke.Type is NullableTypeSymbol
+            ? invoke.Type
+            : (TypeSymbol)NullableTypeSymbol.Get(invoke.Type);
+        LocalVariableSymbol resultSlot = null;
+        if (resultType is NullableTypeSymbol nullableResult
+            && GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(nullableResult.UnderlyingType))
+        {
+            var resultSlotName = "$nres_" + binderCtx.NullConditionalCaptureCounter
+                .ToString(System.Globalization.CultureInfo.InvariantCulture);
+            resultSlot = new LocalVariableSymbol(resultSlotName, isReadOnly: false, type: resultType);
+        }
+
+        return new BoundNullConditionalAccessExpression(
+            syntax,
+            delegateLoad,
+            capture,
+            invoke,
+            resultType,
+            resultSlot);
     }
 
     /// <summary>
@@ -651,19 +722,31 @@ internal sealed partial class ExpressionBinder
         // a CLR struct field).
         var delegateLoad = new BoundClrPropertyAccessExpression(null, receiver, member, memberTypeSymbol);
 
-        // Strip nullable annotation when dispatching through Invoke — the
-        // delegate value is loaded as-is from the field; the call would
-        // dereference null at runtime if the member is unassigned. This
-        // matches CLR semantics for `del()` on a null `Func<T>`.
+        // Strip nullable annotation when dispatching through Invoke.
         var underlyingDelegateClr = memberClrType;
+
+        LocalVariableSymbol capture = null;
+        BoundExpression invokeReceiver = delegateLoad;
+        if (ce.NullableQuestionToken != null)
+        {
+            var captureType = memberTypeSymbol is NullableTypeSymbol nullableMember
+                ? nullableMember.UnderlyingType
+                : memberTypeSymbol;
+            var captureName = "$ncap_" + (++binderCtx.NullConditionalCaptureCounter)
+                .ToString(System.Globalization.CultureInfo.InvariantCulture);
+            capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: captureType);
+            invokeReceiver = new BoundVariableExpression(null, capture);
+        }
 
         // Reuse the same Invoke-overload-resolution path that the bare
         // delegate-variable call uses at #325 (BindCallExpression), so
         // generic delegate arguments, named arguments, and ref/in/out are
         // all handled uniformly.
-        if (TryBindInheritedClrInstanceCall(delegateLoad, underlyingDelegateClr, "Invoke", arguments, ce, out var invokeCall, argumentNames: argumentNames))
+        if (TryBindInheritedClrInstanceCall(invokeReceiver, underlyingDelegateClr, "Invoke", arguments, ce, out var invokeCall, argumentNames: argumentNames))
         {
-            result = invokeCall;
+            result = capture == null
+                ? invokeCall
+                : BuildNullConditionalDelegateInvocation(ce, delegateLoad, capture, invokeCall);
             return true;
         }
 
