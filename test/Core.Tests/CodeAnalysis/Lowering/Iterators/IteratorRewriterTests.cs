@@ -138,6 +138,44 @@ public class IteratorRewriterTests
         Assert.Empty(result.Plans);
     }
 
+    [Fact]
+    public void Detection_TraversesBranchesAndTryFinally_ButNotNestedFunctions()
+    {
+        var yield = new BoundYieldStatement(null, new BoundLiteralExpression(null, 1));
+        var branch = new BoundIfStatement(
+            null,
+            new BoundLiteralExpression(null, true),
+            Block(yield),
+            Block());
+        var tryFinally = new BoundTryStatement(
+            null,
+            Block(branch),
+            ImmutableArray<BoundCatchClause>.Empty,
+            Block());
+
+        Assert.True(IteratorDetection.ContainsYield(Block(tryFinally)));
+
+        var sequenceType = SequenceTypeSymbol.Get(TypeSymbol.Int32);
+        var nestedFunction = new FunctionSymbol(
+            "nested",
+            ImmutableArray<ParameterSymbol>.Empty,
+            sequenceType,
+            package: Package);
+        var functionType = FunctionTypeSymbol.Get(ImmutableArray<TypeSymbol>.Empty, sequenceType);
+        var literal = new BoundFunctionLiteralExpression(
+            null,
+            nestedFunction,
+            functionType,
+            Block(yield),
+            ImmutableArray<VariableSymbol>.Empty);
+        var lambda = new LocalVariableSymbol("lambda", isReadOnly: true, functionType);
+
+        Assert.False(IteratorDetection.ContainsYield(Block(
+            new BoundVariableDeclaration(null, lambda, literal))));
+        Assert.False(IteratorDetection.ContainsYield(Block(
+            new BoundLocalFunctionDeclaration(null, literal))));
+    }
+
     #region Helpers
 
     private static BoundBlockStatement Block(params BoundStatement[] statements)

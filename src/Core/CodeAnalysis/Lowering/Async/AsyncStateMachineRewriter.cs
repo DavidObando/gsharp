@@ -51,7 +51,7 @@ public static class AsyncStateMachineRewriter
             }
 
             // Skip async iterators — they are handled by the async iterator rewriter.
-            if (IsAsyncIteratorFunction(function))
+            if (AsyncIteratorDetection.IsAsyncIteratorFunction(function, pair.Value))
             {
                 continue;
             }
@@ -151,9 +151,6 @@ public static class AsyncStateMachineRewriter
         var parameterTypes = string.Join(",", function.Parameters.Select(parameter => parameter.Type?.Name ?? string.Empty));
         return packageName + ":" + function.Name + ":" + function.Parameters.Length + ":" + parameterTypes;
     }
-
-    private static bool IsAsyncIteratorFunction(FunctionSymbol function)
-        => AsyncIteratorDetection.IsAsyncIteratorFunction(function);
 
     private sealed class AwaitStateCollector : BoundTreeWalker
     {

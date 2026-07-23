@@ -71,6 +71,9 @@ import System.Collections.Generic
 import System.Threading.Tasks
 
 func empty() IAsyncEnumerable[int32] {
+    if false {
+        yield 0
+    }
 }
 ";
         var items = CompileAndEnumerate<int>(Source, "empty", nameof(AsyncIterator_Empty_ProducesNoValues));
