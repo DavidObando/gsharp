@@ -3,10 +3,13 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using System.Runtime.Loader;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -148,6 +151,106 @@ public sealed class Issue2726NominalEventDelegateEmitTests
         Assert.Equal(1, closedRaiser.GetMethod("Run")!.Invoke(
             instance,
             new[] { Activator.CreateInstance(localArgs) }));
+    }
+
+    [Fact]
+    public void ExplicitRaiseAccessors_ExposeIdenticalParameterSignaturesInOutAndRefoutMetadata()
+    {
+        // Issue #2726 follow-up: canonicalized nominal `EventHandler`/`EventHandler<T>`
+        // events with explicit `raise` accessors must expose the same raise_X
+        // parameter signature in the implementation (`/out`) assembly and the
+        // reference (`/refout`, MetadataOnly) assembly. The metadata-only fallback
+        // previously emitted zero-parameter raise_X methods because it only
+        // recognized `FunctionTypeSymbol` handler types, not canonicalized nominal
+        // CLR delegates.
+        const string source = """
+            package Issue2726.Refout
+            import System
+
+            class LocalArgs : EventArgs { }
+
+            class Raiser {
+                event ExplicitChanged (object?, EventArgs) -> void {
+                    add { }
+                    remove { }
+                    raise { }
+                }
+
+                event ExplicitLocal (object?, LocalArgs) -> void {
+                    add { }
+                    remove { }
+                    raise { }
+                }
+
+                event NominalChanged EventHandler[LocalArgs] {
+                    add { }
+                    remove { }
+                    raise { }
+                }
+            }
+
+            class GenericRaiser[T EventArgs] {
+                event OpenChanged EventHandler[T] {
+                    add { }
+                    remove { }
+                    raise { }
+                }
+            }
+            """;
+
+        using var artifacts = CompileGSharpWithReference(source, "RefoutRaise.dll");
+        IlVerifier.Verify(artifacts.OutputPath);
+
+        var implementationSignatures = ReadRaiseSignatureBlobs(artifacts.OutputPath);
+        var referenceSignatures = ReadRaiseSignatureBlobs(artifacts.ReferenceOutputPath);
+
+        var expectedRaiseMethods = new[]
+        {
+            "Raiser.raise_ExplicitChanged",
+            "Raiser.raise_ExplicitLocal",
+            "Raiser.raise_NominalChanged",
+            "GenericRaiser`1.raise_OpenChanged",
+        };
+
+        // The implementation assembly emits each explicit raise_X accessor.
+        Assert.Equal(
+            expectedRaiseMethods.OrderBy(name => name, StringComparer.Ordinal),
+            implementationSignatures.Keys.OrderBy(name => name, StringComparer.Ordinal));
+
+        // The reference assembly exposes the identical set of raise_X accessors...
+        Assert.Equal(
+            implementationSignatures.Keys.OrderBy(name => name, StringComparer.Ordinal),
+            referenceSignatures.Keys.OrderBy(name => name, StringComparer.Ordinal));
+
+        // ...with byte-for-byte identical parameter signatures, and a non-zero
+        // parameter count proving the metadata-only fallback no longer collapses
+        // canonicalized nominal handlers to a zero-parameter shape.
+        foreach (var raiseMethod in expectedRaiseMethods)
+        {
+            var implementationSignature = implementationSignatures[raiseMethod];
+            var referenceSignature = referenceSignatures[raiseMethod];
+            Assert.Equal(implementationSignature.Blob, referenceSignature.Blob);
+            Assert.Equal(2, implementationSignature.ParameterCount);
+            Assert.Equal(2, referenceSignature.ParameterCount);
+        }
+
+        // Tie the shared metadata back to concrete CLR parameter types on the
+        // loadable implementation assembly for the closed shapes.
+        var assembly = Assembly.LoadFrom(artifacts.OutputPath);
+        var raiser = assembly.GetType("Issue2726.Refout.Raiser")!;
+        var localArgs = assembly.GetType("Issue2726.Refout.LocalArgs")!;
+        Assert.Equal(
+            new[] { typeof(object), typeof(EventArgs) },
+            raiser.GetEvent("ExplicitChanged")!.GetRaiseMethod()!
+                .GetParameters().Select(parameter => parameter.ParameterType).ToArray());
+        Assert.Equal(
+            new[] { typeof(object), localArgs },
+            raiser.GetEvent("ExplicitLocal")!.GetRaiseMethod()!
+                .GetParameters().Select(parameter => parameter.ParameterType).ToArray());
+        Assert.Equal(
+            new[] { typeof(object), localArgs },
+            raiser.GetEvent("NominalChanged")!.GetRaiseMethod()!
+                .GetParameters().Select(parameter => parameter.ParameterType).ToArray());
     }
 
     [Fact]
@@ -337,6 +440,62 @@ public sealed class Issue2726NominalEventDelegateEmitTests
         return new CompilationArtifacts(directory, outputPath);
     }
 
+    private static ReferenceCompilationArtifacts CompileGSharpWithReference(string source, string outputName)
+    {
+        var directory = ArtifactDirectory();
+        var sourcePath = Path.Combine(directory, "test.gs");
+        var outputPath = Path.Combine(directory, outputName);
+        var referenceOutputPath = Path.Combine(
+            directory,
+            Path.GetFileNameWithoutExtension(outputName) + ".ref" + Path.GetExtension(outputName));
+        File.WriteAllText(sourcePath, source);
+        var result = RunCompiler(new[]
+        {
+            "/out:" + outputPath,
+            "/refout:" + referenceOutputPath,
+            "/target:library",
+            "/targetframework:net10.0",
+            sourcePath,
+        });
+        Assert.True(result.ExitCode == 0, $"gsc failed:\n{result.Stdout}\n{result.Stderr}");
+        return new ReferenceCompilationArtifacts(directory, outputPath, referenceOutputPath);
+    }
+
+    private static Dictionary<string, RaiseSignature> ReadRaiseSignatureBlobs(string assemblyPath)
+    {
+        var signatures = new Dictionary<string, RaiseSignature>(StringComparer.Ordinal);
+        using var stream = File.OpenRead(assemblyPath);
+        using var peReader = new PEReader(stream);
+        var reader = peReader.GetMetadataReader();
+        foreach (var typeHandle in reader.TypeDefinitions)
+        {
+            var type = reader.GetTypeDefinition(typeHandle);
+            var typeName = reader.GetString(type.Name);
+            foreach (var methodHandle in type.GetMethods())
+            {
+                var method = reader.GetMethodDefinition(methodHandle);
+                var methodName = reader.GetString(method.Name);
+                if (!methodName.StartsWith("raise_", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var blob = reader.GetBlobBytes(method.Signature);
+
+                // ECMA-335 II.23.2.1: the second byte of a non-generic method
+                // signature is the compressed parameter count (single-byte for the
+                // small counts used here).
+                signatures[$"{typeName}.{methodName}"] = new RaiseSignature(
+                    Convert.ToHexString(blob),
+                    blob[1]);
+            }
+        }
+
+        return signatures;
+    }
+
+    private readonly record struct RaiseSignature(string Blob, int ParameterCount);
+
     private static void CompileGSharpFile(string sourcePath, string outputPath)
     {
         var result = RunCompiler(new[]
@@ -404,6 +563,24 @@ public sealed class Issue2726NominalEventDelegateEmitTests
         public string Directory { get; }
 
         public string OutputPath { get; }
+
+        public void Dispose() => DeleteDirectory(Directory);
+    }
+
+    private sealed class ReferenceCompilationArtifacts : IDisposable
+    {
+        public ReferenceCompilationArtifacts(string directory, string outputPath, string referenceOutputPath)
+        {
+            Directory = directory;
+            OutputPath = outputPath;
+            ReferenceOutputPath = referenceOutputPath;
+        }
+
+        public string Directory { get; }
+
+        public string OutputPath { get; }
+
+        public string ReferenceOutputPath { get; }
 
         public void Dispose() => DeleteDirectory(Directory);
     }
