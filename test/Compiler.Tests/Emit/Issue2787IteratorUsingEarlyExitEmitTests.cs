@@ -16,6 +16,86 @@ namespace GSharp.Compiler.Tests.Emit;
 public class Issue2787IteratorUsingEarlyExitEmitTests
 {
     [Fact]
+    public void OrdinaryMethod_GotoBeforeUsing_SkipsUninitializedCleanup()
+    {
+        const string source = """
+            package i2787ordinarysync
+            import System
+
+            public var trace = ""
+
+            class Resource : IDisposable {
+                init() {
+                    trace = trace + "+"
+                }
+                func Dispose() {
+                    trace = trace + "-"
+                }
+            }
+
+            func run(skip bool) {
+                if skip {
+                    goto done
+                }
+                using let resource = Resource{}
+                trace = trace + "B"
+                done:
+                {
+                    trace = trace + "E"
+                }
+            }
+
+            run(true)
+            trace = trace + "|"
+            run(false)
+            Console.WriteLine(trace)
+            """;
+
+        Assert.Equal("E|+BE-\n", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void OrdinaryAsyncMethod_GotoBeforeUsing_SkipsUninitializedCleanup()
+    {
+        const string source = """
+            package i2787ordinaryasync
+            import System
+            import System.Threading.Tasks
+
+            public var trace = ""
+
+            class Resource : IDisposable {
+                init() {
+                    trace = trace + "+"
+                }
+                func Dispose() {
+                    trace = trace + "-"
+                }
+            }
+
+            async func run(skip bool) {
+                if skip {
+                    goto done
+                }
+                using let resource = Resource{}
+                await Task.Yield()
+                trace = trace + "B"
+                done:
+                {
+                    trace = trace + "E"
+                }
+            }
+
+            run(true).GetAwaiter().GetResult()
+            trace = trace + "|"
+            run(false).GetAwaiter().GetResult()
+            Console.WriteLine(trace)
+            """;
+
+        Assert.Equal("E|+BE-\n", CompileAndRun(source));
+    }
+
+    [Fact]
     public void AsyncIterator_MissingFileGotoBeforeUsing_EnumeratesEmpty()
     {
         const string source = """
