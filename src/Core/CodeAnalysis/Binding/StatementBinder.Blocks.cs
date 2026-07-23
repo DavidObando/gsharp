@@ -229,7 +229,17 @@ internal sealed partial class StatementBinder
 
             scope = new BoundScope(scope);
             var variable = bindLocalVariable(catchSyntax.Identifier, isReadOnly: true, type: catchType);
-            var body = BindBlockStatement(catchSyntax.Body);
+            exceptionHandlerRegions.Push(catchSyntax);
+            BoundStatement body;
+            try
+            {
+                body = BindBlockStatement(catchSyntax.Body);
+            }
+            finally
+            {
+                exceptionHandlerRegions.Pop();
+            }
+
             scope = scope.Parent;
 
             catches.Add(new BoundCatchClause(catchType, variable, body));
@@ -238,7 +248,15 @@ internal sealed partial class StatementBinder
         BoundStatement finallyBlock = null;
         if (syntax.FinallyClause != null)
         {
-            finallyBlock = BindBlockStatement(syntax.FinallyClause.Body);
+            exceptionHandlerRegions.Push(syntax.FinallyClause);
+            try
+            {
+                finallyBlock = BindBlockStatement(syntax.FinallyClause.Body);
+            }
+            finally
+            {
+                exceptionHandlerRegions.Pop();
+            }
         }
 
         if (catches.Count == 0 && finallyBlock == null)

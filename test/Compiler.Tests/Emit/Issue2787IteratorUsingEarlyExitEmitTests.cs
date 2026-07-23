@@ -10,11 +10,192 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// Issue #2787: iterator control flow may bypass a using declaration, so its
-/// cleanup must run only after the resource initializer completed.
+/// Issue #2787: control flow may bypass or re-enter a using declaration, so
+/// cleanup must track initialization and all emitted branches must remain legal.
 /// </summary>
 public class Issue2787IteratorUsingEarlyExitEmitTests
 {
+    [Fact]
+    public void Using_LeaveAndReenter_DisposesResourceOnce()
+    {
+        const string source = """
+            package i2787reentersync
+            import System
+
+            public var trace = ""
+
+            class Resource : IDisposable {
+                init() {
+                    trace = trace + "+"
+                }
+                func Dispose() {
+                    trace = trace + "-"
+                }
+            }
+
+            func run() {
+                var pass = 0
+                {
+                    using let resource = Resource{}
+                    inside:
+                    {
+                        trace = trace + "B"
+                        if pass == 0 {
+                            pass = 1
+                            goto outside
+                        }
+                        goto done
+                    }
+                }
+                outside:
+                {
+                    trace = trace + "O"
+                    pass = 2
+                    goto inside
+                }
+                done:
+                {
+                }
+            }
+
+            run()
+            Console.WriteLine(trace)
+            """;
+
+        Assert.Equal("+B-OB\n", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void AwaitUsing_LeaveAndReenter_DisposesResourceOnce()
+    {
+        const string source = """
+            package i2787reenterasync
+            import System
+            import System.Threading.Tasks
+
+            public var trace = ""
+
+            class Resource : IAsyncDisposable {
+                init() {
+                    trace = trace + "+"
+                }
+                func DisposeAsync() ValueTask {
+                    trace = trace + "-"
+                    return ValueTask.CompletedTask
+                }
+            }
+
+            async func run() {
+                var pass = 0
+                {
+                    await using let resource = Resource{}
+                    await Task.Yield()
+                    inside:
+                    {
+                        trace = trace + "B"
+                        if pass == 0 {
+                            pass = 1
+                            goto outside
+                        }
+                        goto done
+                    }
+                }
+                outside:
+                {
+                    trace = trace + "O"
+                    pass = 2
+                    goto inside
+                }
+                done:
+                {
+                }
+            }
+
+            run().GetAwaiter().GetResult()
+            Console.WriteLine(trace)
+            """;
+
+        Assert.Equal("+B-OB\n", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void GotoIntoCatch_IsRejected()
+    {
+        const string source = """
+            package i2787catchentry
+            import System
+
+            func run() {
+                goto handler
+                try {
+                    throw Exception("boom")
+                } catch (ex Exception) {
+                    handler:
+                    {
+                    }
+                }
+            }
+            """;
+
+        Assert.Contains(CompileExpectingErrors(source), line => line.Contains("GS0497"));
+    }
+
+    [Fact]
+    public void GotoIntoFinally_IsRejected()
+    {
+        const string source = """
+            package i2787finallyentry
+
+            func run() {
+                goto handler
+                try {
+                } finally {
+                    handler:
+                    {
+                    }
+                }
+            }
+            """;
+
+        Assert.Contains(CompileExpectingErrors(source), line => line.Contains("GS0497"));
+    }
+
+    [Fact]
+    public void GotoWithinExceptionHandlers_RemainsLegal()
+    {
+        const string source = """
+            package i2787handlerlocal
+            import System
+
+            public var trace = ""
+
+            func run() {
+                try {
+                    throw Exception("boom")
+                } catch (ex Exception) {
+                    goto caught
+                    caught:
+                    {
+                        trace = trace + "C"
+                    }
+                }
+                try {
+                } finally {
+                    goto cleaned
+                    cleaned:
+                    {
+                        trace = trace + "F"
+                    }
+                }
+            }
+
+            run()
+            Console.WriteLine(trace)
+            """;
+
+        Assert.Equal("CF\n", CompileAndRun(source));
+    }
+
     [Fact]
     public void OrdinaryMethod_GotoBeforeUsing_SkipsUninitializedCleanup()
     {
@@ -445,6 +626,56 @@ public class Issue2787IteratorUsingEarlyExitEmitTests
                 process.ExitCode == 0,
                 $"exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
             return stdout.Replace("\r\n", "\n");
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private static List<string> CompileExpectingErrors(string source)
+    {
+        var directory = Directory.CreateTempSubdirectory("gs_2787_error_").FullName;
+        try
+        {
+            var sourcePath = Path.Combine(directory, "test.gs");
+            var assemblyPath = Path.Combine(directory, "test.dll");
+            File.WriteAllText(sourcePath, source);
+
+            using var compileOut = new StringWriter();
+            using var compileErr = new StringWriter();
+            var previousOut = Console.Out;
+            var previousErr = Console.Error;
+            Console.SetOut(compileOut);
+            Console.SetError(compileErr);
+            int exitCode;
+            try
+            {
+                exitCode = Program.Main(
+                [
+                    "/out:" + assemblyPath,
+                    "/target:library",
+                    "/targetframework:net10.0",
+                    sourcePath,
+                ]);
+            }
+            finally
+            {
+                Console.SetOut(previousOut);
+                Console.SetError(previousErr);
+            }
+
+            Assert.NotEqual(0, exitCode);
+            return (compileOut.ToString() + compileErr.ToString())
+                .Split('\n')
+                .Where(line => !string.IsNullOrWhiteSpace(line))
+                .ToList();
         }
         finally
         {

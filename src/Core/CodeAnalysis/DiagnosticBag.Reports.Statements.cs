@@ -553,6 +553,14 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.DuplicateGotoLabel, labelName);
 
     /// <summary>
+    /// Reports a function-wide goto that enters a catch or finally handler.
+    /// </summary>
+    /// <param name="location">The source location of the goto label identifier.</param>
+    /// <param name="labelName">The target label name.</param>
+    public void ReportGotoIntoExceptionHandler(TextLocation location, string labelName)
+    => Report(location, DiagnosticDescriptors.GotoIntoExceptionHandler, labelName);
+
+    /// <summary>
     /// ADR-0070 / issue #707: GS0295 (warning) — a loop label shadows an
     /// enclosing live loop label of the same name. The inner label wins for
     /// nested <c>break</c> / <c>continue</c> resolution.

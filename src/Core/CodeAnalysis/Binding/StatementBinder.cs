@@ -91,6 +91,11 @@ internal sealed partial class StatementBinder
     private readonly Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression> bindLambdaWithTargetType;
     private readonly Func<VariableDeclarationSyntax, BoundStatement> bindGenericLocalFunctionDeclaration;
     private readonly Action<TextLocation, string, BoundFunctionLiteralExpression> checkNonGenericLocalFunctionEnclosingTypeParameterReference;
+    private readonly Stack<SyntaxNode> exceptionHandlerRegions = new();
+    private readonly Dictionary<string, ImmutableArray<SyntaxNode>> userLabelHandlerRegions =
+        new(StringComparer.Ordinal);
+    private readonly List<(string LabelName, TextLocation Location, ImmutableArray<SyntaxNode> SourceRegions)>
+        userGotoHandlerRegions = new();
     private int usingInitializationFlagCount;
 
     public StatementBinder(
@@ -441,13 +446,15 @@ internal sealed partial class StatementBinder
         }
     }
 
-    private static BoundExpressionStatement BuildInitializedAssignment(VariableSymbol initialized)
+    private static BoundExpressionStatement BuildInitializedAssignment(
+        VariableSymbol initialized,
+        bool value = true)
         => new(
             null,
             new BoundAssignmentExpression(
                 null,
                 initialized,
-                new BoundLiteralExpression(null, true)));
+                new BoundLiteralExpression(null, value)));
 
     private BoundTryStatement BuildCleanupTryStatement(
         ImmutableArray<BoundStatement> protectedStatements,
@@ -458,6 +465,11 @@ internal sealed partial class StatementBinder
         BoundStatement cleanupStatement = new BoundExpressionStatement(null, cleanup);
         if (initialized != null)
         {
+            cleanupStatement = new BoundBlockStatement(
+                null,
+                ImmutableArray.Create<BoundStatement>(
+                    BuildInitializedAssignment(initialized, value: false),
+                    cleanupStatement));
             cleanupStatement = new BoundIfStatement(
                 null,
                 new BoundVariableExpression(null, initialized),

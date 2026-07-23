@@ -367,6 +367,7 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor ExplicitInterfaceClauseMemberNotFound = new("GS0494", DiagnosticSeverity.Error, "'{0}' has no member '{1}' matching this declaration's signature/accessor shape.");
     internal static readonly DiagnosticDescriptor DuplicateExplicitInterfaceImplementation = new("GS0495", DiagnosticSeverity.Error, "'{0}.{1}' is already explicitly implemented elsewhere in this type.");
     internal static readonly DiagnosticDescriptor AmbiguousSourceType = new("GS0496", DiagnosticSeverity.Error, "Type '{0}' is ambiguous between two or more imported packages that each declare a same-named type; qualify the reference with its package name to disambiguate (issue #2455).");
+    internal static readonly DiagnosticDescriptor GotoIntoExceptionHandler = new("GS0497", DiagnosticSeverity.Error, "A goto cannot enter a catch or finally handler at label '{0}'.");
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");
     internal static readonly DiagnosticDescriptor VariableNotDefinitelyAssignedForRef = new("GS9003", DiagnosticSeverity.Error, "Variable '{0}' must be definitely assigned before being passed by `ref`.");
