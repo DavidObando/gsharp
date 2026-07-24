@@ -2539,7 +2539,9 @@ internal static class OverloadResolution
                         break;
                     }
 
-                    conversions[i] = ImplicitConversionKind.Identity;
+                    conversions[i] = delegateRefKindArgumentCheck?.Invoke(i, paramTypes[i]) == false
+                        ? ImplicitConversionKind.DelegateRefKindMismatch
+                        : ImplicitConversionKind.Identity;
                     continue;
                 }
 

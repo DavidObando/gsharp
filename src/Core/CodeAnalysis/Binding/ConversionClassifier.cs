@@ -1398,6 +1398,7 @@ internal sealed class ConversionClassifier
         }
 
         var invokeParams = invoke.GetParameters();
+        var targetParameterRefKinds = DelegateRefKindUtilities.GetParameterRefKinds(invoke);
         var closesExtensionReceiver = group.Receiver != null
             && group.Candidates.All(candidate => candidate.IsStatic);
         var argTypes = new Type[invokeParams.Length + (closesExtensionReceiver ? 1 : 0)];
@@ -1428,6 +1429,14 @@ internal sealed class ConversionClassifier
             }
 
             if (!IsMethodGroupReturnCompatible(candidate.ReturnType, invoke.ReturnType))
+            {
+                continue;
+            }
+
+            if (!DelegateRefKindUtilities.GetParameterRefKinds(
+                    candidate,
+                    skipFirstParameter: closesExtensionReceiver)
+                .SequenceEqual(targetParameterRefKinds))
             {
                 continue;
             }
@@ -2230,28 +2239,9 @@ internal sealed class ConversionClassifier
             return false;
         }
 
-        ImmutableArray<RefKind> sourceRefKinds;
-        if (expression is BoundFunctionLiteralExpression literal)
-        {
-            sourceRefKinds = literal.Function.Parameters
-                .Select(parameter => parameter.RefKind)
-                .ToImmutableArray();
-        }
-        else if (expression.Type is DelegateTypeSymbol
-            || (expression.Type?.ClrType is Type sourceType
-                && ClrTypeUtilities.IsDelegateType(sourceType)))
-        {
-            sourceRefKinds = GetMethodGroupTargetRefKinds(
-                expression.Type,
-                parameterCount: 0,
-                out _);
-        }
-        else if (expression.Type is FunctionTypeSymbol sourceFunction)
-        {
-            sourceRefKinds = ImmutableArray.CreateRange(
-                Enumerable.Repeat(RefKind.None, sourceFunction.Arity));
-        }
-        else
+        if (!DelegateRefKindUtilities.TryGetSourceParameterRefKinds(
+            expression,
+            out var sourceRefKinds))
         {
             return false;
         }

@@ -618,6 +618,243 @@ public class ImportedMemberMatrixTests
     }
 
     [Fact]
+    public void SourceNamedRefOutInParameterDelegates_MethodGroupsCompileAndRun()
+    {
+        const string source = """
+            package SourceRefKindMethodGroups.Probe
+            import System
+
+            type RefAction = delegate func(ref value int32)
+            type OutAction = delegate func(out value int32)
+            type InPredicate = delegate func(in value int32) bool
+            type GenericRefAction[T] = delegate func(ref value T)
+            type GenericOutAction[T] = delegate func(out value T)
+            type GenericInPredicate[T] = delegate func(in value T) bool
+
+            func AddOne(ref value int32) { value = value + 1 }
+            func Set42(out value int32) { value = 42 }
+            func Is42(in value int32) bool { return value == 42 }
+
+            var refAction RefAction = AddOne
+            var outAction OutAction = Set42
+            var inPredicate InPredicate = Is42
+            var genericRefAction GenericRefAction[int32] = AddOne
+            var genericOutAction GenericOutAction[int32] = Set42
+            var genericInPredicate GenericInPredicate[int32] = Is42
+
+            var value = 41
+            refAction(ref value)
+            Console.WriteLine(value)
+            outAction(out value)
+            Console.WriteLine(value)
+            Console.WriteLine(inPredicate(in value))
+            value = 41
+            genericRefAction(ref value)
+            Console.WriteLine(value)
+            genericOutAction(out value)
+            Console.WriteLine(value)
+            Console.WriteLine(genericInPredicate(in value))
+            """;
+
+        Assert.Equal("42\n42\nTrue\n42\n42\nTrue\n", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void ImportedRefOutInParameterDelegates_SourceMethodGroupsCompileAndRun()
+    {
+        const string csSource = """
+            using System;
+
+            namespace ImportedDelegateSourceMethodGroups.CSharp
+            {
+                public delegate void RefAction(ref int value);
+                public delegate void OutAction(out int value);
+                public delegate bool InPredicate(in int value);
+                public delegate void GenericRefAction<T>(ref T value);
+
+                public static class Api
+                {
+                    public static void Apply(RefAction action, ref int value) => action(ref value);
+                    public static void Fill(OutAction action, out int value) => action(out value);
+                    public static bool Test(InPredicate predicate, in int value) => predicate(in value);
+                    public static string Pick(RefAction action) => "ref";
+                    public static string Pick(Action<int> action) => "value";
+                }
+            }
+            """;
+
+        const string source = """
+            package ImportedDelegateSourceMethodGroups.Probe
+            import System
+            import ImportedDelegateSourceMethodGroups.CSharp
+
+            func AddOne(ref value int32) { value = value + 1 }
+            func Set42(out value int32) { value = 42 }
+            func Is42(in value int32) bool { return value == 42 }
+
+            var genericRefAction GenericRefAction[int32] = AddOne
+            var value = 41
+            Api.Apply(AddOne, ref value)
+            Console.WriteLine(value)
+            Api.Fill(Set42, out value)
+            Console.WriteLine(value)
+            Console.WriteLine(Api.Test(Is42, in value))
+            value = 41
+            genericRefAction(ref value)
+            Console.WriteLine(value)
+            Console.WriteLine(Api.Pick(AddOne))
+            """;
+
+        Assert.Equal(
+            "42\n42\nTrue\n42\nref\n",
+            CompileAndRunWithSiblingCs(
+                csSource,
+                source,
+                "ImportedDelegateSourceMethodGroups.CSharp"));
+    }
+
+    [Fact]
+    public void ImportedRefOutInParameterDelegates_ClrMethodGroupsCompileAndRun()
+    {
+        const string csSource = """
+            namespace ImportedClrMethodGroups.CSharp
+            {
+                public delegate void RefAction(ref int value);
+                public delegate void OutAction(out int value);
+                public delegate bool InPredicate(in int value);
+                public delegate void GenericRefAction<T>(ref T value);
+
+                public static class Methods
+                {
+                    public static void AddOne(ref int value) => value++;
+                    public static void Set42(out int value) => value = 42;
+                    public static bool Is42(in int value) => value == 42;
+                }
+
+                public static class Api
+                {
+                    public static void Apply(RefAction action, ref int value) => action(ref value);
+                    public static void Fill(OutAction action, out int value) => action(out value);
+                    public static bool Test(InPredicate predicate, in int value) => predicate(in value);
+                }
+            }
+            """;
+
+        const string source = """
+            package ImportedClrMethodGroups.Probe
+            import System
+            import ImportedClrMethodGroups.CSharp
+
+            var refAction RefAction = Methods.AddOne
+            var outAction OutAction = Methods.Set42
+            var inPredicate InPredicate = Methods.Is42
+            var genericRefAction GenericRefAction[int32] = Methods.AddOne
+
+            var value = 41
+            refAction(ref value)
+            Console.WriteLine(value)
+            outAction(out value)
+            Console.WriteLine(value)
+            Console.WriteLine(Api.Test(inPredicate, in value))
+            value = 41
+            Api.Apply(Methods.AddOne, ref value)
+            Console.WriteLine(value)
+            Api.Fill(Methods.Set42, out value)
+            Console.WriteLine(value)
+            Console.WriteLine(Api.Test(Methods.Is42, in value))
+            value = 41
+            genericRefAction(ref value)
+            Console.WriteLine(value)
+            """;
+
+        Assert.Equal(
+            "42\n42\nTrue\n42\n42\nTrue\n42\n",
+            CompileAndRunWithSiblingCs(
+                csSource,
+                source,
+                "ImportedClrMethodGroups.CSharp"));
+    }
+
+    [Fact]
+    public void SourceAndImportedMethodGroups_RefKindMismatchesStayDiagnosed()
+    {
+        const string sourceDefined = """
+            package SourceMethodGroupRefKindMismatch.Probe
+
+            type RefAction = delegate func(ref value int32)
+            type OutAction = delegate func(out value int32)
+            type InPredicate = delegate func(in value int32) bool
+
+            func AddOne(ref value int32) { value = value + 1 }
+            func Set42(out value int32) { value = 42 }
+            func Is42Ref(ref value int32) bool { return value == 42 }
+
+            var refCallback RefAction = Set42
+            var outCallback OutAction = AddOne
+            var inCallback InPredicate = Is42Ref
+            """;
+
+        const string csSource = """
+            namespace ImportedMethodGroupRefKindMismatch.CSharp
+            {
+                public delegate void RefAction(ref int value);
+                public delegate void OutAction(out int value);
+                public delegate bool InPredicate(in int value);
+
+                public static class Methods
+                {
+                    public static void AddOne(ref int value) => value++;
+                    public static void Set42(out int value) => value = 42;
+                    public static bool Is42Ref(ref int value) => value == 42;
+                }
+
+                public static class Api
+                {
+                    public static void Apply(RefAction action) { }
+                }
+            }
+            """;
+
+        const string imported = """
+            package ImportedMethodGroupRefKindMismatch.Probe
+            import ImportedMethodGroupRefKindMismatch.CSharp
+
+            func SetSource42(out value int32) { value = 42 }
+
+            var refCallback RefAction = Methods.Set42
+            var outCallback OutAction = Methods.AddOne
+            var inCallback InPredicate = Methods.Is42Ref
+            Api.Apply(SetSource42)
+            Api.Apply(Methods.Set42)
+            """;
+
+        var workDir = CreateWorkDir("method_group_ref_kind_mismatch_");
+        try
+        {
+            var siblingDll = BuildCsLibrary(
+                workDir,
+                csSource,
+                "ImportedMethodGroupRefKindMismatch.CSharp");
+            var sourceDiagnostics = CompileExpectingErrors(
+                sourceDefined,
+                Array.Empty<string>(),
+                workDir);
+            var importedDiagnostics = CompileExpectingErrors(
+                imported,
+                new[] { siblingDll },
+                workDir);
+            Assert.Equal(Enumerable.Repeat("GS0155", 3), GetDiagnosticIds(sourceDiagnostics));
+            Assert.Equal(
+                new[] { "GS0218", "GS0218", "GS0218", "GS0155", "GS0218" },
+                GetDiagnosticIds(importedDiagnostics));
+        }
+        finally
+        {
+            TryDelete(workDir);
+        }
+    }
+
+    [Fact]
     public void SourceNamedRefOutInParameterDelegates_MatchImportedMismatchDiagnostics()
     {
         const string csSource = """
