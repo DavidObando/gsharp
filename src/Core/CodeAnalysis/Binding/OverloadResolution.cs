@@ -2090,7 +2090,7 @@ internal static class OverloadResolution
                 var result = new Type[ps.Length];
                 for (var i = 0; i < ps.Length; i++)
                 {
-                    result[i] = ps[i].ParameterType;
+                    result[i] = GetDelegateCompatibilityParameterType(ps[i]);
                 }
 
                 parameterTypes = result;
@@ -2159,7 +2159,9 @@ internal static class OverloadResolution
             var resolvedParams = new Type[defParams.Length];
             for (var i = 0; i < defParams.Length; i++)
             {
-                resolvedParams[i] = SubstituteGenericParameter(defParams[i].ParameterType, genericArgs);
+                resolvedParams[i] = SubstituteGenericParameter(
+                    GetDelegateCompatibilityParameterType(defParams[i]),
+                    genericArgs);
             }
 
             parameterTypes = resolvedParams;
@@ -2170,6 +2172,17 @@ internal static class OverloadResolution
         {
             return false;
         }
+    }
+
+    private static Type GetDelegateCompatibilityParameterType(ParameterInfo parameter)
+    {
+        var parameterType = parameter.ParameterType;
+
+        // Issue #2802: an `in` slot's function shape is its pointee type;
+        // readonly-by-ref remains parameter metadata, not a managed-pointer value type.
+        return parameterType.IsByRef && parameter.IsIn && !parameter.IsOut
+            ? parameterType.GetElementType()
+            : parameterType;
     }
 
     /// <summary>

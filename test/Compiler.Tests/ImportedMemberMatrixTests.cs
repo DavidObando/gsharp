@@ -312,6 +312,65 @@ public class ImportedMemberMatrixTests
     }
 
     [Fact]
+    public void ImportedMemberMatrix_InParameterDelegate_LambdaCompilesAndRuns()
+    {
+        const string csSource = """
+            namespace ImportedInDelegate.CSharp
+            {
+                public delegate bool Predicate(in int value);
+
+                public static class Api
+                {
+                    public static bool Invoke(Predicate predicate)
+                    {
+                        var value = 100;
+                        return predicate(in value);
+                    }
+                }
+            }
+            """;
+
+        const string gsSource = """
+            package ImportedInDelegate.Probe
+            import ImportedInDelegate.CSharp
+            import System
+
+            Console.WriteLine(Api.Invoke((in value int32) -> value == 100))
+            """;
+
+        Assert.Equal("True\n", CompileAndRunWithSiblingCs(csSource, gsSource, "ImportedInDelegate.CSharp"));
+    }
+
+    [Fact]
+    public void ImportedMemberMatrix_InParameterDelegate_RejectsMismatchedLambdaRefKind()
+    {
+        const string csSource = """
+            namespace ImportedInDelegateMismatch.CSharp
+            {
+                public delegate bool Predicate(in int value);
+
+                public static class Api
+                {
+                    public static bool Invoke(Predicate predicate) => true;
+                }
+            }
+            """;
+
+        const string gsSource = """
+            package ImportedInDelegateMismatch.Probe
+            import ImportedInDelegateMismatch.CSharp
+
+            var result = Api.Invoke((ref value int32) -> value == 100)
+            """;
+
+        var diagnostics = CompileExpectingErrorsWithSiblingCs(
+            csSource,
+            gsSource,
+            "ImportedInDelegateMismatch.CSharp");
+        Assert.Contains(diagnostics, d => d.Contains("GS0155", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void NamedDelegate_OmittedOptionalArgument_UsesDeclaredDefault()
     {
         const string source = """

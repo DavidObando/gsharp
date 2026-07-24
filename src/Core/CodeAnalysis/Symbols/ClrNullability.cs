@@ -106,8 +106,11 @@ public static class ClrNullability
     /// <returns>The mapped type symbol.</returns>
     public static TypeSymbol GetParameterTypeSymbol(ParameterInfo parameter)
     {
-        var baseSymbol = TypeSymbol.FromClrType(parameter.ParameterType);
-        return ApplyReferenceNullabilityFull(baseSymbol, parameter.ParameterType, parameter, parameter.Member);
+        var parameterType = parameter.ParameterType.IsByRef
+            ? parameter.ParameterType.GetElementType()
+            : parameter.ParameterType;
+        var baseSymbol = TypeSymbol.FromClrType(parameterType);
+        return ApplyReferenceNullabilityFull(baseSymbol, parameterType, parameter, parameter.Member);
     }
 
     internal static bool TryGetNotNullWhen(ParameterInfo parameter, out bool returnValue)

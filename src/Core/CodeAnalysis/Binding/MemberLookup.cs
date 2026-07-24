@@ -2255,7 +2255,7 @@ internal sealed class MemberLookup
         {
             parameterTypes.Add(parameter.ParameterType.ContainsGenericParameters
                 ? TypeSymbol.Object
-                : TypeSymbol.FromClrType(parameter.ParameterType));
+                : ClrNullability.GetParameterTypeSymbol(parameter));
 
             // ADR-0102 follow-up / issue #818: a delegate whose CLR Invoke
             // parameter carries [ParamArrayAttribute] is variadic from the

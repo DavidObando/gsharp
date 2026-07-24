@@ -439,6 +439,14 @@ internal sealed class ConversionClassifier
             return new BoundConversionExpression(null, type, expressionTreeLiteral);
         }
 
+        if (expression is BoundFunctionLiteralExpression refKindLiteral
+            && type?.ClrType is Type delegateType
+            && HasDelegateParameterRefKindMismatch(delegateType, refKindLiteral))
+        {
+            Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type);
+            return new BoundErrorExpression(expression.Syntax);
+        }
+
         if (expression is BoundFunctionLiteralExpression literal
             && type is FunctionTypeSymbol targetFunctionType
             && TypeSymbol.ContainsTypeParameter(targetFunctionType))
@@ -2211,6 +2219,36 @@ internal sealed class ConversionClassifier
             allowExplicit: false);
         var call = new BoundCallExpression(null, method, ImmutableArray.Create(operand));
         return BindConversion(diagnosticLocation, call, targetType, allowExplicit);
+    }
+
+    private static bool HasDelegateParameterRefKindMismatch(
+        Type targetType,
+        BoundFunctionLiteralExpression literal)
+    {
+        if (!ClrTypeUtilities.IsDelegateType(targetType))
+        {
+            return false;
+        }
+
+        var sourceParameters = literal.Function.Parameters;
+        var targetRefKinds = GetMethodGroupTargetRefKinds(
+            TypeSymbol.FromClrType(targetType),
+            sourceParameters.Length,
+            out _);
+        if (targetRefKinds.Length != sourceParameters.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < sourceParameters.Length; i++)
+        {
+            if (sourceParameters[i].RefKind != targetRefKinds[i])
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

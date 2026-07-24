@@ -254,7 +254,13 @@ internal sealed class LambdaBinder
                 Diagnostics.ReportParameterAlreadyDeclared(p.Location, pname);
             }
 
-            var lambdaParam = new ParameterSymbol(pname, ptype, isVariadic, declaringSyntax: p.Identifier, isScoped: p.IsScoped);
+            var lambdaParam = new ParameterSymbol(
+                pname,
+                ptype,
+                isVariadic,
+                declaringSyntax: p.Identifier,
+                isScoped: p.IsScoped,
+                refKind: conversions.BindAndValidateParameterRefKind(p, pname, ptype, isVariadic, syntax.IsAsync ? "async" : null));
 
             // ADR-0063 §5: function-literal (lambda) parameters can declare a
             // default value; lambdas can be invoked through their delegate type
@@ -659,7 +665,13 @@ internal sealed class LambdaBinder
                 Diagnostics.ReportParameterAlreadyDeclared(p.Location, pname);
             }
 
-            var lambdaParam = new ParameterSymbol(pname, ptype, isVariadic, declaringSyntax: p.Identifier, isScoped: p.IsScoped);
+            var lambdaParam = new ParameterSymbol(
+                pname,
+                ptype,
+                isVariadic,
+                declaringSyntax: p.Identifier,
+                isScoped: p.IsScoped,
+                refKind: conversions.BindAndValidateParameterRefKind(p, pname, ptype, isVariadic, isAsync ? "async" : null));
 
             // ADR-0063 §5: arrow-lambda parameters can also declare a default
             // value; the conversion classifier validates the constant-folded
@@ -871,7 +883,8 @@ internal sealed class LambdaBinder
                 original.Name,
                 adapterParameterType,
                 declaringSyntax: original.DeclaringSyntax,
-                isScoped: original.IsScoped);
+                isScoped: original.IsScoped,
+                refKind: original.RefKind);
             adapterParameters.Add(adapterParameter);
             replacementMap[original] = new BoundConversionExpression(
                 null,
