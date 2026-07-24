@@ -400,7 +400,9 @@ internal sealed class FunctionEmitter
         bool isEntryPoint)
     {
         var sigBlob = new BlobBuilder();
-        var signatureParameterCount = function.Parameters.Length - (function.ExplicitReceiverParameter == null ? 0 : 1);
+        bool emitsExplicitReceiver = function.IsExtension && !function.IsInstanceMethod;
+        var signatureParameterCount = function.Parameters.Length
+            - (function.ExplicitReceiverParameter != null && !emitsExplicitReceiver ? 1 : 0);
         new BlobEncoder(sigBlob).MethodSignature(
                 isInstanceMethod: function.IsInstanceMethod,
                 genericParameterCount: function.TypeParameters.IsDefaultOrEmpty ? 0 : function.TypeParameters.Length)
@@ -434,7 +436,8 @@ internal sealed class FunctionEmitter
                 {
                     foreach (var p in function.Parameters)
                     {
-                        if (ReferenceEquals(p, function.ThisParameter))
+                        if (ReferenceEquals(p, function.ThisParameter)
+                            && !emitsExplicitReceiver)
                         {
                             continue;
                         }
@@ -649,7 +652,8 @@ internal sealed class FunctionEmitter
         var paramFlagsList = new List<ImmutableArray<byte>>();
         foreach (var p in function.Parameters)
         {
-            if (ReferenceEquals(p, function.ThisParameter))
+            if (ReferenceEquals(p, function.ThisParameter)
+                && !(function.IsExtension && !function.IsInstanceMethod))
             {
                 continue;
             }

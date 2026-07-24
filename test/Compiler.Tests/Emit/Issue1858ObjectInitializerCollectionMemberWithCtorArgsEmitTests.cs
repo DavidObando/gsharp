@@ -86,6 +86,39 @@ public class Issue1858ObjectInitializerCollectionMemberWithCtorArgsEmitTests
         Assert.Equal("7\n1\n42\n", output);
     }
 
+    [Fact]
+    public void CtorArgPlusNestedObjectMember_PopulatesExistingObject()
+    {
+        const string source = """
+            package i1858nestedobject
+            import System
+
+            class Profile {
+                prop Width int32 { get; set; }
+                prop Height int32 { get; set; }
+            }
+
+            class Foo {
+                prop X int32 { get; init; }
+                prop Profile Profile { get; init; }
+                init(x int32) {
+                    X = x
+                    Profile = Profile()
+                }
+            }
+
+            func Main() {
+                let f = Foo(7) { Profile = { Width = 80, Height = 30 } }
+                System.Console.WriteLine(f.X)
+                System.Console.WriteLine(f.Profile.Width)
+                System.Console.WriteLine(f.Profile.Height)
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("7\n80\n30\n", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_1858_exe_").FullName;

@@ -171,6 +171,82 @@ namespace LibA
     }
 
     [Fact]
+    public void CrossProject_ArgumentToPromotedSiblingParameter_DoesNotInsertRuntimeAssertion()
+    {
+        const string libB = @"
+namespace LibB
+{
+    public class Service
+    {
+        public void Accept(string value)
+        {
+            _ = value?.Length;
+        }
+    }
+}";
+        const string libA = @"
+using LibB;
+
+namespace LibA
+{
+    public class Settings
+    {
+        public string Value { get; set; }
+    }
+
+    public class Consumer
+    {
+        public void Run(Service service, Settings settings)
+        {
+            service.Accept(settings?.Value);
+        }
+    }
+}";
+
+        (string printedB, string printedA) = TranslateTwoProjects(libB, libA);
+
+        Assert.Contains("func Accept(value string?)", Compact(printedB));
+        Assert.Contains("service.Accept(settings?.Value)", Compact(printedA));
+        Assert.DoesNotContain("service.Accept((settings?.Value)!!)", Compact(printedA));
+    }
+
+    [Fact]
+    public void CrossProject_NamedDelegateParameter_StillReceivesRequiredAssertion()
+    {
+        const string libB = @"
+namespace LibB
+{
+    public delegate void Callback();
+
+    public class Service
+    {
+        public void Accept(Callback callback)
+        {
+            if (callback is not null) { }
+        }
+    }
+}";
+        const string libA = @"
+using LibB;
+
+namespace LibA
+{
+    public class Consumer
+    {
+        public void Run(Service service, Callback callback = null)
+        {
+            service.Accept(callback);
+        }
+    }
+}";
+
+        (string printedB, string printedA) = TranslateTwoProjects(libB, libA);
+
+        Assert.DoesNotContain("callback Callback?", Compact(printedB));
+        Assert.Contains("service.Accept(callback!!)", Compact(printedA));
+    }
+
+    [Fact]
     public void CrossProject_FieldTarget_FromReferencedInterfaceMember_InsertsForgiveness()
     {
         const string LibASource = @"
@@ -353,6 +429,138 @@ namespace LibA
 
         Assert.Contains("TargetB{Name: foo.Name!!}", Compact(printedA));
         Assert.Contains("TargetC{Name: foo.Name!!}", Compact(printedA));
+    }
+
+    [Fact]
+    public void CrossProject_ReverseDependentPropertyTaint_ForgivesInferredLocalReceiver()
+    {
+        const string data = @"
+namespace Data
+{
+    public class Response
+    {
+        public string[] Items { get; set; }
+    }
+
+    public static class Reader
+    {
+        public static int Count(Response response)
+        {
+            var items = response.Items;
+            return items.Length;
+        }
+    }
+}";
+        LoadedCSharpProject projectData = LoadOblivious(data, "Data");
+
+        const string core = @"
+using Data;
+
+namespace Core
+{
+    public static class Reset
+    {
+        public static void Clear(Response response) { response.Items = null; }
+    }
+}";
+        LoadedCSharpProject projectCore = LoadOblivious(
+            core,
+            "Core",
+            new MetadataReference[] { projectData.Compilation.ToMetadataReference() });
+
+        var siblings = new[] { projectData.Compilation, projectCore.Compilation };
+        LoadedDocument document = Assert.Single(projectData.Documents);
+        var context = new TranslationContext(
+            projectData.Compilation,
+            document.SemanticModel,
+            document.FilePath,
+            siblingCompilations: null,
+            repositoryCompilations: siblings);
+        string printed = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains("prop Items []?string", printed);
+        Assert.Contains("return items!!.Length", printed);
+    }
+
+    [Fact]
+    public void CrossProject_ReverseDependentRecordParameterTaint_WidensStoredContract()
+    {
+        const string data = @"
+namespace Data
+{
+    public record Context(string Progress);
+}";
+        LoadedCSharpProject projectData = LoadOblivious(data, "Data");
+
+        const string app = @"
+using Data;
+
+namespace App
+{
+    public static class Factory
+    {
+        public static Context Create() => new Context(null);
+    }
+}";
+        LoadedCSharpProject projectApp = LoadOblivious(
+            app,
+            "App",
+            new MetadataReference[] { projectData.Compilation.ToMetadataReference() });
+
+        var repository = new[] { projectData.Compilation, projectApp.Compilation };
+        LoadedDocument document = Assert.Single(projectData.Documents);
+        var context = new TranslationContext(
+            projectData.Compilation,
+            document.SemanticModel,
+            document.FilePath,
+            siblingCompilations: null,
+            repositoryCompilations: repository);
+        string printed = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains("data class Context(Progress string?)", printed);
+    }
+
+    [Fact]
+    public void CrossProject_MigratedSiblingObjectInitializer_UsesConstructorSuffix()
+    {
+        const string library = @"
+namespace Library
+{
+    public class Widget
+    {
+        public bool Enabled { get; set; }
+    }
+}";
+        LoadedCSharpProject projectLibrary = LoadOblivious(library, "Library");
+
+        const string app = @"
+using Library;
+
+namespace App
+{
+    public static class Factory
+    {
+        public static Widget Create() => new Widget { Enabled = true };
+    }
+}";
+        LoadedCSharpProject projectApp = LoadOblivious(
+            app,
+            "App",
+            new MetadataReference[] { projectLibrary.Compilation.ToMetadataReference() });
+
+        LoadedDocument document = Assert.Single(projectApp.Documents);
+        var context = new TranslationContext(
+            projectApp.Compilation,
+            document.SemanticModel,
+            document.FilePath,
+            siblingCompilations: null,
+            repositoryCompilations: new[] { projectLibrary.Compilation, projectApp.Compilation });
+        string printed = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains("Widget(){Enabled = true}", Compact(printed));
     }
 
     // ---- Transitive (three-project) chain: the real Oahu shape -------------
@@ -565,7 +773,11 @@ namespace LibA
         var translator = new CSharpToGSharpTranslator();
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(
-            project.Compilation, document.SemanticModel, document.FilePath, siblingCompilations);
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath,
+            siblingCompilations,
+            repositoryCompilations: siblingCompilations);
         CompilationUnit unit = translator.TranslateDocument(document, context);
         return PrintAndValidate(unit);
     }

@@ -538,6 +538,16 @@ public sealed record BoundBinaryOperator
             return true;
         }
 
+        // Imported reference classes named directly in G# source retain the
+        // language's historical nil-comparison behavior. Explicit non-null
+        // metadata on imported member results is rejected contextually by the
+        // expression binder, where the producing member is still available.
+        if (nullableOrUnderlying is ImportedTypeSymbol importedClass
+            && importedClass.ClrType is { IsClass: true })
+        {
+            return true;
+        }
+
         // Issue #2300: an open type parameter (`T`) whose constraint does
         // not guarantee a non-nullable value type — i.e. unconstrained,
         // class-constrained, or interface-constrained — may be

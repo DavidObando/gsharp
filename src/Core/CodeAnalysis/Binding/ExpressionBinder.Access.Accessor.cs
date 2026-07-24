@@ -108,6 +108,17 @@ internal sealed partial class ExpressionBinder
             && IsUserAggregateType(enclosingAliasType)
             && TryGetHeadIdentifier(syntax.RightPart, out var headIdentifier))
         {
+            if (syntax.RightPart is CallExpressionSyntax nestedCall
+                && scope.TryLookupNestedTypeAlias(
+                    enclosingAliasType,
+                    headIdentifier,
+                    -1,
+                    out var nestedCallType)
+                && nestedCallType is StructSymbol nestedClassDef)
+            {
+                return overloads.BindConstructorCallExpression(nestedCall, nestedClassDef);
+            }
+
             // Issue #1174: when a top-level type shares the nested type's simple
             // name, re-binding the right part by simple name would resolve to the
             // top-level homonym (which holds the simple key). Resolve the nested
@@ -1176,6 +1187,34 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindNullConditionalAccessExpressionCore(BoundExpression receiver, ExpressionSyntax rightPart)
     {
+        if (rightPart is UnaryExpressionSyntax unary
+            && unary.OperatorToken.Kind == SyntaxKind.BangBangToken)
+        {
+            var liftedOperand = BindNullConditionalAccessExpressionCore(receiver, unary.Operand);
+            if (liftedOperand is BoundErrorExpression)
+            {
+                return liftedOperand;
+            }
+
+            var assertionOperator = BoundUnaryOperator.Bind(
+                unary.OperatorToken.Kind,
+                liftedOperand.Type);
+            if (assertionOperator == null)
+            {
+                Diagnostics.ReportUndefinedUnaryOperator(
+                    unary.OperatorToken.Location,
+                    unary.OperatorToken.Text,
+                    liftedOperand.Type);
+                return new BoundErrorExpression(null);
+            }
+
+            return new BoundUnaryExpression(
+                null,
+                assertionOperator,
+                liftedOperand,
+                binderCtx.IsCheckedContext);
+        }
+
         var receiverType = receiver.Type;
         TypeSymbol underlying;
         if (receiverType is NullableTypeSymbol nullable)

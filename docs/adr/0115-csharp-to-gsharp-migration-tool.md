@@ -31,6 +31,18 @@ The scaffolded solution under `tools/cs2gs/` already fixes the project decomposi
 
 Build `cs2gs` as a **Roslyn-based, offline, deterministic** translator feeding a **four-stage gap-discovery pipeline**, with structured triage artifacts consumed by an *external* issue-filing agent. The tool lives entirely under `tools/cs2gs/` and is never referenced by `gsc` or any compiler/runtime assembly.
 
+`cs2gs migrate` produces a maintainable repository mirror by default. The
+destination preserves repository-relative directories and non-C# files,
+translates each checked-in `.cs` to the corresponding `.gs`, transforms each
+`.csproj` to a same-location `.gsproj`, and replaces `.sln` files with `.slnx`
+while preserving project coverage. Literal Nerdbank.GitVersioning versions
+below the G#-compatible `3.11.13-beta` floor are upgraded in transformed
+projects and shared MSBuild props. Validation still runs through the four-stage
+pipeline, but logs, triage records, reports, and build intermediates are written
+to a separate artifacts root. The original timestamped per-app layout remains
+available through `--diagnostic-run` for corpus gap discovery, ledger gating,
+and CI compatibility.
+
 ### A. Translation approach: Roslyn front-end → dedicated emit AST → canonical pretty-printer
 
 `Cs2Gs.Translator` parses each input with Roslyn into a `CSharpCompilation`, binds a `SemanticModel`, and walks the bound tree to build a tree of `Cs2Gs.CodeModel` nodes — a **purpose-built G# emit AST** owned by this tool. `Cs2Gs.CodeModel` then **pretty-prints canonical G#** (section B). Before any generated `.gs` reaches `gsc`, the pretty-printed text is **round-trip validated by re-parsing it with the real G# parser** (`Gsharp.CodeAnalysis` syntax API, consumed read-only as a library reference); a file that does not parse is a translator bug and fails the Translate stage *before* a compile is ever attempted (section C).
@@ -722,7 +734,12 @@ Both are written under the run directory alongside the per-failure triage artifa
 - **`summary.json`** (written by `JsonSummaryWriter`, reusing `TriageSerialization.Options` so formatting matches the section D artifacts) carries run provenance (`runId`, `timestamp`, `gscVersion`, `succeeded`, `totalApps`, `greenApps`, `stageOrder`), the per-app rows (`appId`, `succeeded`, `failureCategory`, per-stage `{stage,status,artifactCount}`, the run-relative `artifacts`/`fingerprints`), and the `gaps` array keyed by `fingerprint` with `occurrences` and the merged `retryHistory`.
 - **`report.html`** (written by `HtmlReportWriter`) is a single file with all CSS and JS inlined and **no external asset, CDN, font, or network reference** of any kind. It renders the run header (runId/timestamp/gscVersion, overall verdict, green/total app count), the color-coded status matrix (cells are **never color-only** — each carries `PASS`/`FAIL`/`SKIP` text plus an `aria-label`), the discovered-gaps section (each gap shows category/stage/diagnostic, the affected apps, the `suggestedIssue` title + labels incl. `Oats`, a collapsible issue body, and retry history), and a per-app detail drill-down linking each app's stages and artifacts. **Every** value interpolated into the document is HTML-encoded through a single `HtmlReportWriter.Encode` helper (diagnostic messages, C# snippets, and issue titles/bodies originate from source code and must be escaped to prevent broken or injected markup); the minimal collapse/expand JS is dependency-free. `Cs2Gs.Report` depends only on `Cs2Gs.Pipeline` (for the `RunResult`/`TriageArtifact` models and serializer options) — no Roslyn.
 
-**CLI wiring.** A `cs2gs migrate` run generates both artifacts into the run directory automatically at the end (and prints their paths). `cs2gs report --run <runDir> [--out <file-or-dir>]` regenerates both from an existing `run.json` without re-running the pipeline, so a CI job can re-render a report (e.g. against an updated report template) without a fresh corpus run.
+**CLI wiring.** A `cs2gs migrate` run generates both artifacts under its
+external artifacts root automatically at the end (and prints their paths);
+`--diagnostic-run` retains the historical run directory. `cs2gs report --run
+<runDir> [--out <file-or-dir>]` regenerates both from an existing `run.json`
+without re-running the pipeline, so a CI job can re-render a report (e.g.
+against an updated report template) without a fresh corpus run.
 
 ### G. Validation outcome (issue #914 capstone)
 

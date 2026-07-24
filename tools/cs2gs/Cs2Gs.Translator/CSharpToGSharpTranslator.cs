@@ -92,6 +92,7 @@ public sealed partial class CSharpToGSharpTranslator
     // duplicating what gsc's own `/analyzer:`-triggered gsgen run later adds
     // (GS0102). Null (default) preserves the exact prior no-filter behavior.
     private readonly HashSet<string> retainedFilePaths;
+    private readonly string packageFilter;
 
     // One registry per resolved G# package deduplicates declarations across
     // documents (#2292). Synthetic names themselves are derived from the full
@@ -125,16 +126,22 @@ public sealed partial class CSharpToGSharpTranslator
     /// outside this set (i.e. excluded as generated) are not merged in. Pass
     /// <see langword="null"/> (default) to keep every part regardless of file.
     /// </param>
+    /// <param name="packageFilter">
+    /// When supplied, emits only declarations whose containing namespace
+    /// matches this package.
+    /// </param>
     public CSharpToGSharpTranslator(
         bool preservePartialParts = false,
         bool markMergedTypePartial = false,
-        IReadOnlyCollection<string> retainedFilePaths = null)
+        IReadOnlyCollection<string> retainedFilePaths = null,
+        string packageFilter = null)
     {
         this.preservePartialParts = preservePartialParts;
         this.markMergedTypePartial = markMergedTypePartial;
         this.retainedFilePaths = retainedFilePaths is null
             ? null
             : new HashSet<string>(retainedFilePaths, StringComparer.Ordinal);
+        this.packageFilter = packageFilter;
     }
 
     /// <summary>
@@ -172,7 +179,7 @@ public sealed partial class CSharpToGSharpTranslator
             partialTypeParts = FilterPartialTypeParts(partialTypeParts, this.retainedFilePaths);
         }
 
-        string package = this.ResolvePackage(root, context);
+        string package = this.packageFilter ?? this.ResolvePackage(root, context);
 
         // Issue #1910 (gap 3): a merged-in member from a non-primary partial
         // part (see `VisitAggregateCore`) is translated using ITS OWN file's
@@ -259,7 +266,9 @@ public sealed partial class CSharpToGSharpTranslator
             trailingStatements.AddRange(entryStatements);
         }
 
-        foreach (MemberDeclarationSyntax member in EnumerateTopLevelDeclarations(root))
+        foreach (MemberDeclarationSyntax member in EnumerateTopLevelDeclarations(root)
+            .Where(member => this.packageFilter is null
+                || DeclarationBelongsToPackage(member, context, this.packageFilter)))
         {
             if (member is GlobalStatementSyntax)
             {
@@ -330,6 +339,17 @@ public sealed partial class CSharpToGSharpTranslator
         return new CompilationUnit(package, allImports, members);
     }
 
+    /// <summary>Gets the distinct source namespaces declared by a document.</summary>
+    /// <param name="document">The bound source document.</param>
+    /// <returns>Declared namespaces in source order.</returns>
+    public static IReadOnlyList<string> GetDeclaredPackages(LoadedDocument document) =>
+        EnumerateTopLevelDeclarations(document.GetRoot())
+            .Select(member => document.SemanticModel.GetDeclaredSymbol(member))
+            .Where(symbol => symbol?.ContainingNamespace is { IsGlobalNamespace: false })
+            .Select(symbol => symbol.ContainingNamespace.ToDisplayString())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
     // Forwards to the canonical identifier sanitizer implemented on the nested
     // declaration visitor, so callers outside the visitor (e.g.
     // <see cref="CSharpTypeMapper"/>) can route type-name references through the
@@ -348,6 +368,12 @@ public sealed partial class CSharpToGSharpTranslator
             }
         }
     }
+
+    private static bool DeclarationBelongsToPackage(
+        MemberDeclarationSyntax member,
+        TranslationContext context,
+        string package) =>
+        context.GetDeclaredSymbol(member)?.ContainingNamespace?.ToDisplayString() == package;
 
     private static IEnumerable<MemberDeclarationSyntax> FlattenNamespaceMembers(MemberDeclarationSyntax member)
     {
@@ -760,6 +786,7 @@ public sealed partial class CSharpToGSharpTranslator
         // block), so a sibling static call inside it must stay bare rather than
         // be qualified through a non-existent type (ADR-0115 §B.1/§B.18).
         private readonly INamedTypeSymbol entryType;
+        private readonly HashSet<INamedTypeSymbol> efEntityTypes;
 
         // The per-document MUTABLE working state (caches, suppression/pending
         // sets, per-scope scalars set-and-restored around nested scopes, and
@@ -787,6 +814,7 @@ public sealed partial class CSharpToGSharpTranslator
             this.partialTypeParts = partialTypeParts ?? new Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>>(SymbolEqualityComparer.Default);
             this.preservePartialParts = preservePartialParts;
             this.markMergedTypePartial = markMergedTypePartial;
+            this.efEntityTypes = CollectEfEntityTypes(context.Compilation);
 
             // `entryPoint` is threaded in by the caller (`TranslateDocument`)
             // instead of being recomputed here: `Compilation.GetEntryPoint`

@@ -145,6 +145,25 @@ namespace Corpus.Issue1909
     }
 
     [Fact]
+    public void NullablePrimaryConstructorBaseArgument_IsForgiven()
+    {
+        string rendered = Render(@"
+#nullable enable
+namespace Corpus.Issue1909
+{
+    public record Message(string Text);
+    public record CustomMessage(string? Text) : Message(Text);
+}
+");
+
+        Assert.Contains(
+            "data class CustomMessage(Text string?) : Message(Text!!) {",
+            rendered,
+            StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
     public void TranslatedProgram_CompilesAndRunsWithGsc()
     {
         string rendered = Render(@"

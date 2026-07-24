@@ -141,6 +141,28 @@ namespace Corpus.Issue1907
     }
 
     [Fact]
+    public void AutoPropertyInitializer_CarriesInitializerToBackingField()
+    {
+        string rendered = Render(@"
+namespace Corpus.Issue1907
+{
+    public class Settings
+    {
+        public Value Current { get; set; } = new Value();
+    }
+
+    public class Value { }
+}
+");
+
+        Assert.Contains("private var _current Value = Value()", rendered, StringComparison.Ordinal);
+        Assert.Contains("prop Current Value", rendered, StringComparison.Ordinal);
+        Assert.Contains("return _current", rendered, StringComparison.Ordinal);
+        Assert.Contains("_current = value", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
     public void StaticFieldKeywordProperty_GetsStaticBackingField()
     {
         string rendered = Render(@"

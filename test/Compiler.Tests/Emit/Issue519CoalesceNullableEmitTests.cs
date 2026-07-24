@@ -315,6 +315,37 @@ public class Issue519CoalesceNullableEmitTests
     }
 
     [Fact]
+    public void CoalesceNullConditionalBoolResult_UsesFallbackWhenReceiverIsNil()
+    {
+        var source = """
+            package P
+
+            import System
+
+            class Items {
+                public func HasItems() bool {
+                    return true
+                }
+            }
+
+            class Probe {
+                public prop Items Items { get; set; }
+            }
+
+            var missing Probe? = nil
+            var absent bool = missing?.Items!!.HasItems() ?? false
+            Console.WriteLine(absent)
+
+            var present Probe? = Probe() { Items = Items() }
+            var found bool = present?.Items!!.HasItems() ?? false
+            Console.WriteLine(found)
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("False\nTrue\n", output);
+    }
+
+    [Fact]
     public void CoalesceReferenceNullableString_StillUsesShortCircuitPath()
     {
         // Regression guard: a reference-typed nullable continues to use the

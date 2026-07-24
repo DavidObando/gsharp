@@ -6,13 +6,54 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Pipeline;
+using Cs2Gs.Translator;
+using Cs2Gs.Translator.Loading;
 using Xunit;
 
 namespace Cs2Gs.Tests;
 
 public sealed class Issue2585SemanticQualificationPipelineTests
 {
+    [Fact]
+    public void MultiNamespaceDocument_CanBeSplitByDeclaredPackage()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("AudioQuality.cs", """
+                namespace Oahu.BooksDatabase
+                {
+                    namespace Ex
+                    {
+                        public static class ExCodec
+                        {
+                            public static bool Parse() => true;
+                        }
+                    }
+
+                    public record AudioQuality(int? SampleRate, int? BitRate);
+                }
+                """),
+        });
+        LoadedDocument document = Assert.Single(project.Documents);
+        string[] packages = CSharpToGSharpTranslator.GetDeclaredPackages(document).ToArray();
+
+        Assert.Equal(new[] { "Oahu.BooksDatabase.Ex", "Oahu.BooksDatabase" }, packages);
+
+        string parent = GSharpPrinter.Print(new CSharpToGSharpTranslator(
+            packageFilter: "Oahu.BooksDatabase").TranslateDocument(document));
+        string nested = GSharpPrinter.Print(new CSharpToGSharpTranslator(
+            packageFilter: "Oahu.BooksDatabase.Ex").TranslateDocument(document));
+
+        Assert.Contains("package Oahu.BooksDatabase", parent);
+        Assert.Contains("data class AudioQuality", parent);
+        Assert.DoesNotContain("ExCodec", parent);
+        Assert.Contains("package Oahu.BooksDatabase.Ex", nested);
+        Assert.Contains("func Parse()", nested);
+        Assert.DoesNotContain("AudioQuality", nested);
+    }
+
     [Fact]
     public async Task Pipeline_OahuCoreQualifiedJsonOptions_WithTypeHomonymCompiles()
     {

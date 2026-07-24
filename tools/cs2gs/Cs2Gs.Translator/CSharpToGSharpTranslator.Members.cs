@@ -1811,7 +1811,8 @@ public sealed partial class CSharpToGSharpTranslator
             if (fieldKeywordBackingName == null
                 && !isStatic
                 && node.Initializer != null
-                && (symbol?.IsRequired == true || symbol?.SetMethod?.IsInitOnly == true))
+                && (!IsGetOnlyAutoProperty(node) || symbol?.ContainingType?.IsRecord == true)
+                && !IsNullOrSuppressedNull(node.Initializer.Value))
             {
                 fieldKeywordBackingName = this.RegisterSynthesizedPropertyBackingField(
                     symbol,

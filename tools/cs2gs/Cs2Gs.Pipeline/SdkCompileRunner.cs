@@ -46,6 +46,106 @@ public sealed class SdkCompileRunner
     };
 
     /// <summary>
+    /// Transforms and builds a mirrored project while keeping all build
+    /// products and logs outside the migrated repository.
+    /// </summary>
+    /// <param name="sourceProjectPath">The original C# project path.</param>
+    /// <param name="generatedProjectPath">The mirrored G# project path.</param>
+    /// <param name="artifactDirectory">The external build and log directory.</param>
+    /// <param name="config">The build configuration.</param>
+    /// <param name="generatedProjectPaths">The complete source-to-generated project map.</param>
+    /// <returns>The SDK compile result.</returns>
+    public SdkCompileResult CompileMirroredProject(
+        string sourceProjectPath,
+        string generatedProjectPath,
+        string artifactDirectory,
+        string config,
+        IReadOnlyDictionary<string, string> generatedProjectPaths)
+    {
+        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
+        string sdkMoniker = ResolveSdkMoniker(config);
+        if (sdkMoniker is null)
+        {
+            return SdkCompileResult.Unavailable(
+                "No locally-built Gsharp.NET.Sdk nupkg was found under out/bin/<Config>/nupkgs/ or .nugs/.");
+        }
+
+        string projectDirectory = Path.GetDirectoryName(Path.GetFullPath(generatedProjectPath));
+        Directory.CreateDirectory(projectDirectory);
+        Directory.CreateDirectory(artifactDirectory);
+        GsharpTestProjectRunner.WriteIsolationBoundary(artifactDirectory);
+        WriteLocalNugetConfig(artifactDirectory, repoRoot);
+
+        System.Xml.Linq.XDocument project = GSharpProjectTransformer.Transform(
+            sourceProjectPath,
+            projectDirectory,
+            sdkMoniker,
+            generatedProjectPaths);
+        project.Save(generatedProjectPath, System.Xml.Linq.SaveOptions.DisableFormatting);
+
+        string projectNugetConfig = Directory.EnumerateFiles(projectDirectory)
+            .FirstOrDefault(path => Path.GetFileName(path).Equals(
+                "nuget.config", StringComparison.OrdinalIgnoreCase))
+            ?? Path.Combine(projectDirectory, "nuget.config");
+        byte[] originalNugetConfig = File.Exists(projectNugetConfig)
+            ? File.ReadAllBytes(projectNugetConfig)
+            : null;
+        WriteLocalNugetConfigFile(projectNugetConfig, repoRoot);
+        IReadOnlyList<(string Path, byte[] Original)> temporaryBuildProps =
+            Array.Empty<(string Path, byte[] Original)>();
+        try
+        {
+            temporaryBuildProps = PrepareTemporaryBuildProps(generatedProjectPaths.Values);
+            var args = new List<string>
+            {
+                "build",
+                generatedProjectPath,
+                "-c",
+                config ?? "Release",
+                "-p:RestoreConfigFile=" + projectNugetConfig,
+                "-p:Cs2GsArtifactRoot=" + artifactDirectory,
+            };
+            ProcessRunResult result = ProcessRunner.Run(
+                "dotnet", args, projectDirectory, TimeSpan.FromMinutes(10));
+            File.WriteAllText(Path.Combine(artifactDirectory, "sdk.build.log"), result.Output ?? string.Empty);
+
+            IReadOnlyList<GscDiagnostic> diagnostics = GscInvoker.ParseDiagnostics(result.Output);
+            string assemblyPath = result.ExitCode == 0
+                ? ResolveTargetPath(
+                    generatedProjectPath,
+                    projectDirectory,
+                    config,
+                    artifactDirectory)
+                : null;
+            if (result.ExitCode == 0 && (string.IsNullOrEmpty(assemblyPath) || !File.Exists(assemblyPath)))
+            {
+                diagnostics = diagnostics.Append(new GscDiagnostic(
+                    "GS9999",
+                    "The mirrored project built successfully but its evaluated TargetPath could not be resolved.",
+                    "error",
+                    Path.GetFileName(generatedProjectPath),
+                    1,
+                    1)).ToList();
+            }
+
+            return SdkCompileResult.Completed(result.ExitCode, result.Output, diagnostics, assemblyPath);
+        }
+        finally
+        {
+            RestoreTemporaryBuildProps(temporaryBuildProps);
+
+            if (originalNugetConfig is null)
+            {
+                File.Delete(projectNugetConfig);
+            }
+            else
+            {
+                File.WriteAllBytes(projectNugetConfig, originalNugetConfig);
+            }
+        }
+    }
+
+    /// <summary>
     /// Builds the supplied G# files via <c>dotnet build</c> against the
     /// locally-built <c>Gsharp.NET.Sdk</c>.
     /// </summary>
@@ -548,6 +648,207 @@ public sealed class SdkCompileRunner
             relativePath.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal);
     }
 
+    internal static string ResolveSdkMoniker(string config)
+    {
+        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
+        (string NupkgPath, string Version)? sdk =
+            GsharpTestProjectRunner.ResolveLocalSdkPackage(repoRoot, config) ??
+            ResolveFallbackSdkPackageFromLocalFeed(repoRoot);
+        if (sdk is null || sdk.Value.NupkgPath is null)
+        {
+            return null;
+        }
+
+        GsharpTestProjectRunner.EnsureInLocalFeed(repoRoot, sdk.Value.NupkgPath);
+        return SdkPackageId + "/" + sdk.Value.Version;
+    }
+
+    internal static ProcessRunResult TestMirroredProject(
+        string generatedProjectPath,
+        string artifactDirectory,
+        string config,
+        IReadOnlyDictionary<string, string> generatedProjectPaths)
+    {
+        string projectDirectory = Path.GetDirectoryName(Path.GetFullPath(generatedProjectPath));
+        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
+        string projectNugetConfig = Directory.EnumerateFiles(projectDirectory)
+            .FirstOrDefault(path => Path.GetFileName(path).Equals(
+                "nuget.config", StringComparison.OrdinalIgnoreCase))
+            ?? Path.Combine(projectDirectory, "nuget.config");
+        byte[] originalNugetConfig = File.Exists(projectNugetConfig)
+            ? File.ReadAllBytes(projectNugetConfig)
+            : null;
+        WriteLocalNugetConfigFile(projectNugetConfig, repoRoot);
+        IReadOnlyList<(string Path, byte[] Original)> temporaryBuildProps =
+            Array.Empty<(string Path, byte[] Original)>();
+        try
+        {
+            temporaryBuildProps = PrepareTemporaryBuildProps(generatedProjectPaths.Values);
+            return ProcessRunner.Run(
+                "dotnet",
+                new[]
+                {
+                    "test",
+                    generatedProjectPath,
+                    "--no-build",
+                    "-c",
+                    config ?? "Release",
+                    "-p:Cs2GsArtifactRoot=" + artifactDirectory,
+                },
+                projectDirectory,
+                TimeSpan.FromMinutes(10));
+        }
+        finally
+        {
+            RestoreTemporaryBuildProps(temporaryBuildProps);
+
+            if (originalNugetConfig is null)
+            {
+                File.Delete(projectNugetConfig);
+            }
+            else
+            {
+                File.WriteAllBytes(projectNugetConfig, originalNugetConfig);
+            }
+        }
+    }
+
+    private static IReadOnlyList<(string Path, byte[] Original)> PrepareTemporaryBuildProps(
+        IEnumerable<string> generatedProjectPaths)
+    {
+        var prepared = new List<(string Path, byte[] Original)>();
+        try
+        {
+            foreach (string projectDirectory in generatedProjectPaths
+                .Select(path => Path.GetDirectoryName(Path.GetFullPath(path)))
+                .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                string propsPath = Path.Combine(projectDirectory, "Directory.Build.props");
+                byte[] original = File.Exists(propsPath) ? File.ReadAllBytes(propsPath) : null;
+                System.Xml.Linq.XDocument document;
+                if (original is null)
+                {
+                    document = new System.Xml.Linq.XDocument(new System.Xml.Linq.XElement("Project"));
+                    string inheritedProps = FindInheritedBuildProps(projectDirectory);
+                    if (inheritedProps is not null)
+                    {
+                        document.Root.Add(new System.Xml.Linq.XElement(
+                            "Import",
+                            new System.Xml.Linq.XAttribute(
+                                "Project",
+                                Path.GetRelativePath(projectDirectory, inheritedProps))));
+                    }
+                }
+                else
+                {
+                    using var stream = new MemoryStream(original);
+                    document = System.Xml.Linq.XDocument.Load(
+                        stream,
+                        System.Xml.Linq.LoadOptions.PreserveWhitespace);
+                }
+
+                System.Xml.Linq.XNamespace ns = document.Root.Name.Namespace;
+                document.Root.Add(new System.Xml.Linq.XElement(
+                    ns + "PropertyGroup",
+                    new System.Xml.Linq.XElement(
+                        ns + "BaseOutputPath",
+                        "$(Cs2GsArtifactRoot)/bin/$(MSBuildProjectName)/"),
+                    new System.Xml.Linq.XElement(
+                        ns + "BaseIntermediateOutputPath",
+                        "$(Cs2GsArtifactRoot)/obj/$(MSBuildProjectName)/"),
+                    new System.Xml.Linq.XElement(
+                        ns + "MSBuildProjectExtensionsPath",
+                        "$(Cs2GsArtifactRoot)/obj/$(MSBuildProjectName)/")));
+                document.Save(propsPath, System.Xml.Linq.SaveOptions.DisableFormatting);
+                prepared.Add((propsPath, original));
+            }
+        }
+        catch
+        {
+            RestoreTemporaryBuildProps(prepared);
+            throw;
+        }
+
+        return prepared;
+    }
+
+    private static string FindInheritedBuildProps(string projectDirectory)
+    {
+        DirectoryInfo directory = Directory.GetParent(projectDirectory);
+        while (directory is not null)
+        {
+            string candidate = Path.Combine(directory.FullName, "Directory.Build.props");
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            directory = directory.Parent;
+        }
+
+        return null;
+    }
+
+    private static void RestoreTemporaryBuildProps(
+        IEnumerable<(string Path, byte[] Original)> temporaryBuildProps)
+    {
+        foreach ((string Path, byte[] Original) temporary in temporaryBuildProps.Reverse())
+        {
+            if (temporary.Original is null)
+            {
+                File.Delete(temporary.Path);
+            }
+            else
+            {
+                File.WriteAllBytes(temporary.Path, temporary.Original);
+            }
+        }
+    }
+
+    private static string ResolveTargetPath(
+        string projectPath,
+        string projectDirectory,
+        string config,
+        string artifactDirectory)
+    {
+        ProcessRunResult result = ProcessRunner.Run(
+            "dotnet",
+            new[]
+            {
+                "msbuild",
+                projectPath,
+                "-getProperty:TargetPath",
+                "-p:Configuration=" + (config ?? "Release"),
+                "-p:Cs2GsArtifactRoot=" + artifactDirectory,
+            },
+            projectDirectory,
+            TimeSpan.FromMinutes(2));
+        if (result.ExitCode != 0)
+        {
+            return null;
+        }
+
+        Match json = Regex.Match(
+            result.Stdout ?? string.Empty,
+            "\"TargetPath\"\\s*:\\s*\"(?<path>[^\"]+)\"",
+            RegexOptions.CultureInvariant);
+        string candidate = json.Success
+            ? json.Groups["path"].Value
+            : (result.Stdout ?? string.Empty)
+                .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(line => line.Trim())
+                .LastOrDefault(line => line.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ||
+                    line.EndsWith(".exe", StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return null;
+        }
+
+        candidate = candidate.Replace("\\\\", "\\");
+        return Path.GetFullPath(
+            Path.IsPathRooted(candidate) ? candidate : Path.Combine(projectDirectory, candidate));
+    }
+
     private static void AppendDeclaredItems(StringBuilder sb, IReadOnlyList<DeclaredProjectItem> items)
     {
         foreach (IGrouping<string, DeclaredProjectItem> group in
@@ -619,6 +920,11 @@ public sealed class SdkCompileRunner
     /// <param name="repoRoot">The repository root containing the <c>.nugs</c> feed.</param>
     private static void WriteLocalNugetConfig(string appRunDir, string repoRoot)
     {
+        WriteLocalNugetConfigFile(Path.Combine(appRunDir, "nuget.config"), repoRoot);
+    }
+
+    private static void WriteLocalNugetConfigFile(string path, string repoRoot)
+    {
         string localFeed = Path.Combine(repoRoot, ".nugs");
         var sb = new StringBuilder();
         sb.Append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
@@ -632,7 +938,7 @@ public sealed class SdkCompileRunner
         sb.Append("    <clear />\n");
         sb.Append("  </disabledPackageSources>\n");
         sb.Append("</configuration>\n");
-        File.WriteAllText(Path.Combine(appRunDir, "nuget.config"), sb.ToString());
+        File.WriteAllText(path, sb.ToString());
     }
 
     private static void AddOrUpgradePackage(

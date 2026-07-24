@@ -73,7 +73,7 @@ public sealed class IlVerifyStage : IMigrationStage
             verifyReferences);
 
         File.WriteAllText(
-            Path.Combine(context.AppRunDir, "ilverify.log"),
+            Path.Combine(context.ArtifactDir, "ilverify.log"),
             result.Output ?? string.Empty);
 
         if (result.Succeeded)

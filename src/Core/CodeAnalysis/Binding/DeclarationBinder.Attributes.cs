@@ -681,10 +681,12 @@ internal sealed partial class DeclarationBinder
                 return false;
 
             case TypeOfExpressionSyntax typeOfSyntax:
-                if (bindTypeOfExpression(typeOfSyntax) is BoundTypeOfExpression bt
-                    && bt.OperandType?.ClrType is { } clr)
+                if (bindTypeOfExpression(typeOfSyntax) is BoundTypeOfExpression bt &&
+                    bt.OperandType is { } operandType &&
+                    (operandType.ClrType is not null ||
+                     operandType is StructSymbol or InterfaceSymbol or EnumSymbol or DelegateTypeSymbol))
                 {
-                    value = clr;
+                    value = operandType.ClrType is { } clrType ? clrType : operandType;
                     type = bt.Type;
                     return true;
                 }

@@ -137,6 +137,32 @@ public class AttributeEmitTests
     }
 
     [Fact]
+    public void Emits_Typeof_SameCompilation_Type()
+    {
+        var source = """
+            package P
+            import System
+            import System.Diagnostics
+
+            class Proxy {
+            }
+
+            @DebuggerTypeProxy(typeof(Proxy))
+            class Model {
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var model = assembly.GetTypes().Single(t => t.Name == "Model");
+        var data = model
+            .GetCustomAttributesData()
+            .Single(d => d.AttributeType.FullName == "System.Diagnostics.DebuggerTypeProxyAttribute");
+        var arg = Assert.Single(data.ConstructorArguments);
+
+        Assert.Equal(assembly.GetTypes().Single(t => t.Name == "Proxy"), arg.Value);
+    }
+
+    [Fact]
     public void Emits_Typeof_Named_Argument()
     {
         // DebuggerDisplayAttribute exposes a settable `Target` property of

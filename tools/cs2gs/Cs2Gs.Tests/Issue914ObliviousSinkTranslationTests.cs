@@ -169,6 +169,69 @@ namespace Demo
         Assert.Contains("(object?) -> void", printed);
     }
 
+    [Fact]
+    public void Oblivious_SourceNamedDelegatePromotion_IsConsistentAcrossForwardingParameters()
+    {
+        string printed = TranslateOblivious(@"
+namespace Demo
+{
+    public class Item { }
+    public delegate void Handler(Item item);
+
+    public class Runner
+    {
+        public void Start(Handler handler)
+        {
+            Forward(handler);
+        }
+
+        private void Forward(Handler handler)
+        {
+            Invoke(handler);
+        }
+
+        private void Invoke(Handler handler)
+        {
+            handler(null);
+        }
+    }
+}");
+
+        Assert.Equal(3, printed.Split("handler (Item?) -> void", StringSplitOptions.None).Length - 1);
+    }
+
+    [Fact]
+    public void Oblivious_SourceNamedDelegate_WidensContractForPromotedArgument()
+    {
+        string printed = TranslateOblivious(@"
+namespace Demo
+{
+    public class Item { }
+    public class Holder
+    {
+        public Item Value { get; set; }
+    }
+
+    public delegate void Handler(Item value);
+
+    public class C
+    {
+        public void Run(Handler handler, Holder holder)
+        {
+            holder.Value = null;
+            var value = holder.Value;
+            handler(value);
+        }
+    }
+}");
+
+        Assert.True(
+            printed.Contains("type Handler = delegate func(value Item?)", StringComparison.Ordinal),
+            printed);
+        Assert.Contains("handler(value)", printed);
+        Assert.DoesNotContain("handler(value!!)", printed);
+    }
+
     private static string TranslateOblivious(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });

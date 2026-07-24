@@ -27,6 +27,24 @@ namespace Cs2Gs.Tests;
 public class Issue1728ObjectInitializerWithCtorArgsTranslationTests
 {
     [Fact]
+    public void ReferenceClassNoArgsObjectInitializer_EmitsConstructionSuffix()
+    {
+        string printed = TranslateUnit(@"
+using System.Text;
+namespace Demo
+{
+    public class C
+    {
+        public StringBuilder Make() => new StringBuilder { Capacity = 2 };
+    }
+}");
+
+        Assert.Contains("StringBuilder()", printed);
+        Assert.Contains("Capacity = 2", printed);
+        Assert.DoesNotContain("StringBuilder{Capacity:", printed);
+    }
+
+    [Fact]
     public void ExplicitNew_CtorArgsPlusObjectInitializer_EmitsConstructionSuffix()
     {
         string printed = TranslateUnit(@"
@@ -152,14 +170,8 @@ namespace Demo
     }
 
     [Fact]
-    public void CtorArgsPlusNestedObjectInitializerMember_ReportsUnsupported()
+    public void CtorArgsPlusNestedObjectInitializerMember_PreservesMemberAssignments()
     {
-        // Regression guard (B1, PR #1877 review of issue #1858): a nested
-        // `Sub = { X = 1, Y = 2 }` member is a C# OBJECT initializer, not a
-        // collection initializer — it has no faithful G# form when combined
-        // with constructor arguments. Must still fail loud (ReportUnsupported),
-        // not silently lower each `X = 1` as a bare collection element (which
-        // would emit the semantically wrong `.Add(X = 1)`).
         (string printed, TranslationContext context) = TranslateUnitWithContext(@"
 namespace Demo
 {
@@ -182,11 +194,117 @@ namespace Demo
     }
 }");
 
-        Assert.Contains(
-            context.Diagnostics,
-            d => d.Severity == TranslationSeverity.Unsupported &&
-                d.Message.Contains("nested collection/object initializer as a member value"));
-        Assert.DoesNotContain(".Add(X = 1)", printed);
+        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("Foo(x)", printed);
+        Assert.True(
+            printed.Contains("Sub = {", StringComparison.Ordinal) &&
+            printed.Contains("X = 1", StringComparison.Ordinal) &&
+            printed.Contains("Y = 2", StringComparison.Ordinal),
+            printed);
+    }
+
+    [Fact]
+    public void TargetTypedConditionalNullDelegateArm_EmitsTypedDefault()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public interface IService { }
+
+    public class Screen
+    {
+        public Screen(System.Func<IService>? factory) { }
+    }
+
+    public class C
+    {
+        public Screen Make(IService? service) =>
+            new Screen(service is null ? null : () => service);
+    }
+}");
+
+        Assert.Contains("default(", printed);
+        Assert.DoesNotContain("if service == nil { nil }", printed);
+    }
+
+    [Fact]
+    public void XunitNullAssertion_DoesNotDereferenceNullableArgument()
+    {
+        string printed = TranslateUnit(@"
+namespace Xunit
+{
+    public static class Assert
+    {
+        public static void Null(object? value) { }
+    }
+}
+
+namespace Demo
+{
+    public class C
+    {
+        public void Check(string? value) => Xunit.Assert.Null(value);
+    }
+}");
+
+        Assert.Contains("Assert.Null(value)", printed);
+        Assert.DoesNotContain("Assert.Null(value!!)", printed);
+    }
+
+    [Fact]
+    public void NullableOptionalParameter_PassedToPromotedNullableParameter_IsNotDereferenced()
+    {
+        string printed = TranslateUnit(@"
+#nullable disable
+namespace Demo
+{
+    public interface IService { }
+
+    public class C
+    {
+        public C(IService service = null)
+        {
+            SetService(service);
+        }
+
+        public void SetService(IService service)
+        {
+            if (service is null) { }
+        }
+    }
+}");
+
+        Assert.Contains("SetService(service)", printed);
+        Assert.DoesNotContain("SetService(service!!)", printed);
+    }
+
+    [Fact]
+    public void EntityExposedThroughDbSet_IsEmittedOpenForEfProxying()
+    {
+        string printed = TranslateUnit(@"
+namespace Microsoft.EntityFrameworkCore
+{
+    public class DbSet<T> { }
+}
+
+namespace Demo
+{
+    using Microsoft.EntityFrameworkCore;
+
+    public class Account
+    {
+        public int Id { get; set; }
+        public string Alias { get; set; }
+    }
+
+    public class Context
+    {
+        public DbSet<Account> Accounts { get; set; }
+    }
+}");
+
+        Assert.Contains("open class Account", printed);
+        Assert.Contains("prop Alias string?", printed);
     }
 
     private static string TranslateUnit(string source)

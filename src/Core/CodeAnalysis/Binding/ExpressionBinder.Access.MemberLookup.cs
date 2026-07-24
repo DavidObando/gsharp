@@ -28,6 +28,32 @@ internal sealed partial class ExpressionBinder
     {
         switch (rightPart)
         {
+            case UnaryExpressionSyntax unary
+                when unary.OperatorToken.Kind == SyntaxKind.BangBangToken:
+                var assertedOperand = BindAccessorStep(receiver, classSymbol, unary.Operand);
+                if (assertedOperand is BoundErrorExpression)
+                {
+                    return assertedOperand;
+                }
+
+                var assertionOperator = BoundUnaryOperator.Bind(
+                    unary.OperatorToken.Kind,
+                    assertedOperand.Type);
+                if (assertionOperator == null)
+                {
+                    Diagnostics.ReportUndefinedUnaryOperator(
+                        unary.OperatorToken.Location,
+                        unary.OperatorToken.Text,
+                        assertedOperand.Type);
+                    return new BoundErrorExpression(null);
+                }
+
+                return new BoundUnaryExpression(
+                    null,
+                    assertionOperator,
+                    assertedOperand,
+                    binderCtx.IsCheckedContext);
+
             case AccessorExpressionSyntax nested:
                 // Issue #672: when the LHS is a CLR type symbol, check whether
                 // the left segment of the nested accessor names a nested type
@@ -501,6 +527,18 @@ internal sealed partial class ExpressionBinder
                     // declared on a base interface (e.g. IReadOnlyCollection<T>.Count
                     // surfaced through IReadOnlyList<T>) are found.
                     var prop = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
+                    if (prop == null && scope.References.CanAccessInternalMembers(clrReceiverType.Assembly))
+                    {
+                        var internalCandidate = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
+                            clrReceiverType,
+                            memberName,
+                            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                        if (internalCandidate?.GetMethod?.IsAssembly == true)
+                        {
+                            prop = internalCandidate;
+                        }
+                    }
+
                     if (prop != null && prop.GetIndexParameters().Length == 0 && prop.CanRead)
                     {
                         // Issue #504 follow-up: properties with NRT
@@ -527,6 +565,18 @@ internal sealed partial class ExpressionBinder
                     }
 
                     var fld = ClrTypeUtilities.SafeGetFieldIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
+                    if (fld == null && scope.References.CanAccessInternalMembers(clrReceiverType.Assembly))
+                    {
+                        var internalCandidate = ClrTypeUtilities.SafeGetFieldIncludingInterfaces(
+                            clrReceiverType,
+                            memberName,
+                            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                        if (internalCandidate?.IsAssembly == true)
+                        {
+                            fld = internalCandidate;
+                        }
+                    }
+
                     if (fld != null)
                     {
                         var fieldType = NormalizeImportedSemanticAggregate(ClrNullability.GetFieldTypeSymbol(fld), fld);

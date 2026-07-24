@@ -191,7 +191,11 @@ public sealed partial class CSharpToGSharpTranslator
             // maps to the canonical auto form `prop Name T` (ADR-0115 §B.11). An
             // init-only auto-property (get + init) keeps its explicit accessors so
             // the init-only semantics are preserved (issue #946).
-            if (!anyBodied && hasGet && hasSet && declared.All(a => a.Modifiers.Count == 0))
+            if (!anyBodied
+                && hasGet
+                && hasSet
+                && fieldKeywordBackingName == null
+                && declared.All(a => a.Modifiers.Count == 0))
             {
                 return new List<PropertyAccessor>();
             }
@@ -519,7 +523,7 @@ public sealed partial class CSharpToGSharpTranslator
                 if (baseTypeSyntax is PrimaryConstructorBaseTypeSyntax primaryBase)
                 {
                     return primaryBase.ArgumentList.Arguments
-                        .Select(a => this.TranslateExpression(a.Expression))
+                        .Select(this.TranslateArgument)
                         .ToList();
                 }
             }
@@ -666,21 +670,26 @@ public sealed partial class CSharpToGSharpTranslator
             return syntax == null ? new List<Parameter>() : this.MapParameterList(syntax);
         }
 
-        private List<Parameter> MapParameterList(BaseParameterListSyntax syntax)
+        private List<Parameter> MapParameterList(
+            BaseParameterListSyntax syntax,
+            bool promoteNullability = true)
         {
             var parameters = new List<Parameter>();
             foreach (ParameterSyntax parameter in syntax.Parameters)
             {
                 if (this.context.GetDeclaredSymbol(parameter) is IParameterSymbol symbol)
                 {
-                    parameters.Add(this.MapParameter(symbol, parameter));
+                    parameters.Add(this.MapParameter(symbol, parameter, promoteNullability));
                 }
             }
 
             return parameters;
         }
 
-        private Parameter MapParameter(IParameterSymbol symbol, SyntaxNode fallbackNode)
+        private Parameter MapParameter(
+            IParameterSymbol symbol,
+            SyntaxNode fallbackNode,
+            bool promoteNullability = true)
         {
             string refKind = symbol.RefKind switch
             {
@@ -725,7 +734,7 @@ public sealed partial class CSharpToGSharpTranslator
             // null-checked or null-assigned in the method body is really nullable;
             // render it `T?` so the `== nil` guard type-checks (variadic params are
             // never null-compared as a whole, so they are excluded).
-            if (!variadic)
+            if (!variadic && promoteNullability)
             {
                 type = this.PromoteIfUsedAsNullable(type, symbol);
             }

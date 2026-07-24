@@ -336,6 +336,14 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
+            if (symbol is ILocalSymbol local
+                && !this.ShouldPromoteToNullableReference(local)
+                && local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    is VariableDeclaratorSyntax { Initializer.Value: { } localInitializer })
+            {
+                return this.IsNullablePromotedValue(localInitializer);
+            }
+
             return symbol switch
             {
                 IFieldSymbol or IPropertySymbol or ILocalSymbol or IParameterSymbol or IMethodSymbol =>
@@ -406,6 +414,41 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
+            string delegateMetadataName = GetMetadataTypeName(delegateType.OriginalDefinition);
+            foreach (SyntaxTree tree in this.context.Compilation.SyntaxTrees)
+            {
+                SemanticModel model = this.context.Compilation.GetSemanticModel(tree);
+                foreach (DelegateDeclarationSyntax declaration in tree.GetRoot()
+                    .DescendantNodes().OfType<DelegateDeclarationSyntax>())
+                {
+                    if (model.GetDeclaredSymbol(declaration) is not INamedTypeSymbol declarationSymbol
+                        || GetMetadataTypeName(declarationSymbol) != delegateMetadataName)
+                    {
+                        continue;
+                    }
+
+                    nullablePositions.Clear();
+                    for (int i = 0; i < declaration.ParameterList.Parameters.Count; i++)
+                    {
+                        IParameterSymbol declaredParameter =
+                            model.GetDeclaredSymbol(declaration.ParameterList.Parameters[i]);
+                        if (declaredParameter == null)
+                        {
+                            continue;
+                        }
+
+                        if (declaredParameter.Type.NullableAnnotation == NullableAnnotation.Annotated
+                            || ObliviousNullabilityAnalyzer.IsTainted(
+                                    this.context.Compilation,
+                                    declaredParameter,
+                                    this.context.SiblingCompilations))
+                        {
+                            nullablePositions.Add(i);
+                        }
+                    }
+                }
+            }
+
             if (nullablePositions.Count == 0)
             {
                 return type;
@@ -432,6 +475,20 @@ public sealed partial class CSharpToGSharpTranslator
             return changed
                 ? new ArrowTypeReference(parameterTypes, arrow.ReturnTypes, arrow.IsAsync) { IsNullable = arrow.IsNullable }
                 : type;
+        }
+
+        private static string GetMetadataTypeName(INamedTypeSymbol type)
+        {
+            var parts = new List<string>();
+            for (INamedTypeSymbol current = type; current != null; current = current.ContainingType)
+            {
+                parts.Insert(0, current.MetadataName);
+            }
+
+            string nested = string.Join("+", parts);
+            return type.ContainingNamespace is { IsGlobalNamespace: false } ns
+                ? ns.ToDisplayString() + "." + nested
+                : nested;
         }
 
         // Issue #914: whether <paramref name="expression"/> is a bare `null` /
@@ -571,6 +628,18 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // EF Core treats reference properties from nullable-oblivious C#
+            // entity types as optional. Preserve that model when translating
+            // DbSet<T> entities; emitting a non-nullable G# property would make
+            // EF materialize nullable database columns with GetString instead
+            // of honoring DBNull.
+            if (this.IsObliviousCompilation()
+                && symbol is IPropertySymbol property
+                && this.efEntityTypes.Contains(property.ContainingType.OriginalDefinition))
+            {
+                return true;
+            }
+
             // A function-type (delegate) parameter with an explicit `= null`
             // default is nullable by construction: a non-nullable function type
             // cannot carry a `nil` default at all (gsc GS0265 at the declaration
@@ -616,11 +685,15 @@ public sealed partial class CSharpToGSharpTranslator
             // `null` for every existing single-compilation caller, so this
             // overload reduces to the exact prior single-compilation check —
             // a pure additive fix for the cross-project case.
+            IReadOnlyList<CSharpCompilation> taintCompilations =
+                IsStoredMemberNullabilitySymbol(symbol)
+                    ? this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+                    : this.context.SiblingCompilations;
             if (declared.NullableAnnotation == NullableAnnotation.None
                 && ObliviousNullabilityAnalyzer.IsTainted(
                     this.context.Compilation,
                     symbol,
-                    this.context.SiblingCompilations))
+                    taintCompilations))
             {
                 return true;
             }
@@ -628,6 +701,17 @@ public sealed partial class CSharpToGSharpTranslator
             return symbol is not IMethodSymbol
                 && this.IsUsedAsNullable(symbol, this.GetNullabilityScope(symbol));
         }
+
+        private static bool IsStoredMemberNullabilitySymbol(ISymbol symbol) =>
+            symbol is IFieldSymbol or IPropertySymbol
+            || symbol is IParameterSymbol
+            {
+                ContainingSymbol: IMethodSymbol
+                {
+                    MethodKind: MethodKind.Constructor,
+                    ContainingType.IsRecord: true,
+                },
+            };
 
         // Issue #2521: sink lowering must use the target contract that G# will
         // actually bind, not consumer-side taint recorded for an imported

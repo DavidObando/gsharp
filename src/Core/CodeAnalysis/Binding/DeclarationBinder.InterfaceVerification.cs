@@ -1389,6 +1389,13 @@ internal sealed partial class DeclarationBinder
             // Properties.
             foreach (var clrProp in clrIface.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
             {
+                bool requiresGetter = clrProp.GetMethod?.IsAbstract == true;
+                bool requiresSetter = clrProp.SetMethod?.IsAbstract == true;
+                if (!requiresGetter && !requiresSetter)
+                {
+                    continue;
+                }
+
                 var implProp = MemberLookup.FindMatchingProperty(structSymbol, clrProp);
                 if (implProp == null)
                 {
@@ -1398,7 +1405,7 @@ internal sealed partial class DeclarationBinder
                     {
                         // Synthesize a PropertySymbol backed by the field so the emit
                         // path handles it via the existing auto-property machinery.
-                        bool contractHasSetter = clrProp.SetMethod != null;
+                        bool contractHasSetter = requiresSetter;
                         var synthesized = new PropertySymbol(
                             name: clrProp.Name,
                             type: matchingField.Type,
@@ -1421,7 +1428,7 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                if (clrProp.GetMethod != null && !implProp.HasGetter)
+                if (requiresGetter && !implProp.HasGetter)
                 {
                     Diagnostics.ReportInterfaceMethodNotImplemented(
                         syntax.Identifier.Location,
@@ -1430,7 +1437,7 @@ internal sealed partial class DeclarationBinder
                         clrProp.Name + " (getter)");
                 }
 
-                if (clrProp.SetMethod != null && !implProp.HasSetter)
+                if (requiresSetter && !implProp.HasSetter)
                 {
                     Diagnostics.ReportInterfaceMethodNotImplemented(
                         syntax.Identifier.Location,
