@@ -23,20 +23,25 @@ internal sealed partial class OverloadResolver
 {
     /// <summary>
     /// Issue #1213 / #1221: lowers a call through a delegate/function-typed
-    /// variable to a <see cref="BoundIndirectCallExpression"/>, with two
-    /// event-raise refinements when the variable is the implicit backing-field
-    /// of a field-like event (an <see cref="ImplicitFieldVariableSymbol"/>):
-    /// <list type="bullet">
-    /// <item><description>The callee is loaded as a field read on <c>this</c>
-    /// (e.g. <c>ldfld Base::Changed</c>) — including the backing field declared
-    /// on a base class, so an inherited event can be raised from a derived type
-    /// — rather than a (non-existent) local slot.</description></item>
-    /// <item><description>The conditional raise form <c>Ev?(args)</c> on a
-    /// <c>void</c> delegate is guarded by a null check (a
-    /// <see cref="BoundNullConditionalAccessExpression"/>), so raising an event
-    /// with no subscribers is a safe no-op, mirroring <c>Ev?.Invoke(args)</c>.
-    /// </description></item>
-    /// </list>
+    /// variable to a <see cref="BoundIndirectCallExpression"/>. When the
+    /// variable is the implicit backing-field of a field-like event (an
+    /// <see cref="ImplicitFieldVariableSymbol"/>) the callee is loaded as a
+    /// field read on <c>this</c> (e.g. <c>ldfld Base::Changed</c>) — including a
+    /// backing field declared on a base class, so an inherited event can be
+    /// raised from a derived type — rather than a (non-existent) local slot.
+    /// <para>
+    /// The null-conditional invocation form <c>Ev?(args)</c> is guarded by a
+    /// null check (a <see cref="BoundNullConditionalAccessExpression"/>) so a
+    /// null delegate short-circuits, mirroring <c>Ev?.Invoke(args)</c>. A
+    /// <c>void</c> delegate yields a plain no-op; Issue #2798: a value-returning
+    /// delegate yields the correct optional/null result via the established
+    /// result-slot lowering instead of NRE-ing (or silently dropping the
+    /// <c>?</c> and producing a non-optional result). Issue #2799 follow-up:
+    /// this guard applies uniformly across <b>every</b> receiver kind reaching
+    /// this path — implicit field-like event backing field, bare static field
+    /// or property, and a plain local or parameter — not only the field-like
+    /// event originally handled. The receiver is evaluated exactly once.
+    /// </para>
     /// </summary>
     private BoundExpression BuildIndirectDelegateCall(
         CallExpressionSyntax syntax,
@@ -45,40 +50,107 @@ internal sealed partial class OverloadResolver
         ImmutableArray<BoundExpression> args,
         TypeSymbol narrowedTargetType = null)
     {
+        // Compute the receiver load and its static type for each variable
+        // kind. Every non-null-conditional call below reduces to a plain
+        // `BoundIndirectCallExpression` on this receiver load; the null-
+        // conditional form additionally guards it (see below).
+        //
+        // Issue #2066: a smart-cast-narrowed local (and, for the fallthrough
+        // below, any local/parameter) carries the narrowed (non-nullable,
+        // possibly named-delegate) type so the emitter's
+        // `call.Target.Type is DelegateTypeSymbol` check in EmitIndirectCall
+        // dispatches through the named delegate's own Invoke MethodDef instead
+        // of the type-erased native-function Invoke, which would otherwise
+        // mismatch the value's actual runtime (named-delegate) shape and fail
+        // IL verification.
+        BoundExpression receiverLoad;
+        TypeSymbol receiverType;
         if (variable is ImplicitFieldVariableSymbol implicitField)
         {
-            if (syntax.NullableQuestionToken != null
-                && ReferenceEquals(fnType.ReturnType, TypeSymbol.Void))
+            receiverLoad = BuildImplicitFieldLoad(implicitField);
+            receiverType = implicitField.Field.Type;
+        }
+        else if (TryBuildImplicitMemberLoad(variable, syntax.Identifier.Location, out var memberLoad))
+        {
+            receiverLoad = memberLoad;
+            receiverType = memberLoad.Type ?? narrowedTargetType ?? variable.Type;
+        }
+        else
+        {
+            receiverLoad = new BoundVariableExpression(null, variable, narrowedTargetType);
+            receiverType = narrowedTargetType ?? variable.Type;
+        }
+
+        // Issue #1213 / #2798 / #2799 follow-up: the null-conditional
+        // invocation form `Ev?(args)` of a structural function-typed value
+        // must short-circuit when the delegate is null, evaluating the
+        // receiver exactly once. The `void`-returning form is a plain no-op;
+        // a value-returning form yields the correct optional/null result via
+        // the established result-slot lowering rather than NRE-ing (or, worse,
+        // silently dropping the `?` and producing a non-optional result). This
+        // applies uniformly across every receiver kind that reaches this path
+        // — implicit backing field of a field-like event, bare static field or
+        // property, and a plain local or parameter — not just the field-like
+        // event handled originally.
+        if (syntax.NullableQuestionToken != null)
+        {
+            if (receiverLoad is BoundErrorExpression)
             {
-                var captureName = "$ncap_" + (++binderCtx.NullConditionalCaptureCounter)
-                    .ToString(System.Globalization.CultureInfo.InvariantCulture);
-                var capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: implicitField.Field.Type);
-                var invoke = new BoundIndirectCallExpression(null, new BoundVariableExpression(null, capture), fnType, args);
-                return new BoundNullConditionalAccessExpression(
-                    syntax,
-                    BuildImplicitFieldLoad(implicitField),
-                    capture,
-                    invoke,
-                    TypeSymbol.Void,
-                    resultSlot: null);
+                return receiverLoad;
             }
 
-            return new BoundIndirectCallExpression(null, BuildImplicitFieldLoad(implicitField), fnType, args);
+            var captureName = "$ncap_" + (++binderCtx.NullConditionalCaptureCounter)
+                .ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: receiverType);
+            var invoke = new BoundIndirectCallExpression(null, new BoundVariableExpression(null, capture), fnType, args);
+            return BuildNullConditionalDelegateResult(syntax, receiverLoad, capture, invoke, fnType.ReturnType);
         }
 
-        if (TryBuildImplicitMemberLoad(variable, syntax.Identifier.Location, out var memberLoad))
+        return new BoundIndirectCallExpression(null, receiverLoad, fnType, args);
+    }
+
+    /// <summary>
+    /// Wraps a null-conditional delegate/event invocation in a
+    /// <see cref="BoundNullConditionalAccessExpression"/> that short-circuits
+    /// when the captured receiver is null. A <c>void</c>-returning invocation
+    /// leaves no value (a plain no-op null branch); a value-returning
+    /// invocation adopts the established result-slot lowering — the result type
+    /// is the nullable wrapping of <paramref name="returnType"/>, and a
+    /// value-type return additionally allocates a <c>$nres_</c> slot so the null
+    /// branch can materialize <c>default(Nullable&lt;T&gt;)</c>. Shared by the
+    /// CLR-delegate call path (<c>OverloadResolver.CallBinding</c>) and the
+    /// structural <see cref="FunctionTypeSymbol"/> path
+    /// (<see cref="BuildIndirectDelegateCall"/>). The caller must have already
+    /// incremented <c>binderCtx.NullConditionalCaptureCounter</c> for the
+    /// capture; this method reuses that same value for the result slot.
+    /// </summary>
+    private BoundExpression BuildNullConditionalDelegateResult(
+        CallExpressionSyntax syntax,
+        BoundExpression receiverLoad,
+        LocalVariableSymbol capture,
+        BoundExpression whenNotNull,
+        TypeSymbol returnType)
+    {
+        if (ReferenceEquals(returnType, TypeSymbol.Void))
         {
-            return new BoundIndirectCallExpression(null, memberLoad, fnType, args);
+            return new BoundNullConditionalAccessExpression(
+                syntax, receiverLoad, capture, whenNotNull, TypeSymbol.Void, resultSlot: null);
         }
 
-        // Issue #2066: a smart-cast-narrowed local carries the narrowed
-        // (non-nullable, possibly named-delegate) type so the emitter's
-        // `call.Target.Type is DelegateTypeSymbol` check in EmitIndirectCall
-        // dispatches through the named delegate's own Invoke MethodDef
-        // instead of the type-erased native-function Invoke, which would
-        // otherwise mismatch the value's actual runtime (named-delegate)
-        // shape and fail IL verification.
-        return new BoundIndirectCallExpression(null, new BoundVariableExpression(null, variable, narrowedTargetType), fnType, args);
+        var resultType = returnType is NullableTypeSymbol
+            ? returnType
+            : (TypeSymbol)NullableTypeSymbol.Get(returnType);
+        LocalVariableSymbol resultSlot = null;
+        if (resultType is NullableTypeSymbol nullableResult
+            && GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(nullableResult.UnderlyingType))
+        {
+            var resultSlotName = "$nres_" + binderCtx.NullConditionalCaptureCounter
+                .ToString(System.Globalization.CultureInfo.InvariantCulture);
+            resultSlot = new LocalVariableSymbol(resultSlotName, isReadOnly: false, type: resultType);
+        }
+
+        return new BoundNullConditionalAccessExpression(
+            syntax, receiverLoad, capture, whenNotNull, resultType, resultSlot);
     }
 
     /// <summary>
