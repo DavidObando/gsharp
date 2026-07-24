@@ -416,7 +416,7 @@ public class ImportedMemberMatrixTests
     }
 
     [Fact]
-    public void ImportedMemberMatrix_RefAndOutParameterDelegates_RejectMismatchedRefKinds()
+    public void ImportedMemberMatrix_RefAndOutParameterDelegates_ReportConversionDiagnosticForMismatchedRefKinds()
     {
         const string csSource = """
             namespace ImportedRefOutDelegateMismatch.CSharp
