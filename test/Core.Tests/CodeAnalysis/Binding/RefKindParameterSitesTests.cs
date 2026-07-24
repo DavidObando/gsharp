@@ -106,6 +106,62 @@ type StructInObserver = delegate func(in box int32)
     }
 
     [Fact]
+    public void NamedDelegate_RefKindInvocationMismatches_ReportGS0235NotGS0155()
+    {
+        var sources = new[]
+        {
+            @"
+package RefDelegateMismatch
+
+type RefAction = delegate func(ref value int32)
+var callback RefAction = (ref value int32) -> { }
+var value = 0
+callback(out value)
+0
+",
+            @"
+package GenericOutDelegateMismatch
+
+type OutAction[T] = delegate func(out value T) bool
+func Bad[T](callback OutAction[T], ref value T) {
+    callback(ref value)
+}
+0
+",
+            @"
+package GenericInDelegateMismatch
+
+type InAction[T] = delegate func(in value T) bool
+func Bad[T](callback InAction[T], ref value T) {
+    callback(ref value)
+}
+0
+",
+        };
+
+        foreach (var source in sources)
+        {
+            var result = Evaluate(source);
+            Assert.True(
+                result.Diagnostics.Any(d => d.Id == "GS0235"),
+                source + "\n" + string.Join("\n", result.Diagnostics.Select(d => $"{d.Id}: {d.Message}")));
+            Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0155");
+        }
+
+        var missingIn = Evaluate(@"
+package InDelegateMissingModifier
+
+type InAction = delegate func(in value int32)
+var callback InAction = (in value int32) -> { }
+var value = 0
+callback(value)
+0
+");
+        Assert.Contains(missingIn.Diagnostics, d => d.Id == "GS0242");
+        Assert.DoesNotContain(missingIn.Diagnostics, d => d.Id == "GS0155");
+    }
+
+    [Fact]
     public void PrimaryCtor_RefParameter_Rejected()
     {
         var source = @"

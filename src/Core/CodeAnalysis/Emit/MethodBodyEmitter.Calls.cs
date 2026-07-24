@@ -396,10 +396,7 @@ internal sealed partial class MethodBodyEmitter
             var namedInvokeHandle = this.outer.userTokens.ResolveDelegateInvokeToken(namedDelegate);
 
             this.EmitExpression(call.Target);
-            foreach (var arg in call.Arguments)
-            {
-                this.EmitExpression(arg);
-            }
+            this.EmitImportedCallArguments(call.Arguments, call.ArgumentRefKinds);
 
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(namedInvokeHandle);
@@ -416,10 +413,7 @@ internal sealed partial class MethodBodyEmitter
         if (this.outer.userTokens.FunctionTypeNeedsSymbolicDelegate(call.FunctionType))
         {
             this.EmitExpression(call.Target);
-            foreach (var arg in call.Arguments)
-            {
-                this.EmitExpression(arg);
-            }
+            this.EmitImportedCallArguments(call.Arguments, call.ArgumentRefKinds);
 
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(this.outer.memberRefs.GetFunctionDelegateInvokeRef(call.FunctionType));
@@ -427,10 +421,7 @@ internal sealed partial class MethodBodyEmitter
         }
 
         this.EmitExpression(call.Target);
-        foreach (var arg in call.Arguments)
-        {
-            this.EmitExpression(arg);
-        }
+        this.EmitImportedCallArguments(call.Arguments, call.ArgumentRefKinds);
 
         var delegateType = this.outer.signatures.ResolveDelegateClrType(call.FunctionType);
 

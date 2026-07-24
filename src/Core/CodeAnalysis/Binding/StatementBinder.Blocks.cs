@@ -514,7 +514,7 @@ internal sealed partial class StatementBinder
     // a BoundAddressOfExpression or BoundConditionalAddressExpression — for
     // every deferable call kind (user function, imported function/method).
     // Detecting the argument shape directly (rather than only consulting
-    // ArgumentRefKinds, which only imported call kinds carry) catches every
+    // ArgumentRefKinds, which not every call kind historically carried) catches every
     // by-ref argument regardless of which call kind wraps it.
     private static bool HasByRefArgument(BoundExpression expression)
     {
@@ -558,7 +558,7 @@ internal sealed partial class StatementBinder
                     MethodTypeArguments = call.MethodTypeArguments,
                 };
             case BoundIndirectCallExpression call:
-                return new BoundIndirectCallExpression(null, CaptureExpression(call.Target, prefix), call.FunctionType, CaptureArguments(call.Arguments, prefix));
+                return new BoundIndirectCallExpression(null, CaptureExpression(call.Target, prefix), call.FunctionType, CaptureArguments(call.Arguments, prefix), call.ArgumentRefKinds);
             case BoundUserInstanceCallExpression call:
                 return new BoundUserInstanceCallExpression(
                     null,

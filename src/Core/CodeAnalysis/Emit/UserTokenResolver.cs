@@ -1127,7 +1127,7 @@ internal sealed class UserTokenResolver
                 {
                     foreach (var p in def.Parameters)
                     {
-                        this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
+                        TypeDefEmitter.EncodeParameterSignature(ps, p, this.signatures.EncodeTypeSymbol, this.outer.wellKnown);
                     }
                 });
 

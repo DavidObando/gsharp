@@ -518,6 +518,35 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
+        if (callableType is DelegateTypeSymbol namedDelegate)
+        {
+            if (!overloads.TryBindNamedDelegateArguments(
+                methodName,
+                namedDelegate,
+                ce,
+                arguments,
+                out var namedArguments,
+                out var namedRefKinds))
+            {
+                result = new BoundErrorExpression(null);
+                return true;
+            }
+
+            BoundExpression namedMemberLoad = matchedField != null
+                ? isStatic
+                    ? new BoundFieldAccessExpression(null, receiver, declaringType, matchedField, memberType)
+                    : new BoundFieldAccessExpression(null, receiver, declaringType, matchedField)
+                : new BoundPropertyAccessExpression(null, receiver, declaringType, matchedProperty);
+            result = BuildDelegateMemberInvocation(
+                ce,
+                namedMemberLoad,
+                callableType,
+                functionType,
+                namedArguments,
+                namedRefKinds);
+            return true;
+        }
+
         // ADR-0102 follow-up / issue #818: when the field's declared
         // function type spells a trailing variadic parameter, pack /
         // pass-through trailing args at the call site.
@@ -600,11 +629,12 @@ internal sealed partial class ExpressionBinder
         BoundExpression delegateLoad,
         TypeSymbol delegateType,
         FunctionTypeSymbol functionType,
-        ImmutableArray<BoundExpression> arguments)
+        ImmutableArray<BoundExpression> arguments,
+        ImmutableArray<RefKind> argumentRefKinds = default)
     {
         if (syntax.NullableQuestionToken == null)
         {
-            return new BoundIndirectCallExpression(null, delegateLoad, functionType, arguments);
+            return new BoundIndirectCallExpression(null, delegateLoad, functionType, arguments, argumentRefKinds);
         }
 
         var captureName = "$ncap_" + (++binderCtx.NullConditionalCaptureCounter)
@@ -614,7 +644,8 @@ internal sealed partial class ExpressionBinder
             null,
             new BoundVariableExpression(null, capture),
             functionType,
-            arguments);
+            arguments,
+            argumentRefKinds);
         return BuildNullConditionalDelegateInvocation(syntax, delegateLoad, capture, invoke);
     }
 
@@ -1109,64 +1140,23 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private BoundExpression BindNamedDelegateInvokeCall(BoundExpression receiver, DelegateTypeSymbol delegateSym, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce)
     {
-        // ADR-0101 follow-up / issue #812: a named delegate may declare a
-        // trailing variadic parameter. Apply the same arity + pack /
-        // pass-through rule that we use for the direct-call (`del(args)`)
-        // path so the explicit `.Invoke(args)` spelling behaves identically.
-        var isVariadic = delegateSym.Parameters.Length > 0
-            && delegateSym.Parameters[delegateSym.Parameters.Length - 1].IsVariadic;
-        var fixedParamCount = isVariadic ? delegateSym.Parameters.Length - 1 : delegateSym.Parameters.Length;
-
-        if (isVariadic)
+        if (!overloads.TryBindNamedDelegateArguments(
+            delegateSym.Name,
+            delegateSym,
+            ce,
+            arguments,
+            out var convertedArgs,
+            out var argumentRefKinds))
         {
-            if (arguments.Length < fixedParamCount)
-            {
-                Diagnostics.ReportTooFewArgumentsForVariadic(ce.Location, delegateSym.Name, fixedParamCount, arguments.Length);
-                return new BoundErrorExpression(null);
-            }
-        }
-        else if (arguments.Length != delegateSym.Parameters.Length)
-        {
-            Diagnostics.ReportWrongArgumentCount(ce.Location, delegateSym.Name, delegateSym.Parameters.Length, arguments.Length);
             return new BoundErrorExpression(null);
         }
 
-        var permutedArgs = arguments;
-        if (isVariadic)
-        {
-            var variadicParam = delegateSym.Parameters[delegateSym.Parameters.Length - 1];
-            var sliceType = (SliceTypeSymbol)variadicParam.Type;
-            var hasVariadicErrors = false;
-
-            // Issue #1823: route through the #1630 canonical helper so
-            // trailing elements get the same per-element coercion applied
-            // at every other variadic pack site (previously packed raw,
-            // uncoerced elements here).
-            permutedArgs = OverloadResolver.PackOrPassThroughVariadicArguments(
-                conversions,
-                Diagnostics,
-                ce,
-                arguments,
-                fixedParamCount,
-                sliceType,
-                variadicParam.Name,
-                i => i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Location,
-                ref hasVariadicErrors);
-
-            if (hasVariadicErrors)
-            {
-                return new BoundErrorExpression(null);
-            }
-        }
-
-        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(permutedArgs.Length);
-        for (var i = 0; i < permutedArgs.Length; i++)
-        {
-            var argLoc = i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Location;
-            convertedArgs.Add(conversions.BindConversion(argLoc, permutedArgs[i], delegateSym.Parameters[i].Type));
-        }
-
-        return new BoundIndirectCallExpression(null, receiver, delegateSym.EquivalentFunctionType, convertedArgs.MoveToImmutable());
+        return new BoundIndirectCallExpression(
+            null,
+            receiver,
+            delegateSym.EquivalentFunctionType,
+            convertedArgs,
+            argumentRefKinds);
     }
 
     /// <summary>

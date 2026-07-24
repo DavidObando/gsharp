@@ -409,6 +409,69 @@ type IntInObserver = delegate func(in value int32)
         Assert.Contains(modreqs, t => t.FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute");
     }
 
+    [Fact]
+    public void NamedDelegate_RefOutInInvocations_CompileAndRun()
+    {
+        const string Source = @"package DelegateByRefInvoke
+import System
+
+type RefAction = delegate func(ref value int32)
+type OutAction = delegate func(out value int32)
+type InPredicate = delegate func(in value int32) bool
+
+var refAction RefAction = (ref value int32) -> { value = value + 2 }
+var outAction OutAction = (out value int32) -> { value = 42 }
+var inPredicate InPredicate = (in value int32) -> value == 42
+
+var value = 40
+refAction(ref value)
+Console.WriteLine(value)
+outAction.Invoke(out value)
+Console.WriteLine(value)
+Console.WriteLine(inPredicate(in value))
+Console.WriteLine(inPredicate.Invoke(in value))
+";
+
+        Assert.Equal("42\n42\nTrue\nTrue\n", CompileAndRun(Source, "DelegateByRefInvoke"));
+    }
+
+    [Fact]
+    public void GenericNamedDelegate_RefOutInInvocations_CompileAndRun()
+    {
+        const string Source = @"package GenericDelegateByRefInvoke
+import System
+
+type RefAction[T] = delegate func(ref value T)
+type OutAction[T] = delegate func(out value T)
+type InPredicate[T] = delegate func(in value T) bool
+
+func Apply[T](action RefAction[T], ref value T) {
+    action(ref value)
+}
+
+func Read[T](action OutAction[T], ref value T) {
+    action.Invoke(out value)
+}
+
+func Test[T](predicate InPredicate[T], in value T) bool {
+    return predicate(in value) && predicate.Invoke(in value)
+}
+
+var refAction RefAction[int32] = (ref value int32) -> { value = value + 2 }
+var outAction OutAction[int32] = (out value int32) -> { value = 42 }
+var inPredicate InPredicate[int32] = (in value int32) -> value == 42
+
+var value = 40
+Apply[int32](refAction, ref value)
+Console.WriteLine(value)
+Read[int32](outAction, ref value)
+Console.WriteLine(value)
+Console.WriteLine(Test[int32](inPredicate, in value))
+";
+
+        Assert.Equal("42\n42\nTrue\n", CompileAndRun(Source, "GenericDelegateByRefInvoke"));
+    }
+
     private static string CompileAndRun(string source, string contextName)
     {
         using var peStream = new MemoryStream();

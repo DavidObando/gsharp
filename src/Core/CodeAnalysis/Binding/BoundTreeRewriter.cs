@@ -2201,7 +2201,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundIndirectCallExpression(null, target, node.FunctionType, builder?.ToImmutable() ?? node.Arguments);
+        return new BoundIndirectCallExpression(null, target, node.FunctionType, builder?.ToImmutable() ?? node.Arguments, node.ArgumentRefKinds);
     }
 
     /// <summary>
