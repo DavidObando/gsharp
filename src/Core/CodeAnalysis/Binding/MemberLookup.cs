@@ -847,6 +847,33 @@ internal sealed class MemberLookup
         => MapOpenClrTypeToSymbolic(openClr, openDefinition, typeArguments, openMethodDefinition: null, methodTypeArguments: default);
 
     /// <summary>
+    /// Maps a CLR parameter's value type into the symbolic type model. CLR
+    /// <c>ref</c>/<c>out</c>/<c>in</c> parameters expose <c>T&amp;</c>, but
+    /// G# stores the pointee type and <see cref="RefKind"/> separately.
+    /// </summary>
+    /// <param name="openClr">The open CLR parameter type.</param>
+    /// <param name="openDefinition">The open generic declaring type, if any.</param>
+    /// <param name="typeArguments">The declaring type's symbolic arguments.</param>
+    /// <param name="openMethodDefinition">The open generic method, if any.</param>
+    /// <param name="methodTypeArguments">The method's symbolic arguments.</param>
+    /// <returns>The symbolic parameter value type.</returns>
+    public static TypeSymbol MapOpenClrParameterTypeToSymbolic(
+        Type openClr,
+        Type openDefinition,
+        ImmutableArray<TypeSymbol> typeArguments,
+        MethodInfo openMethodDefinition = null,
+        ImmutableArray<TypeSymbol> methodTypeArguments = default)
+    {
+        var parameterType = openClr?.IsByRef == true ? openClr.GetElementType() : openClr;
+        return MapOpenClrTypeToSymbolic(
+            parameterType,
+            openDefinition,
+            typeArguments,
+            openMethodDefinition,
+            methodTypeArguments);
+    }
+
+    /// <summary>
     /// Issue #833: extended mapping entry point that also substitutes
     /// <em>method</em> generic parameters (<c>MVar(idx)</c>) using the
     /// symbolic arguments at the corresponding ordinals on
@@ -3961,7 +3988,7 @@ internal sealed class MemberLookup
         var anyVariadic = false;
         foreach (var parameter in parameters)
         {
-            var mappedParam = MapOpenClrTypeToSymbolic(
+            var mappedParam = MapOpenClrParameterTypeToSymbolic(
                 parameter.ParameterType,
                 openDefinition,
                 typeArguments,

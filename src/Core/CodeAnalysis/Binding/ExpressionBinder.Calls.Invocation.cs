@@ -808,7 +808,7 @@ internal sealed partial class ExpressionBinder
         var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(invokeParameters.Length);
         foreach (var parameter in invokeParameters)
         {
-            parameterTypes.Add(MemberLookup.MapOpenClrTypeToSymbolic(parameter.ParameterType, openDefinition, symbolicArgs));
+            parameterTypes.Add(MemberLookup.MapOpenClrParameterTypeToSymbolic(parameter.ParameterType, openDefinition, symbolicArgs));
         }
 
         var returnType = invoke.ReturnType.IsSameAs(typeof(void))
@@ -935,7 +935,7 @@ internal sealed partial class ExpressionBinder
         var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(invokeParameters.Length);
         foreach (var parameter in invokeParameters)
         {
-            parameterTypes.Add(MemberLookup.MapOpenClrTypeToSymbolic(
+            parameterTypes.Add(MemberLookup.MapOpenClrParameterTypeToSymbolic(
                 parameter.ParameterType, receiverOpenDef, receiverTypeArgs, openMethod, symbolicMethodTypeArgs));
         }
 

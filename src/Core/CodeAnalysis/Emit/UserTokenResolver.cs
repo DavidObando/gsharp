@@ -1383,7 +1383,7 @@ internal sealed class UserTokenResolver
                             continue;
                         }
 
-                        this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
+                        TypeDefEmitter.EncodeParameterSignature(ps, p, this.signatures.EncodeTypeSymbol, this.outer.wellKnown);
                     }
                 });
         return sigBlob;

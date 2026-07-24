@@ -416,6 +416,122 @@ public class ImportedMemberMatrixTests
     }
 
     [Fact]
+    public void ImportedMemberMatrix_GenericRefOutInParameterDelegates_LambdasCompileAndRun()
+    {
+        const string csSource = """
+            namespace ImportedGenericRefDelegates.CSharp
+            {
+                public delegate void RefAction<T>(ref T value);
+                public delegate bool OutPredicate<T>(out T value);
+                public delegate bool InPredicate<T>(in T value);
+
+                public static class Api
+                {
+                    public static T Apply<T>(T value, RefAction<T> action)
+                    {
+                        action(ref value);
+                        return value;
+                    }
+
+                    public static T Read<T>(OutPredicate<T> predicate)
+                    {
+                        predicate(out var value);
+                        return value;
+                    }
+
+                    public static bool Test<T>(T value, InPredicate<T> predicate) =>
+                        predicate(in value);
+                }
+            }
+            """;
+
+        const string gsSource = """
+            package ImportedGenericRefDelegates.Probe
+            import ImportedGenericRefDelegates.CSharp
+            import System
+
+            func Apply[T](value T, replacement T) T {
+                return Api.Apply[T](value, (ref current T) -> { current = replacement })
+            }
+
+            func Read[T](value T) T {
+                var predicate OutPredicate[T] = (out result T) -> {
+                    result = value
+                    return true
+                }
+                return Api.Read[T](predicate)
+            }
+
+            func Test[T](value T) bool {
+                var predicate InPredicate[T] = (in current T) -> current.ToString() == value.ToString()
+                return Api.Test[T](value, predicate)
+            }
+
+            Console.WriteLine(Apply[int32](40, 42))
+            Console.WriteLine(Read[int32](42))
+            Console.WriteLine(Test[int32](42))
+            """;
+
+        Assert.Equal("42\n42\nTrue\n", CompileAndRunWithSiblingCs(
+            csSource,
+            gsSource,
+            "ImportedGenericRefDelegates.CSharp"));
+    }
+
+    [Fact]
+    public void ImportedMemberMatrix_GenericRefOutInParameterDelegates_ReportRefKindMismatches()
+    {
+        const string csSource = """
+            namespace ImportedGenericRefDelegateMismatch.CSharp
+            {
+                public delegate void RefAction<T>(ref T value);
+                public delegate bool OutPredicate<T>(out T value);
+                public delegate bool InPredicate<T>(in T value);
+            }
+            """;
+
+        var sources = new[]
+        {
+            """
+            package ImportedGenericRefDelegateMismatch.RefProbe
+            import ImportedGenericRefDelegateMismatch.CSharp
+
+            func Bad[T]() {
+                var callback RefAction[T] = (value T) -> { }
+            }
+            """,
+            """
+            package ImportedGenericRefDelegateMismatch.OutProbe
+            import ImportedGenericRefDelegateMismatch.CSharp
+
+            func Bad[T]() {
+                var callback OutPredicate[T] = (ref value T) -> true
+            }
+            """,
+            """
+            package ImportedGenericRefDelegateMismatch.InProbe
+            import ImportedGenericRefDelegateMismatch.CSharp
+
+            func Bad[T]() {
+                var callback InPredicate[T] = (out value T) -> {
+                    return true
+                }
+            }
+            """,
+        };
+
+        foreach (var source in sources)
+        {
+            var diagnostics = CompileExpectingErrorsWithSiblingCs(
+                csSource,
+                source,
+                "ImportedGenericRefDelegateMismatch.CSharp");
+            Assert.Contains(diagnostics, d => d.Contains("GS0155", StringComparison.Ordinal));
+            Assert.DoesNotContain(diagnostics, d => d.Contains("GS9998", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
     public void ImportedMemberMatrix_RefAndOutParameterDelegates_ReportConversionDiagnosticForMismatchedRefKinds()
     {
         const string csSource = """
