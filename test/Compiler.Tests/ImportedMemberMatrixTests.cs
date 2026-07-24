@@ -527,6 +527,7 @@ public class ImportedMemberMatrixTests
                 source,
                 "ImportedGenericRefDelegateMismatch.CSharp");
             Assert.Contains(diagnostics, d => d.Contains("GS0155", StringComparison.Ordinal));
+            Assert.DoesNotContain(diagnostics, d => d.Contains("GS0159", StringComparison.Ordinal));
             Assert.DoesNotContain(diagnostics, d => d.Contains("GS9998", StringComparison.Ordinal));
         }
     }
