@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Xml.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
@@ -83,6 +84,12 @@ public sealed class TestParityStage : IMigrationStage
             return await this.RunLibraryParityAsync(context, cancellationToken).ConfigureAwait(false);
         }
 
+        if (context.Options.OutputLayout == MigrationOutputLayout.Repository &&
+            (context.IsTestProject || IsTestProject(context.App.ProjectPath)))
+        {
+            return this.RunMirroredTestProject(context);
+        }
+
         // No parity oracle applies to this app (e.g. an executable with no golden
         // or a library with no `.Tests` baseline): nothing to verify.
         this.Note(context, "no parity oracle (no stdout golden and no .Tests baseline); nothing to verify.");
@@ -102,10 +109,57 @@ public sealed class TestParityStage : IMigrationStage
         !string.IsNullOrEmpty(context.App.TestsBaselinePath) &&
         File.Exists(context.App.TestsBaselinePath);
 
+    private StageOutcome RunMirroredTestProject(StageExecutionContext context)
+    {
+        string generatedProject =
+            context.Options.GeneratedProjectPaths[Path.GetFullPath(context.App.ProjectPath)];
+        ProcessRunResult result = SdkCompileRunner.TestMirroredProject(
+            generatedProject,
+            context.ArtifactDir,
+            context.Options.Config,
+            context.Options.GeneratedProjectPaths);
+        this.Note(context, result.Output ?? string.Empty);
+        return result.ExitCode == 0
+            ? StageOutcome.Passed()
+            : StageOutcome.Failed(new[]
+            {
+                context.Triage.TestParityLibraryBuildFailure(
+                    result.Output ?? "dotnet test failed without output.",
+                    EmittedGsRelative(context)),
+            });
+    }
+
+    private static bool IsTestProject(string projectPath)
+    {
+        XDocument project = XDocument.Load(projectPath);
+        bool declaredTestProject = project.Descendants()
+            .Where(element => element.Name.LocalName.Equals(
+                "IsTestProject", StringComparison.OrdinalIgnoreCase))
+            .Any(element => string.Equals(element.Value.Trim(), "true", StringComparison.OrdinalIgnoreCase));
+        bool testPackage = project.Descendants()
+            .Where(element => element.Name.LocalName.Equals(
+                "PackageReference", StringComparison.OrdinalIgnoreCase))
+            .Select(element => element.Attributes().FirstOrDefault(attribute =>
+                attribute.Name.LocalName.Equals("Include", StringComparison.OrdinalIgnoreCase))?.Value)
+            .Any(package => string.Equals(
+                package, "Microsoft.NET.Test.Sdk", StringComparison.OrdinalIgnoreCase));
+        string projectName = Path.GetFileNameWithoutExtension(projectPath);
+        string[] segments = Path.GetFullPath(projectPath).Split(
+            new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+            StringSplitOptions.RemoveEmptyEntries);
+        return declaredTestProject ||
+            testPackage ||
+            projectName.EndsWith(".Tests", StringComparison.OrdinalIgnoreCase) ||
+            projectName.EndsWith(".Test", StringComparison.OrdinalIgnoreCase) ||
+            segments.Any(segment =>
+                segment.Equals("tests", StringComparison.OrdinalIgnoreCase) ||
+                segment.Equals("test", StringComparison.OrdinalIgnoreCase));
+    }
+
     private StageOutcome RunStdoutParity(StageExecutionContext context)
     {
         (int exit, string stdout, string stderr, bool timedOut) =
-            RunProgram(context.EmittedAssemblyPath, context.AppRunDir);
+            RunProgram(context.EmittedAssemblyPath, context.ProjectOutputDir);
 
         string golden = File.ReadAllText(context.App.StdoutGolden);
         StdoutParityResult parity = StdoutParity.Compare(golden, stdout);
@@ -187,7 +241,9 @@ public sealed class TestParityStage : IMigrationStage
 
         BaselineTestsOracle oracle = BaselineTestsOracle.Load(context.App.TestsBaselinePath);
 
-        string libraryName = MigrationPipeline.SanitizeAppId(context.App.Id).Replace("corpus_", string.Empty);
+        string libraryName = context.Options.OutputLayout == MigrationOutputLayout.Repository
+            ? Path.GetFileNameWithoutExtension(context.App.ProjectPath)
+            : MigrationPipeline.SanitizeAppId(context.App.Id).Replace("corpus_", string.Empty);
         var project = new GsharpTestProject
         {
             LibraryName = libraryName,
@@ -200,7 +256,7 @@ public sealed class TestParityStage : IMigrationStage
             TestFiles = tests.Files,
         };
 
-        string workDir = Path.Combine(context.AppRunDir, "test-parity");
+        string workDir = Path.Combine(context.ArtifactDir, "test-parity");
         GsharpTestRunResult run = this.libraryRunner.Run(project, workDir);
 
         if (run.Status == GsharpTestRunStatus.Unavailable)
@@ -363,7 +419,7 @@ public sealed class TestParityStage : IMigrationStage
         try
         {
             File.AppendAllText(
-                Path.Combine(context.AppRunDir, "test-parity.log"),
+                Path.Combine(context.ArtifactDir, "test-parity.log"),
                 message + Environment.NewLine);
         }
         catch (IOException)

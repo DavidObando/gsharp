@@ -57,27 +57,40 @@ cs2gs migrate --help
 
 ## Run
 
-### `migrate` — translate + verify the corpus
+### `migrate` — create and verify a mirrored G# repository
 
 ```sh
 dotnet out/bin/Release/Cs2Gs.Cli/cs2gs.dll migrate \
-  --corpus tools/cs2gs/corpus \
-  --out /tmp/cs2gs-run \
+  --corpus /path/to/csharp-repository \
+  --out /path/to/gsharp-repository \
   --config Release
 ```
 
 | Option | Meaning |
 | --- | --- |
-| `--corpus <dir>` | Corpus root (default `tools/cs2gs/corpus`). |
-| `--app <id>` | Migrate only this app (repeatable), e.g. `--app corpus/L1-Console`. |
+| `--corpus <dir>` | Source repository root (default `tools/cs2gs/corpus`). |
+| `--out <dir>` | Empty destination repository (required by default). |
+| `--artifacts <dir>` | Validation runs root (default `<out>.cs2gs-runs`). |
+| `--diagnostic-run` | Preserve the historical timestamped corpus/CI layout. |
+| `--app <id>` | Diagnostic-run only; migrate one app (repeatable). |
 | `--gsc <path>` | Override `gsc.dll` (default `out/bin/<Config>/Compiler/gsc.dll`). |
-| `--out <dir>` | Runs root for artifacts (default `./cs2gs-runs`). |
 | `--config <name>` | Build config used to locate `gsc` (default `Release`). |
 
-Each run prints a per-app × per-stage status matrix and writes a timestamped
-run directory containing the generated `.gs`, triage records, `run.json`, and an
-auto-generated `report.html` + `summary.json`. The process exit code is
-non-zero if any app fails a stage, so CI can gate on it.
+Repository mode preserves relative directories, copies non-C# files, translates
+checked-in `.cs` files to `.gs`, transforms `.csproj` files to `.gsproj`, and
+replaces `.sln` files with `.slnx`. As a compatibility rewrite, literal
+Nerdbank.GitVersioning versions below `3.11.13-beta` are upgraded in projects
+and shared MSBuild props. Build outputs, logs, triage records,
+`run.json`, `report.html`, and `summary.json` stay outside the destination under
+the artifacts root.
+
+Compiler-gap CI uses the legacy layout explicitly:
+
+```sh
+cs2gs migrate --diagnostic-run \
+  --corpus tools/cs2gs/corpus \
+  --out cs2gs-runs
+```
 
 ### `report` — regenerate a report from an existing run
 
@@ -215,7 +228,8 @@ cs2gs triage file-issues --run cs2gs-runs/<runId> --file
 cs2gs triage sync --write
 ```
 
-`cs2gs migrate --baseline tools/cs2gs/triage/gaps.json` gates on the ledger:
+`cs2gs migrate --diagnostic-run --baseline tools/cs2gs/triage/gaps.json`
+gates on the ledger:
 **NEW** or **REGRESSED** fingerprints fail; **KNOWN** open gaps are tolerated;
 **STALE** entries warn (fail with `--baseline-strict`, the nightly mode); an
 **unverified** app (skipped stage, no artifact) must be acknowledged in the

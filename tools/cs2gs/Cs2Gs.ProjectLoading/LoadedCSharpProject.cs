@@ -51,6 +51,10 @@ public sealed class LoadedCSharpProject
     /// gsc/gsgen as Roslyn <c>AdditionalText</c> so file-driven generators (e.g.
     /// Avalonia's XAML name generator) can materialize their output.
     /// </param>
+    /// <param name="projectPath">
+    /// The loaded project file path, or <see langword="null"/> for in-memory inputs.
+    /// </param>
+    /// <param name="isTestProject">Whether evaluated MSBuild properties identify a test project.</param>
     public LoadedCSharpProject(
         CSharpCompilation compilation,
         IReadOnlyList<LoadedDocument> documents,
@@ -59,7 +63,9 @@ public sealed class LoadedCSharpProject
         string rootNamespace = null,
         IReadOnlyList<string> resxFiles = null,
         IReadOnlyList<string> analyzerReferencePaths = null,
-        IReadOnlyList<string> additionalFiles = null)
+        IReadOnlyList<string> additionalFiles = null,
+        string projectPath = null,
+        bool isTestProject = false)
     {
         this.Compilation = compilation;
         this.Documents = documents;
@@ -69,6 +75,8 @@ public sealed class LoadedCSharpProject
         this.ResxFiles = resxFiles ?? ImmutableArray<string>.Empty;
         this.AnalyzerReferencePaths = analyzerReferencePaths ?? ImmutableArray<string>.Empty;
         this.AdditionalFiles = additionalFiles ?? ImmutableArray<string>.Empty;
+        this.ProjectPath = projectPath;
+        this.IsTestProject = isTestProject;
     }
 
     /// <summary>Gets the bound C# compilation.</summary>
@@ -118,6 +126,12 @@ public sealed class LoadedCSharpProject
     /// project.
     /// </summary>
     public IReadOnlyList<string> AdditionalFiles { get; }
+
+    /// <summary>Gets the loaded project file path, or <see langword="null"/>.</summary>
+    public string ProjectPath { get; }
+
+    /// <summary>Gets a value indicating whether this is an evaluated test project.</summary>
+    public bool IsTestProject { get; }
 
     /// <summary>
     /// Gets the subset of <see cref="LoadDiagnostics"/> with

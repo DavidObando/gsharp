@@ -66,6 +66,27 @@ public class Issue1756Tests
         Assert.Contains("Usage:", stdout, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Migrate_RepositoryModeRequiresOutputDirectory()
+    {
+        (int exitCode, string stdout, string stderr) = await RunMainAsync("migrate", "--corpus", ".");
+
+        Assert.Equal(1, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains("requires --out", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Migrate_RepositoryModeRejectsPartialAppSelection()
+    {
+        (int exitCode, string stdout, string stderr) = await RunMainAsync(
+            "migrate", "--corpus", ".", "--out", "unused", "--app", "Sample");
+
+        Assert.Equal(1, exitCode);
+        Assert.Empty(stdout);
+        Assert.Contains("--diagnostic-run", stderr, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// <c>NextValue</c> must throw a dedicated sentinel type (a private
     /// nested subclass of <see cref="ArgumentException"/>), not a plain

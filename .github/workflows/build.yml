@@ -147,6 +147,7 @@ jobs:
         run: |
           set +e
           dotnet out/bin/Release/Cs2Gs.Cli/cs2gs.dll migrate \
+            --diagnostic-run \
             --corpus tools/cs2gs/corpus \
             --baseline tools/cs2gs/triage/gaps.json \
             --out cs2gs-ci-runs \

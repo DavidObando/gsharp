@@ -12,6 +12,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Cs2Gs.Translator.Loading;
 
 namespace Cs2Gs.Pipeline;
 
@@ -110,17 +111,100 @@ public sealed class MigrationPipeline
         string runId = NewRunId(nowUtc);
         string timestamp = nowUtc.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
 
-        string outputRoot = Path.GetFullPath(
-            this.options.OutputRoot ?? Path.Combine(Directory.GetCurrentDirectory(), "cs2gs-runs"));
+        bool repositoryLayout = this.options.OutputLayout == MigrationOutputLayout.Repository;
+        if (repositoryLayout && string.IsNullOrWhiteSpace(this.options.OutputRoot))
+        {
+            throw new InvalidOperationException("Repository migration requires an output directory.");
+        }
+
+        string destinationRoot = repositoryLayout
+            ? Path.GetFullPath(this.options.OutputRoot)
+            : null;
+        string outputRoot = repositoryLayout
+            ? Path.GetFullPath(this.options.ArtifactRoot ?? destinationRoot + ".cs2gs-runs")
+            : Path.GetFullPath(
+                this.options.OutputRoot ?? Path.Combine(Directory.GetCurrentDirectory(), "cs2gs-runs"));
+        if (repositoryLayout)
+        {
+            string relativeArtifactPath = Path.GetRelativePath(destinationRoot, outputRoot);
+            if (!Path.IsPathRooted(relativeArtifactPath) &&
+                !relativeArtifactPath.Equals("..", StringComparison.Ordinal) &&
+                !relativeArtifactPath.StartsWith(
+                    ".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) &&
+                !relativeArtifactPath.StartsWith(
+                    ".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Repository validation artifacts must be outside the destination directory.");
+            }
+        }
+
         string runDir = Path.Combine(outputRoot, runId);
+        IReadOnlyList<string> repositoryFiles = null;
+        if (repositoryLayout)
+        {
+            repositoryFiles = RepositoryMirror.Prepare(this.options.SourceRoot, destinationRoot);
+            this.options.RepositorySourceFiles = repositoryFiles
+                .Where(path => Path.GetExtension(path).Equals(".cs", StringComparison.OrdinalIgnoreCase))
+                .Select(path => Path.GetFullPath(Path.Combine(this.options.SourceRoot, path)))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            this.options.RepositoryTranslations =
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            this.options.RepositoryAdditionalFiles =
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+
         Directory.CreateDirectory(runDir);
         this.options.GeneratedProjectPaths = apps.ToDictionary(
             app => Path.GetFullPath(app.ProjectPath),
-            app => Path.Combine(
-                runDir,
-                SanitizeAppId(app.Id),
-                Path.GetFileNameWithoutExtension(app.ProjectPath) + ".gsproj"),
+            app => repositoryLayout
+                ? Path.Combine(
+                    destinationRoot,
+                    Path.ChangeExtension(
+                        app.RelativeProjectPath ?? Path.GetRelativePath(this.options.SourceRoot, app.ProjectPath),
+                        ".gsproj"))
+                : Path.Combine(
+                    runDir,
+                    SanitizeAppId(app.Id),
+                    Path.GetFileNameWithoutExtension(app.ProjectPath) + ".gsproj"),
             StringComparer.OrdinalIgnoreCase);
+        if (repositoryLayout)
+        {
+            string sdkMoniker = SdkCompileRunner.ResolveSdkMoniker(this.options.Config);
+            if (sdkMoniker is null)
+            {
+                throw new InvalidOperationException(
+                    "Could not resolve a local Gsharp.NET.Sdk package for the mirrored projects.");
+            }
+
+            foreach (CorpusApp app in apps)
+            {
+                string generatedProjectPath =
+                    this.options.GeneratedProjectPaths[Path.GetFullPath(app.ProjectPath)];
+                Directory.CreateDirectory(Path.GetDirectoryName(generatedProjectPath));
+                System.Xml.Linq.XDocument transformed = GSharpProjectTransformer.Transform(
+                    app.ProjectPath,
+                    Path.GetDirectoryName(generatedProjectPath),
+                    sdkMoniker,
+                    this.options.GeneratedProjectPaths);
+                transformed.Save(
+                    generatedProjectPath,
+                    System.Xml.Linq.SaveOptions.DisableFormatting);
+            }
+
+            var loadedProjects = new Dictionary<string, LoadedCSharpProject>(StringComparer.OrdinalIgnoreCase);
+            foreach (CorpusApp app in apps)
+            {
+                string projectPath = Path.GetFullPath(app.ProjectPath);
+                loadedProjects[projectPath] = await CSharpProjectLoader.LoadProjectAsync(
+                    projectPath,
+                    cancellationToken,
+                    includeAutoGenerated: true,
+                    includedAutoGeneratedPaths: this.options.RepositorySourceFiles).ConfigureAwait(false);
+            }
+
+            this.options.RepositoryLoadedProjects = loadedProjects;
+        }
 
         IReadOnlyDictionary<string, List<TriageRetryEntry>> priorHistory =
             LoadPriorRetryEntries(outputRoot, runId);
@@ -135,7 +219,10 @@ public sealed class MigrationPipeline
         };
 
         var appResults = new Dictionary<string, AppResult>(StringComparer.OrdinalIgnoreCase);
-        foreach (CorpusApp app in OrderForSdkBuild(apps))
+        IReadOnlyList<CorpusApp> orderedApps = repositoryLayout
+            ? await this.OrderForSdkBuildAsync(apps, cancellationToken).ConfigureAwait(false)
+            : this.OrderForSdkBuild(apps);
+        foreach (CorpusApp app in orderedApps)
         {
             cancellationToken.ThrowIfCancellationRequested();
             AppResult appResult = await this.RunAppAsync(
@@ -153,10 +240,37 @@ public sealed class MigrationPipeline
             runResult.Apps.Add(appResults[app.Id]);
         }
 
-        SolutionGenerator.Generate(
-            this.options.SourceRoot,
-            runDir,
-            this.options.GeneratedProjectPaths);
+        if (repositoryLayout)
+        {
+            if (runResult.Succeeded)
+            {
+                RepositoryOrphanSourceTranslator.TranslateMissing(
+                    this.options.SourceRoot,
+                    destinationRoot,
+                    repositoryFiles);
+            }
+
+            RepositorySolutionGenerator.Generate(
+                this.options.SourceRoot,
+                destinationRoot,
+                this.options.GeneratedProjectPaths,
+                repositoryFiles);
+            if (runResult.Succeeded)
+            {
+                RepositoryMirror.ValidateCompleted(
+                    this.options.SourceRoot,
+                    destinationRoot,
+                    repositoryFiles,
+                    this.options.RepositoryAdditionalFiles);
+            }
+        }
+        else
+        {
+            SolutionGenerator.Generate(
+                this.options.SourceRoot,
+                runDir,
+                this.options.GeneratedProjectPaths);
+        }
 
         if (runResult.Succeeded && runResult.Apps.Any(a => a.Unverified))
         {
@@ -205,6 +319,62 @@ public sealed class MigrationPipeline
             }
 
             visiting.Remove(path);
+            ordered.Add(app);
+        }
+
+        foreach (CorpusApp app in apps)
+        {
+            Visit(app);
+        }
+
+        return ordered;
+    }
+
+    private async Task<IReadOnlyList<CorpusApp>> OrderForSdkBuildAsync(
+        IReadOnlyList<CorpusApp> apps,
+        CancellationToken cancellationToken)
+    {
+        if (!this.options.CompileViaSdk || apps.Count <= 1)
+        {
+            return apps;
+        }
+
+        var byPath = apps.ToDictionary(
+            app => Path.GetFullPath(app.ProjectPath),
+            StringComparer.OrdinalIgnoreCase);
+        var references = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (CorpusApp app in apps)
+        {
+            IReadOnlyList<Cs2Gs.Translator.Loading.LoadedCSharpProject> loaded =
+                await Cs2Gs.Translator.Loading.CSharpProjectLoader
+                    .LoadProjectWithReferencesAsync(app.ProjectPath, cancellationToken)
+                    .ConfigureAwait(false);
+            references[Path.GetFullPath(app.ProjectPath)] = loaded
+                .Skip(1)
+                .Select(project => project.ProjectPath)
+                .Where(path => !string.IsNullOrEmpty(path))
+                .Select(Path.GetFullPath)
+                .ToList();
+        }
+
+        var ordered = new List<CorpusApp>(apps.Count);
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void Visit(CorpusApp app)
+        {
+            string path = Path.GetFullPath(app.ProjectPath);
+            if (!visited.Add(path))
+            {
+                return;
+            }
+
+            foreach (string reference in references[path])
+            {
+                if (byPath.TryGetValue(reference, out CorpusApp dependency))
+                {
+                    Visit(dependency);
+                }
+            }
+
             ordered.Add(app);
         }
 
@@ -316,11 +486,20 @@ public sealed class MigrationPipeline
         IReadOnlyDictionary<string, List<TriageRetryEntry>> priorHistory,
         CancellationToken cancellationToken)
     {
-        string appRunDir = Path.Combine(runDir, SanitizeAppId(app.Id));
-        Directory.CreateDirectory(appRunDir);
+        string artifactDirectoryName = this.options.OutputLayout == MigrationOutputLayout.Repository
+            ? SanitizeAppId(app.Id) + "-" + Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(app.Id))).Substring(0, 8).ToLowerInvariant()
+            : SanitizeAppId(app.Id);
+        string artifactDir = Path.Combine(runDir, artifactDirectoryName);
+        string projectOutputDir = this.options.OutputLayout == MigrationOutputLayout.Repository
+            ? Path.GetDirectoryName(this.options.GeneratedProjectPaths[Path.GetFullPath(app.ProjectPath)])
+            : artifactDir;
+        Directory.CreateDirectory(artifactDir);
+        Directory.CreateDirectory(projectOutputDir);
 
         var triage = new TriageBuilder(runId, timestamp, gscVersion, app.Id);
-        var context = new StageExecutionContext(app, this.options, gsc, appRunDir, triage);
+        var context = new StageExecutionContext(
+            app, this.options, gsc, projectOutputDir, artifactDir, triage);
 
         var appResult = new AppResult { AppId = app.Id, Succeeded = true };
         bool shortCircuited = false;
@@ -382,7 +561,7 @@ public sealed class MigrationPipeline
             }
 
             IReadOnlyList<TriageArtifact> written = this.WriteArtifacts(
-                outcome.Artifacts, appRunDir, runDir, priorHistory, appResult);
+                outcome.Artifacts, artifactDir, runDir, priorHistory, appResult);
 
             appResult.Stages.Add(new StageResult
             {

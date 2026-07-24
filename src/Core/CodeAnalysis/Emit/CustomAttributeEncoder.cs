@@ -812,6 +812,12 @@ internal sealed class CustomAttributeEncoder
 
     private static bool ArgAssignable(object supplied, Type paramType)
     {
+        // Third-party attributes are commonly resolved through a
+        // MetadataLoadContext. Normalize framework types before using CLR
+        // assignability so, for example, its System.String matches a runtime
+        // string constant.
+        paramType = NormalizeWellKnownType(paramType);
+
         // Everything is assignable to System.Object. Compared by name so the
         // check holds for attribute types resolved through a MetadataLoadContext.
         if (paramType.FullName == "System.Object")
@@ -825,6 +831,12 @@ internal sealed class CustomAttributeEncoder
         }
 
         if (paramType.IsInstanceOfType(supplied))
+        {
+            return true;
+        }
+
+        if (supplied is TypeSymbol &&
+            paramType.FullName == "System.Type")
         {
             return true;
         }
@@ -1016,10 +1028,10 @@ internal sealed class CustomAttributeEncoder
             // ECMA-335 II.23.2.12: SZARRAY element-type for a single-dimensional array parameter.
             this.EncodeClrTypeForCtorSig(enc.SZArray(), t.GetElementType()!);
         }
-        else if (typeof(Type).IsAssignableFrom(t))
+        else if (t.IsSameAs(typeof(Type)))
         {
             // System.Type parameter: encoded as a CLASS type reference in the ctor signature.
-            enc.Type(this.getTypeReference(t), isValueType: false);
+            enc.Type(this.getTypeReference(typeof(Type)), isValueType: false);
         }
         else
         {
@@ -1028,7 +1040,7 @@ internal sealed class CustomAttributeEncoder
         }
     }
 
-    private static void WriteCustomAttributeFixedArg(BlobBuilder bb, Type paramType, object value)
+    private void WriteCustomAttributeFixedArg(BlobBuilder bb, Type paramType, object value)
     {
         if (paramType.IsEnum)
         {
@@ -1088,12 +1100,17 @@ internal sealed class CustomAttributeEncoder
         {
             bb.WriteSerializedString((string)value);
         }
-        else if (typeof(Type).IsAssignableFrom(paramType))
+        else if (paramType.IsSameAs(typeof(Type)))
         {
             // ECMA-335 II.23.3: a System.Type argument is encoded as a
             // SerString carrying the canonical type-name. A null Type
             // serialises as the SerString null marker (0xFF).
-            bb.WriteSerializedString(value is Type t ? GetSerializedTypeName(t) : null);
+            bb.WriteSerializedString(value switch
+            {
+                Type t => GetSerializedTypeName(t),
+                TypeSymbol symbol => this.GetSerializedTypeName(symbol),
+                _ => null,
+            });
         }
         else if (paramType.IsArray && paramType.GetArrayRank() == 1)
         {
@@ -1111,7 +1128,9 @@ internal sealed class CustomAttributeEncoder
             }
             else
             {
-                var runtimeType = value.GetType();
+                var runtimeType = value is Type or TypeSymbol
+                    ? typeof(Type)
+                    : value.GetType();
                 WriteCustomAttributeFieldOrPropertyType(bb, runtimeType);
                 WriteCustomAttributeFixedArg(bb, runtimeType, value);
             }
@@ -1123,7 +1142,7 @@ internal sealed class CustomAttributeEncoder
         }
     }
 
-    private static void WriteCustomAttributeArrayArg(BlobBuilder bb, Type elementType, object value)
+    private void WriteCustomAttributeArrayArg(BlobBuilder bb, Type elementType, object value)
     {
         // ECMA-335 II.23.3: an SZARRAY argument is encoded as an Int32 length
         // (or 0xFFFFFFFF for a null array) followed by length elements of
@@ -1149,6 +1168,55 @@ internal sealed class CustomAttributeEncoder
         // may omit the assembly portion. We always emit the assembly-qualified
         // form so the consumer can unambiguously rebind the type.
         return t.AssemblyQualifiedName ?? t.FullName ?? t.Name;
+    }
+
+    private string GetSerializedTypeName(TypeSymbol type)
+    {
+        string assemblyName =
+            this.emitCtx.AssemblyNameOverride ??
+            this.emitCtx.Program.PackageName ??
+            "Default";
+        return GetMetadataTypeName(type) + ", " + assemblyName;
+    }
+
+    private static string GetMetadataTypeName(TypeSymbol type)
+    {
+        string packageName;
+        TypeSymbol containingType;
+        int arity;
+        switch (type)
+        {
+            case StructSymbol structType:
+                packageName = structType.PackageName;
+                containingType = structType.ContainingType;
+                arity = structType.TypeParameters.Length;
+                break;
+            case InterfaceSymbol interfaceType:
+                packageName = interfaceType.PackageName;
+                containingType = interfaceType.ContainingType;
+                arity = interfaceType.TypeParameters.Length;
+                break;
+            case EnumSymbol enumType:
+                packageName = enumType.PackageName;
+                containingType = enumType.ContainingType;
+                arity = 0;
+                break;
+            case DelegateTypeSymbol delegateType:
+                packageName = delegateType.PackageName;
+                containingType = null;
+                arity = delegateType.TypeParameters.Length;
+                break;
+            default:
+                return type.Name;
+        }
+
+        string name = arity == 0 ? type.Name : type.Name + "`" + arity;
+        if (containingType is not null)
+        {
+            return GetMetadataTypeName(containingType) + "+" + name;
+        }
+
+        return string.IsNullOrEmpty(packageName) ? name : packageName + "." + name;
     }
 
     /// <summary>
@@ -1183,7 +1251,7 @@ internal sealed class CustomAttributeEncoder
         return NormalizeWellKnownType(fieldType);
     }
 
-    private static void WriteCustomAttributeNamedArg(BlobBuilder bb, Type attributeType, BoundAttributeArgument arg)
+    private void WriteCustomAttributeNamedArg(BlobBuilder bb, Type attributeType, BoundAttributeArgument arg)
     {
         var prop = attributeType.GetProperty(arg.Name, BindingFlags.Public | BindingFlags.Instance);
         var field = prop == null
@@ -1268,7 +1336,7 @@ internal sealed class CustomAttributeEncoder
         {
             bb.WriteByte(0x0E);
         }
-        else if (typeof(Type).IsAssignableFrom(t))
+        else if (t.IsSameAs(typeof(Type)))
         {
             // 0x50 — System.Type (no payload byte; the FixedArg holds the SerString).
             bb.WriteByte(0x50);

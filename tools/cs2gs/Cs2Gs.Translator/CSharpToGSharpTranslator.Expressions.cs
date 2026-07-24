@@ -1290,9 +1290,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 case IdentifierNameSyntax:
                 case MemberAccessExpressionSyntax:
-                    ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
-                    return symbol is IFieldSymbol or IPropertySymbol or ILocalSymbol or IParameterSymbol
-                        && this.ShouldPromoteToNullableReference(symbol);
+                    return this.IsNullablePromotedValue(expression);
 
                 default:
                     return false;

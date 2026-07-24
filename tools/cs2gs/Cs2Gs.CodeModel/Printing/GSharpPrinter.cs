@@ -694,6 +694,8 @@ public static class GSharpPrinter
                 $"{RenderExpression(element.Key, indent)}: {RenderExpression(element.Value, indent)}",
             CollectionInitializerElementKind.Indexed =>
                 $"[{RenderExpression(element.Key, indent)}] = {RenderExpression(element.Value, indent)}",
+            CollectionInitializerElementKind.Assignment =>
+                $"{element.MemberName} = {RenderExpression(element.Value, indent)}",
             _ => RenderExpression(element.Value, indent),
         });
 

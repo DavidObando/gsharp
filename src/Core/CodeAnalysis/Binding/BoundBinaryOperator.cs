@@ -538,6 +538,17 @@ public sealed record BoundBinaryOperator
             return true;
         }
 
+        // Imported managed classes are reference types too. Keep this aligned
+        // with reference-equality classification so `ImportedClass == nil`
+        // binds just like a source-declared class.
+        if (nullableOrUnderlying.ClrType is { } clrType
+            && !clrType.IsValueType
+            && !clrType.IsPointer
+            && !clrType.IsByRef)
+        {
+            return true;
+        }
+
         // Issue #2300: an open type parameter (`T`) whose constraint does
         // not guarantee a non-nullable value type — i.e. unconstrained,
         // class-constrained, or interface-constrained — may be

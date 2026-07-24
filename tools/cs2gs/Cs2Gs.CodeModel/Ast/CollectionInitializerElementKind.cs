@@ -18,4 +18,7 @@ public enum CollectionInitializerElementKind
 
     /// <summary>An indexer entry <c>[k] = v</c>, lowered to an indexer set.</summary>
     Indexed,
+
+    /// <summary>A nested object-member assignment <c>Name = value</c>.</summary>
+    Assignment,
 }

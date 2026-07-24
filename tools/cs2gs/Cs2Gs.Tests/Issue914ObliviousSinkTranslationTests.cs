@@ -169,6 +169,37 @@ namespace Demo
         Assert.Contains("(object?) -> void", printed);
     }
 
+    [Fact]
+    public void Oblivious_SourceNamedDelegate_KeepsContractAndForgivesPromotedArgument()
+    {
+        string printed = TranslateOblivious(@"
+namespace Demo
+{
+    public class Item { }
+    public class Holder
+    {
+        public Item Value { get; set; }
+    }
+
+    public delegate void Handler(Item value);
+
+    public class C
+    {
+        public void Run(Handler handler, Holder holder)
+        {
+            holder.Value = null;
+            var value = holder.Value;
+            handler(value);
+        }
+    }
+}");
+
+        Assert.True(
+            printed.Contains("type Handler = delegate func(value Item)", StringComparison.Ordinal),
+            printed);
+        Assert.Contains("handler(value!!)", printed);
+    }
+
     private static string TranslateOblivious(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });

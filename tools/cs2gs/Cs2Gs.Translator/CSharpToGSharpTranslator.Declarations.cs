@@ -531,6 +531,30 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
+        private static HashSet<INamedTypeSymbol> CollectEfEntityTypes(CSharpCompilation compilation)
+        {
+            var entities = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+            foreach (SyntaxTree tree in compilation.SyntaxTrees)
+            {
+                SemanticModel model = compilation.GetSemanticModel(tree);
+                foreach (PropertyDeclarationSyntax property in tree.GetRoot().DescendantNodes().OfType<PropertyDeclarationSyntax>())
+                {
+                    var dbSet = model.GetDeclaredSymbol(property)?.Type as INamedTypeSymbol;
+                    if (dbSet?.Name != "DbSet"
+                        || dbSet.Arity != 1
+                        || dbSet.ContainingNamespace?.ToDisplayString() != "Microsoft.EntityFrameworkCore"
+                        || dbSet.TypeArguments[0] is not INamedTypeSymbol entity)
+                    {
+                        continue;
+                    }
+
+                    entities.Add(entity.OriginalDefinition);
+                }
+            }
+
+            return entities;
+        }
+
         /// <summary>
         /// Determines whether <paramref name="type"/> will be emitted as an
         /// <c>open class</c> in G#. Mirrors the class-declaration openness logic in
@@ -544,7 +568,9 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            if (type.IsAbstract || HasProtectedMember(type))
+            if (type.IsAbstract
+                || HasProtectedMember(type)
+                || this.efEntityTypes.Contains(type.OriginalDefinition))
             {
                 return true;
             }
@@ -1327,7 +1353,8 @@ public sealed partial class CSharpToGSharpTranslator
                 isOpenableKind &&
                 !symbol.IsStatic &&
                 ((!symbol.IsSealed && this.subclassedBases.Contains(symbol.OriginalDefinition))
-                    || HasProtectedMember(symbol));
+                    || HasProtectedMember(symbol)
+                    || (!symbol.IsSealed && this.efEntityTypes.Contains(symbol.OriginalDefinition)));
 
             // G# has no `abstract` class modifier (the keyword is not recognized by
             // the parser); a C# `abstract class`/`abstract record` therefore maps to

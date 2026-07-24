@@ -395,11 +395,27 @@ public sealed class CollectionInitializerElement : GNode
         Value = value;
     }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="CollectionInitializerElement"/>
+    /// class representing a nested object-member assignment.
+    /// </summary>
+    /// <param name="memberName">The assigned member name.</param>
+    /// <param name="value">The assigned value.</param>
+    public CollectionInitializerElement(string memberName, GExpression value)
+    {
+        Kind = CollectionInitializerElementKind.Assignment;
+        MemberName = memberName;
+        Value = value;
+    }
+
     /// <summary>Gets the element kind.</summary>
     public CollectionInitializerElementKind Kind { get; }
 
     /// <summary>Gets the key expression, or <see langword="null"/> for a bare element.</summary>
     public GExpression Key { get; }
+
+    /// <summary>Gets the assigned member name, or <see langword="null"/> for other element kinds.</summary>
+    public string MemberName { get; }
 
     /// <summary>Gets the value expression.</summary>
     public GExpression Value { get; }

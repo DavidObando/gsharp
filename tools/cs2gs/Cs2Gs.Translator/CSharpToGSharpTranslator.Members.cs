@@ -596,7 +596,9 @@ public sealed partial class CSharpToGSharpTranslator
             var symbol = this.context.GetDeclaredSymbol(node) as INamedTypeSymbol;
             IMethodSymbol invoke = symbol?.DelegateInvokeMethod;
 
-            List<Parameter> parameters = this.MapParameterList(node.ParameterList);
+            List<Parameter> parameters = this.MapParameterList(
+                node.ParameterList,
+                promoteNullability: false);
             GTypeReference returnType = invoke != null
                 ? this.MapDelegateLikeReturnType(invoke, isAsync: false, node.ReturnType.GetLocation())
                 : this.MapTypeSyntax(node.ReturnType);
@@ -1810,8 +1812,7 @@ public sealed partial class CSharpToGSharpTranslator
                 node, symbol, primaryCtorParamNames, out IFieldSymbol fieldKeywordBackingSymbol);
             if (fieldKeywordBackingName == null
                 && !isStatic
-                && node.Initializer != null
-                && (symbol?.IsRequired == true || symbol?.SetMethod?.IsInitOnly == true))
+                && node.Initializer != null)
             {
                 fieldKeywordBackingName = this.RegisterSynthesizedPropertyBackingField(
                     symbol,

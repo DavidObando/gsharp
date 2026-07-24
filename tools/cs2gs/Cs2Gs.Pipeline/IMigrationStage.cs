@@ -39,12 +39,13 @@ public interface IMigrationStage
 public sealed class StageExecutionContext
 {
     /// <summary>
-    /// Initializes a new instance of the <see cref="StageExecutionContext"/> class.
+    /// Initializes a new instance of the <see cref="StageExecutionContext"/>
+    /// class using one directory for both generated files and artifacts.
     /// </summary>
     /// <param name="app">The corpus app being migrated.</param>
     /// <param name="options">The whole-run options.</param>
     /// <param name="gsc">The resolved compiler invoker.</param>
-    /// <param name="appRunDir">The per-app output directory under the run dir.</param>
+    /// <param name="appRunDir">The combined generated-file and artifact directory.</param>
     /// <param name="triage">The artifact builder pre-stamped with run provenance.</param>
     public StageExecutionContext(
         CorpusApp app,
@@ -52,11 +53,32 @@ public sealed class StageExecutionContext
         GscInvoker gsc,
         string appRunDir,
         TriageBuilder triage)
+        : this(app, options, gsc, appRunDir, appRunDir, triage)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="StageExecutionContext"/> class.
+    /// </summary>
+    /// <param name="app">The corpus app being migrated.</param>
+    /// <param name="options">The whole-run options.</param>
+    /// <param name="gsc">The resolved compiler invoker.</param>
+    /// <param name="projectOutputDir">The migrated project directory.</param>
+    /// <param name="artifactDir">The external per-project artifact directory.</param>
+    /// <param name="triage">The artifact builder pre-stamped with run provenance.</param>
+    public StageExecutionContext(
+        CorpusApp app,
+        PipelineOptions options,
+        GscInvoker gsc,
+        string projectOutputDir,
+        string artifactDir,
+        TriageBuilder triage)
     {
         this.App = app ?? throw new ArgumentNullException(nameof(app));
         this.Options = options ?? throw new ArgumentNullException(nameof(options));
         this.Gsc = gsc ?? throw new ArgumentNullException(nameof(gsc));
-        this.AppRunDir = appRunDir ?? throw new ArgumentNullException(nameof(appRunDir));
+        this.ProjectOutputDir = projectOutputDir ?? throw new ArgumentNullException(nameof(projectOutputDir));
+        this.ArtifactDir = artifactDir ?? throw new ArgumentNullException(nameof(artifactDir));
         this.Triage = triage ?? throw new ArgumentNullException(nameof(triage));
     }
 
@@ -69,8 +91,17 @@ public sealed class StageExecutionContext
     /// <summary>Gets the resolved compiler invoker.</summary>
     public GscInvoker Gsc { get; }
 
-    /// <summary>Gets the per-app output directory under the run dir.</summary>
-    public string AppRunDir { get; }
+    /// <summary>Gets the directory containing the migrated project and G# sources.</summary>
+    public string ProjectOutputDir { get; }
+
+    /// <summary>Gets the per-project directory for logs, triage, and build intermediates.</summary>
+    public string ArtifactDir { get; }
+
+    /// <summary>
+    /// Gets the historical combined output directory. New code should use
+    /// <see cref="ProjectOutputDir"/> or <see cref="ArtifactDir"/> explicitly.
+    /// </summary>
+    public string AppRunDir => this.ProjectOutputDir;
 
     /// <summary>Gets the artifact builder pre-stamped with run provenance.</summary>
     public TriageBuilder Triage { get; }
@@ -165,6 +196,12 @@ public sealed class StageExecutionContext
     /// <see langword="null"/> until a green stage-2 compile has run.
     /// </summary>
     public string EmittedAssemblyPath { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether evaluated MSBuild properties
+    /// identify a test project.
+    /// </summary>
+    public bool IsTestProject { get; set; }
 }
 
 /// <summary>

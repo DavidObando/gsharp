@@ -725,7 +725,9 @@ public partial class Parser
                 }
                 else
                 {
-                    var rightSide = ParseNameOrCallExpression();
+                    var rightSide = dotToken.Kind == SyntaxKind.QuestionDotToken
+                        ? ParseNullConditionalContinuation()
+                        : ParseNameOrCallExpression();
                     current = new AccessorExpressionSyntax(syntaxTree, current, dotToken, rightSide);
                 }
             }
@@ -811,6 +813,19 @@ public partial class Parser
         }
 
         return current;
+    }
+
+    private ExpressionSyntax ParseNullConditionalContinuation()
+    {
+        var continuation = ParseNameOrCallExpression();
+        while (Current.Kind == SyntaxKind.BangBangToken)
+        {
+            var bangBangToken = NextToken();
+            continuation = new UnaryExpressionSyntax(syntaxTree, bangBangToken, continuation);
+            continuation = ParsePostfixChain(continuation);
+        }
+
+        return continuation;
     }
 
     // Issue #1016: parse the argument of an index expression, allowing a

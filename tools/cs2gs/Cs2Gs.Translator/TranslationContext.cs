@@ -42,6 +42,7 @@ public sealed class TranslationContext
     // sibling set is known", so only `Compilation` is ever consulted — the
     // exact prior behavior.
     private readonly IReadOnlyList<CSharpCompilation> siblingCompilations;
+    private readonly IReadOnlyList<CSharpCompilation> repositoryCompilations;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TranslationContext"/> class.
@@ -70,16 +71,23 @@ public sealed class TranslationContext
     /// project with no references) — only <paramref name="compilation"/> is
     /// then ever consulted, the exact prior behavior.
     /// </param>
+    /// <param name="repositoryCompilations">
+    /// All repository projects, including reverse dependents. This is used only
+    /// for stored-member nullability evidence; signatures keep dependency-only
+    /// analysis so consumer calls cannot rewrite upstream contracts.
+    /// </param>
     public TranslationContext(
         CSharpCompilation compilation,
         SemanticModel semanticModel,
         string filePath,
-        IReadOnlyList<CSharpCompilation> siblingCompilations = null)
+        IReadOnlyList<CSharpCompilation> siblingCompilations = null,
+        IReadOnlyList<CSharpCompilation> repositoryCompilations = null)
     {
         this.Compilation = compilation ?? throw new ArgumentNullException(nameof(compilation));
         this.SemanticModel = semanticModel ?? throw new ArgumentNullException(nameof(semanticModel));
         this.FilePath = filePath;
         this.siblingCompilations = siblingCompilations;
+        this.repositoryCompilations = repositoryCompilations;
     }
 
     /// <summary>Gets the owning C# compilation.</summary>
@@ -92,6 +100,12 @@ public sealed class TranslationContext
     /// single-compilation translation).
     /// </summary>
     public IReadOnlyList<CSharpCompilation> SiblingCompilations => this.siblingCompilations;
+
+    /// <summary>
+    /// Gets all repository compilations, including reverse dependents, for
+    /// stored-member nullability evidence.
+    /// </summary>
+    public IReadOnlyList<CSharpCompilation> RepositoryCompilations => this.repositoryCompilations;
 
     /// <summary>Gets the active semantic model for the file being translated.</summary>
     public SemanticModel SemanticModel { get; private set; }

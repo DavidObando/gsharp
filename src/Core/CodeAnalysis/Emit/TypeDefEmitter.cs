@@ -99,6 +99,7 @@ internal sealed class TypeDefEmitter
     private readonly Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes;
     private readonly Action<TypeDefinitionHandle> emitNullableContextOnType;
     private readonly Action<FieldDefinitionHandle, TypeSymbol> emitNullableAttributeOnField;
+    private readonly Action<ParameterHandle, ImmutableArray<byte>> emitNullableAttributeOnParameter;
     private readonly Action<ParameterHandle> emitIsReadOnlyAttributeOnParameter;
     private readonly Action<ParameterHandle> emitParamArrayAttributeOnParameter;
     private readonly Func<ConstructorInfo, MemberReferenceHandle> getCtorReference;
@@ -125,6 +126,7 @@ internal sealed class TypeDefEmitter
         Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes,
         Action<TypeDefinitionHandle> emitNullableContextOnType,
         Action<FieldDefinitionHandle, TypeSymbol> emitNullableAttributeOnField,
+        Action<ParameterHandle, ImmutableArray<byte>> emitNullableAttributeOnParameter,
         Action<ParameterHandle> emitIsReadOnlyAttributeOnParameter,
         Action<ParameterHandle> emitParamArrayAttributeOnParameter,
         Func<ConstructorInfo, MemberReferenceHandle> getCtorReference,
@@ -150,6 +152,7 @@ internal sealed class TypeDefEmitter
         this.emitUserAttributes = emitUserAttributes ?? throw new ArgumentNullException(nameof(emitUserAttributes));
         this.emitNullableContextOnType = emitNullableContextOnType ?? throw new ArgumentNullException(nameof(emitNullableContextOnType));
         this.emitNullableAttributeOnField = emitNullableAttributeOnField ?? throw new ArgumentNullException(nameof(emitNullableAttributeOnField));
+        this.emitNullableAttributeOnParameter = emitNullableAttributeOnParameter ?? throw new ArgumentNullException(nameof(emitNullableAttributeOnParameter));
         this.emitIsReadOnlyAttributeOnParameter = emitIsReadOnlyAttributeOnParameter ?? throw new ArgumentNullException(nameof(emitIsReadOnlyAttributeOnParameter));
         this.emitParamArrayAttributeOnParameter = emitParamArrayAttributeOnParameter ?? throw new ArgumentNullException(nameof(emitParamArrayAttributeOnParameter));
         this.getCtorReference = getCtorReference ?? throw new ArgumentNullException(nameof(getCtorReference));
@@ -1087,6 +1090,8 @@ internal sealed class TypeDefEmitter
             {
                 this.emitParamArrayAttributeOnParameter(paramHandle);
             }
+
+            this.EmitConstructorParameterNullability(paramHandle, p);
         }
 
         var invokeAttrs = MethodAttributes.Public | MethodAttributes.HideBySig
@@ -1313,10 +1318,22 @@ internal sealed class TypeDefEmitter
             {
                 this.emitParamArrayAttributeOnParameter(paramHandle);
             }
+
+            this.EmitConstructorParameterNullability(paramHandle, p);
         }
 
         paramHandles = handles.MoveToImmutable();
         return first;
+    }
+
+    private void EmitConstructorParameterNullability(ParameterHandle paramHandle, ParameterSymbol parameter)
+    {
+        var nullableFlags = NullableFlagsBuilder.Build(parameter.Type);
+        if (!nullableFlags.IsDefaultOrEmpty
+            && !(nullableFlags.Length == 1 && nullableFlags[0] == NullableFlagsBuilder.NotAnnotated))
+        {
+            this.emitNullableAttributeOnParameter(paramHandle, nullableFlags);
+        }
     }
 
     /// <summary>

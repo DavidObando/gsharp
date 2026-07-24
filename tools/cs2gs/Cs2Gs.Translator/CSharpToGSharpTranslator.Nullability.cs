@@ -336,6 +336,14 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
+            if (symbol is ILocalSymbol local
+                && !this.ShouldPromoteToNullableReference(local)
+                && local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    is VariableDeclaratorSyntax { Initializer.Value: { } localInitializer })
+            {
+                return this.IsNullablePromotedValue(localInitializer);
+            }
+
             return symbol switch
             {
                 IFieldSymbol or IPropertySymbol or ILocalSymbol or IParameterSymbol or IMethodSymbol =>
@@ -372,6 +380,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (!this.IsObliviousCompilation()
                 || type is not ArrowTypeReference arrow
                 || symbol.Type is not INamedTypeSymbol { TypeKind: TypeKind.Delegate } delegateType
+                || !delegateType.DeclaringSyntaxReferences.IsDefaultOrEmpty
                 || delegateType.DelegateInvokeMethod is not { } invoke
                 || invoke.Parameters.Length != arrow.ParameterTypes.Count)
             {
@@ -571,6 +580,18 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // EF Core treats reference properties from nullable-oblivious C#
+            // entity types as optional. Preserve that model when translating
+            // DbSet<T> entities; emitting a non-nullable G# property would make
+            // EF materialize nullable database columns with GetString instead
+            // of honoring DBNull.
+            if (this.IsObliviousCompilation()
+                && symbol is IPropertySymbol property
+                && this.efEntityTypes.Contains(property.ContainingType.OriginalDefinition))
+            {
+                return true;
+            }
+
             // A function-type (delegate) parameter with an explicit `= null`
             // default is nullable by construction: a non-nullable function type
             // cannot carry a `nil` default at all (gsc GS0265 at the declaration
@@ -616,11 +637,15 @@ public sealed partial class CSharpToGSharpTranslator
             // `null` for every existing single-compilation caller, so this
             // overload reduces to the exact prior single-compilation check —
             // a pure additive fix for the cross-project case.
+            IReadOnlyList<CSharpCompilation> taintCompilations =
+                IsStoredMemberNullabilitySymbol(symbol)
+                    ? this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+                    : this.context.SiblingCompilations;
             if (declared.NullableAnnotation == NullableAnnotation.None
                 && ObliviousNullabilityAnalyzer.IsTainted(
                     this.context.Compilation,
                     symbol,
-                    this.context.SiblingCompilations))
+                    taintCompilations))
             {
                 return true;
             }
@@ -628,6 +653,17 @@ public sealed partial class CSharpToGSharpTranslator
             return symbol is not IMethodSymbol
                 && this.IsUsedAsNullable(symbol, this.GetNullabilityScope(symbol));
         }
+
+        private static bool IsStoredMemberNullabilitySymbol(ISymbol symbol) =>
+            symbol is IFieldSymbol or IPropertySymbol
+            || symbol is IParameterSymbol
+            {
+                ContainingSymbol: IMethodSymbol
+                {
+                    MethodKind: MethodKind.Constructor,
+                    ContainingType.IsRecord: true,
+                },
+            };
 
         // Issue #2521: sink lowering must use the target contract that G# will
         // actually bind, not consumer-side taint recorded for an imported
@@ -640,6 +676,18 @@ public sealed partial class CSharpToGSharpTranslator
                 || targetType.NullableAnnotation == NullableAnnotation.Annotated)
             {
                 return false;
+            }
+
+            if (targetSymbol is IParameterSymbol
+                {
+                    ContainingSymbol: IMethodSymbol
+                    {
+                        MethodKind: MethodKind.DelegateInvoke,
+                        ContainingType.DeclaringSyntaxReferences.IsDefaultOrEmpty: false,
+                    },
+                })
+            {
+                return true;
             }
 
             bool targetDeclaredInThisCompilation = targetSymbol?.DeclaringSyntaxReferences

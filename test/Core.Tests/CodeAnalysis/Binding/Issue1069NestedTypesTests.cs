@@ -140,6 +140,25 @@ public class Issue1069NestedTypesTests
     }
 
     [Fact]
+    public void QualifiedNestedClassConstructor_ResolvesWhenSimpleNameCollides()
+    {
+        var scope = BindSource("""
+            package p
+            class Helper { }
+            class Outer {
+                class Helper { }
+            }
+            class Consumer {
+                func Make() Outer.Helper {
+                    return Outer.Helper()
+                }
+            }
+            """);
+
+        Assert.Empty(GetBinderDiagnostics(scope));
+    }
+
+    [Fact]
     public void NestedTypes_UsableAsFieldAndArrayElement()
     {
         var scope = BindSource("""

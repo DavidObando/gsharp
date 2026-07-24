@@ -38,7 +38,7 @@ public sealed class CompileStage : IMigrationStage
         }
 
         string outputName = Path.GetFileNameWithoutExtension(context.App.ProjectPath) + ".dll";
-        string outputPath = Path.Combine(context.AppRunDir, outputName);
+        string outputPath = Path.Combine(context.ArtifactDir, outputName);
 
         IReadOnlyList<string> gsFiles = context.EmittedFiles
             .Select(f => f.GsPath)
@@ -48,21 +48,30 @@ public sealed class CompileStage : IMigrationStage
 
         if (context.Options.CompileViaSdk)
         {
-            SdkCompileResult sdkResult = new SdkCompileRunner().Compile(
-                context.AppRunDir,
-                Path.GetFileNameWithoutExtension(context.App.ProjectPath),
-                gsFiles,
-                context.App.TargetKind,
-                references,
-                context.AnalyzerReferencePaths,
-                context.AdditionalGeneratorFiles,
-                context.RootNamespace,
-                context.Options.Config,
-                context.BuildOnlyPackageReferences,
-                context.PackageReferences,
-                context.ProjectReferences,
-                context.Options.GeneratedProjectPaths,
-                context.UsesCentralPackageManagement);
+            var runner = new SdkCompileRunner();
+            SdkCompileResult sdkResult =
+                context.Options.OutputLayout == MigrationOutputLayout.Repository
+                    ? runner.CompileMirroredProject(
+                        context.App.ProjectPath,
+                        context.Options.GeneratedProjectPaths[Path.GetFullPath(context.App.ProjectPath)],
+                        context.ArtifactDir,
+                        context.Options.Config,
+                        context.Options.GeneratedProjectPaths)
+                    : runner.Compile(
+                        context.ProjectOutputDir,
+                        Path.GetFileNameWithoutExtension(context.App.ProjectPath),
+                        gsFiles,
+                        context.App.TargetKind,
+                        references,
+                        context.AnalyzerReferencePaths,
+                        context.AdditionalGeneratorFiles,
+                        context.RootNamespace,
+                        context.Options.Config,
+                        context.BuildOnlyPackageReferences,
+                        context.PackageReferences,
+                        context.ProjectReferences,
+                        context.Options.GeneratedProjectPaths,
+                        context.UsesCentralPackageManagement);
 
             if (sdkResult.IsAvailable)
             {
@@ -96,7 +105,7 @@ public sealed class CompileStage : IMigrationStage
             context.GeneratorGlobalOptions);
 
         File.WriteAllText(
-            Path.Combine(context.AppRunDir, "gsc.compile.log"),
+            Path.Combine(context.ArtifactDir, "gsc.compile.log"),
             result.Output ?? string.Empty);
 
         if (result.Succeeded)

@@ -108,6 +108,17 @@ internal sealed partial class ExpressionBinder
             && IsUserAggregateType(enclosingAliasType)
             && TryGetHeadIdentifier(syntax.RightPart, out var headIdentifier))
         {
+            if (syntax.RightPart is CallExpressionSyntax nestedCall
+                && scope.TryLookupNestedTypeAlias(
+                    enclosingAliasType,
+                    headIdentifier,
+                    -1,
+                    out var nestedCallType)
+                && nestedCallType is StructSymbol nestedClassDef)
+            {
+                return overloads.BindConstructorCallExpression(nestedCall, nestedClassDef);
+            }
+
             // Issue #1174: when a top-level type shares the nested type's simple
             // name, re-binding the right part by simple name would resolve to the
             // top-level homonym (which holds the simple key). Resolve the nested

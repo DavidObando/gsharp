@@ -41,6 +41,10 @@ public sealed class CorpusApp
     /// wholly unsafe by design) where every fixture may legitimately produce
     /// unverifiable IL.
     /// </param>
+    /// <param name="relativeProjectPath">
+    /// The project path relative to the repository root, or <see langword="null"/>
+    /// for legacy corpus descriptors.
+    /// </param>
     public CorpusApp(
         string id,
         string projectPath,
@@ -50,7 +54,8 @@ public sealed class CorpusApp
         string testsProjectPath = null,
         string testsBaselinePath = null,
         bool allowUnsafeIl = false,
-        IReadOnlyList<string> allowUnsafeIlTypes = null)
+        IReadOnlyList<string> allowUnsafeIlTypes = null,
+        string relativeProjectPath = null)
     {
         this.Id = id ?? throw new ArgumentNullException(nameof(id));
         this.ProjectPath = projectPath ?? throw new ArgumentNullException(nameof(projectPath));
@@ -61,6 +66,7 @@ public sealed class CorpusApp
         this.TestsBaselinePath = testsBaselinePath;
         this.AllowUnsafeIl = allowUnsafeIl;
         this.AllowUnsafeIlTypes = allowUnsafeIlTypes ?? ImmutableArray<string>.Empty;
+        this.RelativeProjectPath = relativeProjectPath;
     }
 
     /// <summary>Gets the stable corpus app id.</summary>
@@ -105,4 +111,10 @@ public sealed class CorpusApp
     /// line), or empty for the whole-app allowance (issue #1985).
     /// </summary>
     public IReadOnlyList<string> AllowUnsafeIlTypes { get; }
+
+    /// <summary>
+    /// Gets the project path relative to the repository root in repository
+    /// layout, or <see langword="null"/> for legacy corpus descriptors.
+    /// </summary>
+    public string RelativeProjectPath { get; }
 }

@@ -49,4 +49,35 @@ public class BuildTaskDesignTimeTests
         Assert.Contains("/r:Reference.dll", arguments);
         Assert.Contains("Program.gs", arguments);
     }
+
+    [Fact]
+    public void ResxLogicalName_GetsResourcesSuffix()
+    {
+        var resource = new TaskItem("Resources.resources");
+        resource.SetMetadata("LogicalName", "Demo.Properties.Resources");
+        resource.SetMetadata("Type", "Resx");
+        var task = new BuildTask
+        {
+            GsharpCompilerFullPath = "missing-gsc.dll",
+            OutputPath = ".",
+            OutputName = "DesignTime",
+            TempOutputPath = ".",
+            TargetFramework = "net10.0",
+            BasePath = ".",
+            OutputType = "Library",
+            Compile = new[] { new TaskItem("Program.gs") },
+            References = Array.Empty<TaskItem>(),
+            Resources = new[] { resource },
+            ResponseFilePath = "project.rsp",
+            SkipCompilerExecution = "true",
+            ProvideCommandLineArgs = "true",
+        };
+
+        Assert.True(task.Execute());
+        Assert.Contains(
+            task.CommandLineArgs,
+            item => item.ItemSpec.Contains(
+                "Demo.Properties.Resources.resources",
+                StringComparison.Ordinal));
+    }
 }

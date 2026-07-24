@@ -95,6 +95,21 @@ func Guard(p IProfile) bool {
     }
 
     [Fact]
+    public void ImportedClass_Vs_Nil_Binds()
+    {
+        const string source = @"
+package P
+
+import System.Text
+
+func Guard(value StringBuilder) bool {
+    return value == nil
+}
+";
+        Assert.Empty(GetErrors(source));
+    }
+
+    [Fact]
     public void GenericInterface_Vs_Nil_Equality_Binds()
     {
         const string source = @"

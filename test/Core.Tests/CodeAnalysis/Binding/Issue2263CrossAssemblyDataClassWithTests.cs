@@ -33,6 +33,12 @@ public class Issue2263CrossAssemblyDataClassWithTests
         data class Point(X int32, Y int32)
 
         data class Line(Start Point, End Point)
+
+        data class Label(Key string, Header string) {
+            convenience init(key string) {
+                init(key, key)
+            }
+        }
         """;
 
     [Fact]
@@ -65,6 +71,29 @@ public class Issue2263CrossAssemblyDataClassWithTests
 
         using var peStream = new MemoryStream();
         var result = consumer.Emit(peStream, pdbStream: null, refStream: null, assemblyName: "Geometry.Consumer");
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
+    }
+
+    [Fact]
+    public void Imported_DataClass_SecondaryConstructor_IsCallable()
+    {
+        var libraryPath = EmitLibrary(nameof(this.Imported_DataClass_SecondaryConstructor_IsCallable));
+
+        using var resolver = ReferenceResolver.WithReferences(new[] { libraryPath });
+        resolver.CurrentAssemblyName = "Geometry.SecondaryConsumer";
+
+        var consumer = new Compilation(
+            resolver,
+            SyntaxTree.Parse(SourceText.From(
+                """
+                package Consumer
+                import Geometry
+
+                func Run() string -> Label("key").Header
+                """)));
+
+        using var peStream = new MemoryStream();
+        var result = consumer.Emit(peStream, pdbStream: null, refStream: null, assemblyName: "Geometry.SecondaryConsumer");
         Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
     }
 

@@ -782,7 +782,7 @@ internal sealed class ConversionClassifier
                     // slot shape uniformly for ref and value instantiations.
                     var defSubstituted = TrySubstituteParameterTypeFromReceiver(method, paramIndex, receiverType, symbolicMethodTypeArgs)
                         ?? TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs);
-                    var defTargetType = defSubstituted ?? TypeSymbol.FromClrType(parameterType);
+                    var defTargetType = defSubstituted ?? ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]);
                     if (defTargetType != null && defTargetType != TypeSymbol.Error)
                     {
                         rebound = new BoundDefaultExpression(argument.Syntax, defTargetType);
@@ -919,7 +919,7 @@ internal sealed class ConversionClassifier
                         substituted = TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs);
                     }
 
-                    var targetType = substituted ?? TypeSymbol.FromClrType(parameterType);
+                    var targetType = substituted ?? ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]);
 
                     // Issue #2142 (follow-up to #2130/#2139): a lambda/arrow
                     // literal flowing into an imported method's

@@ -364,8 +364,14 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
+        var nestedObjectAssignments = braced.Elements
+            .Select(element => (element as ExpressionCollectionElementSyntax)?.Expression as AssignmentExpressionSyntax)
+            .ToImmutableArray();
+        var isNestedObjectInitializer =
+            nestedObjectAssignments.Length > 0 &&
+            nestedObjectAssignments.All(assignment => assignment != null);
         var hasNonIndexedElement = braced.Elements.Any(e => e is not IndexedCollectionElementSyntax);
-        if (hasNonIndexedElement && !HasCollectionAdd(propRead.Type))
+        if (!isNestedObjectInitializer && hasNonIndexedElement && !HasCollectionAdd(propRead.Type))
         {
             return false;
         }
@@ -374,6 +380,26 @@ internal sealed partial class ExpressionBinder
         var memberLocal = new LocalVariableSymbol(tempName, isReadOnly: true, propRead.Type);
         scope.TryDeclareVariable(memberLocal);
         statements.Add(new BoundVariableDeclaration(braced, memberLocal, propRead));
+
+        if (isNestedObjectInitializer)
+        {
+            foreach (var assignment in nestedObjectAssignments)
+            {
+                var initializer = new PropertyInitializerSyntax(
+                    assignment.SyntaxTree,
+                    assignment.IdentifierToken,
+                    assignment.EqualsToken,
+                    assignment.Expression);
+                var boundAssignment = BindObjectInitializerAssignment(memberLocal, propRead.Type, initializer);
+                if (boundAssignment != null)
+                {
+                    statements.Add(new BoundExpressionStatement(initializer, boundAssignment));
+                }
+            }
+
+            return true;
+        }
+
         EmitCollectionElementAddStatements(memberLocal, braced.Elements, statements);
         return true;
     }
@@ -782,6 +808,26 @@ internal sealed partial class ExpressionBinder
             // and keep using CLR overload resolution (#2291/#2458).
             if (ImportedAssemblySemantics.TryGetTypeSemantics(clrType, out _))
             {
+                var primaryParameterCount = dataClassAggregate.PrimaryConstructorParameters.Length;
+                if (syntax.Arguments.Count != primaryParameterCount
+                    && ClrTypeUtilities.SafeGetConstructors(clrType, BindingFlags.Public | BindingFlags.Instance)
+                        .Any(ctor => ctor.GetParameters().Length == syntax.Arguments.Count))
+                {
+                    var boundSecondary = TryBindClrConstructorFromType(
+                        clrType,
+                        syntax,
+                        out result,
+                        out var noApplicableSecondary,
+                        resultTypeOverride: dataClassAggregate);
+                    if (boundSecondary)
+                    {
+                        return true;
+                    }
+
+                    return FinishClrConstructorBindingFailure(
+                        syntax, name, noApplicableSecondary, ref result);
+                }
+
                 result = overloads.BindConstructorCallExpression(syntax, dataClassAggregate);
                 return true;
             }

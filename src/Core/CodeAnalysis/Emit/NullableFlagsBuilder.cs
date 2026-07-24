@@ -129,6 +129,13 @@ internal static class NullableFlagsBuilder
             return;
         }
 
+        if (type is FunctionTypeSymbol function)
+        {
+            builder.Add(NotAnnotated);
+            AppendFunctionArguments(function, builder);
+            return;
+        }
+
         if (type is TupleTypeSymbol tup)
         {
             // ValueTuple<...> is a value type — outer position contributes
@@ -244,6 +251,12 @@ internal static class NullableFlagsBuilder
             return;
         }
 
+        if (type is FunctionTypeSymbol function)
+        {
+            AppendFunctionArguments(function, builder);
+            return;
+        }
+
         if (type is StructSymbol s && !s.TypeArguments.IsDefaultOrEmpty)
         {
             foreach (var arg in s.TypeArguments)
@@ -305,6 +318,21 @@ internal static class NullableFlagsBuilder
             {
                 AppendClrType(clrArg, builder);
             }
+        }
+    }
+
+    private static void AppendFunctionArguments(
+        FunctionTypeSymbol function,
+        ImmutableArray<byte>.Builder builder)
+    {
+        foreach (var parameterType in function.ParameterTypes)
+        {
+            Append(parameterType, builder);
+        }
+
+        if (function.ReturnType != TypeSymbol.Void)
+        {
+            Append(function.ReturnType, builder);
         }
     }
 

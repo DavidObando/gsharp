@@ -114,24 +114,26 @@ public static class CorpusDiscovery
                 StringComparison.OrdinalIgnoreCase));
     }
 
-    private static bool IsUnderBinOrObj(string path)
-    {
-        string normalized = path.Replace('\\', '/');
-        return normalized.Contains("/bin/", StringComparison.Ordinal) ||
-            normalized.Contains("/obj/", StringComparison.Ordinal);
-    }
-
     /// <summary>
     /// Reads the marker file's non-blank, non-comment (<c>#</c>-prefixed)
     /// lines as fixture type names (issue #1985 per-fixture scoping). An
     /// empty/blank-only marker keeps the original whole-app allowance.
     /// </summary>
-    private static IReadOnlyList<string> ReadAllowUnsafeIlTypes(string markerPath)
+    /// <param name="markerPath">The marker file path.</param>
+    /// <returns>The scoped fixture type names.</returns>
+    internal static IReadOnlyList<string> ReadAllowUnsafeIlTypes(string markerPath)
     {
         return File.ReadAllLines(markerPath)
             .Select(line => line.Trim())
             .Where(line => line.Length > 0 && !line.StartsWith("#", StringComparison.Ordinal))
             .ToList();
+    }
+
+    private static bool IsUnderBinOrObj(string path)
+    {
+        string normalized = path.Replace('\\', '/');
+        return normalized.Contains("/bin/", StringComparison.Ordinal) ||
+            normalized.Contains("/obj/", StringComparison.Ordinal);
     }
 
     private static (string TestsProject, string TestsBaseline) FindSiblingTestOracle(

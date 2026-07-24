@@ -1004,7 +1004,8 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression whenTrue = this.TranslateValueWithNullForgiveness(conditional.WhenTrue);
             GExpression whenFalse = this.TranslateValueWithNullForgiveness(conditional.WhenFalse);
 
-            ITypeSymbol resultType = this.context.GetTypeInfo(conditional).Type;
+            TypeInfo conditionalTypeInfo = this.context.GetTypeInfo(conditional);
+            ITypeSymbol resultType = conditionalTypeInfo.Type ?? conditionalTypeInfo.ConvertedType;
             ITypeSymbol trueType = this.context.GetTypeInfo(conditional.WhenTrue).Type;
             ITypeSymbol falseType = this.context.GetTypeInfo(conditional.WhenFalse).Type;
 

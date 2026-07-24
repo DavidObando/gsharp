@@ -164,7 +164,31 @@ internal static class Program
         options.SourceRoot = Path.GetFullPath(corpus);
 
         IReadOnlyList<CorpusApp> apps;
-        if (appIds.Count > 0)
+        if (options.OutputLayout == MigrationOutputLayout.Repository)
+        {
+            if (appIds.Count > 0)
+            {
+                Console.Error.WriteLine("cs2gs: --app is available only with --diagnostic-run.");
+                return 1;
+            }
+
+            if (!string.IsNullOrEmpty(baselinePath) || baselineStrict)
+            {
+                Console.Error.WriteLine(
+                    "cs2gs: --baseline and --baseline-strict are available only with --diagnostic-run.");
+                return 1;
+            }
+
+            if (string.IsNullOrWhiteSpace(options.OutputRoot))
+            {
+                Console.Error.WriteLine("cs2gs: repository migration requires --out <empty-destination>.");
+                return 1;
+            }
+
+            options.ArtifactRoot ??= Path.GetFullPath(options.OutputRoot) + ".cs2gs-runs";
+            apps = RepositoryDiscovery.Discover(corpus);
+        }
+        else if (appIds.Count > 0)
         {
             var selected = new List<CorpusApp>();
             foreach (string id in appIds)
@@ -197,7 +221,10 @@ internal static class Program
 
         PrintSummary(result, pipeline.Stages);
 
-        string runDir = ResolveRunDir(options.OutputRoot, result.RunId);
+        string runsRoot = options.OutputLayout == MigrationOutputLayout.Repository
+            ? options.ArtifactRoot
+            : options.OutputRoot;
+        string runDir = ResolveRunDir(runsRoot, result.RunId);
         bool reportGenerated = GenerateReport(runDir);
 
         // ADR-0138: with --baseline, the exit gate is the ledger classification
@@ -397,7 +424,7 @@ internal static class Program
         string baselinePath = null;
         bool baselineStrict = false;
         var appIds = new List<string>();
-        var options = new PipelineOptions();
+        var options = new PipelineOptions { OutputLayout = MigrationOutputLayout.Repository };
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -425,6 +452,12 @@ internal static class Program
                         break;
                     case "--out":
                         options.OutputRoot = NextValue(args, ref i, arg);
+                        break;
+                    case "--artifacts":
+                        options.ArtifactRoot = NextValue(args, ref i, arg);
+                        break;
+                    case "--diagnostic-run":
+                        options.OutputLayout = MigrationOutputLayout.DiagnosticRun;
                         break;
                     case "--config":
                         options.Config = NextValue(args, ref i, arg);
@@ -584,11 +617,14 @@ internal static class Program
         Console.WriteLine("  cs2gs triage sync [--gaps <file>] [--write] [--no-test-reason <why>]");
         Console.WriteLine();
         Console.WriteLine("migrate options:");
-        Console.WriteLine("  --corpus <dir>    Corpus root (default: tools/cs2gs/corpus).");
-        Console.WriteLine("  --app <id>        Migrate only this app (repeatable, e.g. corpus/L1-Console).");
+        Console.WriteLine("  --corpus <dir>    Source repository root (default: tools/cs2gs/corpus).");
+        Console.WriteLine("  --out <dir>       Empty destination repository (required by default).");
+        Console.WriteLine("  --artifacts <dir> Validation runs root (default: <out>.cs2gs-runs).");
+        Console.WriteLine("  --diagnostic-run  Preserve the historical timestamped corpus/CI layout.");
+        Console.WriteLine("  --app <id>        Diagnostic-run only; migrate one app (repeatable).");
         Console.WriteLine("  --gsc <path>      Override gsc.dll (default: out/bin/<Config>/Compiler/gsc.dll).");
         Console.WriteLine("  --gsgen <path>    Override gsgen.dll (default: out/bin/<Config>/Gsgen.Cli/gsgen.dll); issue #2215.");
-        Console.WriteLine("  --out <dir>       Runs root for artifacts (default: ./cs2gs-runs).");
+        Console.WriteLine("                    With --diagnostic-run, --out is the runs root.");
         Console.WriteLine("  --config <name>   Build config used to find gsc (default: Release).");
         Console.WriteLine("  --baseline <file> Gate on the gap ledger (tools/cs2gs/triage/gaps.json): fail only on");
         Console.WriteLine("                    NEW or REGRESSED fingerprints; known-open gaps are tolerated.");

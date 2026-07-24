@@ -9,6 +9,7 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
 using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
@@ -303,6 +304,217 @@ func (self T?) OrZero[T struct](defaultValue T) T {
         Assert.Null(GetNullableContextAttributeValue(orZero!));
     }
 
+    [Fact]
+    public void ConstructorNullableDelegateParameter_StampsNullableAttribute()
+    {
+        const string Source = """
+            package Issue834.Constructor
+
+            class Screen {
+                init(factory (() -> object)?) {
+                }
+            }
+            """;
+
+        var asm = CompileToAssembly(Source, "Issue834.Constructor");
+        var ctor = asm.GetTypes().Single(t => t.Name == "Screen")
+            .GetConstructors()
+            .Single(c => c.GetParameters().Length == 1);
+        var flags = GetNullableAttributeArrayValue(ctor.GetParameters().Single());
+
+        Assert.NotEmpty(flags);
+        Assert.Equal((byte)2, flags[0]);
+        Assert.IsType<NullableTypeSymbol>(
+            ClrNullability.GetParameterTypeSymbol(ctor.GetParameters().Single()));
+    }
+
+    [Fact]
+    public void ImportedConstructorNullableDelegateParameter_AcceptsNil()
+    {
+        var outputDir = Path.Combine(AppContext.BaseDirectory, "Issue834ImportedConstructor");
+        Directory.CreateDirectory(outputDir);
+        var libraryPath = Path.Combine(outputDir, "Issue834.Constructor.Library.dll");
+
+        var library = new Compilation(
+            SyntaxTree.Parse(SourceText.From(
+                """
+                package Issue834.Constructor
+
+                class Screen {
+                    init(factory (() -> object)?) {
+                    }
+                }
+                """)))
+        {
+            IsLibrary = true,
+        };
+
+        using (var output = File.Create(libraryPath))
+        {
+            var result = library.Emit(output, pdbStream: null, refStream: null, assemblyName: "Issue834.Constructor.Library");
+            Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
+        }
+
+        using var resolver = ReferenceResolver.WithReferences(new[] { libraryPath });
+        resolver.CurrentAssemblyName = "Issue834.Constructor.Consumer";
+        var consumer = new Compilation(
+            resolver,
+            SyntaxTree.Parse(SourceText.From(
+                """
+                package Consumer
+                import Issue834.Constructor
+
+                func Make() Screen -> Screen(nil)
+                """)));
+
+        using var consumerOutput = new MemoryStream();
+        var consumerResult = consumer.Emit(
+            consumerOutput,
+            pdbStream: null,
+            refStream: null,
+            assemblyName: "Issue834.Constructor.Consumer");
+        Assert.True(consumerResult.Success, string.Join(Environment.NewLine, consumerResult.Diagnostics));
+    }
+
+    [Fact]
+    public void ClassUserAttribute_IsEmittedOnType()
+    {
+        var asm = CompileToAssembly(
+            """
+            package Issue834.TypeAttribute
+
+            @Obsolete("legacy")
+            class Legacy {
+            }
+            """,
+            "Issue834.TypeAttribute");
+
+        var type = asm.GetTypes().Single(t => t.Name == "Legacy");
+        Assert.Contains(
+            type.GetCustomAttributesData(),
+            attribute => attribute.AttributeType == typeof(ObsoleteAttribute));
+    }
+
+    [Fact]
+    public void ImportedXunitCollectionAttribute_IsEmittedOnType()
+    {
+        using var resolver = ReferenceResolver.WithReferences(new[] { typeof(CollectionAttribute).Assembly.Location });
+        var compilation = new Compilation(
+            resolver,
+            SyntaxTree.Parse(SourceText.From(
+                """
+                package Issue834.XunitAttribute
+                import Xunit
+
+                @Collection("Serial")
+                class Tests {
+                }
+                """)))
+        {
+            IsLibrary = true,
+        };
+
+        using var output = new MemoryStream();
+        var result = compilation.Emit(output, pdbStream: null, refStream: null, assemblyName: "Issue834.XunitAttribute");
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
+        output.Position = 0;
+        var context = new AssemblyLoadContext("Issue834.XunitAttribute", isCollectible: true);
+        try
+        {
+            var asm = context.LoadFromStream(output);
+            var type = asm.GetTypes().Single(t => t.Name == "Tests");
+            Assert.Contains(
+                type.GetCustomAttributesData(),
+                attribute => attribute.AttributeType.FullName == typeof(CollectionAttribute).FullName);
+        }
+        finally
+        {
+            context.Unload();
+        }
+    }
+
+    [Fact]
+    public void ImportedXunitCollectionDefinitionAttribute_EmitsNamedProperty()
+    {
+        using var resolver = ReferenceResolver.WithReferences(new[] { typeof(CollectionDefinitionAttribute).Assembly.Location });
+        var compilation = new Compilation(
+            resolver,
+            SyntaxTree.Parse(SourceText.From(
+                """
+                package Issue834.XunitNamedAttribute
+                import Xunit
+
+                @CollectionDefinition("Serial", DisableParallelization: true)
+                class SerialCollection {
+                }
+                """)))
+        {
+            IsLibrary = true,
+        };
+
+        using var output = new MemoryStream();
+        var result = compilation.Emit(output, pdbStream: null, refStream: null, assemblyName: "Issue834.XunitNamedAttribute");
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
+        output.Position = 0;
+        var context = new AssemblyLoadContext("Issue834.XunitNamedAttribute", isCollectible: true);
+        try
+        {
+            var asm = context.LoadFromStream(output);
+            var type = asm.GetTypes().Single(t => t.Name == "SerialCollection");
+            var attribute = Assert.Single(
+                type.GetCustomAttributesData(),
+                attribute => attribute.AttributeType.FullName == typeof(CollectionDefinitionAttribute).FullName);
+            Assert.Equal("DisableParallelization", Assert.Single(attribute.NamedArguments).MemberName);
+            Assert.Equal(true, attribute.NamedArguments[0].TypedValue.Value);
+        }
+        finally
+        {
+            context.Unload();
+        }
+    }
+
+    [Fact]
+    public void ImportedAttributeWithSystemTypeConstructor_EmitsResolvableConstructor()
+    {
+        using var resolver = ReferenceResolver.WithReferences(new[] { typeof(TypeCtorProbeAttribute).Assembly.Location });
+        var compilation = new Compilation(
+            resolver,
+            SyntaxTree.Parse(SourceText.From(
+                """
+                package Issue834.ImportedTypeAttribute
+                import GSharp.Core.Tests.CodeAnalysis.Emit
+
+                class Target {
+                }
+
+                @TypeCtorProbe(typeof(Target))
+                class Annotated {
+                }
+                """)))
+        {
+            IsLibrary = true,
+        };
+
+        using var output = new MemoryStream();
+        var result = compilation.Emit(output, pdbStream: null, refStream: null, assemblyName: "Issue834.ImportedTypeAttribute");
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
+        output.Position = 0;
+        var context = new AssemblyLoadContext("Issue834.ImportedTypeAttribute", isCollectible: true);
+        try
+        {
+            var asm = context.LoadFromStream(output);
+            var type = asm.GetTypes().Single(t => t.Name == "Annotated");
+            var attribute = Assert.Single(
+                type.GetCustomAttributesData(),
+                attribute => attribute.AttributeType == typeof(TypeCtorProbeAttribute));
+            Assert.Equal("Target", ((Type)Assert.Single(attribute.ConstructorArguments).Value).Name);
+        }
+        finally
+        {
+            context.Unload();
+        }
+    }
+
     private static byte? GetNullableAttributeValue(ParameterInfo parameter)
     {
         foreach (var ad in parameter.GetCustomAttributesData())
@@ -398,4 +610,14 @@ func (self T?) OrZero[T struct](defaultValue T) T {
         var loadContext = new AssemblyLoadContext(contextName, isCollectible: false);
         return loadContext.LoadFromStream(peStream);
     }
+}
+
+public sealed class TypeCtorProbeAttribute : Attribute
+{
+    public TypeCtorProbeAttribute(Type type)
+    {
+        this.Type = type;
+    }
+
+    public Type Type { get; }
 }
