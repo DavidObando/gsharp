@@ -782,7 +782,8 @@ internal sealed class ConversionClassifier
                     // slot shape uniformly for ref and value instantiations.
                     var defSubstituted = TrySubstituteParameterTypeFromReceiver(method, paramIndex, receiverType, symbolicMethodTypeArgs)
                         ?? TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs);
-                    var defTargetType = defSubstituted ?? ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]);
+                    var defTargetType = defSubstituted
+                        ?? GetClrParameterTargetType(argument.Type, parameters[paramIndex]);
                     if (defTargetType != null && defTargetType != TypeSymbol.Error)
                     {
                         rebound = new BoundDefaultExpression(argument.Syntax, defTargetType);
@@ -919,7 +920,8 @@ internal sealed class ConversionClassifier
                         substituted = TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs);
                     }
 
-                    var targetType = substituted ?? ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]);
+                    var targetType = substituted
+                        ?? GetClrParameterTargetType(argument.Type, parameters[paramIndex]);
 
                     // Issue #2142 (follow-up to #2130/#2139): a lambda/arrow
                     // literal flowing into an imported method's
@@ -2276,6 +2278,20 @@ internal sealed class ConversionClassifier
         // on by `OverloadResolution.ClassifyImplicit`) instead of a raw
         // reference comparison.
         return !ClrTypeUtilities.AreSame(from.ClrType, targetParameterType);
+    }
+
+    private static TypeSymbol GetClrParameterTargetType(TypeSymbol argumentType, ParameterInfo parameter)
+    {
+        if (!parameter.ParameterType.IsValueType
+            && argumentType is NullableTypeSymbol nullable
+            && (NullableLifting.IsValueTypeNullable(nullable)
+                || NullableLifting.IsUserValueTypeNullable(nullable)
+                || nullable.UnderlyingType is TypeParameterSymbol))
+        {
+            return TypeSymbol.FromClrType(parameter.ParameterType);
+        }
+
+        return ClrNullability.GetParameterTypeSymbol(parameter);
     }
 
     // Issue #1150: a func/arrow literal's natural numeric return type

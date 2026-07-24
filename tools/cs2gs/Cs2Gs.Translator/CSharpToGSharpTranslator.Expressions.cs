@@ -799,6 +799,12 @@ public sealed partial class CSharpToGSharpTranslator
             ISymbol targetSymbol,
             bool includePromotedValue = false)
         {
+            ILocalSymbol valueLocal = this.context.GetSymbolInfo(value).Symbol as ILocalSymbol
+                ?? GetReferencedLocal(this.context.SemanticModel.GetOperation(value));
+            bool isFlowNarrowedLocal = valueLocal != null
+                && (this.IsDominatedByNullCheckGuard(value, valueLocal)
+                    || (!this.IsObliviousCompilation()
+                        && this.context.GetTypeInfo(value).Nullability.FlowState == NullableFlowState.NotNull));
             if (translated is NonNullAssertionExpression
                 || IsNullOrSuppressedNull(value)
                 || value is PostfixUnaryExpressionSyntax
@@ -808,6 +814,7 @@ public sealed partial class CSharpToGSharpTranslator
                 || !this.TargetWillRemainNonNullableReference(targetType, targetSymbol)
                 || (!this.NullableReferenceValueMayBeNull(value)
                     && !(includePromotedValue
+                        && !isFlowNarrowedLocal
                         && this.IsObliviousCompilation()
                         && this.IsNullablePromotedValue(value))))
             {
@@ -1290,7 +1297,17 @@ public sealed partial class CSharpToGSharpTranslator
 
                 case IdentifierNameSyntax:
                 case MemberAccessExpressionSyntax:
-                    return this.IsNullablePromotedValue(expression);
+                    ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
+                    if (symbol is ILocalSymbol local
+                        && !this.ShouldPromoteToNullableReference(local)
+                        && local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                            is VariableDeclaratorSyntax { Initializer.Value: { } initializer })
+                    {
+                        return this.IsNullablePromotedValue(initializer);
+                    }
+
+                    return symbol is IFieldSymbol or IPropertySymbol or ILocalSymbol or IParameterSymbol
+                        && this.ShouldPromoteToNullableReference(symbol);
 
                 default:
                     return false;
@@ -1475,11 +1492,11 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 case BinaryExpressionSyntax binary
                     when binary.IsKind(SyntaxKind.EqualsExpression):
-                    return (IsNullLiteral(binary.Right) && this.BindsTo(binary.Left, symbol))
-                        || (IsNullLiteral(binary.Left) && this.BindsTo(binary.Right, symbol));
+                    return (IsNullLiteral(binary.Right) && this.BindsToGuardSymbol(binary.Left, symbol))
+                        || (IsNullLiteral(binary.Left) && this.BindsToGuardSymbol(binary.Right, symbol));
 
                 case IsPatternExpressionSyntax isPattern
-                    when this.BindsTo(isPattern.Expression, symbol):
+                    when this.BindsToGuardSymbol(isPattern.Expression, symbol):
                     return IsNullConstantPattern(isPattern.Pattern)
                         && isPattern.Pattern is not UnaryPatternSyntax;
 
@@ -1498,17 +1515,30 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 case BinaryExpressionSyntax binary
                     when binary.IsKind(SyntaxKind.NotEqualsExpression):
-                    return (IsNullLiteral(binary.Right) && this.BindsTo(binary.Left, symbol))
-                        || (IsNullLiteral(binary.Left) && this.BindsTo(binary.Right, symbol));
+                    return (IsNullLiteral(binary.Right) && this.BindsToGuardSymbol(binary.Left, symbol))
+                        || (IsNullLiteral(binary.Left) && this.BindsToGuardSymbol(binary.Right, symbol));
 
                 case IsPatternExpressionSyntax isPattern
-                    when this.BindsTo(isPattern.Expression, symbol):
+                    when this.BindsToGuardSymbol(isPattern.Expression, symbol):
                     return IsNullConstantPattern(isPattern.Pattern)
                         && isPattern.Pattern is UnaryPatternSyntax;
 
                 default:
                     return false;
             }
+        }
+
+        private bool BindsToGuardSymbol(ExpressionSyntax expression, ISymbol symbol)
+        {
+            if (this.BindsTo(expression, symbol))
+            {
+                return true;
+            }
+
+            expression = StripParentheses(expression);
+            return symbol is ILocalSymbol or IParameterSymbol
+                && expression is IdentifierNameSyntax identifier
+                && identifier.Identifier.ValueText == symbol.Name;
         }
 
         // Issue #2202: true when <paramref name="use"/> reads a nullable

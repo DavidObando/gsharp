@@ -256,7 +256,10 @@ public static class GNodeSamples
     private static CompilationUnit CollectionInitializerSample() =>
         Expr(new CollectionInitializerExpression(
             new InvocationExpression(Id("List"), typeArguments: List<GTypeReference>(Type("int32"))),
-            List(new CollectionInitializerElement(Int("1")), new CollectionInitializerElement(Int("2")))));
+            List(
+                new CollectionInitializerElement(Int("1")),
+                new CollectionInitializerElement(Int("2")),
+                new CollectionInitializerElement("Value", Int("3")))));
 
     private static CompilationUnit SwitchExpressionSample() =>
         Expr(new SwitchExpression(Id("v"), List(

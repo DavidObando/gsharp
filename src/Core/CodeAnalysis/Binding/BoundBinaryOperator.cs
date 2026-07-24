@@ -538,13 +538,12 @@ public sealed record BoundBinaryOperator
             return true;
         }
 
-        // Imported managed classes are reference types too. Keep this aligned
-        // with reference-equality classification so `ImportedClass == nil`
-        // binds just like a source-declared class.
-        if (nullableOrUnderlying.ClrType is { } clrType
-            && !clrType.IsValueType
-            && !clrType.IsPointer
-            && !clrType.IsByRef)
+        // Imported reference classes named directly in G# source retain the
+        // language's historical nil-comparison behavior. Explicit non-null
+        // metadata on imported member results is rejected contextually by the
+        // expression binder, where the producing member is still available.
+        if (nullableOrUnderlying is ImportedTypeSymbol importedClass
+            && importedClass.ClrType is { IsClass: true })
         {
             return true;
         }

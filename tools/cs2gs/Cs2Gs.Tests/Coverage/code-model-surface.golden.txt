@@ -123,7 +123,7 @@ TypeParameter
 [enums]
 AccessorKind = Get, Set, Init
 BindingKind = Let, Var, Const
-CollectionInitializerElementKind = Expression, Keyed, Indexed
+CollectionInitializerElementKind = Expression, Keyed, Indexed, Assignment
 LiteralKind = Int, Float, String, Bool, Char, Null
 TypeDeclarationKind = Class, Struct, DataClass, DataStruct, InlineStruct, Interface
 Variance = None, Out, In

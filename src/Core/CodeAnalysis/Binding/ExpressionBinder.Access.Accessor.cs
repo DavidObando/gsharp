@@ -1187,6 +1187,34 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindNullConditionalAccessExpressionCore(BoundExpression receiver, ExpressionSyntax rightPart)
     {
+        if (rightPart is UnaryExpressionSyntax unary
+            && unary.OperatorToken.Kind == SyntaxKind.BangBangToken)
+        {
+            var liftedOperand = BindNullConditionalAccessExpressionCore(receiver, unary.Operand);
+            if (liftedOperand is BoundErrorExpression)
+            {
+                return liftedOperand;
+            }
+
+            var assertionOperator = BoundUnaryOperator.Bind(
+                unary.OperatorToken.Kind,
+                liftedOperand.Type);
+            if (assertionOperator == null)
+            {
+                Diagnostics.ReportUndefinedUnaryOperator(
+                    unary.OperatorToken.Location,
+                    unary.OperatorToken.Text,
+                    liftedOperand.Type);
+                return new BoundErrorExpression(null);
+            }
+
+            return new BoundUnaryExpression(
+                null,
+                assertionOperator,
+                liftedOperand,
+                binderCtx.IsCheckedContext);
+        }
+
         var receiverType = receiver.Type;
         TypeSymbol underlying;
         if (receiverType is NullableTypeSymbol nullable)

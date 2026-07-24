@@ -809,7 +809,12 @@ internal sealed partial class ExpressionBinder
             if (ImportedAssemblySemantics.TryGetTypeSemantics(clrType, out _))
             {
                 var primaryParameterCount = dataClassAggregate.PrimaryConstructorParameters.Length;
-                if (syntax.Arguments.Count != primaryParameterCount
+                var primaryAcceptsArity =
+                    syntax.Arguments.Count <= primaryParameterCount
+                    && dataClassAggregate.PrimaryConstructorParameters
+                        .Skip(syntax.Arguments.Count)
+                        .All(parameter => parameter.HasExplicitDefaultValue);
+                if (!primaryAcceptsArity
                     && ClrTypeUtilities.SafeGetConstructors(clrType, BindingFlags.Public | BindingFlags.Instance)
                         .Any(ctor => ctor.GetParameters().Length == syntax.Arguments.Count))
                 {

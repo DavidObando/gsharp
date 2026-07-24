@@ -344,6 +344,86 @@ namespace Demo
         Assert.Contains("callback?(tmp)", printed);
     }
 
+    [Fact]
+    public void TryGetOutLocal_PassedToNonNullMethod_AssertsNonNull()
+    {
+        string printed = TranslateNullableEnabled(@"
+#nullable enable
+using System.Diagnostics.CodeAnalysis;
+namespace Demo
+{
+    public class Item { public string Name { get; set; } = """"; }
+
+    public class Runner
+    {
+        private static bool TryGet([NotNullWhen(true)] out Item? item) { item = null; return false; }
+        private static void Sink(Item item) { _ = item.Name; }
+
+        public void Run()
+        {
+            while (TryGet(out var item))
+            {
+                Sink(item);
+            }
+        }
+    }
+}");
+
+        Assert.Contains("Sink(item!!)", printed);
+    }
+
+    [Fact]
+    public void EarlyReturnNullGuard_LocalPassedToNonNullConstructor_AssertsNonNull()
+    {
+        string printed = TranslateNullableEnabled(@"
+#nullable enable
+namespace Demo
+{
+    public class Item { public string Name { get; set; } = """"; }
+    public class Holder { public Holder(Item item) { _ = item.Name; } }
+
+    public class Runner
+    {
+        private static Item? Find() => null;
+
+        public object? Run()
+        {
+            Item item = Find();
+            if (item == null) return null;
+            return new Holder(item);
+        }
+    }
+}");
+
+        Assert.Contains("return Holder(item!!)", printed);
+    }
+
+    [Fact]
+    public void PreviouslyDereferencedNullableLocal_PassedToNonNullConstructor_AssertsNonNull()
+    {
+        string printed = TranslateNullableEnabled(@"
+#nullable enable
+namespace Demo
+{
+    public class Item { public string Name { get; set; } = """"; }
+    public class Holder { public Holder(Item item) { _ = item.Name; } }
+
+    public class Runner
+    {
+        private static Item? Find() => null;
+
+        public object Run()
+        {
+            Item? item = Find();
+            _ = item!.Name;
+            return new Holder(item);
+        }
+    }
+}");
+
+        Assert.Contains("return Holder(item!!)", printed);
+    }
+
     /// <summary>
     /// Negative control: the forwarded value is never null-tainted at all (no
     /// flow of <c>null</c> anywhere in the compilation), so
@@ -588,6 +668,27 @@ namespace Demo
 
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        return PrintAndValidate(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+    }
+
+    private static string TranslateNullableEnabled(string source)
+    {
+        var parseOptions = new CSharpParseOptions(LanguageVersion.Latest);
+        SyntaxTree tree = CSharpSyntaxTree.ParseText(source, parseOptions, path: "Snippet.cs");
+        var compilation = CSharpCompilation.Create(
+            "Cs2Gs.Issue2434.NullableEnabledInMemory",
+            new[] { tree },
+            CSharpProjectLoader.RuntimeReferences(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+                .WithNullableContextOptions(NullableContextOptions.Enable)
+                .WithAllowUnsafe(true));
+        Assert.DoesNotContain(
+            compilation.GetDiagnostics(),
+            diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+
+        SemanticModel model = compilation.GetSemanticModel(tree);
+        var document = new LoadedDocument("Snippet.cs", tree, model);
+        var context = new TranslationContext(compilation, model, document.FilePath);
         return PrintAndValidate(new CSharpToGSharpTranslator().TranslateDocument(document, context));
     }
 

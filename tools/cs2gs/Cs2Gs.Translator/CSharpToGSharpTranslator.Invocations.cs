@@ -1069,10 +1069,18 @@ public sealed partial class CSharpToGSharpTranslator
             // is rejected (GS0190) — never assert inside a `nameof` argument.
             bool isXunitNullAssertion = this.IsXunitNullAssertionArgument(argument);
             IArgumentOperation argumentOperation = this.context.SemanticModel.GetOperation(argument) as IArgumentOperation;
+            ILocalSymbol argumentLocal = this.context.GetSymbolInfo(argument.Expression).Symbol as ILocalSymbol
+                ?? GetReferencedLocal(argumentOperation?.Value);
+            bool isFlowNarrowedLocal = argumentLocal != null
+                && this.IsDominatedByNullCheckGuard(argument.Expression, argumentLocal);
             bool targetIsPromotedMigratedSibling = argumentOperation?.Parameter is { } siblingParameter
                 && siblingParameter.Type.TypeKind != TypeKind.Delegate
+                && !SymbolEqualityComparer.Default.Equals(
+                    siblingParameter.ContainingAssembly,
+                    this.context.Compilation.Assembly)
                 && siblingParameter.ContainingAssembly?.Name is { } targetAssemblyName
-                && this.context.SiblingCompilations?.Any(
+                && targetAssemblyName != this.context.Compilation.AssemblyName
+                && this.context.RepositoryCompilations?.Any(
                     compilation => compilation.AssemblyName == targetAssemblyName) == true
                 && this.ShouldPromoteToNullableReference(siblingParameter);
             bool targetRequiresNonNull = argumentOperation?.Parameter is not { } targetParameter
@@ -1081,6 +1089,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (!IsNameOfArgument(argument)
                 && !isXunitNullAssertion
                 && targetRequiresNonNull
+                && !isFlowNarrowedLocal
                 && this.ReceiverNeedsNullForgiveness(argument.Expression))
             {
                 return new NonNullAssertionExpression(this.TranslateExpression(argument.Expression));
@@ -1298,6 +1307,16 @@ public sealed partial class CSharpToGSharpTranslator
             return this.BuildObjectCreationCore(creation, typeSymbol, type, arguments, creation.Initializer);
         }
 
+        private static ILocalSymbol GetReferencedLocal(IOperation operation)
+        {
+            while (operation is IConversionOperation conversion)
+            {
+                operation = conversion.Operand;
+            }
+
+            return (operation as ILocalReferenceOperation)?.Local;
+        }
+
         /// <summary>
         /// Shared core for <see cref="TranslateObjectCreation"/> and
         /// <see cref="TranslateImplicitObjectCreation"/> (issue #1728): both entry
@@ -1388,7 +1407,7 @@ public sealed partial class CSharpToGSharpTranslator
                 if (!hasCtorArgs
                     && (typeSymbol is ITypeParameterSymbol
                         || (typeSymbol is INamedTypeSymbol initializedType
-                            && (initializedType.IsValueType || initializedType.Locations.Any(location => location.IsInSource)))))
+                            && ShouldUseCompositeObjectInitializer(initializedType, initializer))))
                 {
                     return this.BuildObjectInitializerLiteral(initializer, type);
                 }
@@ -1425,6 +1444,34 @@ public sealed partial class CSharpToGSharpTranslator
             // be silently absorbed into a bogus zip — skip straight to
             // `BuildConstruction` and let the initializer's own diagnostic stand.
             return BuildConstruction(type, arguments);
+        }
+
+        private bool ShouldUseCompositeObjectInitializer(
+            INamedTypeSymbol initializedType,
+            InitializerExpressionSyntax initializer)
+        {
+            string assemblyName = initializedType.ContainingAssembly?.Name;
+            if (!initializedType.IsValueType
+                && assemblyName != null
+                && assemblyName != this.context.Compilation.AssemblyName
+                && this.context.RepositoryCompilations?.Any(
+                    compilation => compilation.AssemblyName == assemblyName) == true)
+            {
+                return false;
+            }
+
+            if (initializedType.IsValueType
+                || initializedType.Locations.Any(location => location.IsInSource)
+                || initializer.Expressions.OfType<AssignmentExpressionSyntax>()
+                    .Any(assignment => assignment.Right is InitializerExpressionSyntax))
+            {
+                return true;
+            }
+
+            return assemblyName != null
+                && assemblyName != "System.Private.CoreLib"
+                && !assemblyName.StartsWith("System.", StringComparison.Ordinal)
+                && !assemblyName.StartsWith("Microsoft.", StringComparison.Ordinal);
         }
 
         private bool TryBuildSourceStructConstructorFields(

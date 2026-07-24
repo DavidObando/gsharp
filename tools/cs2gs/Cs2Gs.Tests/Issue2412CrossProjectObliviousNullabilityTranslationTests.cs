@@ -522,6 +522,47 @@ namespace App
         Assert.Contains("data class Context(Progress string?)", printed);
     }
 
+    [Fact]
+    public void CrossProject_MigratedSiblingObjectInitializer_UsesConstructorSuffix()
+    {
+        const string library = @"
+namespace Library
+{
+    public class Widget
+    {
+        public bool Enabled { get; set; }
+    }
+}";
+        LoadedCSharpProject projectLibrary = LoadOblivious(library, "Library");
+
+        const string app = @"
+using Library;
+
+namespace App
+{
+    public static class Factory
+    {
+        public static Widget Create() => new Widget { Enabled = true };
+    }
+}";
+        LoadedCSharpProject projectApp = LoadOblivious(
+            app,
+            "App",
+            new MetadataReference[] { projectLibrary.Compilation.ToMetadataReference() });
+
+        LoadedDocument document = Assert.Single(projectApp.Documents);
+        var context = new TranslationContext(
+            projectApp.Compilation,
+            document.SemanticModel,
+            document.FilePath,
+            siblingCompilations: null,
+            repositoryCompilations: new[] { projectLibrary.Compilation, projectApp.Compilation });
+        string printed = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains("Widget(){Enabled = true}", Compact(printed));
+    }
+
     // ---- Transitive (three-project) chain: the real Oahu shape -------------
 
     [Fact]
@@ -732,7 +773,11 @@ namespace LibA
         var translator = new CSharpToGSharpTranslator();
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(
-            project.Compilation, document.SemanticModel, document.FilePath, siblingCompilations);
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath,
+            siblingCompilations,
+            repositoryCompilations: siblingCompilations);
         CompilationUnit unit = translator.TranslateDocument(document, context);
         return PrintAndValidate(unit);
     }

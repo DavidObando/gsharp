@@ -380,7 +380,6 @@ public sealed partial class CSharpToGSharpTranslator
             if (!this.IsObliviousCompilation()
                 || type is not ArrowTypeReference arrow
                 || symbol.Type is not INamedTypeSymbol { TypeKind: TypeKind.Delegate } delegateType
-                || !delegateType.DeclaringSyntaxReferences.IsDefaultOrEmpty
                 || delegateType.DelegateInvokeMethod is not { } invoke
                 || invoke.Parameters.Length != arrow.ParameterTypes.Count)
             {
@@ -415,6 +414,41 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
+            string delegateMetadataName = GetMetadataTypeName(delegateType.OriginalDefinition);
+            foreach (SyntaxTree tree in this.context.Compilation.SyntaxTrees)
+            {
+                SemanticModel model = this.context.Compilation.GetSemanticModel(tree);
+                foreach (DelegateDeclarationSyntax declaration in tree.GetRoot()
+                    .DescendantNodes().OfType<DelegateDeclarationSyntax>())
+                {
+                    if (model.GetDeclaredSymbol(declaration) is not INamedTypeSymbol declarationSymbol
+                        || GetMetadataTypeName(declarationSymbol) != delegateMetadataName)
+                    {
+                        continue;
+                    }
+
+                    nullablePositions.Clear();
+                    for (int i = 0; i < declaration.ParameterList.Parameters.Count; i++)
+                    {
+                        IParameterSymbol declaredParameter =
+                            model.GetDeclaredSymbol(declaration.ParameterList.Parameters[i]);
+                        if (declaredParameter == null)
+                        {
+                            continue;
+                        }
+
+                        if (declaredParameter.Type.NullableAnnotation == NullableAnnotation.Annotated
+                            || ObliviousNullabilityAnalyzer.IsTainted(
+                                    this.context.Compilation,
+                                    declaredParameter,
+                                    this.context.SiblingCompilations))
+                        {
+                            nullablePositions.Add(i);
+                        }
+                    }
+                }
+            }
+
             if (nullablePositions.Count == 0)
             {
                 return type;
@@ -441,6 +475,20 @@ public sealed partial class CSharpToGSharpTranslator
             return changed
                 ? new ArrowTypeReference(parameterTypes, arrow.ReturnTypes, arrow.IsAsync) { IsNullable = arrow.IsNullable }
                 : type;
+        }
+
+        private static string GetMetadataTypeName(INamedTypeSymbol type)
+        {
+            var parts = new List<string>();
+            for (INamedTypeSymbol current = type; current != null; current = current.ContainingType)
+            {
+                parts.Insert(0, current.MetadataName);
+            }
+
+            string nested = string.Join("+", parts);
+            return type.ContainingNamespace is { IsGlobalNamespace: false } ns
+                ? ns.ToDisplayString() + "." + nested
+                : nested;
         }
 
         // Issue #914: whether <paramref name="expression"/> is a bare `null` /
@@ -676,18 +724,6 @@ public sealed partial class CSharpToGSharpTranslator
                 || targetType.NullableAnnotation == NullableAnnotation.Annotated)
             {
                 return false;
-            }
-
-            if (targetSymbol is IParameterSymbol
-                {
-                    ContainingSymbol: IMethodSymbol
-                    {
-                        MethodKind: MethodKind.DelegateInvoke,
-                        ContainingType.DeclaringSyntaxReferences.IsDefaultOrEmpty: false,
-                    },
-                })
-            {
-                return true;
             }
 
             bool targetDeclaredInThisCompilation = targetSymbol?.DeclaringSyntaxReferences

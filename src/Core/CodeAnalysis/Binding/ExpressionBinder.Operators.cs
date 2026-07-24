@@ -1443,6 +1443,19 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        if ((syntax.OperatorToken.Kind == SyntaxKind.EqualsEqualsToken
+                || syntax.OperatorToken.Kind == SyntaxKind.BangEqualsToken)
+            && ((boundRight.Type == TypeSymbol.Null && IsExplicitlyNonNullImportedResult(boundLeft))
+                || (boundLeft.Type == TypeSymbol.Null && IsExplicitlyNonNullImportedResult(boundRight))))
+        {
+            Diagnostics.ReportUndefinedBinaryOperator(
+                syntax.OperatorToken.Location,
+                syntax.OperatorToken.Text,
+                boundLeft.Type,
+                boundRight.Type);
+            return new BoundErrorExpression(null);
+        }
+
         var boundOperator = BindBinaryOperatorWithNumericAdaptation(
             syntax.OperatorToken.Kind,
             ref boundLeft,
@@ -1546,6 +1559,19 @@ internal sealed partial class ExpressionBinder
         // context trap on overflow; every other operator kind ignores the
         // flag (comparisons, bitwise ops, etc. never overflow-check).
         return new BoundBinaryExpression(null, boundLeft, boundOperator, boundRight, binderCtx.IsCheckedContext);
+    }
+
+    private static bool IsExplicitlyNonNullImportedResult(BoundExpression expression)
+    {
+        MethodInfo method = expression switch
+        {
+            BoundImportedInstanceCallExpression instanceCall => instanceCall.Method,
+            BoundImportedCallExpression staticCall => staticCall.Function.Method,
+            _ => null,
+        };
+
+        return method?.ReturnType is { IsValueType: false }
+            && ClrNullability.GetReturnTypeSymbol(method) is not NullableTypeSymbol;
     }
 
     /// <summary>
