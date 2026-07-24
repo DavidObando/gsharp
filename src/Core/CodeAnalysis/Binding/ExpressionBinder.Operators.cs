@@ -2534,4 +2534,90 @@ internal sealed partial class ExpressionBinder
                 || StructuralProjectionPlanner.CanProject(sourceType, targetType);
         };
     }
+
+    internal static Func<int, System.Type, bool?> MakeDelegateRefKindArgumentCheck(
+        IReadOnlyList<BoundExpression> boundArguments,
+        int argumentOffset = 0)
+    {
+        if (boundArguments == null)
+        {
+            return null;
+        }
+
+        return (index, clrParameterType) =>
+        {
+            var argIndex = index - argumentOffset;
+            if (argIndex < 0
+                || argIndex >= boundArguments.Count
+                || clrParameterType == null
+                || !ClrTypeUtilities.IsDelegateType(clrParameterType))
+            {
+                return null;
+            }
+
+            var argument = boundArguments[argIndex];
+            while (argument is BoundConversionExpression conversion)
+            {
+                argument = conversion.Expression;
+            }
+
+            ImmutableArray<RefKind> sourceRefKinds;
+            if (argument is BoundFunctionLiteralExpression literal)
+            {
+                sourceRefKinds = literal.Function.Parameters
+                    .Select(parameter => parameter.RefKind)
+                    .ToImmutableArray();
+            }
+            else if (argument.Type is DelegateTypeSymbol sourceDelegate)
+            {
+                sourceRefKinds = sourceDelegate.Parameters
+                    .Select(parameter => parameter.RefKind)
+                    .ToImmutableArray();
+            }
+            else if (argument.Type?.ClrType is System.Type sourceType
+                && ClrTypeUtilities.IsDelegateType(sourceType))
+            {
+                var sourceInvoke = sourceType.GetMethodSafe("Invoke");
+                if (sourceInvoke == null)
+                {
+                    return null;
+                }
+
+                sourceRefKinds = sourceInvoke.GetParameters()
+                    .Select(GetClrParameterRefKind)
+                    .ToImmutableArray();
+            }
+            else if (argument.Type is FunctionTypeSymbol sourceFunction)
+            {
+                sourceRefKinds = ImmutableArray.CreateRange(
+                    Enumerable.Repeat(RefKind.None, sourceFunction.Arity));
+            }
+            else
+            {
+                return null;
+            }
+
+            var targetInvoke = clrParameterType.GetMethodSafe("Invoke");
+            if (targetInvoke == null)
+            {
+                return null;
+            }
+
+            var targetRefKinds = targetInvoke.GetParameters()
+                .Select(GetClrParameterRefKind)
+                .ToImmutableArray();
+            return sourceRefKinds.Length == targetRefKinds.Length
+                ? sourceRefKinds.SequenceEqual(targetRefKinds)
+                : null;
+        };
+    }
+
+    private static RefKind GetClrParameterRefKind(System.Reflection.ParameterInfo parameter) =>
+        !parameter.ParameterType.IsByRef
+            ? RefKind.None
+            : parameter.IsOut
+                ? RefKind.Out
+                : parameter.IsIn
+                    ? RefKind.In
+                    : RefKind.Ref;
 }

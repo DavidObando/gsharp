@@ -991,6 +991,7 @@ internal sealed partial class ExpressionBinder
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
             structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
+            delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
 
@@ -1427,6 +1428,7 @@ internal sealed partial class ExpressionBinder
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments, argumentOffset: 1),
             structuralProjectionArgumentCheck: ExtensionStructuralProjectionCheck,
+            delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments, argumentOffset: 1),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution, argumentOffset: 1),
             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments, argumentOffset: 1),
             deferredInferenceArgs: deferredInferenceArgs);
@@ -2936,6 +2938,7 @@ internal sealed partial class ExpressionBinder
             argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
             structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
+            delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
         if (resolution.Outcome != OverloadResolution.ResolutionOutcome.Resolved)

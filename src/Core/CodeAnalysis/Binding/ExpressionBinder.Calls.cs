@@ -1151,7 +1151,8 @@ internal sealed partial class ExpressionBinder
                 argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
                 supplementaryInterfaceCheck: supplementaryInterfaceCheck,
                 constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(boundArguments),
-                structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(boundArguments));
+                structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(boundArguments),
+                delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(boundArguments));
             switch (resolution.Outcome)
             {
                 case OverloadResolution.ResolutionOutcome.Resolved:

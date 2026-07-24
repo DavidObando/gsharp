@@ -371,6 +371,102 @@ public class ImportedMemberMatrixTests
     }
 
     [Fact]
+    public void ImportedMemberMatrix_RefAndOutParameterDelegates_LambdasCompileAndRun()
+    {
+        const string csSource = """
+            namespace ImportedRefOutDelegates.CSharp
+            {
+                public delegate void RefAction(ref int value);
+                public delegate bool OutPredicate(out int value);
+                public delegate void ValueAction(int value);
+
+                public static class Api
+                {
+                    public static int Apply(RefAction action)
+                    {
+                        var value = 40;
+                        action(ref value);
+                        return value;
+                    }
+
+                    public static int Read(OutPredicate predicate) =>
+                        predicate(out var value) ? value : -1;
+
+                    public static string Kind(RefAction action) => "ref";
+                    public static string Kind(ValueAction action) => "value";
+                }
+            }
+            """;
+
+        const string gsSource = """
+            package ImportedRefOutDelegates.Probe
+            import ImportedRefOutDelegates.CSharp
+            import System
+
+            Console.WriteLine(Api.Apply((ref value int32) -> { value = value + 2 }))
+            Console.WriteLine(Api.Read((out value int32) -> {
+                value = 42
+                return true
+            }))
+            Console.WriteLine(Api.Kind((ref value int32) -> { value = value + 1 }))
+            Console.WriteLine(Api.Kind((value int32) -> { }))
+            """;
+
+        Assert.Equal("42\n42\nref\nvalue\n", CompileAndRunWithSiblingCs(csSource, gsSource, "ImportedRefOutDelegates.CSharp"));
+    }
+
+    [Fact]
+    public void ImportedMemberMatrix_RefAndOutParameterDelegates_RejectMismatchedRefKinds()
+    {
+        const string csSource = """
+            namespace ImportedRefOutDelegateMismatch.CSharp
+            {
+                public delegate void RefAction(ref int value);
+                public delegate bool OutPredicate(out int value);
+
+                public static class Api
+                {
+                    public static void Apply(RefAction action) { }
+                    public static bool Read(OutPredicate predicate) => true;
+                }
+            }
+            """;
+
+        var sources = new[]
+        {
+            """
+            package ImportedRefOutDelegateMismatch.RefProbe
+            import ImportedRefOutDelegateMismatch.CSharp
+
+            Api.Apply((value int32) -> { })
+            """,
+            """
+            package ImportedRefOutDelegateMismatch.OutProbe
+            import ImportedRefOutDelegateMismatch.CSharp
+
+            var result = Api.Read((ref value int32) -> true)
+            """,
+            """
+            package ImportedRefOutDelegateMismatch.ValueProbe
+            import ImportedRefOutDelegateMismatch.CSharp
+
+            let callback (int32) -> void = (value int32) -> { }
+            Api.Apply(callback)
+            """,
+        };
+
+        foreach (var source in sources)
+        {
+            var diagnostics = CompileExpectingErrorsWithSiblingCs(
+                csSource,
+                source,
+                "ImportedRefOutDelegateMismatch.CSharp");
+            Assert.Contains(diagnostics, d => d.Contains("GS0155", StringComparison.Ordinal));
+            Assert.DoesNotContain(diagnostics, d => d.Contains("GS0159", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
     public void NamedDelegate_OmittedOptionalArgument_UsesDeclaredDefault()
     {
         const string source = """

@@ -439,9 +439,8 @@ internal sealed class ConversionClassifier
             return new BoundConversionExpression(null, type, expressionTreeLiteral);
         }
 
-        if (expression is BoundFunctionLiteralExpression refKindLiteral
-            && type?.ClrType is Type delegateType
-            && HasDelegateParameterRefKindMismatch(delegateType, refKindLiteral))
+        if (type?.ClrType is Type delegateType
+            && HasDelegateParameterRefKindMismatch(delegateType, expression))
         {
             Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type);
             return new BoundErrorExpression(expression.Syntax);
@@ -2223,26 +2222,56 @@ internal sealed class ConversionClassifier
 
     private static bool HasDelegateParameterRefKindMismatch(
         Type targetType,
-        BoundFunctionLiteralExpression literal)
+        BoundExpression expression)
     {
         if (!ClrTypeUtilities.IsDelegateType(targetType))
         {
             return false;
         }
 
-        var sourceParameters = literal.Function.Parameters;
-        var targetRefKinds = GetMethodGroupTargetRefKinds(
-            TypeSymbol.FromClrType(targetType),
-            sourceParameters.Length,
-            out _);
-        if (targetRefKinds.Length != sourceParameters.Length)
+        ImmutableArray<RefKind> sourceRefKinds;
+        if (expression is BoundFunctionLiteralExpression literal)
+        {
+            sourceRefKinds = literal.Function.Parameters
+                .Select(parameter => parameter.RefKind)
+                .ToImmutableArray();
+        }
+        else if (expression.Type is DelegateTypeSymbol sourceDelegate)
+        {
+            sourceRefKinds = sourceDelegate.Parameters
+                .Select(parameter => parameter.RefKind)
+                .ToImmutableArray();
+        }
+        else if (expression.Type?.ClrType is Type sourceType
+            && ClrTypeUtilities.IsDelegateType(sourceType))
+        {
+            sourceRefKinds = GetMethodGroupTargetRefKinds(
+                expression.Type,
+                parameterCount: 0,
+                out _);
+        }
+        else if (expression.Type is FunctionTypeSymbol sourceFunction)
+        {
+            sourceRefKinds = ImmutableArray.CreateRange(
+                Enumerable.Repeat(RefKind.None, sourceFunction.Arity));
+        }
+        else
         {
             return false;
         }
 
-        for (var i = 0; i < sourceParameters.Length; i++)
+        var targetRefKinds = GetMethodGroupTargetRefKinds(
+            TypeSymbol.FromClrType(targetType),
+            sourceRefKinds.Length,
+            out _);
+        if (targetRefKinds.Length != sourceRefKinds.Length)
         {
-            if (sourceParameters[i].RefKind != targetRefKinds[i])
+            return false;
+        }
+
+        for (var i = 0; i < sourceRefKinds.Length; i++)
+        {
+            if (sourceRefKinds[i] != targetRefKinds[i])
             {
                 return true;
             }
