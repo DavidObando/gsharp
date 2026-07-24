@@ -1030,9 +1030,32 @@ internal sealed partial class OverloadResolver
             && delegateTargetType.ClrType is System.Type delegateClrType
             && ClrTypeUtilities.IsDelegateType(delegateClrType))
         {
-            var receiver = delegateVar is ImplicitFieldVariableSymbol clrImplicitField
-                ? BuildImplicitFieldLoad(clrImplicitField)
-                : (BoundExpression)new BoundVariableExpression(null, delegateVar);
+            // Issue #2799 follow-up: the receiver load must honor every
+            // implicit-member variable kind, not only a plain local/parameter
+            // (a bare `BoundVariableExpression`) and the field-like event's
+            // implicit backing field. A nominal CLR delegate-typed value
+            // exposed as a bare static field or instance/static property
+            // (`ImplicitStaticFieldVariableSymbol` /
+            // `ImplicitPropertyVariableSymbol` /
+            // `ImplicitStaticPropertyVariableSymbol`) has no local slot, so a
+            // bare `BoundVariableExpression` ICE-d with GS9998 ("no local slot")
+            // on any invocation — conditional or not. `TryBuildImplicitMemberLoad`
+            // resolves each such symbol to the correct field/property access
+            // (the same helper the structural `FunctionTypeSymbol` path uses),
+            // leaving locals/parameters to the bare-variable fallback.
+            BoundExpression receiver;
+            if (delegateVar is ImplicitFieldVariableSymbol clrImplicitField)
+            {
+                receiver = BuildImplicitFieldLoad(clrImplicitField);
+            }
+            else if (TryBuildImplicitMemberLoad(delegateVar, syntax.Identifier.Location, out var clrMemberLoad))
+            {
+                receiver = clrMemberLoad;
+            }
+            else
+            {
+                receiver = new BoundVariableExpression(null, delegateVar);
+            }
 
             // Issue #2796 / #2798: a null-conditional raise `Evt?(args)` of a
             // CLR delegate-typed value — canonically a field-like event's
@@ -1062,24 +1085,7 @@ internal sealed partial class OverloadResolver
                 if (tryBindInheritedClrInstanceCall(eventRaiseCaptureRef, delegateClrType, "Invoke", boundArguments.ToImmutable(), syntax, out var guardedInvoke, null, default, argumentNames)
                     && guardedInvoke is not BoundErrorExpression)
                 {
-                    if (ReferenceEquals(guardedInvoke.Type, TypeSymbol.Void))
-                    {
-                        return new BoundNullConditionalAccessExpression(syntax, receiver, eventRaiseCapture, guardedInvoke, TypeSymbol.Void, resultSlot: null);
-                    }
-
-                    var resultType = guardedInvoke.Type is NullableTypeSymbol
-                        ? guardedInvoke.Type
-                        : (TypeSymbol)NullableTypeSymbol.Get(guardedInvoke.Type);
-                    LocalVariableSymbol resultSlot = null;
-                    if (resultType is NullableTypeSymbol nullableResult
-                        && GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(nullableResult.UnderlyingType))
-                    {
-                        var resultSlotName = "$nres_" + binderCtx.NullConditionalCaptureCounter
-                            .ToString(System.Globalization.CultureInfo.InvariantCulture);
-                        resultSlot = new LocalVariableSymbol(resultSlotName, isReadOnly: false, type: resultType);
-                    }
-
-                    return new BoundNullConditionalAccessExpression(syntax, receiver, eventRaiseCapture, guardedInvoke, resultType, resultSlot);
+                    return BuildNullConditionalDelegateResult(syntax, receiver, eventRaiseCapture, guardedInvoke, guardedInvoke.Type);
                 }
             }
 
