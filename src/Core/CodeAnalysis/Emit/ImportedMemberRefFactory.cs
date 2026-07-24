@@ -489,10 +489,6 @@ internal sealed class ImportedMemberRefFactory
             return existing;
         }
 
-        // Issue #2801: do not remap the reflected type through ReferenceResolver
-        // by FullName here. MemberRef parents must retain the declaring type's
-        // assembly identity when two references define the same type name.
-
         // Nested types: resolution scope is the TypeRef of the declaring type,
         // namespace is empty, name is the short name only. Works for the
         // open generic definition of a nested generic type as well (Reflection

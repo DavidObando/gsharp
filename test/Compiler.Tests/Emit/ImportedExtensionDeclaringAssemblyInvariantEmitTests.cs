@@ -1,4 +1,4 @@
-// <copyright file="Issue2801ImportedExtensionAssemblyIdentityEmitTests.cs" company="GSharp">
+// <copyright file="ImportedExtensionDeclaringAssemblyInvariantEmitTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -14,7 +14,12 @@ using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
 
-public sealed class Issue2801ImportedExtensionAssemblyIdentityEmitTests
+/// <summary>
+/// Verifies that an imported extension method's MemberRef retains its
+/// <see cref="System.Reflection.MethodInfo.DeclaringType"/> assembly identity
+/// when another reference defines the same fully-qualified host type.
+/// </summary>
+public sealed class ImportedExtensionDeclaringAssemblyInvariantEmitTests
 {
     private const string PrimarySource = """
         namespace ClassLibrary1;
@@ -46,10 +51,12 @@ public sealed class Issue2801ImportedExtensionAssemblyIdentityEmitTests
         Console.WriteLine(a.Call())
         """;
 
-    [Fact]
-    public void ImportedExtension_WithCollidingHostTypeName_ReferencesDeclaringAssemblyAndRuns()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MemberRef_PreservesDeclaringAssembly_RegardlessOfReferenceOrder(bool shadowReferenceFirst)
     {
-        using var artifacts = Compile();
+        using var artifacts = Compile(shadowReferenceFirst);
 
         IlVerifier.Verify(
             artifacts.OutputPath,
@@ -62,18 +69,20 @@ public sealed class Issue2801ImportedExtensionAssemblyIdentityEmitTests
             reader.MemberReferences,
             handle => reader.GetString(reader.GetMemberReference(handle).Name) == "Call");
         var call = reader.GetMemberReference(callHandle);
+        Assert.Equal(HandleKind.TypeReference, call.Parent.Kind);
         var parent = reader.GetTypeReference((TypeReferenceHandle)call.Parent);
+        Assert.Equal(HandleKind.AssemblyReference, parent.ResolutionScope.Kind);
         var assembly = reader.GetAssemblyReference((AssemblyReferenceHandle)parent.ResolutionScope);
 
         Assert.Equal("ClassLibrary1", reader.GetString(assembly.Name));
         Assert.Equal("correct\n", Run(artifacts.OutputPath));
     }
 
-    private static CompilationArtifacts Compile()
+    private static CompilationArtifacts Compile(bool shadowReferenceFirst)
     {
         var directory = Path.Combine(
             AppContext.BaseDirectory,
-            "issue2801-artifacts",
+            "imported-extension-assembly-identity-artifacts",
             Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
 
@@ -99,14 +108,16 @@ public sealed class Issue2801ImportedExtensionAssemblyIdentityEmitTests
         int exitCode;
         try
         {
+            var firstReference = shadowReferenceFirst ? shadowPath : primaryPath;
+            var secondReference = shadowReferenceFirst ? primaryPath : shadowPath;
             exitCode = Program.Main(
                 new[]
                 {
                     "/out:" + outputPath,
                     "/target:exe",
                     "/targetframework:net10.0",
-                    "/reference:" + shadowPath,
-                    "/reference:" + primaryPath,
+                    "/reference:" + firstReference,
+                    "/reference:" + secondReference,
                     sourcePath,
                 });
         }
