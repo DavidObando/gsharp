@@ -439,8 +439,7 @@ internal sealed class ConversionClassifier
             return new BoundConversionExpression(null, type, expressionTreeLiteral);
         }
 
-        if (type?.ClrType is Type delegateType
-            && HasDelegateParameterRefKindMismatch(delegateType, expression))
+        if (HasDelegateParameterRefKindMismatch(type, expression))
         {
             Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type);
             return new BoundErrorExpression(expression.Syntax);
@@ -2221,10 +2220,12 @@ internal sealed class ConversionClassifier
     }
 
     private static bool HasDelegateParameterRefKindMismatch(
-        Type targetType,
+        TypeSymbol targetType,
         BoundExpression expression)
     {
-        if (!ClrTypeUtilities.IsDelegateType(targetType))
+        if (targetType is not DelegateTypeSymbol
+            && (targetType?.ClrType is not Type targetClrType
+                || !ClrTypeUtilities.IsDelegateType(targetClrType)))
         {
             return false;
         }
@@ -2236,14 +2237,9 @@ internal sealed class ConversionClassifier
                 .Select(parameter => parameter.RefKind)
                 .ToImmutableArray();
         }
-        else if (expression.Type is DelegateTypeSymbol sourceDelegate)
-        {
-            sourceRefKinds = sourceDelegate.Parameters
-                .Select(parameter => parameter.RefKind)
-                .ToImmutableArray();
-        }
-        else if (expression.Type?.ClrType is Type sourceType
-            && ClrTypeUtilities.IsDelegateType(sourceType))
+        else if (expression.Type is DelegateTypeSymbol
+            || (expression.Type?.ClrType is Type sourceType
+                && ClrTypeUtilities.IsDelegateType(sourceType)))
         {
             sourceRefKinds = GetMethodGroupTargetRefKinds(
                 expression.Type,
@@ -2261,7 +2257,7 @@ internal sealed class ConversionClassifier
         }
 
         var targetRefKinds = GetMethodGroupTargetRefKinds(
-            TypeSymbol.FromClrType(targetType),
+            targetType,
             sourceRefKinds.Length,
             out _);
         if (targetRefKinds.Length != sourceRefKinds.Length)

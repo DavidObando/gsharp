@@ -584,6 +584,100 @@ public class ImportedMemberMatrixTests
     }
 
     [Fact]
+    public void SourceNamedRefOutInParameterDelegates_LambdasCompileAndRun()
+    {
+        const string source = """
+            package SourceRefKindDelegates.Probe
+            import System
+
+            type RefAction = delegate func(ref value int32)
+            type OutAction = delegate func(out value int32)
+            type InPredicate = delegate func(in value int32) bool
+            type GenericRefAction[T] = delegate func(ref value T)
+            type GenericOutAction[T] = delegate func(out value T)
+            type GenericInPredicate[T] = delegate func(in value T) bool
+
+            var refAction RefAction = (ref value int32) -> { value = value + 1 }
+            var outAction OutAction = (out value int32) -> { value = 42 }
+            var inPredicate InPredicate = (in value int32) -> value == 42
+            var genericRefAction GenericRefAction[int32] = (ref value int32) -> { value = value + 1 }
+            var genericOutAction GenericOutAction[int32] = (out value int32) -> { value = 42 }
+            var genericInPredicate GenericInPredicate[int32] = (in value int32) -> value == 42
+
+            var value = 41
+            refAction(ref value)
+            outAction(out value)
+            Console.WriteLine(inPredicate(in value))
+            value = 41
+            genericRefAction(ref value)
+            genericOutAction(out value)
+            Console.WriteLine(genericInPredicate(in value))
+            """;
+
+        Assert.Equal("True\nTrue\n", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void SourceNamedRefOutInParameterDelegates_MatchImportedMismatchDiagnostics()
+    {
+        const string csSource = """
+            namespace RefKindDelegateParity.CSharp
+            {
+                public delegate void RefAction(ref int value);
+                public delegate void OutAction(out int value);
+                public delegate bool InPredicate(in int value);
+                public delegate void GenericRefAction<T>(ref T value);
+                public delegate void GenericOutAction<T>(out T value);
+                public delegate bool GenericInPredicate<T>(in T value);
+            }
+            """;
+
+        const string sourceDefined = """
+            package SourceRefKindDelegateMismatch.Probe
+
+            type RefAction = delegate func(ref value int32)
+            type OutAction = delegate func(out value int32)
+            type InPredicate = delegate func(in value int32) bool
+            type GenericRefAction[T] = delegate func(ref value T)
+            type GenericOutAction[T] = delegate func(out value T)
+            type GenericInPredicate[T] = delegate func(in value T) bool
+
+            var refCallback RefAction = (value int32) -> { }
+            var outCallback OutAction = (ref value int32) -> { }
+            var inCallback InPredicate = (value int32) -> true
+            var genericRefCallback GenericRefAction[int32] = (value int32) -> { }
+            var genericOutCallback GenericOutAction[int32] = (ref value int32) -> { }
+            var genericInCallback GenericInPredicate[int32] = (value int32) -> true
+            """;
+
+        const string imported = """
+            package ImportedRefKindDelegateMismatch.Probe
+            import RefKindDelegateParity.CSharp
+
+            var refCallback RefAction = (value int32) -> { }
+            var outCallback OutAction = (ref value int32) -> { }
+            var inCallback InPredicate = (value int32) -> true
+            var genericRefCallback GenericRefAction[int32] = (value int32) -> { }
+            var genericOutCallback GenericOutAction[int32] = (ref value int32) -> { }
+            var genericInCallback GenericInPredicate[int32] = (value int32) -> true
+            """;
+
+        var workDir = CreateWorkDir("ref_kind_delegate_parity_");
+        try
+        {
+            var siblingDll = BuildCsLibrary(workDir, csSource, "RefKindDelegateParity.CSharp");
+            var sourceDiagnostics = CompileExpectingErrors(sourceDefined, Array.Empty<string>(), workDir);
+            var importedDiagnostics = CompileExpectingErrors(imported, new[] { siblingDll }, workDir);
+            Assert.Equal(Enumerable.Repeat("GS0155", 6), GetDiagnosticIds(sourceDiagnostics));
+            Assert.Equal(GetDiagnosticIds(importedDiagnostics), GetDiagnosticIds(sourceDiagnostics));
+        }
+        finally
+        {
+            TryDelete(workDir);
+        }
+    }
+
+    [Fact]
     public void NamedDelegate_OmittedOptionalArgument_UsesDeclaredDefault()
     {
         const string source = """
@@ -698,6 +792,21 @@ public class ImportedMemberMatrixTests
         var (exitCode, diagnostics) = RunCompiler(GscArgs(outPath, "exe", references, srcPath));
         Assert.True(exitCode != 0, "expected gsc to report errors but it succeeded");
         return diagnostics.Split('\n', StringSplitOptions.RemoveEmptyEntries).ToList();
+    }
+
+    private static List<string> GetDiagnosticIds(IEnumerable<string> diagnostics)
+    {
+        var ids = new List<string>();
+        foreach (var diagnostic in diagnostics)
+        {
+            var index = diagnostic.IndexOf("GS", StringComparison.Ordinal);
+            if (index >= 0 && diagnostic.Length >= index + 6)
+            {
+                ids.Add(diagnostic.Substring(index, 6));
+            }
+        }
+
+        return ids;
     }
 
     private static string[] GscArgs(string outPath, string target, IReadOnlyCollection<string> references, string srcPath)
