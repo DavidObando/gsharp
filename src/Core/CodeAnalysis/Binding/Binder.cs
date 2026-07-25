@@ -259,6 +259,12 @@ public sealed class Binder
             resolveClrTypeForGenericArg: ResolveClrTypeForGenericArg,
             getCurrentFunction: () => this.function,
             setCurrentFunction: fn => this.function = fn,
+            bindParameterAttributes: syntax => declarations.BindAttributes(
+                syntax.Annotations,
+                AttributeTargetKind.Param,
+                ParameterAllowedTargets,
+                "a parameter declaration",
+                System.AttributeTargets.Parameter),
             bindLambdaBodyExpression: syntax => expressions.BindLambdaBodyExpression(syntax),
             bindTypeParameterList: syntax => declarations.BindTypeParameterList(syntax));
         statements = new StatementBinder(
