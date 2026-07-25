@@ -2534,4 +2534,44 @@ internal sealed partial class ExpressionBinder
                 || StructuralProjectionPlanner.CanProject(sourceType, targetType);
         };
     }
+
+    internal static Func<int, System.Type, bool?> MakeDelegateRefKindArgumentCheck(
+        IReadOnlyList<BoundExpression> boundArguments,
+        int argumentOffset = 0)
+    {
+        if (boundArguments == null)
+        {
+            return null;
+        }
+
+        return (index, clrParameterType) =>
+        {
+            var argIndex = index - argumentOffset;
+            if (argIndex < 0
+                || argIndex >= boundArguments.Count
+                || clrParameterType == null
+                || !ClrTypeUtilities.IsDelegateType(clrParameterType))
+            {
+                return null;
+            }
+
+            if (!DelegateRefKindUtilities.TryGetSourceParameterRefKinds(
+                boundArguments[argIndex],
+                out var sourceRefKinds))
+            {
+                return null;
+            }
+
+            var targetInvoke = clrParameterType.GetMethodSafe("Invoke");
+            if (targetInvoke == null)
+            {
+                return null;
+            }
+
+            var targetRefKinds = DelegateRefKindUtilities.GetParameterRefKinds(targetInvoke);
+            return sourceRefKinds.Length == targetRefKinds.Length
+                ? sourceRefKinds.SequenceEqual(targetRefKinds)
+                : null;
+        };
+    }
 }

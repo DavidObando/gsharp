@@ -940,84 +940,24 @@ internal sealed partial class OverloadResolver
                 return new BoundErrorExpression(null);
             }
 
-            // ADR-0101 follow-up / issue #812: a named delegate can declare a
-            // trailing variadic parameter. Pack / pass-through happens at the
-            // direct-call site so the lowered Invoke receives one slice
-            // argument, matching the delegate's Invoke signature.
-            var ndIsVariadic = namedDelegateSym.Parameters.Length > 0
-                && namedDelegateSym.Parameters[namedDelegateSym.Parameters.Length - 1].IsVariadic;
-            var ndFixedCount = ndIsVariadic
-                ? namedDelegateSym.Parameters.Length - 1
-                : namedDelegateSym.Parameters.Length;
-
-            if (ndIsVariadic)
+            if (!TryBindNamedDelegateArguments(
+                namedDelegateVar.Name,
+                namedDelegateSym,
+                syntax,
+                boundArguments.ToImmutable(),
+                out var convertedNamedArgs,
+                out var namedRefKinds))
             {
-                if (syntax.Arguments.Count < ndFixedCount)
-                {
-                    Diagnostics.ReportTooFewArgumentsForVariadic(syntax.Identifier.Location, namedDelegateVar.Name, ndFixedCount, syntax.Arguments.Count);
-                    return new BoundErrorExpression(null);
-                }
-            }
-            else if (syntax.Arguments.Count != namedDelegateSym.Parameters.Length)
-            {
-                var requiredCount = namedDelegateSym.Parameters.Length;
-                while (requiredCount > 0 && namedDelegateSym.Parameters[requiredCount - 1].HasExplicitDefaultValue)
-                {
-                    requiredCount--;
-                }
-
-                if (syntax.Arguments.Count < requiredCount || syntax.Arguments.Count > namedDelegateSym.Parameters.Length)
-                {
-                    Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, namedDelegateVar.Name, namedDelegateSym.Parameters.Length, syntax.Arguments.Count);
-                    return new BoundErrorExpression(null);
-                }
+                return new BoundErrorExpression(null);
             }
 
-            ImmutableArray<BoundExpression> ndPermutedArgs = boundArguments.ToImmutable();
-            if (ndIsVariadic)
-            {
-                // Issue #1630: pack/pass-through through the canonical helper
-                // (applies #1493 element coercion when packing — this path
-                // used to pack raw, uncoerced elements).
-                var ndVariadicParam = namedDelegateSym.Parameters[namedDelegateSym.Parameters.Length - 1];
-                var ndSliceType = (SliceTypeSymbol)ndVariadicParam.Type;
-                var hasNdElementErrors = false;
-                ndPermutedArgs = PackOrPassThroughVariadicArguments(
-                    conversions,
-                    Diagnostics,
-                    syntax,
-                    ndPermutedArgs,
-                    ndFixedCount,
-                    ndSliceType,
-                    ndVariadicParam.Name,
-                    i => syntax.Arguments[i].Location,
-                    ref hasNdElementErrors);
-
-                if (hasNdElementErrors)
-                {
-                    return new BoundErrorExpression(null);
-                }
-            }
-            else if (ndPermutedArgs.Length < namedDelegateSym.Parameters.Length)
-            {
-                var padded = ImmutableArray.CreateBuilder<BoundExpression>(namedDelegateSym.Parameters.Length);
-                padded.AddRange(ndPermutedArgs);
-                for (var i = ndPermutedArgs.Length; i < namedDelegateSym.Parameters.Length; i++)
-                {
-                    padded.Add(CreateOptionalUserDefaultArgument(namedDelegateSym.Parameters[i]));
-                }
-
-                ndPermutedArgs = padded.MoveToImmutable();
-            }
-
-            var convertedNamedArgs = ImmutableArray.CreateBuilder<BoundExpression>(ndPermutedArgs.Length);
-            for (var i = 0; i < ndPermutedArgs.Length; i++)
-            {
-                var argLoc = i < syntax.Arguments.Count ? syntax.Arguments[i].Location : syntax.Identifier.Location;
-                convertedNamedArgs.Add(conversions.BindConversion(argLoc, ndPermutedArgs[i], namedDelegateSym.Parameters[i].Type));
-            }
-
-            return BuildIndirectDelegateCall(syntax, namedDelegateVar, namedDelegateSym.EquivalentFunctionType, convertedNamedArgs.MoveToImmutable(), narrowedCallTargetType);
+            return BuildIndirectDelegateCall(
+                syntax,
+                namedDelegateVar,
+                namedDelegateSym.EquivalentFunctionType,
+                convertedNamedArgs,
+                narrowedCallTargetType,
+                namedRefKinds);
         }
 
         // #325: a variable whose type is a CLR delegate (e.g. `Func[int32,

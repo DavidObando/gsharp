@@ -1255,12 +1255,12 @@ internal sealed class TypeDefEmitter
     /// additionally carries a
     /// <c>modreq(System.Runtime.CompilerServices.IsReadOnlyAttribute)</c> so
     /// consumers (e.g. C#) treat the call site as readonly (ADR-0060).
-    /// This is the single canonical encoding shared by every MethodDef
-    /// signature path — class/struct methods
+    /// This is the single canonical encoding shared by every user-method
+    /// signature path — class/struct MethodDefs
     /// (<c>ReflectionMetadataEmitter.EmitFunction</c>), interface abstract and
-    /// static-virtual slots, delegate <c>Invoke</c>, and explicit
-    /// constructors — so the interface slot and its implementation can never
-    /// drift apart again.
+    /// static-virtual slots, delegate <c>Invoke</c> MethodDefs and MemberRefs,
+    /// and explicit constructors — so definitions and call-site references
+    /// can never drift apart again.
     /// </summary>
     /// <param name="ps">The signature's parameters encoder.</param>
     /// <param name="parameter">The parameter symbol to encode.</param>

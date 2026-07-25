@@ -351,6 +351,7 @@ public sealed class ImportedClassSymbol : Symbol
                 isExpanded),
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(arguments),
+            delegateRefKindArgumentCheck: ExpressionBinder.MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: ExpressionBinder.MakeMethodGroupInference(arguments, ProjectMethodGroupType));
 
         switch (result.Outcome)

@@ -197,7 +197,8 @@ internal sealed partial class DeclarationBinder
                 argTypes,
                 interpolatedStringArgs: interpolatedStringArgs,
                 constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(boundArguments),
-                structuralProjectionArgumentCheck: ExpressionBinder.MakeStructuralProjectionArgumentCheck(boundArguments));
+                structuralProjectionArgumentCheck: ExpressionBinder.MakeStructuralProjectionArgumentCheck(boundArguments),
+                delegateRefKindArgumentCheck: ExpressionBinder.MakeDelegateRefKindArgumentCheck(boundArguments));
             switch (resolution.Outcome)
             {
                 case OverloadResolution.ResolutionOutcome.Resolved:

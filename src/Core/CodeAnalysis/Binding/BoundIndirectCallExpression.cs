@@ -18,12 +18,18 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundIndirectCallExpression : BoundExpression
 {
-    public BoundIndirectCallExpression(SyntaxNode syntax, BoundExpression target, FunctionTypeSymbol functionType, ImmutableArray<BoundExpression> arguments)
+    public BoundIndirectCallExpression(
+        SyntaxNode syntax,
+        BoundExpression target,
+        FunctionTypeSymbol functionType,
+        ImmutableArray<BoundExpression> arguments,
+        ImmutableArray<RefKind> argumentRefKinds = default)
         : base(syntax)
     {
         Target = target;
         FunctionType = functionType;
         Arguments = arguments;
+        ArgumentRefKinds = argumentRefKinds;
     }
 
     public BoundExpression Target { get; }
@@ -31,6 +37,8 @@ public sealed class BoundIndirectCallExpression : BoundExpression
     public FunctionTypeSymbol FunctionType { get; }
 
     public ImmutableArray<BoundExpression> Arguments { get; }
+
+    public ImmutableArray<RefKind> ArgumentRefKinds { get; }
 
     public override TypeSymbol Type => FunctionType.ReturnType;
 

@@ -439,6 +439,12 @@ internal sealed class ConversionClassifier
             return new BoundConversionExpression(null, type, expressionTreeLiteral);
         }
 
+        if (HasDelegateParameterRefKindMismatch(type, expression))
+        {
+            Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type);
+            return new BoundErrorExpression(expression.Syntax);
+        }
+
         if (expression is BoundFunctionLiteralExpression literal
             && type is FunctionTypeSymbol targetFunctionType
             && TypeSymbol.ContainsTypeParameter(targetFunctionType))
@@ -1392,6 +1398,7 @@ internal sealed class ConversionClassifier
         }
 
         var invokeParams = invoke.GetParameters();
+        var targetParameterRefKinds = DelegateRefKindUtilities.GetParameterRefKinds(invoke);
         var closesExtensionReceiver = group.Receiver != null
             && group.Candidates.All(candidate => candidate.IsStatic);
         var argTypes = new Type[invokeParams.Length + (closesExtensionReceiver ? 1 : 0)];
@@ -1422,6 +1429,14 @@ internal sealed class ConversionClassifier
             }
 
             if (!IsMethodGroupReturnCompatible(candidate.ReturnType, invoke.ReturnType))
+            {
+                continue;
+            }
+
+            if (!DelegateRefKindUtilities.GetParameterRefKinds(
+                    candidate,
+                    skipFirstParameter: closesExtensionReceiver)
+                .SequenceEqual(targetParameterRefKinds))
             {
                 continue;
             }
@@ -2211,6 +2226,44 @@ internal sealed class ConversionClassifier
             allowExplicit: false);
         var call = new BoundCallExpression(null, method, ImmutableArray.Create(operand));
         return BindConversion(diagnosticLocation, call, targetType, allowExplicit);
+    }
+
+    private static bool HasDelegateParameterRefKindMismatch(
+        TypeSymbol targetType,
+        BoundExpression expression)
+    {
+        if (targetType is not DelegateTypeSymbol
+            && (targetType?.ClrType is not Type targetClrType
+                || !ClrTypeUtilities.IsDelegateType(targetClrType)))
+        {
+            return false;
+        }
+
+        if (!DelegateRefKindUtilities.TryGetSourceParameterRefKinds(
+            expression,
+            out var sourceRefKinds))
+        {
+            return false;
+        }
+
+        var targetRefKinds = GetMethodGroupTargetRefKinds(
+            targetType,
+            sourceRefKinds.Length,
+            out _);
+        if (targetRefKinds.Length != sourceRefKinds.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < sourceRefKinds.Length; i++)
+        {
+            if (sourceRefKinds[i] != targetRefKinds[i])
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

@@ -48,7 +48,8 @@ internal sealed partial class OverloadResolver
         VariableSymbol variable,
         FunctionTypeSymbol fnType,
         ImmutableArray<BoundExpression> args,
-        TypeSymbol narrowedTargetType = null)
+        TypeSymbol narrowedTargetType = null,
+        ImmutableArray<RefKind> argumentRefKinds = default)
     {
         // Compute the receiver load and its static type for each variable
         // kind. Every non-null-conditional call below reduces to a plain
@@ -102,11 +103,11 @@ internal sealed partial class OverloadResolver
             var captureName = "$ncap_" + (++binderCtx.NullConditionalCaptureCounter)
                 .ToString(System.Globalization.CultureInfo.InvariantCulture);
             var capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: receiverType);
-            var invoke = new BoundIndirectCallExpression(null, new BoundVariableExpression(null, capture), fnType, args);
+            var invoke = new BoundIndirectCallExpression(null, new BoundVariableExpression(null, capture), fnType, args, argumentRefKinds);
             return BuildNullConditionalDelegateResult(syntax, receiverLoad, capture, invoke, fnType.ReturnType);
         }
 
-        return new BoundIndirectCallExpression(null, receiverLoad, fnType, args);
+        return new BoundIndirectCallExpression(null, receiverLoad, fnType, args, argumentRefKinds);
     }
 
     /// <summary>
@@ -225,13 +226,25 @@ internal sealed partial class OverloadResolver
                 return true;
             }
 
-            if (!TryBindFunctionTypeArguments(variable.Name, functionType, syntax, boundArguments, out var convertedArgs))
+            if (nullable.UnderlyingType is DelegateTypeSymbol namedDelegate)
+            {
+                if (!TryBindNamedDelegateArguments(variable.Name, namedDelegate, syntax, boundArguments, out var namedArgs, out var namedRefKinds))
+                {
+                    result = new BoundErrorExpression(null);
+                    return true;
+                }
+
+                whenNotNull = new BoundIndirectCallExpression(null, captureRef, functionType, namedArgs, namedRefKinds);
+            }
+            else if (!TryBindFunctionTypeArguments(variable.Name, functionType, syntax, boundArguments, out var convertedArgs))
             {
                 result = new BoundErrorExpression(null);
                 return true;
             }
-
-            whenNotNull = new BoundIndirectCallExpression(null, captureRef, functionType, convertedArgs);
+            else
+            {
+                whenNotNull = new BoundIndirectCallExpression(null, captureRef, functionType, convertedArgs);
+            }
         }
 
         if (ReferenceEquals(functionType.ReturnType, TypeSymbol.Void))
@@ -335,6 +348,176 @@ internal sealed partial class OverloadResolver
         }
 
         convertedArgs = convertedBuilder.MoveToImmutable();
+        return true;
+    }
+
+    internal bool TryBindNamedDelegateArguments(
+        string calleeName,
+        DelegateTypeSymbol delegateType,
+        CallExpressionSyntax syntax,
+        ImmutableArray<BoundExpression> boundArguments,
+        out ImmutableArray<BoundExpression> convertedArgs,
+        out ImmutableArray<RefKind> argumentRefKinds)
+    {
+        convertedArgs = default;
+        argumentRefKinds = default;
+
+        var parameters = delegateType.Parameters;
+        var isVariadic = parameters.Length > 0 && parameters[parameters.Length - 1].IsVariadic;
+        var fixedCount = isVariadic ? parameters.Length - 1 : parameters.Length;
+        if (isVariadic)
+        {
+            if (syntax.Arguments.Count < fixedCount)
+            {
+                Diagnostics.ReportTooFewArgumentsForVariadic(syntax.Identifier.Location, calleeName, fixedCount, syntax.Arguments.Count);
+                return false;
+            }
+        }
+        else if (syntax.Arguments.Count != parameters.Length)
+        {
+            var requiredCount = parameters.Length;
+            while (requiredCount > 0 && parameters[requiredCount - 1].HasExplicitDefaultValue)
+            {
+                requiredCount--;
+            }
+
+            if (syntax.Arguments.Count < requiredCount || syntax.Arguments.Count > parameters.Length)
+            {
+                Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, calleeName, parameters.Length, syntax.Arguments.Count);
+                return false;
+            }
+        }
+
+        var arguments = boundArguments;
+        if (isVariadic)
+        {
+            var variadicParameter = parameters[parameters.Length - 1];
+            var hasElementErrors = false;
+            arguments = PackOrPassThroughVariadicArguments(
+                conversions,
+                Diagnostics,
+                syntax,
+                arguments,
+                fixedCount,
+                (SliceTypeSymbol)variadicParameter.Type,
+                variadicParameter.Name,
+                i => i < syntax.Arguments.Count ? syntax.Arguments[i].Location : syntax.Location,
+                ref hasElementErrors);
+            if (hasElementErrors)
+            {
+                return false;
+            }
+        }
+        else if (arguments.Length < parameters.Length)
+        {
+            var padded = ImmutableArray.CreateBuilder<BoundExpression>(parameters.Length);
+            padded.AddRange(arguments);
+            for (var i = arguments.Length; i < parameters.Length; i++)
+            {
+                padded.Add(CreateOptionalUserDefaultArgument(parameters[i]));
+            }
+
+            arguments = padded.MoveToImmutable();
+        }
+
+        var hasRefKinds = false;
+        var refKinds = ImmutableArray.CreateBuilder<RefKind>(parameters.Length);
+        var converted = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
+        var hasErrors = false;
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var parameter = parameters[i];
+            refKinds.Add(parameter.RefKind);
+            hasRefKinds |= parameter.RefKind != RefKind.None;
+
+            var argument = arguments[i];
+            var argumentSyntax = i < syntax.Arguments.Count ? UnwrapNamedArgumentValue(syntax.Arguments[i]) : null;
+            var argumentLocation = argumentSyntax?.Location ?? syntax.Identifier.Location;
+            if (parameter.RefKind != RefKind.None || argumentSyntax is RefArgumentExpressionSyntax)
+            {
+                var argumentRefKind = argumentSyntax is RefArgumentExpressionSyntax refArgument
+                    ? getRefKindFromModifier(refArgument.RefKindModifier)
+                    : RefKind.None;
+                if (argumentRefKind == RefKind.None
+                    && argument is BoundAddressOfExpression or BoundConditionalAddressExpression
+                    && parameter.RefKind != RefKind.None)
+                {
+                    argumentRefKind = parameter.RefKind;
+                }
+
+                if (argumentRefKind != parameter.RefKind)
+                {
+                    if (parameter.RefKind == RefKind.In && argumentRefKind == RefKind.None)
+                    {
+                        Diagnostics.ReportInArgumentMissingInModifier(argumentLocation, i + 1, parameter.Name);
+                    }
+                    else
+                    {
+                        Diagnostics.ReportRefKindMismatch(
+                            argumentLocation,
+                            i + 1,
+                            parameter.Name,
+                            refKindToString(parameter.RefKind),
+                            refKindToString(argumentRefKind));
+                    }
+
+                    hasErrors = true;
+                    converted.Add(argument);
+                    continue;
+                }
+
+                if (argument is BoundAddressOfExpression address)
+                {
+                    if (address.Operand.Type == TypeSymbol.Error
+                        && argumentSyntax is RefArgumentExpressionSyntax inlineOut
+                        && inlineOut.IsInlineDeclaration
+                        && inlineOut.DeclaredType == null)
+                    {
+                        argument = bindRefArgumentExpression(inlineOut, parameter);
+                    }
+                    else if (address.Operand.Type != parameter.Type && address.Operand.Type != TypeSymbol.Error)
+                    {
+                        Diagnostics.ReportWrongArgumentType(argumentLocation, parameter.Name, parameter.Type, address.Operand.Type);
+                        hasErrors = true;
+                    }
+                }
+                else if (argument is BoundConditionalAddressExpression conditionalAddress)
+                {
+                    if (conditionalAddress.PointeeType != parameter.Type
+                        && conditionalAddress.PointeeType != TypeSymbol.Error)
+                    {
+                        Diagnostics.ReportWrongArgumentType(argumentLocation, parameter.Name, parameter.Type, conditionalAddress.PointeeType);
+                        hasErrors = true;
+                    }
+                }
+                else
+                {
+                    Diagnostics.ReportWrongArgumentType(argumentLocation, parameter.Name, parameter.Type, argument.Type);
+                    hasErrors = true;
+                }
+
+                converted.Add(argument);
+                continue;
+            }
+
+            if (argumentSyntax != null
+                && bindLambdaWithTarget != null
+                && IsUntypedArrowLambda(argumentSyntax)
+                && parameter.Type is FunctionTypeSymbol lambdaTarget)
+            {
+                argument = bindLambdaWithTarget((LambdaExpressionSyntax)argumentSyntax, lambdaTarget);
+            }
+
+            converted.Add(conversions.BindConversion(argumentLocation, argument, parameter.Type));
+        }
+
+        if (hasErrors)
+        {
+            return false;
+        }
+
+        convertedArgs = converted.MoveToImmutable();
+        argumentRefKinds = hasRefKinds ? refKinds.MoveToImmutable() : default;
         return true;
     }
 
@@ -537,12 +720,23 @@ internal sealed partial class OverloadResolver
 
         if (callee.Type is DelegateTypeSymbol delegateSym)
         {
-            if (!TryBindFunctionTypeArguments(calleeName, delegateSym.EquivalentFunctionType, syntax, boundArguments.ToImmutable(), out var convertedDelegateArgs))
+            if (!TryBindNamedDelegateArguments(
+                calleeName,
+                delegateSym,
+                syntax,
+                boundArguments.ToImmutable(),
+                out var convertedDelegateArgs,
+                out var delegateRefKinds))
             {
                 return new BoundErrorExpression(null);
             }
 
-            return new BoundIndirectCallExpression(syntax, callee, delegateSym.EquivalentFunctionType, convertedDelegateArgs);
+            return new BoundIndirectCallExpression(
+                syntax,
+                callee,
+                delegateSym.EquivalentFunctionType,
+                convertedDelegateArgs,
+                delegateRefKinds);
         }
 
         // A value whose CLR type is a delegate (e.g. `Func[int32, int32]`) is

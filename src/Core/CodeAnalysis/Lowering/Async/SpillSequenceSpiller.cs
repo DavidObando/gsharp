@@ -1834,7 +1834,7 @@ public static class SpillSequenceSpiller
                 call,
                 call.Target,
                 call.Arguments,
-                (target, args) => new BoundIndirectCallExpression(null, target, call.FunctionType, args));
+                (target, args) => new BoundIndirectCallExpression(null, target, call.FunctionType, args, call.ArgumentRefKinds));
         }
 
         private BoundSpillSequenceExpression SpillFunctionPointerInvocation(BoundFunctionPointerInvocationExpression call)
