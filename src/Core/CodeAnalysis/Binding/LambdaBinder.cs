@@ -75,6 +75,7 @@ internal sealed class LambdaBinder
     private readonly Func<TypeSymbol, Type> resolveClrTypeForGenericArg;
     private readonly Func<FunctionSymbol> getCurrentFunction;
     private readonly Action<FunctionSymbol> setCurrentFunction;
+    private readonly Func<ParameterSyntax, ImmutableArray<BoundAttribute>> bindParameterAttributes;
     private readonly Func<ExpressionSyntax, BoundExpression> bindLambdaBodyExpression;
     private readonly Func<TypeParameterListSyntax, ImmutableArray<TypeParameterSymbol>> bindTypeParameterList;
 
@@ -123,6 +124,9 @@ internal sealed class LambdaBinder
     /// <see cref="BindFunctionLiteralExpression"/> to push the
     /// synthetic lambda function for the duration of the body bind
     /// and to restore the outer function on exit.</param>
+    /// <param name="bindParameterAttributes">Callback that binds user
+    /// annotations on a lambda parameter using the declaration binder's
+    /// standard parameter-target validation.</param>
     /// <param name="bindLambdaBodyExpression">ADR-0074 / issue #714:
     /// optional callback that binds an arrow-lambda body expression.
     /// Required only when <see cref="BindLambdaExpression"/> is
@@ -143,6 +147,7 @@ internal sealed class LambdaBinder
         Func<TypeSymbol, Type> resolveClrTypeForGenericArg,
         Func<FunctionSymbol> getCurrentFunction,
         Action<FunctionSymbol> setCurrentFunction,
+        Func<ParameterSyntax, ImmutableArray<BoundAttribute>> bindParameterAttributes,
         Func<ExpressionSyntax, BoundExpression> bindLambdaBodyExpression = null,
         Func<TypeParameterListSyntax, ImmutableArray<TypeParameterSymbol>> bindTypeParameterList = null)
     {
@@ -155,6 +160,7 @@ internal sealed class LambdaBinder
         this.resolveClrTypeForGenericArg = resolveClrTypeForGenericArg ?? throw new ArgumentNullException(nameof(resolveClrTypeForGenericArg));
         this.getCurrentFunction = getCurrentFunction ?? throw new ArgumentNullException(nameof(getCurrentFunction));
         this.setCurrentFunction = setCurrentFunction ?? throw new ArgumentNullException(nameof(setCurrentFunction));
+        this.bindParameterAttributes = bindParameterAttributes ?? throw new ArgumentNullException(nameof(bindParameterAttributes));
         this.bindLambdaBodyExpression = bindLambdaBodyExpression;
         this.bindTypeParameterList = bindTypeParameterList;
     }
@@ -266,6 +272,7 @@ internal sealed class LambdaBinder
             // default value; lambdas can be invoked through their delegate type
             // which honors the default at the call site.
             conversions.BindAndAttachParameterDefaultValue(p, lambdaParam);
+            AttachParameterAttributes(p, lambdaParam);
             parameterSymbols.Add(lambdaParam);
             parameterTypes.Add(ptype);
         }
@@ -678,6 +685,7 @@ internal sealed class LambdaBinder
             // default at bind time the same way it does for function-literal
             // parameters.
             conversions.BindAndAttachParameterDefaultValue(p, lambdaParam);
+            AttachParameterAttributes(p, lambdaParam);
             parameterSymbols.Add(lambdaParam);
             parameterTypes.Add(ptype);
         }
@@ -885,6 +893,7 @@ internal sealed class LambdaBinder
                 declaringSyntax: original.DeclaringSyntax,
                 isScoped: original.IsScoped,
                 refKind: original.RefKind);
+            adapterParameter.SetAttributes(original.Attributes);
             adapterParameters.Add(adapterParameter);
             replacementMap[original] = new BoundConversionExpression(
                 null,
@@ -1152,6 +1161,18 @@ internal sealed class LambdaBinder
         }
 
         return element;
+    }
+
+    /// <summary>Binds and attaches user annotations on a lambda parameter.</summary>
+    /// <param name="syntax">The source parameter syntax.</param>
+    /// <param name="parameter">The parameter symbol receiving the attributes.</param>
+    private void AttachParameterAttributes(ParameterSyntax syntax, ParameterSymbol parameter)
+    {
+        var attributes = bindParameterAttributes(syntax);
+        if (!attributes.IsDefaultOrEmpty)
+        {
+            parameter.SetAttributes(attributes);
+        }
     }
 
     /// <summary>
