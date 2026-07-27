@@ -1045,8 +1045,8 @@ let first = if let copyright = GetCopyrights() && copyright.Length > 0 {
 - A single top-level `&&` **after the final binding** introduces an optional
   `bool` guard, evaluated only once every binding matched and with all bound
   names in scope. Because `&&` is also an ordinary operator, a logical-and that
-  belongs to an *initializer* must be parenthesized: `if let ok = (a && b) && ok
-  { … } else { … }`. A `??` tail needs no parentheses. The statement form has no
+  belongs to an *initializer* must be parenthesized:
+  `if let ok = (a && b) && ok { … } else { … }`. A `??` tail needs no
   guard clause and keeps parsing initializers with the full expression grammar.
 - The bound names are visible in later initializers, in the guard, and in the
   then-block only — never in the `else` branch.
