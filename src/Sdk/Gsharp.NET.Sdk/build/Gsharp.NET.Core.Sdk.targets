@@ -2,6 +2,7 @@
 
   <UsingTask AssemblyFile="$(GsharpToolFullPath)" TaskName="Gsharp.NET.Sdk.Tools.BuildTask" />
   <UsingTask AssemblyFile="$(GsharpToolFullPath)" TaskName="Gsharp.NET.Sdk.Tools.GsgenTask" />
+  <UsingTask AssemblyFile="$(GsharpToolFullPath)" TaskName="Gsharp.NET.Sdk.Tools.WriteGsharpAssemblyInfoTask" />
 
   <PropertyGroup>
     <CoreCompileDependsOn>_ComputeNonExistentFileProperty</CoreCompileDependsOn>
@@ -161,6 +162,54 @@
     </ItemGroup>
 
     <Message Importance="Low" Text="gsgen: resolved analyzers: @(GsharpAnalyzer)" />
+  </Target>
+
+  <!-- Issue #2814 / ADR-0143 §D: reproduce the SDK-derived AssemblyInfo.
+
+       Microsoft.NET.GenerateAssemblyInfo.targets gates CoreGenerateAssemblyInfo
+       on `'$(Language)'=='VB' or '$(Language)'=='C#'`. Because this SDK sets
+       Language=Gsharp, that target silently no-ops and the emitted assembly
+       loses AssemblyTitle/AssemblyProduct/AssemblyCompany/AssemblyConfiguration
+       and peers — attributes the equivalent .csproj build always carries. ADR-0143
+       §D makes reproducing them the G# SDK's job (cs2gs deliberately drops the
+       generated AssemblyInfo.cs and keeps only the project properties).
+
+       The SDK's own WriteCodeFragment task cannot be reused: it is CodeDom-based
+       and only emits C#/VB. WriteGsharpAssemblyInfoTask renders the very same
+       @(AssemblyAttribute) item group — already populated for us by the standard
+       GetAssemblyAttributes target — as file-level G# `@assembly:` annotations.
+
+       $(GeneratedAssemblyInfoFile) needs no override: the SDK already defaults it
+       to $(IntermediateOutputPath)$(MSBuildProjectName).AssemblyInfo$(DefaultLanguageSourceExtension),
+       and Sdk.props sets DefaultLanguageSourceExtension to `.gs`.
+
+       This runs BEFORE _GsharpPartitionForeignCompile so the generated file is in
+       @(Compile) by the time gsgen computes its inputs. It emits `.gs`, so the
+       partition target leaves it alone. -->
+  <Target Name="_GsharpGenerateAssemblyInfo"
+          Condition=" '$(GenerateAssemblyInfo)' == 'true' "
+          DependsOnTargets="CreateGeneratedAssemblyInfoInputsCacheFile"
+          BeforeTargets="_GsharpPartitionForeignCompile;CoreCompile"
+          Inputs="$(GeneratedAssemblyInfoInputsCacheFile)"
+          Outputs="$(GeneratedAssemblyInfoFile)">
+    <WriteGsharpAssemblyInfoTask AssemblyAttributes="@(AssemblyAttribute)"
+                                 OutputFile="$(GeneratedAssemblyInfoFile)" />
+  </Target>
+
+  <!-- Fold the generated AssemblyInfo into @(Compile). Kept separate from, and
+       with no Inputs/Outputs unlike, _GsharpGenerateAssemblyInfo above so it
+       ALWAYS runs — an incremental build that skips regeneration must still add
+       the existing file to @(Compile), mirroring _GsharpIncludeGeneratedCompile.
+       The Remove guards against a project that also globs the file in. -->
+  <Target Name="_GsharpIncludeGeneratedAssemblyInfo"
+          Condition=" '$(GenerateAssemblyInfo)' == 'true' "
+          DependsOnTargets="_GsharpGenerateAssemblyInfo"
+          BeforeTargets="_GsharpPartitionForeignCompile;CoreCompile">
+    <ItemGroup Condition="Exists('$(GeneratedAssemblyInfoFile)')">
+      <Compile Remove="$(GeneratedAssemblyInfoFile)" />
+      <Compile Include="$(GeneratedAssemblyInfoFile)" />
+      <FileWrites Include="$(GeneratedAssemblyInfoFile)" />
+    </ItemGroup>
   </Target>
 
   <!-- Issue #2214 / ADR-0145 extension: partition any stray C# `.cs` Compile
