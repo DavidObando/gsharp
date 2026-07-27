@@ -622,6 +622,9 @@ internal sealed class LambdaBinder
         var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.Parameters.Count);
         var parameterSymbols = ImmutableArray.CreateBuilder<ParameterSymbol>(syntax.Parameters.Count);
         var seen = new HashSet<string>();
+        var hasIncompatibleExplicitParameter = false;
+        var needsExplicitParameterAdapter = false;
+        var exactTargetParameterSlots = new bool[syntax.Parameters.Count];
         for (var i = 0; i < syntax.Parameters.Count; i++)
         {
             var p = syntax.Parameters[i];
@@ -664,6 +667,59 @@ internal sealed class LambdaBinder
                 ptype = SliceTypeSymbol.Get(ptype);
             }
 
+            var refKind = conversions.BindAndValidateParameterRefKind(
+                p,
+                pname,
+                ptype,
+                isVariadic,
+                isAsync ? "async" : null);
+
+            // Issue #2810: an explicit lambda parameter type is a contract,
+            // not a hint. The target delegate supplies its slot type, so that
+            // type must convert implicitly to the written parameter type before
+            // an adapter may be synthesized. By-reference parameters require a
+            // runtime-identical type because a value conversion cannot preserve
+            // aliasing. Reference nullability and named-delegate/function
+            // pairs retain their existing runtime-compatible behavior.
+            if (p.Type != null
+                && arityMatchesTarget
+                && ptype != TypeSymbol.Error
+                && targetFunctionType.ParameterTypes[i] is TypeSymbol targetParameterType
+                && targetParameterType != TypeSymbol.Error)
+            {
+                var runtimeEquivalent = TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                    targetParameterType,
+                    ptype);
+                var conversion = Conversion.ClassifyNonStructural(targetParameterType, ptype);
+                var structurallyCompatibleDelegate = ptype is FunctionTypeSymbol writtenFunctionType
+                    && targetParameterType is not FunctionTypeSymbol
+                    && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(targetParameterType, out var targetDelegateFunctionType)
+                    && Conversion.ClassifyNonStructural(targetDelegateFunctionType, writtenFunctionType).IsImplicit;
+                var compatible = runtimeEquivalent
+                    || structurallyCompatibleDelegate
+                    || (refKind == RefKind.None
+                        && (conversion.IsImplicit
+                            || conversions.HasUserDefinedImplicitConversion(targetParameterType, ptype)));
+                if (!compatible)
+                {
+                    if (conversion.Exists)
+                    {
+                        Diagnostics.ReportCannotConvertImplicitly(p.Type.Location, targetParameterType, ptype);
+                    }
+                    else
+                    {
+                        Diagnostics.ReportCannotConvert(p.Type.Location, targetParameterType, ptype);
+                    }
+
+                    hasIncompatibleExplicitParameter = true;
+                }
+                else if (!runtimeEquivalent && !structurallyCompatibleDelegate)
+                {
+                    needsExplicitParameterAdapter = true;
+                    exactTargetParameterSlots[i] = true;
+                }
+            }
+
             // Issue #1262: skip the uniqueness check for the discard `_` so a
             // second discard parameter is permitted (C# `(_, _) => ...`). Each
             // `_` still occupies its positional slot.
@@ -678,7 +734,7 @@ internal sealed class LambdaBinder
                 isVariadic,
                 declaringSyntax: p.Identifier,
                 isScoped: p.IsScoped,
-                refKind: conversions.BindAndValidateParameterRefKind(p, pname, ptype, isVariadic, isAsync ? "async" : null));
+                refKind: refKind);
 
             // ADR-0063 §5: arrow-lambda parameters can also declare a default
             // value; the conversion classifier validates the constant-folded
@@ -688,6 +744,11 @@ internal sealed class LambdaBinder
             AttachParameterAttributes(p, lambdaParam);
             parameterSymbols.Add(lambdaParam);
             parameterTypes.Add(ptype);
+        }
+
+        if (hasIncompatibleExplicitParameter)
+        {
+            return new BoundErrorExpression(null);
         }
 
         // ADR-0101 follow-up / issue #812: enforce variadic structural rules.
@@ -841,7 +902,20 @@ internal sealed class LambdaBinder
             }
         }
 
-        return new BoundFunctionLiteralExpression(syntax, synthetic, fnType, bodyBlock, captured);
+        var literal = new BoundFunctionLiteralExpression(syntax, synthetic, fnType, bodyBlock, captured);
+        if (!needsExplicitParameterAdapter)
+        {
+            return literal;
+        }
+
+        var adapterTarget = FunctionTypeSymbol.Get(
+            targetFunctionType.ParameterTypes,
+            targetFunctionType.IsVariadic,
+            observableReturnType);
+        return CreateErasedFunctionLiteralAdapter(
+            literal,
+            adapterTarget,
+            ImmutableArray.Create(exactTargetParameterSlots));
     }
 
     /// <summary>
@@ -860,12 +934,15 @@ internal sealed class LambdaBinder
     /// signature needs to widen to a delegate-typed target.</param>
     /// <param name="targetFunctionType">The function-type shape the
     /// adapter must present to the delegate-typed parameter.</param>
+    /// <param name="exactTargetParameterSlots">Parameter slots that must use
+    /// their target type without generic-erasure preservation.</param>
     /// <returns>The adapter literal; its
     /// <see cref="BoundFunctionLiteralExpression.CapturedVariables"/>
     /// match the original literal's captures.</returns>
     public BoundFunctionLiteralExpression CreateErasedFunctionLiteralAdapter(
         BoundFunctionLiteralExpression literal,
-        FunctionTypeSymbol targetFunctionType)
+        FunctionTypeSymbol targetFunctionType,
+        ImmutableArray<bool> exactTargetParameterSlots = default)
     {
         // ADR-0087 §3 R6: if the literal's declared signature already
         // matches the (possibly substituted) target, the adapter would
@@ -880,13 +957,19 @@ internal sealed class LambdaBinder
 
         var adapterParameters = ImmutableArray.CreateBuilder<ParameterSymbol>(literal.Function.Parameters.Length);
         var replacementMap = new Dictionary<VariableSymbol, BoundExpression>();
+        var adapterPrefix = ImmutableArray.CreateBuilder<BoundStatement>();
         for (var i = 0; i < literal.Function.Parameters.Length; i++)
         {
             var original = literal.Function.Parameters[i];
             var targetSlot = i < targetFunctionType.ParameterTypes.Length
                 ? targetFunctionType.ParameterTypes[i]
                 : TypeSymbol.Object;
-            var adapterParameterType = GetAdapterSlotType(original.Type, targetSlot);
+            var useExactTargetParameterType = !exactTargetParameterSlots.IsDefault
+                && i < exactTargetParameterSlots.Length
+                && exactTargetParameterSlots[i];
+            var adapterParameterType = useExactTargetParameterType
+                ? targetSlot
+                : GetAdapterSlotType(original.Type, targetSlot);
             var adapterParameter = new ParameterSymbol(
                 original.Name,
                 adapterParameterType,
@@ -895,10 +978,36 @@ internal sealed class LambdaBinder
                 refKind: original.RefKind);
             adapterParameter.SetAttributes(original.Attributes);
             adapterParameters.Add(adapterParameter);
-            replacementMap[original] = new BoundConversionExpression(
-                null,
-                original.Type,
-                new BoundVariableExpression(null, adapterParameter));
+            var adapterRead = new BoundVariableExpression(null, adapterParameter);
+            var bindConvertedLocal = (useExactTargetParameterType
+                    && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                        adapterParameterType,
+                        original.Type))
+                || conversions.HasUserDefinedImplicitConversion(adapterParameterType, original.Type);
+            if (bindConvertedLocal)
+            {
+                var converted = conversions.BindConversion(
+                    original.DeclaringSyntax?.Location ?? literal.Syntax.Location,
+                    adapterRead,
+                    original.Type);
+                var convertedLocal = new LocalVariableSymbol(
+                    $"<lambda_parameter{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
+                    isReadOnly: true,
+                    original.Type,
+                    original.DeclaringSyntax);
+                adapterPrefix.Add(new BoundVariableDeclaration(
+                    original.DeclaringSyntax,
+                    convertedLocal,
+                    converted));
+                replacementMap[original] = new BoundVariableExpression(null, convertedLocal);
+            }
+            else
+            {
+                replacementMap[original] = new BoundConversionExpression(
+                    null,
+                    original.Type,
+                    adapterRead);
+            }
         }
 
         var adapterReturnType = targetFunctionType.ReturnType == TypeSymbol.Void
@@ -957,6 +1066,11 @@ internal sealed class LambdaBinder
 
         var body = (BoundBlockStatement)new ErasedFunctionLiteralAdapterRewriter(replacementMap, adapterResultType)
             .RewriteStatement(literal.Body);
+        if (adapterPrefix.Count > 0)
+        {
+            adapterPrefix.AddRange(body.Statements);
+            body = new BoundBlockStatement(body.Syntax, adapterPrefix.ToImmutable());
+        }
 
         return new BoundFunctionLiteralExpression(
             literal.Syntax,
