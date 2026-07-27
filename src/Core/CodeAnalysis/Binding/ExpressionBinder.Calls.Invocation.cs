@@ -965,6 +965,7 @@ internal sealed partial class ExpressionBinder
         string methodName,
         CallExpressionSyntax ce,
         System.Type[] explicitTypeArgs,
+        ImmutableArray<TypeSymbol> explicitTypeArgSymbols,
         List<int> deferredIndices,
         BoundExpression[] boundArgs)
     {
@@ -1005,12 +1006,21 @@ internal sealed partial class ExpressionBinder
         // (`c.Id` → GS0158). Try a symbol-based inference first that recovers
         // the real element type from the receiver's symbolic `TypeArguments`,
         // builds a `FunctionTypeSymbol` target carrying that type, and binds the
-        // lambda against it. This path only succeeds (and pre-empts the CLR
-        // paths) when it actually recovers a same-compilation user type, so the
-        // referenced-element-type and primitive cases are untouched.
+        // lambda against it. Issue #2810 also uses this path for explicit
+        // method type arguments whose CLR placeholder is `object`.
         foreach (var probe in probes)
         {
-            if (TryMapDeferredLambdaTargetsSymbolic(probe.Methods, probe.ReceiverParameterOffset, receiverType, ce, deferredIndices, boundArgs, deferred, out var symbolicTargets, out var exactReturnIndices))
+            if (TryMapDeferredLambdaTargetsSymbolic(
+                probe.Methods,
+                probe.ReceiverParameterOffset,
+                receiverType,
+                ce,
+                explicitTypeArgSymbols,
+                deferredIndices,
+                boundArgs,
+                deferred,
+                out var symbolicTargets,
+                out var exactReturnIndices))
             {
                 foreach (var idx in deferredIndices)
                 {
@@ -1338,6 +1348,7 @@ internal sealed partial class ExpressionBinder
         int offset,
         TypeSymbol receiverType,
         CallExpressionSyntax ce,
+        ImmutableArray<TypeSymbol> explicitTypeArgSymbols,
         List<int> deferredIndices,
         BoundExpression[] boundArgs,
         HashSet<int> deferred,
@@ -1355,9 +1366,9 @@ internal sealed partial class ExpressionBinder
         // type carried by a non-deferred argument such as `items : List[Item]`.
         // An extension probe (offset == 1) places the receiver in slot 0, so it
         // genuinely needs a receiver; a static/instance probe (offset == 0) does
-        // not. The success gate below (`anySameCompilationType`) still ensures
-        // this path only fires — and pre-empts the CLR erasure paths — when a
-        // real same-compilation user type is recovered.
+        // not. The success gate below ensures this path only pre-empts the CLR
+        // path when the recovered shape contains symbolic information that
+        // reflection cannot faithfully represent.
         if (offset == 1 && receiverType == null)
         {
             return false;
@@ -1398,7 +1409,7 @@ internal sealed partial class ExpressionBinder
 
         Dictionary<int, ImmutableArray<TypeSymbol>> agreed = null;
         Dictionary<int, TypeSymbol> agreedReturnTypes = null;
-        var anySameCompilationType = false;
+        var anySymbolicType = false;
 
         foreach (var method in methods)
         {
@@ -1411,15 +1422,15 @@ internal sealed partial class ExpressionBinder
             ParameterInfo[] openParameters;
             try
             {
-                if (method.IsGenericMethod)
-                {
-                    openMethod = method.IsGenericMethodDefinition ? method : method.GetGenericMethodDefinition();
-                }
-                else if (receiverOpenDefinition != null
+                if (receiverOpenDefinition != null
                     && !method.IsStatic
                     && TryResolveOpenInstanceMethod(receiverOpenDefinition, method, out var resolvedOpenMethod))
                 {
                     openMethod = resolvedOpenMethod;
+                }
+                else if (method.IsGenericMethod)
+                {
+                    openMethod = method.IsGenericMethodDefinition ? method : method.GetGenericMethodDefinition();
                 }
                 else
                 {
@@ -1438,13 +1449,16 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            var inferred = MemberLookup.InferSymbolicMethodTypeArguments(openMethod, symbolicArgVector);
+            var inferred = !explicitTypeArgSymbols.IsDefaultOrEmpty
+                && openMethod.GetGenericArguments().Length == explicitTypeArgSymbols.Length
+                    ? explicitTypeArgSymbols.ToArray()
+                    : MemberLookup.InferSymbolicMethodTypeArguments(openMethod, symbolicArgVector);
             var methodTypeArgs = ImmutableArray.Create(inferred);
 
             var slotTargets = new Dictionary<int, ImmutableArray<TypeSymbol>>();
             var slotReturnTypes = new Dictionary<int, TypeSymbol>();
             var candidateUsable = true;
-            var candidateHasSameCompilationType = false;
+            var candidateHasSymbolicType = false;
 
             foreach (var idx in deferredIndices)
             {
@@ -1460,6 +1474,11 @@ internal sealed partial class ExpressionBinder
                 try
                 {
                     var delegateType = openParameters[paramIndex].ParameterType;
+                    if (MemberLookup.TryGetExpressionTreeDelegateType(delegateType, out var unwrappedDelegateType))
+                    {
+                        delegateType = unwrappedDelegateType;
+                    }
+
                     invoke = delegateType?.GetMethodSafe("Invoke");
                     invokeParameters = invoke?.GetParameters();
                 }
@@ -1506,22 +1525,22 @@ internal sealed partial class ExpressionBinder
                 var slotUsable = true;
                 foreach (var invokeParameter in invokeParameters)
                 {
-                    var mapped = MemberLookup.MapOpenClrTypeToSymbolic(
+                    var mapped = MemberLookup.MapOpenClrParameterTypeToSymbolic(
                         invokeParameter.ParameterType,
                         receiverOpenDefinition,
                         receiverTypeArguments,
                         openMethod,
                         methodTypeArgs);
-                    if (mapped == null || mapped == TypeSymbol.Error || TypeSymbol.ContainsTypeParameter(mapped))
+                    if (mapped == null || mapped == TypeSymbol.Error)
                     {
                         slotUsable = false;
                         break;
                     }
 
                     parameterTypes.Add(mapped);
-                    if (TypeSymbol.ContainsSameCompilationUserType(mapped))
+                    if (TypeSymbol.RequiresSymbolicProjection(mapped))
                     {
-                        candidateHasSameCompilationType = true;
+                        candidateHasSymbolicType = true;
                     }
                 }
 
@@ -1552,9 +1571,9 @@ internal sealed partial class ExpressionBinder
                 if (mappedReturn != null && mappedReturn != TypeSymbol.Error && !TypeSymbol.ContainsTypeParameter(mappedReturn))
                 {
                     slotReturnTypes[idx] = mappedReturn;
-                    if (TypeSymbol.ContainsSameCompilationUserType(mappedReturn))
+                    if (TypeSymbol.RequiresSymbolicProjection(mappedReturn))
                     {
-                        candidateHasSameCompilationType = true;
+                        candidateHasSymbolicType = true;
                     }
                 }
             }
@@ -1592,10 +1611,10 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
-            anySameCompilationType |= candidateHasSameCompilationType;
+            anySymbolicType |= candidateHasSymbolicType;
         }
 
-        if (agreed == null || !anySameCompilationType)
+        if (agreed == null || !anySymbolicType)
         {
             return false;
         }
@@ -1997,7 +2016,15 @@ internal sealed partial class ExpressionBinder
         if (deferredArrowLambdaIndices.Count > 0)
         {
             var mutableArgs = boundArguments.ToArray();
-            ResolveDeferredArrowLambdaArguments(receiver, classSymbol, methodName, ce, explicitTypeArgs, deferredArrowLambdaIndices, mutableArgs);
+            ResolveDeferredArrowLambdaArguments(
+                receiver,
+                classSymbol,
+                methodName,
+                ce,
+                explicitTypeArgs,
+                typeArgSymbols,
+                deferredArrowLambdaIndices,
+                mutableArgs);
 
             // Issue #951: the reflection-driven resolution above only covers CLR
             // (imported) methods. When the receiver is a user-declared
