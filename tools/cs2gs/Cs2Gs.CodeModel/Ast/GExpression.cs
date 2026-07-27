@@ -999,6 +999,79 @@ public sealed class IfExpression : GExpression
 }
 
 /// <summary>
+/// One <c>let name [T] = expr</c> clause of an <see cref="IfLetExpression"/>
+/// header (ADR-0151; ADR-0071 for the shared binding rules). The initializer
+/// must be of nullable type; the binding is observed at the underlying
+/// non-null type inside the guard and the then-branch.
+/// </summary>
+public sealed class IfLetBinding : GNode
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="IfLetBinding"/> class.
+    /// </summary>
+    /// <param name="name">The bound name.</param>
+    /// <param name="initializer">The nullable initializer expression.</param>
+    /// <param name="declaredType">The optional explicit UNDERLYING (non-null) type clause.</param>
+    public IfLetBinding(string name, GExpression initializer, GTypeReference declaredType = null)
+    {
+        Name = name;
+        Initializer = initializer;
+        DeclaredType = declaredType;
+    }
+
+    /// <summary>Gets the bound name.</summary>
+    public string Name { get; }
+
+    /// <summary>Gets the optional explicit underlying (non-null) type clause.</summary>
+    public GTypeReference DeclaredType { get; }
+
+    /// <summary>Gets the nullable initializer expression.</summary>
+    public GExpression Initializer { get; }
+}
+
+/// <summary>
+/// An <c>if let</c> expression used in value position — ADR-0151:
+/// <c>if let a = e [, let b = e2]* [&amp;&amp; guard] { thenValue } else { elseValue }</c>.
+/// The canonical G# form for a C# conditional whose condition is a bare
+/// non-null declaration pattern (<c>receiver is { } name [&amp;&amp; predicate]</c>),
+/// which otherwise needs a single-evaluation spill temp plus a <c>!!</c> at
+/// every binder reference.
+/// </summary>
+public sealed class IfLetExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="IfLetExpression"/> class.
+    /// </summary>
+    /// <param name="bindings">The comma-separated binding clauses (at least one).</param>
+    /// <param name="guard">The optional boolean guard introduced by a top-level <c>&amp;&amp;</c>, or <see langword="null"/>.</param>
+    /// <param name="thenExpression">The value of the then-branch.</param>
+    /// <param name="elseExpression">The value of the (mandatory) else-branch.</param>
+    public IfLetExpression(
+        IReadOnlyList<IfLetBinding> bindings,
+        GExpression guard,
+        GExpression thenExpression,
+        GExpression elseExpression)
+    {
+        Bindings = bindings ?? new List<IfLetBinding>();
+        Guard = guard;
+        ThenExpression = thenExpression;
+        ElseExpression = elseExpression;
+    }
+
+    /// <summary>Gets the binding clauses, in source order.</summary>
+    public IReadOnlyList<IfLetBinding> Bindings { get; }
+
+    /// <summary>Gets the optional boolean guard, or <see langword="null"/> when absent.</summary>
+    public GExpression Guard { get; }
+
+    /// <summary>Gets the then-branch value expression.</summary>
+    public GExpression ThenExpression { get; }
+
+    /// <summary>Gets the else-branch value expression.</summary>
+    public GExpression ElseExpression { get; }
+}
+
+/// <summary>
 /// An <c>out</c>-argument declaration passed to a method's <c>out</c> parameter
 /// (ADR-0115 §B; sample <c>TryParseOutVar.gs</c>). Renders the inline
 /// declaration forms <c>out var x</c>, <c>out let x</c>, or the discard

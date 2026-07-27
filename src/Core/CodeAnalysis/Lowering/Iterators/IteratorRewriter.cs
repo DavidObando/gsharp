@@ -183,6 +183,19 @@ public static class IteratorRewriter
 
             base.VisitVariableDeclaration(node);
         }
+
+        protected override void VisitAddressOfExpression(BoundAddressOfExpression node)
+        {
+            if (node.Operand is BoundVariableExpression variable
+                && variable.Variable is not ParameterSymbol
+                && !TypeSymbol.IsByRefLike(variable.Variable.Type)
+                && !Locals.Contains(variable.Variable))
+            {
+                Locals.Add(variable.Variable);
+            }
+
+            base.VisitAddressOfExpression(node);
+        }
     }
 }
 

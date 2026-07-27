@@ -232,6 +232,51 @@ namespace Demo
         Assert.DoesNotContain("handler(value!!)", printed);
     }
 
+    [Fact]
+    public void Oblivious_NullableDelegateForwardedThroughGenericMethods_PromotesEveryParameter()
+    {
+        string printed = TranslateOblivious(@"
+namespace Demo
+{
+    public class Book { }
+    public class Conversion { }
+    public class Context { }
+    public delegate void ConvertDelegate<T>(Book book, T context, System.Action<Conversion> callback);
+
+    public class Job<T>
+    {
+        public void Start(ConvertDelegate<T> convertAction)
+        {
+            Forward(convertAction);
+        }
+
+        private void Forward(ConvertDelegate<T> convertAction)
+        {
+            Invoke(convertAction);
+        }
+
+        private void Invoke(ConvertDelegate<T> convertAction)
+        {
+            if (convertAction != null)
+                convertAction(new Book(), default(T), _ => { });
+        }
+    }
+
+    public class App
+    {
+        public void Run()
+        {
+            ConvertDelegate<Context> convertAction = (_, _, _) => { };
+            new Job<Context>().Start(convertAction);
+        }
+    }
+}");
+
+        Assert.Equal(3, printed.Split("convertAction ((Book, T, (Conversion) -> void) -> void)?", StringSplitOptions.None).Length - 1);
+        Assert.Contains("Start(convertAction)", printed);
+        Assert.DoesNotContain("Start(convertAction!!)", printed);
+    }
+
     private static string TranslateOblivious(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });

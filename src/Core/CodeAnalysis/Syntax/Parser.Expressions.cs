@@ -625,7 +625,12 @@ public partial class Parser
                 return ParsePostfixChain(ParseSwitchExpression());
 
             case SyntaxKind.IfKeyword:
-                return ParsePostfixChain(ParseIfExpression());
+                // ADR-0151: `if let …` in an expression position is the
+                // value-producing binding form; every other `if` is the
+                // ADR-0064 if-expression. A statement-leading `if let` is
+                // intercepted earlier by ParseStatement, so reaching here
+                // always means a value position.
+                return ParsePostfixChain(IsIfLetStart() ? ParseIfLetExpression() : ParseIfExpression());
 
             case SyntaxKind.ThrowKeyword:
                 // Issue #1018: throw-expression in value position

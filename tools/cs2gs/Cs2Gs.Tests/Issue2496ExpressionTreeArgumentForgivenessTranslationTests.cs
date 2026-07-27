@@ -126,6 +126,7 @@ public sealed class Issue2496ExpressionTreeArgumentForgivenessTranslationTests
                 public static void Run(RuntimeSink sink)
                 {
                     sink.Accept((Item item) => item.Name);
+                    sink.Accept((Item item) => item.Other?.Name);
                     sink.AcceptBlock((Item item) => { return item.Name; });
                     sink.Accept<Item>(Item.ReadName);
                 }
@@ -133,6 +134,8 @@ public sealed class Issue2496ExpressionTreeArgumentForgivenessTranslationTests
             """);
 
         Assert.Contains("Accept((item Item) -> item.Name!!)", printed, StringComparison.Ordinal);
+        Assert.Contains("Accept((item Item) -> item.Other?.Name)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("item.Other?.Name!!", printed, StringComparison.Ordinal);
         Assert.Contains("return item.Name!!", printed, StringComparison.Ordinal);
         Assert.Contains("Accept[Item](Item.ReadName)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("ReadName!!", printed, StringComparison.Ordinal);

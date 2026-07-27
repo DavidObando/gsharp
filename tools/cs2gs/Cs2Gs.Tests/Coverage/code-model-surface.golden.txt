@@ -18,6 +18,7 @@ DefaultValueExpression
 FromEndIndexExpression
 IdentifierExpression
 IfExpression
+IfLetExpression
 IncrementDecrementExpression
 IndexExpression
 InterpolatedStringExpression
@@ -110,6 +111,7 @@ CollectionInitializerElement
 CompilationUnit
 EnumCase
 FieldInitializer
+IfLetBinding
 ImportDirective
 InterpolationPart
 Parameter

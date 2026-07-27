@@ -91,6 +91,38 @@ func Both(left string?, right string?) {
 
 The binding's initializer must have a nullable type (`T?`). The else-block of `guard let` must end in `return`, `throw`, `break`, or `continue`.
 
+## `if let` as a value
+
+`if let` also works in expression position, so "unwrap or fall back" is a single expression. The terminal `else` is required, and each branch block ends in the value it produces.
+
+```gsharp title="IfLetExpression.gs"
+package Tour.ControlFlow.IfLetExpression
+
+import System
+
+func FirstCopyright(copyrights []?string) string? {
+    return if let all = copyrights && all.Length > 0 {
+        all[0]
+    } else {
+        default(string?)
+    }
+}
+
+func Combine(left string?, right string?) string {
+    return if let a = left, let b = right && a.Length > 0 {
+        "$a + $b"
+    } else if let a = left {
+        a
+    } else {
+        "none"
+    }
+}
+```
+
+Bindings are evaluated left to right and stop at the first `nil`, so `let b = B(a)` may use an `a` bound to its left (already narrowed to its non-null type). A single top-level `&&` after the *last* binding starts an optional boolean guard that only runs once every binding matched. Because `&&` is also an ordinary operator, parenthesize one that belongs to an initializer: `if let ok = (a && b) && ok { … } else { … }`.
+
+The bound names are visible in later initializers, in the guard, and in the then-branch only — never in the `else` branch. The same `GS0276` / `GS0277` / `GS0263` rules as the plain `if` expression apply, plus `GS0296` when an initializer is not nullable.
+
 ## `??=` — null-coalescing compound assignment
 
 `a ??= b` is the compound shorthand for *"if `a` is currently `nil`, evaluate `b` and write the result into `a`."* The right-hand side is evaluated only in the nil case.

@@ -104,6 +104,30 @@ public class Issue1244GenericAbstractOverrideEmitTests
         Assert.Equal("42\n", CompileAndRun(source));
     }
 
+    [Fact]
+    public void ExpressionBodiedPropertyOverride_InheritedByLeaf_DispatchesDuringBaseConstruction()
+    {
+        var source = """
+            package p
+            open class Base[T] {
+                private let values []T
+                init() { values = [Size]T }
+                protected open prop Size int32 { get; }
+                func Count() int32 { return values.Length }
+            }
+            open class Mid : Base[int32] {
+                protected open override prop Size int32 -> 1000
+            }
+            class Leaf : Mid {
+            }
+            func Main() {
+                System.Console.WriteLine(Leaf().Count())
+            }
+            """;
+
+        Assert.Equal("1000\n", CompileAndRun(source));
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue1244_emit_").FullName;

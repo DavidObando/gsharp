@@ -247,6 +247,43 @@ namespace LibA
     }
 
     [Fact]
+    public void CrossProject_GenericDelegateParameter_PromotedBySibling_DoesNotAssert()
+    {
+        const string libB = @"
+namespace LibB
+{
+    public delegate void Callback<T>(T value);
+
+    public class Service<T>
+    {
+        public void Accept(Callback<T> callback)
+        {
+            if (callback is not null) { }
+        }
+    }
+}";
+        const string libA = @"
+using LibB;
+
+namespace LibA
+{
+    public class Consumer
+    {
+        public void Run(Service<string> service, Callback<string> callback = null)
+        {
+            service.Accept(callback);
+        }
+    }
+}";
+
+        (string printedB, string printedA) = TranslateTwoProjects(libB, libA);
+
+        Assert.Contains("callback ((T) -> void)?", Compact(printedB));
+        Assert.Contains("service.Accept(callback)", Compact(printedA));
+        Assert.DoesNotContain("service.Accept(callback!!)", Compact(printedA));
+    }
+
+    [Fact]
     public void CrossProject_FieldTarget_FromReferencedInterfaceMember_InsertsForgiveness()
     {
         const string LibASource = @"

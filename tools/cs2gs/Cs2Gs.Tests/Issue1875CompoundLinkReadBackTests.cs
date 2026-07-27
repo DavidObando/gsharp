@@ -27,6 +27,51 @@ namespace Cs2Gs.Tests;
 public class Issue1875CompoundLinkReadBackTests
 {
     [Fact]
+    public void ChainedAssignment_CompoundFromEndIndex_PreservesFromEndSyntax()
+    {
+        string printed = TranslateUnit(@"
+using System;
+
+namespace Demo
+{
+    public sealed class C
+    {
+        public uint M(Span<uint> values)
+        {
+            uint result;
+            result = values[^1] += 3;
+            return result;
+        }
+    }
+}");
+
+        Assert.Contains("values[^1]", printed);
+        Assert.DoesNotContain("let __spill0 = ^1", printed);
+    }
+
+    [Fact]
+    public void ChainedAssignment_CompoundBitwiseComplementIndex_RemainsValueExpression()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public sealed class C
+    {
+        public int M(int[] values, int index)
+        {
+            int result;
+            result = values[~index] += 3;
+            return result;
+        }
+    }
+}");
+
+        Assert.Contains("let __spill0 = ^index", printed);
+        Assert.Contains("values[__spill0]", printed);
+        Assert.DoesNotContain("values[^index]", printed);
+    }
+
+    [Fact]
     public void ChainedAssignment_CompoundPropertyTarget_GetterReadExactlyOnce()
     {
         string printed = TranslateUnit(@"

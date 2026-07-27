@@ -561,6 +561,7 @@ Cause/fix examples:
 - **GS0276** — `let x = if cond { 1 }` — the if has no `else`, so when `cond` is false there is no value to bind. Add a terminal `else { … }`, or use the statement form (`if cond { x = 1 }`). The same rule applies to chained `else if` shapes: every chain must end in a terminal `else`.
 - **GS0277** — `let x = if cond { } else { 1 }` — the then-block is empty. Replace the empty block with `{ <expr> }`, or fall through with an explicit value (`{ 0 }`). Also fires when the block's last statement is a non-expression form (`for`, `while`, etc.) and there is no trailing expression to lift out.
 - **GS0263** also covers if-expression branches with no common result type (e.g. `if cond { true } else { "no" }`). Mirrors the ternary diagnostic since both forms share `ComputeConditionalCommonType`.
+- All three codes apply verbatim to the ADR-0151 **`if let` expression** (`let x = if let v = maybe { v } else { fallback }`): the terminal `else` is required, each branch block must end in a value, and the tails must unify. A non-nullable binding initializer additionally reports GS0296.
 
 ## Null-coalescing compound assignment diagnostics (GS0298–GS0299)
 

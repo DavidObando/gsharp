@@ -338,7 +338,22 @@ public sealed class StructSymbol : TypeSymbol
             // substitution-aware unimplemented-method computation so a class that
             // inherits a constructed generic base (e.g. `Derived : Base[int32]`)
             // and overrides every abstract member is correctly treated as concrete.
-            return !GetUnimplementedAbstractMethods().IsDefaultOrEmpty;
+            bool HasUnimplementedAbstractProperties()
+            {
+                var effectiveProperties = new Dictionary<string, PropertySymbol>();
+                for (var current = this; current != null; current = current.BaseClass)
+                {
+                    foreach (var property in current.Properties)
+                    {
+                        var key = property.Name + "|" + string.Join(",", property.Parameters.Select(p => p.Type.ToString()));
+                        effectiveProperties.TryAdd(key, property);
+                    }
+                }
+
+                return effectiveProperties.Values.Any(property => property.IsAbstract);
+            }
+
+            return !GetUnimplementedAbstractMethods().IsDefaultOrEmpty || HasUnimplementedAbstractProperties();
         }
     }
 

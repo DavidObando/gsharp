@@ -817,6 +817,19 @@ internal static class ObliviousNullabilityAnalyzer
                 tainted,
                 edges,
                 scalarTupleEdges);
+
+            // A parameter forwarded unchanged into another parameter inherits
+            // that downstream nullable contract. This lets a null-check at the
+            // end of a pass-through chain widen every upstream declaration even
+            // when the original null-producing caller lives in another project.
+            foreach (ISymbol source in ResolveSources(value, model))
+            {
+                if (source is IParameterSymbol { Type.TypeKind: TypeKind.Delegate }
+                    && parameter.Type.TypeKind == TypeKind.Delegate)
+                {
+                    edges.Add((Canonical(source), parameterSymbol));
+                }
+            }
         }
     }
 

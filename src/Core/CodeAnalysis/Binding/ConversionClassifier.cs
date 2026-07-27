@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
+using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
@@ -964,6 +965,7 @@ internal sealed class ConversionClassifier
 
                     if (argument.Type != targetType
                         && (Conversion.Classify(argument.Type, targetType).Exists || isExpressionTreeLiteralTarget || isUnresolvedMethodGroupTarget)
+                        && !IsNaturalStructuralDelegateTarget(argument.Type, targetType)
                         && NeedsBindClrParameterConversion(argument.Type, parameterType, substituted))
                     {
                         // Issue #506: the source-argument list may not align with
@@ -1003,6 +1005,7 @@ internal sealed class ConversionClassifier
                     }
                     else if (substituted != null
                         && argument.Type != targetType
+                        && !IsNaturalStructuralDelegateTarget(argument.Type, targetType)
                         && (!(argument is BoundFunctionLiteralExpression
                                 || OverloadResolution.IsUnresolvedMethodGroupArgument(argument))
                             || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(targetType, out _)))
@@ -1225,6 +1228,7 @@ internal sealed class ConversionClassifier
         // as the receiver's `TEntity` — rather than only ever substituting one
         // or the other depending on which happens to be tried first.
         var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openParamType, openDef, imported.TypeArguments, openMethod, symbolicMethodTypeArgs);
+        mapped = PreserveParameterTopLevelNullability(openParams[paramIndex], mapped);
         return mapped != null
             && mapped != TypeSymbol.Error
             && TypeSymbol.RequiresSymbolicProjection(mapped)
@@ -1353,6 +1357,7 @@ internal sealed class ConversionClassifier
             typeArguments: default,
             openMethodDefinition: openMethod,
             methodTypeArguments: methodTypeArgs);
+        mapped = PreserveParameterTopLevelNullability(openParams[paramIndex], mapped);
 
         return mapped != null
             && mapped != TypeSymbol.Error
@@ -2035,6 +2040,36 @@ internal sealed class ConversionClassifier
     }
 
     // ----- Private helpers (kept here because they are only used by methods in this class) -----
+    private static TypeSymbol PreserveParameterTopLevelNullability(ParameterInfo parameter, TypeSymbol mapped)
+    {
+        var flags = ClrNullability.ReadNullableFlags(parameter, parameter.Member);
+        return mapped != null
+            && mapped is not NullableTypeSymbol
+            && ClrTypeUtilities.IsDelegateType(parameter.ParameterType)
+            && !flags.IsDefaultOrEmpty
+            && flags[0] == NullableFlagsBuilder.Annotated
+                ? NullableTypeSymbol.Get(mapped)
+                : mapped;
+    }
+
+    private static bool IsNaturalStructuralDelegateTarget(TypeSymbol source, TypeSymbol target)
+    {
+        source = source is NullableTypeSymbol sourceNullable ? sourceNullable.UnderlyingType : source;
+        target = target is NullableTypeSymbol targetNullable ? targetNullable.UnderlyingType : target;
+        target = target is NullabilityAnnotatedTypeSymbol annotated ? annotated.BaseType : target;
+
+        if (!MemberLookup.TryCanonicalizeStructuralFunctionType(source, target, out _))
+        {
+            return false;
+        }
+
+        var fullName = target.ClrType?.IsGenericType == true
+            ? target.ClrType.GetGenericTypeDefinition().FullName
+            : target.ClrType?.FullName;
+        return fullName == "System.Action"
+            || fullName?.StartsWith("System.Action`", StringComparison.Ordinal) == true
+            || fullName?.StartsWith("System.Func`", StringComparison.Ordinal) == true;
+    }
 
     /// <summary>
     /// Issue #2148: returns the <see cref="TypeSymbol.ClrType"/> of the nearest

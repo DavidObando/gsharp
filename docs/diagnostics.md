@@ -488,6 +488,8 @@ See [ADR-0064](adr/0064-if-expression-and-block-expression.md). `if` used as a v
 | GS0276 | Error | An if-expression in value position must have an `else` branch so that all code paths produce a value. | `let x = if cond { 1 }` — the if has no `else`, so when `cond` is false there is no value to bind. Add a terminal `else { … }`, or use the statement form (`if cond { x = 1 }`). Applies to chained `else if` shapes too: every chain must end in a terminal `else`. |
 | GS0277 | Error | A block in an if-expression value position must end with a value-producing expression. | `let x = if cond { } else { 1 }` — the then-block is empty. Replace the empty block with `{ <expr> }`, or fall through with an explicit value (`{ 0 }`). Also fires when the block's last statement is a non-expression form (`for`, `while`, etc.) and there is no trailing expression to lift out. |
 
+Both codes apply verbatim to the ADR-0151 [`if let` expression](adr/0151-if-let-expressions.md) (`let x = if let v = maybe { v } else { fallback }`), as does GS0263 for non-unifying branch tails; a non-nullable binding initializer additionally reports GS0296.
+
 ## Top-level statement diagnostics (GS0285–GS0287)
 
 These complement the existing top-level statement diagnostics in the main table (GS0165 multi-package, GS0166 conflict-with-Main) and round out ADR-0066's contract. See [ADR-0066](adr/0066-top-level-statement-mechanics.md) for the full rule set.

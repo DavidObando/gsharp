@@ -209,6 +209,7 @@ internal sealed partial class ExpressionBinder
 
         if (targetType != null
             && (syntax is IfExpressionSyntax
+                || syntax is IfLetExpressionSyntax
                 || syntax is ConditionalExpressionSyntax
                 || syntax is SwitchExpressionSyntax))
         {

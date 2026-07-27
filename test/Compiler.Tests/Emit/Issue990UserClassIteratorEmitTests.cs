@@ -128,6 +128,43 @@ public class Issue990UserClassIteratorEmitTests
         Assert.Equal(1, GetIntField(assembly, "sum"));
     }
 
+    [Fact]
+    public void ReferenceOutVarInWhileCondition_RemainsAssignedAcrossYield()
+    {
+        var source = """
+            package T
+            open class Box { let value int32 init(value int32) { this.value = value } }
+            open class Cursor {
+                private var next int32 = 1
+                func TryNext(out index int32, out value Box?) bool {
+                    if next > 2 {
+                        index = -1
+                        value = nil
+                        return false
+                    }
+                    index = next
+                    value = Box(next)
+                    next++
+                    return true
+                }
+            }
+            public var observed = 0
+            func boxes() sequence[Box] {
+                let cursor = Cursor()
+                while cursor.TryNext(out var index, out var value) {
+                    yield value!!
+                    observed += value!!.value
+                }
+            }
+            public var total = 0
+            for box in boxes() { total += box.value }
+            """;
+
+        var assembly = CompileAndRun(source);
+        Assert.Equal(3, GetIntField(assembly, "total"));
+        Assert.Equal(3, GetIntField(assembly, "observed"));
+    }
+
     private static Assembly CompileAndRun(string source)
     {
         var outPath = CompileToFile(source, target: "exe");

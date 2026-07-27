@@ -219,82 +219,24 @@ internal sealed partial class StatementBinder
     /// erroneous), its underlying non-null type, and the resulting decl.
     /// The variable is declared in the binder's current scope; callers
     /// control that scope to scope the binding to a then-block or to the
-    /// enclosing block as appropriate.
+    /// enclosing block as appropriate. The nullable-stripping rules
+    /// themselves live in <see cref="IfLetBindingSupport"/>, shared with the
+    /// ADR-0151 <c>if let</c> EXPRESSION form.
     /// </summary>
     private (VariableSymbol Variable, TypeSymbol Underlying, BoundStatement Declaration) BindIfLetBindingClause(IfLetBindingClauseSyntax binding)
     {
-        TypeSymbol declaredUnderlying = null;
-        if (binding.TypeClause != null)
-        {
-            declaredUnderlying = bindTypeClause(binding.TypeClause);
+        var bound = IfLetBindingSupport.BindBindingClause(
+            binding,
+            Diagnostics,
+            conversions,
+            bindTypeClause,
+            syntax => bindExpression(syntax),
+            (identifier, isReadOnly, type) => bindLocalVariable(identifier, isReadOnly, type));
 
-            // The author wrote `if let s string = …`: they declared the
-            // underlying (non-null) type. A nullable spelling would be
-            // self-defeating — reject it through the standard
-            // initializer-type diagnostic by widening to the nullable.
-            if (declaredUnderlying is NullableTypeSymbol declaredNullable)
-            {
-                declaredUnderlying = declaredNullable.UnderlyingType;
-            }
-        }
-
-        var initializerExpr = bindExpression(binding.Initializer);
-        var initializerType = initializerExpr.Type;
-
-        if (initializerType == TypeSymbol.Error)
-        {
-            var errorVar = bindLocalVariable(binding.Identifier, isReadOnly: true, declaredUnderlying ?? TypeSymbol.Error);
-            return (null, null, new BoundVariableDeclaration(binding, errorVar, initializerExpr));
-        }
-
-        // ADR-0071: the right-hand side must be of nullable type so the
-        // binding has something to strip. A non-nullable RHS is GS0296.
-        TypeSymbol underlying;
-        TypeSymbol nullableStorageType;
-        if (initializerType is NullableTypeSymbol nullable)
-        {
-            underlying = nullable.UnderlyingType;
-            nullableStorageType = nullable;
-        }
-        else if (initializerType == TypeSymbol.Null)
-        {
-            // A bare `nil` literal — there's no narrowing to do; bind to
-            // the declared underlying type if available, otherwise error.
-            if (declaredUnderlying == null)
-            {
-                Diagnostics.ReportIfLetInitializerMustBeNullable(binding.Initializer.Location, binding.Identifier.Text, initializerType);
-                var errorVar = bindLocalVariable(binding.Identifier, isReadOnly: true, TypeSymbol.Error);
-                return (null, null, new BoundVariableDeclaration(binding, errorVar, initializerExpr));
-            }
-
-            underlying = declaredUnderlying;
-            nullableStorageType = NullableTypeSymbol.Get(declaredUnderlying);
-        }
-        else
-        {
-            Diagnostics.ReportIfLetInitializerMustBeNullable(binding.Initializer.Location, binding.Identifier.Text, initializerType);
-            var errorVar = bindLocalVariable(binding.Identifier, isReadOnly: true, declaredUnderlying ?? initializerType);
-            return (null, null, new BoundVariableDeclaration(binding, errorVar, initializerExpr));
-        }
-
-        // If the user gave an explicit type clause, the underlying type
-        // they wrote must match (or be a conversion-target of) the RHS's
-        // underlying. We route through the existing conversion classifier
-        // for an apples-to-apples diagnostic.
-        if (declaredUnderlying != null)
-        {
-            var conv = conversions.BindConversion(binding.Initializer.Location, initializerExpr, NullableTypeSymbol.Get(declaredUnderlying));
-            initializerExpr = conv;
-            underlying = declaredUnderlying;
-            nullableStorageType = NullableTypeSymbol.Get(declaredUnderlying);
-        }
-
-        // The synthesized binding is `let name <nullable> = expr`. The
-        // user observes it at the underlying type via the existing
-        // narrowing path (NarrowedType on each read site).
-        var variable = bindLocalVariable(binding.Identifier, isReadOnly: true, nullableStorageType);
-        var declaration = new BoundVariableDeclaration(binding, variable, initializerExpr);
-        return (variable, underlying, declaration);
+        var declaration = new BoundVariableDeclaration(binding, bound.Variable, bound.Initializer);
+        return bound.IsValid
+            ? (bound.Variable, bound.Underlying, declaration)
+            : (null, null, declaration);
     }
 
     /// <summary>
@@ -303,27 +245,7 @@ internal sealed partial class StatementBinder
     /// binding this is just <c>variable != nil</c>.
     /// </summary>
     private static BoundExpression BuildNilCheckChain(SyntaxNode syntax, List<(VariableSymbol Variable, TypeSymbol Underlying)> bindings)
-    {
-        BoundExpression result = null;
-        foreach (var (variable, _) in bindings)
-        {
-            var read = new BoundVariableExpression(syntax, variable);
-            var nilLiteral = new BoundLiteralExpression(syntax, null, TypeSymbol.Null);
-            var neqOp = BoundBinaryOperator.Bind(SyntaxKind.BangEqualsToken, variable.Type, TypeSymbol.Null);
-            BoundExpression test = new BoundBinaryExpression(syntax, read, neqOp, nilLiteral);
-            if (result == null)
-            {
-                result = test;
-            }
-            else
-            {
-                var andOp = BoundBinaryOperator.Bind(SyntaxKind.AmpersandAmpersandToken, TypeSymbol.Bool, TypeSymbol.Bool);
-                result = new BoundBinaryExpression(syntax, result, andOp, test);
-            }
-        }
-
-        return result;
-    }
+        => IfLetBindingSupport.BuildNilCheckChain(syntax, bindings.Select(b => b.Variable));
 
     /// <summary>
     /// ADR-0071 / issue #708: standalone fallback for binding

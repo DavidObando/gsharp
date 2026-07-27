@@ -969,6 +969,7 @@ internal sealed partial class StatementBinder
             }
             else if (type != null
                 && (syntax.Initializer is IfExpressionSyntax
+                    || syntax.Initializer is IfLetExpressionSyntax
                     || syntax.Initializer is ConditionalExpressionSyntax
                     || syntax.Initializer is SwitchExpressionSyntax
                     || IsNullCoalescingExpression(syntax.Initializer)))

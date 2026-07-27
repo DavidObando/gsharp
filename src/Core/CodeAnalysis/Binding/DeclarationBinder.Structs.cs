@@ -1482,6 +1482,16 @@ internal sealed partial class DeclarationBinder
                     isAutoProperty = (getAccessor == null || getAccessor.Body == null)
                                   && (writeAccessor == null || writeAccessor.Body == null)
                                   && propSyntax.Accessors.All(a => a.Body == null);
+
+                    // A bodyless accessor list on an open property declares an
+                    // abstract slot; it must not acquire an auto-property field.
+                    if (propSyntax.OpenModifier != null
+                        && propSyntax.OverrideModifier == null
+                        && hasGetter
+                        && !hasSetter)
+                    {
+                        isAutoProperty = false;
+                    }
                 }
 
                 // ADR-0118 / issue #944: there is no auto-indexer form — an

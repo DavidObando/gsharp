@@ -562,7 +562,8 @@ public sealed partial class CSharpToGSharpTranslator
         {
             GExpression translated = this.TranslateExpression(recv);
 
-            if (!this.IsWithinExpressionTreeLambda(recv)
+            if (!this.IsActivePatternBinding(recv)
+                && !this.IsWithinExpressionTreeLambda(recv)
                 && (this.ReceiverNeedsNullForgiveness(recv, isDereferenceReceiver: true)
                     || this.ReceiverIsNullableReferenceFieldOrProperty(recv)
                     || this.NullableReferenceValueMayBeNull(recv)))
@@ -783,13 +784,25 @@ public sealed partial class CSharpToGSharpTranslator
         {
             GExpression translated = this.TranslateExpression(value);
 
-            if (this.ReceiverNeedsNullForgiveness(value))
+            if (!this.IsActivePatternBinding(value)
+                && this.ReceiverNeedsNullForgiveness(value))
             {
                 return new NonNullAssertionExpression(translated);
             }
 
             (ITypeSymbol targetType, ISymbol targetSymbol) = this.FindContextualValueTarget(value);
             return this.ForgiveNullableReferenceValue(value, translated, targetType, targetSymbol);
+        }
+
+        private bool IsActivePatternBinding(ExpressionSyntax expression)
+        {
+            while (expression is ParenthesizedExpressionSyntax parenthesized)
+            {
+                expression = parenthesized.Expression;
+            }
+
+            return this.context.GetSymbolInfo(expression).Symbol is { } symbol
+                && this.state.PatternBindings.ContainsKey(symbol);
         }
 
         private GExpression ForgiveNullableReferenceValue(
@@ -1847,6 +1860,7 @@ public sealed partial class CSharpToGSharpTranslator
         private bool IsUnguardedForwardOfTaintedValueAsRuntimeLambdaResult(ExpressionSyntax use)
         {
             if (IsNullOrSuppressedNull(use)
+                || this.IsNullableInitializer(use)
                 || !this.IsObliviousCompilation()
                 || this.IsWithinExpressionTreeLambda(use)
                 || this.FindResultLambda(use) is not { } lambda

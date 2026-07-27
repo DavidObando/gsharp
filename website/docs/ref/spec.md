@@ -926,6 +926,7 @@ BlockExpression = "{" Statement* ( Expression )? "}" .
 - The result type is the common type of all branch tails, chosen by the same `ComputeConditionalCommonType` helper that  uses for the ternary (identity, one-way implicit conversion, numeric widening tie-break, nil/null compatibility). Branch tails are implicitly converted to that result type. Mismatched branch types report `GS0263` (shared with the ternary).
 - Only one arm is evaluated at runtime; the other arms are not executed. Lowers to the same `BoundConditionalExpression` that the ternary uses, so no new IL emit paths are involved.
 - A throw-expression (`throw e`) may be used as a ternary branch (`cond ? a : throw e`) or `??` right operand; its bottom (`never`) type takes the sibling operand's type. Inside an *if-expression* or *switch-expression* tail, the trailing position is a block-value/arm context: to exit on the error path you can still place a `throw` **statement** in the block prefix and supply a tail expression of the chosen result type (unreachable at runtime but satisfying the binder), which matches the switch-expression treatment.
+- The nullable-binding variant `if let name = expr [, let n2 = e2]* [&& guard] { value } else { value }` is available in the same value positions and follows all of the rules above; see [`if let` expressions](#if-let-expressions).
 
 ```gsharp
 let label = if x > 0 { "positive" } else if x < 0 { "negative" } else { "zero" }
@@ -956,7 +957,7 @@ PrefixExpression  = ( "+" | "-" | "!" | "^" | "*" | "&" | "<-" | "await" | "++" 
 PostfixExpression = PrimaryExpression { "!!" } { ( "." | "?." ) NameOrCall | ( "[" | "?[" ) IndexArgument "]" } ( "++" | "--" )? ( "with" "{" FieldEqualsList? "}" )? .
 (* Prefix `++x`/`--x` and postfix `x++`/`x--` are value-producing expressions. Prefix yields the value AFTER mutation; postfix yields the value BEFORE mutation. The operand must be an assignable variable, field, or indexed element; otherwise GS0402 is reported. They are also valid as standalone statements (`IncDecStmt`).. *)
 IndexArgument     = Expression | Expression? ".." Expression? .  (* the range form slices; see "Range and slice expressions" *)
-PrimaryExpression = Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | LambdaExpression | SwitchExpr | IfExpression | "(" Expression ")" | TupleLiteral | MakeChannel | TypeOf | NameOf .
+PrimaryExpression = Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | LambdaExpression | SwitchExpr | IfExpression | IfLetExpression | "(" Expression ")" | TupleLiteral | MakeChannel | TypeOf | NameOf .
 (* Postfix chains apply to every PrimaryExpression except a bare numeric Literal: `42.Member` is not accepted; use `(42).Member`.. *)
 Literal           = Number | String | InterpolatedString | "true" | "false" | "nil" | char .
 InterpolatedString = '"' { InterpolationText | "$$" | "$" identifier | InterpolationHole } '"' .
@@ -1015,6 +1016,44 @@ only when every clause is non-nil. The else-block of `guard let` MUST exit
 the enclosing scope (`return`, `throw`, `break`, `continue`, or a block whose
 last statement does); otherwise the binder reports `GS0297`. `guard` is a
 reserved keyword.
+
+### `if let` expressions
+
+`if let` is also available as a value-producing **expression**, combining the
+binding header above with the branch rules of the if-expression:
+
+```ebnf
+IfLetExpression = "if" LetBindingList ( "&&" Expression )? BlockExpression
+                  "else" ( IfExpression | IfLetExpression | BlockExpression ) .
+```
+
+```gsharp
+let first = if let copyright = GetCopyrights() && copyright.Length > 0 {
+    copyright[0]
+} else {
+    default(string?)
+}
+```
+
+- The `else` branch is **mandatory** in value position (`GS0276`), each branch
+  block must end in a value-producing expression (`GS0277`), and the branch
+  tails must have a common result type (`GS0263`). A contextual target type
+  (typed `let`, `return`, assignment, argument) is threaded into both branches.
+- Bindings are evaluated left to right and short-circuit on the first `nil`; a
+  later initializer may reference an earlier binding at its narrowed non-null
+  type (`if let a = A(), let b = B(a) { … }`).
+- A single top-level `&&` **after the final binding** introduces an optional
+  `bool` guard, evaluated only once every binding matched and with all bound
+  names in scope. Because `&&` is also an ordinary operator, a logical-and that
+  belongs to an *initializer* must be parenthesized: `if let ok = (a && b) && ok
+  { … } else { … }`. A `??` tail needs no parentheses. The statement form has no
+  guard clause and keeps parsing initializers with the full expression grammar.
+- The bound names are visible in later initializers, in the guard, and in the
+  then-block only — never in the `else` branch.
+- The `else` branch may chain into another `if`/`if let` expression
+  (`else if let name = expr { … } else { … }`).
+- Statement-form `if let` and `guard let` are unaffected: `if let` only parses
+  as an expression in a value position.
 
 ### Null-coalescing compound assignment
 
@@ -1651,7 +1690,7 @@ PrimaryExpression ::= Literal | identifier
                     | CollectionInitializer
                     | StructLiteral | GenericStructLiteral | ArrayLiteral | MapLiteral
                     | FunctionLiteral | LambdaExpression
-                    | SwitchExpr | IfExpression
+                    | SwitchExpr | IfExpression | IfLetExpression
                     | '(' Expression ')' | TupleLiteral
                     | MakeChannel | TypeOf | NameOf | DefaultExpression | BaseInterfaceCall | CheckedExpression
                     | ThrowExpr                                          (* throw-expression,  *)
@@ -1690,6 +1729,8 @@ DefaultExpression ::= 'default' ('(' TypeClause ')')?                     (*  *)
 BaseInterfaceCall ::= 'base' '[' TypeClause ']' '.' identifier TypeArgList? '(' Arguments? ')'   (* explicit-base interface call,  *)
 CheckedExpression ::= ('checked' | 'unchecked') '(' Expression ')'         (* : names the overflow-checking context for evaluating the argument expression *)
 IfExpression      ::= 'if' Expression Block ('else' (IfExpression | Block))?   (* if-as-expression,  *)
+IfLetExpression   ::= 'if' LetBindingList ('&&' Expression)? Block
+                      'else' (IfExpression | IfLetExpression | Block)         (* if-let-as-expression, ADR-0151 *)
 TupleLiteral      ::= '(' Expression ',' Expression (',' Expression)* ')'
 Arguments         ::= Argument (',' Argument)*
 Argument          ::= identifier (':' | '=') (RefArgument | Expression)   (* named argument; '=' separator is deprecated, GS0315 *)

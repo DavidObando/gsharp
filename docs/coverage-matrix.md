@@ -124,6 +124,7 @@ IdentifierToken
 IfExpression
 IfKeyword
 IfLetBindingClause
+IfLetExpression
 IfLetStatement
 IfStatement
 ImportDeclaration
