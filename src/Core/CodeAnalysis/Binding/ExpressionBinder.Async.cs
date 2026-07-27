@@ -431,10 +431,12 @@ internal sealed partial class ExpressionBinder
                 receiver,
                 out var importedType,
                 out var sourceType,
+                out var interfaceType,
                 out var enumType)
             && RightPartLooksLikeStaticMember(
                 importedType,
                 sourceType,
+                interfaceType,
                 enumType,
                 rightPart);
     }
