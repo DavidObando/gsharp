@@ -347,6 +347,14 @@ internal sealed partial class ExpressionBinder
                         narrowed => new BoundVariableExpression(null, variable, narrowed));
                 }
             }
+            else if (TryBindInheritedClrInstanceMemberByBareName(name, out var inheritedClrHead))
+            {
+                // Issue #2809: an unqualified accessor chain whose head is an
+                // inherited CLR property/field (`Clients.All()`) must bind as
+                // `this.Clients.All()` before the fallback reclassifies the head
+                // as a type/import qualifier.
+                return BindAccessorStep(inheritedClrHead, null, rightPart);
+            }
             else if (scope.TryLookupImport(name, out var matchedImport)
                 && TryBindImportAccessor(matchedImport, ref rightPart, out var typeFromImport))
             {
