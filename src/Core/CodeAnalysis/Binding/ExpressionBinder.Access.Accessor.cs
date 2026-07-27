@@ -1856,8 +1856,8 @@ internal sealed partial class ExpressionBinder
             type,
             headName,
             MemberQuery.InheritedStatic(MemberKinds.Field | MemberKinds.Property)) != null
-            || (type is StructSymbol structType
-                && ClrTypeExposesStaticMember(TypeMemberModel.GetNearestImportedBase(structType)?.ClrType, headName));
+            || (type is StructSymbol nonCallStructType
+                && ClrTypeExposesStaticMember(TypeMemberModel.GetNearestImportedBase(nonCallStructType)?.ClrType, headName));
     }
 
     private BoundExpression BindEnumAccessorStep(EnumSymbol enumSymbol, ExpressionSyntax rightPart)
