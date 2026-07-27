@@ -99,9 +99,17 @@ original ADR and are now pinned down:
   reuses the existing `IfExpressionSyntax`/`BlockExpressionSyntax` plumbing
   that was already wired through the binder, so smart-cast narrowing of
   variables tested in the condition still applies inside both branches.
-  `if let` and `guard let` remain *statement* forms (ADR-0071); the
-  expression form does not subsume them and they continue to parse via
-  `ParseIfLetStatement` / `ParseGuardLetStatement`.
+  `if let` and `guard let` remain *statement* forms (ADR-0071) when they lead
+  a statement, and continue to parse via `ParseIfLetStatement` /
+  `ParseGuardLetStatement`. **Addendum (ADR-0151):** `if let` additionally has
+  a value-producing EXPRESSION form,
+  `if let a = e [, let b = e2]* [&& guard] { … } else { … }`, parsed as a
+  distinct `IfLetExpressionSyntax` in value positions only. It reuses this
+  ADR's block-tail, terminal-`else`, common-type, target-typing, and
+  GS0276/GS0277/GS0263 rules verbatim, and lowers into the very same
+  `BoundConditionalExpression` / `BoundBlockExpression` pair — so the
+  expression form does not subsume `guard let`, and this ADR's statement/
+  expression split is unchanged for plain `if`.
 - **Block-as-expression rules.** A `{ stmt*; tailExpr }` block in value
   position requires a non-empty tail (GS0277). A block with only statements
   is still legal in *statement* position via `BlockStatementSyntax`; only the

@@ -777,20 +777,25 @@ public partial class Parser
             suppressTrailingObjectInitializer--;
         }
 
-        var thenBlock = ParseBlockExpression();
+        var thenBlock = ParseBlockExpression(valueRequired: true);
 
         SyntaxToken elseKeyword = null;
         ExpressionSyntax elseExpression = null;
         if (Current.Kind == SyntaxKind.ElseKeyword)
         {
             elseKeyword = NextToken();
-            if (Current.Kind == SyntaxKind.IfKeyword)
+            if (IsIfLetStart())
+            {
+                // ADR-0151: `else if let …` chains into the binding form.
+                elseExpression = ParseIfLetExpression();
+            }
+            else if (Current.Kind == SyntaxKind.IfKeyword)
             {
                 elseExpression = ParseIfExpression();
             }
             else
             {
-                elseExpression = ParseBlockExpression();
+                elseExpression = ParseBlockExpression(valueRequired: true);
             }
         }
 
@@ -800,7 +805,12 @@ public partial class Parser
     // Issue #669: parse a block expression `{ stmt*; expr? }`.
     // The last item in the block, if it is an expression statement, becomes
     // the trailing value-producing expression of the block.
-    private BlockExpressionSyntax ParseBlockExpression()
+    // ADR-0151: `valueRequired` is true for the branch blocks of an
+    // if-/if-let-expression, where a trailing VALUE is mandatory (GS0277), and
+    // false for an arrow-lambda body block, where a missing tail simply makes
+    // the lambda void (ADR-0128). Only the former promotes a trailing `if let`
+    // to the value-producing binding form; see ParseBlockExpressionItem.
+    private BlockExpressionSyntax ParseBlockExpression(bool valueRequired = false)
     {
         var statements = ImmutableArray.CreateBuilder<StatementSyntax>();
         ExpressionSyntax trailingExpression = null;
@@ -812,7 +822,7 @@ public partial class Parser
         {
             var startToken = Current;
 
-            var statement = ParseBlockExpressionItem();
+            var statement = ParseBlockExpressionItem(valueRequired);
             statements.Add(statement);
 
             if (Current == startToken)
@@ -837,20 +847,30 @@ public partial class Parser
     // Issue #669: parse a single item inside a block expression. This is
     // similar to ParseStatement() but recognizes `if` as potentially
     // an if-expression (when followed by the block-expression shape).
-    private StatementSyntax ParseBlockExpressionItem()
+    private StatementSyntax ParseBlockExpressionItem(bool valueRequired = false)
     {
         // If the current token is `if` and this could be an if-expression
         // (value-producing), parse it as an expression statement wrapping
         // an IfExpressionSyntax. This handles nested `if` in block position.
-        // `if let` (ADR-0071) is always a statement, never a value-producing
-        // if-expression, even when it ends in a plain `else { … }` — without
-        // this check `LooksLikeIfExpression` would misparse `if let x = y {
-        // … } else { … }` as an if-expression, since it only inspects the
-        // shape of the trailing else, not the `let` after `if`.
-        if (Current.Kind == SyntaxKind.IfKeyword && Peek(1).Kind != SyntaxKind.LetKeyword && LooksLikeIfExpression())
+        //
+        // ADR-0151: a trailing `if let … else …` is likewise promoted to the
+        // value-producing binding form — but ONLY inside a block whose tail
+        // must be a value (`valueRequired`, i.e. an if-/if-let-expression
+        // branch), where the statement form is already rejected with GS0277.
+        // An arrow-lambda body block keeps parsing `if let` as the ADR-0071
+        // STATEMENT so an existing void body that ends in
+        // `if let x = y { return … } else { return … }` is unchanged.
+        if (Current.Kind == SyntaxKind.IfKeyword && LooksLikeIfExpression())
         {
-            var ifExpr = ParseIfExpression();
-            return new ExpressionStatementSyntax(syntaxTree, ifExpr);
+            if (Peek(1).Kind != SyntaxKind.LetKeyword)
+            {
+                return new ExpressionStatementSyntax(syntaxTree, ParseIfExpression());
+            }
+
+            if (valueRequired)
+            {
+                return new ExpressionStatementSyntax(syntaxTree, ParseIfLetExpression());
+            }
         }
 
         return ParseStatement();

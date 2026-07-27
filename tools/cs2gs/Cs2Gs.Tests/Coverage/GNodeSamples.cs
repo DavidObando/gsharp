@@ -107,6 +107,8 @@ public static class GNodeSamples
             [typeof(InterpolationPart)] = InterpolatedStringSample,
             [typeof(InterpolatedStringExpression)] = InterpolatedStringSample,
             [typeof(IfExpression)] = () => Expr(new IfExpression(Id("c"), Int("1"), Int("2"))),
+            [typeof(IfLetBinding)] = IfLetExpressionSample,
+            [typeof(IfLetExpression)] = IfLetExpressionSample,
             [typeof(OutArgumentExpression)] = () => Stmts(new ExpressionStatement(new InvocationExpression(
                 Id("M"),
                 List<GExpression>(new OutArgumentExpression("out var", "x"))))),
@@ -270,6 +272,14 @@ public static class GNodeSamples
         Expr(new InterpolatedStringExpression(List(
             InterpolationPart.Literal("hi "),
             InterpolationPart.Hole(Id("who")))));
+
+    // ADR-0151: `let x = if let v = maybe && v.Length > 0 { v } else { "" }`.
+    private static CompilationUnit IfLetExpressionSample() =>
+        Expr(new IfLetExpression(
+            List(new IfLetBinding("v", Id("maybe"))),
+            new BinaryExpression(new MemberAccessExpression(Id("v"), "Length"), ">", Int("0")),
+            Id("v"),
+            LiteralExpression.String(string.Empty)));
 
     private static CompilationUnit ConditionalAccessSample() =>
         Expr(new ConditionalAccessExpression(

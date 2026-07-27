@@ -29,6 +29,14 @@ public static class GSharpPrinter
     // SyntaxFacts.GetUnaryOperatorPrecedence.
     private const int UnaryPrecedence = 6;
 
+    // ADR-0151: the minimum precedence an `if let` EXPRESSION binding
+    // initializer may sit at without parentheses. gsc parses such an
+    // initializer only down to the logical-and tier — the first top-level
+    // `&&` (or `||`) terminates it and starts the optional guard — so an
+    // initializer whose own top-level operator is `&&` (2), `||` (1), or
+    // `??` (0) must be wrapped. Comparison (3) and above are unambiguous.
+    private const int IfLetInitializerPrecedence = 3;
+
     /// <summary>
     /// Prints a compilation unit to canonical G# source text.
     /// </summary>
@@ -595,6 +603,9 @@ public static class GSharpPrinter
             case IfExpression ifExpression:
                 return $"if {RenderExpression(ifExpression.Condition, indent)} {{ {RenderBranchValue(ifExpression.ThenExpression, indent)} }} else {{ {RenderBranchValue(ifExpression.ElseExpression, indent)} }}";
 
+            case IfLetExpression ifLetExpression:
+                return RenderIfLetExpression(ifLetExpression, indent);
+
             case ThrowExpression throwExpression:
                 // G# supports throw-as-expression natively: render the bare
                 // `throw <operand>` form, valid in coalesce-RHS, switch-arm,
@@ -627,6 +638,41 @@ public static class GSharpPrinter
             default:
                 throw new ArgumentException($"Unsupported expression: {expression?.GetType().Name}");
         }
+    }
+
+    /// <summary>
+    /// ADR-0151: renders the value-position <c>if let</c> form
+    /// <c>if let a = e [, let b = e2]* [&amp;&amp; guard] { then } else { else }</c>.
+    /// </summary>
+    /// <remarks>
+    /// Each binding initializer is rendered at <see cref="IfLetInitializerPrecedence"/>
+    /// so a top-level <c>&amp;&amp;</c> / <c>||</c> / <c>??</c> is parenthesized:
+    /// gsc parses an expression-form initializer only up to the logical-and
+    /// tier, and the first top-level <c>&amp;&amp;</c> starts the guard. The
+    /// guard itself needs no wrapping — gsc parses everything after the
+    /// delimiter with the full expression grammar, so a flat reprint
+    /// reproduces the original tree.
+    /// </remarks>
+    private static string RenderIfLetExpression(IfLetExpression ifLet, int indent)
+    {
+        var bindings = string.Join(
+            ", ",
+            ifLet.Bindings.Select(binding =>
+            {
+                var type = binding.DeclaredType == null
+                    ? string.Empty
+                    : $" {RenderType(binding.DeclaredType)}";
+                var initializer = RenderExpression(binding.Initializer, indent, IfLetInitializerPrecedence);
+                return $"let {binding.Name}{type} = {initializer}";
+            }));
+
+        var guard = ifLet.Guard == null
+            ? string.Empty
+            : $" && {RenderExpression(ifLet.Guard, indent)}";
+
+        return $"if {bindings}{guard} " +
+            $"{{ {RenderBranchValue(ifLet.ThenExpression, indent)} }} " +
+            $"else {{ {RenderBranchValue(ifLet.ElseExpression, indent)} }}";
     }
 
     private static string RenderBranchValue(GExpression expression, int indent)

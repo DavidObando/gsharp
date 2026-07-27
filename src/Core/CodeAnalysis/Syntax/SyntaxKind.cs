@@ -355,6 +355,13 @@ public enum SyntaxKind
     IfExpression,
     BlockExpression,
 
+    // ADR-0151: `if let` as a value-producing expression.
+    // `if let a = e [, let b = e2]* [&& guard] { a } else { b }` → value.
+    // Reuses `IfLetBindingClause` for the binding list; the binder lowers it
+    // to the existing `BoundBlockExpression`/`BoundConditionalExpression`
+    // pair, so no new bound-node kind is introduced.
+    IfLetExpression,
+
     // ADR-0072 / issue #709: null-coalescing compound assignment
     // `a ??= b` — assigns `b` to `a` only when `a` is nil. Statement-level
     // only in G#; the binder validates LHS is nullable (GS0298) and

@@ -867,6 +867,14 @@ internal sealed partial class ExpressionBinder
             return BindIfExpression(nestedIf, targetType: null, canBeVoid: canBeVoid);
         }
 
+        // ADR-0151: `… else if let a = e { … } else { … }` chains a plain
+        // if-expression into the binding form (and vice versa, via
+        // BindIfLetElseBranch), so both else-branch binders accept both kinds.
+        if (elseSyntax is IfLetExpressionSyntax nestedIfLet)
+        {
+            return BindIfLetExpression(nestedIfLet, targetType: null, canBeVoid: canBeVoid);
+        }
+
         if (elseSyntax is BlockExpressionSyntax block)
         {
             return BindBlockExpressionValue(block, canBeVoid);

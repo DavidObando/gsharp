@@ -377,6 +377,104 @@ func (self T?) OrZero[T struct](defaultValue T) T {
     }
 
     [Fact]
+    public void ImportedGenericMethodNullableDelegateParameter_AcceptsNullableDelegateVariable()
+    {
+        var outputDir = Path.Combine(AppContext.BaseDirectory, "Issue834ImportedGenericMethod");
+        Directory.CreateDirectory(outputDir);
+        var modelPath = Path.Combine(outputDir, "Issue834.GenericMethod.Model.dll");
+        var libraryPath = Path.Combine(outputDir, "Issue834.GenericMethod.Library.dll");
+
+        var model = new Compilation(
+            SyntaxTree.Parse(SourceText.From(
+                """
+                package Issue834.GenericModel
+
+                class Book {
+                }
+
+                class Conversion {
+                }
+
+                interface ICancellation {
+                }
+                """)))
+        {
+            IsLibrary = true,
+        };
+
+        using (var output = File.Create(modelPath))
+        {
+            var result = model.Emit(output, pdbStream: null, refStream: null, assemblyName: "Issue834.GenericMethod.Model");
+            Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
+        }
+
+        using var libraryResolver = ReferenceResolver.WithReferences(new[] { modelPath });
+        libraryResolver.CurrentAssemblyName = "Issue834.GenericMethod.Library";
+        var library = new Compilation(
+            libraryResolver,
+            SyntaxTree.Parse(SourceText.From(
+                """
+                package Issue834.GenericLibrary
+                import Issue834.GenericModel
+
+                class Runner[T ICancellation] {
+                    init() {
+                    }
+
+                    func Run(callback ((Book, T, (Conversion) -> void) -> void)?) {
+                    }
+                }
+                """)))
+        {
+            IsLibrary = true,
+        };
+
+        using (var output = File.Create(libraryPath))
+        {
+            var result = library.Emit(output, pdbStream: null, refStream: null, assemblyName: "Issue834.GenericMethod.Library");
+            Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
+        }
+
+        var runtimeDir = Path.GetDirectoryName(typeof(object).Assembly.Location)!;
+        var metadataResolver = new System.Reflection.PathAssemblyResolver(
+            Directory.GetFiles(runtimeDir, "*.dll").Concat(new[] { modelPath, libraryPath }));
+        using (var metadataContext = new MetadataLoadContext(metadataResolver, "System.Private.CoreLib"))
+        {
+            var assembly = metadataContext.LoadFromAssemblyPath(libraryPath);
+            var parameter = assembly.GetType("Issue834.GenericLibrary.Runner`1")!
+                .GetMethod("Run")!
+                .GetParameters()
+                .Single();
+            Assert.IsType<NullableTypeSymbol>(ClrNullability.GetParameterTypeSymbol(parameter));
+        }
+
+        using var resolver = ReferenceResolver.WithReferences(new[] { modelPath, libraryPath });
+        resolver.CurrentAssemblyName = "Issue834.GenericMethod.Consumer";
+        var consumer = new Compilation(
+            resolver,
+            SyntaxTree.Parse(SourceText.From(
+                """
+                package Consumer
+                import Issue834.GenericLibrary
+                import Issue834.GenericModel
+
+                class SimpleCancellation : ICancellation {
+                }
+
+                var callback ((Book, SimpleCancellation, (Conversion) -> void) -> void)? = nil
+                Runner[SimpleCancellation]().Run(callback)
+                """)));
+
+        using var consumerOutput = new MemoryStream();
+        var consumerResult = consumer.Emit(
+            consumerOutput,
+            pdbStream: null,
+            refStream: null,
+            assemblyName: "Issue834.GenericMethod.Consumer");
+        Assert.True(consumerResult.Success, string.Join(Environment.NewLine, consumerResult.Diagnostics));
+    }
+
+    [Fact]
     public void ClassUserAttribute_IsEmittedOnType()
     {
         var asm = CompileToAssembly(

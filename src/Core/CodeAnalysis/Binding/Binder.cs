@@ -318,7 +318,8 @@ public sealed class Binder
             reportObsoleteUseIfApplicable: ReportObsoleteUseIfApplicable,
             isAsyncIteratorReturnType: IsAsyncIteratorReturnType,
             getCurrentFunction: () => this.function,
-            bindStatementList: (syntax, trailing) => statements.BindStatementList(syntax, trailingStatement: trailing));
+            bindStatementList: (syntax, trailing) => statements.BindStatementList(syntax, trailingStatement: trailing),
+            bindLocalVariable: (identifier, isReadOnly, type) => declarations.BindVariableDeclaration(identifier, isReadOnly, type));
 
         // statements/declarations still reference this.expressions through
         // the callbacks above; expressions is wired last so its constructor

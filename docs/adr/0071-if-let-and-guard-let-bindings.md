@@ -262,3 +262,40 @@ No `BoundNodeKind` is added by this ADR, so the bound-tree machinery
 `SpillSequenceSpiller`, `EmitExpression`, and the
 `BoundNodeKindExhaustivenessTests` allowlists) requires no updates beyond
 the new `SyntaxKind` entries.
+
+## Addendum (ADR-0151): statement form vs. expression form
+
+ADR-0151 adds a value-producing `if let` **expression**. The two surfaces share
+the binding grammar and the binding semantics but not the shape around them:
+
+| | Statement form (this ADR) | Expression form (ADR-0151) |
+| --- | --- | --- |
+| Syntax node | `IfLetStatementSyntax` | `IfLetExpressionSyntax` |
+| Parsed when | `if let` leads a *statement* | `if let` appears in a *value* position |
+| `else` | Optional | **Required** (GS0276) |
+| Branch bodies | Statements | Blocks whose tail is a value (GS0277) |
+| Guard clause | None | Optional top-level `&& <bool>` after the last binding |
+| Initializer grammar | Full expression grammar (a top-level `&&` belongs to the initializer) | Stops at a top-level `&&` (or a top-level logical-or), which starts the guard; parenthesize to keep it in the initializer |
+| Result | No value | Common type of the branch tails (GS0263) |
+| Lowering | `BoundBlockStatement` + `BoundIfStatement` (this ADR) | `BoundBlockExpression` + `BoundConditionalExpression` (ADR-0064 nodes) |
+
+Both forms:
+
+- require every clause initializer to be of nullable type (**GS0296**);
+- accept the optional explicit *underlying* type clause;
+- scope the bound names to the then-region only — never to the `else` branch;
+- observe each binding at its non-null underlying type through the ADR-0069
+  narrowing path.
+
+The nullable-stripping rules themselves live in a single shared helper
+(`IfLetBindingSupport`) invoked by both binders, and the binding-list grammar
+lives in a single parser partial (`Parser.IfLet.cs`) used by `if let`,
+`guard let`, and the expression form, so the two surfaces cannot drift.
+
+One deliberate difference: the expression form evaluates its bindings with a
+true left-to-right short circuit (a later initializer is only evaluated when
+every earlier one matched, and may reference the earlier bindings at their
+narrowed types), because in value position the difference is observable through
+side effects. The statement form's existing lowering, which sequences the
+binding declarations before the nil test, is preserved as-is for source
+compatibility.

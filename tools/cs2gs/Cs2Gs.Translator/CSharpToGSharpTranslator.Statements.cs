@@ -1000,10 +1000,32 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateConditionalExpression(
             ConditionalExpressionSyntax conditional)
         {
+            // ADR-0151: `receiver is { } name [&& predicate] ? a : b` has a
+            // canonical G# form — the value-position `if let` — which needs
+            // neither a single-evaluation spill temp nor a `!!` at each binder
+            // reference. Attempt it before the general lowering; the helper is
+            // conservative and leaves everything untranslated when it bails.
+            if (this.TryTranslateIfLetConditional(conditional, out GExpression ifLet))
+            {
+                return ifLet;
+            }
+
             GExpression condition = this.TranslateExpression(conditional.Condition);
             GExpression whenTrue = this.TranslateValueWithNullForgiveness(conditional.WhenTrue);
             GExpression whenFalse = this.TranslateValueWithNullForgiveness(conditional.WhenFalse);
+            (whenTrue, whenFalse) = this.CoerceConditionalArms(conditional, whenTrue, whenFalse);
+            return new IfExpression(condition, whenTrue, whenFalse);
+        }
 
+        // Shared by the general `IfExpression` lowering above and the ADR-0151
+        // `if let` rewrite: aligns the two translated arms with C#'s computed
+        // conditional result type (numeric widening that gsc will not infer on
+        // its own, and a bare `null` arm re-spelled as `default(T?)`).
+        private (GExpression WhenTrue, GExpression WhenFalse) CoerceConditionalArms(
+            ConditionalExpressionSyntax conditional,
+            GExpression whenTrue,
+            GExpression whenFalse)
+        {
             TypeInfo conditionalTypeInfo = this.context.GetTypeInfo(conditional);
             ITypeSymbol resultType = conditionalTypeInfo.Type ?? conditionalTypeInfo.ConvertedType;
             ITypeSymbol trueType = this.context.GetTypeInfo(conditional.WhenTrue).Type;
@@ -1057,7 +1079,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            return new IfExpression(condition, whenTrue, whenFalse);
+            return (whenTrue, whenFalse);
         }
 
         // Unwraps `System.Nullable<T>` to its underlying `T`; other types pass

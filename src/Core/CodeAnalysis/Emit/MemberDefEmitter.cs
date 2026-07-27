@@ -291,6 +291,11 @@ internal sealed class MemberDefEmitter
     /// </summary>
     private MethodDefinitionHandle EmitPropertyGetter(StructSymbol structSym, PropertySymbol prop)
     {
+        if (prop.IsAbstract && prop.GetterBodySyntax == null)
+        {
+            return this.EmitAbstractClassPropertyAccessor(prop, isGetter: true);
+        }
+
         var (computed, bodyOffset) = this.EmitPropertyAccessorBody(structSym, prop, isStatic: false, isGetter: true);
         if (computed.HasValue)
         {
@@ -365,6 +370,11 @@ internal sealed class MemberDefEmitter
     /// </summary>
     private MethodDefinitionHandle EmitPropertySetter(StructSymbol structSym, PropertySymbol prop)
     {
+        if (prop.IsAbstract && prop.SetterBodySyntax == null)
+        {
+            return this.EmitAbstractClassPropertyAccessor(prop, isGetter: false);
+        }
+
         var (computed, bodyOffset) = this.EmitPropertyAccessorBody(structSym, prop, isStatic: false, isGetter: false);
         if (computed.HasValue)
         {
@@ -442,6 +452,51 @@ internal sealed class MemberDefEmitter
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: firstParamHandle);
+    }
+
+    private MethodDefinitionHandle EmitAbstractClassPropertyAccessor(PropertySymbol prop, bool isGetter)
+    {
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                prop.Parameters.Length + (isGetter ? 0 : 1),
+                r =>
+                {
+                    if (isGetter)
+                    {
+                        this.encodeTypeSymbol(r.Type(), prop.Type);
+                    }
+                    else
+                    {
+                        r.Void();
+                    }
+                },
+                ps =>
+                {
+                    foreach (var indexParam in prop.Parameters)
+                    {
+                        this.encodeTypeSymbol(ps.AddParameter().Type(), indexParam.Type);
+                    }
+
+                    if (!isGetter)
+                    {
+                        this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type);
+                    }
+                });
+
+        var accessibility = isGetter ? prop.GetterAccessibility : prop.SetterAccessibility;
+        return this.emitCtx.Metadata.AddMethodDefinition(
+            attributes: AccessibilityMap.ToMethodVisibility(accessibility)
+                | MethodAttributes.SpecialName
+                | MethodAttributes.HideBySig
+                | MethodAttributes.Virtual
+                | MethodAttributes.Abstract
+                | MethodAttributes.NewSlot,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.emitCtx.Metadata.GetOrAddString($"{(isGetter ? "get" : "set")}_{prop.Name}"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
+            bodyOffset: -1,
+            parameterList: this.nextParameterHandle());
     }
 
     /// <summary>

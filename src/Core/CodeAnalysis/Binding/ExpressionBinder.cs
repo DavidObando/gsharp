@@ -71,6 +71,12 @@ internal sealed partial class ExpressionBinder
     private readonly Func<FunctionSymbol> getCurrentFunction;
     private readonly Func<ImmutableArray<StatementSyntax>, Func<BoundStatement>, ImmutableArray<BoundStatement>> bindStatementList;
 
+    // ADR-0151: declares the local a value-position `if let` binding
+    // introduces, routed through the same
+    // `DeclarationBinder.BindVariableDeclaration` the statement forms use so
+    // duplicate-name reporting and top-level/global variable shaping match.
+    private readonly Func<SyntaxToken, bool, TypeSymbol, VariableSymbol> bindLocalVariable;
+
     // Issue #1502 follow-up: when true, a same-compilation enum (or `Enum?`)
     // appearing inside a delegate shape is erased to `object` (the covariant
     // reference ride-through) instead of its default scalar ride-through
@@ -96,7 +102,8 @@ internal sealed partial class ExpressionBinder
         Action<TextLocation, Symbol, string> reportObsoleteUseIfApplicable,
         Func<TypeSymbol, bool> isAsyncIteratorReturnType,
         Func<FunctionSymbol> getCurrentFunction,
-        Func<ImmutableArray<StatementSyntax>, Func<BoundStatement>, ImmutableArray<BoundStatement>> bindStatementList = null)
+        Func<ImmutableArray<StatementSyntax>, Func<BoundStatement>, ImmutableArray<BoundStatement>> bindStatementList = null,
+        Func<SyntaxToken, bool, TypeSymbol, VariableSymbol> bindLocalVariable = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
         this.memberLookup = memberLookup ?? throw new ArgumentNullException(nameof(memberLookup));
@@ -111,6 +118,7 @@ internal sealed partial class ExpressionBinder
         this.isAsyncIteratorReturnType = isAsyncIteratorReturnType ?? throw new ArgumentNullException(nameof(isAsyncIteratorReturnType));
         this.getCurrentFunction = getCurrentFunction ?? throw new ArgumentNullException(nameof(getCurrentFunction));
         this.bindStatementList = bindStatementList;
+        this.bindLocalVariable = bindLocalVariable;
     }
 
     private DiagnosticBag Diagnostics => binderCtx.Diagnostics;
@@ -243,6 +251,15 @@ internal sealed partial class ExpressionBinder
         {
             var boundIf = BindIfExpression(ifExpr, targetType);
             return conversions.BindConversion(syntax.Location, boundIf, targetType);
+        }
+
+        // ADR-0151: the `if let` expression honors the target type on exactly
+        // the same terms as the plain if-expression above — its branch tails
+        // unify against the target before the standard conversion runs.
+        if (syntax is IfLetExpressionSyntax ifLetExpr)
+        {
+            var boundIfLet = BindIfLetExpression(ifLetExpr, targetType);
+            return conversions.BindConversion(syntax.Location, boundIfLet, targetType);
         }
 
         if (syntax is ConditionalExpressionSyntax conditionalExpr)
@@ -405,6 +422,9 @@ internal sealed partial class ExpressionBinder
                 return BindConditionalExpression((ConditionalExpressionSyntax)syntax);
             case SyntaxKind.IfExpression:
                 return BindIfExpression((IfExpressionSyntax)syntax, targetType: null, canBeVoid: canBeVoid);
+            case SyntaxKind.IfLetExpression:
+                // ADR-0151: value-producing `if let` — see ExpressionBinder.IfLet.cs.
+                return BindIfLetExpression((IfLetExpressionSyntax)syntax, targetType: null, canBeVoid: canBeVoid);
             case SyntaxKind.ThrowExpression:
                 return BindThrowExpression((ThrowExpressionSyntax)syntax);
             case SyntaxKind.IndirectAssignmentExpression:
@@ -1050,6 +1070,7 @@ internal sealed partial class ExpressionBinder
         }
 
         return syntax is IfExpressionSyntax
+            or IfLetExpressionSyntax
             or ConditionalExpressionSyntax
             or SwitchExpressionSyntax
             || (syntax is BinaryExpressionSyntax binary
@@ -1495,7 +1516,9 @@ internal sealed partial class ExpressionBinder
         // a generic delegate parameter such as Func<TSource,bool>. The real
         // element type is recovered downstream via the symbolic return-type and
         // deferred-lambda machinery (MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs).
-        if (typeSymbol is FunctionTypeSymbol functionType
+        var functionType = typeSymbol as FunctionTypeSymbol
+            ?? (typeSymbol as NullableTypeSymbol)?.UnderlyingType as FunctionTypeSymbol;
+        if (functionType != null
             && TryBuildErasedDelegateClrType(functionType, out var erasedDelegate))
         {
             return erasedDelegate;

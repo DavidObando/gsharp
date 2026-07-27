@@ -99,6 +99,9 @@ public class Issue1675SyntaxNodeChildEnumerationTests
 
         // issue #1884: goto / general label statement
         "package p\nfunc F() {\n  var a = 0\n  retry:\n  a = a + 1\n  if a < 3 {\n    goto retry\n  }\n}\n",
+
+        // ADR-0151: value-producing if-let expression with an optional guard
+        "package p\nfunc F(s string?) int32 {\n  return if let v = s && v.Length > 0 { v.Length } else { 0 }\n}\n",
     };
 
     /// <summary>

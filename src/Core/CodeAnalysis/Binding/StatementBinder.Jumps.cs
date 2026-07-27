@@ -246,6 +246,7 @@ internal sealed partial class StatementBinder
             // (C#-style target-typing) before the conversion below.
             if ((syntax.Expression is SwitchExpressionSyntax
                     || syntax.Expression is IfExpressionSyntax
+                    || syntax.Expression is IfLetExpressionSyntax
                     || syntax.Expression is ConditionalExpressionSyntax
                     || IsNullCoalescingExpression(syntax.Expression))
                 && function != null

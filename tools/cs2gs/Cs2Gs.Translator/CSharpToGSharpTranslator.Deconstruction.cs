@@ -325,7 +325,7 @@ public sealed partial class CSharpToGSharpTranslator
             var safeTargets = new GExpression[lefts.Count];
             for (int i = 0; i < lefts.Count; i++)
             {
-                safeTargets[i] = this.MakeDuplicationSafeTarget(lefts[i].Target, statements);
+                safeTargets[i] = this.MakeDuplicationSafeTarget(lefts[i].Target, statements, lefts[i].Syntax);
             }
 
             GExpression value;
@@ -584,7 +584,10 @@ public sealed partial class CSharpToGSharpTranslator
                     default:
                         // An existing storage location (`arr[i]`, `obj.F`, ...):
                         // spill its receiver/index once, now, before the RHS.
-                        captured[targetExpr] = this.MakeDuplicationSafeTarget(this.TranslateExpression(targetExpr), statements);
+                        captured[targetExpr] = this.MakeDuplicationSafeTarget(
+                            this.TranslateExpression(targetExpr),
+                            statements,
+                            targetExpr);
                         break;
                 }
             }
@@ -1193,17 +1196,38 @@ public sealed partial class CSharpToGSharpTranslator
         // #1731). A target that is already an identifier/`this`/literal, or a
         // member access whose receiver needs no spilling, passes through
         // untouched.
-        private GExpression MakeDuplicationSafeTarget(GExpression target, List<GStatement> prologue)
+        private GExpression MakeDuplicationSafeTarget(
+            GExpression target,
+            List<GStatement> prologue,
+            ExpressionSyntax syntax = null)
         {
             switch (target)
             {
                 case MemberAccessExpression member:
-                    return new MemberAccessExpression(this.MakeDuplicationSafeTarget(member.Target, prologue), member.MemberName);
+                    return new MemberAccessExpression(
+                        this.MakeDuplicationSafeTarget(
+                            member.Target,
+                            prologue,
+                            (syntax as MemberAccessExpressionSyntax)?.Expression),
+                        member.MemberName);
 
                 case IndexExpression index:
+                    // `^n` is contextual index syntax: spilling the whole expression
+                    // turns `target[^n]` into `let i = ^n; target[i]`, which loses
+                    // from-end semantics. Spill only `n` and keep `^` at the access.
+                    bool isFromEnd = syntax is ElementAccessExpressionSyntax elementAccess
+                        && elementAccess.ArgumentList.Arguments.Count == 1
+                        && elementAccess.ArgumentList.Arguments[0].Expression.IsKind(SyntaxKind.IndexExpression);
+                    GExpression safeIndex = isFromEnd
+                        && index.Index is UnaryExpression { Operator: "^" } fromEnd
+                        ? new UnaryExpression("^", this.SpillOperand(fromEnd.Operand, prologue))
+                        : this.SpillOperand(index.Index, prologue);
                     return new IndexExpression(
-                        this.MakeDuplicationSafeTarget(index.Target, prologue),
-                        this.SpillOperand(index.Index, prologue));
+                        this.MakeDuplicationSafeTarget(
+                            index.Target,
+                            prologue,
+                            (syntax as ElementAccessExpressionSyntax)?.Expression),
+                        safeIndex);
 
                 default:
                     return this.SpillOperand(target, prologue);
