@@ -206,7 +206,7 @@ internal sealed partial class ExpressionBinder
             // value/instance path — both unchanged.
             if (variableHit != null
                 && rightPart is CallExpressionSyntax colorColorCall
-                && TryResolveColorColorType(name, leftName, out _, out var unifiedColorStruct, out _)
+                && TryResolveColorColorType(name, leftName, out _, out var unifiedColorStruct, out _, out _)
                 && unifiedColorStruct != null
                 && TryBindColorColorUnifiedCall(unifiedColorStruct, leftName, colorColorCall, out var unifiedColorResult))
             {
@@ -220,8 +220,19 @@ internal sealed partial class ExpressionBinder
             // to the value interpretation otherwise so instance access continues
             // to bind as today (`field.InstanceMethod()`).
             if (variableHit != null
-                && TryResolveColorColorType(name, leftName, out var colorClassSymbol, out var colorStructSymbol, out var colorEnumSymbol)
-                && RightPartLooksLikeStaticMember(colorClassSymbol, colorStructSymbol, colorEnumSymbol, rightPart))
+                && TryResolveColorColorType(
+                    name,
+                    leftName,
+                    out var colorClassSymbol,
+                    out var colorStructSymbol,
+                    out var colorInterfaceSymbol,
+                    out var colorEnumSymbol)
+                && RightPartLooksLikeStaticMember(
+                    colorClassSymbol,
+                    colorStructSymbol,
+                    colorInterfaceSymbol,
+                    colorEnumSymbol,
+                    rightPart))
             {
                 if (colorClassSymbol != null)
                 {
@@ -230,6 +241,10 @@ internal sealed partial class ExpressionBinder
                 else if (colorStructSymbol != null)
                 {
                     userStructSymbol = colorStructSymbol;
+                }
+                else if (colorInterfaceSymbol != null)
+                {
+                    userInterfaceSymbol = colorInterfaceSymbol;
                 }
                 else
                 {
@@ -351,9 +366,32 @@ internal sealed partial class ExpressionBinder
             {
                 // Issue #2809: an unqualified accessor chain whose head is an
                 // inherited CLR property/field (`Clients.All()`) must bind as
-                // `this.Clients.All()` before the fallback reclassifies the head
-                // as a type/import qualifier.
-                return BindAccessorStep(inheritedClrHead, null, rightPart);
+                // `this.Clients.All()`. Preserve #687's type/value collision
+                // rule: a same-named type still wins when the right side is one
+                // of its static members (`Path.Combine(...)`).
+                if (TryResolveColorColorType(
+                        name,
+                        leftName,
+                        out var inheritedColorClass,
+                        out var inheritedColorStruct,
+                        out var inheritedColorInterface,
+                        out var inheritedColorEnum)
+                    && RightPartLooksLikeStaticMember(
+                        inheritedColorClass,
+                        inheritedColorStruct,
+                        inheritedColorInterface,
+                        inheritedColorEnum,
+                        rightPart))
+                {
+                    classSymbol = inheritedColorClass;
+                    userStructSymbol = inheritedColorStruct;
+                    userInterfaceSymbol = inheritedColorInterface;
+                    enumSymbol = inheritedColorEnum;
+                }
+                else
+                {
+                    return BindAccessorStep(inheritedClrHead, null, rightPart);
+                }
             }
             else if (scope.TryLookupImport(name, out var matchedImport)
                 && TryBindImportAccessor(matchedImport, ref rightPart, out var typeFromImport))
@@ -1509,10 +1547,12 @@ internal sealed partial class ExpressionBinder
         NameExpressionSyntax leftName,
         out ImportedClassSymbol importedClassSymbol,
         out StructSymbol userStructSymbol,
+        out InterfaceSymbol interfaceSymbol,
         out EnumSymbol enumSymbol)
     {
         importedClassSymbol = null;
         userStructSymbol = null;
+        interfaceSymbol = null;
         enumSymbol = null;
 
         // Issue #2394: check the same-compilation SOURCE type (struct/enum)
@@ -1530,6 +1570,12 @@ internal sealed partial class ExpressionBinder
             if (typeAlias is EnumSymbol foundEnum)
             {
                 enumSymbol = foundEnum;
+                return true;
+            }
+
+            if (typeAlias is InterfaceSymbol foundInterface)
+            {
+                interfaceSymbol = foundInterface;
                 return true;
             }
         }
@@ -1648,6 +1694,7 @@ internal sealed partial class ExpressionBinder
     private bool RightPartLooksLikeStaticMember(
         ImportedClassSymbol importedClassSymbol,
         StructSymbol userStructSymbol,
+        InterfaceSymbol interfaceSymbol,
         EnumSymbol enumSymbol,
         ExpressionSyntax rightPart)
     {
@@ -1664,6 +1711,11 @@ internal sealed partial class ExpressionBinder
         if (userStructSymbol != null)
         {
             return HasUserTypeStaticMember(userStructSymbol, headName, isCall);
+        }
+
+        if (interfaceSymbol != null)
+        {
+            return HasUserTypeStaticMember(interfaceSymbol, headName, isCall);
         }
 
         if (enumSymbol != null)
@@ -1762,25 +1814,50 @@ internal sealed partial class ExpressionBinder
         return false;
     }
 
-    private static bool HasUserTypeStaticMember(StructSymbol structSym, string headName, bool isCall)
+    private static bool HasUserTypeStaticMember(TypeSymbol type, string headName, bool isCall)
     {
-        if (structSym == null)
+        if (type == null)
         {
             return false;
+        }
+
+        if (type is InterfaceSymbol interfaceType)
+        {
+            var fieldOwner = interfaceType.Definition ?? interfaceType;
+            fieldOwner.EnsureMembersResolved();
+            if (isCall)
+            {
+                return !TypeMemberModel.GetMethods(
+                    interfaceType,
+                    headName,
+                    MemberQuery.Static(MemberKinds.Method)).IsEmpty;
+            }
+
+            return fieldOwner.GetStaticField(headName) != null
+                || fieldOwner.Properties.Any(
+                    property => property.IsStatic
+                        && !property.IsIndexer
+                        && property.Name == headName)
+                || !TypeMemberModel.GetMethods(
+                    interfaceType,
+                    headName,
+                    MemberQuery.Static(MemberKinds.Method)).IsEmpty;
         }
 
         // ADR-0112: route through the canonical member-resolution layer.
         if (isCall)
         {
-            return !TypeMemberModel.GetMethods(structSym, headName, MemberQuery.InheritedStatic(MemberKinds.Method)).IsEmpty
-                || ClrTypeExposesStaticMember(TypeMemberModel.GetNearestImportedBase(structSym)?.ClrType, headName);
+            return !TypeMemberModel.GetMethods(type, headName, MemberQuery.InheritedStatic(MemberKinds.Method)).IsEmpty
+                || (type is StructSymbol structType
+                    && ClrTypeExposesStaticMember(TypeMemberModel.GetNearestImportedBase(structType)?.ClrType, headName));
         }
 
         return TypeMemberModel.LookupMember(
-            structSym,
+            type,
             headName,
             MemberQuery.InheritedStatic(MemberKinds.Field | MemberKinds.Property)) != null
-            || ClrTypeExposesStaticMember(TypeMemberModel.GetNearestImportedBase(structSym)?.ClrType, headName);
+            || (type is StructSymbol structType
+                && ClrTypeExposesStaticMember(TypeMemberModel.GetNearestImportedBase(structType)?.ClrType, headName));
     }
 
     private BoundExpression BindEnumAccessorStep(EnumSymbol enumSymbol, ExpressionSyntax rightPart)

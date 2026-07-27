@@ -52,6 +52,43 @@ public sealed class Issue2809InheritedClrPropertyAccessorChainTests
             """));
     }
 
+    [Fact]
+    public void ImportedBaseProperty_DoesNotShadowStaticTypeMember()
+    {
+        Assert.Empty(Bind("""
+            package Consumer
+            import Project1
+            import System.IO
+
+            class ChatHub : A {
+                func Join() string {
+                    return Path.Combine("first", "second")
+                }
+            }
+            """));
+    }
+
+    [Fact]
+    public void ImportedBaseProperty_DoesNotShadowStaticInterfaceMember()
+    {
+        Assert.Empty(Bind("""
+            package Consumer
+            import Project1
+
+            interface Path {
+                shared {
+                    const Kind string = "path"
+                }
+            }
+
+            class ChatHub : A {
+                func Join() string {
+                    return Path.Kind
+                }
+            }
+            """));
+    }
+
     private static IReadOnlyList<GSharp.Core.CodeAnalysis.Diagnostic> Bind(string source)
     {
         using var resolver = ReferenceResolver.WithReferences(new[] { LibraryPath });
@@ -76,6 +113,7 @@ public sealed class Issue2809InheritedClrPropertyAccessorChainTests
                 public class A
                 {
                     public B Clients { get; } = new B();
+                    public B Path { get; } = new B();
                 }
 
                 public class B
