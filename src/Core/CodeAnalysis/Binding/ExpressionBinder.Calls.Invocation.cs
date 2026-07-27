@@ -978,7 +978,7 @@ internal sealed partial class ExpressionBinder
         // `List[T]`/`sequence[T]` paths do) purely for the purpose of inferring
         // the deferred lambda targets; the finally-bound call keeps the original
         // slice/array receiver expression.
-        var receiverType = receiver?.Type;
+        var receiverType = receiver?.Type ?? classSymbol?.SymbolicReceiver;
         if (receiverType != null
             && TryNormalizeSliceArrayReceiverForLambdaInference(receiverType, out var normalizedReceiverType))
         {
@@ -1423,8 +1423,11 @@ internal sealed partial class ExpressionBinder
             try
             {
                 if (receiverOpenDefinition != null
-                    && !method.IsStatic
-                    && TryResolveOpenInstanceMethod(receiverOpenDefinition, method, out var resolvedOpenMethod))
+                    && TryResolveOpenMethodByToken(
+                        receiverOpenDefinition,
+                        method,
+                        method.IsStatic ? BindingFlags.Static : BindingFlags.Instance,
+                        out var resolvedOpenMethod))
                 {
                     openMethod = resolvedOpenMethod;
                 }
@@ -1943,15 +1946,17 @@ internal sealed partial class ExpressionBinder
                 // (delegate-reshaping conversions still make it applicable to a
                 // concrete CLR delegate parameter when that path is chosen).
                 var argName = argumentNames.IsDefault ? null : argumentNames[argSlot];
+                var symbolicReceiver = receiver?.Type as ImportedTypeSymbol
+                    ?? classSymbol?.SymbolicReceiver;
                 if (argumentNames.IsDefault
-                    && receiver?.Type is ImportedTypeSymbol symbolicReceiver
+                    && symbolicReceiver != null
                     && !symbolicReceiver.TypeArguments.IsDefaultOrEmpty
                     && symbolicReceiver.TypeArguments.Any(TypeSymbol.RequiresSymbolicProjection))
                 {
-                    // Issue #2673: a constructed imported receiver can erase a
-                    // same-compilation type argument to object in reflection.
-                    // Defer the lambda so the existing symbolic-target pass
-                    // recovers the open method's reified delegate signature.
+                    // Issue #2673 / #2810: a constructed imported instance or
+                    // static receiver can erase a symbolic type argument to
+                    // object in reflection. Defer the lambda so the symbolic
+                    // target pass recovers the open delegate signature.
                     deferredArrowLambdaIndices.Add(argSlot);
                     boundArguments.Add(new BoundErrorExpression(inner));
                 }
