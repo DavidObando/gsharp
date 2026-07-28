@@ -63,6 +63,27 @@ public sealed class FieldSymbol : Symbol
     public bool IsEventBackingField { get; }
 
     /// <summary>
+    /// Returns whether this static field may be addressed in the current
+    /// static-constructor context.
+    /// </summary>
+    /// <param name="staticConstructorOwner">The type whose <c>.cctor</c> is active, or <c>null</c>.</param>
+    /// <returns><c>true</c> when taking the field address is legal.</returns>
+    internal bool IsStaticAddressLegal(Symbol staticConstructorOwner)
+    {
+        if (!(IsReadOnly && IsStatic) || IsConst)
+        {
+            return true;
+        }
+
+        return staticConstructorOwner switch
+        {
+            StructSymbol s => !s.StaticFields.IsDefaultOrEmpty && s.StaticFields.Contains(this),
+            InterfaceSymbol i => !i.StaticFields.IsDefaultOrEmpty && i.StaticFields.Contains(this),
+            _ => false,
+        };
+    }
+
+    /// <summary>
     /// Gets the compile-time constant value for a <see cref="IsConst"/> field
     /// (Issue #948), or <c>null</c> for non-const fields. The binder folds the
     /// field initializer to a literal and writes it here; the emitter uses it

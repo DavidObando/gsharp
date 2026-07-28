@@ -365,7 +365,7 @@ internal sealed partial class ExpressionBinder
             && !ReceiverTypeIsReference(bve.Variable.Type);
     }
 
-    private static bool IsAddressableStructFieldReceiver(BoundExpression receiver)
+    private bool IsAddressableStructFieldReceiver(BoundExpression receiver)
     {
         if (receiver is BoundVariableExpression)
         {
@@ -382,8 +382,15 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        return fieldAccess.Receiver == null
-            || ReceiverTypeIsReference(fieldAccess.Receiver.Type)
+        if (fieldAccess.Receiver == null)
+        {
+            var staticConstructorOwner = function?.IsStaticInitializer == true
+                ? function.StaticOwnerType as Symbol
+                : null;
+            return fieldAccess.Field.IsStaticAddressLegal(staticConstructorOwner);
+        }
+
+        return ReceiverTypeIsReference(fieldAccess.Receiver.Type)
             || IsAddressableStructFieldReceiver(fieldAccess.Receiver);
     }
 

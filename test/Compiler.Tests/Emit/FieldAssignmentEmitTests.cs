@@ -162,6 +162,58 @@ public class FieldAssignmentEmitTests
     }
 
     [Fact]
+    public void MutableStaticStructFieldAssignments_UpdateStorage()
+    {
+        var source = """
+            package P2818MutableStaticEmit
+            import System
+
+            struct Item {
+                var Id int32
+            }
+
+            class Holder {
+                shared {
+                    var Origin Item = Item{Id: 1}
+                }
+            }
+
+            Holder.Origin.Id = 5
+            Holder.Origin.Id += 2
+            public var result = Holder.Origin.Id
+            """;
+
+        Assert.Equal(7, RunAndGetIntResult(source));
+    }
+
+    [Fact]
+    public void StaticReadonlyStructFieldAssignments_InDeclaringCctor_UpdateStorage()
+    {
+        var source = """
+            package P2818ReadonlyStaticCctorEmit
+            import System
+
+            struct Item {
+                var Id int32
+            }
+
+            class Holder {
+                shared {
+                    let Origin Item = Item{Id: 1}
+                    init {
+                        Holder.Origin.Id = 5
+                        Holder.Origin.Id += 2
+                    }
+                }
+            }
+
+            public var result = Holder.Origin.Id
+            """;
+
+        Assert.Equal(7, RunAndGetIntResult(source));
+    }
+
+    [Fact]
     public void StructFieldAssignment_ValueExpressionReadsReceiver()
     {
         // Reading the receiver inside the value expression is fine and must

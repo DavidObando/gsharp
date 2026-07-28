@@ -4299,22 +4299,7 @@ internal sealed class ReflectionMetadataEmitter
     /// <param name="field">The field whose address is being considered.</param>
     /// <returns><c>true</c> when <c>ldsflda</c> of the field is legal here.</returns>
     internal bool IsStaticFieldAddressLegalHere(FieldSymbol field)
-    {
-        if (!(field.IsReadOnly && field.IsStatic) || field.IsConst)
-        {
-            return true;
-        }
-
-        switch (this.emitCtx.CurrentStaticConstructorOwner)
-        {
-            case StructSymbol s:
-                return !s.StaticFields.IsDefaultOrEmpty && s.StaticFields.Contains(field);
-            case InterfaceSymbol i:
-                return !i.StaticFields.IsDefaultOrEmpty && i.StaticFields.Contains(field);
-            default:
-                return false;
-        }
-    }
+        => field.IsStaticAddressLegal(this.emitCtx.CurrentStaticConstructorOwner);
 
     private bool IsAddressableFieldAccessForReceiverSpill(
         BoundFieldAccessExpression fa,

@@ -3331,15 +3331,26 @@ internal sealed partial class DeclarationBinder
         // Bind `shared` static field initializers.
         if (staticFieldInitializers.Count > 0)
         {
-            var staticInitBuilder = ImmutableDictionary.CreateBuilder<FieldSymbol, BoundExpression>();
-            foreach (var (fieldSym, initSyntax, fieldType) in staticFieldInitializers)
+            var previousFunction = getCurrentFunction();
+            var staticInitializerContext = CreateFieldInitializerAccessibilityContext(structSymbol);
+            staticInitializerContext.IsStaticInitializer = true;
+            setCurrentFunction(staticInitializerContext);
+            try
             {
-                var boundInit = bindExpression(initSyntax);
-                var convertedInit = conversions.BindConversion(initSyntax.Location, boundInit, fieldType);
-                staticInitBuilder[fieldSym] = convertedInit;
-            }
+                var staticInitBuilder = ImmutableDictionary.CreateBuilder<FieldSymbol, BoundExpression>();
+                foreach (var (fieldSym, initSyntax, fieldType) in staticFieldInitializers)
+                {
+                    var boundInit = bindExpression(initSyntax);
+                    var convertedInit = conversions.BindConversion(initSyntax.Location, boundInit, fieldType);
+                    staticInitBuilder[fieldSym] = convertedInit;
+                }
 
-            structSymbol.SetStaticFieldInitializers(staticInitBuilder.ToImmutable());
+                structSymbol.SetStaticFieldInitializers(staticInitBuilder.ToImmutable());
+            }
+            finally
+            {
+                setCurrentFunction(previousFunction);
+            }
         }
 
         // Bind instance field initializers. These run before the constructor

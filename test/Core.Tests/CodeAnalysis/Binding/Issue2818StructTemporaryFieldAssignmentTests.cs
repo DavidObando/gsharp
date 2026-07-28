@@ -57,6 +57,98 @@ public class Issue2818StructTemporaryFieldAssignmentTests
         Assert.Contains(result.Diagnostics, d => d.Id == "GS0499");
     }
 
+    [Fact]
+    public void StaticReadonlyStructFieldAssignment_ReportsGS0499()
+    {
+        var result = Evaluate("""
+            package P2818StaticSimple
+
+            struct Item {
+                var Id int32
+            }
+
+            class Holder {
+                shared {
+                    let Origin Item = Item{Id: 1}
+                }
+            }
+
+            Holder.Origin.Id = 5
+            """);
+
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0499");
+    }
+
+    [Fact]
+    public void StaticReadonlyStructFieldCompoundAssignment_ReportsGS0499()
+    {
+        var result = Evaluate("""
+            package P2818StaticCompound
+
+            struct Item {
+                var Id int32
+            }
+
+            class Holder {
+                shared {
+                    let Origin Item = Item{Id: 1}
+                }
+            }
+
+            Holder.Origin.Id += 5
+            """);
+
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0499");
+    }
+
+    [Fact]
+    public void MutableStaticStructFieldAssignments_DoNotReportGS0499()
+    {
+        var result = Evaluate("""
+            package P2818StaticMutable
+
+            struct Item {
+                var Id int32
+            }
+
+            class Holder {
+                shared {
+                    var Origin Item = Item{Id: 1}
+                }
+            }
+
+            Holder.Origin.Id = 5
+            Holder.Origin.Id += 2
+            """);
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0499");
+    }
+
+    [Fact]
+    public void StaticReadonlyStructFieldAssignments_InDeclaringCctor_DoNotReportGS0499()
+    {
+        var result = Evaluate("""
+            package P2818StaticCctor
+
+            struct Item {
+                var Id int32
+            }
+
+            class Holder {
+                shared {
+                    let Origin Item = Item{Id: 1}
+                    let InitializerResult int32 = (Holder.Origin.Id = 3)
+                    init {
+                        Holder.Origin.Id = 5
+                        Holder.Origin.Id += 2
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0499");
+    }
+
     private static EvaluationResult Evaluate(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

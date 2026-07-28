@@ -1169,6 +1169,15 @@ internal sealed class SlotPlanner
                 return;
             }
 
+            // Pointer field syntax unwraps `*p` before emit. Cache the pointer
+            // operand itself so both the field read and write reuse one value.
+            if (receiver is BoundDereferenceExpression dereference
+                && TypeSymbol.IsUnmanagedPointer(dereference.Operand.Type))
+            {
+                this.sink.Add(dereference.Operand);
+                return;
+            }
+
             // An addressable value-type field must stay in its owning storage:
             // caching the field value would turn the write into a temp-local
             // mutation. Cache the side-effecting owner instead, then let

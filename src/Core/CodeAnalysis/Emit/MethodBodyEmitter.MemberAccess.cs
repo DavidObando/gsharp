@@ -534,7 +534,7 @@ internal sealed partial class MethodBodyEmitter
             // ADR-0122 §4 / issue #1034: `(*p).field` / `p->field` read. The
             // pointer value IS the struct's address, so load the pointer and
             // `ldfld` directly — avoiding a wasteful `ldobj` of the whole struct.
-            this.EmitExpression(deref.Operand);
+            this.EmitInstanceReceiver(deref.Operand);
         }
         else if (!receiverIsClass && fa.Receiver is BoundVariableExpression bv && this.TryLoadStructVariableAddress(bv))
         {
@@ -1778,7 +1778,7 @@ internal sealed partial class MethodBodyEmitter
         {
             // ADR-0122 §4/§10: `(*p).field` / `p->field`. The pointer value IS
             // the struct's address, so load the pointer directly before ldflda.
-            this.EmitExpression(deref.Operand);
+            this.EmitInstanceReceiver(deref.Operand);
         }
         else if (!receiverIsClass && fa.Receiver is BoundVariableExpression bv && this.TryLoadStructVariableAddress(bv))
         {
