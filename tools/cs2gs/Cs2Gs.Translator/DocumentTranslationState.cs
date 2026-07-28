@@ -144,11 +144,8 @@ internal sealed class DocumentTranslationState
     public Dictionary<ISymbol, MultiDimArrayInfo> MultiDimArrays { get; } =
         new Dictionary<ISymbol, MultiDimArrayInfo>(SymbolEqualityComparer.Default);
 
-    // Owned struct / data-struct instance methods cannot live in the type
-    // body (the parser rejects an in-body `func`); they are lifted to
-    // top-level receiver-clause `func`s emitted as siblings of the type
-    // (issue #938, ADR-0115 §B.5). Collected here per aggregate and drained
-    // by the document translator.
+    // Top-level declarations synthesized while translating an aggregate
+    // (receiver-clause extensions and operators) are emitted as siblings.
     public List<GMember> PendingTopLevelDeclarations { get; } = new List<GMember>();
 
     // The syntax node whose body is currently being translated. It bounds the
@@ -231,12 +228,6 @@ internal sealed class DocumentTranslationState
     // Monotonic counter for synthesizing null-seam helper method names
     // (issue #1849), reset per aggregate alongside `PendingSynthHelpers`.
     public int SynthHelperCounter { get; set; }
-
-    // When translating the body of a lifted owned-value-aggregate receiver
-    // method (issue #938), the implicit `this.` of a bare instance-member
-    // reference must be made explicit through the receiver name (`self.`),
-    // because a top-level receiver-clause `func` has no implicit receiver.
-    public string CurrentReceiverName { get; set; }
 
     // The exception variable bound by the innermost enclosing `catch` clause,
     // used to translate a C# re-throw (`throw;`) — which has no bare G# form —

@@ -23,9 +23,9 @@ public sealed partial class CSharpToGSharpTranslator
     private sealed partial class DeclarationVisitor
     {
         /// <summary>
-        /// Removes and returns the top-level declarations (lifted owned-struct
-        /// receiver methods, issue #938) collected while translating the most
-        /// recent aggregate, so the document translator can emit them as siblings.
+        /// Removes and returns top-level declarations collected while translating
+        /// the most recent aggregate, so the document translator can emit them as
+        /// siblings.
         /// </summary>
         /// <returns>The collected top-level declarations (possibly empty).</returns>
         public IReadOnlyList<GMember> DrainPendingTopLevel()
@@ -1210,13 +1210,28 @@ public sealed partial class CSharpToGSharpTranslator
                 this.state.StaticFieldInitializers.Keys, SymbolEqualityComparer.Default);
             this.CollectStaticFieldInitializers(mergedMembers, symbol);
 
+            var membersToTranslate = mergedMembers
+                .Select(member => (Member: member, OwnedExtensionTarget: (INamedTypeSymbol)null))
+                .ToList();
+            if (symbol != null &&
+                this.ShouldAttachOwnedExtensions(node, symbol) &&
+                this.ownedExtensions.TryGetMethods(symbol, out IReadOnlyList<MethodDeclarationSyntax> ownedExtensionMethods))
+            {
+                membersToTranslate.AddRange(
+                    ownedExtensionMethods
+                        .Where(this.CanLowerOwnedExtension)
+                        .Select(method => (
+                            Member: (MemberDeclarationSyntax)method,
+                            OwnedExtensionTarget: symbol)));
+            }
+
             var instanceMembers = new List<GMember>();
             var sharedMembers = new List<GMember>();
-            foreach (MemberDeclarationSyntax member in mergedMembers)
+            foreach ((MemberDeclarationSyntax member, INamedTypeSymbol ownedExtensionTarget) in membersToTranslate)
             {
                 // Issue #1910: a merged-in member from another partial part lives
-                // in a different `SyntaxTree`; resolve it (and everything nested
-                // inside it) through that tree's own semantic model.
+                // in a different `SyntaxTree`; issue #2821 owned extension methods
+                // can as well. Resolve either through that tree's semantic model.
                 using IDisposable modelScope = this.context.UseSemanticModelFor(member.SyntaxTree);
                 foreach ((GMember translated, bool isStatic) in this.TranslateMember(
                     member,
@@ -1224,7 +1239,8 @@ public sealed partial class CSharpToGSharpTranslator
                     lift,
                     propertyCtorInits,
                     primaryCtorParamNames,
-                    callSiteLoweredStructConstructors))
+                    callSiteLoweredStructConstructors,
+                    ownedExtensionTarget))
                 {
                     // A C# operator overload translates to a receiver-clause
                     // `func (a T) operator <op>(...)`; like every receiver-clause
@@ -1233,17 +1249,6 @@ public sealed partial class CSharpToGSharpTranslator
                     // reference aggregate (ADR-0035, sample Operators.gs; §B.5).
                     if (translated is MethodDeclaration { Receiver: not null } opMethod &&
                         opMethod.Name.StartsWith("operator ", System.StringComparison.Ordinal))
-                    {
-                        this.state.PendingTopLevelDeclarations.Add(translated);
-                        continue;
-                    }
-
-                    // A lifted owned-value-aggregate instance method (it carries a
-                    // receiver clause) cannot live in the struct body; collect it
-                    // as a top-level sibling declaration (issue #938).
-                    if (IsValueAggregate(kind.Value) &&
-                        !isStatic &&
-                        translated is MethodDeclaration { Receiver: not null })
                     {
                         this.state.PendingTopLevelDeclarations.Add(translated);
                         continue;
@@ -1409,6 +1414,19 @@ public sealed partial class CSharpToGSharpTranslator
                 attributes: this.MapAttributes(mergedAttributeLists),
                 isUnsafe: isUnsafe,
                 isPartial: isPartial);
+        }
+
+        private bool ShouldAttachOwnedExtensions(
+            TypeDeclarationSyntax node,
+            INamedTypeSymbol symbol)
+        {
+            if (!this.preservePartialParts ||
+                !this.partialTypeParts.TryGetValue(symbol, out List<TypeDeclarationSyntax> parts))
+            {
+                return true;
+            }
+
+            return parts[0].SyntaxTree == node.SyntaxTree && parts[0].Span == node.Span;
         }
 
         /// <summary>

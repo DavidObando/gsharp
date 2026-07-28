@@ -28,7 +28,8 @@ public sealed partial class CSharpToGSharpTranslator
             ConstructorLift lift,
             IReadOnlyList<(string Name, GExpression Value)> propertyCtorInits,
             IReadOnlyCollection<string> primaryCtorParamNames = null,
-            IReadOnlyCollection<ConstructorDeclarationSyntax> callSiteLoweredStructConstructors = null)
+            IReadOnlyCollection<ConstructorDeclarationSyntax> callSiteLoweredStructConstructors = null,
+            INamedTypeSymbol ownedExtensionTarget = null)
         {
             switch (member)
             {
@@ -41,7 +42,15 @@ public sealed partial class CSharpToGSharpTranslator
                     break;
 
                 case MethodDeclarationSyntax method:
-                    (GMember methodMember, bool methodIsStatic) = this.TranslateMethod(method, ownerKind);
+                    if (ownedExtensionTarget is null && this.CanLowerOwnedExtension(method))
+                    {
+                        break;
+                    }
+
+                    (GMember methodMember, bool methodIsStatic) = this.TranslateMethod(
+                        method,
+                        ownerKind,
+                        ownedExtensionTarget: ownedExtensionTarget);
                     if (methodMember != null)
                     {
                         yield return (methodMember, methodIsStatic);
@@ -225,6 +234,26 @@ public sealed partial class CSharpToGSharpTranslator
                         $"member '{member.Kind()}' has no canonical G# mapping yet (ADR-0115 §B.11).");
                     break;
             }
+        }
+
+        private bool CanLowerOwnedExtension(MethodDeclarationSyntax method)
+        {
+            if (!this.ownedExtensions.Contains(method))
+            {
+                return false;
+            }
+
+            using IDisposable modelScope = this.context.UseSemanticModelFor(method.SyntaxTree);
+            if (this.context.GetDeclaredSymbol(method) is not IMethodSymbol symbol ||
+                !symbol.IsExtensionMethod ||
+                symbol.Parameters.Length == 0)
+            {
+                return false;
+            }
+
+            IParameterSymbol receiver = symbol.Parameters[0];
+            return receiver.RefKind == RefKind.None &&
+                !this.ShouldPromoteToNullableReference(receiver);
         }
 
         /// <summary>
@@ -759,7 +788,8 @@ public sealed partial class CSharpToGSharpTranslator
         private (GMember Member, bool IsStatic) TranslateMethod(
             MethodDeclarationSyntax node,
             TypeDeclarationKind ownerKind,
-            Receiver forcedReceiver = null)
+            Receiver forcedReceiver = null,
+            INamedTypeSymbol ownedExtensionTarget = null)
         {
             var symbol = this.context.GetDeclaredSymbol(node) as IMethodSymbol;
             bool isStatic = symbol != null && symbol.IsStatic;
@@ -892,7 +922,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             Receiver receiver = null;
             bool skipFirstParameter = false;
-            bool selfQualifyBody = false;
+            IParameterSymbol ownedExtensionSelf = null;
 
             if (forcedReceiver != null)
             {
@@ -910,15 +940,22 @@ public sealed partial class CSharpToGSharpTranslator
             }
             else if (symbol != null && symbol.IsExtensionMethod)
             {
-                // C# extension methods translate to the receiver-clause form on a
-                // non-owned type (ADR-0115 §B.5). A receiver clause is only valid
-                // on a struct/class (ADR-0079); an extension on an enum receiver
-                // is rejected by gsc (GS0103 "must be a struct or class"), so it
-                // stays a plain static helper and its call sites are rewritten to
-                // the positional form `Owner.Method(receiver, …)`.
                 IParameterSymbol self = symbol.Parameters.FirstOrDefault();
-                if (self != null && self.Type.TypeKind != TypeKind.Enum)
+                if (self != null && ownedExtensionTarget != null)
                 {
+                    // Issue #2821: a same-package source receiver is owned by
+                    // this output package. Emit the extension as an in-body
+                    // member and preserve its former `this` parameter as a local
+                    // copy of the real instance for the translated body.
+                    ownedExtensionSelf = self;
+                    skipFirstParameter = true;
+                    isStatic = false;
+                }
+                else if (self != null && self.Type.TypeKind != TypeKind.Enum)
+                {
+                    // External C# extension methods retain receiver-clause form
+                    // (ADR-0115 §B.5). Enum receivers stay static helpers because
+                    // G# rejects receiver clauses on enums (GS0103).
                     // Issue #1072/#1535: an extension receiver that is null-compared
                     // or null-assigned in the body is really nullable (common in
                     // nullable-oblivious sources, e.g. `this object o => o == null`),
@@ -934,45 +971,28 @@ public sealed partial class CSharpToGSharpTranslator
                     isStatic = false;
                 }
             }
-            else if (!isStatic && IsValueAggregate(ownerKind))
-            {
-                // Owned-struct instance method: the parser rejects an in-body
-                // 'func' inside a struct body (GS0005) and the binder flags the
-                // receiver-clause form with GS0314, so no warning-free spelling
-                // exists today. Emit the only form that parses and record the
-                // known gap (issue #938, ADR-0115 §B.5).
-                receiver = new Receiver(
-                    "self",
-                    new NamedTypeReference(symbol?.ContainingType?.Name ?? node.Identifier.Text));
-                selfQualifyBody = true;
-                this.context.Report(new TranslationDiagnostic(
-                    nameof(SyntaxKind.MethodDeclaration),
-                    $"instance method '{node.Identifier.Text}' on owned struct/data-struct emits the receiver-clause form (the only form that parses); the binder will flag GS0314 — expected, known compiler gap (issue #938, ADR-0115 §B.5).",
-                    node.GetLocation(),
-                    TranslationSeverity.Info));
-            }
 
             List<Parameter> parameters = this.MapParameters(symbol, node.ParameterList, skipFirstParameter);
             GTypeReference returnType = this.MapReturnType(symbol, node);
             List<TypeParameter> typeParameters = this.MapMethodTypeParameters(symbol);
 
             bool hasBody = node.Body != null || node.ExpressionBody != null;
-            string previousReceiver = this.state.CurrentReceiverName;
-            if (selfQualifyBody)
-            {
-                this.state.CurrentReceiverName = receiver.Name;
-            }
-
             BlockStatement body;
-            try
+            body = hasBody
+                ? this.TranslateBody(node, $"method '{node.Identifier.Text}'")
+                : null;
+
+            if (body != null && ownedExtensionSelf != null)
             {
-                body = hasBody
-                    ? this.TranslateBody(node, $"method '{node.Identifier.Text}'")
-                    : null;
-            }
-            finally
-            {
-                this.state.CurrentReceiverName = previousReceiver;
+                var statements = new List<GStatement>(body.Statements.Count + 1)
+                {
+                    new LocalDeclarationStatement(
+                        BindingKind.Var,
+                        SanitizeIdentifier(ownedExtensionSelf.Name),
+                        initializer: new ThisExpression()),
+                };
+                statements.AddRange(body.Statements);
+                body = new BlockStatement(statements);
             }
 
             // ADR-0122 / issue #1014: a C# `unsafe` method body is an unsafe
@@ -1033,11 +1053,9 @@ public sealed partial class CSharpToGSharpTranslator
             // emitted G# round-trips (ADR-0115 §B.6).
             bool isOpen = this.IsMemberEmittedOpen(symbol, isOverride);
 
-            // A method lifted to the top-level receiver-clause form (an owned-value
-            // aggregate method or an extension method) has no `open`/`override`:
-            // those modifiers are only valid on in-body class members, and the
-            // parser rejects `override func (...)` (GS0005). Drop them so the
-            // emitted G# round-trips (ADR-0115 §B.5/§B.14).
+            // A method emitted in top-level receiver-clause form has no
+            // `open`/`override`: those modifiers are only valid on in-body
+            // members. Drop them so the emitted G# round-trips.
             if (receiver != null)
             {
                 isOpen = false;
