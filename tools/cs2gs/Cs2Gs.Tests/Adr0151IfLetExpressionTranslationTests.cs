@@ -6,10 +6,13 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Text;
+using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
+using Cs2Gs.Pipeline;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using Xunit;
@@ -300,6 +303,169 @@ namespace Demo
         CompileAndRun(printed, "Package().Copyright()");
     }
 
+    [Fact]
+    public void Issue2819_SameVersionPackedToolAndSdk_CompileTranslatedIfLet()
+    {
+        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
+        (string NupkgPath, string Version)? cs2gs = ResolveLocalCs2GsPackage(repoRoot);
+        Assert.NotNull(cs2gs);
+
+        string sdkPackage = Path.Combine(
+            Path.GetDirectoryName(cs2gs.Value.NupkgPath),
+            "Gsharp.NET.Sdk." + cs2gs.Value.Version + ".nupkg");
+        Assert.True(
+            File.Exists(sdkPackage),
+            "Building the cs2gs tool package must produce the same-version Gsharp.NET.Sdk package: " +
+                cs2gs.Value.Version);
+
+        string workDir = Path.Combine(
+            repoRoot,
+            "issue-2819-package-smoke",
+            Guid.NewGuid().ToString("N"));
+        string feedDir = Path.Combine(workDir, "out", "bin", "Release", "nupkgs");
+        string packagesDir = Path.Combine(workDir, "packages");
+        string toolDir = Path.Combine(workDir, "tool");
+        Directory.CreateDirectory(feedDir);
+        Directory.CreateDirectory(packagesDir);
+        Directory.CreateDirectory(toolDir);
+        GsharpTestProjectRunner.WriteIsolationBoundary(workDir);
+        File.WriteAllText(Path.Combine(workDir, "GSharp.sln"), string.Empty);
+
+        string packedTool = Path.Combine(feedDir, Path.GetFileName(cs2gs.Value.NupkgPath));
+        string packedSdk = Path.Combine(feedDir, Path.GetFileName(sdkPackage));
+        File.Copy(cs2gs.Value.NupkgPath, packedTool);
+        File.Copy(sdkPackage, packedSdk);
+
+        string nugetConfig = Path.Combine(workDir, "nuget.config");
+        File.WriteAllText(
+            nugetConfig,
+            $"""
+             <?xml version="1.0" encoding="utf-8"?>
+             <configuration>
+               <packageSources>
+                 <clear />
+                 <add key="issue-2819-packages" value="{System.Security.SecurityElement.Escape(feedDir)}" />
+               </packageSources>
+               <config>
+                 <add key="globalPackagesFolder" value="{System.Security.SecurityElement.Escape(packagesDir)}" />
+               </config>
+             </configuration>
+             """);
+
+        string sdkExtractDir = Path.Combine(workDir, "sdk");
+        ZipFile.ExtractToDirectory(packedSdk, sdkExtractDir);
+        string packedGsc = Path.Combine(sdkExtractDir, "tools", "compiler", "gsc.dll");
+        Assert.True(File.Exists(packedGsc), "Packed SDK must contain tools/compiler/gsc.dll.");
+
+        string sourceDir = Path.Combine(workDir, "source");
+        string translatedDir = Path.Combine(workDir, "translated");
+        string artifactsDir = Path.Combine(workDir, "artifacts");
+        Directory.CreateDirectory(sourceDir);
+        File.WriteAllText(Path.Combine(sourceDir, "Repro.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <Nullable>enable</Nullable>
+              </PropertyGroup>
+            </Project>
+            """);
+        File.WriteAllText(Path.Combine(sourceDir, "Repro.cs"), @"
+#nullable enable
+namespace Demo
+{
+    public class C
+    {
+        public string[]? G() => null;
+
+        public string? Value() =>
+            G() is { } values && values.Length > 0 ? values[0] : null;
+    }
+}");
+
+        var environment = new Dictionary<string, string>
+        {
+            ["DOTNET_CLI_HOME"] = Path.Combine(workDir, ".dotnet"),
+            ["GSHARP_SKIP_ILVERIFY"] = "1",
+            ["NUGET_PACKAGES"] = packagesDir,
+        };
+        Directory.CreateDirectory(environment["DOTNET_CLI_HOME"]);
+
+        (int Exit, string Output) install = RunProcess(
+            "dotnet",
+            new[]
+            {
+                "tool",
+                "install",
+                "Gsharp.Cs2Gs",
+                "--tool-path",
+                toolDir,
+                "--version",
+                cs2gs.Value.Version,
+                "--configfile",
+                nugetConfig,
+            },
+            workDir,
+            environment);
+        Assert.True(install.Exit == 0, "Installing exact cs2gs nupkg failed:\n" + install.Output);
+
+        string cs2gsCommand = Path.Combine(toolDir, OperatingSystem.IsWindows() ? "cs2gs.exe" : "cs2gs");
+        Assert.True(File.Exists(cs2gsCommand), "Installed cs2gs command was not found: " + cs2gsCommand);
+        (int Exit, string Output) migration = RunProcess(
+            cs2gsCommand,
+            new[]
+            {
+                "migrate",
+                "--corpus",
+                sourceDir,
+                "--out",
+                translatedDir,
+                "--artifacts",
+                artifactsDir,
+                "--config",
+                "Release",
+                "--no-via-sdk",
+                "--gsc",
+                packedGsc,
+            },
+            workDir,
+            environment);
+        Assert.True(migration.Exit == 0, "Packed cs2gs migration failed:\n" + migration.Output);
+
+        string translatedSource = Path.Combine(translatedDir, "Repro.gs");
+        Assert.True(File.Exists(translatedSource), "Packed cs2gs did not emit Repro.gs.");
+        Assert.Contains(
+            "if let values = ",
+            File.ReadAllText(translatedSource),
+            StringComparison.Ordinal);
+
+        string translatedProject = Path.Combine(translatedDir, "Repro.gsproj");
+        Assert.True(File.Exists(translatedProject), "Packed cs2gs did not emit Repro.gsproj.");
+        Assert.Contains(
+            "Gsharp.NET.Sdk/" + cs2gs.Value.Version,
+            File.ReadAllText(translatedProject),
+            StringComparison.Ordinal);
+
+        (int Exit, string Output) build = RunProcess(
+            "dotnet",
+            new[]
+            {
+                "build",
+                translatedProject,
+                "-c",
+                "Release",
+                "--nologo",
+                "-p:RestoreConfigFile=" + nugetConfig,
+                "-p:RestorePackagesPath=" + packagesDir,
+                "-p:RestoreNoCache=true",
+            },
+            translatedDir,
+            environment);
+        Assert.True(
+            build.Exit == 0,
+            "Exact same-version packed SDK must compile packed cs2gs output:\n" + build.Output);
+        Directory.Delete(workDir, recursive: true);
+    }
+
     // ── Conservative fallbacks ───────────────────────────────────────────
 
     [Fact]
@@ -465,6 +631,70 @@ namespace Demo
             "Translated G# must round-trip. Errors:\n" +
                 string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
         return printed;
+    }
+
+    private static (string NupkgPath, string Version)? ResolveLocalCs2GsPackage(string repoRoot)
+    {
+        string nupkgDir = Path.Combine(repoRoot, "out", "bin", "Release", "nupkgs");
+        if (!Directory.Exists(nupkgDir))
+        {
+            return null;
+        }
+
+        const string Prefix = "Gsharp.Cs2Gs.";
+        const string Suffix = ".nupkg";
+        (string NupkgPath, string Version)? best = null;
+        foreach (string file in Directory.EnumerateFiles(nupkgDir, Prefix + "*" + Suffix))
+        {
+            string name = Path.GetFileName(file);
+            string version = name.Substring(Prefix.Length, name.Length - Prefix.Length - Suffix.Length);
+            if (best is null ||
+                GsharpTestProjectRunner.CompareVersions(version, best.Value.Version) > 0)
+            {
+                best = (file, version);
+            }
+        }
+
+        return best;
+    }
+
+    private static (int Exit, string Output) RunProcess(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        string workingDirectory,
+        IReadOnlyDictionary<string, string> environment)
+    {
+        var psi = new ProcessStartInfo(fileName)
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        foreach (string argument in arguments)
+        {
+            psi.ArgumentList.Add(argument);
+        }
+
+        foreach ((string name, string value) in environment)
+        {
+            psi.Environment[name] = value;
+        }
+
+        using var process = Process.Start(psi);
+        Task<string> stdout = process.StandardOutput.ReadToEndAsync();
+        Task<string> stderr = process.StandardError.ReadToEndAsync();
+        bool exited = process.WaitForExit((int)TimeSpan.FromMinutes(10).TotalMilliseconds);
+        if (!exited)
+        {
+            process.Kill(entireProcessTree: true);
+        }
+
+        process.WaitForExit();
+        Task.WaitAll(stdout, stderr);
+        string output = stdout.Result + stderr.Result;
+        Assert.True(exited, fileName + " timed out. Output:\n" + output);
+        return (process.ExitCode, output);
     }
 
     private static void CompileAndRun(string printed, string callExpression)

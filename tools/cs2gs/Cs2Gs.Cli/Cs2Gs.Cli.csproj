@@ -33,6 +33,10 @@
   <ItemGroup>
     <ProjectReference Include="..\Cs2Gs.Pipeline\Cs2Gs.Pipeline.csproj" />
     <ProjectReference Include="..\Cs2Gs.Report\Cs2Gs.Report.csproj" />
+    <!-- cs2gs emits syntax consumed by this packed SDK. Keep both packages on
+         the same build graph so a tool-only build cannot reuse stale SDK bits. -->
+    <ProjectReference Include="..\..\..\src\Sdk\Gsharp.NET.Sdk\Gsharp.NET.Sdk.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
