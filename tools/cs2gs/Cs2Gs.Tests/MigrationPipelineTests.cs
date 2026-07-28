@@ -202,11 +202,12 @@ public class MigrationPipelineTests
     }
 
     /// <summary>
-    /// SDK-generated and hand-authored friend-assembly declarations must each
-    /// reach the compiled G# assembly exactly once.
+    /// Diagnostic-run projects disable SDK AssemblyInfo generation, so the
+    /// translator must retain only generated friend declarations while the
+    /// hand-authored fully-qualified attribute stays in its translated source.
     /// </summary>
     [Fact]
-    public async Task L2_Compile_EmitsInternalsVisibleToExactlyOnce()
+    public async Task L2_DiagnosticCompile_EmitsInternalsVisibleToExactlyOnce()
     {
         string compiler = FindCompiler();
         if (compiler is null)
@@ -216,60 +217,96 @@ public class MigrationPipelineTests
 
         string corpus = ResolveCorpusDir();
         string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
-        (string NupkgPath, string Version)? sdk =
-            GsharpTestProjectRunner.ResolveLocalSdkPackage(repoRoot);
-        if (sdk is null)
+        if (GsharpTestProjectRunner.ResolveLocalSdkPackage(repoRoot) is null)
         {
             return;
         }
 
-        CorpusApp originalL2 = CorpusDiscovery.FindById(corpus, "corpus/L2-Library");
         string sourceRoot = NewOutputRoot("l2-friend-source");
-        string sourceProjectDir = Path.Combine(sourceRoot, "L2-Library");
-        Directory.CreateDirectory(sourceProjectDir);
-        File.Copy(
-            Path.Combine(corpus, "Directory.Build.props"),
-            Path.Combine(sourceRoot, "Directory.Build.props"));
-        string projectPath = Path.Combine(sourceProjectDir, Path.GetFileName(originalL2.ProjectPath));
-        File.Copy(originalL2.ProjectPath, projectPath);
-        File.WriteAllText(
-            projectPath,
-            File.ReadAllText(projectPath).Replace(
-                "<PropertyGroup>",
-                "<PropertyGroup>" + Environment.NewLine + "    <TargetFramework>net10.0</TargetFramework>",
-                StringComparison.Ordinal));
-        File.WriteAllText(Path.Combine(sourceProjectDir, "FriendAssembly.cs"), """
-            using System.Runtime.CompilerServices;
-
-            [assembly: InternalsVisibleTo("L2-Library.Source.Tests")]
-
-            public sealed class Marker
-            {
-            }
-            """);
-        var l2 = new CorpusApp(
-            originalL2.Id,
-            projectPath,
-            originalL2.TargetKind);
-        string outRoot = NewOutputRoot("l2-friend-assembly");
+        CorpusApp l2 = CreateFriendAssemblyFixture(corpus, sourceRoot);
+        string outRoot = NewOutputRoot("l2-friend-diagnostic");
         var options = new PipelineOptions { GscPath = compiler, OutputRoot = outRoot };
-        var pipeline = new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() });
+        var pipeline = new MigrationPipeline(
+            options,
+            new IMigrationStage[] { new TranslateStage(), new CompileStage() });
 
         RunResult result = await pipeline.RunAsync(new[] { l2 });
         AppResult app = Assert.Single(result.Apps);
 
-        Assert.True(app.Succeeded);
+        Assert.True(app.Succeeded, string.Join(Environment.NewLine, app.Artifacts));
         string appDir = Path.Combine(outRoot, result.RunId, MigrationPipeline.SanitizeAppId(l2.Id));
-        string generatedProjectPath = Path.Combine(appDir, "L2-Library.gsproj");
+        Assert.Equal(
+            "@assembly:InternalsVisibleTo(\"L2-Library.Tests\")" + Environment.NewLine,
+            File.ReadAllText(Path.Combine(appDir, "AssemblyInfo.gs")));
+        Assert.Contains(
+            "@assembly:System.Runtime.CompilerServices.InternalsVisibleTo(\"L2-Library.Source.Tests\")",
+            File.ReadAllText(Path.Combine(appDir, "FriendAssembly.gs")),
+            StringComparison.Ordinal);
+
+        string assemblyPath = Path.Combine(appDir, "bin", "Release", "net10.0", "L2-Library.dll");
+        AssertFriendAssemblies(assemblyPath);
+    }
+
+    /// <summary>
+    /// Repository projects preserve the MSBuild item and must not receive a
+    /// second generated G# annotation from translation.
+    /// </summary>
+    [Fact]
+    public async Task L2_RepositoryCompile_EmitsInternalsVisibleToExactlyOnce()
+    {
+        string compiler = FindCompiler();
+        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
+        (string NupkgPath, string Version)? sdk =
+            GsharpTestProjectRunner.ResolveLocalSdkPackage(repoRoot);
+        if (compiler is null || sdk is null)
+        {
+            return;
+        }
+
+        string corpus = ResolveCorpusDir();
+        string sourceRoot = NewOutputRoot("l2-friend-repository-source");
+        CorpusApp l2 = CreateFriendAssemblyFixture(corpus, sourceRoot);
+        string destinationRoot = NewOutputRoot("l2-friend-repository");
+        string projectDir = Path.Combine(destinationRoot, "L2-Library");
+        Directory.CreateDirectory(projectDir);
+        var options = new PipelineOptions
+        {
+            GscPath = compiler,
+            SourceRoot = sourceRoot,
+            OutputRoot = destinationRoot,
+            OutputLayout = MigrationOutputLayout.Repository,
+        };
+        var context = new StageExecutionContext(
+            l2,
+            options,
+            new GscInvoker(compiler),
+            projectDir,
+            new TriageBuilder("run", "2026-07-28T00:00:00Z", "test", l2.Id));
+        StageOutcome translation = await new TranslateStage().ExecuteAsync(context);
+
+        Assert.Equal(StageStatus.Passed, translation.Status);
+        Assert.False(File.Exists(Path.Combine(projectDir, "AssemblyInfo.gs")));
+        Assert.Contains(
+            "@assembly:System.Runtime.CompilerServices.InternalsVisibleTo(\"L2-Library.Source.Tests\")",
+            File.ReadAllText(Path.Combine(projectDir, "FriendAssembly.gs")),
+            StringComparison.Ordinal);
+
+        string generatedProjectPath = Path.Combine(projectDir, "L2-Library.gsproj");
         GSharpProjectTransformer.Transform(
-            projectPath,
-            appDir,
+            l2.ProjectPath,
+            projectDir,
             "Gsharp.NET.Sdk/" + sdk.Value.Version,
             generatedProjectPaths: null).Save(
                 generatedProjectPath,
                 System.Xml.Linq.SaveOptions.DisableFormatting);
+        Assert.Single(
+            System.Xml.Linq.XDocument.Load(generatedProjectPath).Descendants(),
+            element =>
+                element.Name.LocalName == "InternalsVisibleTo" &&
+                element.Attribute("Include")?.Value == "L2-Library.Tests");
+
         GsharpTestProjectRunner.EnsureInLocalFeed(repoRoot, sdk.Value.NupkgPath);
-        GsharpTestProjectRunner.WriteIsolationBoundary(appDir);
+        GsharpTestProjectRunner.WriteIsolationBoundary(projectDir);
         ProcessRunResult build = ProcessRunner.Run(
             "dotnet",
             new[]
@@ -280,21 +317,12 @@ public class MigrationPipelineTests
                 "Release",
                 "-p:RestoreConfigFile=" + Path.Combine(repoRoot, "nuget.config"),
             },
-            appDir,
+            projectDir,
             TimeSpan.FromMinutes(5));
         Assert.True(build.ExitCode == 0, build.Output);
 
-        string assemblyPath = Path.Combine(appDir, "bin", "Release", "net10.0", "L2-Library.dll");
-        Assembly assembly = Assembly.LoadFile(assemblyPath);
-        string[] friendAssemblies = assembly.GetCustomAttributesData()
-            .Where(attribute => attribute.AttributeType == typeof(InternalsVisibleToAttribute))
-            .Select(attribute => (string)Assert.Single(attribute.ConstructorArguments).Value)
-            .OrderBy(name => name, StringComparer.Ordinal)
-            .ToArray();
-
-        Assert.Equal(
-            new[] { "L2-Library.Source.Tests", "L2-Library.Tests" },
-            friendAssemblies);
+        string assemblyPath = Path.Combine(projectDir, "bin", "Release", "net10.0", "L2-Library.dll");
+        AssertFriendAssemblies(assemblyPath);
     }
 
     /// <summary>
@@ -557,6 +585,50 @@ public class MigrationPipelineTests
 
         public Task<StageOutcome> ExecuteAsync(StageExecutionContext context, CancellationToken cancellationToken = default) =>
             Task.FromResult(StageOutcome.Failed(Array.Empty<TriageArtifact>()));
+    }
+
+    private static CorpusApp CreateFriendAssemblyFixture(string corpus, string sourceRoot)
+    {
+        CorpusApp original = CorpusDiscovery.FindById(corpus, "corpus/L2-Library");
+        string projectDir = Path.Combine(sourceRoot, "L2-Library");
+        Directory.CreateDirectory(projectDir);
+        File.Copy(
+            Path.Combine(corpus, "Directory.Build.props"),
+            Path.Combine(sourceRoot, "Directory.Build.props"));
+        string projectPath = Path.Combine(projectDir, Path.GetFileName(original.ProjectPath));
+        File.Copy(original.ProjectPath, projectPath);
+        File.WriteAllText(
+            projectPath,
+            File.ReadAllText(projectPath).Replace(
+                "<PropertyGroup>",
+                "<PropertyGroup>" + Environment.NewLine + "    <TargetFramework>net10.0</TargetFramework>",
+                StringComparison.Ordinal));
+        File.WriteAllText(Path.Combine(projectDir, "FriendAssembly.cs"), """
+            [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("L2-Library.Source.Tests")]
+
+            public sealed class Marker
+            {
+            }
+            """);
+        return new CorpusApp(
+            original.Id,
+            projectPath,
+            original.TargetKind,
+            relativeProjectPath: Path.Combine("L2-Library", Path.GetFileName(projectPath)));
+    }
+
+    private static void AssertFriendAssemblies(string assemblyPath)
+    {
+        Assembly assembly = Assembly.LoadFile(assemblyPath);
+        string[] friendAssemblies = assembly.GetCustomAttributesData()
+            .Where(attribute => attribute.AttributeType == typeof(InternalsVisibleToAttribute))
+            .Select(attribute => (string)Assert.Single(attribute.ConstructorArguments).Value)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            new[] { "L2-Library.Source.Tests", "L2-Library.Tests" },
+            friendAssemblies);
     }
 
     private static string FingerprintShort(string fingerprint)

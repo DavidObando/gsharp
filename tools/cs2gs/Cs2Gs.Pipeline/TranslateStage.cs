@@ -273,7 +273,7 @@ public sealed class TranslateStage : IMigrationStage
                 markMergedTypePartial: hasAnalyzerReferences,
                 retainedFilePaths: retainedFilePaths);
 
-            EmitFriendAssemblyAnnotations(
+            PreserveGeneratedFriendAssemblyAnnotations(
                 context,
                 currentProject,
                 isReferencedProject,
@@ -461,26 +461,38 @@ public sealed class TranslateStage : IMigrationStage
         return artifacts.Count == 0 ? StageOutcome.Passed() : StageOutcome.Failed(artifacts);
     }
 
-    private static void EmitFriendAssemblyAnnotations(
+    private static void PreserveGeneratedFriendAssemblyAnnotations(
         StageExecutionContext context,
         LoadedCSharpProject project,
         bool isReferencedProject,
         ISet<string> usedOutputPaths)
     {
         const string attributeName = "System.Runtime.CompilerServices.InternalsVisibleToAttribute";
-
-        // Documents are loader-classified hand-authored sources; generated obj
-        // AssemblyInfo trees remain in the compilation but are excluded here.
+        var handAuthoredTrees = project.Documents
+            .Select(document => document.SyntaxTree)
+            .ToHashSet();
         List<string> friendAssemblies = project.Compilation.Assembly.GetAttributes()
             .Where(attribute =>
                 attribute.AttributeClass?.ToDisplayString() == attributeName &&
                 attribute.ConstructorArguments.Length == 1 &&
                 attribute.ConstructorArguments[0].Value is string &&
-                attribute.ApplicationSyntaxReference is { SyntaxTree: { } syntaxTree } &&
-                project.Documents.Any(document => document.SyntaxTree == syntaxTree))
+                !handAuthoredTrees.Contains(attribute.ApplicationSyntaxReference?.SyntaxTree))
             .Select(attribute => (string)attribute.ConstructorArguments[0].Value)
             .Distinct(StringComparer.Ordinal)
             .ToList();
+        if (!isReferencedProject)
+        {
+            foreach (string friendAssembly in friendAssemblies)
+            {
+                context.GeneratedFriendAssemblies.Add(friendAssembly);
+            }
+        }
+
+        if (context.Options.OutputLayout == MigrationOutputLayout.Repository)
+        {
+            return;
+        }
+
         if (friendAssemblies.Count == 0)
         {
             return;

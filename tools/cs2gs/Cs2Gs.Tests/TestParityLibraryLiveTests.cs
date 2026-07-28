@@ -5,6 +5,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using Cs2Gs.Pipeline;
 using Xunit;
 
@@ -35,6 +37,12 @@ public class TestParityLibraryLiveTests
         "    func Subtract(a int, b int) int {\n" +
         "        return a - b\n" +
         "    }\n" +
+        "\n" +
+        "    shared {\n" +
+        "        internal func AddInternal(a int, b int) int {\n" +
+        "            return a + b\n" +
+        "        }\n" +
+        "    }\n" +
         "}\n";
 
     private const string TestSource =
@@ -54,6 +62,11 @@ public class TestParityLibraryLiveTests
         "    func Subtract_Returns_Difference() {\n" +
         "        var calc = Calculator()\n" +
         "        Assert.Equal(1, calc.Subtract(3, 2))\n" +
+        "    }\n" +
+        "\n" +
+        "    @Fact\n" +
+        "    func FriendAssembly_Can_Call_Internal_Method() {\n" +
+        "        Assert.Equal(5, Calculator.AddInternal(2, 3))\n" +
         "    }\n" +
         "\n" +
         "    @Theory\n" +
@@ -89,6 +102,7 @@ public class TestParityLibraryLiveTests
             {
                 new GsharpSourceFile("Calculator.gs", LibrarySource),
             },
+            LibraryFriendAssemblies = new[] { "CalcLib.Tests" },
             TestsName = "CalcLib.Tests",
             TestsRootNamespace = "CalcLib.Tests",
             TestFiles = new List<GsharpSourceFile>
@@ -106,12 +120,20 @@ public class TestParityLibraryLiveTests
             run.Status == GsharpTestRunStatus.Ran,
             "Expected a live dotnet test run with a TRX. Status=" + run.Status +
                 "; output tail:\n" + run.Output);
+        Assembly library = Assembly.LoadFile(
+            Path.Combine(workDir, "CalcLib", "bin", "Release", "net10.0", "CalcLib.dll"));
+        Assert.Single(
+            library.GetCustomAttributesData(),
+            attribute =>
+                attribute.AttributeType == typeof(InternalsVisibleToAttribute) &&
+                (string)Assert.Single(attribute.ConstructorArguments).Value == "CalcLib.Tests");
 
         var oracle = new[]
         {
             new TestCaseOutcome("CalcLib.Tests.CalculatorTests.Add_Cases(a: 1, b: 2, expected: 3)", "Passed"),
             new TestCaseOutcome("CalcLib.Tests.CalculatorTests.Add_Cases(a: 2, b: 2, expected: 4)", "Passed"),
             new TestCaseOutcome("CalcLib.Tests.CalculatorTests.Add_Returns_Sum", "Passed"),
+            new TestCaseOutcome("CalcLib.Tests.CalculatorTests.FriendAssembly_Can_Call_Internal_Method", "Passed"),
             new TestCaseOutcome("CalcLib.Tests.CalculatorTests.Subtract_Returns_Difference", "Passed"),
         };
 

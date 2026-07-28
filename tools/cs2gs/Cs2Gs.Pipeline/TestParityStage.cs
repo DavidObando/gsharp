@@ -251,6 +251,10 @@ public sealed class TestParityStage : IMigrationStage
             LibraryFiles = context.EmittedFiles
                 .Select(f => new GsharpSourceFile(Path.GetFileName(f.GsPath), f.GSharpSource))
                 .ToList(),
+            LibraryFriendAssemblies =
+                context.Options.OutputLayout == MigrationOutputLayout.Repository
+                    ? context.GeneratedFriendAssemblies.OrderBy(name => name, StringComparer.Ordinal).ToList()
+                    : Array.Empty<string>(),
             TestsName = libraryName + ".Tests",
             TestsRootNamespace = libraryName.Replace('-', '_') + ".Tests",
             TestFiles = tests.Files,
