@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 namespace Cs2Gs.Pipeline;
 
@@ -35,6 +36,23 @@ public enum TestDiffKind
 public static class TestParityComparison
 {
     /// <summary>
+    /// Matches one innermost C#-record <c>ToString()</c> rendering embedded in an
+    /// xUnit theory display name: <c>Rectangle { Width = 3, Height = 4 }</c>.
+    /// The <c>[^{}]*</c> body keeps the match innermost so nested records
+    /// normalize from the inside out (issue #2833).
+    /// </summary>
+    private static readonly Regex CSharpRecordToStringPattern = new(
+        @"(?<name>[\w`.+<>,\[\]]+) \{(?<body>[^{}]*)\}",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Matches the <c> = </c> separator inside a normalized record body.
+    /// </summary>
+    private static readonly Regex RecordFieldSeparatorPattern = new(
+        @" = ",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    /// <summary>
     /// Compares an expected baseline outcome set with the actual G# run outcomes.
     /// </summary>
     /// <param name="expected">The C# baseline oracle test outcomes.</param>
@@ -54,47 +72,106 @@ public static class TestParityComparison
             throw new ArgumentNullException(nameof(actual));
         }
 
-        var expectedByName = new Dictionary<string, string>(StringComparer.Ordinal);
+        var expectedByName = new Dictionary<string, (string Display, string Outcome)>(StringComparer.Ordinal);
         foreach (TestCaseOutcome test in expected)
         {
             if (test?.Name is not null)
             {
-                expectedByName[test.Name] = test.Outcome;
+                expectedByName[NormalizeTestName(test.Name)] = (test.Name, test.Outcome);
             }
         }
 
-        var actualByName = new Dictionary<string, string>(StringComparer.Ordinal);
+        var actualByName = new Dictionary<string, (string Display, string Outcome)>(StringComparer.Ordinal);
         foreach (TestCaseOutcome test in actual)
         {
             if (test?.Name is not null)
             {
-                actualByName[test.Name] = test.Outcome;
+                actualByName[NormalizeTestName(test.Name)] = (test.Name, test.Outcome);
             }
         }
 
         var diffs = new List<TestParityDiff>();
 
-        foreach (KeyValuePair<string, string> pair in expectedByName.OrderBy(p => p.Key, StringComparer.Ordinal))
+        foreach (KeyValuePair<string, (string Display, string Outcome)> pair in
+            expectedByName.OrderBy(p => p.Key, StringComparer.Ordinal))
         {
-            if (!actualByName.TryGetValue(pair.Key, out string actualOutcome))
+            if (!actualByName.TryGetValue(pair.Key, out (string Display, string Outcome) actualEntry))
             {
-                diffs.Add(new TestParityDiff(TestDiffKind.Missing, pair.Key, pair.Value, null));
+                diffs.Add(new TestParityDiff(TestDiffKind.Missing, pair.Value.Display, pair.Value.Outcome, null));
             }
-            else if (!string.Equals(pair.Value, actualOutcome, StringComparison.Ordinal))
+            else if (!string.Equals(pair.Value.Outcome, actualEntry.Outcome, StringComparison.Ordinal))
             {
-                diffs.Add(new TestParityDiff(TestDiffKind.OutcomeMismatch, pair.Key, pair.Value, actualOutcome));
+                diffs.Add(new TestParityDiff(
+                    TestDiffKind.OutcomeMismatch, pair.Value.Display, pair.Value.Outcome, actualEntry.Outcome));
             }
         }
 
-        foreach (KeyValuePair<string, string> pair in actualByName.OrderBy(p => p.Key, StringComparer.Ordinal))
+        foreach (KeyValuePair<string, (string Display, string Outcome)> pair in
+            actualByName.OrderBy(p => p.Key, StringComparer.Ordinal))
         {
             if (!expectedByName.ContainsKey(pair.Key))
             {
-                diffs.Add(new TestParityDiff(TestDiffKind.Extra, pair.Key, null, pair.Value));
+                diffs.Add(new TestParityDiff(TestDiffKind.Extra, pair.Value.Display, null, pair.Value.Outcome));
             }
         }
 
         return new TestParityResult(diffs);
+    }
+
+    /// <summary>
+    /// Canonicalizes a test display name so the ADR-0029 <c>data</c>-type
+    /// <c>ToString()</c> format is comparable with the C# <c>record</c> format
+    /// (issue #2833).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// xUnit builds a theory case's display name from each argument's
+    /// <c>ToString()</c>. ADR-0029 deliberately picked the Kotlin rendering
+    /// <c>Rectangle(Width=3, Height=4)</c> over the C# record rendering
+    /// <c>Rectangle { Width = 3, Height = 4 }</c>, so a theory whose data
+    /// includes a record produces display names that differ between the C#
+    /// baseline oracle and the migrated G# run even though every test ran and
+    /// passed identically. Matching those cases on the raw display name reports
+    /// a spurious <c>Missing</c> + <c>Extra</c> pair per case.
+    /// </para>
+    /// <para>
+    /// The normalization rewrites the C# spelling into the G# spelling before
+    /// comparison, innermost-first so nested records fold correctly. It is
+    /// idempotent: a name already in the G# spelling contains no braces and is
+    /// returned unchanged. Diagnostics still report the original display name.
+    /// </para>
+    /// </remarks>
+    /// <param name="name">The raw xUnit test display name.</param>
+    /// <returns>The canonicalized name used as the comparison key.</returns>
+    public static string NormalizeTestName(string name)
+    {
+        if (string.IsNullOrEmpty(name) || name.IndexOf('{') < 0)
+        {
+            return name;
+        }
+
+        string current = name;
+        for (int guard = 0; guard < 32; guard++)
+        {
+            string next = CSharpRecordToStringPattern.Replace(
+                current,
+                m =>
+                {
+                    string body = m.Groups["body"].Value.Trim();
+                    return body.Length == 0
+                        ? m.Groups["name"].Value + "()"
+                        : m.Groups["name"].Value + "(" + RecordFieldSeparatorPattern.Replace(body, "=") + ")";
+                });
+
+            if (string.Equals(next, current, StringComparison.Ordinal))
+            {
+                return next;
+            }
+
+            current = next;
+        }
+
+        return current;
     }
 }
 

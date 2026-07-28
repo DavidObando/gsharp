@@ -280,7 +280,7 @@ details.
 | --- | --- | --- | --- | --- |
 | `corpus/L1-Console` | PASS | PASS | PASS | PASS |
 | `corpus/L2-Library` | PASS | PASS | PASS | PASS |
-| `corpus/L3-Library` | PASS | PASS | PASS | skip (unverified, ledgered; [#1924](https://github.com/DavidObando/gsharp/issues/1924)) |
+| `corpus/L3-Library` | PASS | PASS | PASS | PASS |
 | `corpus/L4-Console` | PASS | PASS | PASS | PASS |
 | `corpus/L5-Console` | PASS | PASS | PASS | PASS |
 | `corpus/grid/G01…G14` (14 apps) | PASS except deliberate G07 unsupported operator | PASS | PASS | PASS |

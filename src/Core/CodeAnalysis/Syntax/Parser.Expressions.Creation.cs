@@ -811,8 +811,13 @@ public partial class Parser
     {
         isComplex = false;
 
-        // Optional leading bracketed segment: '[' ']' or '[' Number ']' for slice/array shapes.
-        if (Peek(pos).Kind == SyntaxKind.OpenSquareBracketToken)
+        // Optional leading bracketed segments: '[' ']' or '[' Number ']' for
+        // slice/array shapes. Issue #2830: a jagged shape stacks them
+        // (`[][]int32`, `[2][]T`), so this loops — matching the real
+        // `ParseTypeClause` nesting that issue #1046 introduced. Scanning only
+        // one segment made `List[[][]int32]{ … }` fail to be recognised as a
+        // generic composite-literal site.
+        while (Peek(pos).Kind == SyntaxKind.OpenSquareBracketToken)
         {
             // An array/slice prefix is unambiguously a type shape (Issue #1323).
             isComplex = true;
@@ -1258,7 +1263,7 @@ public partial class Parser
         try
         {
             // Indexed entry `[key] = value`.
-            if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
+            if (Current.Kind == SyntaxKind.OpenSquareBracketToken && LooksLikeIndexedCollectionElement())
             {
                 var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
                 var key = ParseExpression();
@@ -1285,6 +1290,55 @@ public partial class Parser
         {
             suppressTrailingObjectInitializer = savedSuppress;
             suppressStructLiteral = savedStructLiteral;
+        }
+    }
+
+    // Issue #2830: inside a collection initializer both an indexed
+    // entry (`[key] = value`) and an array-literal element (`[]T{ … }`,
+    // `[N]T{ … }`) start with `[`. Scan to the bracket that closes the leading
+    // `[` and commit to the indexed form only when a `=` follows it; every
+    // other shape is an ordinary element expression, which lets
+    // `List[[]object]{ []object{ … }, … }` parse.
+    private bool LooksLikeIndexedCollectionElement()
+    {
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        for (var offset = 0; ; offset++)
+        {
+            var kind = Peek(offset).Kind;
+            switch (kind)
+            {
+                case SyntaxKind.OpenSquareBracketToken:
+                    bracketDepth++;
+                    break;
+
+                case SyntaxKind.CloseSquareBracketToken:
+                    bracketDepth--;
+                    if (bracketDepth == 0)
+                    {
+                        return Peek(offset + 1).Kind == SyntaxKind.EqualsToken;
+                    }
+
+                    break;
+
+                case SyntaxKind.OpenBraceToken:
+                    braceDepth++;
+                    break;
+
+                case SyntaxKind.CloseBraceToken:
+                    // The brace that closes the enclosing collection
+                    // initializer — the leading `[` was never closed.
+                    if (braceDepth == 0)
+                    {
+                        return false;
+                    }
+
+                    braceDepth--;
+                    break;
+
+                case SyntaxKind.EndOfFileToken:
+                    return false;
+            }
         }
     }
 

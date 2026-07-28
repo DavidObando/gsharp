@@ -1,8 +1,6 @@
 {
   "schemaVersion": "1.0",
-  "unverifiedApps": [
-    "corpus/L3-Library"
-  ],
+  "unverifiedApps": [],
   "gaps": [
     {
       "fingerprint": "sha256:6f8792050be1d47fac7ce41e95e0648de72bd0620f11414aff2e5dff56919e29",
