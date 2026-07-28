@@ -10,6 +10,7 @@ using System.Text;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
+using Cs2Gs.Pipeline;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using Xunit;
@@ -298,6 +299,60 @@ namespace Demo
 
         Assert.Contains("if let c = ", printed, StringComparison.Ordinal);
         CompileAndRun(printed, "Package().Copyright()");
+    }
+
+    [Fact]
+    public void Issue2819_SameVersionPackedSdk_CompilesTranslatedIfLet()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class C
+    {
+        public string[]? G() => null;
+
+        public string? Value() =>
+            G() is { } values && values.Length > 0 ? values[0] : null;
+    }
+}");
+
+        Assert.Contains("if let values = ", printed, StringComparison.Ordinal);
+
+        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
+        (string NupkgPath, string Version)? sdk =
+            GsharpTestProjectRunner.ResolveLocalSdkPackage(repoRoot, "Release");
+        Assert.NotNull(sdk);
+        string cs2gsPackage = Path.Combine(
+            Path.GetDirectoryName(sdk.Value.NupkgPath),
+            "Gsharp.Cs2Gs." + sdk.Value.Version + ".nupkg");
+        Assert.True(
+            File.Exists(cs2gsPackage),
+            "cs2gs and Gsharp.NET.Sdk must be packed at the same version: " + sdk.Value.Version);
+
+        string workDir = Path.Combine(
+            AppContext.BaseDirectory,
+            "issue-2819-packed-sdk",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workDir);
+        string sourcePath = Path.Combine(workDir, "Repro.gs");
+        File.WriteAllText(sourcePath, printed);
+
+        SdkCompileResult result = new SdkCompileRunner().Compile(
+            workDir,
+            "Issue2819",
+            new[] { sourcePath },
+            TargetKind.Library,
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            rootNamespace: null,
+            config: "Release");
+
+        Assert.True(result.IsAvailable, result.UnavailableReason);
+        Assert.True(
+            result.Succeeded,
+            "Packed SDK must compile cs2gs value-position if-let output. Output:\n" + result.Output);
     }
 
     // ── Conservative fallbacks ───────────────────────────────────────────
