@@ -179,6 +179,12 @@ internal sealed class DocumentTranslationState
     // Monotonic counter for synthesizing spill temporaries (issue #1731).
     public int SpillCounter { get; set; }
 
+    // While rebuilding a static-helper receiver chained from `?.`, replace the
+    // conditional-receiver placeholder with the already-guarded receiver so the
+    // normal member-access translator still applies tuple/nullable/pointer and
+    // extension-property rewrites to the rest of the chain.
+    public GExpression ConditionalReceiverReplacement { get; set; }
+
     // Issue #1902: numbers the `__qN` tuple parameter synthesized to carry a
     // query's transparent identifier (multiple in-scope range variables)
     // through a lambda that C#'s query-translation spec (§12.19.3) would bind

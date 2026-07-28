@@ -403,8 +403,22 @@ public sealed partial class CSharpToGSharpTranslator
                     out string owner,
                     out string name,
                     out SimpleNameSyntax helperName,
-                    out ExpressionSyntax chainedReceiver) ||
-                method.ReturnsVoid)
+                    out ExpressionSyntax chainedReceiver))
+            {
+                return false;
+            }
+
+            if (DependsOnEnclosingConditionalReceiver(conditionalAccess.Expression))
+            {
+                this.ReportUnsupportedNestedConditionalStaticHelperChain(conditionalAccess);
+                result = this.PreserveNullConditionalStaticExtensionInvocation(
+                    conditionalAccess,
+                    invocation,
+                    helperName);
+                return true;
+            }
+
+            if (method.ReturnsVoid)
             {
                 return false;
             }
@@ -465,6 +479,17 @@ public sealed partial class CSharpToGSharpTranslator
                 !method.ReturnsVoid)
             {
                 return false;
+            }
+
+            if (DependsOnEnclosingConditionalReceiver(conditionalAccess.Expression))
+            {
+                this.ReportUnsupportedNestedConditionalStaticHelperChain(conditionalAccess);
+                result = new ExpressionStatement(
+                    this.PreserveNullConditionalStaticExtensionInvocation(
+                        conditionalAccess,
+                        invocation,
+                        helperName));
+                return true;
             }
 
             if (chainedReceiver != null &&
@@ -551,7 +576,7 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression helperReceiver = new NonNullAssertionExpression(receiver);
             if (chainedReceiver != null)
             {
-                helperReceiver = TranslateConditionalStaticHelperReceiver(
+                helperReceiver = this.TranslateConditionalStaticHelperReceiver(
                     chainedReceiver,
                     helperReceiver);
             }
@@ -574,25 +599,26 @@ public sealed partial class CSharpToGSharpTranslator
             (expression is MemberAccessExpressionSyntax member &&
              IsSupportedConditionalStaticHelperReceiver(member.Expression));
 
-        private static GExpression TranslateConditionalStaticHelperReceiver(
+        private GExpression TranslateConditionalStaticHelperReceiver(
             ExpressionSyntax expression,
             GExpression conditionalReceiver)
         {
-            return expression switch
+            GExpression previous = this.state.ConditionalReceiverReplacement;
+            this.state.ConditionalReceiverReplacement = conditionalReceiver;
+            try
             {
-                MemberBindingExpressionSyntax binding =>
-                    new MemberAccessExpression(
-                        conditionalReceiver,
-                        SanitizeIdentifier(binding.Name.Identifier.Text)),
-                MemberAccessExpressionSyntax member =>
-                    new MemberAccessExpression(
-                        TranslateConditionalStaticHelperReceiver(
-                            member.Expression,
-                            conditionalReceiver),
-                        SanitizeIdentifier(member.Name.Identifier.Text)),
-                _ => conditionalReceiver,
-            };
+                return this.TranslateExpression(expression);
+            }
+            finally
+            {
+                this.state.ConditionalReceiverReplacement = previous;
+            }
         }
+
+        private static bool DependsOnEnclosingConditionalReceiver(ExpressionSyntax expression) =>
+            expression.DescendantNodesAndSelf(
+                    descendIntoChildren: node => node is not ConditionalAccessExpressionSyntax)
+                .Any(node => node is MemberBindingExpressionSyntax or ElementBindingExpressionSyntax);
 
         private GExpression PreserveNullConditionalStaticExtensionInvocation(
             ConditionalAccessExpressionSyntax conditionalAccess,
@@ -617,6 +643,16 @@ public sealed partial class CSharpToGSharpTranslator
                 "a null-conditional static-helper extension call with a non-member receiver chain " +
                 "cannot be lowered without losing the conditional receiver; the safe extension form " +
                 "is retained instead (issue #2821).";
+            this.context.ReportUnsupported(conditionalAccess, message);
+        }
+
+        private void ReportUnsupportedNestedConditionalStaticHelperChain(
+            ConditionalAccessExpressionSyntax conditionalAccess)
+        {
+            const string message =
+                "a static-helper extension call nested under another null-conditional receiver " +
+                "cannot be lowered without spilling a bare conditional receiver; the safe extension " +
+                "form is retained instead (issue #2821).";
             this.context.ReportUnsupported(conditionalAccess, message);
         }
 

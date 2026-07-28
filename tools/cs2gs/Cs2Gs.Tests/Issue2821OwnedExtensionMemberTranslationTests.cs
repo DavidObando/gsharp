@@ -515,6 +515,61 @@ public static class User
     }
 
     [Fact]
+    public void NullConditionalVoidStaticHelper_InSyncActionLambda_UsesStatementGuard()
+    {
+        IReadOnlyDictionary<string, string> printed = TranslateFiles(
+            ("Host.cs", @"
+#nullable enable
+namespace Demo;
+
+public sealed class Host
+{
+}"),
+            ("Extensions.cs", @"
+#nullable enable
+namespace Demo;
+
+public static class FirstExtensions
+{
+    public static void Touch(this Host host)
+    {
+    }
+}
+
+public static class SecondExtensions
+{
+    public static void Touch(this Host host, int value)
+    {
+    }
+}"),
+            ("User.cs", @"
+#nullable enable
+using System;
+
+namespace Demo;
+
+public static class User
+{
+    public static Host? GetHost() => null;
+
+    public static Action Bind() => () => GetHost()?.Touch();
+}"));
+
+        string user = Compact(printed["User.cs"]);
+
+        Assert.Equal(1, CountOccurrences(user, "User.GetHost()"));
+        Assert.Contains("() -> { let __spill", user);
+        Assert.Contains("if __spill", user);
+        Assert.Contains("FirstExtensions.Touch(__spill", user);
+        Assert.DoesNotContain("() -> User.GetHost()?.Touch()", user);
+        Assert.DoesNotContain("default(void", user);
+
+        ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
+            BindDiagnostics(printed.Values);
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
+    }
+
+    [Fact]
     public void NullConditionalStaticHelper_UsesTypedDefaultsForCompositeResults()
     {
         IReadOnlyDictionary<string, string> printed = TranslateFiles(
@@ -641,6 +696,183 @@ public static class User
         ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
             BindDiagnostics(printed.Values);
         Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
+    }
+
+    [Fact]
+    public void NullConditionalStaticHelper_NestedConditionalChain_BailsWithoutBareSpill()
+    {
+        IReadOnlyDictionary<string, string> printed = TranslateFiles(
+            ("Host.cs", @"
+#nullable enable
+namespace Demo;
+
+public sealed class Root
+{
+    public Host? Host;
+
+    public Host? GetHost() => Host;
+}
+
+public sealed class Host
+{
+}"),
+            ("Extensions.cs", @"
+#nullable enable
+namespace Demo;
+
+public static class FirstExtensions
+{
+    public static string Describe(this Host host) => ""first"";
+}
+
+public static class SecondExtensions
+{
+    public static string Describe(this Host host, int value) => ""second"";
+}"),
+            ("User.cs", @"
+#nullable enable
+namespace Demo;
+
+public static class User
+{
+    public static string Field(Root? root) => root?.Host?.Describe() ?? ""none"";
+
+    public static string Call(Root? root) => root?.GetHost()?.Describe() ?? ""none"";
+}"));
+
+        string user = Compact(printed["User.cs"]);
+
+        Assert.Contains(".Host?.Describe()", user);
+        Assert.Contains(".GetHost()?.Describe()", user);
+        Assert.DoesNotContain("let __spill = .", user);
+        Assert.DoesNotContain("FirstExtensions.Describe(.", user);
+    }
+
+    [Fact]
+    public void NullConditionalStaticHelper_ChainedPrefixUsesNormalMemberTranslation()
+    {
+        IReadOnlyDictionary<string, string> printed = TranslateFiles(
+            ("Types.cs", @"
+#nullable enable
+namespace Demo;
+
+public readonly struct Node
+{
+}
+
+public sealed class Holder
+{
+    public Node Value;
+}
+
+public sealed class Config
+{
+    public (Node Node, int Other) Pair;
+
+    public Node? Maybe;
+
+    public Holder Holder = new Holder();
+}
+
+public static class HolderExtensions
+{
+    extension(Holder holder)
+    {
+        public Node Current => holder.Value;
+    }
+}"),
+            ("Extensions.cs", @"
+#nullable enable
+namespace Demo;
+
+public static class FirstExtensions
+{
+    public static string Describe(this Node node) => ""first"";
+}
+
+public static class SecondExtensions
+{
+    public static string Describe(this Node node, int value) => ""second"";
+}"),
+            ("User.cs", @"
+#nullable enable
+namespace Demo;
+
+public static class User
+{
+    public static string Tuple(Config? config) =>
+        config?.Pair.Node.Describe() ?? ""none"";
+
+    public static string Nullable(Config? config) =>
+        config?.Maybe.Value.Describe() ?? ""none"";
+
+    public static string ExtensionProperty(Config? config) =>
+        config?.Holder.Current.Describe() ?? ""none"";
+}"));
+
+        string user = Compact(printed["User.cs"]);
+
+        Assert.Equal(3, CountOccurrences(user, "FirstExtensions.Describe("));
+        Assert.Contains(".Pair.Item1)", user);
+        Assert.Contains(".Maybe!!)", user);
+        Assert.Contains(".Holder.Current())", user);
+        Assert.DoesNotContain(".Pair.Node", user);
+        Assert.DoesNotContain(".Maybe.Value", user);
+
+        ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
+            BindDiagnostics(printed.Values);
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
+    }
+
+    [Fact]
+    public void NullConditionalStaticHelper_ChainedPrefixPreservesPointerAccess()
+    {
+        IReadOnlyDictionary<string, string> printed = TranslateFiles(
+            ("Types.cs", @"
+#nullable enable
+namespace Demo;
+
+public struct Node
+{
+}
+
+public struct PointerHolder
+{
+    public Node Value;
+}
+
+public sealed unsafe class Config
+{
+    public PointerHolder* Pointer;
+}"),
+            ("Extensions.cs", @"
+#nullable enable
+namespace Demo;
+
+public static class FirstExtensions
+{
+    public static string Describe(this Node node) => ""first"";
+}
+
+public static class SecondExtensions
+{
+    public static string Describe(this Node node, int value) => ""second"";
+}"),
+            ("User.cs", @"
+#nullable enable
+namespace Demo;
+
+public static class User
+{
+    public static unsafe string Run(Config? config) =>
+        config?.Pointer->Value.Describe() ?? ""none"";
+}"));
+
+        string user = Compact(printed["User.cs"]);
+
+        Assert.Contains("FirstExtensions.Describe(", user);
+        Assert.Contains(".Pointer->Value)", user);
+        Assert.DoesNotContain(".Pointer.Value", user);
     }
 
     [Fact]
