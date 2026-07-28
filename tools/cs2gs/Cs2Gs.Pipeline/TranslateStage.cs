@@ -468,11 +468,16 @@ public sealed class TranslateStage : IMigrationStage
         ISet<string> usedOutputPaths)
     {
         const string attributeName = "System.Runtime.CompilerServices.InternalsVisibleToAttribute";
+
+        // Documents are loader-classified hand-authored sources; generated obj
+        // AssemblyInfo trees remain in the compilation but are excluded here.
         List<string> friendAssemblies = project.Compilation.Assembly.GetAttributes()
             .Where(attribute =>
                 attribute.AttributeClass?.ToDisplayString() == attributeName &&
                 attribute.ConstructorArguments.Length == 1 &&
-                attribute.ConstructorArguments[0].Value is string)
+                attribute.ConstructorArguments[0].Value is string &&
+                attribute.ApplicationSyntaxReference is { SyntaxTree: { } syntaxTree } &&
+                project.Documents.Any(document => document.SyntaxTree == syntaxTree))
             .Select(attribute => (string)attribute.ConstructorArguments[0].Value)
             .Distinct(StringComparer.Ordinal)
             .ToList();
