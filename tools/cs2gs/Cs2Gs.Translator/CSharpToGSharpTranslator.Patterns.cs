@@ -240,7 +240,9 @@ public sealed partial class CSharpToGSharpTranslator
                     return this.TranslatePredefinedTypeExpression(predefinedType);
 
                 case ConditionalAccessExpressionSyntax conditionalAccess:
-                    if (this.TryTranslateNullConditionalEnumExtension(conditionalAccess, out GExpression enumExtResult))
+                    if (this.TryTranslateNullConditionalStaticExtensionHelper(
+                            conditionalAccess,
+                            out GExpression enumExtResult))
                     {
                         return enumExtResult;
                     }

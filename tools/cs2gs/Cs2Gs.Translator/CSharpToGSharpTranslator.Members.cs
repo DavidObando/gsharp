@@ -951,7 +951,9 @@ public sealed partial class CSharpToGSharpTranslator
                     skipFirstParameter = true;
                     isStatic = false;
                 }
-                else if (self != null && self.Type.TypeKind != TypeKind.Enum)
+                else if (self != null &&
+                    self.Type.TypeKind != TypeKind.Enum &&
+                    !this.ownedExtensions.IsStaticHelper(symbol))
                 {
                     // External C# extension methods retain receiver-clause form
                     // (ADR-0115 §B.5). Enum receivers stay static helpers because

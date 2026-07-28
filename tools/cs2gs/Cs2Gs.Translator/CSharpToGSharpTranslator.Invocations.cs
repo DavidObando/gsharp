@@ -84,13 +84,12 @@ public sealed partial class CSharpToGSharpTranslator
                 return new InvocationExpression(invokeTarget, invokeArguments, null);
             }
 
-            // A C# extension method whose receiver is an enum is emitted as a
-            // plain static helper (a receiver clause is rejected on enums,
-            // GS0103). Rewrite the call `x.M(args)` to the positional form
-            // `Owner.M(x, args)` so it binds to that helper.
+            // Extensions that must remain static helpers (enum receivers or
+            // owned reduced-signature collisions) use positional calls.
             if (invocation.Expression is MemberAccessExpressionSyntax extMember
                 && this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol extMethod
-                && TryGetEnumExtension(extMethod, out string extOwner, out string extName))
+                && extMethod.MethodKind == MethodKind.ReducedExtension
+                && this.TryGetStaticExtensionHelper(extMethod, out string extOwner, out string extName))
             {
                 var extArgs = new List<GExpression>
                 {
@@ -126,6 +125,7 @@ public sealed partial class CSharpToGSharpTranslator
                 && staticExt.Parameters.Length >= 1
                 && !(staticExt.ReducedFrom ?? staticExt).DeclaringSyntaxReferences.IsDefaultOrEmpty
                 && (staticExt.Parameters[0].Type?.TypeKind ?? TypeKind.Unknown) != TypeKind.Enum
+                && !this.ownedExtensions.IsStaticHelper(staticExt)
                 && this.context.SemanticModel.GetSymbolInfo(staticExtMember.Expression).Symbol is INamedTypeSymbol
                 && TryGetExplicitExtensionReceiverArgument(
                     staticExtOperation,
@@ -167,6 +167,7 @@ public sealed partial class CSharpToGSharpTranslator
                 && bareExt.Parameters.Length >= 1
                 && !(bareExt.ReducedFrom ?? bareExt).DeclaringSyntaxReferences.IsDefaultOrEmpty
                 && (bareExt.Parameters[0].Type?.TypeKind ?? TypeKind.Unknown) != TypeKind.Enum
+                && !this.ownedExtensions.IsStaticHelper(bareExt)
                 && TryGetExplicitExtensionReceiverArgument(
                     bareExtOperation,
                     bareExt,
@@ -381,15 +382,12 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         /// <summary>
-        /// Rewrites a null-conditional call to an enum extension method
-        /// (<c>recv?.M(args)</c> where <c>M</c> is <c>this EnumType</c>) into the
+        /// Rewrites a null-conditional call to a static-helper extension method
+        /// into the
         /// ternary <c>if recv != nil { Owner.M(recv!!, args) } else { nil }</c>.
-        /// An enum extension is emitted as a plain static helper (a G# receiver
-        /// clause is rejected on enums, GS0103), so the <c>?.</c> member-binding
-        /// form cannot bind to it; gsc reports GS0159. The receiver is a pure
-        /// expression in practice, so the duplicated evaluation is safe.
+        /// The <c>?.</c> member-binding form cannot bind to a static helper.
         /// </summary>
-        private bool TryTranslateNullConditionalEnumExtension(
+        private bool TryTranslateNullConditionalStaticExtensionHelper(
             ConditionalAccessExpressionSyntax conditionalAccess,
             out GExpression result)
         {
@@ -402,7 +400,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             if (this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method ||
-                !TryGetEnumExtension(method, out string owner, out string name))
+                !this.TryGetStaticExtensionHelper(method, out string owner, out string name))
             {
                 return false;
             }
@@ -501,17 +499,14 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         /// <summary>
-        /// Determines whether <paramref name="method"/> is a C# extension method
-        /// whose receiver (<c>this</c>) parameter is an enum. Such an extension
-        /// cannot carry a G# receiver clause (ADR-0079; gsc reports GS0103), so it
-        /// is emitted as a plain static helper and its call sites are rewritten to
-        /// the positional form <c>Owner.Method(receiver, …)</c>.
+        /// Determines whether <paramref name="method"/> is emitted as a plain
+        /// static helper rather than a receiver-clause method.
         /// </summary>
         /// <param name="method">The bound (possibly reduced) call symbol.</param>
         /// <param name="ownerName">The declaring static class name when matched.</param>
         /// <param name="methodName">The helper method name when matched.</param>
-        /// <returns><see langword="true"/> when the call targets an enum extension.</returns>
-        private static bool TryGetEnumExtension(IMethodSymbol method, out string ownerName, out string methodName)
+        /// <returns><see langword="true"/> when the call targets a static helper.</returns>
+        private bool TryGetStaticExtensionHelper(IMethodSymbol method, out string ownerName, out string methodName)
         {
             ownerName = null;
             methodName = null;
@@ -522,7 +517,8 @@ public sealed partial class CSharpToGSharpTranslator
 
             ITypeSymbol receiverType = method.ReceiverType
                 ?? method.Parameters.FirstOrDefault()?.Type;
-            if (receiverType?.TypeKind != TypeKind.Enum)
+            if (receiverType?.TypeKind != TypeKind.Enum &&
+                !this.ownedExtensions.IsStaticHelper(method))
             {
                 return false;
             }

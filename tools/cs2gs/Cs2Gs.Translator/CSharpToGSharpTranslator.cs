@@ -451,6 +451,7 @@ public sealed partial class CSharpToGSharpTranslator
     private static OwnedExtensionRegistry CollectOwnedExtensions(Compilation compilation)
     {
         var result = new OwnedExtensionRegistry();
+        var candidates = new List<(INamedTypeSymbol Receiver, MethodDeclarationSyntax Syntax, IMethodSymbol Method)>();
         foreach (Microsoft.CodeAnalysis.SyntaxTree tree in compilation.SyntaxTrees)
         {
             SemanticModel model = compilation.GetSemanticModel(tree);
@@ -475,13 +476,31 @@ public sealed partial class CSharpToGSharpTranslator
                         compilation.Assembly) ||
                     !SymbolEqualityComparer.Default.Equals(
                         receiverDefinition.ContainingNamespace,
-                        method.ContainingNamespace) ||
-                    HasSameNamedInstanceMember(receiverType, method.Name))
+                        method.ContainingNamespace))
                 {
                     continue;
                 }
 
-                result.Add(receiverDefinition, methodDeclaration);
+                candidates.Add((receiverDefinition, methodDeclaration, method));
+            }
+        }
+
+        foreach ((INamedTypeSymbol receiver, MethodDeclarationSyntax syntax, IMethodSymbol method) in candidates)
+        {
+            bool duplicateOwnedExtension = candidates.Any(
+                other =>
+                    !ReferenceEquals(other.Syntax, syntax) &&
+                    SymbolEqualityComparer.Default.Equals(other.Receiver, receiver) &&
+                    HaveSameReducedSignature(method, other.Method));
+            if (duplicateOwnedExtension || HasReducedDeclarationCollision(receiver, method))
+            {
+                result.AddStaticHelper(syntax);
+                continue;
+            }
+
+            if (!HasApplicableInstanceMember(compilation, receiver, method))
+            {
+                result.Add(receiver, syntax);
             }
         }
 
@@ -501,18 +520,138 @@ public sealed partial class CSharpToGSharpTranslator
         return false;
     }
 
-    private static bool HasSameNamedInstanceMember(INamedTypeSymbol type, string name)
+    private static bool HasReducedDeclarationCollision(INamedTypeSymbol type, IMethodSymbol extension)
     {
         for (INamedTypeSymbol current = type; current != null; current = current.BaseType)
         {
-            if (current.GetMembers(name).Any(member => !member.IsStatic))
+            foreach (ISymbol member in current.GetMembers(extension.Name))
             {
-                return true;
+                if (member.IsStatic)
+                {
+                    continue;
+                }
+
+                if (member is not IMethodSymbol method ||
+                    HaveSameReducedSignature(
+                        extension,
+                        method,
+                        leftIsExtension: true,
+                        rightIsExtension: false))
+                {
+                    return true;
+                }
             }
         }
 
         return false;
     }
+
+    private static bool HasApplicableInstanceMember(
+        Compilation compilation,
+        INamedTypeSymbol type,
+        IMethodSymbol extension)
+    {
+        for (INamedTypeSymbol current = type; current != null; current = current.BaseType)
+        {
+            foreach (IMethodSymbol method in current.GetMembers(extension.Name).OfType<IMethodSymbol>())
+            {
+                if (!method.IsStatic &&
+                    HasOverlappingApplicability(compilation, method, extension))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasOverlappingApplicability(
+        Compilation compilation,
+        IMethodSymbol instanceMethod,
+        IMethodSymbol extension)
+    {
+        int instanceMinimum = MinimumArgumentCount(instanceMethod.Parameters, 0);
+        int extensionMinimum = MinimumArgumentCount(extension.Parameters, 1);
+        int instanceMaximum = MaximumArgumentCount(instanceMethod.Parameters, 0);
+        int extensionMaximum = MaximumArgumentCount(extension.Parameters, 1);
+        int minimum = Math.Max(instanceMinimum, extensionMinimum);
+        int maximum = Math.Min(instanceMaximum, extensionMaximum);
+        if (minimum > maximum)
+        {
+            return false;
+        }
+
+        if (instanceMethod.TypeParameters.Length > 0 ||
+            extension.TypeParameters.Length > 0 ||
+            instanceMethod.Parameters.Any(parameter => parameter.IsOptional || parameter.IsParams) ||
+            extension.Parameters.Skip(1).Any(parameter => parameter.IsOptional || parameter.IsParams))
+        {
+            return true;
+        }
+
+        if (instanceMethod.Parameters.Length != extension.Parameters.Length - 1)
+        {
+            return false;
+        }
+
+        return instanceMethod.Parameters
+            .Zip(extension.Parameters.Skip(1), (target, source) => (Target: target, Source: source))
+            .All(pair =>
+                pair.Target.RefKind == pair.Source.RefKind &&
+                (pair.Source.RefKind == RefKind.None
+                    ? compilation.ClassifyConversion(pair.Source.Type, pair.Target.Type).IsImplicit
+                    : SignatureType(pair.Source.Type) == SignatureType(pair.Target.Type)));
+    }
+
+    private static int MinimumArgumentCount(ImmutableArray<IParameterSymbol> parameters, int offset) =>
+        parameters.Skip(offset).Count(parameter => !parameter.IsOptional && !parameter.IsParams);
+
+    private static int MaximumArgumentCount(ImmutableArray<IParameterSymbol> parameters, int offset) =>
+        parameters.Length > offset && parameters[parameters.Length - 1].IsParams
+            ? int.MaxValue
+            : parameters.Length - offset;
+
+    private static bool HaveSameReducedSignature(
+        IMethodSymbol left,
+        IMethodSymbol right,
+        bool leftIsExtension = true,
+        bool rightIsExtension = true)
+    {
+        if (left.Name != right.Name ||
+            left.TypeParameters.Length != right.TypeParameters.Length)
+        {
+            return false;
+        }
+
+        int leftOffset = leftIsExtension ? 1 : 0;
+        int rightOffset = rightIsExtension ? 1 : 0;
+        if (left.Parameters.Length - leftOffset != right.Parameters.Length - rightOffset)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < left.Parameters.Length - leftOffset; i++)
+        {
+            IParameterSymbol leftParameter = left.Parameters[leftOffset + i];
+            IParameterSymbol rightParameter = right.Parameters[rightOffset + i];
+            if (leftParameter.RefKind != rightParameter.RefKind ||
+                SignatureType(leftParameter.Type) != SignatureType(rightParameter.Type))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static string SignatureType(ITypeSymbol type) =>
+        string.Concat(
+            type.ToDisplayParts(SymbolDisplayFormat.FullyQualifiedFormat)
+                .Select(part => part.Symbol is ITypeParameterSymbol
+                    { TypeParameterKind: TypeParameterKind.Method } parameter
+                        ? "!" + parameter.Ordinal.ToString(CultureInfo.InvariantCulture)
+                        : part.ToString()));
 
     private static Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> CollectPartialTypeParts(Compilation compilation)
     {
@@ -976,6 +1115,9 @@ public sealed partial class CSharpToGSharpTranslator
         private readonly Dictionary<MethodDeclarationSyntax, INamedTypeSymbol> receiversByMethod =
             new();
 
+        private readonly HashSet<(Microsoft.CodeAnalysis.SyntaxTree Tree, int Start, int Length)> staticHelpers =
+            new();
+
         public void Add(INamedTypeSymbol receiver, MethodDeclarationSyntax method)
         {
             if (!this.methodsByReceiver.TryGetValue(receiver, out List<MethodDeclarationSyntax> methods))
@@ -990,6 +1132,18 @@ public sealed partial class CSharpToGSharpTranslator
 
         public bool Contains(MethodDeclarationSyntax method) =>
             this.receiversByMethod.ContainsKey(method);
+
+        public void AddStaticHelper(MethodDeclarationSyntax method) =>
+            this.staticHelpers.Add((method.SyntaxTree, method.SpanStart, method.Span.Length));
+
+        public bool IsStaticHelper(IMethodSymbol method)
+        {
+            IMethodSymbol original = method?.ReducedFrom ?? method;
+            return original != null &&
+                original.DeclaringSyntaxReferences.Any(
+                    reference => this.staticHelpers.Contains(
+                        (reference.SyntaxTree, reference.Span.Start, reference.Span.Length)));
+        }
 
         public bool TryGetMethods(
             INamedTypeSymbol receiver,
@@ -1029,6 +1183,14 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         filtered.Add(entry.Key, method);
                     }
+                }
+            }
+
+            foreach ((Microsoft.CodeAnalysis.SyntaxTree tree, int start, int length) in this.staticHelpers)
+            {
+                if (retainedFilePaths.Contains(tree.FilePath))
+                {
+                    filtered.staticHelpers.Add((tree, start, length));
                 }
             }
 
