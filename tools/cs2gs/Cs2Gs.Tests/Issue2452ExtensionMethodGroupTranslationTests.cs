@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.IO;
 using System.Linq;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
@@ -10,6 +11,9 @@ using Cs2Gs.Translator.Loading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Xunit;
+using GSharpCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation;
+using GSharpSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree;
+using GSharpSourceText = GSharp.Core.CodeAnalysis.Text.SourceText;
 
 namespace Cs2Gs.Tests;
 
@@ -113,7 +117,10 @@ public class Issue2452ExtensionMethodGroupTranslationTests
 
         string printed = Translate(source);
         Assert.Contains("host.Shape + shape.Shape + host.Measure()", printed, StringComparison.Ordinal);
+        Assert.Contains("func (host Host) Shape()", printed, StringComparison.Ordinal);
+        Assert.Contains("func (host Host) Measure(unused int32 = 0)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("host.Shape()", printed, StringComparison.Ordinal);
+        AssertCompilesWithoutErrors(printed);
     }
 
     private static string Translate(string source)
@@ -127,5 +134,21 @@ public class Issue2452ExtensionMethodGroupTranslationTests
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         return GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+    }
+
+    private static void AssertCompilesWithoutErrors(string source)
+    {
+        var compilation = new GSharpCompilation(
+            GSharpSyntaxTree.Parse(GSharpSourceText.From(source)))
+        {
+            IsLibrary = true,
+        };
+        using var peStream = new MemoryStream();
+        var result = compilation.Emit(peStream);
+
+        Assert.True(
+            result.Success,
+            "Emit failed:\n" + string.Join("\n", result.Diagnostics.Select(d => d.ToString())));
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
     }
 }

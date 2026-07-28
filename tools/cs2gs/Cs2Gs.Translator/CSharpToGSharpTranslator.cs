@@ -469,12 +469,14 @@ public sealed partial class CSharpToGSharpTranslator
 
                 INamedTypeSymbol receiverDefinition = receiverType.OriginalDefinition;
                 if (receiverDefinition.TypeKind is not (TypeKind.Class or TypeKind.Struct) ||
+                    IsGenericReceiver(receiverType) ||
                     !SymbolEqualityComparer.Default.Equals(
                         receiverDefinition.ContainingAssembly,
                         compilation.Assembly) ||
                     !SymbolEqualityComparer.Default.Equals(
                         receiverDefinition.ContainingNamespace,
-                        method.ContainingNamespace))
+                        method.ContainingNamespace) ||
+                    HasSameNamedInstanceMember(receiverType, method.Name))
                 {
                     continue;
                 }
@@ -484,6 +486,32 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         return result;
+    }
+
+    private static bool IsGenericReceiver(INamedTypeSymbol type)
+    {
+        for (INamedTypeSymbol current = type; current != null; current = current.ContainingType)
+        {
+            if (current.IsGenericType)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasSameNamedInstanceMember(INamedTypeSymbol type, string name)
+    {
+        for (INamedTypeSymbol current = type; current != null; current = current.BaseType)
+        {
+            if (current.GetMembers(name).Any(member => !member.IsStatic))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> CollectPartialTypeParts(Compilation compilation)

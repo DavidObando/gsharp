@@ -92,6 +92,52 @@ public static class TextExtensions
     }
 
     [Fact]
+    public void OpenGenericOwnedReceiver_RetainsReceiverClause()
+    {
+        IReadOnlyDictionary<string, string> printed = TranslateFiles(
+            ("Box.cs", @"
+namespace Demo;
+
+public sealed class Box<T>
+{
+    public T Value;
+}"),
+            ("Extensions.cs", @"
+namespace Demo;
+
+public static class BoxExtensions
+{
+    public static T Read<T>(this Box<T> box) => box.Value;
+}"));
+
+        Assert.Contains("func (box Box[T]) Read[T]()", printed["Extensions.cs"]);
+        Assert.DoesNotContain("func Read", printed["Box.cs"]);
+    }
+
+    [Fact]
+    public void ClosedGenericOwnedReceiver_RetainsReceiverClause()
+    {
+        IReadOnlyDictionary<string, string> printed = TranslateFiles(
+            ("Box.cs", @"
+namespace Demo;
+
+public sealed class Box<T>
+{
+    public T Value;
+}"),
+            ("Extensions.cs", @"
+namespace Demo;
+
+public static class BoxExtensions
+{
+    public static int Read(this Box<int> box) => box.Value;
+}"));
+
+        Assert.Contains("func (box Box[int32]) Read()", printed["Extensions.cs"]);
+        Assert.DoesNotContain("func Read", printed["Box.cs"]);
+    }
+
+    [Fact]
     public void ExcludedGeneratedExtension_DoesNotMoveIntoRetainedTarget()
     {
         IReadOnlyDictionary<string, string> printed = TranslateFiles(
