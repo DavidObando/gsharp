@@ -1055,10 +1055,10 @@ public sealed partial class CSharpToGSharpTranslator
             // emitted G# round-trips (ADR-0115 §B.6).
             bool isOpen = this.IsMemberEmittedOpen(symbol, isOverride);
 
-            // A method emitted in top-level receiver-clause form has no
-            // `open`/`override`: those modifiers are only valid on in-body
-            // members. Drop them so the emitted G# round-trips.
-            if (receiver != null)
+            // Receiver-clause methods and value-aggregate members have no
+            // `open`/`override`: G# value aggregates expose no open base method
+            // to override. Drop the modifiers so the emitted G# binds.
+            if (receiver != null || IsValueAggregate(ownerKind))
             {
                 isOpen = false;
                 isOverride = false;

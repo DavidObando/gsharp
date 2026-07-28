@@ -36,9 +36,14 @@ public readonly record struct Value(int Number)
 
         Assert.Contains("data struct Value", printed);
         Assert.Contains("    func Double()", printed);
-        Assert.Contains("    override func ToString()", printed);
+        Assert.Contains("    func ToString()", printed);
+        Assert.DoesNotContain("override func ToString()", printed);
         Assert.DoesNotContain("func (self Value)", printed);
         Assert.DoesNotContain("func (self Value) ToString", printed);
+
+        ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
+            BindDiagnostics(new[] { printed });
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
     }
 
     [Fact]
