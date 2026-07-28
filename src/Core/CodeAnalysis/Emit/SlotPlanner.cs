@@ -1028,6 +1028,7 @@ internal sealed class SlotPlanner
         {
             if (node.ReceiverExpression != null)
             {
+                this.AddIfNeeded(node.ReceiverExpression);
                 this.AddIfCompoundReused(node.ReceiverExpression, node.Value);
             }
 

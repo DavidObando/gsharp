@@ -662,14 +662,12 @@ internal sealed partial class MethodBodyEmitter
                     + "Check AssignmentValueSpillCollector and its ancestor walker.");
             }
 
-            // Issue #1688: this receiver is a plain value push for `stfld`
-            // (not an address), so needAddress: false — TryEmitCachedReceiver
-            // falls back to a normal EmitExpression when no compound-reuse
-            // slot was planned (the common #1614 simple-assignment case).
-            if (!this.TryEmitCachedReceiver(addressReceiver ?? fas.ReceiverExpression, needAddress: false))
-            {
-                this.EmitExpression(addressReceiver ?? fas.ReceiverExpression);
-            }
+            // Issue #2818: stfld needs an object reference for a class
+            // receiver, but a managed pointer for a value-type receiver.
+            // EmitInstanceReceiver preserves both shapes: nested addressable
+            // fields use ldflda, while non-addressable struct rvalues spill to
+            // a local and use ldloca.
+            this.EmitInstanceReceiver(addressReceiver ?? fas.ReceiverExpression);
 
             // Issue #1235 (object-initializer follow-up): a `T{Field: value}`
             // literal on a class-constrained type parameter lowers to an

@@ -106,6 +106,50 @@ public class FieldAssignmentEmitTests
     }
 
     [Fact]
+    public void NestedStructFieldAssignment_ThroughClassField_LeavesFieldUpdated()
+    {
+        var source = """
+            package P
+            import System
+
+            struct Item {
+                var Id int32
+            }
+
+            class Holder {
+                var Value Item
+            }
+
+            let holder = Holder()
+            holder.Value.Id = 7
+            public var result = holder.Value.Id
+            """;
+
+        Assert.Equal(7, RunAndGetIntResult(source));
+    }
+
+    [Fact]
+    public void StructRvalueFieldAssignment_ResultIsAssignedValue()
+    {
+        var source = """
+            package P
+            import System
+
+            struct Item {
+                var Id int32
+            }
+
+            func makeItem() Item {
+                return Item{Id: 1}
+            }
+
+            public var result = (makeItem().Id = 7)
+            """;
+
+        Assert.Equal(7, RunAndGetIntResult(source));
+    }
+
+    [Fact]
     public void StructFieldAssignment_ValueExpressionReadsReceiver()
     {
         // Reading the receiver inside the value expression is fine and must
