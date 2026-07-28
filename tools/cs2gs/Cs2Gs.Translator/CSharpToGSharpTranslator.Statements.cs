@@ -1763,6 +1763,14 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GStatement TranslateExpressionStatement(ExpressionSyntax expression)
         {
+            if (expression is ConditionalAccessExpressionSyntax conditionalAccess &&
+                this.TryTranslateNullConditionalStaticExtensionHelperStatement(
+                    conditionalAccess,
+                    out GStatement conditionalHelperStatement))
+            {
+                return conditionalHelperStatement;
+            }
+
             switch (expression)
             {
                 case AssignmentExpressionSyntax assignment when this.IsDelegateMulticastCombine(assignment, out string combineOp):

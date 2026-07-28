@@ -467,6 +467,183 @@ public static class User
     }
 
     [Fact]
+    public void NullConditionalVoidStaticHelper_UsesStatementGuard()
+    {
+        IReadOnlyDictionary<string, string> printed = TranslateFiles(
+            ("Host.cs", @"
+#nullable enable
+namespace Demo;
+
+public sealed class Host
+{
+}"),
+            ("Extensions.cs", @"
+#nullable enable
+namespace Demo;
+
+public static class FirstExtensions
+{
+    public static void Touch(this Host host)
+    {
+    }
+}
+
+public static class SecondExtensions
+{
+    public static void Touch(this Host host, int value)
+    {
+    }
+}"),
+            ("User.cs", @"
+#nullable enable
+namespace Demo;
+
+public static class User
+{
+    public static void Run(Host? host) => host?.Touch();
+}"));
+
+        string user = Compact(printed["User.cs"]);
+
+        Assert.Contains("if host != nil { FirstExtensions.Touch(host!!) }", user);
+        Assert.DoesNotContain("else { nil }", user);
+        Assert.DoesNotContain("default(void", user);
+
+        ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
+            BindDiagnostics(printed.Values);
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
+    }
+
+    [Fact]
+    public void NullConditionalStaticHelper_UsesTypedDefaultsForCompositeResults()
+    {
+        IReadOnlyDictionary<string, string> printed = TranslateFiles(
+            ("Host.cs", @"
+#nullable enable
+namespace Demo;
+
+public sealed class Host
+{
+}"),
+            ("Extensions.cs", @"
+#nullable enable
+using System;
+using System.Collections.Generic;
+
+namespace Demo;
+
+public static class FirstExtensions
+{
+    public static List<int> Items(this Host host) => new List<int>();
+
+    public static int[] Values(this Host host) => new int[0];
+
+    public static (int, string) Pair(this Host host) => (1, ""one"");
+
+    public static Func<int, string> Formatter(this Host host) =>
+        value => value.ToString();
+}
+
+public static class SecondExtensions
+{
+    public static List<int> Items(this Host host, int value) => new List<int>();
+
+    public static int[] Values(this Host host, int value) => new int[0];
+
+    public static (int, string) Pair(this Host host, int value) => (1, ""one"");
+
+    public static Func<int, string> Formatter(this Host host, int value) =>
+        item => item.ToString();
+}"),
+            ("User.cs", @"
+#nullable enable
+using System;
+using System.Collections.Generic;
+
+namespace Demo;
+
+public static class User
+{
+    public static List<int>? Items(Host? host) => host?.Items();
+
+    public static int[]? Values(Host? host) => host?.Values();
+
+    public static (int, string)? Pair(Host? host) => host?.Pair();
+
+    public static Func<int, string>? Formatter(Host? host) => host?.Formatter();
+}"));
+
+        string user = Compact(printed["User.cs"]);
+
+        Assert.Contains("default(List[int32]?)", user);
+        Assert.Contains("default([]?int32)", user);
+        Assert.Contains("default((int32, string)?)", user);
+        Assert.Contains("default(((int32) -> string)?)", user);
+        Assert.DoesNotContain("List[int32]?(", user);
+        Assert.DoesNotContain("[]?int32(", user);
+        Assert.DoesNotContain("(int32, string)?(", user);
+        Assert.DoesNotContain("-> string)?(", user);
+
+        ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
+            BindDiagnostics(printed.Values);
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
+    }
+
+    [Fact]
+    public void NullConditionalStaticHelper_ChainedReceiverKeepsWholePrefix()
+    {
+        IReadOnlyDictionary<string, string> printed = TranslateFiles(
+            ("Config.cs", @"
+#nullable enable
+namespace Demo;
+
+public sealed class Config
+{
+    public Options Options = new Options();
+}
+
+public sealed class Options
+{
+}"),
+            ("Extensions.cs", @"
+#nullable enable
+namespace Demo;
+
+public static class FirstExtensions
+{
+    public static string Describe(this Options options) => ""first"";
+}
+
+public static class SecondExtensions
+{
+    public static string Describe(this Options options, int value) => ""second"";
+}"),
+            ("User.cs", @"
+#nullable enable
+namespace Demo;
+
+public static class User
+{
+    public static Config? GetConfig() => null;
+
+    public static string Run() => GetConfig()?.Options.Describe() ?? ""none"";
+}"));
+
+        string user = Compact(printed["User.cs"]);
+
+        Assert.Equal(1, CountOccurrences(user, "User.GetConfig()"));
+        Assert.Contains("let __spill", user);
+        Assert.Contains("FirstExtensions.Describe(__spill", user);
+        Assert.Contains("!!.Options)", user);
+        Assert.DoesNotContain("FirstExtensions.Describe(.Options", user);
+        Assert.DoesNotContain(".Options.Describe()", user);
+
+        ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
+            BindDiagnostics(printed.Values);
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
+    }
+
+    [Fact]
     public void RefReceiverStaticHelper_PassesReceiverAddress()
     {
         IReadOnlyDictionary<string, string> printed = TranslateFiles(
