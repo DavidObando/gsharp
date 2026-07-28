@@ -365,11 +365,11 @@ internal sealed partial class ExpressionBinder
             && !ReceiverTypeIsReference(bve.Variable.Type);
     }
 
-    private bool IsAddressableStructFieldReceiver(BoundExpression receiver)
+    private bool IsWritableStructFieldReceiver(BoundExpression receiver)
     {
         if (receiver is BoundVariableExpression)
         {
-            return true;
+            return !ReceiverBlocksValueTypeMemberWrite(receiver);
         }
 
         if (receiver is BoundDereferenceExpression dereference)
@@ -390,8 +390,17 @@ internal sealed partial class ExpressionBinder
             return fieldAccess.Field.IsStaticAddressLegal(staticConstructorOwner);
         }
 
+        if (fieldAccess.Field.IsReadOnly
+            && !IsReadOnlyFieldAssignmentAllowed(
+                fieldAccess.Field,
+                fieldAccess.StructType,
+                ReceiverExpressionIsThis(fieldAccess.Receiver)))
+        {
+            return false;
+        }
+
         return ReceiverTypeIsReference(fieldAccess.Receiver.Type)
-            || IsAddressableStructFieldReceiver(fieldAccess.Receiver);
+            || IsWritableStructFieldReceiver(fieldAccess.Receiver);
     }
 
     /// <summary>
@@ -971,7 +980,7 @@ internal sealed partial class ExpressionBinder
             || assignmentReceiver is BoundUnaryExpression;
         if (usesExpressionReceiver
             && !structSymbol.IsClass
-            && !IsAddressableStructFieldReceiver(assignmentReceiver))
+            && !IsWritableStructFieldReceiver(assignmentReceiver))
         {
             Diagnostics.ReportFieldAssignmentThroughStructTemporary(
                 syntax.EqualsToken.Location,
@@ -1386,7 +1395,7 @@ internal sealed partial class ExpressionBinder
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
             }
 
-            if (!structSym.IsClass && !IsAddressableStructFieldReceiver(boundReceiver))
+            if (!structSym.IsClass && !IsWritableStructFieldReceiver(boundReceiver))
             {
                 Diagnostics.ReportFieldAssignmentThroughStructTemporary(
                     syntax.OperatorToken.Location,
@@ -2026,7 +2035,7 @@ internal sealed partial class ExpressionBinder
                     $"{declaringType.Name}.{field.Name}");
 
                 var converted = conversions.BindConversion(syntax.Value.Location, BindValue(field.Type), field.Type);
-                if (!structSym.IsClass && !IsAddressableStructFieldReceiver(receiver))
+                if (!structSym.IsClass && !IsWritableStructFieldReceiver(receiver))
                 {
                     Diagnostics.ReportFieldAssignmentThroughStructTemporary(
                         syntax.EqualsToken.Location,

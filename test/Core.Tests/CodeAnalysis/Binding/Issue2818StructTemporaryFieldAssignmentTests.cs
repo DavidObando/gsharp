@@ -57,6 +57,75 @@ public class Issue2818StructTemporaryFieldAssignmentTests
         Assert.Contains(result.Diagnostics, d => d.Id == "GS0499");
     }
 
+    [Theory]
+    [InlineData("=")]
+    [InlineData("+=")]
+    public void LetStructLocal_NestedFieldAssignment_ReportsGS0499(string assignmentOperator)
+    {
+        var result = Evaluate($$"""
+            package P2818ReadonlyLocal
+
+            struct Item {
+                var Id int32
+            }
+
+            struct Outer {
+                var Inner Item
+            }
+
+            let outer = Outer{Inner: Item{Id: 1}}
+            outer.Inner.Id {{assignmentOperator}} 5
+            """);
+
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0499");
+    }
+
+    [Theory]
+    [InlineData("=")]
+    [InlineData("+=")]
+    public void ClassHeldReadonlyStructFieldAssignment_ReportsGS0499(string assignmentOperator)
+    {
+        var result = Evaluate($$"""
+            package P2818ReadonlyInstance
+
+            struct Item {
+                var Id int32
+            }
+
+            class Holder {
+                let Value Item = Item{Id: 1}
+            }
+
+            var holder = Holder()
+            holder.Value.Id {{assignmentOperator}} 5
+            """);
+
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0499");
+    }
+
+    [Fact]
+    public void InstanceReadonlyStructFieldAssignments_InDeclaringConstructor_DoNotReportGS0499()
+    {
+        var result = Evaluate("""
+            package P2818ReadonlyInstanceConstructor
+
+            struct Item {
+                var Id int32
+            }
+
+            class Holder {
+                let Value Item = Item{Id: 1}
+
+                init() {
+                    Value.Id = 5
+                    Value.Id += 2
+                }
+            }
+            """);
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0499");
+    }
+
     [Fact]
     public void StaticReadonlyStructFieldAssignment_ReportsGS0499()
     {
