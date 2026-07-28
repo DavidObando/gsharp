@@ -110,14 +110,19 @@ public class Issue2452ExtensionMethodGroupTranslationTests
                 public sealed class Consumer
                 {
                     public int Read(Host host, IShape shape) =>
-                        host.Shape + shape.Shape + host.Measure();
+                        host.Shape + shape.Shape + host.Measure() + Extensions.Shape(host);
                 }
             }
             """;
 
         string printed = Translate(source);
-        Assert.Contains("host.Shape + shape.Shape + host.Measure()", printed, StringComparison.Ordinal);
-        Assert.Contains("func (host Host) Shape()", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            "host.Shape + shape.Shape + host.Measure() + Extensions.Shape(host)",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains("class Extensions", printed, StringComparison.Ordinal);
+        Assert.Contains("func Shape(host Host)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("func (host Host) Shape", printed, StringComparison.Ordinal);
         Assert.Contains("func (host Host) Measure(unused int32 = 0)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("host.Shape()", printed, StringComparison.Ordinal);
         AssertCompilesWithoutErrors(printed);

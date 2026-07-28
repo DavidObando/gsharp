@@ -487,18 +487,21 @@ public sealed partial class CSharpToGSharpTranslator
 
         foreach ((INamedTypeSymbol receiver, MethodDeclarationSyntax syntax, IMethodSymbol method) in candidates)
         {
-            bool duplicateOwnedExtension = candidates.Any(
+            bool crossContainerOverload = candidates.Any(
                 other =>
                     !ReferenceEquals(other.Syntax, syntax) &&
                     SymbolEqualityComparer.Default.Equals(other.Receiver, receiver) &&
-                    HaveSameReducedSignature(method, other.Method));
-            if (duplicateOwnedExtension || HasReducedDeclarationCollision(receiver, method))
+                    other.Method.Name == method.Name &&
+                    !SymbolEqualityComparer.Default.Equals(
+                        other.Method.ContainingType,
+                        method.ContainingType));
+            if (crossContainerOverload || HasReducedDeclarationCollision(receiver, method))
             {
                 result.AddStaticHelper(syntax);
                 continue;
             }
 
-            if (!HasApplicableInstanceMember(compilation, receiver, method))
+            if (!HasApplicableInstanceMember(receiver, method))
             {
                 result.Add(receiver, syntax);
             }
@@ -546,17 +549,14 @@ public sealed partial class CSharpToGSharpTranslator
         return false;
     }
 
-    private static bool HasApplicableInstanceMember(
-        Compilation compilation,
-        INamedTypeSymbol type,
-        IMethodSymbol extension)
+    private static bool HasApplicableInstanceMember(INamedTypeSymbol type, IMethodSymbol extension)
     {
         for (INamedTypeSymbol current = type; current != null; current = current.BaseType)
         {
             foreach (IMethodSymbol method in current.GetMembers(extension.Name).OfType<IMethodSymbol>())
             {
                 if (!method.IsStatic &&
-                    HasOverlappingApplicability(compilation, method, extension))
+                    HasOverlappingApplicability(method, extension))
                 {
                     return true;
                 }
@@ -566,42 +566,14 @@ public sealed partial class CSharpToGSharpTranslator
         return false;
     }
 
-    private static bool HasOverlappingApplicability(
-        Compilation compilation,
-        IMethodSymbol instanceMethod,
-        IMethodSymbol extension)
+    private static bool HasOverlappingApplicability(IMethodSymbol instanceMethod, IMethodSymbol extension)
     {
         int instanceMinimum = MinimumArgumentCount(instanceMethod.Parameters, 0);
         int extensionMinimum = MinimumArgumentCount(extension.Parameters, 1);
         int instanceMaximum = MaximumArgumentCount(instanceMethod.Parameters, 0);
         int extensionMaximum = MaximumArgumentCount(extension.Parameters, 1);
-        int minimum = Math.Max(instanceMinimum, extensionMinimum);
-        int maximum = Math.Min(instanceMaximum, extensionMaximum);
-        if (minimum > maximum)
-        {
-            return false;
-        }
-
-        if (instanceMethod.TypeParameters.Length > 0 ||
-            extension.TypeParameters.Length > 0 ||
-            instanceMethod.Parameters.Any(parameter => parameter.IsOptional || parameter.IsParams) ||
-            extension.Parameters.Skip(1).Any(parameter => parameter.IsOptional || parameter.IsParams))
-        {
-            return true;
-        }
-
-        if (instanceMethod.Parameters.Length != extension.Parameters.Length - 1)
-        {
-            return false;
-        }
-
-        return instanceMethod.Parameters
-            .Zip(extension.Parameters.Skip(1), (target, source) => (Target: target, Source: source))
-            .All(pair =>
-                pair.Target.RefKind == pair.Source.RefKind &&
-                (pair.Source.RefKind == RefKind.None
-                    ? compilation.ClassifyConversion(pair.Source.Type, pair.Target.Type).IsImplicit
-                    : SignatureType(pair.Source.Type) == SignatureType(pair.Target.Type)));
+        return Math.Max(instanceMinimum, extensionMinimum) <=
+            Math.Min(instanceMaximum, extensionMaximum);
     }
 
     private static int MinimumArgumentCount(ImmutableArray<IParameterSymbol> parameters, int offset) =>

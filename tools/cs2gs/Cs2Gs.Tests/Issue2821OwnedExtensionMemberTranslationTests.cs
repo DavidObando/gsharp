@@ -144,6 +144,50 @@ public static class HostExtensions
     }
 
     [Fact]
+    public void InterfaceInstanceAndExtensionOverloads_RetainReceiverClause()
+    {
+        IReadOnlyDictionary<string, string> printed = TranslateFiles(
+            ("Host.cs", @"
+namespace Demo;
+
+public interface IA
+{
+}
+
+public interface IB
+{
+}
+
+public sealed class Both : IA, IB
+{
+}
+
+public sealed class Host
+{
+    public int M(IA value) => 1;
+}"),
+            ("Extensions.cs", @"
+namespace Demo;
+
+public static class HostExtensions
+{
+    public static int M(this Host host, IB value) => 2;
+}"),
+            ("User.cs", @"
+namespace Demo;
+
+public static class User
+{
+    public static int Run(Host host, Both value) => host.M(value);
+}"));
+
+        Assert.Contains("func M(value IA)", printed["Host.cs"]);
+        Assert.DoesNotContain("func M(value IB)", printed["Host.cs"]);
+        Assert.Contains("func (host Host) M(value IB)", printed["Extensions.cs"]);
+        Assert.Contains("host.M(value)", printed["User.cs"]);
+    }
+
+    [Fact]
     public void ExactReducedSignatureCollision_StaysStatic()
     {
         IReadOnlyDictionary<string, string> printed = TranslateFiles(
@@ -175,6 +219,60 @@ public static class User
         Assert.Contains("func M(host Host, value int32)", printed["Extensions.cs"]);
         Assert.DoesNotContain("func (host Host) M", combined);
         Assert.Contains("HostExtensions.M(host, 1)", printed["User.cs"]);
+
+        ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
+            BindDiagnostics(printed.Values);
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Id is "GS0264" or "GS0314");
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
+    }
+
+    [Fact]
+    public void DistinctOverloads_FromDifferentStaticClasses_StayStatic()
+    {
+        IReadOnlyDictionary<string, string> printed = TranslateFiles(
+            ("Host.cs", @"
+namespace Demo;
+
+public sealed class Host
+{
+}"),
+            ("FirstExtensions.cs", @"
+namespace Demo;
+
+public static class FirstExtensions
+{
+    public static string Describe(this Host host, object value) => ""object"";
+}"),
+            ("SecondExtensions.cs", @"
+namespace Demo;
+
+public static class SecondExtensions
+{
+    public static string Describe(this Host host, string value) => ""string"";
+}"),
+            ("User.cs", @"
+namespace Demo;
+
+public static class User
+{
+    public static string Run(Host host, string value) =>
+        FirstExtensions.Describe(host, value) +
+        SecondExtensions.Describe(host, value) +
+        host.Describe(value);
+}"));
+
+        string combined = string.Join(Environment.NewLine, printed.Values);
+
+        Assert.Contains("class FirstExtensions", combined);
+        Assert.Contains("class SecondExtensions", combined);
+        Assert.Contains("func Describe(host Host, value object)", printed["FirstExtensions.cs"]);
+        Assert.Contains("func Describe(host Host, value string)", printed["SecondExtensions.cs"]);
+        Assert.DoesNotContain("func Describe(value ", printed["Host.cs"]);
+        Assert.DoesNotContain("func (host Host) Describe", combined);
+        Assert.Contains("FirstExtensions.Describe(host, value)", printed["User.cs"]);
+        Assert.Equal(
+            2,
+            CountOccurrences(printed["User.cs"], "SecondExtensions.Describe(host, value)"));
 
         ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
             BindDiagnostics(printed.Values);
