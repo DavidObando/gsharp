@@ -451,7 +451,7 @@ public static class User
 {
     public static Host? GetHost() => null;
 
-    public static string? Run() => GetHost()?.Describe();
+    public static string Run() => GetHost()?.Describe() ?? ""none"";
 }"));
 
         string user = Compact(printed["User.cs"]);
