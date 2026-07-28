@@ -420,6 +420,142 @@ public static class User
     }
 
     [Fact]
+    public void NullConditionalStaticHelper_EvaluatesReceiverOnce()
+    {
+        IReadOnlyDictionary<string, string> printed = TranslateFiles(
+            ("Host.cs", @"
+#nullable enable
+namespace Demo;
+
+public sealed class Host
+{
+}"),
+            ("Extensions.cs", @"
+#nullable enable
+namespace Demo;
+
+public static class FirstExtensions
+{
+    public static string Describe(this Host host) => ""first"";
+}
+
+public static class SecondExtensions
+{
+    public static string Describe(this Host host, int value) => ""second"";
+}"),
+            ("User.cs", @"
+#nullable enable
+namespace Demo;
+
+public static class User
+{
+    public static Host? GetHost() => null;
+
+    public static string? Run() => GetHost()?.Describe();
+}"));
+
+        string user = Compact(printed["User.cs"]);
+
+        Assert.Equal(2, CountOccurrences(user, "GetHost()"));
+        Assert.Contains("let __spill", user);
+        Assert.Contains("FirstExtensions.Describe(__spill", user);
+        Assert.DoesNotContain("if GetHost() != nil", user);
+
+        ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
+            BindDiagnostics(printed.Values);
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
+    }
+
+    [Fact]
+    public void RefReceiverStaticHelper_PassesReceiverAddress()
+    {
+        IReadOnlyDictionary<string, string> printed = TranslateFiles(
+            ("Counter.cs", @"
+namespace Demo;
+
+public struct Counter
+{
+    public int Value;
+}"),
+            ("Extensions.cs", @"
+namespace Demo;
+
+public static class FirstExtensions
+{
+    public static void Increment(this ref Counter counter) => counter.Value++;
+}
+
+public static class SecondExtensions
+{
+    public static void Increment(this ref Counter counter, int amount) =>
+        counter.Value += amount;
+}"),
+            ("User.cs", @"
+namespace Demo;
+
+public static class User
+{
+    public static void Run(ref Counter counter) => counter.Increment();
+}"));
+
+        Assert.Contains("FirstExtensions.Increment(&counter)", Compact(printed["User.cs"]));
+
+        ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
+            BindDiagnostics(printed.Values);
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
+    }
+
+    [Fact]
+    public void NullableStaticHelperReceivers_PreserveNullForgiveness()
+    {
+        IReadOnlyDictionary<string, string> printed = TranslateFiles(
+            ("Host.cs", @"
+#nullable enable
+namespace Demo;
+
+public sealed class Host
+{
+}"),
+            ("Extensions.cs", @"
+#nullable enable
+namespace Demo;
+
+public static class FirstExtensions
+{
+    public static string Describe(this Host host, object value) => ""object"";
+}
+
+public static class SecondExtensions
+{
+    public static string Describe(this Host host, string value) => ""string"";
+}"),
+            ("User.cs", @"
+#nullable enable
+using System;
+
+namespace Demo;
+
+public sealed class User
+{
+    public Host? Current;
+
+    public string Invoke(string value) => Current.Describe(value);
+
+    public Func<string, string> Bind() => Current.Describe;
+}"));
+
+        string user = Compact(printed["User.cs"]);
+
+        Assert.Contains("SecondExtensions.Describe(Current!!, value)", user);
+        Assert.Contains("= Current!!", user);
+        Assert.Contains("SecondExtensions.Describe(__spill", user);
+
+        ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
+            BindDiagnostics(printed.Values);
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
+    }
+
+    [Fact]
     public void ExternalReceiver_RetainsReceiverClause()
     {
         string printed = TranslateFiles(

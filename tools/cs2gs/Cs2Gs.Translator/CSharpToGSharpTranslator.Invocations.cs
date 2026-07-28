@@ -93,7 +93,9 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 var extArgs = new List<GExpression>
                 {
-                    this.TranslateExpression(extMember.Expression),
+                    PassStaticExtensionHelperReceiver(
+                        this.TranslateReceiverWithNullForgiveness(extMember.Expression),
+                        extMethod),
                 };
                 extArgs.AddRange(this.TranslateArguments(invocation.ArgumentList.Arguments));
                 IReadOnlyList<GTypeReference> extTypeArgs = extMember.Name is GenericNameSyntax extGeneric
@@ -405,7 +407,9 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            GExpression receiver = this.TranslateExpression(conditionalAccess.Expression);
+            GExpression receiver = this.SpillOperand(
+                this.TranslateExpression(conditionalAccess.Expression),
+                conditionalAccess.Expression);
 
             var callArgs = new List<GExpression>
             {
@@ -536,7 +540,7 @@ public sealed partial class CSharpToGSharpTranslator
             string methodName)
         {
             GExpression receiver = this.CaptureMethodGroupReceiver(
-                this.TranslateExpression(member.Expression),
+                this.TranslateReceiverWithNullForgiveness(member.Expression),
                 member.Expression);
 
             IMethodSymbol invoke = (this.context.GetTypeInfo(member).ConvertedType as INamedTypeSymbol)
@@ -546,7 +550,7 @@ public sealed partial class CSharpToGSharpTranslator
             var parameters = new List<Parameter>(sourceParameters.Length);
             var arguments = new List<GExpression>(sourceParameters.Length + 1)
             {
-                receiver,
+                PassStaticExtensionHelperReceiver(receiver, method),
             };
 
             for (int i = 0; i < sourceParameters.Length; i++)
@@ -581,6 +585,16 @@ public sealed partial class CSharpToGSharpTranslator
                 arguments,
                 typeArguments);
             return new LambdaExpression(parameters, expressionBody: call);
+        }
+
+        private static GExpression PassStaticExtensionHelperReceiver(
+            GExpression receiver,
+            IMethodSymbol method)
+        {
+            IMethodSymbol original = method.ReducedFrom ?? method;
+            return original.Parameters[0].RefKind is RefKind.Ref or RefKind.Out
+                ? new UnaryExpression("&", receiver)
+                : receiver;
         }
 
         private GExpression CaptureMethodGroupReceiver(
