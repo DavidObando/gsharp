@@ -114,6 +114,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
             Imports = program.Imports,
             FriendAssemblies = program.FriendAssemblies,
             AssemblyAttributes = program.AssemblyAttributes,
+            ModuleAttributes = program.ModuleAttributes,
         };
 
         return result;

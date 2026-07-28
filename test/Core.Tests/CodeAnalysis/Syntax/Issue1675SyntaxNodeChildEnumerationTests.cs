@@ -321,13 +321,14 @@ public class Issue1675SyntaxNodeChildEnumerationTests
 
     private static IEnumerable<PropertyInfo> LegacyChildProperties(Type nodeType)
     {
-        // Verbatim filter from the pre-#1675 GetChildren implementation.
+        // Historical filter plus explicit derived-property exclusions.
         var properties = nodeType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
         foreach (var property in properties)
         {
-            if (typeof(SyntaxNode).IsAssignableFrom(property.PropertyType)
+            if (property.GetCustomAttribute<SyntaxChildIgnoreAttribute>() == null
+                && (typeof(SyntaxNode).IsAssignableFrom(property.PropertyType)
                 || typeof(SeparatedSyntaxList).IsAssignableFrom(property.PropertyType)
-                || typeof(IEnumerable<SyntaxNode>).IsAssignableFrom(property.PropertyType))
+                || typeof(IEnumerable<SyntaxNode>).IsAssignableFrom(property.PropertyType)))
             {
                 yield return property;
             }
@@ -336,11 +337,16 @@ public class Issue1675SyntaxNodeChildEnumerationTests
 
     private static IEnumerable<SyntaxNode> LegacyGetChildren(SyntaxNode node)
     {
-        // Verbatim copy of the pre-#1675 reflection-based implementation.
+        // Historical implementation plus explicit derived-property exclusions.
         var properties = node.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
 
         foreach (var property in properties)
         {
+            if (property.GetCustomAttribute<SyntaxChildIgnoreAttribute>() != null)
+            {
+                continue;
+            }
+
             if (typeof(SyntaxNode).IsAssignableFrom(property.PropertyType))
             {
                 var child = (SyntaxNode)property.GetValue(node);

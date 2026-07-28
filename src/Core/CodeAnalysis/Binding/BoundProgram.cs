@@ -279,4 +279,10 @@ public sealed class BoundProgram
     /// used for every other declaration-level attribute.
     /// </summary>
     public ImmutableArray<BoundAttribute> AssemblyAttributes { get; internal set; } = ImmutableArray<BoundAttribute>.Empty;
+
+    /// <summary>
+    /// Gets every file-level <c>@module:</c> annotation. The emitter writes
+    /// one real <c>CustomAttribute</c> row on the module metadata row per entry.
+    /// </summary>
+    public ImmutableArray<BoundAttribute> ModuleAttributes { get; internal set; } = ImmutableArray<BoundAttribute>.Empty;
 }

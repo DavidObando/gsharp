@@ -203,7 +203,8 @@ public abstract class SyntaxNode
         var childProperties = new List<PropertyInfo>(properties.Length);
         foreach (var property in properties)
         {
-            if (TryClassifyChildProperty(property, out _))
+            if (property.GetCustomAttribute<SyntaxChildIgnoreAttribute>() == null
+                && TryClassifyChildProperty(property, out _))
             {
                 childProperties.Add(property);
             }

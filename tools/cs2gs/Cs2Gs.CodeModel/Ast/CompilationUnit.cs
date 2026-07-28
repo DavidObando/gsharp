@@ -20,16 +20,19 @@ public sealed class CompilationUnit : GNode
     /// <param name="imports">The import directives, in original order.</param>
     /// <param name="members">The ordered top-level members and statements.</param>
     /// <param name="leadingComments">Optional file-leading comment lines (without the <c>//</c> prefix).</param>
+    /// <param name="fileAttributes">Assembly- or module-targeted file-level attributes, in source order.</param>
     public CompilationUnit(
         string package = null,
         IReadOnlyList<ImportDirective> imports = null,
         IReadOnlyList<GNode> members = null,
-        IReadOnlyList<string> leadingComments = null)
+        IReadOnlyList<string> leadingComments = null,
+        IReadOnlyList<AttributeUse> fileAttributes = null)
     {
         Package = package;
         Imports = imports ?? new List<ImportDirective>();
         Members = members ?? new List<GNode>();
         LeadingComments = leadingComments ?? new List<string>();
+        FileAttributes = fileAttributes ?? new List<AttributeUse>();
     }
 
     /// <summary>Gets the package name, or <see langword="null"/> for none.</summary>
@@ -43,6 +46,9 @@ public sealed class CompilationUnit : GNode
 
     /// <summary>Gets the file-leading comment lines (without the <c>//</c> prefix).</summary>
     public IReadOnlyList<string> LeadingComments { get; }
+
+    /// <summary>Gets assembly- or module-targeted file-level attributes.</summary>
+    public IReadOnlyList<AttributeUse> FileAttributes { get; }
 }
 
 /// <summary>

@@ -1220,6 +1220,22 @@ public static class GSharpPrinter
             needsBlank = true;
         }
 
+        if (unit.FileAttributes.Count > 0)
+        {
+            if (needsBlank)
+            {
+                sb.Append('\n');
+            }
+
+            foreach (var attribute in unit.FileAttributes)
+            {
+                sb.Append(RenderAttributeInline(attribute));
+                sb.Append('\n');
+            }
+
+            needsBlank = true;
+        }
+
         string previousText = null;
         foreach (var node in unit.Members)
         {

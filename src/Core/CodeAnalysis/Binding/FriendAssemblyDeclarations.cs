@@ -41,7 +41,7 @@ internal static class FriendAssemblyDeclarations
     private const string AnnotationNameWithSuffix = "InternalsVisibleToAttribute";
 
     /// <summary>
-    /// Collects every file-level <c>@assembly:</c> annotation across
+    /// Collects every file-level <c>@assembly:</c> or <c>@module:</c> annotation across
     /// <paramref name="syntaxTrees"/> EXCEPT <c>InternalsVisibleTo</c> (which
     /// <see cref="Collect"/> already handles via its own syntactic,
     /// string-literal-only fast path). Used by <c>Binder.BindGlobalScope</c>
@@ -60,12 +60,13 @@ internal static class FriendAssemblyDeclarations
         var builder = ImmutableArray.CreateBuilder<AnnotationSyntax>();
         foreach (var tree in syntaxTrees)
         {
-            var annotations = tree.Root?.AssemblyAttributes ?? ImmutableArray<AnnotationSyntax>.Empty;
+            var annotations = tree.Root?.FileAttributes ?? ImmutableArray<AnnotationSyntax>.Empty;
             foreach (var annotation in annotations)
             {
                 var name = annotation.GetNameText();
-                if (string.Equals(name, AnnotationName, StringComparison.Ordinal)
-                    || string.Equals(name, AnnotationNameWithSuffix, StringComparison.Ordinal))
+                if (annotation.Target?.KindIdentifier.Text == "assembly"
+                    && (string.Equals(name, AnnotationName, StringComparison.Ordinal)
+                        || string.Equals(name, AnnotationNameWithSuffix, StringComparison.Ordinal)))
                 {
                     continue;
                 }

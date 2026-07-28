@@ -77,11 +77,11 @@ public sealed class Binder
         ImmutableHashSet.Create(AttributeTargetKind.Field);
 
     /// <summary>
-    /// Targets permitted on a file-level <c>@assembly:</c> annotation lead-in
-    /// (ADR-0047 §2/§10, issue #2237): only <c>assembly</c>.
+    /// Targets permitted on a file-level annotation lead-in (ADR-0047 §2):
+    /// <c>assembly</c> and <c>module</c>.
     /// </summary>
-    internal static readonly ImmutableHashSet<AttributeTargetKind> AssemblyDeclarationAllowedTargets =
-        ImmutableHashSet.Create(AttributeTargetKind.Assembly);
+    internal static readonly ImmutableHashSet<AttributeTargetKind> FileDeclarationAllowedTargets =
+        ImmutableHashSet.Create(AttributeTargetKind.Assembly, AttributeTargetKind.Module);
 
     // PR-B-1: cross-cutting binder state lives on BinderContext so the
     // upcoming Binder-component extractions (MemberLookup, ConversionClassifier,
@@ -1189,7 +1189,7 @@ public sealed class Binder
             ?? ResolveEntryPointPackage(packageByTree, globalStatements, functions, packagesInOrder);
         var entryPoint = ResolveEntryPoint(binder, functions, structs, globalStatements, syntaxTrees, entryPointPackage, synthesizedEntryPoint);
 
-        // Issue #2237: bind every `@assembly:` annotation EXCEPT
+        // Issue #2237/#2815: bind every file-level annotation EXCEPT
         // InternalsVisibleTo (which keeps its own early, syntactic
         // fast path below via FriendAssemblyDeclarations.Collect) through
         // the SAME general attribute binder used for every other
@@ -1200,13 +1200,19 @@ public sealed class Binder
         // `[assembly: ...]`. Must run before the diagnostics snapshot below
         // so any reported diagnostics (e.g. "attribute type not found") are
         // captured.
-        var otherAssemblyAnnotations = FriendAssemblyDeclarations.CollectOtherAnnotations(syntaxTrees);
-        var boundAssemblyAttributes = binder.declarations.BindAttributes(
-            otherAssemblyAnnotations,
+        var otherFileAnnotations = FriendAssemblyDeclarations.CollectOtherAnnotations(syntaxTrees);
+        var boundFileAttributes = binder.declarations.BindAttributes(
+            otherFileAnnotations,
             AttributeTargetKind.Assembly,
-            AssemblyDeclarationAllowedTargets,
-            "assembly declaration",
+            FileDeclarationAllowedTargets,
+            "file-level declaration",
             System.AttributeTargets.Assembly);
+        var boundAssemblyAttributes = boundFileAttributes
+            .Where(attribute => attribute.Target == AttributeTargetKind.Assembly)
+            .ToImmutableArray();
+        var boundModuleAttributes = boundFileAttributes
+            .Where(attribute => attribute.Target == AttributeTargetKind.Module)
+            .ToImmutableArray();
 
         var diagnostics = binder.Diagnostics.ToImmutableArray();
 
@@ -1222,6 +1228,9 @@ public sealed class Binder
         result.AssemblyAttributes = previous == null
             ? boundAssemblyAttributes
             : previous.AssemblyAttributes.AddRange(boundAssemblyAttributes);
+        result.ModuleAttributes = previous == null
+            ? boundModuleAttributes
+            : previous.ModuleAttributes.AddRange(boundModuleAttributes);
 
         // Issue #2224: anonymous-class literals (`object { let ... }`) bound
         // anywhere during this pass — top-level statements included —
@@ -1255,6 +1264,7 @@ public sealed class Binder
                 PreprocessorSymbols = result.PreprocessorSymbols,
                 FriendAssemblies = result.FriendAssemblies,
                 AssemblyAttributes = result.AssemblyAttributes,
+                ModuleAttributes = result.ModuleAttributes,
                 AnonymousTypes = result.AnonymousTypes,
                 RichAnonymousClassMap = result.RichAnonymousClassMap,
             };
@@ -1801,6 +1811,7 @@ public sealed class Binder
             Imports = globalScope.GetCumulativeImports(),
             FriendAssemblies = globalScope.FriendAssemblies,
             AssemblyAttributes = globalScope.AssemblyAttributes,
+            ModuleAttributes = globalScope.ModuleAttributes,
         };
     }
 

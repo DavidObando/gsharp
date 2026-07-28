@@ -302,6 +302,12 @@ public sealed class BoundGlobalScope
     public ImmutableArray<BoundAttribute> AssemblyAttributes { get; internal set; } = ImmutableArray<BoundAttribute>.Empty;
 
     /// <summary>
+    /// Gets every file-level <c>@module:</c> annotation, bound through the
+    /// general attribute binder for emission on the module metadata row.
+    /// </summary>
+    public ImmutableArray<BoundAttribute> ModuleAttributes { get; internal set; } = ImmutableArray<BoundAttribute>.Empty;
+
+    /// <summary>
     /// Gets or sets every anonymous-class type (issue #2224) synthesized
     /// while binding this compilation's top-level statements and (once
     /// <c>Binder.BindProgram</c> runs) its function/method bodies.

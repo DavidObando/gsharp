@@ -101,7 +101,6 @@ func Foo() {
     [InlineData("method")]
     [InlineData("property")]
     [InlineData("event")]
-    [InlineData("module")]
     [InlineData("genericparam")]
     public void Parses_All_Canonical_Use_Site_Targets(string kind)
     {
@@ -163,6 +162,43 @@ func F() {
 
         var fn = tree.Root.Members.OfType<FunctionDeclarationSyntax>().Single();
         Assert.Empty(fn.Annotations);
+    }
+
+    [Fact]
+    public void Module_Target_Annotation_Attaches_At_File_Scope_Not_To_Next_Member()
+    {
+        const string source = @"
+package P
+
+@module:System.CLSCompliantAttribute(true)
+func F() {
+}
+";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var annotation = Assert.Single(tree.Root.ModuleAttributes);
+        Assert.NotNull(annotation.Target);
+        Assert.Equal("module", annotation.Target.KindIdentifier.Text);
+        Assert.Equal("System.CLSCompliantAttribute", annotation.GetNameText());
+
+        var fn = tree.Root.Members.OfType<FunctionDeclarationSyntax>().Single();
+        Assert.Empty(fn.Annotations);
+    }
+
+    [Fact]
+    public void File_Target_Annotations_AppearOnce_InSourceOrder_InChildTraversal()
+    {
+        const string source = @"
+@module:System.CLSCompliantAttribute(true)
+@assembly:System.Reflection.AssemblyTitleAttribute(""Oahu"")
+";
+        var tree = SyntaxTree.Parse(source);
+
+        var annotations = tree.Root.GetChildren().OfType<AnnotationSyntax>().ToArray();
+        Assert.Equal(2, annotations.Length);
+        Assert.Equal("module", annotations[0].Target.KindIdentifier.Text);
+        Assert.Equal("assembly", annotations[1].Target.KindIdentifier.Text);
     }
 
     [Fact]

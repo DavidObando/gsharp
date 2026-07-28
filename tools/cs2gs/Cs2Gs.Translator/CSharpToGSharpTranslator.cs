@@ -93,6 +93,7 @@ public sealed partial class CSharpToGSharpTranslator
     // (GS0102). Null (default) preserves the exact prior no-filter behavior.
     private readonly HashSet<string> retainedFilePaths;
     private readonly string packageFilter;
+    private readonly bool includeFileAttributes;
 
     // One registry per resolved G# package deduplicates declarations across
     // documents (#2292). Synthetic names themselves are derived from the full
@@ -130,11 +131,17 @@ public sealed partial class CSharpToGSharpTranslator
     /// When supplied, emits only declarations whose containing namespace
     /// matches this package.
     /// </param>
+    /// <param name="includeFileAttributes">
+    /// When <see langword="false"/>, omits compilation-unit assembly/module
+    /// attributes. Used for secondary package-split outputs so file-level
+    /// metadata is emitted once.
+    /// </param>
     public CSharpToGSharpTranslator(
         bool preservePartialParts = false,
         bool markMergedTypePartial = false,
         IReadOnlyCollection<string> retainedFilePaths = null,
-        string packageFilter = null)
+        string packageFilter = null,
+        bool includeFileAttributes = true)
     {
         this.preservePartialParts = preservePartialParts;
         this.markMergedTypePartial = markMergedTypePartial;
@@ -142,6 +149,7 @@ public sealed partial class CSharpToGSharpTranslator
             ? null
             : new HashSet<string>(retainedFilePaths, StringComparer.Ordinal);
         this.packageFilter = packageFilter;
+        this.includeFileAttributes = includeFileAttributes;
     }
 
     /// <summary>
@@ -240,6 +248,12 @@ public sealed partial class CSharpToGSharpTranslator
             this.preservePartialParts,
             this.markMergedTypePartial);
 
+        IReadOnlyList<AttributeUse> fileAttributes = this.includeFileAttributes
+            ? visitor.MapFileAttributes(
+                root.AttributeLists.Where(list =>
+                    list.Target?.Identifier.ValueText is "assembly" or "module"))
+            : Array.Empty<AttributeUse>();
+
         // Issue #2382: a NATIVE C# top-level-statements program (`GlobalStatementSyntax`
         // members directly under the compilation unit — no enclosing class/method
         // syntax at all, unlike the explicit-`Main` case handled by `entryType`
@@ -336,7 +350,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
         }
 
-        return new CompilationUnit(package, allImports, members);
+        return new CompilationUnit(package, allImports, members, fileAttributes: fileAttributes);
     }
 
     /// <summary>Gets the distinct source namespaces declared by a document.</summary>
@@ -822,6 +836,9 @@ public sealed partial class CSharpToGSharpTranslator
             // document (once by the caller, once here).
             this.entryType = entryPoint?.ContainingType;
         }
+
+        public IReadOnlyList<AttributeUse> MapFileAttributes(IEnumerable<AttributeListSyntax> attributeLists) =>
+            this.MapAttributes(attributeLists);
 
         public override GMember VisitClassDeclaration(ClassDeclarationSyntax node) => this.VisitAggregate(node);
 
