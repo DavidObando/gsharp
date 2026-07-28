@@ -309,7 +309,8 @@ public sealed class TranslateStage : IMigrationStage
                         : new CSharpToGSharpTranslator(
                             markMergedTypePartial: hasAnalyzerReferences,
                             retainedFilePaths: retainedFilePaths,
-                            packageFilter: package);
+                            packageFilter: package,
+                            includeFileAttributes: unitIndex == 0);
                     string printed = GSharpPrinter.Print(
                         unitTranslator.TranslateDocument(document, translationContext));
 

@@ -3,6 +3,7 @@
 // </copyright>
 
 using System.Collections.Immutable;
+using System.Linq;
 
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
@@ -26,13 +27,19 @@ public class CompilationUnitSyntax : SyntaxNode
     /// Initializes a new instance of the <see cref="CompilationUnitSyntax"/> class.
     /// </summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
-    /// <param name="assemblyAttributes">The file-level <c>@assembly:</c> annotations declared before the first member (producer-side friend-assembly opt-in, see ADR-0047 §2/§7).</param>
+    /// <param name="fileAttributes">The file-level <c>@assembly:</c> and <c>@module:</c> annotations declared before the first member.</param>
     /// <param name="members">The members of this compilation unit.</param>
     /// <param name="endOfFileToken">The end of file token.</param>
-    public CompilationUnitSyntax(SyntaxTree syntaxTree, ImmutableArray<AnnotationSyntax> assemblyAttributes, ImmutableArray<MemberSyntax> members, SyntaxToken endOfFileToken)
+    public CompilationUnitSyntax(SyntaxTree syntaxTree, ImmutableArray<AnnotationSyntax> fileAttributes, ImmutableArray<MemberSyntax> members, SyntaxToken endOfFileToken)
         : base(syntaxTree)
     {
-        AssemblyAttributes = assemblyAttributes;
+        FileAttributes = fileAttributes.IsDefault ? ImmutableArray<AnnotationSyntax>.Empty : fileAttributes;
+        AssemblyAttributes = FileAttributes
+            .Where(attribute => attribute.Target?.KindIdentifier.Text == "assembly")
+            .ToImmutableArray();
+        ModuleAttributes = FileAttributes
+            .Where(attribute => attribute.Target?.KindIdentifier.Text == "module")
+            .ToImmutableArray();
         Members = members;
         EndOfFileToken = endOfFileToken;
     }
@@ -46,7 +53,21 @@ public class CompilationUnitSyntax : SyntaxNode
     /// These are producer-declared, assembly-scoped custom attributes — not
     /// attached to any single declaration.
     /// </summary>
+    [SyntaxChildIgnore]
     public ImmutableArray<AnnotationSyntax> AssemblyAttributes { get; }
+
+    /// <summary>
+    /// Gets the file-level <c>@module:</c> annotations declared before the
+    /// first member.
+    /// </summary>
+    [SyntaxChildIgnore]
+    public ImmutableArray<AnnotationSyntax> ModuleAttributes { get; }
+
+    /// <summary>
+    /// Gets all file-level <c>@assembly:</c> and <c>@module:</c> annotations
+    /// in source order.
+    /// </summary>
+    public ImmutableArray<AnnotationSyntax> FileAttributes { get; }
 
     /// <summary>
     /// Gets the members of this compilation unit.

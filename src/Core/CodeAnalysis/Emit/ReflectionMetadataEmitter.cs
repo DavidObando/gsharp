@@ -3767,12 +3767,13 @@ internal sealed class ReflectionMetadataEmitter
         // patch it with a content-derived value after PE serialization.
         var assemblyName = this.emitCtx.AssemblyNameOverride ?? this.emitCtx.Program.PackageName ?? "Default";
         var mvidFixup = this.emitCtx.Metadata.ReserveGuid();
-        this.emitCtx.Metadata.AddModule(
+        var moduleHandle = this.emitCtx.Metadata.AddModule(
             generation: 0,
             moduleName: this.emitCtx.Metadata.GetOrAddString(assemblyName + ".dll"),
             mvid: mvidFixup.Handle,
             encId: default(GuidHandle),
             encBaseId: default(GuidHandle));
+        this.assemblyAttrs.EmitUserModuleAttributes(moduleHandle);
 
         var assemblyHandle = this.emitCtx.Metadata.AddAssembly(
             name: this.emitCtx.Metadata.GetOrAddString(assemblyName),

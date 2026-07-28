@@ -240,6 +240,17 @@ internal sealed class AssemblyAttributeEmitter
         return emitted.ToImmutable();
     }
 
+    /// <summary>
+    /// Emits every user-declared <c>@module:</c> annotation on the module row.
+    /// </summary>
+    public void EmitUserModuleAttributes(ModuleDefinitionHandle moduleHandle)
+    {
+        foreach (var attr in this.emitCtx.Program.ModuleAttributes)
+        {
+            this.attrEncoder.EmitBoundAttribute(moduleHandle, attr);
+        }
+    }
+
     private void EmitFriendAssemblyAttributes(AssemblyDefinitionHandle assemblyHandle)
     {
         foreach (var friend in this.emitCtx.Program.FriendAssemblies)

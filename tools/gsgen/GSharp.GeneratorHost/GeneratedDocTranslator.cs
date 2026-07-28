@@ -36,7 +36,7 @@ public static class GeneratedDocTranslator
     /// <param name="stubCSharp">The declaration-only C# stub the generators ran against.</param>
     /// <param name="generated">The generated C# documents.</param>
     /// <param name="references">The metadata references used to bind stub + generated code.</param>
-    /// <returns>The back-translated G# parts, one per non-empty generated document.</returns>
+    /// <returns>The back-translated G# parts, one per generated document with members or file-level attributes.</returns>
     public static IReadOnlyList<TranslatedGsDocument> Translate(
         string stubCSharp,
         IReadOnlyList<GeneratedCsDocument> generated,
@@ -83,8 +83,8 @@ public static class GeneratedDocTranslator
             CompilationUnit unit = new CSharpToGSharpTranslator(preservePartialParts: true)
                 .TranslateDocument(loaded);
 
-            // Skip a generated document that carried no translatable members.
-            if (unit.Members.Count == 0)
+            // Skip a generated document that carried no translatable content.
+            if (unit.Members.Count == 0 && unit.FileAttributes.Count == 0)
             {
                 continue;
             }

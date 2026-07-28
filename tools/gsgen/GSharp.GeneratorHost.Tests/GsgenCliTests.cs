@@ -6,11 +6,16 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using GSharp.Gsgen.Cli;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Emit;
 using Xunit;
+using GsCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation;
+using GsSourceText = GSharp.Core.CodeAnalysis.Text.SourceText;
+using GsSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree;
 
 namespace GSharp.GeneratorHost.Tests;
 
@@ -302,6 +307,94 @@ public class GsgenCliTests : IDisposable
     }
 
     [Fact]
+    public void ForeignCsFile_PreservesCompilationUnitAssemblyAttribute()
+    {
+        var outDir = Path.Combine(this.workDir, "gen");
+        var gs = this.WriteGs("Input.gs", "package Probe\n\nfunc Placeholder() {\n}\n");
+        var cs = this.WriteCs(
+            "Test2.cs",
+            """
+            using System.Reflection;
+
+            [assembly: System.Reflection.AssemblyTitleAttribute("Oahu")]
+
+            namespace Probe2
+            {
+                internal class Holder
+                {
+                    internal const string X = "y";
+                }
+            }
+            """);
+
+        var args = new List<string> { $"/gs:{gs}", $"/csfile:{cs}", $"/out:{outDir}" };
+        args.AddRange(RuntimeReferencePaths().Select(p => $"/r:{p}"));
+
+        var stdout = new StringWriter();
+        int exit = GsgenProgram.Run(args.ToArray(), stdout);
+
+        Assert.True(exit == 0, stdout.ToString());
+        string content = File.ReadAllText(Assert.Single(Directory.EnumerateFiles(outDir, "*.g.gs")));
+        Assert.Contains("package Probe2", content);
+        Assert.Contains("import System.Reflection", content);
+        Assert.Contains("@assembly:System.Reflection.AssemblyTitleAttribute(\"Oahu\")", content);
+        Assert.Contains("internal class Holder", content);
+    }
+
+    [Fact]
+    public void ForeignCsFile_WithOnlyFileAttributes_WritesCompilableOutput()
+    {
+        var outDir = Path.Combine(this.workDir, "gen");
+        var gs = this.WriteGs("Input.gs", "package Probe\n\nfunc Placeholder() {\n}\n");
+        var cs = this.WriteCs(
+            "AssemblyAttributes.cs",
+            """
+            using System;
+            using System.Reflection;
+
+            [assembly: System.Reflection.AssemblyTitleAttribute("Oahu")]
+            [module: System.CLSCompliantAttribute(true)]
+            """);
+
+        var args = new List<string> { $"/gs:{gs}", $"/csfile:{cs}", $"/out:{outDir}" };
+        args.AddRange(RuntimeReferencePaths().Select(p => $"/r:{p}"));
+
+        var stdout = new StringWriter();
+        int exit = GsgenProgram.Run(args.ToArray(), stdout);
+
+        Assert.True(exit == 0, stdout.ToString());
+        string content = File.ReadAllText(Assert.Single(Directory.EnumerateFiles(outDir, "*.g.gs")));
+        Assert.Contains("import System", content);
+        Assert.Contains("import System.Reflection", content);
+        Assert.Contains("@assembly:System.Reflection.AssemblyTitleAttribute(\"Oahu\")", content);
+        Assert.Contains("@module:System.CLSCompliantAttribute(true)", content);
+
+        var tree = GsSyntaxTree.Parse(GsSourceText.From(content));
+        Assert.Empty(tree.Diagnostics);
+
+        using var pe = new MemoryStream();
+        var compilation = new GsCompilation(tree) { IsLibrary = true };
+        var emit = compilation.Emit(
+            pe,
+            pdbStream: null,
+            refStream: null,
+            assemblyName: "Issue2815FileAttributes");
+        Assert.True(
+            emit.Success,
+            "generated file should compile: " + string.Join("; ", emit.Diagnostics.Select(d => d.Message)));
+
+        pe.Position = 0;
+        using var peReader = new PEReader(pe, PEStreamOptions.LeaveOpen);
+        MetadataReader metadata = peReader.GetMetadataReader();
+        Assert.Contains(
+            "System.Reflection.AssemblyTitleAttribute",
+            GetAttributeTypeNames(metadata, metadata.GetAssemblyDefinition().GetCustomAttributes()));
+        Assert.Contains(
+            "System.CLSCompliantAttribute",
+            GetAttributeTypeNames(metadata, metadata.GetModuleDefinition().GetCustomAttributes()));
+    }
+
+    [Fact]
     public void NoAnalyzersNoCsFiles_FastPath_Unaffected()
     {
         // Guard: a project with no generators AND no stray .cs (the universal
@@ -381,6 +474,30 @@ public class GsgenCliTests : IDisposable
             .OrderByDescending(d => d, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault();
         return refDir is null ? Array.Empty<string>() : Directory.GetFiles(refDir, "*.dll");
+    }
+
+    private static IReadOnlyList<string> GetAttributeTypeNames(
+        MetadataReader metadata,
+        CustomAttributeHandleCollection attributes)
+    {
+        var names = new List<string>();
+        foreach (CustomAttributeHandle handle in attributes)
+        {
+            CustomAttribute attribute = metadata.GetCustomAttribute(handle);
+            if (attribute.Constructor.Kind != HandleKind.MemberReference)
+            {
+                continue;
+            }
+
+            MemberReference constructor = metadata.GetMemberReference((MemberReferenceHandle)attribute.Constructor);
+            if (constructor.Parent.Kind == HandleKind.TypeReference)
+            {
+                TypeReference type = metadata.GetTypeReference((TypeReferenceHandle)constructor.Parent);
+                names.Add(metadata.GetString(type.Namespace) + "." + metadata.GetString(type.Name));
+            }
+        }
+
+        return names;
     }
 
     /// <summary>

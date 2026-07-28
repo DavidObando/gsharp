@@ -22,6 +22,8 @@ public sealed class Issue2585SemanticQualificationPipelineTests
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
         {
             ("AudioQuality.cs", """
+                [assembly: System.Reflection.AssemblyTitleAttribute("Oahu")]
+
                 namespace Oahu.BooksDatabase
                 {
                     namespace Ex
@@ -42,14 +44,18 @@ public sealed class Issue2585SemanticQualificationPipelineTests
         Assert.Equal(new[] { "Oahu.BooksDatabase.Ex", "Oahu.BooksDatabase" }, packages);
 
         string parent = GSharpPrinter.Print(new CSharpToGSharpTranslator(
-            packageFilter: "Oahu.BooksDatabase").TranslateDocument(document));
+            packageFilter: "Oahu.BooksDatabase",
+            includeFileAttributes: true).TranslateDocument(document));
         string nested = GSharpPrinter.Print(new CSharpToGSharpTranslator(
-            packageFilter: "Oahu.BooksDatabase.Ex").TranslateDocument(document));
+            packageFilter: "Oahu.BooksDatabase.Ex",
+            includeFileAttributes: false).TranslateDocument(document));
 
         Assert.Contains("package Oahu.BooksDatabase", parent);
+        Assert.Contains("@assembly:System.Reflection.AssemblyTitleAttribute(\"Oahu\")", parent);
         Assert.Contains("data class AudioQuality", parent);
         Assert.DoesNotContain("ExCodec", parent);
         Assert.Contains("package Oahu.BooksDatabase.Ex", nested);
+        Assert.DoesNotContain("@assembly:", nested);
         Assert.Contains("func Parse()", nested);
         Assert.DoesNotContain("AudioQuality", nested);
     }
