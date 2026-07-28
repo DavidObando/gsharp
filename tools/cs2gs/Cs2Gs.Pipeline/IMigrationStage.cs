@@ -191,6 +191,13 @@ public sealed class StageExecutionContext
     public List<DeclaredProjectItem> ProjectReferences { get; } = new List<DeclaredProjectItem>();
 
     /// <summary>
+    /// Gets friend assemblies contributed by generated C# sources, including
+    /// SDK-generated <c>InternalsVisibleTo</c> items.
+    /// </summary>
+    public ISet<string> GeneratedFriendAssemblies { get; } =
+        new HashSet<string>(StringComparer.Ordinal);
+
+    /// <summary>
     /// Gets or sets the absolute path of the assembly emitted by the Compile
     /// stage, published for the IL-verify stage to read (ADR-0115 §C). It is
     /// <see langword="null"/> until a green stage-2 compile has run.

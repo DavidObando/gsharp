@@ -451,16 +451,27 @@ public class GsharpTestProjectRunner
         return sha256.ComputeHash(stream);
     }
 
-    private static string LibraryProject(GsharpTestProject project, string sdkVersion) =>
-        $"<Project Sdk=\"{SdkPackageId}/{sdkVersion}\">\n" +
-        "\n" +
-        "  <PropertyGroup>\n" +
-        "    <OutputType>Library</OutputType>\n" +
-        "    <TargetFramework>net10.0</TargetFramework>\n" +
-        $"    <RootNamespace>{project.LibraryRootNamespace}</RootNamespace>\n" +
-        "  </PropertyGroup>\n" +
-        "\n" +
-        "</Project>\n";
+    private static string LibraryProject(GsharpTestProject project, string sdkVersion)
+    {
+        string friendAssemblies = project.LibraryFriendAssemblies.Count == 0
+            ? string.Empty
+            : "\n  <ItemGroup>\n" +
+                string.Concat(project.LibraryFriendAssemblies.Select(name =>
+                    "    <InternalsVisibleTo Include=\"" +
+                    System.Security.SecurityElement.Escape(name) +
+                    "\" />\n")) +
+                "  </ItemGroup>\n";
+        return $"<Project Sdk=\"{SdkPackageId}/{sdkVersion}\">\n" +
+            "\n" +
+            "  <PropertyGroup>\n" +
+            "    <OutputType>Library</OutputType>\n" +
+            "    <TargetFramework>net10.0</TargetFramework>\n" +
+            $"    <RootNamespace>{project.LibraryRootNamespace}</RootNamespace>\n" +
+            "  </PropertyGroup>\n" +
+            friendAssemblies +
+            "\n" +
+            "</Project>\n";
+    }
 
     private static string TestsProject(GsharpTestProject project, string sdkVersion) =>
         $"<Project Sdk=\"{SdkPackageId}/{sdkVersion}\">\n" +
@@ -533,6 +544,9 @@ public sealed class GsharpTestProject
 
     /// <summary>Gets or sets the translated G# library source files.</summary>
     public IReadOnlyList<GsharpSourceFile> LibraryFiles { get; set; } = Array.Empty<GsharpSourceFile>();
+
+    /// <summary>Gets or sets friend assemblies declared by the source library project.</summary>
+    public IReadOnlyList<string> LibraryFriendAssemblies { get; set; } = Array.Empty<string>();
 
     /// <summary>Gets or sets the test project name (folder + assembly).</summary>
     public string TestsName { get; set; } = "Library.Tests";
