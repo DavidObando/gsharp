@@ -534,7 +534,7 @@ internal sealed partial class MethodBodyEmitter
             // ADR-0122 §4 / issue #1034: `(*p).field` / `p->field` read. The
             // pointer value IS the struct's address, so load the pointer and
             // `ldfld` directly — avoiding a wasteful `ldobj` of the whole struct.
-            this.EmitExpression(deref.Operand);
+            this.EmitInstanceReceiver(deref.Operand);
         }
         else if (!receiverIsClass && fa.Receiver is BoundVariableExpression bv && this.TryLoadStructVariableAddress(bv))
         {
@@ -662,14 +662,11 @@ internal sealed partial class MethodBodyEmitter
                     + "Check AssignmentValueSpillCollector and its ancestor walker.");
             }
 
-            // Issue #1688: this receiver is a plain value push for `stfld`
-            // (not an address), so needAddress: false — TryEmitCachedReceiver
-            // falls back to a normal EmitExpression when no compound-reuse
-            // slot was planned (the common #1614 simple-assignment case).
-            if (!this.TryEmitCachedReceiver(addressReceiver ?? fas.ReceiverExpression, needAddress: false))
-            {
-                this.EmitExpression(addressReceiver ?? fas.ReceiverExpression);
-            }
+            // Issue #2818: stfld needs an object reference for a class
+            // receiver, but a managed pointer for a value-type receiver.
+            // EmitInstanceReceiver preserves both shapes and routes nested
+            // addressable field chains through the shared-receiver cache.
+            this.EmitInstanceReceiver(addressReceiver ?? fas.ReceiverExpression);
 
             // Issue #1235 (object-initializer follow-up): a `T{Field: value}`
             // literal on a class-constrained type parameter lowers to an
@@ -1781,7 +1778,7 @@ internal sealed partial class MethodBodyEmitter
         {
             // ADR-0122 §4/§10: `(*p).field` / `p->field`. The pointer value IS
             // the struct's address, so load the pointer directly before ldflda.
-            this.EmitExpression(deref.Operand);
+            this.EmitInstanceReceiver(deref.Operand);
         }
         else if (!receiverIsClass && fa.Receiver is BoundVariableExpression bv && this.TryLoadStructVariableAddress(bv))
         {
@@ -1796,7 +1793,11 @@ internal sealed partial class MethodBodyEmitter
         }
         else
         {
-            this.EmitExpression(fa.Receiver);
+            // Issue #2818: an addressable value-type field chain may have a
+            // side-effecting reference-type root shared by compound read/write
+            // (`GetHolder().Value.Id += 5`). Route the owner through the
+            // receiver cache instead of evaluating that root again.
+            this.EmitInstanceReceiver(fa.Receiver);
         }
 
         this.il.OpCode(ILOpCode.Ldflda);

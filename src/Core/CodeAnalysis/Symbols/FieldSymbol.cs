@@ -129,4 +129,25 @@ public sealed class FieldSymbol : Symbol
         FixedBufferElementType = elementType;
         FixedBufferLength = length;
     }
+
+    /// <summary>
+    /// Returns whether this static field may be addressed in the current
+    /// static-constructor context.
+    /// </summary>
+    /// <param name="staticConstructorOwner">The type whose <c>.cctor</c> is active, or <c>null</c>.</param>
+    /// <returns><c>true</c> when taking the field address is legal.</returns>
+    internal bool IsStaticAddressLegal(Symbol staticConstructorOwner)
+    {
+        if (!(IsReadOnly && IsStatic) || IsConst)
+        {
+            return true;
+        }
+
+        return staticConstructorOwner switch
+        {
+            StructSymbol s => !s.StaticFields.IsDefaultOrEmpty && s.StaticFields.Contains(this),
+            InterfaceSymbol i => !i.StaticFields.IsDefaultOrEmpty && i.StaticFields.Contains(this),
+            _ => false,
+        };
+    }
 }

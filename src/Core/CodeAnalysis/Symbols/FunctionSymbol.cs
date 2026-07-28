@@ -436,6 +436,9 @@ public sealed class FunctionSymbol : Symbol
     /// <summary>Gets a value indicating whether this function is a P/Invoke stub (ADR-0086).</summary>
     public bool IsPInvoke => PInvokeMetadata != null;
 
+    /// <summary>Gets or sets a value indicating whether this synthetic function represents a type's static-constructor context.</summary>
+    internal bool IsStaticInitializer { get; set; }
+
     /// <summary>
     /// ADR-0105 Phase 2 — re-points this (reused) function symbol at the
     /// declaration node of a freshly-parsed syntax tree whose member signature

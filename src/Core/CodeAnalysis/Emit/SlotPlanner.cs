@@ -1022,8 +1022,9 @@ internal sealed class SlotPlanner
         // the shape TryBindChainedCompoundAssignment produces for
         // `getObj().Field += x` (the compound RHS embeds a
         // BoundFieldAccessExpression over the identical receiver instance) —
-        // must spill the receiver to a temp and evaluate it exactly once
-        // instead of once for the read and once more for the write.
+        // must preserve receiver identity across read and write. Reference
+        // receivers are cached directly; addressable value-type fields cache
+        // their owning receiver so the write still targets original storage.
         protected override void VisitFieldAssignmentExpression(BoundFieldAssignmentExpression node)
         {
             if (node.ReceiverExpression != null)
@@ -1163,10 +1164,37 @@ internal sealed class SlotPlanner
             }
 
             var found = ReceiverReuseWalker.ContainsReceiverReference(value, receiver);
-            if (found)
+            if (!found)
             {
-                this.sink.Add(receiver);
+                return;
             }
+
+            // Pointer field syntax unwraps `*p` before emit. Cache the pointer
+            // operand itself so both the field read and write reuse one value.
+            if (receiver is BoundDereferenceExpression dereference
+                && TypeSymbol.IsUnmanagedPointer(dereference.Operand.Type))
+            {
+                this.sink.Add(dereference.Operand);
+                return;
+            }
+
+            // An addressable value-type field must stay in its owning storage:
+            // caching the field value would turn the write into a temp-local
+            // mutation. Cache the side-effecting owner instead, then let
+            // EmitFieldAddress rebuild the same address for read and write.
+            if (receiver is BoundFieldAccessExpression fieldAccess
+                && ReflectionMetadataEmitter.IsValueTypeSymbol(receiver.Type)
+                && !this.needsRvalueReceiverSpill(receiver, this.function, this.locals))
+            {
+                if (fieldAccess.Receiver != null)
+                {
+                    this.AddIfCompoundReused(fieldAccess.Receiver, value);
+                }
+
+                return;
+            }
+
+            this.sink.Add(receiver);
         }
     }
 

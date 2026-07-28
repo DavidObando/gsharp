@@ -92,6 +92,31 @@ public class Issue1034StructPointerEmitTests
     }
 
     [Fact]
+    public void StructPointer_CompoundFieldAssignment_EvaluatesPointerOnce()
+    {
+        var source = PointStruct + """
+            var calls int32 = 0
+
+            unsafe func GetPtr(p *Point) *Point {
+                calls += 1
+                return p
+            }
+
+            unsafe func run() {
+                var arr = []Point{Point{x: 1, y: 2}}
+                GetPtr(&arr[0])->x += 5
+                Console.WriteLine(calls)
+                Console.WriteLine(arr[0].x)
+            }
+
+            run()
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("1\n6\n", output);
+    }
+
+    [Fact]
     public void StructPointer_IndexingReadWrite_CompilesAndRuns()
     {
         var source = PointStruct + """

@@ -2126,6 +2126,7 @@ public sealed class Binder
         {
             IsStatic = true,
             StaticOwnerType = structSym,
+            IsStaticInitializer = true,
         };
 
         var previousPackage = parentScope.SetCurrentDeclaringPackage(structSym.PackageName);

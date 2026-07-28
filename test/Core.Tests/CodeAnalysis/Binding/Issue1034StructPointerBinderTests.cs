@@ -130,6 +130,32 @@ unsafe func run() {
     }
 
     [Fact]
+    public void ArrowCompoundAssignment_WithCallReceiver_Binds_NoErrors()
+    {
+        const string source = @"
+package P
+import System.Runtime.InteropServices
+
+@StructLayout(LayoutKind.Sequential)
+struct Point {
+    var x int32
+    var y int32
+}
+
+unsafe func GetPtr(p *Point) *Point {
+    return p
+}
+
+unsafe func run() {
+    var arr = []Point{Point{x: 1, y: 2}}
+    GetPtr(&arr[0])->x += 5
+}
+";
+        var diagnostics = GetDiagnostics(source);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
     public void PointerToBlittableStruct_Arithmetic_NoErrors()
     {
         const string source = @"
