@@ -426,7 +426,7 @@ public sealed partial class CSharpToGSharpTranslator
                 callTypeArgs);
 
             GExpression guard = new BinaryExpression(
-                this.TranslateExpression(conditionalAccess.Expression),
+                receiver,
                 "!=",
                 new IdentifierExpression("nil"));
 
