@@ -534,26 +534,26 @@ namespace Demo;
 
 public static class FirstExtensions
 {
-    public static List<int> Items(this Host host) => new List<int>();
+    public static List<int> Items(this Host host) => throw new InvalidOperationException();
 
-    public static int[] Values(this Host host) => new int[0];
+    public static int[] Values(this Host host) => throw new InvalidOperationException();
 
-    public static (int, string) Pair(this Host host) => (1, ""one"");
+    public static (int, string) Pair(this Host host) => throw new InvalidOperationException();
 
     public static Func<int, string> Formatter(this Host host) =>
-        value => value.ToString();
+        throw new InvalidOperationException();
 }
 
 public static class SecondExtensions
 {
-    public static List<int> Items(this Host host, int value) => new List<int>();
+    public static List<int> Items(this Host host, int value) => throw new InvalidOperationException();
 
-    public static int[] Values(this Host host, int value) => new int[0];
+    public static int[] Values(this Host host, int value) => throw new InvalidOperationException();
 
-    public static (int, string) Pair(this Host host, int value) => (1, ""one"");
+    public static (int, string) Pair(this Host host, int value) => throw new InvalidOperationException();
 
     public static Func<int, string> Formatter(this Host host, int value) =>
-        item => item.ToString();
+        throw new InvalidOperationException();
 }"),
             ("User.cs", @"
 #nullable enable
