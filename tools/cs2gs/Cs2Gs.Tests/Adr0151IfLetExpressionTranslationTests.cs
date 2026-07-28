@@ -319,7 +319,7 @@ namespace Demo
                 cs2gs.Value.Version);
 
         string workDir = Path.Combine(
-            AppContext.BaseDirectory,
+            repoRoot,
             "issue-2819-package-smoke",
             Guid.NewGuid().ToString("N"));
         string feedDir = Path.Combine(workDir, "out", "bin", "Release", "nupkgs");
@@ -463,6 +463,7 @@ namespace Demo
         Assert.True(
             build.Exit == 0,
             "Exact same-version packed SDK must compile packed cs2gs output:\n" + build.Output);
+        Directory.Delete(workDir, recursive: true);
     }
 
     // ── Conservative fallbacks ───────────────────────────────────────────
