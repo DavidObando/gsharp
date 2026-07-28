@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.IO;
 using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
@@ -14,6 +15,8 @@ using Cs2Gs.Translator.Loading;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -335,6 +338,88 @@ public static class User
     }
 
     [Fact]
+    public void CrossProjectStaticHelpers_PreserveInvocationStaticAndMethodGroupForms()
+    {
+        LoadedCSharpProject producer = CSharpProjectLoader.LoadInMemory(
+            new[]
+            {
+                ("Producer.cs", @"
+namespace Demo;
+
+public sealed class Host
+{
+}
+
+public static class FirstExtensions
+{
+    public static string Describe(this Host host, object value) => ""object"";
+}
+
+public static class SecondExtensions
+{
+    public static string Describe(this Host host, string value) => ""string"";
+}"),
+            },
+            CSharpProjectLoader.RuntimeReferences(),
+            "Producer");
+
+        using var image = new MemoryStream();
+        Microsoft.CodeAnalysis.Emit.EmitResult emit = producer.Compilation.Emit(image);
+        Assert.True(
+            emit.Success,
+            "Producer should emit with no C# errors: " +
+                string.Join(Environment.NewLine, emit.Diagnostics));
+
+        MetadataReference producerReference = MetadataReference.CreateFromImage(image.ToArray());
+        LoadedCSharpProject consumer = CSharpProjectLoader.LoadInMemory(
+            new[]
+            {
+                ("Consumer.cs", @"
+using System;
+using Demo;
+
+namespace Client;
+
+public static class User
+{
+    public static string Invoke(Host host, string value) => host.Describe(value);
+
+    public static string Static(Host host, string value) =>
+        SecondExtensions.Describe(host, value);
+
+    public static Func<string, string> BindString(Host host) => host.Describe;
+
+    public static Func<object, string> BindObject(Host host) => host.Describe;
+}"),
+            },
+            CSharpProjectLoader.RuntimeReferences().Append(producerReference).ToList(),
+            "Consumer");
+
+        Assert.True(
+            consumer.BoundWithoutErrors,
+            "Consumer should bind with no C# errors: " +
+                string.Join(Environment.NewLine, consumer.ErrorDiagnostics));
+
+        var siblings = new[] { producer.Compilation, consumer.Compilation };
+        string printedProducer = TranslateProject(producer, siblings);
+        string printedConsumer = TranslateProject(consumer, siblings);
+        string compactConsumer = Compact(printedConsumer);
+
+        Assert.Contains("func Describe(host Host, value object)", printedProducer);
+        Assert.Contains("func Describe(host Host, value string)", printedProducer);
+        Assert.Equal(
+            2,
+            CountOccurrences(compactConsumer, "SecondExtensions.Describe(host, value)"));
+        Assert.Contains("SecondExtensions.Describe(__spill", compactConsumer);
+        Assert.Contains("FirstExtensions.Describe(__spill", compactConsumer);
+        Assert.DoesNotContain("host.Describe", compactConsumer);
+
+        ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
+            BindDiagnostics(new[] { printedProducer, printedConsumer });
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
+    }
+
+    [Fact]
     public void ExternalReceiver_RetainsReceiverClause()
     {
         string printed = TranslateFiles(
@@ -465,6 +550,30 @@ public static class MeterExtensions
             .Concat(Binder.BindProgram(scope).Diagnostics)
             .ToImmutableArray();
     }
+
+    private static string TranslateProject(
+        LoadedCSharpProject project,
+        IReadOnlyList<CSharpCompilation> siblingCompilations)
+    {
+        var translator = new CSharpToGSharpTranslator();
+        var output = new List<string>();
+        foreach (LoadedDocument document in project.Documents)
+        {
+            var context = new TranslationContext(
+                project.Compilation,
+                document.SemanticModel,
+                document.FilePath,
+                siblingCompilations);
+            output.Add(GSharpPrinter.Print(translator.TranslateDocument(document, context)));
+        }
+
+        return string.Join(Environment.NewLine, output);
+    }
+
+    private static string Compact(string printed) =>
+        string.Join(" ", printed.Split(
+            new[] { ' ', '\t', '\r', '\n' },
+            StringSplitOptions.RemoveEmptyEntries));
 
     private static int CountOccurrences(string haystack, string needle)
     {

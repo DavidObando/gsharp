@@ -529,6 +529,87 @@ public sealed partial class CSharpToGSharpTranslator
             return ownerName != null;
         }
 
+        private GExpression TranslateStaticExtensionHelperMethodGroup(
+            MemberAccessExpressionSyntax member,
+            IMethodSymbol method,
+            string ownerName,
+            string methodName)
+        {
+            GExpression receiver = this.CaptureMethodGroupReceiver(
+                this.TranslateExpression(member.Expression),
+                member.Expression);
+
+            IMethodSymbol invoke = (this.context.GetTypeInfo(member).ConvertedType as INamedTypeSymbol)
+                ?.DelegateInvokeMethod;
+            ImmutableArray<IParameterSymbol> sourceParameters =
+                invoke?.Parameters ?? method.Parameters;
+            var parameters = new List<Parameter>(sourceParameters.Length);
+            var arguments = new List<GExpression>(sourceParameters.Length + 1)
+            {
+                receiver,
+            };
+
+            for (int i = 0; i < sourceParameters.Length; i++)
+            {
+                Parameter mapped = this.MapParameter(
+                    sourceParameters[i],
+                    member,
+                    promoteNullability: false);
+                string name = $"__arg{i}";
+                parameters.Add(new Parameter(
+                    name,
+                    mapped.Type,
+                    mapped.IsVariadic,
+                    mapped.RefKind));
+                GExpression argument = new IdentifierExpression(name);
+                if (sourceParameters[i].RefKind is RefKind.Ref or RefKind.Out)
+                {
+                    argument = new UnaryExpression("&", argument);
+                }
+
+                arguments.Add(argument);
+            }
+
+            IMethodSymbol original = method.ReducedFrom ?? method;
+            IReadOnlyList<GTypeReference> typeArguments = original.IsGenericMethod
+                ? method.TypeArguments
+                    .Select(type => this.typeMapper.Map(type, this.context, member.GetLocation()))
+                    .ToList()
+                : null;
+            var call = new InvocationExpression(
+                new MemberAccessExpression(new IdentifierExpression(ownerName), methodName),
+                arguments,
+                typeArguments);
+            return new LambdaExpression(parameters, expressionBody: call);
+        }
+
+        private GExpression CaptureMethodGroupReceiver(
+            GExpression receiver,
+            ExpressionSyntax receiverSyntax)
+        {
+            if (this.state.PendingSpillPrologue != null)
+            {
+                string temp = $"__spill{this.state.SpillCounter++}";
+                this.state.PendingSpillPrologue.Add(
+                    new LocalDeclarationStatement(BindingKind.Let, temp, initializer: receiver));
+                return new IdentifierExpression(temp);
+            }
+
+            if (this.state.PendingHelperCaptures != null)
+            {
+                string name = $"__p{this.state.PendingHelperCaptures.Count}";
+                GTypeReference type = this.ResolveExpressionType(receiverSyntax)
+                    ?? new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+                this.state.PendingHelperCaptures.Add((name, receiver, type));
+                return new IdentifierExpression(name);
+            }
+
+            this.context.ReportUnsupported(
+                receiverSyntax,
+                "a static-helper extension method group here has no enclosing evaluation seam to capture its receiver once.");
+            return receiver;
+        }
+
         /// <summary>
         /// Translates a single C# call argument, honoring <c>out</c>/<c>ref</c>
         /// argument forms (ADR-0115 §B; sample <c>TryParseOutVar.gs</c>): an

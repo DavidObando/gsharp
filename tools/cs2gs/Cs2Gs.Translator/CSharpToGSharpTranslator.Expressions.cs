@@ -345,6 +345,23 @@ public sealed partial class CSharpToGSharpTranslator
             if (this.context.GetSymbolInfo(member).Symbol is IMethodSymbol { IsExtensionMethod: true } memberExtMethod)
             {
                 this.typeMapper.TrackExtensionMethodNamespace(memberExtMethod);
+                if (memberExtMethod.MethodKind == MethodKind.ReducedExtension &&
+                    this.TryGetStaticExtensionHelper(memberExtMethod, out string helperOwner, out string helperName))
+                {
+                    if (member.Parent is ArgumentSyntax nameOfArgument &&
+                        IsNameOfArgument(nameOfArgument))
+                    {
+                        return new MemberAccessExpression(
+                            new IdentifierExpression(helperOwner),
+                            helperName);
+                    }
+
+                    return this.TranslateStaticExtensionHelperMethodGroup(
+                        member,
+                        memberExtMethod,
+                        helperOwner,
+                        helperName);
+                }
             }
 
             // Issue #1879: a C# 14 extension-block member is declared on a
