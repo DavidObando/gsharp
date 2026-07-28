@@ -664,9 +664,8 @@ internal sealed partial class MethodBodyEmitter
 
             // Issue #2818: stfld needs an object reference for a class
             // receiver, but a managed pointer for a value-type receiver.
-            // EmitInstanceReceiver preserves both shapes: nested addressable
-            // fields use ldflda, while non-addressable struct rvalues spill to
-            // a local and use ldloca.
+            // EmitInstanceReceiver preserves both shapes and routes nested
+            // addressable field chains through the shared-receiver cache.
             this.EmitInstanceReceiver(addressReceiver ?? fas.ReceiverExpression);
 
             // Issue #1235 (object-initializer follow-up): a `T{Field: value}`
@@ -1794,7 +1793,11 @@ internal sealed partial class MethodBodyEmitter
         }
         else
         {
-            this.EmitExpression(fa.Receiver);
+            // Issue #2818: an addressable value-type field chain may have a
+            // side-effecting reference-type root shared by compound read/write
+            // (`GetHolder().Value.Id += 5`). Route the owner through the
+            // receiver cache instead of evaluating that root again.
+            this.EmitInstanceReceiver(fa.Receiver);
         }
 
         this.il.OpCode(ILOpCode.Ldflda);

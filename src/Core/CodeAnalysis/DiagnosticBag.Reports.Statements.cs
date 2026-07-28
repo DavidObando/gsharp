@@ -76,6 +76,19 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.CannotAssign, name);
 
     /// <summary>
+    /// Reports a field write through a non-addressable struct value, where the
+    /// write would otherwise target a temporary copy and be discarded.
+    /// </summary>
+    /// <param name="location">The assignment operator location.</param>
+    /// <param name="fieldName">The field being assigned.</param>
+    /// <param name="receiverType">The struct receiver type.</param>
+    public void ReportFieldAssignmentThroughStructTemporary(
+        TextLocation location,
+        string fieldName,
+        TypeSymbol receiverType)
+    => Report(location, DiagnosticDescriptors.FieldAssignmentThroughStructTemporary, fieldName, receiverType);
+
+    /// <summary>
     /// Issue #946: reports that an <c>init</c>-only property was assigned
     /// outside of object initialization. An <c>init</c>-only property may only
     /// be assigned in the declaring type's constructor(s), in an object/

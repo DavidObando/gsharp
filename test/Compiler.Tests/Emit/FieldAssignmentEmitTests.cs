@@ -129,7 +129,7 @@ public class FieldAssignmentEmitTests
     }
 
     [Fact]
-    public void StructRvalueFieldAssignment_ResultIsAssignedValue()
+    public void NestedStructFieldCompoundAssignment_EvaluatesRootReceiverOnce()
     {
         var source = """
             package P
@@ -139,14 +139,26 @@ public class FieldAssignmentEmitTests
                 var Id int32
             }
 
-            func makeItem() Item {
-                return Item{Id: 1}
+            class Holder {
+                var Value Item
             }
 
-            public var result = (makeItem().Id = 7)
+            public var calls = 0
+            public var lastHolder = Holder()
+
+            func GetHolder() Holder {
+                calls += 1
+                var holder = Holder()
+                holder.Value.Id = 10
+                lastHolder = holder
+                return holder
+            }
+
+            GetHolder().Value.Id += 5
+            public var result = (lastHolder.Value.Id * 10) + calls
             """;
 
-        Assert.Equal(7, RunAndGetIntResult(source));
+        Assert.Equal(151, RunAndGetIntResult(source));
     }
 
     [Fact]

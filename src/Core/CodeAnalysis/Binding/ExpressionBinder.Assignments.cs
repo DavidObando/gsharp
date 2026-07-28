@@ -365,6 +365,28 @@ internal sealed partial class ExpressionBinder
             && !ReceiverTypeIsReference(bve.Variable.Type);
     }
 
+    private static bool IsAddressableStructFieldReceiver(BoundExpression receiver)
+    {
+        if (receiver is BoundVariableExpression)
+        {
+            return true;
+        }
+
+        if (receiver is BoundDereferenceExpression dereference)
+        {
+            return TypeSymbol.IsUnmanagedPointer(dereference.Operand.Type);
+        }
+
+        if (receiver is not BoundFieldAccessExpression fieldAccess)
+        {
+            return false;
+        }
+
+        return fieldAccess.Receiver == null
+            || ReceiverTypeIsReference(fieldAccess.Receiver.Type)
+            || IsAddressableStructFieldReceiver(fieldAccess.Receiver);
+    }
+
     /// <summary>
     /// Issue #947: returns <see langword="true"/> when the bound
     /// <paramref name="receiver"/> denotes the enclosing function's <c>this</c>
@@ -937,9 +959,21 @@ internal sealed partial class ExpressionBinder
             $"{structSymbol.Name}.{field.Name}");
 
         var converted = conversions.BindConversion(syntax.Value.Location, BindValue(field.Type), field.Type);
-        if (implicitFieldReceiverExpr != null
+        var usesExpressionReceiver = implicitFieldReceiverExpr != null
             || (assignmentReceiver is BoundVariableExpression narrowedVariable && narrowedVariable.NarrowedType != null)
-            || assignmentReceiver is BoundUnaryExpression)
+            || assignmentReceiver is BoundUnaryExpression;
+        if (usesExpressionReceiver
+            && !structSymbol.IsClass
+            && !IsAddressableStructFieldReceiver(assignmentReceiver))
+        {
+            Diagnostics.ReportFieldAssignmentThroughStructTemporary(
+                syntax.EqualsToken.Location,
+                field.Name,
+                structSymbol);
+            return new BoundErrorExpression(syntax);
+        }
+
+        if (usesExpressionReceiver)
         {
             return BoundFieldAssignmentExpression.WithExpressionReceiver(null, assignmentReceiver, structSymbol, field, converted);
         }
@@ -1343,6 +1377,15 @@ internal sealed partial class ExpressionBinder
             if (ReceiverBlocksValueTypeMemberWrite(boundReceiver))
             {
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
+            }
+
+            if (!structSym.IsClass && !IsAddressableStructFieldReceiver(boundReceiver))
+            {
+                Diagnostics.ReportFieldAssignmentThroughStructTemporary(
+                    syntax.OperatorToken.Location,
+                    field.Name,
+                    structSym);
+                return new BoundErrorExpression(syntax);
             }
 
             var leftRead = new BoundFieldAccessExpression(null, boundReceiver, declaringType, field);
@@ -1976,6 +2019,15 @@ internal sealed partial class ExpressionBinder
                     $"{declaringType.Name}.{field.Name}");
 
                 var converted = conversions.BindConversion(syntax.Value.Location, BindValue(field.Type), field.Type);
+                if (!structSym.IsClass && !IsAddressableStructFieldReceiver(receiver))
+                {
+                    Diagnostics.ReportFieldAssignmentThroughStructTemporary(
+                        syntax.EqualsToken.Location,
+                        field.Name,
+                        structSym);
+                    return new BoundErrorExpression(syntax);
+                }
+
                 return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiver, declaringType, field, converted);
             }
 
