@@ -386,7 +386,8 @@ public sealed partial class CSharpToGSharpTranslator
         /// <summary>
         /// Rewrites a null-conditional call to a static-helper extension method
         /// into the
-        /// ternary <c>if recv != nil { Owner.M(recv!!, args) } else { nil }</c>.
+        /// ternary
+        /// <c>if recv != nil { R?(Owner.M(recv!!, args)) } else { nil }</c>.
         /// The <c>?.</c> member-binding form cannot bind to a static helper.
         /// </summary>
         private bool TryTranslateNullConditionalStaticExtensionHelper(
@@ -424,6 +425,16 @@ public sealed partial class CSharpToGSharpTranslator
                 new MemberAccessExpression(new IdentifierExpression(owner), name),
                 callArgs,
                 callTypeArgs);
+            if (this.context.GetTypeInfo(conditionalAccess).Type is
+                { SpecialType: not SpecialType.System_Void } conditionalType)
+            {
+                call = new ConversionExpression(
+                    MakeNullable(this.typeMapper.Map(
+                        conditionalType,
+                        this.context,
+                        conditionalAccess.GetLocation())),
+                    call);
+            }
 
             GExpression guard = new BinaryExpression(
                 receiver,
