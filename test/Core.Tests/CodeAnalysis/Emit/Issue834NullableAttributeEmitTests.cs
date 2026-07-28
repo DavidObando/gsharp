@@ -377,7 +377,7 @@ func (self T?) OrZero[T struct](defaultValue T) T {
     }
 
     [Fact]
-    public void ImportedGenericMethodNullableDelegateParameter_AcceptsNullableDelegateVariable()
+    public void ImportedGenericMethodNullableDelegateParameter_AcceptsNullableDelegateVariableAndNil()
     {
         var outputDir = Path.Combine(AppContext.BaseDirectory, "Issue834ImportedGenericMethod");
         Directory.CreateDirectory(outputDir);
@@ -421,7 +421,7 @@ func (self T?) OrZero[T struct](defaultValue T) T {
                     init() {
                     }
 
-                    func Run(callback ((Book, T, (Conversion) -> void) -> void)?) {
+                    func Run(context T, callback ((Book, T, (Conversion) -> void) -> void)?) {
                     }
                 }
                 """)))
@@ -444,7 +444,7 @@ func (self T?) OrZero[T struct](defaultValue T) T {
             var parameter = assembly.GetType("Issue834.GenericLibrary.Runner`1")!
                 .GetMethod("Run")!
                 .GetParameters()
-                .Single();
+                .Single(parameter => parameter.Name == "callback");
             Assert.IsType<NullableTypeSymbol>(ClrNullability.GetParameterTypeSymbol(parameter));
         }
 
@@ -461,8 +461,17 @@ func (self T?) OrZero[T struct](defaultValue T) T {
                 class SimpleCancellation : ICancellation {
                 }
 
-                var callback ((Book, SimpleCancellation, (Conversion) -> void) -> void)? = nil
-                Runner[SimpleCancellation]().Run(callback)
+                class Use {
+                    func M() {
+                        let runner = Runner[SimpleCancellation]()
+                        var callback ((Book, SimpleCancellation, (Conversion) -> void) -> void)? = nil
+
+                        // Issue #2820: cover both nullable-variable and literal-nil binding
+                        // after substituting the imported generic receiver's T.
+                        runner.Run(SimpleCancellation(), callback)
+                        runner.Run(SimpleCancellation(), nil)
+                    }
+                }
                 """)));
 
         using var consumerOutput = new MemoryStream();

@@ -113,37 +113,6 @@ public static class ClrNullability
         return ApplyReferenceNullabilityFull(baseSymbol, parameterType, parameter, parameter.Member);
     }
 
-    /// <summary>
-    /// Issue #2820: applies a parameter's top-level nullable-reference
-    /// annotation to a type reconstructed through generic substitution.
-    /// </summary>
-    /// <param name="parameter">The open parameter carrying nullable metadata.</param>
-    /// <param name="mapped">The substituted parameter type.</param>
-    /// <returns>The substituted type with its top-level annotation restored.</returns>
-    internal static TypeSymbol ApplyParameterTopLevelNullability(ParameterInfo parameter, TypeSymbol mapped)
-    {
-        if (parameter == null || mapped == null || mapped is NullableTypeSymbol)
-        {
-            return mapped;
-        }
-
-        var parameterType = parameter.ParameterType.IsByRef
-            ? parameter.ParameterType.GetElementType()
-            : parameter.ParameterType;
-        if (parameterType == null
-            || parameterType.IsValueType
-            || parameterType.IsGenericParameter
-            || parameterType.IsPointer
-            || mapped is PointerTypeSymbol or FunctionPointerTypeSymbol)
-        {
-            return mapped;
-        }
-
-        return GetParameterTypeSymbol(parameter) is NullableTypeSymbol
-            ? NullableTypeSymbol.Get(mapped)
-            : mapped;
-    }
-
     internal static bool TryGetNotNullWhen(ParameterInfo parameter, out bool returnValue)
     {
         return TryGetBoolAttributeValue(parameter, NotNullWhenAttributeFullName, out returnValue);
