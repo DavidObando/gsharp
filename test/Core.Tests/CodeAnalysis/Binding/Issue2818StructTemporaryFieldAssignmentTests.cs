@@ -62,7 +62,7 @@ public class Issue2818StructTemporaryFieldAssignmentTests
     [InlineData("+=")]
     public void LetStructLocal_NestedFieldAssignment_ReportsGS0499(string assignmentOperator)
     {
-        var result = Evaluate($$"""
+        var result = Evaluate($$$"""
             package P2818ReadonlyLocal
 
             struct Item {
@@ -74,7 +74,7 @@ public class Issue2818StructTemporaryFieldAssignmentTests
             }
 
             let outer = Outer{Inner: Item{Id: 1}}
-            outer.Inner.Id {{assignmentOperator}} 5
+            outer.Inner.Id {{{assignmentOperator}}} 5
             """);
 
         Assert.Contains(result.Diagnostics, d => d.Id == "GS0499");
