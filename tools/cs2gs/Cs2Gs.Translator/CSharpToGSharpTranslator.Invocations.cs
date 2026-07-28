@@ -613,11 +613,11 @@ public sealed partial class CSharpToGSharpTranslator
         private void ReportUnsupportedConditionalStaticHelperChain(
             ConditionalAccessExpressionSyntax conditionalAccess)
         {
-            this.context.ReportUnsupported(
-                conditionalAccess,
+            const string message =
                 "a null-conditional static-helper extension call with a non-member receiver chain " +
                 "cannot be lowered without losing the conditional receiver; the safe extension form " +
-                "is retained instead (issue #2821).");
+                "is retained instead (issue #2821).";
+            this.context.ReportUnsupported(conditionalAccess, message);
         }
 
         // Issue #914 (oblivious sink): a null-conditional delegate/event invoke
