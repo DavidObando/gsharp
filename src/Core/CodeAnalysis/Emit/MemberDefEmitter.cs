@@ -304,7 +304,28 @@ internal sealed class MemberDefEmitter
 
         var sigBlob = new BlobBuilder();
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
-            .Parameters(0, r => this.encodeTypeSymbol(r.Type(), prop.Type), _ => { });
+            .Parameters(
+                prop.Parameters.IsDefaultOrEmpty ? 0 : prop.Parameters.Length,
+                r => this.encodeTypeSymbol(r.Type(), prop.Type),
+                ps =>
+                {
+                    // Issue #2832: an indexer's getter takes the index
+                    // parameters. A computed accessor normally reaches the
+                    // `EmitFunction` path above, which encodes them from the
+                    // accessor's FunctionSymbol — but under
+                    // `EmitContext.MetadataOnly` (reference-assembly emit) no
+                    // body is produced, so this fallback is what lands in the
+                    // ref assembly and must carry the same signature.
+                    if (prop.Parameters.IsDefaultOrEmpty)
+                    {
+                        return;
+                    }
+
+                    foreach (var indexParam in prop.Parameters)
+                    {
+                        this.encodeTypeSymbol(ps.AddParameter().Type(), indexParam.Type);
+                    }
+                });
 
         // ADR-0149: an explicit-interface qualifier clause property (whether
         // an auto-property, reaching this fallback path, or an indexer,
@@ -382,9 +403,10 @@ internal sealed class MemberDefEmitter
         }
 
         var sigBlob = new BlobBuilder();
+        var indexParameterCount = prop.Parameters.IsDefaultOrEmpty ? 0 : prop.Parameters.Length;
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
             .Parameters(
-                1,
+                indexParameterCount + 1,
                 r =>
                 {
                     // Issue #946: an `init`-only setter encodes its void return
@@ -402,7 +424,21 @@ internal sealed class MemberDefEmitter
 
                     r.Void();
                 },
-                ps => this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type));
+                ps =>
+                {
+                    // Issue #2832: see the matching comment in
+                    // EmitPropertyGetter — an indexer's setter takes the index
+                    // parameters ahead of the value parameter.
+                    if (!prop.Parameters.IsDefaultOrEmpty)
+                    {
+                        foreach (var indexParam in prop.Parameters)
+                        {
+                            this.encodeTypeSymbol(ps.AddParameter().Type(), indexParam.Type);
+                        }
+                    }
+
+                    this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type);
+                });
 
         // ADR-0149: see the matching visibility comment in EmitPropertyGetter
         // — an explicit-interface qualifier clause property is always
@@ -434,11 +470,13 @@ internal sealed class MemberDefEmitter
         }
 
         // Emit a Parameter row for "value" so the setter has a named parameter.
+        // Issue #2832: for an indexer the value parameter follows the index
+        // parameters, so its sequence number is offset accordingly.
         var firstParamHandle = this.nextParameterHandle();
         this.emitCtx.Metadata.AddParameter(
             attributes: ParameterAttributes.None,
             name: this.emitCtx.Metadata.GetOrAddString(prop.SetterParameterName ?? "value"),
-            sequenceNumber: 1);
+            sequenceNumber: indexParameterCount + 1);
 
         // ADR-0149: see the matching comment in EmitPropertyGetter.
         var setterName = prop.HasExplicitInterfaceClause

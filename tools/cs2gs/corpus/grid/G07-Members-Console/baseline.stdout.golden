@@ -7,6 +7,7 @@ AttributeList: note=hand-written note
 AttributeList: paramNote=gauged seed
 AttributeList: measured=42
 BaseConstructorInitializer: kind=truck wheels=6
+CompoundAssignmentOperatorDeclaration: total=22
 ConstructorDeclaration: blank=unassigned@0
 ConstructorDeclaration: assigned=kim@12
 ConversionOperatorDeclaration: implicit-then-explicit=42

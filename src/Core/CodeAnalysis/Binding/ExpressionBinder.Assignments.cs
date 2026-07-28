@@ -1140,6 +1140,17 @@ internal sealed partial class ExpressionBinder
         var leftExpr = BindNameExpressionCore(bareName);
         SyntaxFacts.TryGetCompoundAssignmentBaseOperator(syntax.OperatorToken.Kind, out var baseOpSyntaxKind);
         var leftType = leftExpr.Type;
+
+        // Issue #2834 / ADR-0035: a user-defined compound-assignment operator
+        // mutates the receiver in place, so it replaces the whole
+        // `name = name op rhs` rewrite below rather than feeding it.
+        var userCompound = TryBindUserCompoundAssignmentOperator(
+            syntax.OperatorToken.Kind, leftExpr, boundRhs, syntax.Value.Location);
+        if (userCompound != null)
+        {
+            return userCompound;
+        }
+
         var binaryResult = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftExpr, boundRhs, syntax.Value.Location);
         if (binaryResult == null)
         {
@@ -1251,6 +1262,17 @@ internal sealed partial class ExpressionBinder
 
             var fieldType = fieldOwner.SubstituteMemberType(staticField.Type);
             var leftRead = new BoundFieldAccessExpression(null, receiver: null, fieldOwner, staticField, fieldType);
+
+            // Issue #2834: a user-defined compound-assignment operator mutates
+            // the target in place, replacing the read/binary/write rewrite.
+            var userCompound = TryBindUserCompoundAssignmentOperator(
+                syntax.OperatorToken.Kind, leftRead, boundRhs, syntax.Value.Location);
+            if (userCompound != null)
+            {
+                result = userCompound;
+                return true;
+            }
+
             var binary = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftRead, boundRhs, syntax.Value.Location);
             if (binary == null)
             {
@@ -1284,6 +1306,17 @@ internal sealed partial class ExpressionBinder
             }
 
             var leftRead = new BoundPropertyAccessExpression(null, receiver: null, propertyOwner, prop);
+
+            // Issue #2834: a user-defined compound-assignment operator mutates
+            // the target in place, replacing the read/binary/write rewrite.
+            var userCompound = TryBindUserCompoundAssignmentOperator(
+                syntax.OperatorToken.Kind, leftRead, boundRhs, syntax.Value.Location);
+            if (userCompound != null)
+            {
+                result = userCompound;
+                return true;
+            }
+
             var binary = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftRead, boundRhs, syntax.Value.Location);
             if (binary == null)
             {
@@ -1405,6 +1438,16 @@ internal sealed partial class ExpressionBinder
             }
 
             var leftRead = new BoundFieldAccessExpression(null, boundReceiver, declaringType, field);
+
+            // Issue #2834: a user-defined compound-assignment operator mutates
+            // the target in place, replacing the read/binary/write rewrite.
+            var userCompound = TryBindUserCompoundAssignmentOperator(
+                syntax.OperatorToken.Kind, leftRead, boundRhs, syntax.Value.Location);
+            if (userCompound != null)
+            {
+                return userCompound;
+            }
+
             var binary = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftRead, boundRhs, syntax.Value.Location);
             if (binary == null)
             {
@@ -1419,6 +1462,23 @@ internal sealed partial class ExpressionBinder
         // ADR-0051: check properties.
         if (TypeMemberModel.TryGetProperty(structSym, memberName, out var prop, out var propDeclaringType))
         {
+            // Issue #2834: a user-defined compound-assignment operator mutates
+            // the property's *value* in place, so it needs only a getter — no
+            // setter, no accessibility-of-setter check, and no write-back. This
+            // is resolved before the read/binary/write checks below.
+            if (prop.HasGetter)
+            {
+                var userPropCompound = TryBindUserCompoundAssignmentOperator(
+                    syntax.OperatorToken.Kind,
+                    new BoundPropertyAccessExpression(null, boundReceiver, structSym, prop),
+                    boundRhs,
+                    syntax.Value.Location);
+                if (userPropCompound != null)
+                {
+                    return userPropCompound;
+                }
+            }
+
             if (!prop.HasGetter || !prop.HasSetter)
             {
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);

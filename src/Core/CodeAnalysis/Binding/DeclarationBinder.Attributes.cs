@@ -606,6 +606,21 @@ internal sealed partial class DeclarationBinder
         return type?.ClrType.IsEnumSafe() == true;
     }
 
+    // Issue #2831: the CLR custom-attribute blob (ECMA-335 II.23.3) can carry
+    // only primitives, `string`, `System.Type` and enums, so a folded constant
+    // is accepted as an attribute argument only when its static type is one of
+    // those serialisable shapes.
+    private static bool IsSerialisableAttributeConstant(TypeSymbol type)
+    {
+        if (IsEnumLikeType(type))
+        {
+            return true;
+        }
+
+        var clr = type?.ClrType;
+        return clr is not null && (clr.IsPrimitive || clr.IsSameAs(typeof(string)) || clr.IsSameAs(typeof(decimal)));
+    }
+
     private static bool TryParseTargetKind(string text, out AttributeTargetKind kind)
     {
         switch (text)
@@ -695,6 +710,27 @@ internal sealed partial class DeclarationBinder
 
             case ArrayCreationExpressionSyntax arraySyntax:
                 return TryBindAttributeArrayArgument(arraySyntax, out value, out type);
+
+            // Issue #2831: a negated (or explicitly `+`-signed) numeric literal
+            // — `@InlineData(-1)`, `@MyAttr([]int32{-2, -7})` — is a
+            // compile-time constant per ECMA-335 II.23.3 but parses as a unary
+            // expression, so it never reached the literal case above. Fold it
+            // with the same constant evaluator the `const`-field binder uses,
+            // and accept only primitive/string results the emitter can
+            // serialise (`nameof(...)` and friends stay out of scope).
+            case UnaryExpressionSyntax unarySyntax:
+                if (bindExpression(unarySyntax) is { } boundUnary
+                    && boundUnary.Type is { } unaryType
+                    && TryEvaluateConstant(boundUnary, out var foldedValue)
+                    && foldedValue is not null
+                    && IsSerialisableAttributeConstant(unaryType))
+                {
+                    value = foldedValue;
+                    type = unaryType;
+                    return true;
+                }
+
+                return false;
         }
 
         // Issue #177: accept BoundLiteralExpression whose static type is an

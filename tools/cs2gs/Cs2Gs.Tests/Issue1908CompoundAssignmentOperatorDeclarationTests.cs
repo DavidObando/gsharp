@@ -2,6 +2,11 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
+using System.Linq;
+using Cs2Gs.CodeModel.Ast;
+using Cs2Gs.CodeModel.Printing;
+using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using Xunit;
@@ -9,24 +14,26 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Regression tests for issue #1908: a C# 14 user-defined INSTANCE
-/// compound-assignment operator declaration (<c>public void operator +=(T
-/// other)</c>, backed by <c>op_AdditionAssignment</c> and siblings) used to
-/// translate its C# operator token text verbatim into a G# operator
-/// declaration (<c>func (self T) operator +=(other T) { ... }</c>). G#
-/// operator declarations only have binary/unary form (ADR-0035) — there is
-/// no compound-assignment declaration syntax — so the emitted G# failed to
+/// Regression tests for issue #1908, as resolved by issue #2834.
+/// <para>
+/// History: a C# 14 user-defined INSTANCE compound-assignment operator
+/// declaration (<c>public void operator +=(T other)</c>, backed by
+/// <c>op_AdditionAssignment</c> and siblings) originally translated its C#
+/// operator token text verbatim into the G# top-level receiver-clause operator
+/// form (<c>func (self T) operator +=(other T) { ... }</c>). G# only had
+/// binary/unary operator declarations (ADR-0035), so the emitted G# failed to
 /// round-trip parse with <c>GS0005 Unexpected token &lt;PlusEqualsToken&gt;,
-/// expected &lt;PlusToken&gt;</c>.
-///
-/// There is no lossless mechanical rewrite to a binary <c>operator +</c>:
-/// the compound form mutates instance state in place rather than returning a
-/// new value, and G# has no compound-assignment declaration/consumption
-/// surface at all. The translator now reports this construct as a loud,
-/// non-silent <c>CS2GS-GAP</c> (ADR-0115 §B) instead of emitting invalid G#
-/// syntax; the operator member is dropped from the translated output (grid
-/// app G07, tracked as a known/open gap in
-/// <c>tools/cs2gs/triage/gaps.json</c>).
+/// expected &lt;PlusToken&gt;</c>. As a stopgap (#1908) the construct was
+/// reported as a loud <c>CS2GS-GAP</c> and dropped.
+/// </para>
+/// <para>
+/// G# now has first-class compound-assignment operator declarations (#2834), so
+/// the construct translates to the IN-BODY member form
+/// <c>func operator +=(other T)</c> — instance, <c>void</c>-returning,
+/// <c>specialname</c>, exactly like Roslyn's. These tests keep the original
+/// #1908 guarantee (the printed G# must round-trip parse) while pinning the
+/// new, non-lossy translation.
+/// </para>
 /// </summary>
 public class Issue1908CompoundAssignmentOperatorDeclarationTests
 {
@@ -42,8 +49,53 @@ public class Issue1908CompoundAssignmentOperatorDeclarationTests
     [InlineData("<<=", "int")]
     [InlineData(">>=", "int")]
     [InlineData(">>>=", "int")]
-    public void InstanceCompoundAssignmentOperator_ReportsUnsupportedInsteadOfInvalidSyntax(
+    public void InstanceCompoundAssignmentOperator_TranslatesAndRoundTripParses(
         string compoundToken, string paramType)
+    {
+        CompilationUnit unit = Translate(compoundToken, paramType, out TranslationContext context);
+
+        // No longer a gap.
+        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+
+        // Emitted as an in-body instance member: no receiver clause (that form
+        // is rewritten to a *static* op_*, which is the wrong shape here) and
+        // no return type.
+        TypeDeclaration bag = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "TallyBag");
+        MethodDeclaration op = bag.Members
+            .OfType<MethodDeclaration>()
+            .Single(m => m.Name == "operator " + compoundToken);
+
+        Assert.Null(op.Receiver);
+        Assert.Null(op.ReturnType);
+        Assert.Single(op.Parameters);
+
+        Assert.DoesNotContain(
+            unit.Members.OfType<MethodDeclaration>(),
+            m => m.Name.StartsWith("operator ", StringComparison.Ordinal));
+
+        // The original #1908 bug: the printed G# must parse (it used to fail
+        // with GS0005).
+        string printed = GSharpPrinter.Print(unit);
+        Assert.Contains("func operator " + compoundToken + "(amount int32)", printed, StringComparison.Ordinal);
+
+        RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
+        Assert.True(roundTrip.Success, string.Join(Environment.NewLine, roundTrip.Errors));
+    }
+
+    /// <summary>
+    /// The rest of the type still translates normally alongside the operator.
+    /// </summary>
+    [Fact]
+    public void InstanceCompoundAssignmentOperator_DoesNotDropSiblingMembers()
+    {
+        CompilationUnit unit = Translate("+=", "int", out _);
+        string printed = GSharpPrinter.Print(unit);
+
+        Assert.Contains("operator +=", printed, StringComparison.Ordinal);
+        Assert.Contains("Total", printed, StringComparison.Ordinal);
+    }
+
+    private static CompilationUnit Translate(string compoundToken, string paramType, out TranslationContext context)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
         {
@@ -71,66 +123,14 @@ namespace Demo
     }}
 }}"),
         });
+
         Assert.True(
             project.BoundWithoutErrors,
             "Snippet should bind with no C# errors: " +
-                string.Join(System.Environment.NewLine, project.ErrorDiagnostics));
+                string.Join(Environment.NewLine, project.ErrorDiagnostics));
 
         LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        _ = new CSharpToGSharpTranslator().TranslateDocument(document, context);
-
-        Assert.Contains(
-            context.Diagnostics,
-            d => d.Severity == TranslationSeverity.Unsupported
-                && d.Message.Contains("compound-assignment")
-                && d.Message.Contains($"operator {compoundToken}"));
-    }
-
-    /// <summary>
-    /// The dropped operator member must not leak the raw C# compound-assignment
-    /// token (e.g. <c>operator +=</c>) into the printed G# — that shape fails
-    /// round-trip parse with GS0005 (the original bug). The rest of the type
-    /// (fields, other members) still translates normally.
-    /// </summary>
-    [Fact]
-    public void InstanceCompoundAssignmentOperator_DoesNotEmitInvalidOperatorSyntax()
-    {
-        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
-        {
-            ("Snippet.cs", @"
-namespace Demo
-{
-    public class TallyBag
-    {
-        private int _total;
-
-        public TallyBag(int start)
-        {
-            _total = start;
-        }
-
-        public void operator +=(int amount)
-        {
-            _total = _total + amount;
-        }
-
-        public int Total()
-        {
-            return _total;
-        }
-    }
-}"),
-        });
-        Assert.True(project.BoundWithoutErrors);
-
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        Cs2Gs.CodeModel.Ast.CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
-
-        string printed = Cs2Gs.CodeModel.Printing.GSharpPrinter.Print(unit);
-
-        Assert.DoesNotContain("operator +=", printed);
-        Assert.Contains("Total", printed);
+        context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        return new CSharpToGSharpTranslator().TranslateDocument(document, context);
     }
 }

@@ -89,6 +89,16 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.FieldAssignmentThroughStructTemporary, fieldName, receiverType);
 
     /// <summary>
+    /// Issue #2834: reports a user-defined compound-assignment operator whose
+    /// shape does not match the C# 14 contract (instance, one parameter, no
+    /// return value).
+    /// </summary>
+    /// <param name="location">The operator token location.</param>
+    /// <param name="operatorName">The metadata operator name, e.g. <c>op_AdditionAssignment</c>.</param>
+    public void ReportInvalidCompoundAssignmentOperatorShape(TextLocation location, string operatorName)
+    => Report(location, DiagnosticDescriptors.InvalidCompoundAssignmentOperatorShape, operatorName);
+
+    /// <summary>
     /// Issue #946: reports that an <c>init</c>-only property was assigned
     /// outside of object initialization. An <c>init</c>-only property may only
     /// be assigned in the declaring type's constructor(s), in an object/
