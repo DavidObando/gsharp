@@ -874,6 +874,37 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
+    /// Issue #2820: maps an open CLR parameter into the symbolic type model
+    /// while preserving its top-level nullable-reference annotation.
+    /// </summary>
+    /// <param name="parameter">The open parameter to map.</param>
+    /// <param name="openDefinition">The open generic declaring type, if any.</param>
+    /// <param name="typeArguments">The declaring type's symbolic arguments.</param>
+    /// <param name="openMethodDefinition">The open generic method, if any.</param>
+    /// <param name="methodTypeArguments">The method's symbolic arguments.</param>
+    /// <returns>The nullability-aware symbolic parameter type.</returns>
+    public static TypeSymbol MapOpenClrParameterTypeToSymbolic(
+        ParameterInfo parameter,
+        Type openDefinition,
+        ImmutableArray<TypeSymbol> typeArguments,
+        MethodInfo openMethodDefinition = null,
+        ImmutableArray<TypeSymbol> methodTypeArguments = default)
+    {
+        if (parameter == null)
+        {
+            return TypeSymbol.Error;
+        }
+
+        var mapped = MapOpenClrParameterTypeToSymbolic(
+            parameter.ParameterType,
+            openDefinition,
+            typeArguments,
+            openMethodDefinition,
+            methodTypeArguments);
+        return ClrNullability.ApplyParameterTopLevelNullability(parameter, mapped);
+    }
+
+    /// <summary>
     /// Issue #833: extended mapping entry point that also substitutes
     /// <em>method</em> generic parameters (<c>MVar(idx)</c>) using the
     /// symbolic arguments at the corresponding ordinals on
@@ -3488,23 +3519,24 @@ internal sealed class MemberLookup
             var openParameters = openMethod?.GetParameters();
             if (openParameters != null && (uint)parameterIndex < (uint)openParameters.Length)
             {
-                var openParameterType = openParameters[parameterIndex].ParameterType;
+                var openParameter = openParameters[parameterIndex];
+                var openParameterType = openParameter.ParameterType;
                 if (openParameterType.IsByRef)
                 {
-                    return ByRefTypeSymbol.Get(MapOpenClrTypeToSymbolic(
-                        openParameterType.GetElementType(),
+                    return ByRefTypeSymbol.Get(MapOpenClrParameterTypeToSymbolic(
+                        openParameter,
                         openDefinition,
                         declaringTypeArguments));
                 }
 
-                return MapOpenClrTypeToSymbolic(
-                    openParameterType,
+                return MapOpenClrParameterTypeToSymbolic(
+                    openParameter,
                     openDefinition,
                     declaringTypeArguments);
             }
         }
 
-        return TypeSymbol.FromClrType(closedMethod.GetParameters()[parameterIndex].ParameterType);
+        return ClrNullability.GetParameterTypeSymbol(closedMethod.GetParameters()[parameterIndex]);
     }
 
     internal static MethodInfo GetImportedMethodForEmission(MethodInfo method)

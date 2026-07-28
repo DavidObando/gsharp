@@ -7,7 +7,6 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
-using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
@@ -1193,7 +1192,8 @@ internal sealed class ConversionClassifier
             return null;
         }
 
-        var openParamType = openParams[paramIndex].ParameterType;
+        var openParameter = openParams[paramIndex];
+        var openParamType = openParameter.ParameterType;
         if (openParamType.IsByRef)
         {
             openParamType = openParamType.GetElementType();
@@ -1227,8 +1227,12 @@ internal sealed class ConversionClassifier
         // `Expression<Func<TEntity,TRelated>>`) is substituted in the SAME pass
         // as the receiver's `TEntity` — rather than only ever substituting one
         // or the other depending on which happens to be tried first.
-        var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openParamType, openDef, imported.TypeArguments, openMethod, symbolicMethodTypeArgs);
-        mapped = PreserveParameterTopLevelNullability(openParams[paramIndex], mapped);
+        var mapped = MemberLookup.MapOpenClrParameterTypeToSymbolic(
+            openParameter,
+            openDef,
+            imported.TypeArguments,
+            openMethod,
+            symbolicMethodTypeArgs);
         return mapped != null
             && mapped != TypeSymbol.Error
             && TypeSymbol.RequiresSymbolicProjection(mapped)
@@ -1340,7 +1344,8 @@ internal sealed class ConversionClassifier
             return null;
         }
 
-        var openParamType = openParams[paramIndex].ParameterType;
+        var openParameter = openParams[paramIndex];
+        var openParamType = openParameter.ParameterType;
         if (openParamType.IsByRef)
         {
             openParamType = openParamType.GetElementType();
@@ -1351,13 +1356,12 @@ internal sealed class ConversionClassifier
             return null;
         }
 
-        var mapped = MemberLookup.MapOpenClrTypeToSymbolic(
-            openParamType,
+        var mapped = MemberLookup.MapOpenClrParameterTypeToSymbolic(
+            openParameter,
             openDefinition: null,
             typeArguments: default,
             openMethodDefinition: openMethod,
             methodTypeArguments: methodTypeArgs);
-        mapped = PreserveParameterTopLevelNullability(openParams[paramIndex], mapped);
 
         return mapped != null
             && mapped != TypeSymbol.Error
@@ -2040,18 +2044,6 @@ internal sealed class ConversionClassifier
     }
 
     // ----- Private helpers (kept here because they are only used by methods in this class) -----
-    private static TypeSymbol PreserveParameterTopLevelNullability(ParameterInfo parameter, TypeSymbol mapped)
-    {
-        var flags = ClrNullability.ReadNullableFlags(parameter, parameter.Member);
-        return mapped != null
-            && mapped is not NullableTypeSymbol
-            && ClrTypeUtilities.IsDelegateType(parameter.ParameterType)
-            && !flags.IsDefaultOrEmpty
-            && flags[0] == NullableFlagsBuilder.Annotated
-                ? NullableTypeSymbol.Get(mapped)
-                : mapped;
-    }
-
     private static bool IsNaturalStructuralDelegateTarget(TypeSymbol source, TypeSymbol target)
     {
         source = source is NullableTypeSymbol sourceNullable ? sourceNullable.UnderlyingType : source;
