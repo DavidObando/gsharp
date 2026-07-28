@@ -456,10 +456,10 @@ public static class User
 
         string user = Compact(printed["User.cs"]);
 
-        Assert.Equal(2, CountOccurrences(user, "GetHost()"));
+        Assert.Equal(1, CountOccurrences(user, "User.GetHost()"));
         Assert.Contains("let __spill", user);
         Assert.Contains("FirstExtensions.Describe(__spill", user);
-        Assert.DoesNotContain("if GetHost() != nil", user);
+        Assert.DoesNotContain("if User.GetHost() != nil", user);
 
         ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
             BindDiagnostics(printed.Values);
