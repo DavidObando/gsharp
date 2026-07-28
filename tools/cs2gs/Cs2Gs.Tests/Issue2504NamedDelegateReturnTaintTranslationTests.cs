@@ -50,7 +50,10 @@ public sealed class Issue2504NamedDelegateReturnTaintTranslationTests
             """);
 
         Assert.Contains("type Callback = delegate func() Result?", printed, StringComparison.Ordinal);
-        Assert.Contains("callback (() -> Result?)?", printed, StringComparison.Ordinal);
+        // Issue #2835: source-declared delegates keep their nominal name, so the
+        // return promotion reads off the `type Callback = ...` declaration above
+        // and the field carries only its own envelope nullability.
+        Assert.Contains("private let callback Callback?", printed, StringComparison.Ordinal);
         Assert.Contains("func Produce() Result? -> nil", printed, StringComparison.Ordinal);
         Assert.Contains("Holder(Produce)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("Produce!!", printed, StringComparison.Ordinal);
@@ -90,8 +93,11 @@ public sealed class Issue2504NamedDelegateReturnTaintTranslationTests
         Assert.Contains("type Callback = delegate func(enforce bool = false) Result?", printed, StringComparison.Ordinal);
         Assert.Contains("func Clean(enforce bool) Result?", printed, StringComparison.Ordinal);
         Assert.Contains("func Produce(enforce bool) Result?", printed, StringComparison.Ordinal);
-        Assert.Contains("func Accept(callback (bool) -> Result?)", printed, StringComparison.Ordinal);
-        Assert.Contains("func Return() (bool) -> Result?", printed, StringComparison.Ordinal);
+        // Issue #2835: nominal, not erased. The `Result?` return promotion lives
+        // on the `type Callback` declaration asserted above; neither the
+        // parameter nor the return borrows callable-envelope nullability.
+        Assert.Contains("func Accept(callback Callback)", printed, StringComparison.Ordinal);
+        Assert.Contains("func Return() Callback", printed, StringComparison.Ordinal);
         Assert.Contains("event Changed Callback", printed, StringComparison.Ordinal);
     }
 
@@ -121,9 +127,15 @@ public sealed class Issue2504NamedDelegateReturnTaintTranslationTests
         Assert.Contains("type CleanCallback = delegate func() Result", printed, StringComparison.Ordinal);
         Assert.Contains("type NullableResultCallback = delegate func() Result?", printed, StringComparison.Ordinal);
         Assert.Contains("type OptionalNullableResultCallback = delegate func() Result?", printed, StringComparison.Ordinal);
-        Assert.Contains("optionalClean (() -> Result)?", printed, StringComparison.Ordinal);
-        Assert.Contains("nullableResult () -> Result?", printed, StringComparison.Ordinal);
-        Assert.Contains("optionalNullableResult (() -> Result?)?", printed, StringComparison.Ordinal);
+        // Issue #2835: with nominal delegate names the two dimensions stay
+        // independently observable -- the RETURN promotion is carried by the
+        // delegate declaration (`CleanCallback` vs `NullableResultCallback`
+        // above) and the ENVELOPE promotion by the trailing `?` on each field.
+        // All four combinations are distinct:
+        Assert.Contains("clean CleanCallback =", printed, StringComparison.Ordinal);
+        Assert.Contains("optionalClean CleanCallback? =", printed, StringComparison.Ordinal);
+        Assert.Contains("nullableResult NullableResultCallback =", printed, StringComparison.Ordinal);
+        Assert.Contains("optionalNullableResult OptionalNullableResultCallback? =", printed, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -283,12 +283,17 @@ details.
 | `corpus/L3-Library` | PASS | PASS | PASS | PASS |
 | `corpus/L4-Console` | PASS | PASS | PASS | PASS |
 | `corpus/L5-Console` | PASS | PASS | PASS | PASS |
-| `corpus/grid/G01…G14` (14 apps) | PASS except deliberate G07 unsupported operator | PASS | PASS | PASS |
+| `corpus/grid/G01…G14` (14 apps) | PASS | PASS | PASS | PASS |
 | `corpus/CompileGap-Library` | PASS | FAIL (deliberate, ledgered wontfix) | skip | skip |
 
 With `--baseline tools/cs2gs/triage/gaps.json` the run above gates green
-(`2 known, 0 new, 0 regressed, 0 stale`): every residual failure is a
-ledgered, issue-linked gap. The grid build-out filed the coverage backlog as
+(`1 known, 0 new, 0 regressed, 0 stale`): the single residual failure is the
+deliberate `corpus/CompileGap-Library` fixture. G07's C# 14 `operator +=`
+declaration stopped being a gap once #2834 gave it a canonical G# spelling
+(`public func operator +=(amount int32)`), which in turn exposed and fixed
+#2835 (source-declared delegate types were erased to structural arrow form).
+
+The grid build-out filed the coverage backlog as
 issues [#1879–#1934](https://github.com/DavidObando/gsharp/issues?q=label%3A%22gap%3Atranslate%22%2C%22gap%3Acompile%22%2C%22gap%3Ailverify%22%2C%22gap%3Aparity%22)
 (37 translator gaps, 17 gsc gaps, 1 pipeline policy), each with a quarantined
 fixture next to its grid app.

@@ -1,9 +1,9 @@
 // inventory: OperatorDeclaration — C#14 user-defined instance compound assignment
-// operator += has no canonical G# form (G# operator declarations are
-// binary/unary only, ADR-0035); the translator reports this as a loud
-// CS2GS-GAP (issue #1908) instead of emitting `operator +=`, which fails
-// round-trip parse (GS0005). Tracked as a known/open gap in
-// tools/cs2gs/triage/gaps.json so the corpus sanity check tolerates it.
+// operator +=. gsc issue #2834 gave this a canonical G# spelling as an ordinary
+// in-body member (`public func operator +=(amount int32) { ... }`), which emits
+// the same instance, void-returning, specialname `op_AdditionAssignment` method
+// Roslyn produces, so the construct round-trips end to end (translate, compile,
+// ilverify, stdout parity) instead of being a tracked CS2GS-GAP.
 using System;
 
 namespace Corpus.Grid07

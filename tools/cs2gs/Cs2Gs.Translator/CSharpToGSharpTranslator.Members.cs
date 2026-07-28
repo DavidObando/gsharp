@@ -1478,31 +1478,24 @@ public sealed partial class CSharpToGSharpTranslator
         /// <c>func</c> only binds at top level.
         ///
         /// C# 14 instance compound-assignment operators (<c>operator +=</c> and
-        /// siblings, <c>op_AdditionAssignment</c> etc.) have no canonical G# form
-        /// — G# operator declarations are binary/unary only (ADR-0035) and there
-        /// is no lossless mechanical rewrite to a binary operator, since the
-        /// compound form mutates instance state in place rather than returning a
-        /// new value. These are reported as an unsupported gap instead of
-        /// emitting the C# token text verbatim into a <c>operator +=</c>
-        /// declaration that fails to parse (issue #1908).
+        /// siblings, <c>op_AdditionAssignment</c> etc.) are NOT binary operators:
+        /// they are instance, <c>void</c>-returning, single-parameter methods
+        /// that mutate the receiver in place. gsc issue #2834 gives them a
+        /// canonical G# spelling as an ordinary IN-BODY member —
+        /// <c>public func operator +=(amount int32) { … }</c> — which round-trips
+        /// to the same <c>specialname</c> instance <c>op_*Assignment</c> metadata
+        /// Roslyn emits. They therefore keep their C# shape verbatim and are NOT
+        /// lifted to a top-level receiver-clause sibling.
         /// </summary>
         private (GMember Member, bool IsStatic) TranslateOperator(OperatorDeclarationSyntax node)
         {
             string operatorToken = node.OperatorToken.Text;
+            var symbol = this.context.GetDeclaredSymbol(node) as IMethodSymbol;
 
             if (IsCompoundAssignmentOperatorToken(node.OperatorToken.Kind()))
             {
-                string binaryToken = operatorToken.TrimEnd('=');
-                string message =
-                    $"C# 14 instance compound-assignment operator 'operator {operatorToken}' has no canonical " +
-                    "G# form: G# operator declarations are binary/unary only (ADR-0035) and there is no lossless " +
-                    $"mechanical rewrite to a binary 'operator {binaryToken}', since the compound form may " +
-                    "mutate instance state beyond its return value.";
-                this.context.ReportUnsupported(node, message);
-                return (null, false);
+                return (this.TranslateCompoundAssignmentOperator(node, operatorToken, symbol), false);
             }
-
-            var symbol = this.context.GetDeclaredSymbol(node) as IMethodSymbol;
 
             List<Parameter> allParameters = this.MapParameters(symbol, node.ParameterList, skipFirst: false);
             Receiver receiver;
@@ -1553,6 +1546,47 @@ public sealed partial class CSharpToGSharpTranslator
             // sibling; returning IsStatic=false routes them through the existing
             // receiver-clause lift in VisitAggregate.
             return (method, false);
+        }
+
+        /// <summary>
+        /// gsc issue #2834: translates a C# 14 instance compound-assignment
+        /// operator (<c>public void operator +=(int amount)</c>) to the canonical
+        /// G# in-body member <c>public func operator +=(amount int32) { … }</c>.
+        /// Unlike a binary operator this keeps its C# shape exactly — instance,
+        /// <c>void</c>, one parameter — and is not lifted to a receiver-clause
+        /// sibling, so it round-trips to the same <c>specialname</c> instance
+        /// <c>op_*Assignment</c> metadata Roslyn emits and consumes.
+        /// </summary>
+        private MethodDeclaration TranslateCompoundAssignmentOperator(
+            OperatorDeclarationSyntax node,
+            string operatorToken,
+            IMethodSymbol symbol)
+        {
+            List<Parameter> parameters = this.MapParameters(symbol, node.ParameterList, skipFirst: false);
+
+            BlockStatement body = (node.Body != null || node.ExpressionBody != null)
+                ? this.TranslateBody(node, $"operator '{operatorToken}'")
+                : null;
+
+            GStatement arrowBody = node.ExpressionBody != null ? TryFoldArrowBody(body) : null;
+            if (arrowBody != null)
+            {
+                body = null;
+            }
+
+            return new MethodDeclaration(
+                $"operator {operatorToken}",
+                parameters: parameters,
+                returnType: null,
+                body: body,
+                typeParameters: null,
+                receiver: null,
+                visibility: MapVisibility(symbol, this.context, node),
+                isOpen: false,
+                isOverride: false,
+                isAsync: false,
+                attributes: this.MapAttributes(node.AttributeLists),
+                expressionBody: arrowBody);
         }
 
         private (GMember Member, bool IsStatic) TranslateConversionOperator(ConversionOperatorDeclarationSyntax node)

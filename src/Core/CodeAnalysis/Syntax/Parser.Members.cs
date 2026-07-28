@@ -1250,6 +1250,20 @@ public partial class Parser
         var operatorKeyword = NextToken();
         var operatorToken = NextToken();
 
+        // Issue #2834 / ADR-0035: a compound-assignment operator token (`+=`,
+        // `-=`, …) is unambiguous — it is never a binary or unary operator —
+        // so it is mapped before the binary/unary disambiguation below. The
+        // declaration is an instance, void-returning method taking the
+        // right-hand operand, and is accepted in BOTH the receiver-clause form
+        // (`func (b Bag) operator +=(n int32)`) and the in-body form
+        // (`public func operator +=(n int32)` inside the type's body).
+        var compoundName = GSharp.Core.CodeAnalysis.Binding.OperatorNames
+            .TryGetCompoundAssignmentName(operatorToken.Kind);
+        if (compoundName != null)
+        {
+            return new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, operatorKeyword.Position, compoundName, null);
+        }
+
         // Disambiguate binary vs unary by peeking the parameter list. With a
         // receiver clause, the parameter list contains only the *extra*
         // operands — empty list ⇒ unary, otherwise binary. (Free-function

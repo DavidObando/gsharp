@@ -1197,6 +1197,16 @@ internal sealed partial class DeclarationBinder
                     methodSymbol.AsyncReturnsValueTask = returnTypeIsValueTask;
                     methodSymbol.IsUnsafe = methodSyntax.IsUnsafe || syntax.IsUnsafe;
 
+                    // Issue #2834: an in-body compound-assignment operator
+                    // (`public func operator +=(n int32)`) is an ordinary
+                    // instance method plus `specialname`, matching the shape
+                    // C# 14 emits and consumes for `op_*Assignment`.
+                    if (OperatorNames.IsCompoundAssignmentName(methodName))
+                    {
+                        methodSymbol.IsSpecialName = true;
+                        ValidateCompoundAssignmentOperatorShape(methodSyntax, methodName, returnType, methodParameters.Length);
+                    }
+
                     // Issue #987: a no-body `open func F() R;` inside a class is
                     // the canonical G# spelling of a C# abstract method. Mark the
                     // method abstract so the body binder skips it (there is no

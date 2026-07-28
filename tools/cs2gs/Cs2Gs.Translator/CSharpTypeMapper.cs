@@ -703,8 +703,28 @@ public sealed class CSharpTypeMapper
 
             // Delegate types (Func/Action/named delegates) render in arrow form
             // (ADR-0115 §B.8).
+            //
+            // Issue #2835: EXCEPT a delegate declared in the source being
+            // translated. CLR delegates are nominally typed — structurally
+            // equivalent delegates are not interchangeable — and cs2gs emits a
+            // real `type X = delegate func(…)` declaration for every source
+            // delegate, so erasing its uses to `(string) -> void` (i.e.
+            // `Action[string]`) makes the translated program fail at runtime the
+            // moment a value crosses between the two spellings. This is the same
+            // reasoning `MapEventType` already applies to an event's own handler
+            // type, now extended to every type position. Imported/BCL delegates
+            // keep the arrow form.
             if (named.TypeKind == TypeKind.Delegate && named.DelegateInvokeMethod != null)
             {
+                if (IsSourceDeclaredDelegate(named))
+                {
+                    return named.IsGenericType
+                        ? new NamedTypeReference(
+                            this.QualifiedTypeName(named, context),
+                            named.TypeArguments.Select(a => this.Map(a, context, location)).ToList())
+                        : new NamedTypeReference(this.QualifiedTypeName(named, context));
+                }
+
                 return this.MapDelegate(named.DelegateInvokeMethod, context, location);
             }
 
@@ -1044,6 +1064,21 @@ public sealed class CSharpTypeMapper
                 yield return deeper;
             }
         }
+    }
+
+    /// <summary>
+    /// Issue #2835: whether <paramref name="named"/> is a delegate type declared
+    /// in the compilation being translated (as opposed to an imported/BCL
+    /// delegate such as <c>Func</c>/<c>Action</c>). Source delegates are emitted
+    /// by cs2gs as real <c>type X = delegate func(…)</c> declarations, so their
+    /// uses must keep the nominal name to preserve CLR delegate identity.
+    /// </summary>
+    /// <param name="named">The candidate delegate type.</param>
+    /// <returns><see langword="true"/> when the delegate is source-declared.</returns>
+    private static bool IsSourceDeclaredDelegate(INamedTypeSymbol named)
+    {
+        INamedTypeSymbol definition = named.OriginalDefinition ?? named;
+        return definition.Locations.Any(l => l.IsInSource);
     }
 
     private ArrowTypeReference MapDelegate(IMethodSymbol invoke, TranslationContext context, Location location)

@@ -197,7 +197,14 @@ namespace Demo
     }
 }");
 
-        Assert.Equal(3, printed.Split("handler (Item?) -> void", StringSplitOptions.None).Length - 1);
+        // Issue #2835: a source-declared delegate keeps its NOMINAL name at
+        // every use site (CLR delegates are nominally typed), so the oblivious
+        // promotion of the delegate's own parameter lands once, on the delegate
+        // declaration, instead of being re-encoded into an erased arrow form at
+        // all three forwarding parameters.
+        Assert.Contains("type Handler = delegate func(item Item?)", printed, StringComparison.Ordinal);
+        Assert.Equal(3, printed.Split("handler Handler", StringSplitOptions.None).Length - 1);
+        Assert.DoesNotContain("(Item?) -> void", printed, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -272,7 +279,15 @@ namespace Demo
     }
 }");
 
-        Assert.Equal(3, printed.Split("convertAction ((Book, T, (Conversion) -> void) -> void)?", StringSplitOptions.None).Length - 1);
+        // Issue #2835: the delegate keeps its nominal name, so the null-check
+        // promotion shows up as `ConvertDelegate[T]?` on every forwarding
+        // parameter rather than on an erased arrow form. The BCL `Action<T>`
+        // nested inside the delegate's own signature still erases to arrow form.
+        Assert.Contains(
+            "type ConvertDelegate[T] = delegate func(book Book, context T, callback (Conversion) -> void)",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Equal(3, printed.Split("convertAction ConvertDelegate[T]?", StringSplitOptions.None).Length - 1);
         Assert.Contains("Start(convertAction)", printed);
         Assert.DoesNotContain("Start(convertAction!!)", printed);
     }

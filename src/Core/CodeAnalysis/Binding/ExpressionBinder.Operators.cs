@@ -1657,6 +1657,83 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Issue #2834 / ADR-0035: resolves a user-defined compound-assignment
+    /// operator (<c>func (b Bag) operator +=(n int32)</c> or the equivalent
+    /// in-body <c>public func operator +=(n int32)</c>) for
+    /// <c>target op= value</c> and produces the direct instance call
+    /// <c>target.op_XxxAssignment(value)</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Unlike a binary operator, a compound-assignment operator is an
+    /// INSTANCE, <see langword="void"/>-returning method that mutates the
+    /// receiver in place — the same shape C# 14 uses, so the two languages
+    /// consume each other's declarations. It is therefore never rewritten to
+    /// <c>target = target op value</c>; the resolved call IS the assignment.
+    /// </para>
+    /// <para>
+    /// Resolution is attempted BEFORE the built-in / binary-operator path so a
+    /// type that declares both <c>operator +</c> and <c>operator +=</c> gets
+    /// the in-place form for <c>+=</c>, matching C#. When the type declares no
+    /// compound operator this returns <see langword="null"/> and the caller
+    /// falls back to the ordinary <c>lhs = lhs op rhs</c> rewrite.
+    /// </para>
+    /// </remarks>
+    /// <param name="compoundOperatorKind">The compound-assignment token kind (<c>+=</c>, …).</param>
+    /// <param name="target">The bound left-hand operand (the mutated receiver).</param>
+    /// <param name="value">The bound right-hand operand.</param>
+    /// <param name="valueLocation">The source location of the right-hand operand.</param>
+    /// <returns>The bound in-place operator call, or <see langword="null"/> when none applies.</returns>
+    private BoundExpression TryBindUserCompoundAssignmentOperator(
+        SyntaxKind compoundOperatorKind,
+        BoundExpression target,
+        BoundExpression value,
+        TextLocation valueLocation)
+    {
+        var operatorName = OperatorNames.TryGetCompoundAssignmentName(compoundOperatorKind);
+        if (operatorName == null || target?.Type == null || value == null)
+        {
+            return null;
+        }
+
+        // A `T?` receiver never gets the in-place operator: mutating through a
+        // possibly-nil reference is exactly what `!!` exists to make explicit.
+        if (target.Type is not StructSymbol targetStruct)
+        {
+            return null;
+        }
+
+        if (!TypeMemberModel.TryGetMethodIncludingInherited(targetStruct, operatorName, out var op)
+            || op == null
+            || op.IsStatic)
+        {
+            return null;
+        }
+
+        // A receiver-clause declaration (`func (b Bag) operator +=(n int32)`)
+        // carries its receiver in Parameters[0]; the in-body form does not.
+        var parameterOffset = op.ExplicitReceiverParameter == null ? 0 : 1;
+        if (op.Parameters.Length != parameterOffset + 1)
+        {
+            return null;
+        }
+
+        var parameterType = targetStruct.SubstituteMemberType(op.Parameters[parameterOffset].Type) ?? op.Parameters[parameterOffset].Type;
+        if (!Conversion.Classify(value.Type, parameterType).Exists)
+        {
+            return null;
+        }
+
+        var convertedValue = conversions.BindConversion(valueLocation, value, parameterType);
+        return new BoundUserInstanceCallExpression(
+            null,
+            target,
+            op,
+            ImmutableArray.Create(convertedValue),
+            TypeSymbol.Void);
+    }
+
+    /// <summary>
     /// Issue #1554: shared fallback that resolves a binary operator via the
     /// user-defined operator path (Stream D) and then the CLR <c>op_*</c> path
     /// (Stream C), in that order, for both the plain binary expression

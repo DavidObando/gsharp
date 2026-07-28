@@ -254,7 +254,14 @@ internal sealed partial class DeclarationBinder
             // specific emitter logic needed) and is discoverable by CLR
             // consumers and by gsc's own ClrOperatorResolution (Stream C)
             // reflection fallback after import.
-            if (methodName.StartsWith("op_", StringComparison.Ordinal))
+            // Issue #2834 / ADR-0035: a compound-assignment operator
+            // (`operator +=` and siblings) is deliberately excluded from the
+            // static `op_*` branch above. C# 14 defines it as an INSTANCE,
+            // void-returning, single-parameter method that mutates the
+            // receiver in place, so it must round-trip through the ordinary
+            // instance-method path below — only `IsSpecialName` is added.
+            if (methodName.StartsWith("op_", StringComparison.Ordinal)
+                && !OperatorNames.IsCompoundAssignmentName(methodName))
             {
                 function = new FunctionSymbol(
                     methodName,
@@ -309,6 +316,17 @@ internal sealed partial class DeclarationBinder
             function.AsyncReturnsValueTask = typeIsValueTask;
             function.IsUnsafe = syntax.IsUnsafe;
             function.ReturnRefKind = returnRefKind;
+
+            // Issue #2834: the receiver-clause compound-assignment operator
+            // stays an ordinary instance method (see above) but must still
+            // carry `specialname` so Roslyn and gsc both recognise it as an
+            // operator rather than a callable method named `op_…`.
+            if (OperatorNames.IsCompoundAssignmentName(methodName))
+            {
+                function.IsSpecialName = true;
+                ValidateCompoundAssignmentOperatorShape(syntax, methodName, type, function.Parameters.Length - 1);
+            }
+
             Binder.AttachDocumentation(function, syntax);
             function.SetAttributes(functionAttributes);
             ValidateInlineDataNilArguments(functionAttributes, function.Parameters);
@@ -423,6 +441,30 @@ internal sealed partial class DeclarationBinder
         TypeSymbol ReturnType,
         bool TypeIsValueTask,
         RefKind ReturnRefKind);
+
+    /// <summary>
+    /// Issue #2834: validates that a user-defined compound-assignment operator
+    /// matches the C# 14 contract — an instance method with exactly one
+    /// parameter and no return value, because it mutates its receiver in place
+    /// instead of producing a new value.
+    /// </summary>
+    /// <param name="syntax">The operator declaration.</param>
+    /// <param name="operatorName">The metadata name, e.g. <c>op_AdditionAssignment</c>.</param>
+    /// <param name="returnType">The bound return type.</param>
+    /// <param name="userParameterCount">The parameter count excluding any receiver-clause parameter.</param>
+    private void ValidateCompoundAssignmentOperatorShape(
+        FunctionDeclarationSyntax syntax,
+        string operatorName,
+        TypeSymbol returnType,
+        int userParameterCount)
+    {
+        if (userParameterCount == 1 && (returnType == null || returnType == TypeSymbol.Void))
+        {
+            return;
+        }
+
+        Diagnostics.ReportInvalidCompoundAssignmentOperatorShape(syntax.Identifier.Location, operatorName);
+    }
 
     private FunctionReceiverBindingResult BindFunctionReceiver(
         FunctionDeclarationSyntax syntax,
