@@ -743,6 +743,40 @@ namespace Demo
     }
 
     /// <summary>
+    /// Oahu.Decrypt's <c>Artist?.Split(';')?[0]</c> uses a second safe index
+    /// even though <c>String.Split</c> returns a non-null array. Keep null
+    /// propagation from <c>Artist</c>, but render the dependent index as ordinary
+    /// <c>[0]</c>; a genuinely nullable chain result must retain <c>?[0]</c>.
+    /// </summary>
+    [Fact]
+    public void NullConditionalIndex_UsesImmediateChainResultNullability()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class Provider
+    {
+        public string[]? MaybeItems() => null;
+    }
+
+    public class MetadataItems
+    {
+        public string? Artist { get; set; }
+        public Provider? Provider { get; set; }
+
+        public string? FirstAuthor => Artist?.Split(';')?[0];
+        public string? MaybeFirst => Provider?.MaybeItems()?[0];
+    }
+}");
+
+        Assert.Contains("Artist?.Split(';')[0]", printed);
+        Assert.DoesNotContain("Artist?.Split(';')?[0]", printed);
+        Assert.Contains("Provider?.MaybeItems()?[0]", printed);
+        AssertGscCompiles(printed, "GS0300");
+    }
+
+    /// <summary>
     /// A tuple literal element is a value position: a declared-nullable
     /// (<c>T?</c>) operand flow-proven non-null by a preceding guard must be
     /// emitted with the G# non-null assertion (<c>x!!</c>), because G# does not
@@ -792,7 +826,7 @@ namespace Demo
         return printed;
     }
 
-    private static void AssertGscCompiles(string source)
+    private static void AssertGscCompiles(string source, params string[] forbiddenDiagnostics)
     {
         string compiler =
             GscInvoker.Resolve(null, "Release", AppContext.BaseDirectory) ??
@@ -817,6 +851,10 @@ namespace Demo
                 Array.Empty<string>());
 
             Assert.True(result.Succeeded, result.Output);
+            foreach (string diagnostic in forbiddenDiagnostics)
+            {
+                Assert.DoesNotContain(diagnostic, result.Output);
+            }
         }
         finally
         {

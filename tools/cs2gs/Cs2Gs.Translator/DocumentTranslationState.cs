@@ -185,6 +185,13 @@ internal sealed class DocumentTranslationState
     // extension-property rewrites to the rest of the chain.
     public GExpression ConditionalReceiverReplacement { get; set; }
 
+    // Issue #2823: a redundant `?[i]` after an earlier conditional-access
+    // segment whose own result is non-nullable becomes an ordinary dependent
+    // `[i]`. Keying the replacement by the exact element binding prevents a
+    // nested conditional access in the continuation from borrowing its receiver.
+    public Dictionary<ElementBindingExpressionSyntax, GExpression> ConditionalElementReceivers { get; } =
+        new Dictionary<ElementBindingExpressionSyntax, GExpression>();
+
     // Issue #1902: numbers the `__qN` tuple parameter synthesized to carry a
     // query's transparent identifier (multiple in-scope range variables)
     // through a lambda that C#'s query-translation spec (§12.19.3) would bind

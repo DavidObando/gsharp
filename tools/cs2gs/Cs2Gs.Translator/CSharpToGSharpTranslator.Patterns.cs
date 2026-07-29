@@ -252,6 +252,17 @@ public sealed partial class CSharpToGSharpTranslator
                         return delegateInvokeResult;
                     }
 
+                    if (conditionalAccess.Expression is ConditionalAccessExpressionSyntax previousAccess
+                        && FindLeadingElementBinding(conditionalAccess.WhenNotNull)
+                            is ElementBindingExpressionSyntax elementBinding
+                        && !this.ConditionalAccessResultIsNullable(previousAccess))
+                    {
+                        return this.TranslateNonNullableConditionalIndex(
+                            conditionalAccess.WhenNotNull,
+                            elementBinding,
+                            this.TranslateExpression(previousAccess));
+                    }
+
                     return new ConditionalAccessExpression(
                         this.TranslateExpression(conditionalAccess.Expression),
                         this.TranslateExpression(conditionalAccess.WhenNotNull));
@@ -290,7 +301,14 @@ public sealed partial class CSharpToGSharpTranslator
                         ? this.TranslateIndexArgumentWithNullForgiveness(
                             elementBinding.ArgumentList.Arguments[0])
                         : new IdentifierExpression("nil");
-                    return new IndexExpression(new ConditionalReceiverExpression(), bindingIndex);
+                    GExpression bindingReceiver =
+                        this.state.ConditionalElementReceivers.TryGetValue(
+                            elementBinding,
+                            out GExpression elementReceiver)
+                                ? elementReceiver
+                                : this.state.ConditionalReceiverReplacement ??
+                                    new ConditionalReceiverExpression();
+                    return new IndexExpression(bindingReceiver, bindingIndex);
 
                 case TypeOfExpressionSyntax typeOf:
                     return new TypeOfExpression(this.MapTypeOfOperand(typeOf.Type));
@@ -426,6 +444,46 @@ public sealed partial class CSharpToGSharpTranslator
                         $"expression '{expression.Kind()}' has no canonical G# form yet; emitted an identifier placeholder (ADR-0115 §B).");
                     return new IdentifierExpression("nil");
             }
+        }
+
+        private static ElementBindingExpressionSyntax FindLeadingElementBinding(
+            ExpressionSyntax expression) =>
+            expression switch
+            {
+                ElementBindingExpressionSyntax elementBinding => elementBinding,
+                ParenthesizedExpressionSyntax parenthesized =>
+                    FindLeadingElementBinding(parenthesized.Expression),
+                InvocationExpressionSyntax invocation =>
+                    FindLeadingElementBinding(invocation.Expression),
+                MemberAccessExpressionSyntax memberAccess =>
+                    FindLeadingElementBinding(memberAccess.Expression),
+                ElementAccessExpressionSyntax elementAccess =>
+                    FindLeadingElementBinding(elementAccess.Expression),
+                _ => null,
+            };
+
+        private GExpression TranslateNonNullableConditionalIndex(
+            ExpressionSyntax continuation,
+            ElementBindingExpressionSyntax elementBinding,
+            GExpression receiver)
+        {
+            this.state.ConditionalElementReceivers.Add(elementBinding, receiver);
+            try
+            {
+                return this.TranslateExpression(continuation);
+            }
+            finally
+            {
+                this.state.ConditionalElementReceivers.Remove(elementBinding);
+            }
+        }
+
+        private bool ConditionalAccessResultIsNullable(
+            ConditionalAccessExpressionSyntax conditionalAccess)
+        {
+            ExpressionSyntax result = conditionalAccess.WhenNotNull;
+            return this.NullableReferenceValueMayBeNull(result)
+                || this.ReceiverValueIsPromotedNullable(result);
         }
 
         // A constant pattern whose expression is actually a bare/qualified TYPE
