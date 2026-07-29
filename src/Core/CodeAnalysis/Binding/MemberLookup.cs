@@ -4720,6 +4720,22 @@ internal sealed class MemberLookup
             actual = nullableActual.UnderlyingType;
         }
 
+        // Issue #2839: the very same annotation arrives as a
+        // NullabilityAnnotatedTypeSymbol — not a NullableTypeSymbol — when its
+        // provenance is metadata ([NullableAttribute] on an imported member)
+        // rather than a source `?`. It is a pure annotation wrapper carrying the
+        // imported type's nullable-flag bytes, so structurally it must unify
+        // exactly like the source-annotated case above. Without this unwrap an
+        // imported nullable collection navigation property (for example
+        // `ICollection<Child>?` declared in a referenced assembly) matched none
+        // of the structural patterns below, so the element type was never
+        // recovered and EF Core's collection `ThenInclude` overload was
+        // silently dropped in favour of the scalar one.
+        while (actual is NullabilityAnnotatedTypeSymbol annotatedActual)
+        {
+            actual = annotatedActual.BaseType;
+        }
+
         // T[] / []T (open array element).
         if (openClr.IsArray && openClr.GetArrayRank() == 1)
         {
