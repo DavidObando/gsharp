@@ -56,22 +56,6 @@ public sealed partial class CSharpToGSharpTranslator
                 return replacement;
             }
 
-            // Inside a lifted owned-struct receiver method (issue #938) a bare
-            // reference to an instance member carries an implicit C# `this`; a
-            // top-level receiver-clause `func` has no implicit receiver, so the
-            // reference must be made explicit through the receiver (`self.X`).
-            if (this.state.CurrentReceiverName != null)
-            {
-                ISymbol symbol = this.context.GetSymbolInfo(identifier).Symbol;
-                if (symbol is { IsStatic: false } &&
-                    symbol.Kind is SymbolKind.Field or SymbolKind.Property or SymbolKind.Method)
-                {
-                    return new MemberAccessExpression(
-                        new IdentifierExpression(this.state.CurrentReceiverName),
-                        SanitizeIdentifier(identifier.Identifier.Text));
-                }
-            }
-
             // A C# bare sibling static field/property reference (`FfAc3ChannelsTab`)
             // carries an implicit type qualifier. A G# top-level `func` (e.g. a
             // lifted extension method whose former `static class` keeps the field
@@ -361,6 +345,23 @@ public sealed partial class CSharpToGSharpTranslator
             if (this.context.GetSymbolInfo(member).Symbol is IMethodSymbol { IsExtensionMethod: true } memberExtMethod)
             {
                 this.typeMapper.TrackExtensionMethodNamespace(memberExtMethod);
+                if (memberExtMethod.MethodKind == MethodKind.ReducedExtension &&
+                    this.TryGetStaticExtensionHelper(memberExtMethod, out string helperOwner, out string helperName))
+                {
+                    if (member.Parent is ArgumentSyntax nameOfArgument &&
+                        IsNameOfArgument(nameOfArgument))
+                    {
+                        return new MemberAccessExpression(
+                            new IdentifierExpression(helperOwner),
+                            helperName);
+                    }
+
+                    return this.TranslateStaticExtensionHelperMethodGroup(
+                        member,
+                        memberExtMethod,
+                        helperOwner,
+                        helperName);
+                }
             }
 
             // Issue #1879: a C# 14 extension-block member is declared on a

@@ -240,7 +240,9 @@ public sealed partial class CSharpToGSharpTranslator
                     return this.TranslatePredefinedTypeExpression(predefinedType);
 
                 case ConditionalAccessExpressionSyntax conditionalAccess:
-                    if (this.TryTranslateNullConditionalEnumExtension(conditionalAccess, out GExpression enumExtResult))
+                    if (this.TryTranslateNullConditionalStaticExtensionHelper(
+                            conditionalAccess,
+                            out GExpression enumExtResult))
                     {
                         return enumExtResult;
                     }
@@ -268,17 +270,19 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         return new InvocationExpression(
                             new MemberAccessExpression(
-                                new ConditionalReceiverExpression(),
+                                this.state.ConditionalReceiverReplacement ??
+                                    new ConditionalReceiverExpression(),
                                 SanitizeIdentifier(memberBinding.Name.Identifier.Text)),
                             new List<GExpression>(),
                             null);
                     }
 
-                    // The `.b` continuation of a null-conditional chain. Its
-                    // receiver is the empty conditional-receiver placeholder, so it
-                    // renders as the bare `.b` that follows the `?`.
+                    // The `.b` continuation normally uses the empty conditional
+                    // receiver; static-helper prefix rebuilding temporarily
+                    // supplies the guarded receiver instead.
                     return new MemberAccessExpression(
-                        new ConditionalReceiverExpression(),
+                        this.state.ConditionalReceiverReplacement ??
+                            new ConditionalReceiverExpression(),
                         SanitizeIdentifier(memberBinding.Name.Identifier.Text));
 
                 case ElementBindingExpressionSyntax elementBinding:

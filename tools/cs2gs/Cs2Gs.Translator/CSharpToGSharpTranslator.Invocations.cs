@@ -84,17 +84,18 @@ public sealed partial class CSharpToGSharpTranslator
                 return new InvocationExpression(invokeTarget, invokeArguments, null);
             }
 
-            // A C# extension method whose receiver is an enum is emitted as a
-            // plain static helper (a receiver clause is rejected on enums,
-            // GS0103). Rewrite the call `x.M(args)` to the positional form
-            // `Owner.M(x, args)` so it binds to that helper.
+            // Extensions that must remain static helpers (enum receivers or
+            // owned reduced-signature collisions) use positional calls.
             if (invocation.Expression is MemberAccessExpressionSyntax extMember
                 && this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol extMethod
-                && TryGetEnumExtension(extMethod, out string extOwner, out string extName))
+                && extMethod.MethodKind == MethodKind.ReducedExtension
+                && this.TryGetStaticExtensionHelper(extMethod, out string extOwner, out string extName))
             {
                 var extArgs = new List<GExpression>
                 {
-                    this.TranslateExpression(extMember.Expression),
+                    PassStaticExtensionHelperReceiver(
+                        this.TranslateReceiverWithNullForgiveness(extMember.Expression),
+                        extMethod),
                 };
                 extArgs.AddRange(this.TranslateArguments(invocation.ArgumentList.Arguments));
                 IReadOnlyList<GTypeReference> extTypeArgs = extMember.Name is GenericNameSyntax extGeneric
@@ -126,6 +127,7 @@ public sealed partial class CSharpToGSharpTranslator
                 && staticExt.Parameters.Length >= 1
                 && !(staticExt.ReducedFrom ?? staticExt).DeclaringSyntaxReferences.IsDefaultOrEmpty
                 && (staticExt.Parameters[0].Type?.TypeKind ?? TypeKind.Unknown) != TypeKind.Enum
+                && !this.ownedExtensions.IsStaticHelper(staticExt)
                 && this.context.SemanticModel.GetSymbolInfo(staticExtMember.Expression).Symbol is INamedTypeSymbol
                 && TryGetExplicitExtensionReceiverArgument(
                     staticExtOperation,
@@ -167,6 +169,7 @@ public sealed partial class CSharpToGSharpTranslator
                 && bareExt.Parameters.Length >= 1
                 && !(bareExt.ReducedFrom ?? bareExt).DeclaringSyntaxReferences.IsDefaultOrEmpty
                 && (bareExt.Parameters[0].Type?.TypeKind ?? TypeKind.Unknown) != TypeKind.Enum
+                && !this.ownedExtensions.IsStaticHelper(bareExt)
                 && TryGetExplicitExtensionReceiverArgument(
                     bareExtOperation,
                     bareExt,
@@ -381,56 +384,276 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         /// <summary>
-        /// Rewrites a null-conditional call to an enum extension method
-        /// (<c>recv?.M(args)</c> where <c>M</c> is <c>this EnumType</c>) into the
-        /// ternary <c>if recv != nil { Owner.M(recv!!, args) } else { nil }</c>.
-        /// An enum extension is emitted as a plain static helper (a G# receiver
-        /// clause is rejected on enums, GS0103), so the <c>?.</c> member-binding
-        /// form cannot bind to it; gsc reports GS0159. The receiver is a pure
-        /// expression in practice, so the duplicated evaluation is safe.
+        /// Rewrites a null-conditional call to a static-helper extension method
+        /// into the
+        /// ternary
+        /// <c>if recv != nil { Owner.M(recv!!, args) } else { default(R?) }</c>.
+        /// The <c>?.</c> member-binding form cannot bind to a static helper.
         /// </summary>
-        private bool TryTranslateNullConditionalEnumExtension(
+        private bool TryTranslateNullConditionalStaticExtensionHelper(
             ConditionalAccessExpressionSyntax conditionalAccess,
             out GExpression result)
         {
             result = null;
 
-            if (conditionalAccess.WhenNotNull is not InvocationExpressionSyntax invocation ||
-                invocation.Expression is not MemberBindingExpressionSyntax binding)
+            if (!this.TryMatchNullConditionalStaticExtensionHelper(
+                    conditionalAccess,
+                    out InvocationExpressionSyntax invocation,
+                    out IMethodSymbol method,
+                    out string owner,
+                    out string name,
+                    out SimpleNameSyntax helperName,
+                    out ExpressionSyntax chainedReceiver))
             {
                 return false;
             }
 
-            if (this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method ||
-                !TryGetEnumExtension(method, out string owner, out string name))
+            if (DependsOnEnclosingConditionalReceiver(conditionalAccess.Expression))
+            {
+                this.ReportUnsupportedNestedConditionalStaticHelperChain(conditionalAccess);
+                result = this.PreserveNullConditionalStaticExtensionInvocation(
+                    conditionalAccess,
+                    invocation,
+                    helperName);
+                return true;
+            }
+
+            if (method.ReturnsVoid)
             {
                 return false;
             }
 
-            GExpression receiver = this.TranslateExpression(conditionalAccess.Expression);
-
-            var callArgs = new List<GExpression>
+            if (chainedReceiver != null &&
+                !IsSupportedConditionalStaticHelperReceiver(chainedReceiver))
             {
-                new NonNullAssertionExpression(receiver),
-            };
+                this.ReportUnsupportedConditionalStaticHelperChain(conditionalAccess);
+                result = this.PreserveNullConditionalStaticExtensionInvocation(
+                    conditionalAccess,
+                    invocation,
+                    helperName);
+                return true;
+            }
+
+            if (this.context.GetTypeInfo(conditionalAccess).Type is not { } conditionalType)
+            {
+                return false;
+            }
+
+            this.BuildNullConditionalStaticExtensionHelper(
+                conditionalAccess,
+                invocation,
+                owner,
+                name,
+                helperName,
+                chainedReceiver,
+                out GExpression guard,
+                out GExpression call);
+
+            GTypeReference nullableType = this.typeMapper.Map(
+                conditionalType,
+                this.context,
+                conditionalAccess.GetLocation());
+            if (!nullableType.IsNullable)
+            {
+                nullableType = MakeNullable(nullableType);
+            }
+
+            result = new ParenthesizedExpression(
+                new IfExpression(guard, call, new DefaultValueExpression(nullableType)));
+            return true;
+        }
+
+        private bool TryTranslateNullConditionalStaticExtensionHelperStatement(
+            ConditionalAccessExpressionSyntax conditionalAccess,
+            out GStatement result)
+        {
+            result = null;
+            if (!this.TryMatchNullConditionalStaticExtensionHelper(
+                    conditionalAccess,
+                    out InvocationExpressionSyntax invocation,
+                    out IMethodSymbol method,
+                    out string owner,
+                    out string name,
+                    out SimpleNameSyntax helperName,
+                    out ExpressionSyntax chainedReceiver) ||
+                !method.ReturnsVoid)
+            {
+                return false;
+            }
+
+            if (DependsOnEnclosingConditionalReceiver(conditionalAccess.Expression))
+            {
+                this.ReportUnsupportedNestedConditionalStaticHelperChain(conditionalAccess);
+                result = new ExpressionStatement(
+                    this.PreserveNullConditionalStaticExtensionInvocation(
+                        conditionalAccess,
+                        invocation,
+                        helperName));
+                return true;
+            }
+
+            if (chainedReceiver != null &&
+                !IsSupportedConditionalStaticHelperReceiver(chainedReceiver))
+            {
+                this.ReportUnsupportedConditionalStaticHelperChain(conditionalAccess);
+                result = new ExpressionStatement(
+                    this.PreserveNullConditionalStaticExtensionInvocation(
+                        conditionalAccess,
+                        invocation,
+                        helperName));
+                return true;
+            }
+
+            this.BuildNullConditionalStaticExtensionHelper(
+                conditionalAccess,
+                invocation,
+                owner,
+                name,
+                helperName,
+                chainedReceiver,
+                out GExpression guard,
+                out GExpression call);
+
+            result = new IfStatement(
+                guard,
+                new BlockStatement(new GStatement[] { new ExpressionStatement(call) }));
+            return true;
+        }
+
+        private bool TryMatchNullConditionalStaticExtensionHelper(
+            ConditionalAccessExpressionSyntax conditionalAccess,
+            out InvocationExpressionSyntax invocation,
+            out IMethodSymbol method,
+            out string owner,
+            out string name,
+            out SimpleNameSyntax helperName,
+            out ExpressionSyntax chainedReceiver)
+        {
+            invocation = conditionalAccess.WhenNotNull as InvocationExpressionSyntax;
+            method = invocation == null
+                ? null
+                : this.context.GetSymbolInfo(invocation).Symbol as IMethodSymbol;
+            owner = null;
+            name = null;
+            helperName = null;
+            chainedReceiver = null;
+            if (invocation == null ||
+                method == null ||
+                !this.TryGetStaticExtensionHelper(method, out owner, out name))
+            {
+                return false;
+            }
+
+            switch (invocation.Expression)
+            {
+                case MemberBindingExpressionSyntax binding:
+                    helperName = binding.Name;
+                    return true;
+
+                case MemberAccessExpressionSyntax member:
+                    helperName = member.Name;
+                    chainedReceiver = member.Expression;
+                    return true;
+
+                default:
+                    return false;
+            }
+        }
+
+        private void BuildNullConditionalStaticExtensionHelper(
+            ConditionalAccessExpressionSyntax conditionalAccess,
+            InvocationExpressionSyntax invocation,
+            string owner,
+            string name,
+            SimpleNameSyntax helperName,
+            ExpressionSyntax chainedReceiver,
+            out GExpression guard,
+            out GExpression call)
+        {
+            GExpression receiver = this.SpillOperand(
+                this.TranslateExpression(conditionalAccess.Expression),
+                conditionalAccess.Expression);
+            GExpression helperReceiver = new NonNullAssertionExpression(receiver);
+            if (chainedReceiver != null)
+            {
+                helperReceiver = this.TranslateConditionalStaticHelperReceiver(
+                    chainedReceiver,
+                    helperReceiver);
+            }
+
+            var callArgs = new List<GExpression> { helperReceiver };
             callArgs.AddRange(this.TranslateArguments(invocation.ArgumentList.Arguments));
-            IReadOnlyList<GTypeReference> callTypeArgs = binding.Name is GenericNameSyntax generic
+            IReadOnlyList<GTypeReference> callTypeArgs = helperName is GenericNameSyntax generic
                 ? this.MapTypeArguments(generic)
                 : null;
 
-            GExpression call = new InvocationExpression(
+            call = new InvocationExpression(
                 new MemberAccessExpression(new IdentifierExpression(owner), name),
                 callArgs,
                 callTypeArgs);
+            guard = new BinaryExpression(receiver, "!=", LiteralExpression.Null());
+        }
 
-            GExpression guard = new BinaryExpression(
+        private static bool IsSupportedConditionalStaticHelperReceiver(ExpressionSyntax expression) =>
+            expression is MemberBindingExpressionSyntax ||
+            (expression is MemberAccessExpressionSyntax member &&
+             IsSupportedConditionalStaticHelperReceiver(member.Expression));
+
+        private GExpression TranslateConditionalStaticHelperReceiver(
+            ExpressionSyntax expression,
+            GExpression conditionalReceiver)
+        {
+            GExpression previous = this.state.ConditionalReceiverReplacement;
+            this.state.ConditionalReceiverReplacement = conditionalReceiver;
+            try
+            {
+                return this.TranslateExpression(expression);
+            }
+            finally
+            {
+                this.state.ConditionalReceiverReplacement = previous;
+            }
+        }
+
+        private static bool DependsOnEnclosingConditionalReceiver(ExpressionSyntax expression) =>
+            expression.DescendantNodesAndSelf(
+                    descendIntoChildren: node => node is not ConditionalAccessExpressionSyntax)
+                .Any(node => node is MemberBindingExpressionSyntax or ElementBindingExpressionSyntax);
+
+        private GExpression PreserveNullConditionalStaticExtensionInvocation(
+            ConditionalAccessExpressionSyntax conditionalAccess,
+            InvocationExpressionSyntax invocation,
+            SimpleNameSyntax helperName)
+        {
+            IReadOnlyList<GTypeReference> typeArguments = helperName is GenericNameSyntax generic
+                ? this.MapTypeArguments(generic)
+                : null;
+            return new ConditionalAccessExpression(
                 this.TranslateExpression(conditionalAccess.Expression),
-                "!=",
-                new IdentifierExpression("nil"));
+                new InvocationExpression(
+                    this.TranslateExpression(invocation.Expression),
+                    this.TranslateCallArguments(invocation, invocation.ArgumentList.Arguments),
+                    typeArguments));
+        }
 
-            result = new ParenthesizedExpression(
-                new IfExpression(guard, call, new IdentifierExpression("nil")));
-            return true;
+        private void ReportUnsupportedConditionalStaticHelperChain(
+            ConditionalAccessExpressionSyntax conditionalAccess)
+        {
+            const string message =
+                "a null-conditional static-helper extension call with a non-member receiver chain " +
+                "cannot be lowered without losing the conditional receiver; the safe extension form " +
+                "is retained instead (issue #2821).";
+            this.context.ReportUnsupported(conditionalAccess, message);
+        }
+
+        private void ReportUnsupportedNestedConditionalStaticHelperChain(
+            ConditionalAccessExpressionSyntax conditionalAccess)
+        {
+            const string message =
+                "a static-helper extension call nested under another null-conditional receiver " +
+                "cannot be lowered without spilling a bare conditional receiver; the safe extension " +
+                "form is retained instead (issue #2821).";
+            this.context.ReportUnsupported(conditionalAccess, message);
         }
 
         // Issue #914 (oblivious sink): a null-conditional delegate/event invoke
@@ -501,17 +724,14 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         /// <summary>
-        /// Determines whether <paramref name="method"/> is a C# extension method
-        /// whose receiver (<c>this</c>) parameter is an enum. Such an extension
-        /// cannot carry a G# receiver clause (ADR-0079; gsc reports GS0103), so it
-        /// is emitted as a plain static helper and its call sites are rewritten to
-        /// the positional form <c>Owner.Method(receiver, …)</c>.
+        /// Determines whether <paramref name="method"/> is emitted as a plain
+        /// static helper rather than a receiver-clause method.
         /// </summary>
         /// <param name="method">The bound (possibly reduced) call symbol.</param>
         /// <param name="ownerName">The declaring static class name when matched.</param>
         /// <param name="methodName">The helper method name when matched.</param>
-        /// <returns><see langword="true"/> when the call targets an enum extension.</returns>
-        private static bool TryGetEnumExtension(IMethodSymbol method, out string ownerName, out string methodName)
+        /// <returns><see langword="true"/> when the call targets a static helper.</returns>
+        private bool TryGetStaticExtensionHelper(IMethodSymbol method, out string ownerName, out string methodName)
         {
             ownerName = null;
             methodName = null;
@@ -522,7 +742,8 @@ public sealed partial class CSharpToGSharpTranslator
 
             ITypeSymbol receiverType = method.ReceiverType
                 ?? method.Parameters.FirstOrDefault()?.Type;
-            if (receiverType?.TypeKind != TypeKind.Enum)
+            if (receiverType?.TypeKind != TypeKind.Enum &&
+                !this.ownedExtensions.IsStaticHelper(method))
             {
                 return false;
             }
@@ -531,6 +752,97 @@ public sealed partial class CSharpToGSharpTranslator
             ownerName = original.ContainingType?.Name is { } containingName ? SanitizeIdentifier(containingName) : null;
             methodName = SanitizeIdentifier(original.Name);
             return ownerName != null;
+        }
+
+        private GExpression TranslateStaticExtensionHelperMethodGroup(
+            MemberAccessExpressionSyntax member,
+            IMethodSymbol method,
+            string ownerName,
+            string methodName)
+        {
+            GExpression receiver = this.CaptureMethodGroupReceiver(
+                this.TranslateReceiverWithNullForgiveness(member.Expression),
+                member.Expression);
+
+            IMethodSymbol invoke = (this.context.GetTypeInfo(member).ConvertedType as INamedTypeSymbol)
+                ?.DelegateInvokeMethod;
+            ImmutableArray<IParameterSymbol> sourceParameters =
+                invoke?.Parameters ?? method.Parameters;
+            var parameters = new List<Parameter>(sourceParameters.Length);
+            var arguments = new List<GExpression>(sourceParameters.Length + 1)
+            {
+                PassStaticExtensionHelperReceiver(receiver, method),
+            };
+
+            for (int i = 0; i < sourceParameters.Length; i++)
+            {
+                Parameter mapped = this.MapParameter(
+                    sourceParameters[i],
+                    member,
+                    promoteNullability: false);
+                string name = $"__arg{i}";
+                parameters.Add(new Parameter(
+                    name,
+                    mapped.Type,
+                    mapped.IsVariadic,
+                    mapped.RefKind));
+                GExpression argument = new IdentifierExpression(name);
+                if (sourceParameters[i].RefKind is RefKind.Ref or RefKind.Out)
+                {
+                    argument = new UnaryExpression("&", argument);
+                }
+
+                arguments.Add(argument);
+            }
+
+            IMethodSymbol original = method.ReducedFrom ?? method;
+            IReadOnlyList<GTypeReference> typeArguments = original.IsGenericMethod
+                ? method.TypeArguments
+                    .Select(type => this.typeMapper.Map(type, this.context, member.GetLocation()))
+                    .ToList()
+                : null;
+            var call = new InvocationExpression(
+                new MemberAccessExpression(new IdentifierExpression(ownerName), methodName),
+                arguments,
+                typeArguments);
+            return new LambdaExpression(parameters, expressionBody: call);
+        }
+
+        private static GExpression PassStaticExtensionHelperReceiver(
+            GExpression receiver,
+            IMethodSymbol method)
+        {
+            IMethodSymbol original = method.ReducedFrom ?? method;
+            return original.Parameters[0].RefKind is RefKind.Ref or RefKind.Out
+                ? new UnaryExpression("&", receiver)
+                : receiver;
+        }
+
+        private GExpression CaptureMethodGroupReceiver(
+            GExpression receiver,
+            ExpressionSyntax receiverSyntax)
+        {
+            if (this.state.PendingSpillPrologue != null)
+            {
+                string temp = $"__spill{this.state.SpillCounter++}";
+                this.state.PendingSpillPrologue.Add(
+                    new LocalDeclarationStatement(BindingKind.Let, temp, initializer: receiver));
+                return new IdentifierExpression(temp);
+            }
+
+            if (this.state.PendingHelperCaptures != null)
+            {
+                string name = $"__p{this.state.PendingHelperCaptures.Count}";
+                GTypeReference type = this.ResolveExpressionType(receiverSyntax)
+                    ?? new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
+                this.state.PendingHelperCaptures.Add((name, receiver, type));
+                return new IdentifierExpression(name);
+            }
+
+            this.context.ReportUnsupported(
+                receiverSyntax,
+                "a static-helper extension method group here has no enclosing evaluation seam to capture its receiver once.");
+            return receiver;
         }
 
         /// <summary>

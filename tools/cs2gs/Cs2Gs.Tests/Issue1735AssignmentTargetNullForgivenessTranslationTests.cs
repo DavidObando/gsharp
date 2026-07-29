@@ -26,9 +26,8 @@ namespace Cs2Gs.Tests;
 /// <c>this.Prop!!.Member = v</c>.
 /// </item>
 /// <item>
-/// That same branch hard-coded <c>this</c> even inside a lifted owned-struct
-/// receiver-clause method (issue #938), where the receiver is not <c>this</c>
-/// but the receiver-clause parameter (<c>self</c>).
+/// Owned struct methods now stay in-body, so that same branch must qualify
+/// their nullable instance receivers through real <c>this</c>.
 /// </item>
 /// <item>
 /// A delegate/event invoked via the explicit <c>.Invoke(...)</c> spelling
@@ -86,13 +85,10 @@ namespace Demo
     }
 
     [Fact]
-    public void OwnedStructReceiverClause_ImplicitThisNullableField_UsesActualReceiverNotThis()
+    public void OwnedStructInBodyMethod_ImplicitThisNullableField_UsesThis()
     {
-        // Issue #938: a struct instance method is lifted to the receiver-clause
-        // form (`func (self Vec) F()`), so an implicit-this reference inside the
-        // body must qualify through the receiver-clause parameter, not `this`
-        // (which does not exist there). Combined with the nullable-receiver
-        // assertion, the assignment target must read `self.Child!!.Value = 5`.
+        // Issue #2821: owned struct methods now use the canonical in-body form.
+        // Nullable assignment-target qualification therefore uses real `this`.
         string printed = TranslateUnit(@"
 #nullable enable
 namespace Demo
@@ -109,8 +105,8 @@ namespace Demo
     }
 }");
 
-        Assert.DoesNotContain("this.Child", printed);
-        Assert.Contains("self.Child!!.Value = 5", printed);
+        Assert.DoesNotContain("func (self Vec)", printed);
+        Assert.Contains("this.Child!!.Value = 5", printed);
     }
 
     [Fact]

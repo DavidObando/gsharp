@@ -156,6 +156,27 @@ public sealed partial class CSharpToGSharpTranslator
                         isAsync: isAsync);
                 }
 
+                // A void static-helper `?.` call needs a guarded statement, not
+                // an expression-bodied lambda whose body cannot represent void.
+                if (!isAsync &&
+                    lambda.Body is ConditionalAccessExpressionSyntax voidConditional &&
+                    this.TryMatchNullConditionalStaticExtensionHelper(
+                        voidConditional,
+                        out _,
+                        out IMethodSymbol voidHelper,
+                        out _,
+                        out _,
+                        out _,
+                        out _) &&
+                    voidHelper.ReturnsVoid)
+                {
+                    return new LambdaExpression(
+                        parameters,
+                        blockBody: new BlockStatement(this.WithSpillSeam(
+                            () => this.TranslateExpressionStatements((ExpressionSyntax)lambda.Body).ToList()).ToList()),
+                        isAsync: false);
+                }
+
                 if (lambda.Body is AssignmentExpressionSyntax)
                 {
                     // An assignment is statement-only in G#; an assignment-bodied lambda

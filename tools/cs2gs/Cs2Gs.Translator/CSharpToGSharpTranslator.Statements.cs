@@ -1763,6 +1763,14 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GStatement TranslateExpressionStatement(ExpressionSyntax expression)
         {
+            if (expression is ConditionalAccessExpressionSyntax conditionalAccess &&
+                this.TryTranslateNullConditionalStaticExtensionHelperStatement(
+                    conditionalAccess,
+                    out GStatement conditionalHelperStatement))
+            {
+                return conditionalHelperStatement;
+            }
+
             switch (expression)
             {
                 case AssignmentExpressionSyntax assignment when this.IsDelegateMulticastCombine(assignment, out string combineOp):
@@ -1874,10 +1882,8 @@ public sealed partial class CSharpToGSharpTranslator
         //     property/field of the enclosing type. gsc resolves a bare-identifier
         //     assignment receiver as a variable/parameter; an implicit-this property
         //     receiver has no local slot, so the member write fails (GS0158 /
-        //     GS9998). Qualifying it as `this.Prop.Member = v` (or `self.Prop.Member
-        //     = v` inside a lifted receiver-clause func, issue #938 — see
-        //     <paramref name="left"/>'s <see cref="currentReceiverName"/>) routes the
-        //     write through the expression-receiver path, which binds correctly.
+        //     GS9998). Qualifying it as `this.Prop.Member = v` routes the write
+        //     through the expression-receiver path, which binds correctly.
         //     When `Prop` is itself declared-nullable (or promoted, issue #1072),
         //     the same `!!` the read path applies is inserted on the qualified
         //     receiver (`this.Prop!!.Member = v`) — the qualification and the
@@ -1900,11 +1906,8 @@ public sealed partial class CSharpToGSharpTranslator
                     this.context.GetSymbolInfo(receiverId).Symbol is { IsStatic: false } receiverSymbol &&
                     receiverSymbol.Kind is SymbolKind.Property or SymbolKind.Field)
                 {
-                    GExpression qualifier = this.state.CurrentReceiverName != null
-                        ? new IdentifierExpression(this.state.CurrentReceiverName)
-                        : new ThisExpression();
                     GExpression qualifiedReceiver = new MemberAccessExpression(
-                        qualifier, SanitizeIdentifier(receiverId.Identifier.Text));
+                        new ThisExpression(), SanitizeIdentifier(receiverId.Identifier.Text));
 
                     if (this.ReceiverNeedsNullForgiveness(receiverId, isDereferenceReceiver: true) ||
                         this.ReceiverIsNullableReferenceFieldOrProperty(receiverId))

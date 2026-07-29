@@ -110,9 +110,6 @@ namespace Corpus.Issue1909
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         Cs2Gs.CodeModel.Ast.CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
 
-        // ignore the pre-existing "receiver-clause form" info diagnostic
-        // (issue #938, unrelated to primary constructors) that every
-        // struct instance-method translation emits.
         string rendered = GSharpPrinter.Print(unit);
 
         Assert.Contains("struct Point(x int32, y int32) {", rendered, StringComparison.Ordinal);

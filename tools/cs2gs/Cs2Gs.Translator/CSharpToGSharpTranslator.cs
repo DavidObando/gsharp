@@ -62,6 +62,13 @@ public sealed partial class CSharpToGSharpTranslator
     // every document translated from the same compilation.
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>>> PartialTypePartsCache = new();
 
+    // Issue #2821: classic C# extension methods whose receiver type is declared
+    // in the same source compilation and namespace belong to that output
+    // package. Collect them once per compilation so the receiver's declaration
+    // can absorb them even when the extension and target live in different
+    // files (including partial target declarations).
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, OwnedExtensionRegistry> OwnedExtensionsCache = new();
+
     // ADR-0145 (§C/§D): opt-in "preserve partial parts" mode. In the DEFAULT
     // (false) cs2gs-migration mode, all C# `partial` parts of a type are MERGED
     // into ONE non-partial G# type, emitted once (issue #1910). The
@@ -187,6 +194,9 @@ public sealed partial class CSharpToGSharpTranslator
             partialTypeParts = FilterPartialTypeParts(partialTypeParts, this.retainedFilePaths);
         }
 
+        OwnedExtensionRegistry ownedExtensions =
+            GetOrCollectOwnedExtensions(context.Compilation).Filter(this.retainedFilePaths);
+
         string package = this.packageFilter ?? this.ResolvePackage(root, context);
 
         // Issue #1910 (gap 3): a merged-in member from a non-primary partial
@@ -204,6 +214,8 @@ public sealed partial class CSharpToGSharpTranslator
             this.preservePartialParts
                 ? Enumerable.Empty<Microsoft.CodeAnalysis.SyntaxTree>()
                 : CollectExtraUsingTrees(root, partialTypeParts);
+        extraUsingTrees = extraUsingTrees.Concat(
+            CollectOwnedExtensionUsingTrees(root, context, ownedExtensions));
         IReadOnlyList<ImportDirective> imports = this.TranslateImports(root, extraUsingTrees, context);
 
         HashSet<INamedTypeSymbol> openBases = GetOrCollectSubclassedBaseTypes(context.Compilation);
@@ -245,6 +257,7 @@ public sealed partial class CSharpToGSharpTranslator
             staticUsingTargets,
             entryPoint,
             partialTypeParts,
+            ownedExtensions,
             this.preservePartialParts,
             this.markMergedTypePartial);
 
@@ -311,8 +324,8 @@ public sealed partial class CSharpToGSharpTranslator
                 members.Add(translated);
             }
 
-            // Owned-struct receiver methods (issue #938) are emitted as siblings
-            // immediately after their owning type so they read together.
+            // Synthesized top-level receiver funcs/operators are emitted as
+            // siblings immediately after their source aggregate.
             members.AddRange(visitor.DrainPendingTopLevel());
         }
 
@@ -430,6 +443,218 @@ public sealed partial class CSharpToGSharpTranslator
         return PartialTypePartsCache.GetValue(compilation, CollectPartialTypeParts);
     }
 
+    private static OwnedExtensionRegistry GetOrCollectOwnedExtensions(Compilation compilation)
+    {
+        return OwnedExtensionsCache.GetValue(compilation, CollectOwnedExtensions);
+    }
+
+    private static OwnedExtensionRegistry CollectOwnedExtensions(Compilation compilation)
+    {
+        var result = new OwnedExtensionRegistry(compilation.Assembly);
+        var candidates = new List<(INamedTypeSymbol Receiver, MethodDeclarationSyntax Syntax, IMethodSymbol Method)>();
+        foreach (Microsoft.CodeAnalysis.SyntaxTree tree in compilation.SyntaxTrees)
+        {
+            SemanticModel model = compilation.GetSemanticModel(tree);
+            foreach (MethodDeclarationSyntax methodDeclaration in tree.GetRoot()
+                .DescendantNodes()
+                .OfType<MethodDeclarationSyntax>())
+            {
+                if (model.GetDeclaredSymbol(methodDeclaration) is not IMethodSymbol method ||
+                    !TryGetOwnedExtensionReceiver(method, out INamedTypeSymbol receiverDefinition))
+                {
+                    continue;
+                }
+
+                candidates.Add((receiverDefinition, methodDeclaration, method));
+            }
+        }
+
+        foreach ((INamedTypeSymbol receiver, MethodDeclarationSyntax syntax, IMethodSymbol method) in candidates)
+        {
+            if (HasCrossContainerOwnedExtensionOverload(receiver, method) ||
+                HasReducedDeclarationCollision(receiver, method))
+            {
+                result.AddStaticHelper(syntax);
+                continue;
+            }
+
+            if (!HasApplicableInstanceMember(receiver, method))
+            {
+                result.Add(receiver, syntax);
+            }
+        }
+
+        return result;
+    }
+
+    private static bool TryGetOwnedExtensionReceiver(
+        IMethodSymbol method,
+        out INamedTypeSymbol receiverDefinition)
+    {
+        receiverDefinition = null;
+        if (method == null ||
+            !method.IsExtensionMethod ||
+            method.Parameters.Length == 0 ||
+            method.Parameters[0].NullableAnnotation == NullableAnnotation.Annotated ||
+            method.Parameters[0].Type is not INamedTypeSymbol receiverType)
+        {
+            return false;
+        }
+
+        receiverDefinition = receiverType.OriginalDefinition;
+        return receiverDefinition.TypeKind is TypeKind.Class or TypeKind.Struct &&
+            !IsGenericReceiver(receiverType) &&
+            SymbolEqualityComparer.Default.Equals(
+                receiverDefinition.ContainingAssembly,
+                method.ContainingAssembly) &&
+            SymbolEqualityComparer.Default.Equals(
+                receiverDefinition.ContainingNamespace,
+                method.ContainingNamespace);
+    }
+
+    private static bool HasCrossContainerOwnedExtensionOverload(
+        INamedTypeSymbol receiver,
+        IMethodSymbol method)
+    {
+        foreach (INamedTypeSymbol type in receiver.ContainingNamespace.GetTypeMembers())
+        {
+            foreach (IMethodSymbol other in type.GetMembers(method.Name).OfType<IMethodSymbol>())
+            {
+                if (!SymbolEqualityComparer.Default.Equals(other.ContainingType, method.ContainingType) &&
+                    TryGetOwnedExtensionReceiver(other, out INamedTypeSymbol otherReceiver) &&
+                    SymbolEqualityComparer.Default.Equals(otherReceiver, receiver))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsReproducibleStaticHelper(IMethodSymbol method)
+    {
+        IMethodSymbol original = method?.ReducedFrom ?? method;
+        return TryGetOwnedExtensionReceiver(original, out INamedTypeSymbol receiver) &&
+            (HasCrossContainerOwnedExtensionOverload(receiver, original) ||
+                HasReducedDeclarationCollision(receiver, original));
+    }
+
+    private static bool IsGenericReceiver(INamedTypeSymbol type)
+    {
+        for (INamedTypeSymbol current = type; current != null; current = current.ContainingType)
+        {
+            if (current.IsGenericType)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasReducedDeclarationCollision(INamedTypeSymbol type, IMethodSymbol extension)
+    {
+        for (INamedTypeSymbol current = type; current != null; current = current.BaseType)
+        {
+            foreach (ISymbol member in current.GetMembers(extension.Name))
+            {
+                if (member.IsStatic)
+                {
+                    continue;
+                }
+
+                if (member is not IMethodSymbol method ||
+                    HaveSameReducedSignature(
+                        extension,
+                        method,
+                        leftIsExtension: true,
+                        rightIsExtension: false))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasApplicableInstanceMember(INamedTypeSymbol type, IMethodSymbol extension)
+    {
+        for (INamedTypeSymbol current = type; current != null; current = current.BaseType)
+        {
+            foreach (IMethodSymbol method in current.GetMembers(extension.Name).OfType<IMethodSymbol>())
+            {
+                if (!method.IsStatic &&
+                    HasOverlappingApplicability(method, extension))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasOverlappingApplicability(IMethodSymbol instanceMethod, IMethodSymbol extension)
+    {
+        int instanceMinimum = MinimumArgumentCount(instanceMethod.Parameters, 0);
+        int extensionMinimum = MinimumArgumentCount(extension.Parameters, 1);
+        int instanceMaximum = MaximumArgumentCount(instanceMethod.Parameters, 0);
+        int extensionMaximum = MaximumArgumentCount(extension.Parameters, 1);
+        return Math.Max(instanceMinimum, extensionMinimum) <=
+            Math.Min(instanceMaximum, extensionMaximum);
+    }
+
+    private static int MinimumArgumentCount(ImmutableArray<IParameterSymbol> parameters, int offset) =>
+        parameters.Skip(offset).Count(parameter => !parameter.IsOptional && !parameter.IsParams);
+
+    private static int MaximumArgumentCount(ImmutableArray<IParameterSymbol> parameters, int offset) =>
+        parameters.Length > offset && parameters[parameters.Length - 1].IsParams
+            ? int.MaxValue
+            : parameters.Length - offset;
+
+    private static bool HaveSameReducedSignature(
+        IMethodSymbol left,
+        IMethodSymbol right,
+        bool leftIsExtension = true,
+        bool rightIsExtension = true)
+    {
+        if (left.Name != right.Name ||
+            left.TypeParameters.Length != right.TypeParameters.Length)
+        {
+            return false;
+        }
+
+        int leftOffset = leftIsExtension ? 1 : 0;
+        int rightOffset = rightIsExtension ? 1 : 0;
+        if (left.Parameters.Length - leftOffset != right.Parameters.Length - rightOffset)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < left.Parameters.Length - leftOffset; i++)
+        {
+            IParameterSymbol leftParameter = left.Parameters[leftOffset + i];
+            IParameterSymbol rightParameter = right.Parameters[rightOffset + i];
+            if (leftParameter.RefKind != rightParameter.RefKind ||
+                SignatureType(leftParameter.Type) != SignatureType(rightParameter.Type))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static string SignatureType(ITypeSymbol type) =>
+        string.Concat(
+            type.ToDisplayParts(SymbolDisplayFormat.FullyQualifiedFormat)
+                .Select(part => part.Symbol is ITypeParameterSymbol
+                    { TypeParameterKind: TypeParameterKind.Method } parameter
+                        ? "!" + parameter.Ordinal.ToString(CultureInfo.InvariantCulture)
+                        : part.ToString()));
+
     private static Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> CollectPartialTypeParts(Compilation compilation)
     {
         var result = new Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>>(SymbolEqualityComparer.Default);
@@ -506,6 +731,32 @@ public sealed partial class CSharpToGSharpTranslator
                 if (part.SyntaxTree != root.SyntaxTree)
                 {
                     trees.Add(part.SyntaxTree);
+                }
+            }
+        }
+
+        return trees;
+    }
+
+    private static HashSet<Microsoft.CodeAnalysis.SyntaxTree> CollectOwnedExtensionUsingTrees(
+        CompilationUnitSyntax root,
+        TranslationContext context,
+        OwnedExtensionRegistry ownedExtensions)
+    {
+        var trees = new HashSet<Microsoft.CodeAnalysis.SyntaxTree>();
+        foreach (TypeDeclarationSyntax declaration in root.DescendantNodes().OfType<TypeDeclarationSyntax>())
+        {
+            if (context.GetDeclaredSymbol(declaration) is not INamedTypeSymbol type ||
+                !ownedExtensions.TryGetMethods(type, out IReadOnlyList<MethodDeclarationSyntax> methods))
+            {
+                continue;
+            }
+
+            foreach (MethodDeclarationSyntax method in methods)
+            {
+                if (method.SyntaxTree != root.SyntaxTree)
+                {
+                    trees.Add(method.SyntaxTree);
                 }
             }
         }
@@ -744,6 +995,10 @@ public sealed partial class CSharpToGSharpTranslator
         // declaration; every other part's members are merged into it.
         private readonly Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts;
 
+        // Issue #2821: same-package source extension methods are emitted as
+        // members of their owned receiver type, not as top-level receiver funcs.
+        private readonly OwnedExtensionRegistry ownedExtensions;
+
         // ADR-0145 (§C/§D): when true, `partial` parts are NOT merged — every
         // part is emitted as its own standalone G# `partial` declaration (using
         // only its own members), so a generated part augments the user's real G#
@@ -818,6 +1073,7 @@ public sealed partial class CSharpToGSharpTranslator
             HashSet<INamedTypeSymbol> staticUsingTargets,
             IMethodSymbol entryPoint,
             Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts,
+            OwnedExtensionRegistry ownedExtensions,
             bool preservePartialParts = false,
             bool markMergedTypePartial = false)
         {
@@ -826,6 +1082,7 @@ public sealed partial class CSharpToGSharpTranslator
             this.subclassedBases = subclassedBases;
             this.staticUsingTargets = staticUsingTargets ?? new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
             this.partialTypeParts = partialTypeParts ?? new Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>>(SymbolEqualityComparer.Default);
+            this.ownedExtensions = ownedExtensions ?? new OwnedExtensionRegistry(context.Compilation.Assembly);
             this.preservePartialParts = preservePartialParts;
             this.markMergedTypePartial = markMergedTypePartial;
             this.efEntityTypes = CollectEfEntityTypes(context.Compilation);
@@ -850,5 +1107,115 @@ public sealed partial class CSharpToGSharpTranslator
 
         public override GMember VisitDelegateDeclaration(DelegateDeclarationSyntax node) =>
             this.TranslateDelegateDeclaration(node);
+    }
+
+    private sealed class OwnedExtensionRegistry
+    {
+        private readonly IAssemblySymbol assembly;
+
+        private readonly Dictionary<INamedTypeSymbol, List<MethodDeclarationSyntax>> methodsByReceiver =
+            new(SymbolEqualityComparer.Default);
+
+        private readonly Dictionary<MethodDeclarationSyntax, INamedTypeSymbol> receiversByMethod =
+            new();
+
+        private readonly HashSet<(Microsoft.CodeAnalysis.SyntaxTree Tree, int Start, int Length)> staticHelpers =
+            new();
+
+        public OwnedExtensionRegistry(IAssemblySymbol assembly = null)
+        {
+            this.assembly = assembly;
+        }
+
+        public void Add(INamedTypeSymbol receiver, MethodDeclarationSyntax method)
+        {
+            if (!this.methodsByReceiver.TryGetValue(receiver, out List<MethodDeclarationSyntax> methods))
+            {
+                methods = new List<MethodDeclarationSyntax>();
+                this.methodsByReceiver.Add(receiver, methods);
+            }
+
+            methods.Add(method);
+            this.receiversByMethod.Add(method, receiver);
+        }
+
+        public bool Contains(MethodDeclarationSyntax method) =>
+            this.receiversByMethod.ContainsKey(method);
+
+        public void AddStaticHelper(MethodDeclarationSyntax method) =>
+            this.staticHelpers.Add((method.SyntaxTree, method.SpanStart, method.Span.Length));
+
+        public bool IsStaticHelper(IMethodSymbol method)
+        {
+            IMethodSymbol original = method?.ReducedFrom ?? method;
+            if (original == null)
+            {
+                return false;
+            }
+
+            if (original.DeclaringSyntaxReferences.Any(
+                    reference => this.staticHelpers.Contains(
+                        (reference.SyntaxTree, reference.Span.Start, reference.Span.Length))))
+            {
+                return true;
+            }
+
+            // Referenced projects do not share this compilation's syntax-keyed
+            // registry. Re-run the declaration-only rule on metadata symbols.
+            return !SymbolEqualityComparer.Default.Equals(original.ContainingAssembly, this.assembly) &&
+                IsReproducibleStaticHelper(original);
+        }
+
+        public bool TryGetMethods(
+            INamedTypeSymbol receiver,
+            out IReadOnlyList<MethodDeclarationSyntax> methods)
+        {
+            if (receiver != null &&
+                this.methodsByReceiver.TryGetValue(receiver.OriginalDefinition, out List<MethodDeclarationSyntax> found))
+            {
+                methods = found;
+                return true;
+            }
+
+            methods = Array.Empty<MethodDeclarationSyntax>();
+            return false;
+        }
+
+        public OwnedExtensionRegistry Filter(HashSet<string> retainedFilePaths)
+        {
+            if (retainedFilePaths is null)
+            {
+                return this;
+            }
+
+            var filtered = new OwnedExtensionRegistry(this.assembly);
+            foreach (KeyValuePair<INamedTypeSymbol, List<MethodDeclarationSyntax>> entry in this.methodsByReceiver)
+            {
+                bool targetIsRetained = entry.Key.DeclaringSyntaxReferences.Any(
+                    r => retainedFilePaths.Contains(r.SyntaxTree.FilePath));
+                if (!targetIsRetained)
+                {
+                    continue;
+                }
+
+                foreach (MethodDeclarationSyntax method in entry.Value)
+                {
+                    if (retainedFilePaths.Contains(method.SyntaxTree.FilePath))
+                    {
+                        filtered.Add(entry.Key, method);
+                    }
+                }
+            }
+
+            foreach ((Microsoft.CodeAnalysis.SyntaxTree tree, int start, int length) in this.staticHelpers)
+            {
+                if (retainedFilePaths.Contains(tree.FilePath))
+                {
+                    filtered.staticHelpers.Add((tree, start, length));
+                }
+            }
+
+            return filtered;
+        }
     }
 }
